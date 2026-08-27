@@ -239,6 +239,16 @@ export interface LoginsServeOptions {
    * one that is refused after the press. See `SessionAccess.logins`.
    */
   signIn(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Sign one of this machine's logins out, here.
+   *
+   * The counterpart `signIn` went without until 2026-08-26 — see the note on
+   * {@link createLoginsServe} for the missing piece it was waiting on. Handed in
+   * for the same reason `signIn` is, so the one runner that backs the local
+   * Accounts pane backs this seam too. `session` is always null: a logout runs a
+   * command and finishes rather than opening a terminal to be watched.
+   */
+  signOut(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
 }
 
 /**
@@ -257,20 +267,25 @@ export interface LoginsServeOptions {
  *   > *"So we can click and manage what accounts are there, what we want to
  *   > login, logout, things, access. All of this we can just manage from this."*
  *
- * ## What is not here, and where it would go
+ * ## Sign out, which is now here
  *
- * **Sign out.** Nothing in this app signs an agent out on any machine: there is
- * no logout command in `agent-catalog.ts` — `signInArgs` has no counterpart —
- * and the Accounts pane at this desk offers no such control either. A verb here
- * would therefore be a frame whose only possible answer is an apology, which is
- * the shape of defect this app keeps being reviewed for. It goes in when the
- * local one does, and both need the same missing thing first: each agent's own
- * logout command, measured rather than guessed, in the catalogue.
+ * It went in on 2026-08-26, the moment the missing piece did: `agent-catalog.ts`
+ * gained `signOutArgs`, the measured logout command `signInArgs` never had a
+ * counterpart for. With a command to run, `signOut` is a real verb rather than a
+ * frame whose only answer is an apology — it runs the logout, re-reads this
+ * machine's own probe, and reports what actually happened. It arrived in the
+ * same change as the local Accounts pane's Sign out, off the one runner both
+ * reach, which is what the note here always said it would need.
+ *
+ * The one agent that still cannot be signed out from here — Gemini, which has no
+ * logout command — answers with its own reason rather than a false success, and
+ * the panes gate their button on `hasSignOut` so it is never even asked.
  */
 export function createLoginsServe(options: LoginsServeOptions): RemoteLoginsAccess {
   const probe = options.readSignIn ?? ((profile: Profile) => readSignIn(profile))
   return {
     read: () => everyAccount(probe),
     signIn: (accountId) => options.signIn(accountId),
+    signOut: (accountId) => options.signOut(accountId),
   }
 }

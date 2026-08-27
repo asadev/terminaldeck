@@ -138,22 +138,82 @@ describe('a login on the far machine', () => {
     // certain to be refused is not one to draw.
     expect(row({ onSignIn: null })).not.toContain('Sign in')
   })
+
+  it('offers Sign out on a signed-in login whose agent has a logout command', () => {
+    // The counterpart that arrived with the catalogue's logout command. The
+    // login is signed in and Claude has `claude auth logout`, so the far machine
+    // can be asked to run it.
+    expect(row({ onSignOut: () => {} })).toContain('Sign out')
+  })
+
+  it('draws no Sign out where that machine cannot be asked to run one', () => {
+    // The same capability as sign-in: absent onSignOut is a machine that cannot
+    // be asked, and a button certain to be refused is not one to draw.
+    expect(row()).not.toContain('Sign out')
+  })
+
+  it('shows the reason, not a button, where the agent has no logout command', () => {
+    // Gemini has none. The row says so in Gemini's own words rather than drawing
+    // a control that could only refuse — §4.1.
+    const geminiLogin: MachineAccount = {
+      id: 'system:gemini',
+      name: 'Gemini',
+      provider: 'gemini',
+      color: null,
+      system: true,
+      signIn: {
+        state: 'signed-in',
+        account: null,
+        plan: null,
+        detail: 'Signed in.',
+        command: '',
+      },
+    }
+    const html = row({ account: geminiLogin, onSignOut: () => {} })
+    expect(html).toContain('no logout command')
+    expect(html).not.toContain('Sign out')
+  })
 })
 
-describe('what this pane still does not offer', () => {
+describe('login, logout, access — all three now', () => {
   /**
    *   > *"So we can click and manage what accounts are there, what we want to
    *   > login, logout, things, access."*
    *
-   * Two of the three are here now — the list and the sign-in over
-   * `CAPABILITY.logins`, and the access grant on the Remote pane. **Sign out is
-   * not**, and this is the assertion that keeps it from being drawn before it
-   * exists: nothing in this app signs an agent out on any machine, including
-   * this one — `agent-catalog.ts` has `signInArgs` and no counterpart — so a
-   * Sign out here could only apologise.
+   * All three are here now. The list and the sign-in came over
+   * `CAPABILITY.logins`, and the access grant is on the Remote pane; **sign
+   * out** was the last one waiting, and it was waiting on one thing — a measured
+   * logout command in `agent-catalog.ts`, which `signInArgs` never had a
+   * counterpart for. This is the assertion that flipped when it arrived: the row
+   * that once could only apologise now runs that machine's own logout.
    */
-  it('draws no sign-out anywhere, because nothing in this app can sign an agent out', () => {
-    const html = render({ machine, link: link({ sessions: [session()] }) })
-    expect(html).not.toContain('Sign out')
+  it('offers a sign-out on a signed-in login whose agent has a logout command', () => {
+    const claude: MachineAccount = {
+      id: 'system',
+      name: 'Default',
+      provider: 'claude',
+      color: null,
+      system: true,
+      signIn: {
+        state: 'signed-in',
+        account: 'sherzod.davlatov@gmail.com',
+        plan: 'max',
+        detail: 'Signed in as sherzod.davlatov@gmail.com on the max plan.',
+        command: '',
+      },
+    }
+    const html = renderToStaticMarkup(
+      <ul>
+        <DeviceRow
+          account={claude}
+          running={false}
+          session=""
+          busy={false}
+          onSignIn={() => {}}
+          onSignOut={() => {}}
+        />
+      </ul>,
+    )
+    expect(html).toContain('Sign out')
   })
 })

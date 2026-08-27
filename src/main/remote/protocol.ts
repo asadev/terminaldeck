@@ -4818,6 +4818,19 @@ export type ClientMessage =
    * the answer before the person has typed anything.
    */
   | { t: 'logins.signin'; rid: string; accountId: string }
+  /**
+   * Sign one of that machine's logins out, over there.
+   *
+   * The counterpart to `logins.signin`, and a different kind of act: a logout is
+   * a command that runs and finishes rather than an interactive flow, so this
+   * opens no terminal and its answer — {@link ServerMessage} `logins.signedout` —
+   * carries no session to attach to. The far end runs the login's own logout
+   * command, re-reads its own probe, and reports what actually happened.
+   *
+   * Served only to one of the owner's own devices, exactly as `logins.signin` is
+   * — `CAPABILITY.logins` is stripped for a guest before the frame is read.
+   */
+  | { t: 'logins.signout'; rid: string; accountId: string }
   /* ---- capability `settings` --------------------------------------------- */
   /**
    * Read this machine's two server-owned settings.
@@ -5745,6 +5758,19 @@ export type ServerMessage =
    * one place to look for the outcome.
    */
   | { t: 'logins.signedin'; rid: string; ok: boolean; message: string; session: string | null }
+  /**
+   * What happened to one `logins.signout`, in the far machine's own words.
+   *
+   * `session` is always null — a logout runs a command and opens nothing to
+   * attach to — and is kept in the shape only so `logins.signedout` and
+   * `logins.signedin` read the same way on the asking side. `ok` is the far
+   * machine's own answer, settled against its probe rather than the command's
+   * exit status, which lies about a logout that removed nothing.
+   *
+   * There is no `logins.signout.failed`, for the reason `logins.signedin` has no
+   * failure frame: a refusal is this frame with `ok: false` and the sentence.
+   */
+  | { t: 'logins.signedout'; rid: string; ok: boolean; message: string; session: string | null }
   /* ---- capability `settings` --------------------------------------------- */
   /**
    * The answer to one `settings.read`, and only ever to one.
@@ -7811,6 +7837,18 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('logins.signin with an unusable account id')
       return { ok: true, message: { t: 'logins.signin', rid: requestId, accountId } }
     }
+    case 'logins.signout': {
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad('logins.signout without a request id')
+      const accountId = parsed.accountId
+      if (typeof accountId !== 'string' || accountId === '') return bad('logins.signout without an account')
+      if (accountId.length > MAX_ACCOUNT_ID_LENGTH) return tooLarge('logins.signout with an oversized account id')
+      // The same class `logins.signin` checks, and for the same reason: past this
+      // line the value selects a configuration directory on somebody else's
+      // computer to run a logout against. One rule for both frames.
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(accountId)) return bad('logins.signout with an unusable account id')
+      return { ok: true, message: { t: 'logins.signout', rid: requestId, accountId } }
+    }
 
     /* ---- capability `settings` ------------------------------------------- */
     // Shape and the closed key allowlist, and nothing else. Whether this host
@@ -9789,6 +9827,26 @@ export function parseServerFrame(parsed: unknown): ServerParse {
         ok: true,
         message: {
           t: 'logins.signedin',
+          rid: requestId,
+          ok: parsed.ok === true,
+          message: typeof parsed.message === 'string' ? parsed.message : '',
+          session: id(parsed.session),
+        },
+      }
+    }
+    /*
+     * The outcome of one sign-out. `ok` must be the literal `true`, the same
+     * guard `logins.signedin` keeps: a garbled frame read as success is a pane
+     * telling somebody a login was let go of when it was not. `session` is read
+     * for shape only — a sign-out never opens one — and folds to null.
+     */
+    case 'logins.signedout': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'logins.signedout without a request id' }
+      return {
+        ok: true,
+        message: {
+          t: 'logins.signedout',
           rid: requestId,
           ok: parsed.ok === true,
           message: typeof parsed.message === 'string' ? parsed.message : '',

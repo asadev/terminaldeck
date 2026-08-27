@@ -7,7 +7,9 @@ import {
   MULTI_LOGIN_AGENTS,
   hasAnyLogin,
   hasMultipleLogins,
+  hasSignOut,
   loginsNote,
+  signOutNote,
 } from './agent-catalog'
 
 /**
@@ -114,5 +116,39 @@ describe('the derived lists', () => {
     expect(loginsNote('gemini')).toContain('keychain')
     expect(loginsNote('shell')).toContain('shell')
     expect(loginsNote('gemini')).not.toBe(loginsNote('shell'))
+  })
+})
+
+/**
+ * Signing out, the counterpart `signInArgs` went without.
+ *
+ * Three panes — the local Accounts list, a paired device's, and the servers pane
+ * — all said in their own words that nothing could sign an agent out because
+ * there was no logout command to run. These pin the missing piece that closed
+ * all three: the measured command, and the predicate every Sign-out control is
+ * gated on so a button is drawn only where one exists.
+ */
+describe('signing out', () => {
+  it('carries each agent’s measured logout command, and null where there is none', () => {
+    // Measured on a real box 2026-08-21 — the same commands `main/servers/
+    // setup.ts` runs its own sign-out from.
+    expect(AGENT_CATALOG.claude.signOutArgs).toEqual(['auth', 'logout'])
+    expect(AGENT_CATALOG.codex.signOutArgs).toEqual(['logout'])
+    // Gemini has no logout command; the shell has no account. Both null.
+    expect(AGENT_CATALOG.gemini.signOutArgs).toBeNull()
+    expect(AGENT_CATALOG.shell.signOutArgs).toBeNull()
+  })
+
+  it('gates the Sign-out control on there being a command to run', () => {
+    expect(hasSignOut('claude')).toBe(true)
+    expect(hasSignOut('codex')).toBe(true)
+    // §4.1: a control that cannot act is absent, not drawn hopefully.
+    expect(hasSignOut('gemini')).toBe(false)
+    expect(hasSignOut('shell')).toBe(false)
+  })
+
+  it('answers a signed-in row that has no sign-out in that agent’s own words', () => {
+    expect(signOutNote('gemini')).toContain('Gemini')
+    expect(signOutNote('gemini')).not.toBe(signOutNote('shell'))
   })
 })

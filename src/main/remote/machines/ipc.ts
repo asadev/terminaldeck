@@ -1311,6 +1311,36 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   )
 
   /**
+   * Sign one of another machine's logins out, over there.
+   *
+   * The mirror of `machines:logins:signin`, and it answers with a sentence on
+   * every path for the same reason. The answer's `session` is always null — a
+   * logout opens no terminal — so unlike sign-in there is nothing to attach to;
+   * whether the login is actually gone is the next `machines:logins:read`.
+   */
+  ipcMain.handle(
+    'machines:logins:signout',
+    async (
+      _event,
+      id: unknown,
+      accountId: unknown,
+    ): Promise<{ ok: boolean; message: string; session: string | null }> => {
+      if (typeof id !== 'string') {
+        return { ok: false, message: 'That is not a machine.', session: null }
+      }
+      // Shape-checked here as well as on the wire, for the reason
+      // `machines:logins:signin` narrows its account id: everything past this
+      // line selects a configuration directory on somebody else's computer.
+      if (typeof accountId !== 'string' || accountId === '') {
+        return { ok: false, message: 'That is not an account.', session: null }
+      }
+      const link = links.get(id)
+      if (!link) return { ok: false, message: 'This desktop is not linked to that machine.', session: null }
+      return link.signOutLogin(accountId)
+    },
+  )
+
+  /**
    * Put text into a session on another machine, without opening it here.
    *
    * ## Why this is not `machines:input`

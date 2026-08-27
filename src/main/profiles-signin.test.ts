@@ -1,16 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   describeAnswer,
   parseAuthStatus,
   parseCodexLoginStatus,
   readSignIn,
   resetSignInCache,
+  signOutAccount,
   SIGNIN_TIMEOUT_MS,
   toSignInReport,
   unsupportedReason,
   type ProbeInput,
 } from './profiles-signin'
-import { systemProfile, type Profile } from './profiles'
+import { installPaths, resetPaths } from './platform/paths'
+import { createProfile, resetProfilesCache, systemProfile, type Profile } from './profiles'
 
 /**
  * The one screen in this app that would be worth nothing if it guessed.
@@ -524,5 +529,99 @@ describe('probing an account of an agent other than Claude', () => {
     })
     // `CLAUDE_CONFIG_DIR=$HOME/.claude` is not a no-op — see `profiles.ts`.
     expect(sawEnv.CLAUDE_CONFIG_DIR).toBeUndefined()
+  })
+})
+
+/**
+ * Signing out — run the agent's own logout command, then settle from the probe.
+ *
+ * The one screen that would be worth nothing if it guessed has a counterpart the
+ * pane went without: a Sign out that runs and then *checks*, because the exit
+ * status lies. Measured 2026-08-21: `codex logout` exits the same way whether it
+ * removed a login or found none. So the runner re-reads this machine's own probe
+ * and reports from that, exactly as `main/servers/setup.ts` settles a server's.
+ */
+describe('signOutAccount', () => {
+  const USER_DATA = join(tmpdir(), `terminaldeck-signout-test-${process.pid}`)
+
+  beforeEach(() => {
+    resetPaths()
+    installPaths({
+      userData: () => USER_DATA,
+      home: () => USER_DATA,
+      downloads: () => USER_DATA,
+      appRoot: () => USER_DATA,
+    })
+    rmSync(USER_DATA, { recursive: true, force: true })
+    mkdirSync(USER_DATA, { recursive: true })
+    resetProfilesCache()
+    resetSignInCache()
+  })
+
+  afterAll(() => {
+    resetPaths()
+    rmSync(USER_DATA, { recursive: true, force: true })
+  })
+
+  const RUNNABLE = {
+    id: 'codex' as const,
+    bin: 'codex',
+    onPath: '/opt/homebrew/bin/codex',
+    runnable: 'codex',
+    version: 'codex-cli 0.148.0',
+    broken: false,
+    said: '',
+    usedAlternate: false,
+    checkedAt: 0,
+  }
+
+  it('runs the logout, then reports success only when the probe agrees', async () => {
+    const codex = createProfile('work@codex', { provider: 'codex' })
+    const calls: string[][] = []
+    const answer = await signOutAccount(codex.id, {
+      platform: 'darwin',
+      path: '/usr/bin:/bin',
+      binary: RUNNABLE,
+      exec: async (_command, args) => {
+        calls.push(args)
+        // The logout command first, then the status re-read. "Not logged in" is
+        // what a signed-out CODEX_HOME answers — so the machine's own probe is
+        // what turns this into a success, never the command's exit status.
+        return args.includes('logout')
+          ? { stdout: 'Successfully logged out', stderr: '', exitCode: 0, killed: false }
+          : { stdout: 'Not logged in', stderr: '', exitCode: 0, killed: false }
+      },
+    })
+    // The command that was run, and the re-read that followed it.
+    expect(calls[0]).toEqual(['logout'])
+    expect(calls.some((args) => args.join(' ') === 'login status')).toBe(true)
+    expect(answer.ok).toBe(true)
+    expect(answer.message).toContain('signed out')
+    // A logout opens no terminal, so there is nothing to attach to.
+    expect(answer.session).toBeNull()
+  })
+
+  it('reports the login still there when the probe says it did not take', async () => {
+    const codex = createProfile('work@codex', { provider: 'codex' })
+    const answer = await signOutAccount(codex.id, {
+      platform: 'darwin',
+      path: '/usr/bin:/bin',
+      binary: RUNNABLE,
+      // The command "worked", but the probe still finds a login — so this is not
+      // reported as success, which is the whole reason the probe is re-read.
+      exec: async (_command, args) =>
+        args.includes('logout')
+          ? { stdout: 'Successfully logged out', stderr: '', exitCode: 0, killed: false }
+          : { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0, killed: false },
+    })
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('still signed in')
+  })
+
+  it('says plainly when the account has been deleted under it', async () => {
+    const answer = await signOutAccount('gone-in-between')
+    expect(answer.ok).toBe(false)
+    expect(answer.message).toContain('no such login')
+    expect(answer.session).toBeNull()
   })
 })

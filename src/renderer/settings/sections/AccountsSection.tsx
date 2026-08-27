@@ -13,6 +13,7 @@ import {
 } from '../../components/ProviderPicker'
 import { onMenuToggle } from '../menu-room'
 import { AddAccountDialog } from './AddAccountDialog'
+import { hasSignOut, signOutNote } from '../../../shared/agent-catalog'
 import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
 import {
   accountLabel,
@@ -473,6 +474,18 @@ export interface AccountsViewProps {
   /** Null when nothing in this window can start a session — no Sign in button. */
   onSignIn: ((account: AccountView) => void) | null
   /**
+   * Sign this account out — run the agent's own logout command under its config
+   * directory. Null when this window has no way to (no bridge), and then no Sign
+   * out is drawn on any row.
+   *
+   * Optional so the many render tests that predate it need no change; absent
+   * reads the same as null, which is a pane that draws no Sign out — the honest
+   * state for a window with no accounts bridge. A row draws the button only when
+   * this is set, the account is signed in, and its agent has a logout command
+   * (`hasSignOut`); a signed-in account of an agent with none shows the reason.
+   */
+  onSignOut?: ((account: AccountView) => void) | null
+  /**
    * The one control at the foot of the list, handed in from the pane above.
    *
    * It is **Add accounts** — a disclosure of every agent, where an installed one
@@ -563,6 +576,7 @@ export function AccountsView({
   busy,
   providerRows,
   onSignIn,
+  onSignOut = null,
   onSignInNew,
   onRename,
   onRemove,
@@ -662,6 +676,20 @@ export function AccountsView({
     // without an assertion.
     const editing = renaming?.id === account.id ? renaming : null
     const rowProblem = agentProblem(providerRows, account.provider)
+    /*
+     * Sign out is drawn only where it can act: the account is signed in, and its
+     * agent has a logout command to run. An account signed in on an agent with
+     * none (Gemini) shows the reason instead — §4.1, never a button that refuses.
+     */
+    const canSignOutHere =
+      onSignOut !== null &&
+      state?.state === 'signed-in' &&
+      account.provider !== null &&
+      hasSignOut(account.provider)
+    const signedInNoSignOut =
+      state?.state === 'signed-in' &&
+      account.provider !== null &&
+      !hasSignOut(account.provider)
     /*
      * Undefined until the state channel has answered for this row — and
      * for an `unmanaged` account it answers `unmanaged` forever, because
@@ -771,6 +799,14 @@ export function AccountsView({
                 </span>
               )}
 
+              {/* Why a signed-in account of this agent has no Sign out, in the
+                  agent's own terms — the same sentence the device and servers
+                  panes show, read from the one catalogue, and only on a row where
+                  the button would otherwise be the missing control. */}
+              {signedInNoSignOut && account.provider !== null && (
+                <span className="settings-account-blocked">{signOutNote(account.provider)}</span>
+              )}
+
               {/* The config directory and the conversation location were
                   two more lines here. Both are behind the ⓘ above — see
                   `accountNote`, and the header on this file for why four
@@ -808,6 +844,18 @@ export function AccountsView({
                   Sign in
                 </Button>
               )}
+
+            {/* And out again, on a row that is signed in and whose agent has a
+                logout command. It runs that command under this account's own
+                configuration directory and re-reads the probe — the sign-in
+                state on the row settles from the truth, not from the press. The
+                counterpart the pane went without until the catalogue carried a
+                logout command to run. */}
+            {canSignOutHere && onSignOut !== null && (
+              <Button disabled={busy} onClick={() => onSignOut(account)}>
+                Sign out
+              </Button>
+            )}
 
             {/*
               The other three, behind one dot, anchored to the row.
@@ -1323,6 +1371,53 @@ export function AccountsSection({
          so what is sent can be asserted in a test — there is no DOM here to
          press the button in. */
       onSignIn={startSession ? (account) => startSession(signInRequest(account)) : null}
+      /* Sign out runs the agent's own logout under this account's directory in
+         the main process and answers with a sentence. The button beside it is
+         gated on `hasSignOut`, so this is only ever called for an account whose
+         agent has a logout command — Gemini's row shows its reason and never
+         reaches here. Null when there is no bridge to call, which draws no Sign
+         out at all rather than one that would do nothing. */
+      onSignOut={
+        bridge?.profileSignOut
+          ? (account) => {
+              const call = bridge.profileSignOut
+              if (!call) return
+              setBusy(true)
+              setFailure(null)
+              void Promise.resolve(call(account.id)).then(
+                (raw) => {
+                  setBusy(false)
+                  const answer = raw as { ok?: unknown; message?: unknown } | null
+                  const ok = typeof answer === 'object' && answer !== null && answer.ok === true
+                  const message =
+                    typeof answer === 'object' &&
+                    answer !== null &&
+                    typeof answer.message === 'string'
+                      ? answer.message
+                      : ''
+                  // The row settles from the probe, not the press: reload
+                  // re-reads this account's sign-in state, so a sign-out that
+                  // took turns the row's Sign out back into Sign in on its own,
+                  // and the chip in every open session reads again too.
+                  accounts.reload()
+                  announceAccountsChanged()
+                  // Only a refusal is said out loud — "still signed in", an agent
+                  // that would not run — because on success the row itself is the
+                  // feedback. The sentence is the one the runner already wrote.
+                  if (!ok && message) setFailure(message)
+                },
+                (cause: unknown) => {
+                  setBusy(false)
+                  setFailure(
+                    cause instanceof Error && cause.message
+                      ? cause.message
+                      : 'Could not sign that account out.',
+                  )
+                },
+              )
+            }
+          : null
+      }
       /* One press: make the account, open its sign-in, and unmake it if the
          session cannot start. `signInToNewAccount` holds all three so the
          cleanup branch can be asserted without a DOM. */

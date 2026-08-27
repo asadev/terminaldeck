@@ -7,7 +7,9 @@ import {
   ACCOUNT_PROVIDERS,
   ACCOUNT_STRATEGIES,
   accountEnv,
+  hasSignOut,
   signInCommandLine,
+  signOutCommandLine,
   supportsAccounts,
   unsupportedAccountReason,
 } from './provider-accounts'
@@ -129,6 +131,22 @@ describe('the sign-in command shown to a signed-out account', () => {
   it('is absent for an agent with no account of its own', () => {
     expect(signInCommandLine('gemini', 'gemini')).toBeNull()
     expect(signInCommandLine('shell', '/bin/zsh')).toBeNull()
+  })
+})
+
+describe('the sign-out command run for a signed-in account', () => {
+  it('is that agent’s own — and, unlike sign-in, run rather than only shown', () => {
+    // Measured 2026-08-21: `claude auth logout` and `codex logout`, the same
+    // commands the servers pane signs a server out with.
+    expect(signOutCommandLine('claude', 'claude')).toBe('claude auth logout')
+    expect(signOutCommandLine('codex', 'codex')).toBe('codex logout')
+  })
+
+  it('is absent for an agent with no logout command, where the row shows a reason', () => {
+    expect(signOutCommandLine('gemini', 'gemini')).toBeNull()
+    expect(signOutCommandLine('shell', '/bin/zsh')).toBeNull()
+    expect(hasSignOut('gemini')).toBe(false)
+    expect(hasSignOut('claude')).toBe(true)
   })
 })
 

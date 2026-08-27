@@ -183,6 +183,16 @@ const LOGINS_READ_TIMEOUT_MS = 20_000
 const LOGINS_SIGNIN_TIMEOUT_MS = 45_000
 
 /**
+ * How long a `logins.signout` may go unanswered.
+ *
+ * Below the sign-in's ceiling because the far end's work is bounded: it runs one
+ * logout command and re-reads its own probe rather than opening a terminal and
+ * waiting on a person in a browser. Still well above a plain read, because it
+ * does spawn a CLI twice.
+ */
+const LOGINS_SIGNOUT_TIMEOUT_MS = 30_000
+
+/**
  * How long a `session.send` may go unanswered.
  *
  * The far end's work is one synchronous write into a pty — it does not read a
@@ -603,6 +613,16 @@ export interface MachineLink {
    * boolean: an interactive login nobody can see is a login nobody can complete.
    */
   signInLogin(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Sign one of that machine's logins out, over there.
+   *
+   * Always answers with a sentence, on every path, for the reason
+   * {@link signInLogin} does. Unlike sign-in there is no terminal to hand back —
+   * a logout runs a command and finishes — so `session` is always null, kept in
+   * the shape only so the two answers read the same way. The far machine settles
+   * `ok` against its own probe rather than the command's exit status.
+   */
+  signOutLogin(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
   /**
    * Put text into a session over there **without attaching to it**, and report
    * what the far end said about it.
@@ -1590,6 +1610,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       case 'account.switched':
       case 'logins.state':
       case 'logins.signedin':
+      case 'logins.signedout':
       case 'session.sent':
         /*
          * The answer to one question this end asked, handed to whoever asked it.
@@ -2176,6 +2197,41 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         return {
           ok: false,
           message: 'That machine did not answer, so it is not known whether a terminal was opened for the login.',
+          session: null,
+        }
+      }
+      return { ok: answer.ok, message: answer.message, session: answer.session }
+    },
+    async signOutLogin(accountId) {
+      // The mirror of `signInLogin`, refusal for refusal — a link that is down
+      // and a machine that does not manage its logins from here are the same two
+      // remedies, both covered by "somebody at that keyboard".
+      if (current.state !== 'online') {
+        return { ok: false, message: 'This desktop is not connected to that machine right now.', session: null }
+      }
+      if (!current.capabilities.includes(CAPABILITY.logins)) {
+        return {
+          ok: false,
+          message:
+            'That machine does not manage its logins from here — it is running an older build, or this desktop is a guest on it.',
+          session: null,
+        }
+      }
+      const answer = await ask(
+        { t: 'logins.signout', rid: randomUUID(), accountId },
+        LOGINS_SIGNOUT_TIMEOUT_MS,
+        CAPABILITY.logins,
+      )
+      if (answer === null || answer.t !== 'logins.signedout') {
+        /*
+         * The honest sentence for no answer, which is not "it failed": unlike a
+         * sign-in this opened nothing over there, so nothing was left running,
+         * but whether the credential was cleared is a question for the next read
+         * of that machine's probe rather than a guess made here.
+         */
+        return {
+          ok: false,
+          message: 'That machine did not answer, so it is not known whether the login was signed out.',
           session: null,
         }
       }

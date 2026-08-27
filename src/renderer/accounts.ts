@@ -64,6 +64,16 @@ export interface AccountsBridge {
   setProjectDefaultProfile(projectPath: string, id: string | null): Promise<unknown>
   profileSignIn(id: string, options?: { refresh?: boolean }): Promise<unknown>
   /**
+   * Sign this account out — run the agent's own logout command under its config
+   * directory, then re-read to prove it took. The counterpart `profileSignIn`
+   * went without until the catalogue gained a logout command to run.
+   *
+   * The answer is a sentence either way, never a bare rejection. Only ever
+   * called for an account whose agent has a logout command — `hasSignOut` gates
+   * the button — so the pane never asks it to sign out Gemini, which has none.
+   */
+  profileSignOut(id: string): Promise<unknown>
+  /**
    * Where this account's conversations are kept, read from the disk rather than
    * remembered from whichever button was pressed last.
    *

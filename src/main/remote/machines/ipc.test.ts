@@ -271,6 +271,8 @@ function rig(
         readLogins: () => Promise.resolve(null),
         signInLogin: (_accountId: string) =>
           Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
+        signOutLogin: (_accountId: string) =>
+          Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
         // Typing into a session over there without attaching to it. Recorded
         // rather than answered `true`, because the argument that has to survive
         // this channel is the text: a handler that dropped it would look
@@ -386,6 +388,7 @@ describe('launching', () => {
          */
         'machines:logins:read',
         'machines:logins:signin',
+        'machines:logins:signout',
         // The two that make remote localhost work in both directions. `ports`
         // is the refresh — the link asks once per welcome and pushes the answer,
         // so this is the button for "I have just started a dev server over
@@ -947,6 +950,12 @@ describe('waking', () => {
             // And the same two asked about the machine rather than a session.
             readLogins: () => Promise.resolve(null),
             signInLogin: (_accountId: string) =>
+              Promise.resolve({
+                ok: false,
+                message: 'That machine does not manage its logins from here.',
+                session: null,
+              }),
+            signOutLogin: (_accountId: string) =>
               Promise.resolve({
                 ok: false,
                 message: 'That machine does not manage its logins from here.',

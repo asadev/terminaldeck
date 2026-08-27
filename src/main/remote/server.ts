@@ -529,6 +529,16 @@ export interface RemoteLoginsAccess {
    * next {@link read}, which reads this machine's own probe.
    */
   signIn(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
+  /**
+   * Sign that login out, on this machine.
+   *
+   * Unlike {@link signIn}, this is a command that finishes rather than an
+   * interactive flow, so `session` is always null — there is nothing to open and
+   * attach to. It reports what happened after re-reading this machine's own
+   * probe, and does not throw for an ordinary refusal: an agent with no logout
+   * command answers with its reason, for the reason the interface note gives.
+   */
+  signOut(accountId: string): Promise<{ ok: boolean; message: string; session: string | null }>
 }
 
 /**
@@ -5704,7 +5714,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
-   * Serve one `logins.read` or `logins.signin`.
+   * Serve one `logins.read`, `logins.signin` or `logins.signout`.
    *
    * ## A different door from `accountServe`, and that is the point of the file
    *
@@ -5724,7 +5734,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   async function loginsServe(
     connection: LiveConnection,
     deviceId: string,
-    message: Extract<ClientMessage, { t: 'logins.read' | 'logins.signin' }>,
+    message: Extract<ClientMessage, { t: 'logins.read' | 'logins.signin' | 'logins.signout' }>,
   ): Promise<void> {
     const logins = options.sessions.logins
     if (!logins || !advertised.includes(CAPABILITY.logins) || !ownDevice(deviceId)) {
@@ -5749,6 +5759,25 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // handful of memoised probes, which is milliseconds but is not nothing.
       if (!live.has(connection.id)) return
       send(connection, { t: 'logins.state', rid: message.rid, accounts })
+      return
+    }
+
+    if (message.t === 'logins.signout') {
+      // The mirror of the sign-in below, and one frame apart: a logout runs a
+      // command and re-reads this machine's probe, so there is no terminal to
+      // hand back — `session` is always null on `logins.signedout`.
+      const answer = await logins.signOut(message.accountId)
+      if (!live.has(connection.id)) return
+      send(connection, {
+        t: 'logins.signedout',
+        rid: message.rid,
+        ok: answer.ok,
+        // Passed through as written, for the reason `logins.signedin`'s is: the
+        // asking machine cannot write a better sentence about a computer it is
+        // not on than that computer's own.
+        message: answer.message,
+        session: answer.session,
+      })
       return
     }
 
@@ -6773,6 +6802,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         return
       case 'logins.read':
       case 'logins.signin':
+      case 'logins.signout':
         // Not awaited, for the reason the account frames above are not: a
         // sign-in starts an agent CLI on this machine, and a socket that stopped
         // reading would freeze every session on the connection while it did.

@@ -184,6 +184,32 @@ export interface AgentEntry {
   /** Args that start an interactive sign-in. Shown to the user; never run behind their back. */
   signInArgs: readonly string[] | null
   /**
+   * Args that sign this agent out, or null where it has no such command.
+   *
+   * The counterpart `signInArgs` went without until 2026-08-26, and its absence
+   * was the one missing piece three panes were waiting on — the local Accounts
+   * list, a paired device's list, and the servers pane all said, in their own
+   * words, that nothing here could sign an agent out because there was no logout
+   * command to run. His ask was the whole of it: *"sign in, sign out and set
+   * access… from that one pane."*
+   *
+   * Unlike sign-in, this is not interactive: the command runs, finishes, and
+   * removes the credential, so it is *run* rather than only printed — which is
+   * why it is a real control here and not a sentence. The two that have one were
+   * measured on a real box on 2026-08-21, the same measurement `main/servers/
+   * setup.ts` runs its own sign-out from; the third has none and says so on its
+   * row rather than showing a button that would run nothing.
+   */
+  signOutArgs: readonly string[] | null
+  /**
+   * Why this agent has no sign-out, in its own terms. Null when it has one.
+   *
+   * The screen draws this sentence and no button for a signed-in row of an agent
+   * with `signOutArgs: null` — §4.1, *"a control that cannot act is removed, or
+   * disabled with a stated reason. Never drawn hopefully."*
+   */
+  signOutNote: string | null
+  /**
    * One sentence for the screen when `logins` is not `multiple`. Never generic —
    * a reason that does not match the agent leaves a person unable to tell
    * whether the app looked or gave up.
@@ -222,6 +248,12 @@ export const AGENT_CATALOG: Record<ProviderId, AgentEntry> = {
     statusArgs: ['auth', 'status', '--json'],
     statusFormat: 'claude-json',
     signInArgs: ['auth', 'login'],
+    // Measured on a real box 2026-08-21: `claude auth logout` sits in this CLI's
+    // own `auth` subcommand list beside `login` and `status`, and lets go of the
+    // login the config directory holds. `main/servers/setup.ts` signs a server
+    // out with exactly this; the local and device panes now run the same command.
+    signOutArgs: ['auth', 'logout'],
+    signOutNote: null,
     loginsNote: null,
     verified:
       '`claude --version` → 2.1.233. `CLAUDE_CONFIG_DIR=/tmp/fresh claude auth status --json` → loggedIn false, while the default directory answers loggedIn true — same binary, two directories, two logins.',
@@ -246,6 +278,13 @@ export const AGENT_CATALOG: Record<ProviderId, AgentEntry> = {
     // `codex login status` has no `--json`; the parser reads its sentences.
     statusFormat: 'codex-text',
     signInArgs: ['login'],
+    // Measured 2026-08-21: `codex logout` answers "Successfully logged out" and
+    // removes `auth.json`. Its exit status is the weaker fact — it exits the same
+    // way whether it removed a login or found none — so whoever runs it confirms
+    // by re-reading this machine's own probe afterwards, exactly as the server
+    // path does.
+    signOutArgs: ['logout'],
+    signOutNote: null,
     loginsNote: null,
     verified:
       '`~/.codex/plugins/.plugin-appserver/codex --version` → codex-cli 0.146.0-alpha.3.1, and `login status` → "Logged in using ChatGPT" while a fresh CODEX_HOME answers "Not logged in". The npm launcher on PATH exits 1 with a spawn ENOENT for its own vendored binary, which is why `alternateBins` is not empty.',
@@ -302,6 +341,14 @@ export const AGENT_CATALOG: Record<ProviderId, AgentEntry> = {
     // Nor a `login` subcommand: signing in happens inside a session, where the
     // CLI draws its own auth-method dialog on first run.
     signInArgs: null,
+    // Gemini CLI has no logout command — its subcommands are mcp, extensions,
+    // skills, hooks and gemma, and its sign-in happens inside a session rather
+    // than from a flag. There is nothing to run, so the row carries this reason
+    // instead of a button that would refuse: §4.1, a control that cannot act is
+    // absent, not disabled hopefully.
+    signOutArgs: null,
+    signOutNote:
+      'Gemini CLI has no logout command, so this app cannot sign it out from here — its login is let go of inside Gemini’s own screen.',
     loginsNote:
       'Gemini keeps one login per machine, in a keychain entry that is the same for every configuration directory — so a second Gemini account here would replace the first rather than sit beside it. The one login below is the machine’s, and signing in from it signs Gemini in everywhere.',
     verified:
@@ -325,6 +372,8 @@ export const AGENT_CATALOG: Record<ProviderId, AgentEntry> = {
     statusArgs: null,
     statusFormat: null,
     signInArgs: null,
+    signOutArgs: null,
+    signOutNote: 'A plain shell has no account to sign out of.',
     loginsNote: 'A plain shell has no account to sign in to.',
     verified: 'Resolved from $SHELL / %COMSPEC% at runtime; never looked up on PATH.',
   },
@@ -386,5 +435,32 @@ export function loginsNote(id: ProviderId): string {
   return (
     AGENT_CATALOG[id]?.loginsNote ??
     'This agent signs in its own way, and nothing here has verified a way to keep two of its logins apart — so a session on it uses whichever login this machine already has.'
+  )
+}
+
+/**
+ * True when this agent can actually be signed out from here.
+ *
+ * The predicate every Sign-out control is gated on — local, device and server
+ * alike — so a button is drawn only where a command exists to back it. An agent
+ * with `signOutArgs: null` (Gemini, and the shell) answers false, and the row
+ * carries {@link signOutNote} instead of a control that would run nothing.
+ */
+export function hasSignOut(id: ProviderId): boolean {
+  return (AGENT_CATALOG[id]?.signOutArgs ?? null) !== null
+}
+
+/**
+ * Why this agent has no sign-out, in its own terms — the sentence a signed-in
+ * row shows where {@link hasSignOut} is false.
+ *
+ * Always the agent's own reason, never a generic one: a person reading a
+ * sentence that does not match their agent cannot tell whether the app looked or
+ * gave up, which is the same rule {@link loginsNote} lives by.
+ */
+export function signOutNote(id: ProviderId): string {
+  return (
+    AGENT_CATALOG[id]?.signOutNote ??
+    'This agent has no command to sign it out from here, so its login is let go of inside the agent’s own screen.'
   )
 }

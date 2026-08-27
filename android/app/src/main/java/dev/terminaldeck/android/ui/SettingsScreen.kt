@@ -1,17 +1,11 @@
 package dev.terminaldeck.android.ui
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Dns
@@ -19,25 +13,17 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -46,7 +32,6 @@ import dev.terminaldeck.android.alerts.AlertCenter
 import dev.terminaldeck.android.alerts.AlertPermission
 import dev.terminaldeck.android.alerts.AlertSettings
 import dev.terminaldeck.android.protocol.ServerSettingKey
-import dev.terminaldeck.android.store.TerminalTextSize
 import dev.terminaldeck.android.ui.kit.DeckDivider
 import dev.terminaldeck.android.ui.kit.DeckFootnote
 import dev.terminaldeck.android.ui.kit.DeckGroup
@@ -54,7 +39,6 @@ import dev.terminaldeck.android.ui.kit.DeckRow
 import dev.terminaldeck.android.ui.kit.DeckTopBar
 import dev.terminaldeck.android.ui.kit.SectionCaption
 import dev.terminaldeck.android.ui.theme.DeckTheme
-import dev.terminaldeck.android.ui.theme.DeckType
 import dev.terminaldeck.android.ui.theme.Space
 import dev.terminaldeck.android.ui.theme.currentAppearance
 
@@ -97,7 +81,6 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val colors = DeckTheme.colors
-    var textSize by remember { mutableIntStateOf(TerminalTextSize.load(context)) }
 
     /*
      * The alert row's value is read on every resume rather than once.
@@ -190,56 +173,10 @@ fun SettingsScreen(
                 ServerSettingsSection(view = settings, onApply = onApplyServerSetting)
             }
 
-            SectionCaption("Terminal")
-            DeckGroup {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = Space.card, end = Space.x1, top = Space.x2, bottom = Space.x2),
-                ) {
-                    Icon(
-                        Icons.Filled.TextFields,
-                        contentDescription = null,
-                        tint = colors.secondary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(Space.x3))
-                    Text(
-                        text = "Text size",
-                        style = DeckType.body,
-                        color = colors.primary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = TerminalTextSize.label(textSize),
-                        style = DeckType.monoValue,
-                        color = colors.faint,
-                    )
-                    IconButton(
-                        enabled = TerminalTextSize.canGoSmaller(textSize),
-                        onClick = {
-                            textSize = TerminalTextSize.smaller(textSize)
-                            TerminalTextSize.save(context, textSize)
-                        },
-                    ) {
-                        Icon(Icons.Filled.Remove, contentDescription = "Smaller terminal text", tint = colors.secondary)
-                    }
-                    IconButton(
-                        enabled = TerminalTextSize.canGoLarger(textSize),
-                        onClick = {
-                            textSize = TerminalTextSize.larger(textSize)
-                            TerminalTextSize.save(context, textSize)
-                        },
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Bigger terminal text", tint = colors.secondary)
-                    }
-                }
-            }
-            DeckFootnote(
-                "A session already open picks this up the next time you open it — the column count " +
-                    "is the font, so changing it resizes the session on the machine."
-            )
+            // The terminal's text size moved to the Appearance page on 2026-08-26
+            // (B4): it is a terminal appearance setting and belongs with the
+            // terminal's other appearance settings there, not buried in this
+            // general list. See [AppearanceScreen].
 
             SectionCaption("About")
             DeckGroup {

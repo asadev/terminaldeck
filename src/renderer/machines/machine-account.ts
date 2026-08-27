@@ -109,6 +109,7 @@ interface Bridge {
   switchMachineAccount?(machineId: string, sessionId: string, accountId: string): Promise<unknown>
   readMachineLogins?(machineId: string): Promise<unknown>
   signInMachineLogin?(machineId: string, accountId: string): Promise<unknown>
+  signOutMachineLogin?(machineId: string, accountId: string): Promise<unknown>
 }
 
 /**
@@ -391,6 +392,35 @@ export async function signInMachineLogin(
   const call = host?.signInMachineLogin
   if (typeof call !== 'function') {
     return { ok: false, message: 'This build has no way to sign a login in over there.', session: null }
+  }
+  const answer = await call.call(host, machineId, accountId)
+  if (!isRecord(answer)) {
+    return { ok: false, message: 'That machine did not answer.', session: null }
+  }
+  return {
+    ok: answer.ok === true,
+    message: typeof answer.message === 'string' ? answer.message : '',
+    session: typeof answer.session === 'string' && answer.session !== '' ? answer.session : null,
+  }
+}
+
+/**
+ * Sign one of another machine's logins out, over there.
+ *
+ * The mirror of {@link signInMachineLogin}, and it answers with a sentence on
+ * every path for the same reason. `session` is always null — a logout opens no
+ * terminal to finish in — so a caller draws no "open it" affordance; whether the
+ * login is actually gone is the next {@link useMachineLogins} read of that
+ * machine's own probe, never assumed from the press.
+ */
+export async function signOutMachineLogin(
+  machineId: string,
+  accountId: string,
+): Promise<{ ok: boolean; message: string; session: string | null }> {
+  const host = bridge()
+  const call = host?.signOutMachineLogin
+  if (typeof call !== 'function') {
+    return { ok: false, message: 'This build has no way to sign a login out over there.', session: null }
   }
   const answer = await call.call(host, machineId, accountId)
   if (!isRecord(answer)) {
