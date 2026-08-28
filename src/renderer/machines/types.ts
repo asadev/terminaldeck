@@ -310,6 +310,39 @@ export interface MachinesBridge {
   cancelMachineUpload(machineId: string): Promise<unknown>
   /** Slice-by-slice progress, so a pane can draw one line about a file in flight. */
   onMachineUpload(cb: (progress: unknown) => void): () => void
+  /**
+   * The host on that machine, over the relay — status, restart, stop. The desktop
+   * half of `host.control`, drawn on a server page for a machine it is paired
+   * with. Each answers the host's own reading, or `null` when nobody answered.
+   *
+   * All three optional, and deliberately **not** on {@link BRIDGE_METHODS}: that
+   * list is an all-or-nothing gate — a preload missing one name makes the whole
+   * machines surface resolve to null — and a verb added this round must not be
+   * able to blank a screen that works. The relay-control card is drawn only where
+   * the method is there *and* the far machine advertised `host.control`, the same
+   * two-question rule the rest of this app follows.
+   */
+  readMachineHost?(id: string): Promise<unknown>
+  restartMachineHost?(id: string): Promise<unknown>
+  stopMachineHost?(id: string): Promise<unknown>
+  /**
+   * That machine's own GitHub login, driven over the relay — read it, connect,
+   * cancel, disconnect. The desktop half of `github`. Each answers the machine's
+   * own `GitHubHostWire`, or `null` when nobody answered; the completion of a
+   * sign-in arrives on {@link onMachineGitHubChanged}. Optional and off
+   * {@link BRIDGE_METHODS} for the reason the three host methods above are.
+   */
+  readMachineGitHub?(id: string): Promise<unknown>
+  connectMachineGitHub?(id: string): Promise<unknown>
+  cancelMachineGitHub?(id: string): Promise<unknown>
+  disconnectMachineGitHub?(id: string): Promise<unknown>
+  /**
+   * That machine's GitHub login changed on its own — a sign-in a person finished
+   * on github.com, or another device changing it. The machine id is split out of
+   * the payload, exactly as the copilot subscriptions do it. Optional and off
+   * {@link BRIDGE_METHODS} for the same reason the methods above are.
+   */
+  onMachineGitHubChanged?(cb: (machineId: string, github: unknown) => void): () => void
 }
 
 const BRIDGE_METHODS = [

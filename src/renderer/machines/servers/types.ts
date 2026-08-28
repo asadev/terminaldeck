@@ -1255,6 +1255,119 @@ export function asHostOffer(value: unknown): HostOffer | null {
   }
 }
 
+/* ------------------------------------------------- host.control + github -- */
+
+/** How the host on a machine is supervised — what a restart will actually do. */
+export type HostManagedBy = 'systemd' | 'direct' | 'unknown'
+
+/**
+ * The machine's own host, as this server page reads it **over the relay** — the
+ * answer to `host.status`, and what a `host.restart` / `host.stop` echoes back.
+ *
+ * Mirrors `HostControlWire` in `src/main/remote/protocol.ts`, and only what a
+ * card on this side draws. It carries what the host knows about *itself*: it is
+ * running (it answered, so `running` is always true here), its build, how it is
+ * supervised, how long it has been up, and — after a restart or stop — a `note`
+ * about what it just set in motion, sent before the connection drops.
+ */
+export interface HostControlWire {
+  running: boolean
+  version: string
+  address: string
+  pid: number
+  startedAt: number
+  uptimeSeconds: number
+  managed: HostManagedBy
+  note: string | null
+}
+
+const HOST_MANAGED: readonly HostManagedBy[] = ['systemd', 'direct', 'unknown']
+
+/**
+ * Read a host reading, or `null` when it was not one.
+ *
+ * `null` is what the relay control keeps its last status through — a missed round
+ * trip is not a machine that stopped, and the card blanks nothing on it. `note`
+ * is read as absent-is-null on purpose: only a restart or a stop sends one, and a
+ * plain status carries none.
+ */
+export function asHostControlWire(value: unknown): HostControlWire | null {
+  if (!isRecord(value)) return null
+  return {
+    running: value.running === true,
+    version: text(value.version),
+    address: text(value.address),
+    pid: whole(value.pid) ?? 0,
+    startedAt: whole(value.startedAt) ?? 0,
+    uptimeSeconds: whole(value.uptimeSeconds) ?? 0,
+    managed: HOST_MANAGED.find((known) => known === value.managed) ?? 'unknown',
+    note: readText(value.note),
+  }
+}
+
+/** A device-flow sign-in waiting on the person right now. */
+export interface GitHubHostPrompt {
+  userCode: string
+  verificationUri: string
+  expiresAt: number
+}
+
+/**
+ * The machine's own GitHub login, as this server page reads it over the relay.
+ *
+ * Mirrors `GitHubHostWire` in `src/main/remote/protocol.ts`. The account lives on
+ * the machine — this desktop never holds the token. `pending` is a sign-in in
+ * flight, `failure` the one sentence for why there is no usable credential, and
+ * `appConfigured` false is a fork with no GitHub App of its own: no Connect
+ * button, only the sentence.
+ */
+export interface GitHubHostWire {
+  connected: boolean
+  login: string | null
+  name: string | null
+  avatarUrl: string | null
+  source: string | null
+  appConfigured: boolean
+  installUrl: string | null
+  pending: GitHubHostPrompt | null
+  failure: string | null
+  disconnect: string | null
+}
+
+/**
+ * Read a GitHub reading, or `null` when it was not one.
+ *
+ * `null` is only ever "nobody answered" — a link that is down, an older build, or
+ * this desktop being a guest on that machine. A refusal a person can act on rides
+ * *inside* the reading as `appConfigured: false` with a `failure` sentence, not
+ * as a `null`, so the card can draw the reason rather than a blank.
+ */
+export function asGitHubHostWire(value: unknown): GitHubHostWire | null {
+  if (!isRecord(value)) return null
+  const pending = isRecord(value.pending)
+    ? {
+        userCode: text(value.pending.userCode),
+        verificationUri: text(value.pending.verificationUri),
+        expiresAt: whole(value.pending.expiresAt) ?? 0,
+      }
+    : null
+  return {
+    connected: value.connected === true,
+    login: readText(value.login),
+    name: readText(value.name),
+    avatarUrl: readText(value.avatarUrl),
+    source: readText(value.source),
+    appConfigured: value.appConfigured === true,
+    installUrl: readText(value.installUrl),
+    // A pending prompt with no code to type is not a prompt — drop it rather than
+    // draw a sign-in screen with nothing on it, and fall back to whatever other
+    // state the reading names.
+    pending: pending !== null && pending.userCode !== '' ? pending : null,
+    failure: readText(value.failure),
+    disconnect: readText(value.disconnect),
+  }
+}
+
 export function asView(value: unknown): ServerView | null {
   if (!isRecord(value)) return null
   return {

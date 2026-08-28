@@ -65,6 +65,8 @@ import {
   type ControlsReadingWire,
   type CopilotLinkWire,
   type CopilotStateReport,
+  type GitHubHostWire,
+  type HostControlWire,
   type HostKind,
   type LocalPort,
   type ProtocolErrorCode,
@@ -206,6 +208,31 @@ const SEND_TIMEOUT_MS = 20_000
 
 /** How long a `hello` may go unanswered before the channel is not one. */
 const WELCOME_TIMEOUT_MS = 15_000
+
+/**
+ * How long a `host.status` / `github.read` may go unanswered — both passive
+ * reads over there, so the only thing being waited out is the relay, the same
+ * twenty seconds a `controls.read` gets and for the same reason. A bar that gives
+ * up early keeps whatever it last genuinely read.
+ *
+ * The two host-control verbs (`host.restart` / `host.stop`) get a longer ceiling
+ * of their own: the far end shells out to systemd before it can even answer, and
+ * the answer *races the very drop it is about to cause* — a restart takes down
+ * this connection. So a null answer there is the ordinary case, not a failure,
+ * and the surface reads it as "no word came back, it may be on its way up"
+ * rather than "it failed". This mirrors `HostControlLink.verbTimeout` on iOS.
+ */
+const HOST_READ_TIMEOUT_MS = 20_000
+const HOST_VERB_TIMEOUT_MS = 30_000
+
+/**
+ * And the GitHub sign-in verbs. A `github.connect` is a round trip to GitHub
+ * from the host to fetch a device code, and a `github.disconnect` can wait on the
+ * host revoking a token — both are seconds, so they get a ceiling well above the
+ * plain read and in line with `GitHubLink.verbTimeout` on iOS.
+ */
+const GITHUB_READ_TIMEOUT_MS = 20_000
+const GITHUB_VERB_TIMEOUT_MS = 45_000
 
 /* ------------------------------------------------------------------ state -- */
 
@@ -647,6 +674,51 @@ export interface MachineLink {
    */
   send(sessionId: string, data: string): Promise<{ ok: boolean; message: string }>
   /*
+   * The host on **that** machine, managed from this one — status, restart, stop,
+   * over the relay. The client half of `host.control`.
+   *
+   * **"The relay is the network." — Asad's rule, pinned.** A server page reaches
+   * one box two roads: an SSH address it was added with, and the relay it is
+   * paired over. The SSH address can be a Tailscale name that drops on its own,
+   * and then the page reports the box unreachable while every session on it is
+   * still running over the public relay. So the status a headless server has no
+   * screen to show, and the restart/stop it has no screen to press, are answered
+   * here over the relay whenever that server is a connected machine — and fall
+   * back to SSH only when it is not. These three are the exact mirror of
+   * iOS `HostControlLink`.
+   *
+   * Each answers with the {@link HostControlWire} the far end sent, or `null`.
+   * `null` is "nobody answered", which is the link being down, the machine
+   * running a build older than `host.control`, or — for restart and stop
+   * especially — the connection dropping *as the host acts*, before the reply
+   * flushed. That last case is why a `null` from a restart is not a failure: the
+   * host answers with a `note` first and acts after, and the reconnection is the
+   * real signal. There is no `host.start` here on purpose: a stopped host is not
+   * connected over the relay, so there is nothing on this wire to start.
+   */
+  hostStatus(): Promise<HostControlWire | null>
+  hostRestart(): Promise<HostControlWire | null>
+  hostStop(): Promise<HostControlWire | null>
+  /*
+   * That machine's own GitHub login, driven from this one — read it, start a
+   * device-flow sign-in over there, cancel one in flight, or sign it out. The
+   * client half of `github`, and the exact mirror of iOS `GitHubLink`.
+   *
+   * The account lives on the machine now: it holds its own token and spends it
+   * on its own pushes, and this desktop only *triggers* that — it never holds a
+   * secret. Each answers with the {@link GitHubHostWire} the far end sent, or
+   * `null` for "nobody answered" (the link down, an older build, or this desktop
+   * being a guest, which is the one absence the two above do not have —
+   * `capabilitiesFor` withholds `github` from a guest the same way it withholds
+   * `logins`). A sign-in that a person then completes on github.com arrives later
+   * as an unsolicited {@link MachineLinkOptions.onGithubChanged} with no `rid`,
+   * because the poll finishes on the host while nobody is watching.
+   */
+  githubRead(): Promise<GitHubHostWire | null>
+  githubConnect(): Promise<GitHubHostWire | null>
+  githubCancel(): Promise<GitHubHostWire | null>
+  githubDisconnect(): Promise<GitHubHostWire | null>
+  /*
    * The copilot on **that** machine, reached from this one.
    *
    * His words for what this is under: *"the same switch we have for sessions"*
@@ -738,6 +810,20 @@ export interface MachineLinkOptions {
    * replay within a week.
    */
   onCopilotChat?(chat: Extract<ServerMessage, { t: 'copilot.chat' }>): void
+  /**
+   * That machine's GitHub login changed on its own, now.
+   *
+   * The one unsolicited frame on the `github` conversation: it arrives without a
+   * `rid` when a sign-in this desktop started finally completes on github.com, or
+   * when another device changes the login. Handed out rather than published as
+   * link state, for the reason the copilot frames above are: it is one card's
+   * subject, not something the machines panel draws, and folding it into
+   * `machines:state` would redraw the sidebar for a change only the server page
+   * cares about. Optional, so every existing construction of a link still
+   * compiles — a machine nobody drew a GitHub card for simply never has a reader
+   * for the push.
+   */
+  onGithubChanged?(github: GitHubHostWire): void
   /**
    * How the file being sent to that machine is getting on.
    *
@@ -1692,6 +1778,41 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
          * missing — the same rule this switch follows throughout.
          */
         return
+      case 'host.state':
+        /*
+         * The answer to one `host.status`, `host.restart` or `host.stop` this end
+         * asked, routed by `rid` to whoever asked — the same handling every other
+         * reading gets, in its own block because the settle-group's shared
+         * case-label list is not appended to across lanes. A restart or a stop
+         * answers `host.state` with a `note` *before* the host acts and drops this
+         * very connection, so this settle is very often the last frame heard on the
+         * socket; that is by design, and `hostRestart` reads the drop-then-null as
+         * "on its way back" rather than as a failure. An answer with no waiting
+         * request falls on the floor in `settle`, which is the right place for it.
+         */
+        settle(message.rid, message)
+        return
+      case 'github.state':
+        /*
+         * The answer to one `github.read`, `github.connect`, `github.cancel` or
+         * `github.disconnect`, routed by `rid` — its own block for the reason
+         * `host.state` above has one. Whether a sign-in this end started ends up
+         * *connected* is not this frame; that arrives as `github.changed` below,
+         * when the poll on the host completes.
+         */
+        settle(message.rid, message)
+        return
+      case 'github.changed':
+        /*
+         * An unsolicited push: a sign-in a person completed on github.com while
+         * nobody was watching, or another device changing the login. No `rid` to
+         * match — it answers nothing this end asked — so it is handed straight out
+         * rather than settled, and it is what makes the connect flow finish on its
+         * own without this end polling anything. Dropped silently when nobody is
+         * drawing a GitHub card for this machine, exactly like the copilot pushes.
+         */
+        options.onGithubChanged?.(message.github)
+        return
       case 'attached':
       case 'detached':
       case 'pong':
@@ -2289,6 +2410,90 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         return { ok: false, message: 'That machine did not answer, so it is not known whether the text arrived.' }
       }
       return { ok: answer.ok, message: answer.message }
+    },
+    /*
+     * The host, over the relay. Three verbs, and the gate for all three lives in
+     * `ask`: it refuses without registering anything when the link is down or the
+     * machine never advertised `host.control`, and settles `null` on a timeout —
+     * so a caller never waits out a deadline for a question that was never asked,
+     * and never has to re-check the capability here. `null` answers all three
+     * absences with one shape, and the surface keeps the last status it read
+     * rather than blanking on a missed round trip — the same rule the control
+     * chips follow. See {@link MachineLink.hostStatus} for why a `null` from a
+     * restart is the ordinary case rather than a failure.
+     */
+    async hostStatus(): Promise<HostControlWire | null> {
+      const answer = await ask(
+        { t: 'host.status', rid: randomUUID() },
+        HOST_READ_TIMEOUT_MS,
+        CAPABILITY.hostControl,
+      )
+      if (answer === null || answer.t !== 'host.state') return null
+      return answer.host
+    },
+    async hostRestart(): Promise<HostControlWire | null> {
+      const answer = await ask(
+        { t: 'host.restart', rid: randomUUID() },
+        HOST_VERB_TIMEOUT_MS,
+        CAPABILITY.hostControl,
+      )
+      if (answer === null || answer.t !== 'host.state') return null
+      return answer.host
+    },
+    async hostStop(): Promise<HostControlWire | null> {
+      const answer = await ask(
+        { t: 'host.stop', rid: randomUUID() },
+        HOST_VERB_TIMEOUT_MS,
+        CAPABILITY.hostControl,
+      )
+      if (answer === null || answer.t !== 'host.state') return null
+      return answer.host
+    },
+    /*
+     * That machine's GitHub, over the relay. Four verbs, gated the same way in
+     * `ask` — `null` for a link that is down, a build older than `github`, or this
+     * desktop being a guest on it, which the far end withholds the capability for.
+     * A refusal (no GitHub App configured, say) arrives *inside* a `github.state`
+     * with `appConfigured: false` and a `failure` sentence rather than as a
+     * `null`, so the card can draw the reason; `null` is only ever "nobody
+     * answered". The completion of a `connect` a person then authorises comes back
+     * on {@link MachineLinkOptions.onGithubChanged}, not here.
+     */
+    async githubRead(): Promise<GitHubHostWire | null> {
+      const answer = await ask(
+        { t: 'github.read', rid: randomUUID() },
+        GITHUB_READ_TIMEOUT_MS,
+        CAPABILITY.github,
+      )
+      if (answer === null || answer.t !== 'github.state') return null
+      return answer.github
+    },
+    async githubConnect(): Promise<GitHubHostWire | null> {
+      const answer = await ask(
+        { t: 'github.connect', rid: randomUUID() },
+        GITHUB_VERB_TIMEOUT_MS,
+        CAPABILITY.github,
+      )
+      if (answer === null || answer.t !== 'github.state') return null
+      return answer.github
+    },
+    async githubCancel(): Promise<GitHubHostWire | null> {
+      const answer = await ask(
+        { t: 'github.cancel', rid: randomUUID() },
+        GITHUB_VERB_TIMEOUT_MS,
+        CAPABILITY.github,
+      )
+      if (answer === null || answer.t !== 'github.state') return null
+      return answer.github
+    },
+    async githubDisconnect(): Promise<GitHubHostWire | null> {
+      const answer = await ask(
+        { t: 'github.disconnect', rid: randomUUID() },
+        GITHUB_VERB_TIMEOUT_MS,
+        CAPABILITY.github,
+      )
+      if (answer === null || answer.t !== 'github.state') return null
+      return answer.github
     },
     copilotAttach: () => copilotVerb({ t: 'copilot.attach' }, 'Watching that machine’s copilot.'),
     copilotStart: () => copilotVerb({ t: 'copilot.start' }, 'Asked that machine to start a copilot run.'),
