@@ -142,20 +142,20 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
   // below: an entry that outlives its reason is documentation asserting the
   // opposite of the code.
-  // The four files of the community store's contract. They are the foundation
-  // the Community department is built on and they landed first, on purpose: the
-  // manifest grammar, where the catalogue is fetched from, the keys that say it
-  // is ours, and the fetch-check-keep that uses all three. Nothing imports them
-  // from a screen yet, because the department itself is the next plan.
+  // The community store's contract landed before the screen that uses it, and
+  // three of its four files are still waiting for the main-process half.
   //
-  // Every one of these entries names the single import that deletes it, so an
-  // entry cannot outlive its reason without somebody reading the sentence that
-  // says it should have gone.
-  'src/shared/store-manifest.ts':
-    'unreachable on purpose while the Community department is unbuilt: it is the manifest ' +
-    'grammar, and its readers today are src/main/store-index.ts (itself unreached), the ' +
-    'terminaldeck-commons indexer and the site validator. Delete this entry the moment a ' +
-    'screen or the headless host imports it.',
+  // `src/shared/store-manifest.ts` was the fourth and its entry is gone, which
+  // is what these entries are for: it said "delete this entry the moment a
+  // screen or the headless host imports it", and the Community department now
+  // does — `renderer/community/bridge.ts` reads the seven kinds, the three tier
+  // sentences and the need words out of it, so the vocabulary on screen is the
+  // same object the manifest parser refuses against rather than a second copy of
+  // the same words.
+  //
+  // Every one of the entries below names the single import that deletes it, so
+  // an entry cannot outlive its reason without somebody reading the sentence
+  // that says it should have gone.
   'src/shared/store-api.ts':
     'unreachable on purpose while the Community department is unbuilt: it holds the catalogue ' +
     'base and the TERMINALDECK_STORE_API override, whose only caller today is ' +

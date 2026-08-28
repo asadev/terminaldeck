@@ -223,6 +223,26 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'the only route to adding an account at all, and the last one was written and rendered by nothing',
   },
   {
+    file: 'renderer/store/StorePage.tsx',
+    child: 'CommunityDepartment',
+    props: ['api', 'filter', 'detail', 'onRows'],
+    // The third department is the easiest thing in this store to build and never
+    // mount: the other two are reached through the same `department(id)`
+    // callback, so a branch that was never added is a rail entry with an empty
+    // section under it and no compiler complaint anywhere.
+    //
+    // `api` is what it lists and installs through — without it the whole
+    // department is its "not wired" state, which is *absent*, so the department
+    // silently disappears from a build that has it. `filter` is the page's one
+    // search box and the rail's shelf reaching this half; dropped, typing
+    // `github` narrows the other two and leaves this one showing everything.
+    // `detail` is what makes a row openable on its own. And `onRows` is how the
+    // rail learns what is on these shelves at all — without it every community
+    // count in the rail is zero while the shelves below it are full, which is
+    // the store's own numbers disagreeing with the store.
+    why: 'the only place the Community department is drawn, and without onRows the rail counts nothing it holds',
+  },
+  {
     file: 'renderer/App.tsx',
     child: 'AlertsWindow',
     props: ['open', 'projectPath', 'onAction', 'report', 'onRescan'],
