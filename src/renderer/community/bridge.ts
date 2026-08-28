@@ -68,7 +68,13 @@ import {
  * stranger's files off somebody's disk because a web form was filled in is not a
  * capability a catalogue should have.
  */
-export type CommunityState = 'available' | 'installed' | 'outdated' | 'damaged' | 'withdrawn'
+export type CommunityState =
+  | 'available'
+  | 'installed'
+  | 'outdated'
+  | 'damaged'
+  | 'withdrawn'
+  | 'unsupported'
 
 const STATES: readonly CommunityState[] = [
   'available',
@@ -76,6 +82,7 @@ const STATES: readonly CommunityState[] = [
   'outdated',
   'damaged',
   'withdrawn',
+  'unsupported',
 ]
 
 /** How an item's bytes reach this machine. Mirrors `StoreDelivery`. */
@@ -188,18 +195,32 @@ export interface CommunityResult {
   message: string
 }
 
+/**
+ * What an install was told to do, beyond which item.
+ *
+ * A named object rather than a bare list of agents, because the choice grows:
+ * an `mcp` item wants values for the variables it declared and a `routine`
+ * cannot install until somebody names the folder it runs in. The main process
+ * reads every field defensively and can widen nothing — the agents are filtered
+ * against what the item itself claims and the values only ever fill
+ * placeholders the manifest already declared.
+ */
+export interface CommunityChoice {
+  agents: readonly string[]
+  values?: Record<string, string>
+  folder?: string
+}
+
 export interface CommunityApi {
   community?(): Promise<unknown>
-  communityInstall?(id: string, agents: readonly string[]): Promise<unknown>
+  communityInstall?(id: string, choice: CommunityChoice): Promise<unknown>
   communityRemove?(id: string): Promise<unknown>
-  communityRefresh?(): Promise<unknown>
 }
 
 const METHODS = [
   'community',
   'communityInstall',
   'communityRemove',
-  'communityRefresh',
 ] as const satisfies readonly (keyof CommunityApi)[]
 
 export function resolveCommunityApi(host?: unknown): CommunityApi {
@@ -221,11 +242,17 @@ export function resolveCommunityApi(host?: unknown): CommunityApi {
 /**
  * Is the department wired in this build?
  *
- * All four, for the reason `storeAvailable` gives about its three: a store with
- * a list and no Install is a catalogue of things you cannot have, and one with
- * an Install and no Remove is worse than no store at all. Refresh is the fourth
- * because this catalogue arrives over a network — a department that can never
- * ask again is one whose only answer to "the list looks old" is to quit the app.
+ * All three, for the reason `storeAvailable` gives about its own: a store with a
+ * list and no Install is a catalogue of things you cannot have, and one with an
+ * Install and no Remove is worse than no store at all.
+ *
+ * There is no fourth. Asking again *is* `community` — the main process fetches
+ * the catalogue on every call and falls back to the kept copy when it cannot, so
+ * "Check again" is that same call and a separate refresh channel would be two
+ * names for one behaviour that eventually disagree. This file required a fourth
+ * one for a while and the department was absent from the rail the whole time
+ * because nothing on the far side had ever registered it, which is the exact
+ * failure a contract like this exists to make loud rather than silent.
  *
  * A `false` here makes the department **absent** from the store's rail. Never
  * greyed: `store/store-nav.ts` drops an unwired department entirely, so there is
@@ -235,8 +262,7 @@ export function communityAvailable(api: CommunityApi): boolean {
   return (
     typeof api.community === 'function' &&
     typeof api.communityInstall === 'function' &&
-    typeof api.communityRemove === 'function' &&
-    typeof api.communityRefresh === 'function'
+    typeof api.communityRemove === 'function'
   )
 }
 
@@ -567,5 +593,13 @@ export function tierWord(item: CommunityItem): string {
  * structurally by returning null below two options.
  */
 export function installable(item: CommunityItem): boolean {
-  return item.delivery === 'repo'
+  /*
+   * `unsupported` is the second answer with no Install, and it is not a
+   * disabled one either. It means this build does not install that kind — hook
+   * sets are written by the Hooks screen, browser extensions by the browser's
+   * own store — or the item does not run on this kind of computer. Either way
+   * the row carries the sentence saying which, and a button that would only ever
+   * answer with that same sentence is a control that cannot act.
+   */
+  return item.delivery === 'repo' && item.state !== 'unsupported'
 }

@@ -81,10 +81,9 @@ describe('is the department wired at all', () => {
       community: () => Promise.resolve({}),
       communityInstall: () => Promise.resolve({}),
       communityRemove: () => Promise.resolve({}),
-      communityRefresh: () => Promise.resolve({}),
     }
     expect(communityAvailable(resolveCommunityApi(whole))).toBe(true)
-    for (const missing of ['community', 'communityInstall', 'communityRemove', 'communityRefresh']) {
+    for (const missing of ['community', 'communityInstall', 'communityRemove']) {
       const partial: Record<string, unknown> = { ...whole }
       delete partial[missing]
       expect(communityAvailable(resolveCommunityApi(partial)), missing).toBe(false)

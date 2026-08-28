@@ -118,6 +118,24 @@ export interface StoreArtifact {
   unpacked: number
 }
 
+/**
+ * The repository's own numbers, and when they were read.
+ *
+ * Kept apart from the row's own fields, and never merged into them, because
+ * these are somebody else's counts: the screen labels them as GitHub's and a
+ * publisher cannot type a star count into a manifest. `readAt` is here so a
+ * number can be drawn with the date it was true — a star count with no date is
+ * a claim about right now that nobody checked.
+ */
+export interface StoreRepoStats {
+  stars: number
+  openIssues: number
+  /** When the repository was last pushed to, ISO. */
+  pushedAt: string
+  /** When these numbers were read off the host, ISO. */
+  readAt: string
+}
+
 /** Where a row's bytes come from, pinned so they cannot move under it. */
 export interface StoreSource {
   repo: string
@@ -154,6 +172,10 @@ export interface StoreRow {
   install: InstallBlock | null
   /** Hosts this item talks to, as declared. Null when it declares none. */
   network: readonly string[]
+  /** A key into the app's own logo table, never a URL. Null for a monogram. */
+  icon: string | null
+  /** The host's own counts, or null when the indexer could not read them. */
+  repoStats: StoreRepoStats | null
   publishedAt: string
   updatedAt: string
 }
@@ -394,7 +416,9 @@ function row(where: string, raw: unknown): StoreRow {
     'source',
     'artifact',
     'install',
+    'icon',
     'network',
+    'repoStats',
     'publishedAt',
     'updatedAt',
   ])
@@ -479,6 +503,36 @@ function row(where: string, raw: unknown): StoreRow {
     }
   }
 
+  /*
+   * An icon is a KEY, never a URL.
+   *
+   * `store/logo-data.ts` holds the pictures this app draws, compiled in. A row
+   * that could name a URL would be a row that makes every shelf fetch from
+   * wherever a publisher points it — a tracking pixel per item, served by
+   * whoever holds the domain that week. So the field names one of ours or it
+   * names nothing, and a row that names one we do not have draws a monogram
+   * rather than a broken image.
+   */
+  let icon: string | null = null
+  if (raw.icon !== undefined && raw.icon !== null) {
+    icon = text(`${where}.icon`, raw.icon, 40)
+    if (!/^[a-z0-9-]+$/.test(icon)) {
+      fail(`${where}.icon must name one of this app's own logos, never a link`)
+    }
+  }
+
+  let repoStats: StoreRepoStats | null = null
+  if (raw.repoStats !== undefined && raw.repoStats !== null) {
+    if (!isRecord(raw.repoStats)) fail(`${where}.repoStats must be an object`)
+    onlyKeys(`${where}.repoStats`, raw.repoStats, ['stars', 'openIssues', 'pushedAt', 'readAt'])
+    repoStats = {
+      stars: whole(`${where}.repoStats.stars`, raw.repoStats.stars, 100_000_000),
+      openIssues: whole(`${where}.repoStats.openIssues`, raw.repoStats.openIssues, 10_000_000),
+      pushedAt: stamp(`${where}.repoStats.pushedAt`, raw.repoStats.pushedAt),
+      readAt: stamp(`${where}.repoStats.readAt`, raw.repoStats.readAt),
+    }
+  }
+
   const tags: string[] = []
   if (!Array.isArray(raw.tags)) fail(`${where}.tags must be a list`)
   if (raw.tags.length > 12) fail(`${where}.tags may hold at most 12 entries`)
@@ -508,7 +562,9 @@ function row(where: string, raw: unknown): StoreRow {
     source,
     artifact,
     install,
+    icon,
     network,
+    repoStats,
     publishedAt: stamp(`${where}.publishedAt`, raw.publishedAt),
     updatedAt: stamp(`${where}.updatedAt`, raw.updatedAt),
   }

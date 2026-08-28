@@ -1344,6 +1344,12 @@ function rowFromRecord(record: InstalledRecord): StoreRow {
     source: { repo: record.repo, commit: record.commit, path: '.', host: '' },
     artifact: null,
     install: null,
+    /* No icon and no counts: both come off the catalogue and this row is being
+       built precisely because the catalogue no longer carries it. Drawing the
+       star count it had the day it was installed would be a number about a
+       repository nobody has looked at since. */
+    icon: null,
+    repoStats: null,
     network: [],
     publishedAt: record.installedAt,
     updatedAt: record.installedAt,

@@ -160,7 +160,7 @@ export function CommunityDepartment({ api, filter, onFilter, detail, onDetail, o
     (id: string, agents: readonly ManifestAgent[]) => {
       const call = api.communityInstall
       if (!call) return
-      void act(id, true, () => call(id, agents))
+      void act(id, true, () => call(id, { agents }))
     },
     [api, act],
   )
@@ -192,19 +192,23 @@ export function CommunityDepartment({ api, filter, onFilter, detail, onDetail, o
     [view],
   )
 
+  /**
+   * Ask the store again.
+   *
+   * This *is* `load()`, and deliberately: the main process fetches the catalogue
+   * on every `community` call and falls back to the kept copy when it cannot
+   * reach it, so there is nothing a separate refresh could do that reading the
+   * list again does not. The only thing added here is the busy state, so the
+   * button says `Checking…` while a real network call is out.
+   */
   const refresh = useCallback(async () => {
-    if (!api.communityRefresh) return
     setBusy('catalogue')
     try {
-      await api.communityRefresh()
-    } catch {
-      /* Whatever went wrong is in the view the reload brings back, which is the
-         one place this screen takes its answers from. */
+      await load()
     } finally {
       setBusy('')
-      await load()
     }
-  }, [api, load])
+  }, [load])
 
   if (!loaded) return null
 

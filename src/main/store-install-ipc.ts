@@ -1,6 +1,12 @@
 import { homedir } from 'node:os'
 import type { IpcMain } from 'electron'
 import {
+  machineProbe,
+  projectView,
+  type CommunityViewOut,
+  type MachineProbe,
+} from './community-view'
+import {
   agentHomes,
   createStoreInstaller,
   itemsDir,
@@ -87,6 +93,21 @@ function emptyView(): StoreView {
 }
 
 /**
+ * The machine probe, made once per run.
+ *
+ * Once because `loginPath()` spawns the user's login shell and reads their whole
+ * rc file, and a probe minted per call would do that on every press of the
+ * department. `agent-binaries.ts` already memoises its own answers on the same
+ * argument.
+ */
+let probe: MachineProbe | null = null
+
+/** Test seam: forget what this run measured about the machine. */
+export function resetCommunityProbe(): void {
+  probe = null
+}
+
+/**
  * Wire the store.
  *
  * Channels:
@@ -94,8 +115,21 @@ function emptyView(): StoreView {
  * - `community:install` (invoke, id, choice) → `{ ok, message }`
  * - `community:remove`  (invoke, id)         → `{ ok, message }`
  */
-export function registerCommunityIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('community:list', async () => (store === null ? emptyView() : await store.view()))
+export function registerCommunityIpc(ipcMain: IpcMain, deps?: CommunityStoreDeps): void {
+  ipcMain.handle('community:list', async (): Promise<CommunityViewOut> => {
+    const view = store === null ? emptyView() : await store.view()
+    probe ??= machineProbe()
+    /*
+     * The screen is handed flat facts, not the installer's own shape.
+     *
+     * `community-view.ts` says why the translation is here and not in the
+     * renderer: which agent tools are on this machine, which of an item's needs
+     * are not, and the exact folders an install writes into are all questions
+     * only this process can answer, and a screen that answered them itself would
+     * be a second opinion built from less evidence.
+     */
+    return await projectView(view, deps?.userData() ?? '', probe)
+  })
 
   ipcMain.handle('community:install', async (_event, id: unknown, choice: unknown) => {
     if (store === null || typeof id !== 'string') return NO_STORE

@@ -3973,11 +3973,12 @@ function registerIpc(): void {
    * read per call rather than captured, so pointing the app at a different
    * catalogue takes effect on the next press instead of the next launch.
    */
-  installCommunityStore({
-    userData: () => app.getPath('userData'),
-    base: () => storeApiBase(process.env),
-  })
-  registerCommunityIpc(ipcMain)
+  const communityDeps = {
+    userData: (): string => app.getPath('userData'),
+    base: (): string => storeApiBase(process.env),
+  }
+  installCommunityStore(communityDeps)
+  registerCommunityIpc(ipcMain, communityDeps)
 
   /*
    * The extension store, and the replay that makes it mean anything.
