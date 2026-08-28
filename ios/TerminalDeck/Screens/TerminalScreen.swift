@@ -298,11 +298,30 @@ struct TerminalScreen: View {
              * this session holds no window, which is almost always. Then this is
              * `sessionBody` and nothing else.
              */
-            SessionPageView(model: model,
-                            hostID: hostID,
-                            sessionID: sessionID,
-                            frontmost: frontmost) {
+            /*
+             * **…except inside the copilot, where the page does not float.**
+             *
+             * Asad, turning the copilot into a proper AI chat: *"The floating
+             * browser-window pill must be GONE while inside the copilot chat —
+             * just the chat, plus the app's normal bottom navigation to move
+             * between pages."*
+             *
+             * That reverses the *"over both modes"* note directly above, on his
+             * word, and only for the copilot: a conversation with the copilot is
+             * the one session where a browser window it is holding is not allowed
+             * to float over the talk. `sessionBody` is what the page floated over
+             * and it renders whole on its own — the copilot loses the floating
+             * page and nothing else. Every other session keeps it.
+             */
+            if isCopilot {
                 sessionBody
+            } else {
+                SessionPageView(model: model,
+                                hostID: hostID,
+                                sessionID: sessionID,
+                                frontmost: frontmost) {
+                    sessionBody
+                }
             }
 
             // Over the terminal rather than above it. See `FindBar`: inserting

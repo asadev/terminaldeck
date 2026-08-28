@@ -513,6 +513,45 @@ final class CopilotLink {
     /// against a run nobody has confirmed exists.
     var hasRun: Bool { state?.run != nil }
 
+    /**
+     * Whether the copilot still owes a reply — drives the three-dot typing
+     * indicator.
+     *
+     * Asad, redesigning this into a proper AI chat: *"a typing/waiting animation
+     * while awaiting a reply — a three-dot typing pulse… so it's obvious
+     * something is happening."* The signal is read off the timeline rather than
+     * kept as a flag, because the timeline is the one truth about what was said
+     * and in what order, and a separate flag would be a second thing to keep in
+     * step with it.
+     *
+     * The rule: walk the conversation from the newest end, **skipping tool
+     * rows** — machinery is not a reply — and stop at the first thing a person or
+     * the agent actually *said*. If that thing came from the agent, the reply has
+     * landed and the dots are off. If it came from this phone, the reply is still
+     * owed and the dots are on — unless the wait already ran out
+     * (`unacknowledged`), because at that point the outgoing bubble itself says
+     * the machine has not echoed it, and a pulse that never stopped would be a
+     * second, louder claim of the same uncertain thing.
+     *
+     * Tool rows are skipped rather than counted so that a copilot that is midway
+     * through its work — running a command, reading a file — still shows the
+     * pulse: it has not replied yet, and *something is happening* is exactly what
+     * those seconds need to say.
+     */
+    var awaitingReply: Bool {
+        for entry in timeline.reversed() {
+            switch entry {
+            case .action:
+                continue
+            case let .message(message):
+                return message.role == .you
+            case let .mine(outgoing):
+                return !outgoing.unacknowledged
+            }
+        }
+        return false
+    }
+
     // MARK: - The connection
 
     /**
@@ -1419,6 +1458,35 @@ final class CopilotLink {
             self?.markUnacknowledged(id)
         }
         return true
+    }
+
+    /**
+     * Run a command the copilot suggested, from the Run button on its own reply.
+     *
+     * Asad, on the chat: *"When the copilot suggests a command to run, show it
+     * with a Run button — tapping it runs the command inside the chat and the
+     * output AND full errors appear IN the chat, the way Claude Code shows a
+     * command with a run affordance."*
+     *
+     * It is `say` under the hood, and that is not a shortcut — it is the only
+     * honest way to run something here. The copilot on the far end **is** a
+     * Claude CLI in a pty: the way a command gets run and its output shown is by
+     * handing the command to that agent, exactly as typing it would, and letting
+     * the run, the tool row and the reply come back down the same conversation.
+     * There is no second channel from this phone that runs a raw shell and
+     * streams bytes back — `sessions.*` reach other sessions, never the
+     * copilot's own hidden run — so this is the channel, and the button is a
+     * shortcut for typing the command rather than a new power.
+     *
+     * Which is also why the Run button is only offered on a **single-line**
+     * command: `oneUtterance` flattens control bytes to spaces, so a two-line
+     * command would be run as one wrong line. The card that draws the button
+     * makes that decision — see `CopilotCommandCard.runnable` — and falls back
+     * to Copy alone for anything the wire cannot carry whole.
+     */
+    @discardableResult
+    func run(_ command: String) -> Bool {
+        say(command)
     }
 
     /**
