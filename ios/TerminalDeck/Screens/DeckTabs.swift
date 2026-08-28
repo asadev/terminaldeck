@@ -492,18 +492,33 @@ struct MachinesView: View {
      * > server page just directly inside server page no need that informative
      * > page for server."*
      *
-     * It used to hide any server already connected as a machine, to answer an
-     * earlier complaint — *"if it is connected we see two."* But that doubling
-     * was two *undifferentiated* machine rows in one flat list. Two clearly
-     * labelled lists answer it instead: a connected box is a **machine** under
-     * "Remote machines" (its sessions) and a **server** under "Servers" (login,
-     * install, start, stop, remove, update) — two different things somebody does
-     * to the same box, said in two different places. So nothing is filtered out:
-     * every server has a row, and that row opens its server page **directly**,
-     * with no machine-detail page in between.
+     * It used to hide any connected server here; then, briefly, it showed the
+     * box in **both** lists. Both were wrong. His rule, said plainly:
+     *
+     * > *"if a server is connected as a server, why keep it in remote machines
+     * > too? It should be just the server, one thing only, in the server list."*
+     *
+     * So this is the whole of it: every server gets a row that opens its server
+     * page **directly** (no machine-detail page between), and the machine-half
+     * of a connected server is dropped from "Remote machines" (see
+     * `remoteMachines`) so the box shows **once**, here. Its sessions stay on
+     * the Sessions tab.
      */
     private var servers: [StoredServer] {
         model.serverConnector.servers
+    }
+
+    /// The machines to list under "Remote machines" — the ones NOT already
+    /// standing as a server below. Asad, on a box paired both ways:
+    /// > *"if a server is connected as a server, why do we keep it in remote
+    /// > machines too? It should be just the server, one thing only, in the
+    /// > server list."* So a machine whose host a server owns drops out of this
+    /// list and shows once, under Servers, where its lifecycle and GitHub live.
+    /// Its sessions are on the Sessions tab, so nothing about it is lost.
+    private var remoteMachines: [HostLink] {
+        model.hosts.filter { host in
+            !model.serverConnector.servers.contains { $0.linkedHostId == host.id }
+        }
     }
 
     /**
@@ -551,7 +566,7 @@ struct MachinesView: View {
                  */
                 listCaption("Remote machines", top: 4)
 
-                ForEach(model.hosts) { host in
+                ForEach(remoteMachines) { host in
                     MachineRow(host: host,
                                // From the model, not the host: two machines
                                // reporting one hostname drew two identical

@@ -102,20 +102,21 @@ fun MachinesScreen(
     //   > this icon to go inside the page and then go inside server page just directly inside server
     //   > page no need that informative page for server."
     //
-    // A box that has connected is both: one of the machines above (its host is a paired machine,
-    // joined back by linkedHostId) AND a server below. It used to be shown only once — dropped from
-    // the Servers section to answer an earlier complaint, > "if it is connected we see two." But that
-    // doubling was two look-alike machine rows in one undivided list. Under two headings it is not a
-    // duplicate: a machine under "Remote machines" (its sessions) and a server under "Servers" (its
-    // login, install, start, stop, remove, update) — two different jobs on the same box. So nothing
-    // is filtered out; every server gets a row, and that row opens its server page directly.
-    //
-    // serverByHost still maps a connected server to its machine, but only to offer the same page as a
-    // shortcut on that machine's ⋯ menu — it no longer decides whether the server gets a row.
+    // A box connected as a server is BOTH a paired machine (joined by linkedHostId) and a server.
+    // It was shown in both lists for a while; that was wrong. His rule, said plainly:
+    //   > "if a server is connected as a server, why keep it in remote machines too? It should be
+    //   > just the server, one thing only, in the server list."
+    // So the machine-half of a connected server is dropped from "Remote machines" (see
+    // remoteMachines) and the box shows once, under Servers, where its lifecycle + GitHub live. Its
+    // sessions are on the Sessions tab. serverByHost still maps a connected server to its host id so
+    // remoteMachines can exclude it (and for the ⋯ shortcut to the server page).
     val serverByHost: Map<String, StoredServer> =
         servers.mapNotNull { server ->
             server.linkedHostId?.takeIf { it in pairedHostIds }?.let { hostId -> hostId to server }
         }.toMap()
+
+    // Remote machines = the paired machines that are NOT already a server below.
+    val remoteMachines = hosts.filter { it.hostId !in serverByHost.keys }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -149,7 +150,7 @@ fun MachinesScreen(
             // REMOTE MACHINES — the paired machines, and the door to pair another.
             SectionLabel("REMOTE MACHINES", top = 0.dp)
 
-            for (host in hosts) {
+            for (host in remoteMachines) {
                 MachineRow(
                     host = host,
                     // Non-null when this machine is also a connected server: its ⋯ menu then offers
@@ -166,10 +167,10 @@ fun MachinesScreen(
             AddRow(
                 icon = Icons.Filled.Add,
                 title = "Pair another machine",
-                subtitle = if (hosts.size == 1) {
-                    "The one above stays paired and stays connected."
-                } else {
-                    "The ones above stay paired and stay connected."
+                subtitle = when {
+                    remoteMachines.isEmpty() -> "Pair a machine to reach it from your phone."
+                    remoteMachines.size == 1 -> "The one above stays paired and stays connected."
+                    else -> "The ones above stay paired and stay connected."
                 },
                 onClick = onAddHost,
             )
