@@ -11,6 +11,8 @@ import dev.terminaldeck.android.credential.coroutineExpiry
 import dev.terminaldeck.android.crypto.Sealed
 import dev.terminaldeck.android.github.ConnectGitHubController
 import dev.terminaldeck.android.github.ConnectGitHubView
+import dev.terminaldeck.android.hostcontrol.HostControlController
+import dev.terminaldeck.android.hostcontrol.HostControlView
 import dev.terminaldeck.android.pairing.PairingCodes
 import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.Capability
@@ -377,6 +379,16 @@ class DeckViewModel(
             expiry = coroutineExpiry(viewModelScope),
             onChange = { publish() },
         )
+        // The host owns its own lifecycle now; this drives it over `host.*` when the machine is
+        // connected over the relay. "The relay is the network": a server page reaches the host here
+        // when its SSH address is offline. One per machine, gated on the machine advertising
+        // `host.control`, exactly like the GitHub cluster above.
+        link.hostControl = HostControlController(
+            send = { link.transport.send(it) },
+            capabilities = { link.capabilities },
+            expiry = coroutineExpiry(viewModelScope),
+            onChange = { publish() },
+        )
         link.controls = SessionControlsController(
             send = { link.transport.send(it) },
             capabilities = { link.capabilities },
@@ -642,6 +654,10 @@ class DeckViewModel(
                 link.devices?.renew()
                 link.settings?.renew()
                 link.github?.renew()
+                // The host lifecycle cluster, on the same rule and for a sharper reason: a welcome
+                // after a restart is *how* a restarted host reports it is back, so `renew` re-reads
+                // its status on the next visit rather than showing the stale "restarting" note.
+                link.hostControl?.renew()
                 // The controls cluster is about a *session*, so a welcome does not re-read it — the
                 // terminal screen calls `follow` and that is the only thing that knows which session
                 // is on screen. What a welcome does is drop what the last connection said, for the
@@ -774,6 +790,14 @@ class DeckViewModel(
             is ServerMessage.GithubChanged,
             -> {
                 link.github?.receive(message)
+            }
+
+            // The host's own lifecycle over the relay — the answer to a status/restart/stop. "The
+            // relay is the network": this is the status a server page shows when its SSH address is
+            // an offline Tailscale name, and the confirmation of a restart/stop it sent over the
+            // relay. Its `rid` bookkeeping lives in the controller.
+            is ServerMessage.HostState -> {
+                link.hostControl?.receive(message)
             }
 
             is ServerMessage.ControlsReading,
@@ -2107,6 +2131,29 @@ class DeckViewModel(
         selected?.github?.disconnect()
     }
 
+    /* ----------------------------- the host over the relay — "the relay is the network" -- */
+
+    /** Ask for the machine's host status once, when the server page appears. */
+    fun openHostControl() {
+        selected?.hostControl?.ensureRead()
+    }
+
+    /**
+     * Restart the machine's host over the relay.
+     *
+     * "The relay is the network": this reaches the box even when the server's stored SSH address is
+     * an offline Tailscale name, because the box is plainly on the relay. The connection drops as the
+     * host restarts and comes back on its own — see [HostControlController].
+     */
+    fun restartHostOverRelay() {
+        selected?.hostControl?.restartHost()
+    }
+
+    /** Stop the machine's host over the relay. There is no start here — a stopped host is off the relay. */
+    fun stopHostOverRelay() {
+        selected?.hostControl?.stopHost()
+    }
+
     /* -------------------------------------------------------------------- state -- */
 
     private fun notify(text: String) {
@@ -2153,6 +2200,7 @@ class DeckViewModel(
             devices = current?.devices?.view(),
             serverSettings = current?.settings?.view(),
             github = current?.github?.view(),
+            hostControl = current?.hostControl?.view(),
             /*
              * The control cluster of whichever machine has a session on screen — not of the selected
              * one.
@@ -2352,6 +2400,13 @@ data class DeckUiState(
      * [dev.terminaldeck.android.ui.ConnectGitHubSection], draws off this.
      */
     val github: ConnectGitHubView? = null,
+    /**
+     * The machine's own host over the relay — status, restart, stop — or null when the machine on
+     * screen does not serve `host.control` (an older host, or a guest). "The relay is the network":
+     * the section the server page mounts draws off this so restart/stop reach the box even when its
+     * SSH address is offline.
+     */
+    val hostControl: HostControlView? = null,
     /**
      * The control cluster of the session on screen, or null.
      *

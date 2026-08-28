@@ -198,6 +198,43 @@ data class GitHubPendingWire(
 )
 
 /**
+ * The machine's own host, as this phone reads it **over the relay** — the payload of `host.state`,
+ * the answer to `host.status` / `host.restart` / `host.stop`.
+ *
+ * "The relay is the network": a server page whose SSH address is an offline Tailscale name still
+ * reaches the box here, because the box is plainly on the relay. This carries only what the host
+ * knows about *itself* — that it is running (it answered, so [running] is always true), its build,
+ * how it is supervised, and how long it has been up. It is deliberately **not** the machine survey
+ * (disk, CPU, services); that reads the whole box and stays on the SSH probe.
+ *
+ * Every field carries a default so a host that omits one decodes rather than failing the frame, the
+ * additive rule the rest of this file teaches. [managed] is a free string — `systemd`, `direct`,
+ * `unknown` — for the reason [GitHubHostWire.source] is: the vocabulary belongs to the host.
+ */
+@Serializable
+data class HostControlWire(
+    /** Always true on this wire: the host answered, so it is running. */
+    val running: Boolean = true,
+    /** The build the host is on, e.g. `0.14.0`. */
+    val version: String = "",
+    /** The relay server address the host prints, or empty. A reader is already on the relay. */
+    val address: String = "",
+    /** The host process id. */
+    val pid: Long = 0,
+    /** When the host process started, epoch milliseconds. */
+    val startedAt: Long = 0,
+    /** How long the host has been up, in seconds. */
+    val uptimeSeconds: Long = 0,
+    /** How the host is supervised — `systemd`, `direct`, or `unknown`. What a restart will do. */
+    val managed: String = "unknown",
+    /**
+     * A sentence about what a restart/stop just set in motion, or null for a plain status. The
+     * connection drops as the host acts, so this is the last thing the phone hears.
+     */
+    val note: String? = null,
+)
+
+/**
  * One row of the device roster, on the wire.
  *
  * Transcribed from `DeviceRosterRow`. [kind] and [status] are left as free strings rather than
@@ -458,6 +495,38 @@ sealed interface ClientMessage {
     @Serializable
     @SerialName("github.disconnect")
     data class GithubDisconnect(val rid: String) : ClientMessage
+
+    /* ---- capability `host.control`. "The relay is the network." --------------------------- */
+
+    /**
+     * Read this machine's own host over the relay — running, version, how it is supervised, how long
+     * it has been up. Answered with a `host.state` carrying the same [rid].
+     *
+     * The point of it is the moment the SSH address is dark: a phone whose server page cannot reach
+     * the box over its stored Tailscale name asks this over the relay instead, and the box answers
+     * because it is plainly there.
+     */
+    @Serializable
+    @SerialName("host.status")
+    data class HostStatus(val rid: String) : ClientMessage
+
+    /**
+     * Restart the host on this machine, over the relay. Answered with a `host.state` whose note is
+     * the last thing this phone hears before the connection drops — a systemd-managed host comes
+     * back on its own.
+     */
+    @Serializable
+    @SerialName("host.restart")
+    data class HostRestart(val rid: String) : ClientMessage
+
+    /**
+     * Stop the host on this machine, over the relay. Answered with a `host.state` carrying a note
+     * before the drop. There is no `host.start` — a stopped host is not on the relay, so bringing
+     * one up is left to SSH.
+     */
+    @Serializable
+    @SerialName("host.stop")
+    data class HostStop(val rid: String) : ClientMessage
 
     /* ---- capability `devices`. The roster, and the one verb that removes a row. ---------- */
 
@@ -1508,6 +1577,24 @@ sealed interface ServerMessage {
     @SerialName("github.changed")
     data class GithubChanged(
         val github: GitHubHostWire = GitHubHostWire(),
+    ) : ServerMessage
+
+    /* ---- capability `host.control` -------------------------------------------------------- */
+
+    /**
+     * The machine's own host over the relay, the answer to `host.status`, `host.restart` or
+     * `host.stop`. [rid] echoes the request it answers.
+     *
+     * For restart and stop this is the *last* frame this phone hears on the connection: the host
+     * sends it, carrying the sentence in [HostControlWire.note], and then does the thing that drops
+     * the socket. There is no unsolicited "host changed" push — a restarted host reconnects, and the
+     * reconnection is the signal.
+     */
+    @Serializable
+    @SerialName("host.state")
+    data class HostState(
+        val rid: String,
+        val host: HostControlWire = HostControlWire(),
     ) : ServerMessage
 
     /* ---- capability `devices` ------------------------------------------------------------- */

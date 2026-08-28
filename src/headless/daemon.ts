@@ -27,6 +27,7 @@
  */
 
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -46,6 +47,7 @@ import {
   type ControlServer,
 } from './control'
 import { createHeadlessHost, type HeadlessHost } from './host'
+import { createHostLifecycle } from './host-lifecycle'
 import { hostVersion } from './version'
 
 const platform = currentPlatform()
@@ -110,7 +112,41 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
 
-  const host = await createHeadlessHost({ storageDir: stateDir, webRoot: webRootBesideBundle() })
+  /*
+   * The host's own lifecycle, over the relay — "the relay is the network".
+   *
+   * Built here, in the one process that owns this host's `shutdown` and knows
+   * how it is supervised, and handed to the endpoint the same way `hostGitHub`
+   * is. Its mere presence advertises the `host.control` capability, so a phone
+   * whose SSH address is an offline Tailscale name still sees the host's status
+   * and can restart/stop it as long as the machine is on the relay. See
+   * `host-lifecycle.ts`.
+   */
+  const daemonStartedAt = Date.now()
+  const hostLifecycle = createHostLifecycle({
+    shutdown,
+    now: Date.now,
+    startedAt: daemonStartedAt,
+    pid: process.pid,
+    version: hostVersion(),
+    serviceName: SERVICE_NAME,
+    serviceUnitExists: () => existsSync(join(configHome(), 'systemd', 'user', SERVICE_NAME)),
+    execPath: process.execPath,
+    entryPath: fileURLToPath(import.meta.url),
+    logPath: join(stateDir, 'host-stderr.log'),
+    spawnDetached,
+    // A small delay so the `host.state` reply flushes before the restart/stop
+    // drops the connection it travelled on.
+    schedule: (fn) => {
+      setTimeout(fn, 50).unref()
+    },
+  })
+
+  const host = await createHeadlessHost({
+    storageDir: stateDir,
+    webRoot: webRootBesideBundle(),
+    hostLifecycle,
+  })
   await host.restore()
 
   /*
@@ -319,6 +355,34 @@ function installService(): number {
 function configHome(): string {
   const xdg = process.env.XDG_CONFIG_HOME
   return xdg !== undefined && xdg.startsWith('/') ? xdg : join(homedir(), '.config')
+}
+
+/**
+ * Spawn a detached, unref'd child and forget it — the seam the relay lifecycle
+ * uses to hand a restart to `systemctl` or a re-launch to `sh`.
+ *
+ * Detached and `unref`'d so it outlives the restart that is about to end this
+ * process; `stdio: 'ignore'` because nothing here reads it, and its own output
+ * (for the re-launch) is redirected to a log inside the shell command. A spawn
+ * that cannot even start is logged rather than thrown — this runs on the data
+ * path of a relay frame, and a throw there would take the connection down.
+ */
+function spawnDetached(command: string, args: readonly string[]): void {
+  try {
+    const child = spawn(command, [...args], { detached: true, stdio: 'ignore' })
+    child.on('error', (error) => {
+      logger.error('headless', 'a lifecycle command could not be spawned', {
+        command,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+    child.unref()
+  } catch (error) {
+    logger.error('headless', 'a lifecycle command threw on spawn', {
+      command,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 /* ---------------------------------------------------------------- startup -- */

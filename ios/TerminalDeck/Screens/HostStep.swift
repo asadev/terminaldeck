@@ -65,6 +65,24 @@ struct HostStepCard: View {
     private var install: ServerInstallState { connector.installs[serverId] ?? ServerInstallState() }
     private var isWorking: Bool { connector.working.contains(serverId) }
 
+    /**
+     * True when the server is a connected machine whose host answers the relay's
+     * own lifecycle verbs — "the relay is the network".
+     *
+     * When it is, `ServerDetailView` draws `HostRelayControlView` with Restart
+     * and Stop over the relay, so this card withholds its own SSH Restart/Stop
+     * row: two of the same verb on one screen is the duplicate §4.1 of
+     * `SERVERS-DESIGN.md` bans. The SSH row is what a server *without* a live
+     * relay machine still gets — an older host, or one that has dropped off the
+     * relay — so nothing is lost, only de-duplicated. Remove (uninstall) and
+     * Update stay here regardless: they replace the binary and genuinely need
+     * SSH, so the relay never owns them.
+     */
+    private var relayControlActive: Bool {
+        guard let hostId = server?.linkedHostId, let link = model.host(hostId) else { return false }
+        return link.connection.isLive && link.hostControl.offered
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
@@ -116,7 +134,11 @@ struct HostStepCard: View {
              * Remove too.
              */
             if let look, look.host.isInstalled, !justLoggedIn {
-                lifecycleRow(host: look.host)
+                // The SSH Restart/Stop row, but only when the relay is not already
+                // carrying those controls: "the relay is the network", so when the
+                // server is a connected machine the relay card above owns
+                // restart/stop and this would be the second copy §4.1 rules out.
+                if !relayControlActive { lifecycleRow(host: look.host) }
                 removeRow(host: look.host)
             }
 

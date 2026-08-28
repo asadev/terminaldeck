@@ -152,6 +152,15 @@ class HostLink(
     var github: dev.terminaldeck.android.github.ConnectGitHubController? = null
 
     /**
+     * This machine's own host lifecycle — status, restart, stop — driven from the phone over the
+     * relay. Created once per link; draws nothing until the machine advertises
+     * [dev.terminaldeck.android.protocol.Capability.HOST_CONTROL]. "The relay is the network": when a
+     * server is a connected machine, its server page reaches the host here rather than over an SSH
+     * address that can drop.
+     */
+    var hostControl: dev.terminaldeck.android.hostcontrol.HostControlController? = null
+
+    /**
      * The control cluster of whichever session this machine has on screen — model, effort, fast
      * mode, permission. Created once per link; follows a session rather than the machine, and draws
      * nothing until the machine advertises [dev.terminaldeck.android.protocol.Capability.CONTROLS].
@@ -273,6 +282,7 @@ class HostLink(
         devices?.stop()
         settings?.stop()
         github?.stop()
+        hostControl?.stop()
         // The controls cluster holds a settle timer as well as its request timers, and the watcher
         // holds a cast on the machine — a link being taken down must end that cast, or the far end
         // keeps rendering JPEGs for a phone that is no longer listening.

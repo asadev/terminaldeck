@@ -73,6 +73,27 @@ struct ServerDetailView: View {
                          */
                         HostStepCard(model: model, serverId: serverId)
 
+                        /*
+                         * **Manage the host over the relay** — "the relay is the
+                         * network."
+                         *
+                         * The card above reaches this server over its SSH address,
+                         * which for Asad is a Tailscale name that goes offline on
+                         * its own — and then it reports the box as unreachable
+                         * while every session on it still runs over the public
+                         * relay. This card is the other road: when the server is a
+                         * connected machine, its status and its restart/stop go
+                         * over the relay, independent of the SSH address. It draws
+                         * nothing when the machine is not connected or is an older
+                         * host that does not speak the verb, so an SSH-only server
+                         * is exactly as it was — and `HostStepCard` withholds its
+                         * own SSH Restart/Stop row when this one is live, so there
+                         * are never two.
+                         */
+                        if let hostId = server.linkedHostId, let link = model.host(hostId) {
+                            HostRelayControlView(host: link)
+                        }
+
                         // **Connect GitHub, right here on the server.**
                         //
                         // > *"As soon as we connect the server and the application, for headless

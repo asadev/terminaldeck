@@ -112,6 +112,14 @@ fun HostStepCard(
      * ever called from a server's own page, never the fresh-login step; see the gate below.
      */
     onRemove: (alsoData: Boolean) -> Unit = {},
+    /**
+     * True when the server is a connected machine whose host answers the relay's own lifecycle
+     * verbs — "the relay is the network". When it is, the server page draws a relay Restart/Stop
+     * section, so this card withholds its own SSH Restart/Stop/Start row: two of the same verb on
+     * one screen is the duplicate §4.1 bans. Remove and Update stay regardless — they replace the
+     * binary and genuinely need SSH.
+     */
+    relayControlsActive: Boolean = false,
 ) {
     val colors = DeckTheme.colors
     val look = state.views[server.id]?.host
@@ -395,7 +403,7 @@ fun HostStepCard(
          * branches shed theirs so a person never meets two of the same verb on one screen. Not on
          * the login step, which keeps its own and is not where he asked for these.
          */
-        if (look != null && look.host.isInstalled && !justLoggedIn) {
+        if (look != null && look.host.isInstalled && !justLoggedIn && !relayControlsActive) {
             Spacer(Modifier.height(Space.x3))
             Text(
                 text = "Manage the host on this server",

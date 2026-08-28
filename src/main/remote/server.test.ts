@@ -1557,6 +1557,165 @@ describe('the two settings this machine owns', () => {
 })
 
 /**
+ * The machine's own host, driven from a phone over the relay — "the relay is the
+ * network". The verbs a headless server has no screen for: read its status,
+ * restart it, stop it. Advertised only to an owner and only when the host passes
+ * a lifecycle seam; refused by the same two doors every owner-only verb has.
+ */
+describe('the host, driven over the relay', () => {
+  const GUEST_CREDENTIAL = 'device-guest.Z3Vlc3Q='
+  const twoDevices: RemoteAuthenticator = {
+    async authenticate(token) {
+      if (token === CREDENTIAL) return { ok: true, deviceId: 'device-1', deviceName: 'Owner', credential: null }
+      if (token === GUEST_CREDENTIAL) return { ok: true, deviceId: 'device-guest', deviceName: 'Guest', credential: null }
+      return { ok: false, message: 'This device is not allowed in.' }
+    },
+  }
+  const GUEST_HELLO = { ...HELLO, token: GUEST_CREDENTIAL }
+
+  interface FakeLifecycle {
+    restarts: number
+    stops: number
+    statuses: number
+    status(): {
+      version: string
+      address: string
+      pid: number
+      startedAt: number
+      uptimeSeconds: number
+      managed: 'systemd' | 'direct' | 'unknown'
+    }
+    restart(): string
+    stop(): string
+  }
+
+  function fakeLifecycle(): FakeLifecycle {
+    return {
+      restarts: 0,
+      stops: 0,
+      statuses: 0,
+      status() {
+        this.statuses += 1
+        return {
+          version: '0.14.0',
+          address: '',
+          pid: 4242,
+          startedAt: 1_900_000_000_000,
+          uptimeSeconds: 3600,
+          managed: 'systemd',
+        }
+      },
+      restart() {
+        this.restarts += 1
+        return 'Restarting over the relay.'
+      },
+      stop() {
+        this.stops += 1
+        return 'Stopping over the relay.'
+      },
+    }
+  }
+
+  it('is advertised to an owner and withheld from a guest', async () => {
+    const harness = await serve({
+      auth: twoDevices,
+      hostLifecycle: fakeLifecycle(),
+      ownDevice: (id) => id === 'device-1',
+    })
+
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    const ownerWelcome = await owner.until((m) => m.t === 'welcome', 'the welcome')
+    expect(ownerWelcome.t === 'welcome' && ownerWelcome.capabilities).toContain(CAPABILITY.hostControl)
+
+    const guest = await connect(harness.port)
+    guest.send(GUEST_HELLO)
+    const guestWelcome = await guest.until((m) => m.t === 'welcome', 'the welcome')
+    expect(guestWelcome.t === 'welcome' && guestWelcome.capabilities).not.toContain(CAPABILITY.hostControl)
+  })
+
+  it('is not advertised by a host built without a lifecycle seam', async () => {
+    const harness = await serve({ auth: twoDevices })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    const welcome = await owner.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.hostControl)
+  })
+
+  it('answers an owner status with the running host', async () => {
+    const lifecycle = fakeLifecycle()
+    const harness = await serve({ auth: twoDevices, hostLifecycle: lifecycle, ownDevice: () => true })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'host.status', rid: 'hc-1' })
+    const state = await owner.until((m) => m.t === 'host.state', 'the state')
+    expect(state).toMatchObject({
+      t: 'host.state',
+      rid: 'hc-1',
+      host: { running: true, version: '0.14.0', managed: 'systemd', note: null },
+    })
+    expect(lifecycle.restarts).toBe(0)
+    expect(lifecycle.stops).toBe(0)
+  })
+
+  it('restarts on an owner’s word, and the answer carries the note before the drop', async () => {
+    const lifecycle = fakeLifecycle()
+    const harness = await serve({ auth: twoDevices, hostLifecycle: lifecycle, ownDevice: () => true })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'host.restart', rid: 'hc-2' })
+    const state = await owner.until((m) => m.t === 'host.state', 'the state')
+    expect(state).toMatchObject({ t: 'host.state', rid: 'hc-2', host: { note: 'Restarting over the relay.' } })
+    expect(lifecycle.restarts).toBe(1)
+  })
+
+  it('stops on an owner’s word', async () => {
+    const lifecycle = fakeLifecycle()
+    const harness = await serve({ auth: twoDevices, hostLifecycle: lifecycle, ownDevice: () => true })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'host.stop', rid: 'hc-3' })
+    const state = await owner.until((m) => m.t === 'host.state', 'the state')
+    expect(state).toMatchObject({ t: 'host.state', rid: 'hc-3', host: { note: 'Stopping over the relay.' } })
+    expect(lifecycle.stops).toBe(1)
+  })
+
+  it('refuses a guest with unauthorized and touches nothing', async () => {
+    const lifecycle = fakeLifecycle()
+    const harness = await serve({ auth: twoDevices, hostLifecycle: lifecycle, ownDevice: (id) => id === 'device-1' })
+    const guest = await connect(harness.port)
+    guest.send(GUEST_HELLO)
+    await guest.until((m) => m.t === 'welcome', 'the welcome')
+
+    guest.send({ t: 'host.restart', rid: 'g-1' })
+    const error = await guest.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    expect(lifecycle.restarts).toBe(0)
+
+    // And the connection survives, like every other refused request here.
+    guest.send({ t: 'ping' })
+    await guest.until((m) => m.t === 'pong', 'the pong')
+  })
+
+  it('answers unavailable, not unauthorized, when the host serves no lifecycle', async () => {
+    const harness = await serve({ auth: twoDevices })
+    const owner = await connect(harness.port)
+    owner.send(HELLO)
+    await owner.until((m) => m.t === 'welcome', 'the welcome')
+
+    owner.send({ t: 'host.status', rid: 'hc-1' })
+    const error = await owner.until((m) => m.t === 'error', 'the refusal')
+    expect(error.t === 'error' && error.code).toBe('unavailable')
+  })
+})
+
+/**
  * The copilot's own terminal, asked for by name over a real socket.
  *
  * This was a live hole in 0.3.0 and not a gap in an unbuilt feature:
