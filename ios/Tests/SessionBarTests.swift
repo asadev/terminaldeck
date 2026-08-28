@@ -296,6 +296,141 @@ final class SessionBarTests: XCTestCase {
         // screen.
         XCTAssertFalse(bar.busy)
     }
+
+    // MARK: - Usage, the best version: a figure is drawn only while it is true
+
+    @MainActor
+    func testAFigureIsFreshWhenItLandsAndStaleWhenTheSessionWritesAgain() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.usage])
+        bar.follow("s1")
+        guard case let .usageRead(rid, _, _, _) = wire.sent[0] else { return XCTFail("expected a usage.read") }
+        _ = bar.receive(.usageReading(rid: rid, id: "s1", want: .context,
+                                      figures: UsageFigures(plan: nil, context: 0.5)))
+
+        // Just landed: genuinely fresh, and drawn.
+        XCTAssertEqual(bar.freshContext, 0.5)
+
+        // The session prints — the window is moving, so the reading is behind it
+        // and withdrawn, though the raw value is kept for the re-read to replace.
+        bar.noteOutput()
+        XCTAssertNil(bar.freshContext, "a context read is stale the moment the session writes again")
+        XCTAssertEqual(bar.context, 0.5)
+    }
+
+    @MainActor
+    func testAKeptFigureIsWithheldWhileNobodyFollowsAndReturnsOnComingBack() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.usage])
+        bar.follow("s1")
+        let planRid = wire.sent.compactMap { message -> String? in
+            if case let .usageRead(rid, _, .plan, _) = message { return rid }
+            return nil
+        }.first
+        guard let planRid else { return XCTFail("expected a plan usage.read") }
+        _ = bar.receive(.usageReading(rid: planRid, id: "s1", want: .plan,
+                                      figures: UsageFigures(plan: 0.7, context: nil)))
+        XCTAssertEqual(bar.freshPlan, 0.7)
+
+        // Left the screen: the row is kept (see the release tests) but nothing is
+        // being followed, so the figure is not asserted as current.
+        bar.release("s1")
+        XCTAssertNil(bar.freshPlan, "a figure nobody is following is not a current reading")
+        XCTAssertEqual(bar.plan, 0.7, "the raw value is kept for a smooth return")
+
+        // Back on the same session: shown again at once, no round trip to wait on.
+        bar.follow("s1")
+        XCTAssertEqual(bar.freshPlan, 0.7)
+    }
+
+    @MainActor
+    func testASwitchWithdrawsBothFiguresUntilTheyAreReadForTheNewLogin() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.usage, WireCapability.account])
+        bar.follow("s1")
+        // The plan read's own rid — `follow` sends a context read and a plan
+        // read, and the receiver matches the answer's `want` to the ask.
+        let planRid = wire.sent.compactMap { message -> String? in
+            if case let .usageRead(rid, _, .plan, _) = message { return rid }
+            return nil
+        }.first
+        guard let planRid else { return XCTFail("expected a plan usage.read") }
+        _ = bar.receive(.usageReading(rid: planRid, id: "s1", want: .plan,
+                                      figures: UsageFigures(plan: 0.7, context: nil)))
+        XCTAssertEqual(bar.freshPlan, 0.7)
+
+        // A switch replaces the process; the old login's ring must not sit over
+        // the new one. Withdrawn on the press, before any answer.
+        bar.switchTo("second")
+        XCTAssertNil(bar.freshPlan, "the pre-switch usage is not the new login's usage")
+    }
+
+    // MARK: - Sign out, from the phone (audit gap 20)
+
+    func testASignOutEncodesAsTheMachineParsesIt() {
+        XCTAssertEqual(
+            WireCodec.encode(.loginsSignout(rid: "r3", accountId: "second")).sortedJSON(),
+            #"{"accountId":"second","rid":"r3","t":"logins.signout"}"#)
+    }
+
+    func testASignedOutFrameIsMachineScopedAndCarriesOnlyItsOutcome() {
+        let raw = #"{"t":"logins.signedout","rid":"r3","ok":true,"message":"Signed out.","session":null}"#
+        guard case let .ok(message, _) = WireCodec.decode(raw),
+              case let .loginsSignedout(rid, ok) = message else {
+            return XCTFail("expected a logins.signedout")
+        }
+        XCTAssertEqual(rid, "r3")
+        XCTAssertTrue(ok)
+    }
+
+    @MainActor
+    func testSignOutIsNotSentToAMachineThatDoesNotManageItsLogins() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        // Account switch, but not the machine-scoped logins verbs.
+        bar.welcomed(capabilities: [WireCapability.account])
+        bar.follow("s1")
+        wire.sent.removeAll()
+        bar.signOut("second")
+        // A frame the far end would refuse is not a frame this bar sends.
+        XCTAssertTrue(wire.sent.isEmpty)
+        XCTAssertFalse(bar.busy)
+    }
+
+    @MainActor
+    func testASignedOutAnswerRereadsTheMachinesOwnList() {
+        let wire = RecordingWire()
+        let bar = SessionBarLink(wire: wire)
+        bar.welcomed(capabilities: [WireCapability.account, WireCapability.logins])
+        bar.follow("s1")
+        wire.sent.removeAll()
+
+        bar.signOut("second")
+        guard case let .loginsSignout(rid, accountId) = wire.sent.last else {
+            return XCTFail("expected a logins.signout")
+        }
+        XCTAssertEqual(accountId, "second")
+        XCTAssertTrue(bar.busy)
+
+        _ = bar.receive(.loginsSignedout(rid: rid, ok: true))
+        XCTAssertFalse(bar.busy)
+        // Whether the login is gone is the machine's own probe, read again rather
+        // than assumed from the press — an account.read follows.
+        XCTAssertTrue(wire.sent.contains { if case .accountRead = $0 { return true }; return false })
+    }
+
+    func testOnlyAgentsWithALogoutCommandCanBeSignedOut() {
+        // A port of `hasSignOut` in agent-catalog.ts: Claude and Codex have one,
+        // Gemini and a shell do not, and an unknown provider falls to false.
+        XCTAssertTrue(SessionBarView.canSignOut(provider: "claude"))
+        XCTAssertTrue(SessionBarView.canSignOut(provider: "codex"))
+        XCTAssertFalse(SessionBarView.canSignOut(provider: "gemini"))
+        XCTAssertFalse(SessionBarView.canSignOut(provider: "shell"))
+        XCTAssertFalse(SessionBarView.canSignOut(provider: nil))
+    }
 }
 
 @MainActor

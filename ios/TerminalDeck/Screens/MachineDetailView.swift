@@ -65,6 +65,7 @@ struct MachineDetailView: View {
                          * from anywhere.
                          */
                         capabilities(host)
+                        github(host)
                         crossing(host)
                     } else {
                         // Forgotten while this screen was open — from the `…` on
@@ -134,6 +135,31 @@ struct MachineDetailView: View {
             can("Open pages in its browser", host.canOpenPagesThere)
             line
             can("Send files", host.canSendFiles)
+        }
+    }
+
+    /**
+     * **Connect GitHub, on a relay-paired machine.**
+     *
+     * Audit gap 21: the Connect-GitHub card was drawn only inside
+     * `ServerDetailView`, which needs an SSH server record — so a Mac or PC
+     * paired with six digits, the machine Asad actually reviews on, had no GitHub
+     * UI at all, even though the `github` capability is advertised over the relay
+     * just the same. *"connect server, then app, then GitHub, so it's linked
+     * there. The host owns it, not the phone."* This is the same card
+     * `ServerDetailView` mounts, reached the same way — `host.github` — and gated
+     * the same way: it draws nothing until the host advertises `github`, so an
+     * older host or a guest gets the page it always had.
+     *
+     * The `offered` check here is only so the section's top spacing is added when
+     * there is a card to space, never as a 24-point gap on a machine without one.
+     * The card itself re-checks and reads its own state.
+     */
+    @ViewBuilder
+    private func github(_ host: HostLink) -> some View {
+        if host.github.offered {
+            ConnectGitHubView(host: host)
+                .padding(.top, 24)
         }
     }
 

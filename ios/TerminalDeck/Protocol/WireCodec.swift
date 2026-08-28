@@ -638,6 +638,15 @@ enum WireCodec {
             // one piece of prose on a bar that has none.
             return .ok(.accountSwitched(rid: rid, id: id, ok: object["ok"] as? Bool == true), activity: [:])
 
+        case "logins.signedout":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "logins.signedout without a request")
+            }
+            // `message` and `session` are on the wire and deliberately not read:
+            // the bar draws no sentence and a logout attaches to nothing. The
+            // list is re-read after this to reflect the machine's own probe.
+            return .ok(.loginsSignedout(rid: rid, ok: object["ok"] as? Bool == true), activity: [:])
+
         case "enrolled":
             guard let deviceId = string(object["deviceId"]),
                   let deviceName = string(object["deviceName"]),
@@ -1219,6 +1228,10 @@ enum WireCodec {
             object = ["t": "account.read", "rid": rid, "id": id]
         case let .accountSwitch(rid, id, accountId):
             object = ["t": "account.switch", "rid": rid, "id": id, "accountId": accountId]
+        case let .loginsSignout(rid, accountId):
+            // No session id: this is the machine-scoped verb, resolved against
+            // the same profile list `account.switch` uses. See `WireCapability.logins`.
+            object = ["t": "logins.signout", "rid": rid, "accountId": accountId]
         case let .enroll(version, device, username, secret, method, capabilities):
             object = [
                 "t": "enroll",

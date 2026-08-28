@@ -60,6 +60,43 @@ final class SessionBarLink {
     /// A refresh or a switch is in flight.
     private(set) var busy = false
 
+    /*
+     * ## Usage, the best version: a figure is drawn only while it is still true
+     *
+     * Asad, 2026-08-26: the ring and the bar *"are often stale"* — a percent
+     * left on the row by a switch, a socket that went, or an agent mid-write.
+     * The fix is not another read; it is refusing to draw a reading that is no
+     * longer the machine's current answer. So each figure carries the moment it
+     * landed, and `freshPlan` / `freshContext` withhold it the instant it stops
+     * being current. Absent, never wrong — the same rule the chip already keeps
+     * for a figure that was never known.
+     */
+
+    /// When the plan reading on screen last landed, or nil for "not a current
+    /// reading". Set together with `plan`, cleared the moment `plan` could be
+    /// about a different login (a switch), a dead socket, or another session.
+    private(set) var planReadAt: Date?
+    /// When the context reading on screen last landed, or nil. Set with
+    /// `context`; additionally cleared the instant the session writes again,
+    /// because an output frame moves the window and the last reading is behind
+    /// it until the debounced re-read replaces it.
+    private(set) var contextReadAt: Date?
+
+    /// The plan figure, but only while it is genuinely the machine's current
+    /// answer for the session on screen. Otherwise nil — no ring rather than a
+    /// stale one. Press the ring (`refresh`) to read it again once it is gone.
+    var freshPlan: Double? {
+        guard sessionID != nil, planReadAt != nil else { return nil }
+        return plan
+    }
+    /// The context figure, but only while genuinely fresh. Held through a quiet
+    /// session — the window does not move when nothing is written — and withdrawn
+    /// while the agent writes, so a climbing number is never read mid-flight.
+    var freshContext: Double? {
+        guard sessionID != nil, contextReadAt != nil else { return nil }
+        return context
+    }
+
     /// What this machine said it can answer. Nothing is asked for a name that
     /// is not in here, so a desktop older than these capabilities gets a screen
     /// that is exactly what it was rather than one explaining what it lacks.
@@ -79,6 +116,7 @@ final class SessionBarLink {
         case usage(UsageWant)
         case account
         case accountSwitch
+        case loginsSignout
     }
 
     init(wire: CopilotWire, now: @escaping () -> Date = Date.init) {
@@ -97,6 +135,11 @@ final class SessionBarLink {
 
     var canReadUsage: Bool { capabilities.contains(WireCapability.usage) }
     var canReadAccount: Bool { capabilities.contains(WireCapability.account) }
+    /// Whether this machine will sign one of its own logins out for this device —
+    /// the gate on the sheet's Sign out control. A machine that advertises
+    /// `account` but not `logins` (an older host, or a guest) draws no Sign out,
+    /// exactly as it did before there was one.
+    var canManageLogins: Bool { capabilities.contains(WireCapability.logins) }
 
     /**
      * The screen opened a session. Everything held about the last one goes:
@@ -203,6 +246,8 @@ final class SessionBarLink {
         figuresFor = nil
         plan = nil
         context = nil
+        planReadAt = nil
+        contextReadAt = nil
         account = nil
         accounts = []
         busy = false
@@ -223,6 +268,8 @@ final class SessionBarLink {
         pending.removeAll()
         plan = nil
         context = nil
+        planReadAt = nil
+        contextReadAt = nil
         busy = false
         askedPlanAt = nil
     }
@@ -235,6 +282,11 @@ final class SessionBarLink {
      * round trips across a relay for one paragraph.
      */
     func noteOutput() {
+        // The window is moving. Whatever context figure is on the row is now
+        // behind the session, so withdraw it until the debounced re-read below
+        // replaces it — never a number climbing while it is read. The plan does
+        // not move per output, so its ring stays and stays pressable.
+        contextReadAt = nil
         quiet?.cancel()
         quiet = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -260,9 +312,32 @@ final class SessionBarLink {
 
     func switchTo(_ accountId: String) {
         guard let sessionID else { return }
+        // The usage on the row is this login's, and the switch replaces the
+        // process — so withdraw both figures now rather than let the old login's
+        // ring sit over the new one until a reading happens to land. They come
+        // back when `accountSwitched` re-asks them for whatever runs after.
+        planReadAt = nil
+        contextReadAt = nil
         let rid = nextRid()
         busy = true
         send(.accountSwitch(rid: rid, id: sessionID, accountId: accountId), rid: rid, as: .accountSwitch)
+    }
+
+    /**
+     * Sign one of this machine's logins out, from the phone.
+     *
+     * The act the audit found missing (gap 20): the sheet could move a session
+     * between logins but never sign one out, which was desktop-only. This is the
+     * machine-scoped verb — no session id — and it is gated on the machine
+     * having advertised `logins`, so it is only ever sent where the sheet
+     * actually drew the control. Whether the login is gone is the next
+     * `account.read`, asked on `logins.signedout`, never assumed from the press.
+     */
+    func signOut(_ accountId: String) {
+        guard canManageLogins else { return }
+        let rid = nextRid()
+        busy = true
+        send(.loginsSignout(rid: rid, accountId: accountId), rid: rid, as: .loginsSignout)
     }
 
     @discardableResult
@@ -309,7 +384,7 @@ final class SessionBarLink {
     private func send(_ message: ClientMessage, rid: String, as ask: Ask) -> Bool {
         guard wire.send(message) else {
             switch ask {
-            case .accountSwitch, .usage(.refresh): busy = false
+            case .accountSwitch, .loginsSignout, .usage(.refresh): busy = false
             default: break
             }
             return false
@@ -329,8 +404,12 @@ final class SessionBarLink {
             switch want {
             case .context:
                 context = figures.context
+                // Stamp only a real figure. A nil reading is "the machine did
+                // not report", which is absent rather than a fresh nothing.
+                contextReadAt = figures.context != nil ? now() : nil
             case .plan, .refresh:
                 plan = figures.plan
+                planReadAt = figures.plan != nil ? now() : nil
                 busy = false
             }
             return true
@@ -347,6 +426,25 @@ final class SessionBarLink {
             // Asked again rather than assumed: the far end decides whether the
             // switch took, and a chip that renamed itself on the press would be
             // the one surface that disagrees with the machine.
+            askAccount()
+            // The usage is now about whatever login this session runs as — read
+            // it again for the new one so the ring and bar come back fresh
+            // rather than staying withdrawn from `switchTo` until the next
+            // output. `askedPlanAt` is reset so the throttle does not swallow the
+            // one plan read a switch genuinely needs.
+            askUsage(.context)
+            askedPlanAt = nil
+            askPlan()
+            return true
+
+        case let .loginsSignedout(rid, _):
+            // Machine-scoped: no session id to check, matched on rid alone.
+            guard pending.removeValue(forKey: rid) != nil else { return false }
+            busy = false
+            // Re-read the machine's own list rather than trust the press: the
+            // signed-out login's row loses its Sign out because the probe now
+            // reports it signed out, which is the visible confirmation — the
+            // same way a switch's confirmation is the fresh list, not a sentence.
             askAccount()
             return true
 

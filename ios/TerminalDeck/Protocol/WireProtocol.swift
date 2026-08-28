@@ -474,6 +474,23 @@ enum WireCapability {
     static let account = "account"
 
     /**
+     * The machine will manage its **own** agent logins — sign one in, sign one
+     * out — for one of the owner's own devices. `logins.read` / `logins.signin`
+     * / `logins.signout`, the machine-scoped account verbs, as opposed to
+     * `account`'s per-session switch.
+     *
+     * Asad, 2026-08-26, reviewing on his phone: *"login, logout, things, access.
+     * All of this we can just manage from this."* Signing in and out was
+     * desktop-only — the phone could only move a running session between logins
+     * it already had — and this is the capability that lets the phone do what
+     * `DeviceAccounts` does at the desk. Only sign-**out** is wired on this
+     * client so far (audit gap 20): it runs the login's own logout over there
+     * and answers `logins.signedout`. Withheld from a guest at the source — a
+     * machine's logins are the owner's — so a device that sees it may act.
+     */
+    static let logins = "logins"
+
+    /**
      * The desktop will read and set a session's model, effort, fast mode and
      * permission — `controls.read` / `controls.apply`.
      *
@@ -1444,6 +1461,23 @@ enum ClientMessage: Equatable {
      * `foreignAccount`.
      */
     case accountSwitch(rid: String, id: String, accountId: String)
+    /**
+     * Sign one of this **machine's** logins out, over there — capability
+     * `logins`, no session in the question.
+     *
+     * The counterpart to a per-session `account.switch`: a switch moves a
+     * running session between logins the machine already holds, this signs a
+     * login *out* of the machine. The far end runs that login's own logout,
+     * re-reads its own probe, and answers `logins.signedout` — a command that
+     * finishes rather than an interactive flow, so nothing opens to attach to.
+     *
+     * The id is the same profile id `account.read` and `account.switch` carry;
+     * the machine resolves all three against the one profile list. Refused when
+     * `logins` is not advertised, so this is sent only when the bar saw it in
+     * the welcome. Asad, on his phone: *"login, logout … we can just manage from
+     * this."*
+     */
+    case loginsSignout(rid: String, accountId: String)
 
     /* ---- sign-in. The one frame a connection may send before a `hello`. ----- */
     /**
@@ -2014,6 +2048,18 @@ enum ServerMessage: Equatable {
      * bar that has none.
      */
     case accountSwitched(rid: String, id: String, ok: Bool)
+    /**
+     * What happened to one `logins.signout`.
+     *
+     * Only `ok` is kept. The far end's `message` and its always-null `session`
+     * are read off the wire and dropped here on purpose, for the reason
+     * `accountSwitched` drops its sentence: this bar draws no prose, and whether
+     * the login is really gone is settled by the next `account.read` of the
+     * machine's own probe — which this client asks for on receipt — never
+     * asserted from the press. A refusal is this frame with `ok: false`; there
+     * is no separate failure frame.
+     */
+    case loginsSignedout(rid: String, ok: Bool)
 
     /* ---- sign-in ---------------------------------------------------------- */
     /**

@@ -2219,11 +2219,12 @@ final class HostLink: Identifiable {
             // one file believing they were editing another.
             copilot.apply(fileText: id, text: text, error: error)
 
-        case .usageReading, .accountState, .accountSwitched:
+        case .usageReading, .accountState, .accountSwitched, .loginsSignedout:
             // Everything about which answer belongs to which question is the
             // bar's, because `rid` is minted there. It drops an answer to a
             // question it did not ask, and an answer about a session that is no
-            // longer on screen.
+            // longer on screen. `logins.signedout` is machine-scoped and carries
+            // no session, so the bar matches it on rid alone.
             bar.receive(message)
 
         case .controlsReading, .controlsApplied:

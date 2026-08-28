@@ -43,13 +43,17 @@ struct SessionBarView: View {
 
     var body: some View {
         // Nothing known is nothing drawn — not an empty row, which reads as a
-        // rendering fault rather than as a decision.
-        if bar.plan == nil && bar.context == nil && bar.account == nil {
+        // rendering fault rather than as a decision. `freshPlan` / `freshContext`
+        // rather than the raw figures: *"usage should be the best version"* — a
+        // ring or bar appears only while its reading is still the machine's
+        // current answer, and the account chip keeps the row present so
+        // withdrawing a stale figure never jolts the whole strip.
+        if bar.freshPlan == nil && bar.freshContext == nil && bar.account == nil {
             EmptyView()
         } else {
             HStack(spacing: 12) {
-                if let plan = bar.plan { ring(plan) }
-                if let context = bar.context { contextBar(context) }
+                if let plan = bar.freshPlan { ring(plan) }
+                if let context = bar.freshContext { contextBar(context) }
                 if let account = bar.account { chip(account) }
                 Spacer(minLength: 0)
             }
@@ -234,6 +238,24 @@ struct SessionBarView: View {
         }
     }
 
+    /**
+     * Whether this app can sign an agent out from here — a port of `hasSignOut`
+     * in `src/shared/agent-catalog.ts`.
+     *
+     * Claude and Codex carry a logout command (`claude auth logout`,
+     * `codex logout`); Gemini and a plain shell do not. Where there is none the
+     * Sign out is **absent**, never drawn and disabled — §4.1, and on this bar
+     * doubly so, because the desktop's spoken reason for the missing button
+     * would be a sentence, and this row draws none. A provider this build has
+     * not heard of falls to false: no button rather than one that runs nothing.
+     */
+    static func canSignOut(provider: String?) -> Bool {
+        switch provider {
+        case "claude", "codex": return true
+        default: return false
+        }
+    }
+
     /// Whole percent, never a decimal on a phone.
     static func percentText(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
@@ -243,11 +265,18 @@ struct SessionBarView: View {
 }
 
 /**
- * Which login this session runs as, and the way to change it.
+ * Which login this session runs as, the way to change it, and — since the
+ * 2026-08-26 review — the way to sign one out.
  *
  * A sheet rather than a menu, because on a phone the list can be four rows long
  * and a `Menu` puts them under the finger that opened it. No header, no
  * explanation, no note about what switching does — the rows are the screen.
+ *
+ * The row is now two controls, not one: the name switches the session onto that
+ * login, and a trailing **Sign out** signs it out of the machine where that can
+ * be done. That is the audit's gap 20 — *"login, logout … we can just manage
+ * from this"* — and it mirrors the desktop's `DeviceAccounts`: the machine runs
+ * its own logout and the list is read again, this sheet only asks.
  */
 private struct AccountSheet: View {
     let bar: SessionBarLink
@@ -302,28 +331,71 @@ private struct AccountSheet: View {
          * it. See `accountLoginLabel`.
          */
         let login = accountLoginLabel(account)
-        Button {
-            dismiss()
-            if !chosen { bar.switchTo(account.id) }
-        } label: {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(SessionBarView.tint(account.color))
-                    .frame(width: 9, height: 9)
-                Text(login)
-                    .foregroundStyle(Theme.primary)
-                Spacer(minLength: 0)
-                if chosen {
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(Theme.accent)
-                        .font(.system(size: 13, weight: .semibold))
+        /*
+         * Sign out, the act the audit found missing (gap 20). Drawn only where
+         * it can act, exactly as `DeviceAccounts` gates it: the machine manages
+         * its own logins (`logins` advertised), this login is really signed in,
+         * and its agent has a logout command. Where any of the three is false the
+         * control is **absent** — §4.1 — never a disabled button, and on this
+         * sheet never the spoken reason the desktop shows in its place: this row
+         * draws no sentence.
+         *
+         * It is offered even on a foreign row and on the row in use. A foreign
+         * login (another agent) cannot be *switched* to and so its switch is
+         * dead, but signing it out of the machine is a separate, valid act the
+         * far end runs on its own — machine-scoped, not about this session.
+         */
+        let signedIn = account.signIn?.state == WireSignIn.signedIn
+        let canSignOut = bar.canManageLogins && signedIn
+            && SessionBarView.canSignOut(provider: account.provider)
+
+        HStack(spacing: 8) {
+            Button {
+                dismiss()
+                if !chosen { bar.switchTo(account.id) }
+            } label: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(SessionBarView.tint(account.color))
+                        .frame(width: 9, height: 9)
+                    Text(login)
+                        .foregroundStyle(Theme.primary)
+                    Spacer(minLength: 0)
+                    if chosen {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(Theme.accent)
+                            .font(.system(size: 13, weight: .semibold))
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(foreign || bar.busy)
+            .opacity(foreign ? 0.4 : 1)
+            .accessibilityIdentifier("session.account.\(account.id)")
+
+            if canSignOut {
+                // A sibling of the switch, never nested inside its label: a
+                // Button in a Button is a hit-testing coin toss, and the coin
+                // here decides between switching login and signing one out. The
+                // sheet stays open — the row losing its Sign out on the next read
+                // is the confirmation, the way a switch's is the moved checkmark.
+                Button {
+                    bar.signOut(account.id)
+                } label: {
+                    Text("Sign out")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.critical)
+                        .padding(.leading, 8)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(bar.busy)
+                .accessibilityLabel("Sign \(login) out")
+                .accessibilityIdentifier("session.account.signout.\(account.id)")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(foreign)
-        .opacity(foreign ? 0.4 : 1)
-        .accessibilityIdentifier("session.account.\(account.id)")
     }
 }
