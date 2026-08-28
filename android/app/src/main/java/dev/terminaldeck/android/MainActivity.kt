@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.hardware.biometrics.BiometricManager
 import android.os.Build
+import android.content.Intent
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
@@ -109,6 +110,7 @@ import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.terminaldeck.android.alerts.AlertCenter
+import dev.terminaldeck.android.alerts.AlertRouter
 import dev.terminaldeck.android.ui.theme.AppearanceStore
 import dev.terminaldeck.android.ui.theme.DeckTheme
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
@@ -237,6 +239,13 @@ class MainActivity : ComponentActivity() {
         TerminalSchemeStore.prime(this)
         installTerminalPalette(TerminalSchemeStore.resolve(dark))
 
+        // A launch from a notification tap: read the machine and session AlertCenter wrote onto the
+        // intent and open that session. The opener is wired later, by the composition, so a tap during
+        // a cold start is held by [AlertRouter] and flushed the moment it is — the whole reason the
+        // router has a pending buffer. A no-op on an ordinary launch; the warm-start path is
+        // [onNewIntent].
+        AlertRouter.deliver(intent)
+
         setContent {
             TerminalDeckTheme {
                 /*
@@ -277,6 +286,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * A notification tapped while the app is already running.
+     *
+     * The launch intent is `singleTop` + `clearTop` (see [AlertCenter]), so a tap on an alert for an
+     * app that is up delivers here rather than making a second activity. `setIntent` keeps
+     * `getIntent()` current for anything that reads it later; [AlertRouter] reads the machine and
+     * session off it and opens that session through the opener the composition wired. The mirror of
+     * iOS's `UNUserNotificationCenterDelegate` → `NotificationRouter.deliver`.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        AlertRouter.deliver(intent)
     }
 
     /**
@@ -652,6 +676,20 @@ fun TerminalDeckApp(
     }
 
     /*
+     * Tap-to-open: the opener a notification tap is routed through.
+     *
+     * [AlertRouter] holds a target read off the intent — by `onCreate` on a cold start, by
+     * `onNewIntent` on a warm one — and calls this the moment it is wired, which flushes a tap that
+     * arrived before the composition was ready. `openFromAlert` funnels it into the same `created`
+     * flow above, so the one navigation effect lands the person on the session. Cleared on the way
+     * out so a torn-down composition does not keep the view model alive through a global callback.
+     */
+    DisposableEffect(viewModel) {
+        AlertRouter.open = { host, session -> viewModel.openFromAlert(host, session) }
+        onDispose { AlertRouter.open = null }
+    }
+
+    /*
      * Picking a photo, a video or a file — and the permissions this app deliberately does not hold.
      *
      * `PickVisualMedia` is the **system photo picker**. It runs in another process, shows the user
@@ -916,6 +954,9 @@ fun TerminalDeckApp(
                 onStart = viewModel::startCopilot,
                 onCancel = viewModel::cancelCopilotTurn,
                 onStopRun = viewModel::stopCopilotRun,
+                // Restart the copilot — end this run, start a fresh one in the same folder. The only
+                // clean slate the copilot has, since it carries no list/+/Delete. See restartCopilot.
+                onRestart = viewModel::restartCopilot,
                 onSay = viewModel::sayToCopilot,
                 onCopy = viewModel::copyText,
                 onOpened = viewModel::openCopilot,
@@ -1827,6 +1868,7 @@ private fun TerminalRoute(
             bar = state.bar,
             onRefreshUsage = viewModel::refreshUsage,
             onSwitchAccount = viewModel::switchAccount,
+            onSignOutAccount = viewModel::signOutAccount,
             onDetails = { onDetails(known) },
             // The Rename row's gate — this machine's `rename` capability, absent on one too old to
             // advertise it. Same flag the session list reads.
@@ -1835,8 +1877,14 @@ private fun TerminalRoute(
             // Always an ordinary session here: the copilot's own conversation is drawn by
             // `CopilotScreen`, and a terminal reached from the Copilot tab is one the copilot
             // *started*. The flag exists so the parity is correct the day that changes; the browser
-            // attach section and Restart stay on their defaults (absent) until the browser lane wires
-            // the window roster — see `TerminalScreen`'s `canAttachBrowser`.
+            // attach section stays on its default (absent) until the browser lane wires the window
+            // roster — see `TerminalScreen`'s `canAttachBrowser`.
+            //
+            // Restart is NOT reached through this flag on Android. Because the copilot renders as a
+            // chat (`CopilotScreen`) rather than a terminal — unlike iOS/desktop, where it is a
+            // `TerminalScreen` with `isCopilot` — the copilot's Restart lives on the composer's action
+            // row in `CopilotScreen` and runs through `DeckViewModel.restartCopilot`. This
+            // `TerminalScreen`'s own `isCopilot` Restart item stays dead-but-correct for that future.
             isCopilot = false,
             // The floating browser window a session may be holding — a live cast over the terminal,
             // draggable, with an address pill and a Delete. Drawn only when this machine's browser is
@@ -1850,6 +1898,9 @@ private fun TerminalRoute(
                         view = view,
                         controller = browser,
                         watch = viewModel.watcher(),
+                        // The watch snapshot carries the login handover on the shown window — whether an
+                        // agent is asking for a person, and whether an answer of ours is in flight.
+                        watchView = state.watch,
                         hostId = hostId,
                         sessionId = liveSession,
                         frontmost = true,

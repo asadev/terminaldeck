@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.SessionBarView
 import dev.terminaldeck.android.protocol.AccountWire
 import dev.terminaldeck.android.protocol.ServerSettingsLabels
+import dev.terminaldeck.android.protocol.accountCanSignOut
 import dev.terminaldeck.android.protocol.accountLoginLabel
 import dev.terminaldeck.android.protocol.foreignAccount
 import dev.terminaldeck.android.protocol.namedLogin
@@ -73,6 +74,9 @@ fun SessionBarRow(
     view: SessionBarView,
     onRefresh: () -> Unit,
     onSwitchAccount: (String) -> Unit,
+    /** Sign one login out on the machine — the desktop's Accounts sign-out, offered per account in the
+     *  sheet. Drawn only where the machine serves it and the account's agent can log out. */
+    onSignOut: (String) -> Unit,
 ) {
     var picking by remember { mutableStateOf(false) }
 
@@ -122,9 +126,14 @@ fun SessionBarRow(
             AccountSheet(
                 current = view.account,
                 accounts = view.accounts,
+                canSignOut = view.canSignOut,
                 onPick = { id ->
                     picking = false
                     onSwitchAccount(id)
+                },
+                onSignOut = { id ->
+                    picking = false
+                    onSignOut(id)
                 },
             )
         }
@@ -252,7 +261,9 @@ private fun AccountChip(account: AccountWire, enabled: Boolean, onClick: () -> U
 private fun AccountSheet(
     current: AccountWire?,
     accounts: List<AccountWire>,
+    canSignOut: Boolean,
     onPick: (String) -> Unit,
+    onSignOut: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -316,7 +327,24 @@ private fun AccountSheet(
                         }
                     }
                 }
+                // Sign out — the desktop's Accounts sign-out, per account. Drawn only where the machine
+                // will end a login from a phone (`canSignOut`) and this account's agent has a logout
+                // command and is signed in (`accountCanSignOut`) — a control that cannot act is removed
+                // rather than offered and refused, and this bar draws no note in its place. Its own
+                // clickable, so a tap signs out rather than switching the row underneath it.
+                if (canSignOut && accountCanSignOut(account)) {
+                    Text(
+                        text = "Sign out",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onSignOut(account.id) }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
                 if (here) {
+                    Spacer(Modifier.width(8.dp))
                     Icon(
                         Icons.Filled.Check,
                         contentDescription = "In use",

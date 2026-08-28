@@ -49,6 +49,27 @@ class WatchController(
     private var counter = 0
 
     /**
+     * The handover outstanding on each window that has one, by window name.
+     *
+     * A map rather than a single value because two windows can be asking at once — two sessions, two
+     * agents, two logins — and the screen that draws one is addressed by the window it is showing.
+     * Windows with nothing outstanding are absent, so [handover] returning null is the ordinary answer
+     * and the bar is simply not drawn. Mirrors iOS `WatchLink.handovers`.
+     */
+    private val handovers = mutableMapOf<String, BrowserHandover>()
+
+    /**
+     * Windows with a `take` or a `done` of ours in flight.
+     *
+     * Two jobs. It stops a double tap sending a second claim — which on a `done` would be a second,
+     * opposite answer to a question already answered. And it is what [wireErrored] reads: the wire's
+     * error frame carries no correlation id, so an error arriving while exactly one handover answer is
+     * outstanding is treated as that one's refusal — the same assumption the copilot and a folder
+     * browse already make. Mirrors iOS `WatchLink.awaiting`.
+     */
+    private val awaiting = mutableSetOf<String>()
+
+    /**
      * The viewer's frame sink.
      *
      * Not part of the ui state: the viewer needs each frame in a callback it can ack from, not a
@@ -59,11 +80,25 @@ class WatchController(
 
     fun offered(): Boolean = capabilities().contains(Capability.WATCH)
 
-    /** A snapshot the strip draws from, or null over a machine that does not offer watching. */
+    /** A snapshot the strip and the handover bar draw from, or null over a machine that does not
+     *  offer watching. The handover maps are copied so the drawn snapshot cannot change under a
+     *  frame arriving between fold and draw. */
     fun view(): WatchView? {
         if (!offered()) return null
-        return WatchView(surfaces = surfaces, watching = watching, asked = requested)
+        return WatchView(
+            surfaces = surfaces,
+            watching = watching,
+            asked = requested,
+            handovers = handovers.toMap(),
+            awaiting = awaiting.toSet(),
+        )
     }
+
+    /** The handover outstanding on one window, or null when nothing is being asked there. */
+    fun handover(window: String): BrowserHandover? = handovers[window]
+
+    /** Whether an answer of ours about this window — a claim or a hand-back — is still in flight. */
+    fun isAwaiting(window: String): Boolean = awaiting.contains(window)
 
     /**
      * A new welcome: forget the last machine's strip.
@@ -77,6 +112,10 @@ class WatchController(
         watching = null
         requested = false
         frameHandler = null
+        // A handover belongs to the connection that was asked, so a new welcome ends any that were
+        // outstanding: an old login prompt drawn under a new machine's name is a question nobody asked.
+        handovers.clear()
+        awaiting.clear()
         onChange()
     }
 
@@ -233,6 +272,94 @@ class WatchController(
         send(ClientMessage.BrowserInput(window = window, seq = seq, key = BrowserKeyWire(type = "char", code = "Backspace", text = "\u0008")))
     }
 
+    /* ------------------------------------------------------------------ handover -- */
+
+    /**
+     * **That person is me.** Claim the login the machine's agent is waiting on.
+     *
+     * Guarded on there actually being a question, because a `take` for a window with no handover is
+     * refused at the far end — a sentence on a screen instead of a button that quietly does nothing.
+     * The last refusal goes with the new attempt: leaving it up beside a claim in flight is the screen
+     * contradicting itself. Once the host grants the baton it stops curtaining this connection's
+     * frames, so the person taps the login field and types with the soft keyboard the cast already
+     * raises — nothing else on the phone changes. Mirrors iOS `WatchLink.take`.
+     */
+    fun take(window: String): Boolean {
+        if (!offered() || handovers[window]?.asking != true || awaiting.contains(window)) return false
+        val rid = nextRid()
+        if (!send(ClientMessage.BrowserHandoverTake(rid = rid, window = window))) return false
+        handovers[window] = handovers[window]!!.copy(refusal = null)
+        awaiting.add(window)
+        onChange()
+        return true
+    }
+
+    /**
+     * Hand it back, and say which of the two things that means.
+     *
+     * [carryOn] `true` returns the baton and the agent's blocked call resolves; `false` ends the drive.
+     * Only from the device that holds it — `mine` is the guard, and the far end applies the same one,
+     * because a second watcher handing back a page mid-password on behalf of the person typing into it
+     * is the exact thing both ends refuse. Mirrors iOS `WatchLink.handBack`.
+     */
+    fun handBack(window: String, carryOn: Boolean): Boolean {
+        if (!offered() || handovers[window]?.mine != true || awaiting.contains(window)) return false
+        val rid = nextRid()
+        if (!send(ClientMessage.BrowserHandoverDone(rid = rid, window = window, carryOn = carryOn))) return false
+        awaiting.add(window)
+        onChange()
+        return true
+    }
+
+    /**
+     * The machine refused something while an answer of ours was in flight.
+     *
+     * The wire's `error` carries no correlation id, so this cannot be narrowed to *our* frame without
+     * inventing a field. What it can be narrowed to is *a moment when exactly one handover answer was
+     * outstanding* — [awaiting] — and the cost of being wrong is one sentence a following state frame
+     * clears. The refusal is drawn **beside** the claim, which becomes *Try again*: this end cannot
+     * know whether a refusal was permanent, and the likeliest one is a race. Mirrors iOS
+     * `WatchLink.wireErrored`; a no-op when nothing was outstanding.
+     */
+    fun wireErrored(message: String) {
+        if (awaiting.isEmpty()) return
+        val sentence = message.ifEmpty { "The machine refused that." }
+        for (window in awaiting) {
+            handovers[window]?.let { handovers[window] = it.copy(refusal = sentence) }
+        }
+        awaiting.clear()
+        onChange()
+    }
+
+    private fun nextRid(): String {
+        counter += 1
+        return "wch-h-$counter"
+    }
+
+    /**
+     * Fold one `browser.handover.state` into what this phone is showing.
+     *
+     * Answer and push are the same here — the state is the whole truth either way, so the rid is not
+     * matched. A plain overwrite now that `taken` is carried rather than derived: nothing needs the
+     * last frame's value. A window that has stopped asking is **removed** rather than kept asking=false,
+     * so a refusal from the last question does not outlive it. Mirrors iOS `WatchLink.apply`.
+     */
+    private fun apply(state: ServerMessage.BrowserHandover) {
+        awaiting.remove(state.window)
+        if (!state.asking) {
+            handovers.remove(state.window)
+        } else {
+            handovers[state.window] = BrowserHandover(
+                asking = true,
+                prompt = state.sentence,
+                mine = state.mine,
+                taken = state.taken,
+                refusal = null,
+            )
+        }
+        onChange()
+    }
+
     /** Frames this controller owns. True when the frame was claimed. */
     fun receive(message: ServerMessage): Boolean = when (message) {
         is ServerMessage.BrowserSurfacesRows -> {
@@ -251,6 +378,11 @@ class WatchController(
             true
         }
 
+        is ServerMessage.BrowserHandover -> {
+            apply(message)
+            true
+        }
+
         else -> false
     }
 
@@ -260,6 +392,8 @@ class WatchController(
         watching = null
         surfaces = emptyList()
         requested = false
+        handovers.clear()
+        awaiting.clear()
     }
 }
 
@@ -273,4 +407,82 @@ data class WatchView(
     val surfaces: List<BrowserSurfaceWire>,
     val watching: String?,
     val asked: Boolean,
+    /** The handover outstanding on each window that has one, by window name. Empty is the ordinary
+     *  case: no agent is waiting on a person. */
+    val handovers: Map<String, BrowserHandover> = emptyMap(),
+    /** Windows with a claim or a hand-back of ours in flight, so the bar can show its buttons busy. */
+    val awaiting: Set<String> = emptySet(),
+) {
+    /** The handover on one window, or null — what the overlay draws the bar off. */
+    fun handoverFor(window: String): BrowserHandover? = handovers[window]
+
+    /** Whether an answer of ours about this window is still in flight. */
+    fun awaitingFor(window: String): Boolean = awaiting.contains(window)
+}
+
+/**
+ * What this phone knows about the handover on one window — the wire's `browser.handover.state` plus
+ * [refusal], which the frame has no field for and this end has to hold: the machine's own sentence
+ * when a claim from this device was refused. Never this end's words for it — the wire's error frame
+ * carries no reason code and inventing one would be inventing why. Mirrors iOS `BrowserHandover`.
+ */
+data class BrowserHandover(
+    /** A handover is outstanding here: the agent has stopped and is waiting for a person. */
+    val asking: Boolean,
+    /** The agent's own sentence — what it wants typed. */
+    val prompt: String,
+    /** This device holds it: the pixels arrive unmasked and the taps land. */
+    val mine: Boolean,
+    /** Somebody holds it — this device or another. With [mine] it makes the three states exactly:
+     *  `!taken` claimable, `taken && mine` yours, `taken && !mine` somebody else's. */
+    val taken: Boolean,
+    /** The machine's sentence when a claim from this device was refused, or null. */
+    val refusal: String? = null,
 )
+
+/**
+ * What the handover bar says and what it offers, from the state alone.
+ *
+ * Pulled out of the view because it is the one decision on that bar that is a decision and not a
+ * layout: four states, four different things to draw, and getting it wrong either way is a real
+ * defect — offering the claim to a device that cannot have it is a button that will be refused;
+ * withholding it from the device that could answer is a blocked agent nobody can unblock. Mirrors
+ * iOS `SessionHandover`, and `WatchHandoverTest` pins it here rather than in a composable.
+ */
+object SessionHandover {
+    enum class Offer {
+        /** Nobody has answered yet. The primary button — this is the feature. */
+        Claim,
+
+        /** This device asked and the machine said no. The same button, saying *Try again*, beside the
+         *  machine's own sentence: this end cannot know a refusal was permanent, and the likeliest one
+         *  is a race. */
+        Retry,
+
+        /** Somebody else answered it. Nothing to press — the far end would refuse it, and reaching
+         *  into a page somebody is typing a password into is precisely what `taken` exists to prevent. */
+        Elsewhere,
+
+        /** This device holds it. Two answers, and they say what they do. */
+        HandBack,
+    }
+
+    fun offer(state: BrowserHandover): Offer = when {
+        // `mine` first and unconditionally: a device that holds the page is never offered a way to take
+        // it again, whatever else is true — including a refusal left over from before it was granted.
+        state.mine -> Offer.HandBack
+        // Then `taken`, which outranks a leftover refusal: if somebody has it, *why this device's last
+        // claim failed* is no longer interesting and a Try again would be a press that cannot succeed.
+        state.taken -> Offer.Elsewhere
+        state.refusal == null -> Offer.Claim
+        else -> Offer.Retry
+    }
+
+    /** What the bar is about, in the fewest words that are still true. `mine` first: a person holding
+     *  the page needs to know that before anything else. */
+    fun headline(state: BrowserHandover): String = when (offer(state)) {
+        Offer.HandBack -> "You have this page"
+        Offer.Elsewhere -> "Another device is answering this"
+        Offer.Claim, Offer.Retry -> "The agent needs you on this page"
+    }
+}

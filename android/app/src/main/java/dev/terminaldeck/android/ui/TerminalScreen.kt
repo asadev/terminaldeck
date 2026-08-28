@@ -177,6 +177,8 @@ fun TerminalScreen(
     bar: SessionBarView? = null,
     onRefreshUsage: () -> Unit = {},
     onSwitchAccount: (String) -> Unit = {},
+    /** Sign one login out on the machine — the account sheet's per-account control. */
+    onSignOutAccount: (String) -> Unit = {},
     /** Everything about this one session, as a sheet. iOS reaches it from here and from the row. */
     onDetails: () -> Unit = {},
     /**
@@ -628,6 +630,7 @@ fun TerminalScreen(
                         view = row,
                         onRefresh = onRefreshUsage,
                         onSwitchAccount = onSwitchAccount,
+                        onSignOut = onSignOutAccount,
                     )
                 }
 

@@ -197,6 +197,39 @@ fun foreignAccount(current: AccountWire?, account: AccountWire): Boolean {
     return mine != theirs
 }
 
+/**
+ * Whether this account's agent has a command that signs it out from here.
+ *
+ * The client half of `agent-catalog.ts`'s `hasSignOut`: `claude` and `codex` carry a real logout
+ * (`claude auth logout`, `codex logout`); `gemini` and a plain shell carry none — the desktop shows a
+ * note there instead, but this bar draws no sentences, so an account whose agent cannot be signed out
+ * simply has no sign-out control. A provider this build has never heard of answers *no*, the
+ * conservative default the catalog itself keeps (`signOutArgs ?? null`): the far end would refuse the
+ * verb, and a control that cannot act is removed rather than offered and refused.
+ *
+ * The set is frozen here the way the model list in [ControlCatalog] is: these are the ids a real CLI
+ * answers to, so a new agent gaining a logout is a deliberate edit on both ends rather than something
+ * to infer.
+ */
+fun agentHasSignOut(provider: String?): Boolean = when (provider) {
+    "claude", "codex" -> true
+    else -> false
+}
+
+/**
+ * Whether this account is signed in right now — the other half of the desktop's sign-out gate.
+ *
+ * The desktop draws sign-out only on a row that *is signed in*; a row the machine could not read, or
+ * one it read as signed out, has nothing to end. Null (the machine did not say) reads as *not signed
+ * in*, the conservative answer: it leaves a control off rather than offering to end a login that may
+ * not be there.
+ */
+fun accountSignedIn(account: AccountWire): Boolean = account.signIn?.state == SignInWire.SIGNED_IN
+
+/** Whether a sign-out control belongs on this account's row: its agent can log out and it is signed in. */
+fun accountCanSignOut(account: AccountWire): Boolean =
+    agentHasSignOut(account.provider) && accountSignedIn(account)
+
 @Serializable
 enum class ChatRole {
     @SerialName("you")

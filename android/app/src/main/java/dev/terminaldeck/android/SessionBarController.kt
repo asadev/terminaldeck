@@ -74,10 +74,30 @@ class SessionBarController(
     private var accounts: List<AccountWire> = emptyList()
     private var busy = false
 
+    /**
+     * When the plan reading currently held landed, or null when there is none — the "best version" of
+     * the ring: it is drawn **only while fresh** (see [view] and [PLAN_FRESH_MS]).
+     *
+     * The plan figure is throttled to a read a minute and moves on the hour, so between reads the
+     * last one lingers — and on a phone bar a stale ring drawn as if it were now is worse than no
+     * ring, because a ring is one number and reads as a fact about this moment. So the reading carries
+     * the time it was taken, and one that has aged out is hidden rather than shown wrong. Cleared with
+     * the figure on a drop, a forget and a switch of session.
+     */
+    private var planAt: Long? = null
+
+    /**
+     * The one-shot that re-folds the bar the moment the plan reading ages out, so a stale ring hides
+     * itself rather than sitting until the next unrelated event. Nothing polls: it is a single timer
+     * per reading, replaced when a fresher one lands. See [stampPlan].
+     */
+    private var planFreshCancel: (() -> Unit)? = null
+
     private sealed interface Ask {
         data class Usage(val want: UsageWant) : Ask
         data object Account : Ask
         data object AccountSwitch : Ask
+        data object SignOut : Ask
     }
 
     private class Pending(val ask: Ask, val session: String, val cancel: () -> Unit)
@@ -112,14 +132,25 @@ class SessionBarController(
         if (sessionId == null) return null
         if (!canReadUsage() && !canReadAccount()) return null
         return SessionBarView(
-            plan = plan,
+            // Only while fresh — an aged reading is hidden, never drawn as if it were now. See [planAt].
+            plan = plan?.takeIf { planFresh() },
             context = context,
             account = account,
             accounts = accounts,
             busy = busy,
             canRefresh = canReadUsage(),
             canSwitchAccount = canReadAccount() && accounts.size > 1,
+            // Whether this machine will end a login from a phone at all — the `logins` capability, which
+            // it serves only to one of the owner's own devices. The row then draws sign-out only where
+            // the account's agent can log out and is signed in; see [SessionBarView.canSignOut].
+            canSignOut = capabilities().contains(Capability.LOGINS),
         )
+    }
+
+    /** Whether the plan reading held is recent enough to draw. Null-safe: no reading is not fresh. */
+    private fun planFresh(): Boolean {
+        val at = planAt ?: return false
+        return now() - at <= PLAN_FRESH_MS
     }
 
     /** The screen opened a session. Everything held about the last one goes. */
@@ -149,6 +180,7 @@ class SessionBarController(
         stop()
         sessionId = null
         plan = null
+        planAt = null
         context = null
         account = null
         accounts = emptyList()
@@ -168,6 +200,7 @@ class SessionBarController(
     fun dropped() {
         stop()
         plan = null
+        planAt = null
         context = null
         busy = false
         askedPlanAt = null
@@ -214,6 +247,31 @@ class SessionBarController(
                 key,
                 Ask.AccountSwitch,
                 id,
+            )
+        ) {
+            busy = false
+        }
+        onChange()
+    }
+
+    /**
+     * Sign one login out on the far machine — the phone half of the desktop's Accounts sign-out.
+     *
+     * Gated on the machine actually serving `logins` (owner devices only) and on nothing else being in
+     * flight, for the same reason the switch is: a second answer landing on a settled row is worse than
+     * a press that waits. The account id is the machine's own, bounded the way the switch's is. Answered
+     * by `logins.signedout`, which settles the row and — on success — re-reads the account list so the
+     * signed-out login drops out of the sheet. Mirrors the desktop `DeviceAccounts` sign-out.
+     */
+    fun signOut(accountId: String) {
+        if (!capabilities().contains(Capability.LOGINS) || busy) return
+        val key = rid()
+        busy = true
+        if (!dispatch(
+                ClientMessage.LoginsSignout(key, accountId.take(Protocol.MAX_ACCOUNT_ID_LENGTH)),
+                key,
+                Ask.SignOut,
+                sessionId ?: "",
             )
         ) {
             busy = false
@@ -276,7 +334,7 @@ class SessionBarController(
         val cancel = expiry.after(timeoutFor(ask)) {
             val dropped = pending.remove(key) ?: return@after
             when (dropped.ask) {
-                is Ask.AccountSwitch, is Ask.Usage -> {
+                is Ask.AccountSwitch, is Ask.SignOut, is Ask.Usage -> {
                     busy = false
                     onChange()
                 }
@@ -289,7 +347,9 @@ class SessionBarController(
 
     private fun timeoutFor(ask: Ask): Long = when (ask) {
         is Ask.Usage -> if (ask.want == UsageWant.Refresh) REFRESH_TIMEOUT_MS else READ_TIMEOUT_MS
-        Ask.AccountSwitch -> SWITCH_TIMEOUT_MS
+        // A logout runs a command and then a probe on the far machine — the same order of work a
+        // switch is, so it gets the same grace before the row is let go of.
+        Ask.AccountSwitch, Ask.SignOut -> SWITCH_TIMEOUT_MS
         else -> READ_TIMEOUT_MS
     }
 
@@ -310,6 +370,7 @@ class SessionBarController(
                     UsageWant.Context -> context = figures.context
                     UsageWant.Plan, UsageWant.Refresh -> {
                         plan = figures.plan
+                        stampPlan()
                         busy = false
                     }
                 }
@@ -337,7 +398,36 @@ class SessionBarController(
                 onChange()
                 return true
             }
+            is ServerMessage.LoginsSignedout -> {
+                val asked = pending[message.rid] ?: return false
+                settle(message.rid, asked)
+                busy = false
+                // Re-read the list rather than believe the press: the far end settled `ok` against its
+                // own login probe, and a re-read is what drops the signed-out row from the sheet. Only
+                // on success — a refused sign-out changed nothing, so the list still stands. The
+                // machine's own sentence is surfaced by the view model, which owns the toast.
+                if (message.ok && sessionId != null) askAccount()
+                onChange()
+                return true
+            }
             else -> return false
+        }
+    }
+
+    /**
+     * Stamp the plan reading with the moment it landed, and arm the one-shot that hides it when it
+     * ages out. A null figure carries no time — there is nothing to go stale — and cancels any timer.
+     */
+    private fun stampPlan() {
+        planFreshCancel?.invoke()
+        planFreshCancel = null
+        planAt = if (plan != null) now() else null
+        if (plan != null) {
+            planFreshCancel = expiry.after(PLAN_FRESH_MS) {
+                planFreshCancel = null
+                // Nothing changed but the clock; the fold re-reads [view] and drops the aged ring.
+                onChange()
+            }
         }
     }
 
@@ -351,6 +441,8 @@ class SessionBarController(
         pending.clear()
         quietCancel?.invoke()
         quietCancel = null
+        planFreshCancel?.invoke()
+        planFreshCancel = null
     }
 
     companion object {
@@ -358,6 +450,17 @@ class SessionBarController(
         const val REFRESH_TIMEOUT_MS = 120_000L
         const val SWITCH_TIMEOUT_MS = 60_000L
         const val PLAN_THROTTLE_MS = 60_000L
+
+        /**
+         * How long a plan reading is drawn before it is treated as stale and hidden.
+         *
+         * Comfortably past the once-a-minute read cadence ([PLAN_THROTTLE_MS]) so an active session's
+         * ring never flickers between reads, and short enough that a session left sitting — the case
+         * where the figure is genuinely old — loses its ring rather than showing an hour-old number as
+         * if it were now. A drop or a session change hides it at once; this is the bound for the case
+         * where neither happens.
+         */
+        const val PLAN_FRESH_MS = 5 * 60_000L
         private const val QUIET_MS = 1_200L
     }
 }
@@ -376,5 +479,8 @@ data class SessionBarView(
     val busy: Boolean,
     val canRefresh: Boolean,
     val canSwitchAccount: Boolean,
+    /** Whether this machine will end a login from a phone at all — the `logins` capability. The
+     *  account sheet then draws sign-out only on rows whose agent can log out and are signed in. */
+    val canSignOut: Boolean = false,
 )
 

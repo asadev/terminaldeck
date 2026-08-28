@@ -618,4 +618,53 @@ class CopilotControllerTest {
         // one message shown once.
         assertEquals(0, c.view()!!.entries.filterIsInstance<CopilotEntry.Mine>().size)
     }
+
+    /**
+     * Restart is the copilot's only clean slate — no list, no +, no Delete — so it must end the run
+     * and start a fresh one, and it must do so **in order**. `copilot.start` is idempotent (the
+     * machine hands back the running run), so the fresh start is held until the machine's own
+     * `copilot.state` confirms this device's run is gone. Mirrors iOS and the desktop.
+     */
+    @Test
+    fun `restart stops the run, then starts a fresh one only once the machine says it is gone`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+
+        c.restart()
+        // The stop leaves now; the start is held. Sending it while the old run is still alive would
+        // hand it straight back and restart nothing.
+        assertEquals(1, wire.only<ClientMessage.CopilotStop>().size)
+        assertEquals(0, wire.only<ClientMessage.CopilotStart>().size)
+        assertEquals(CopilotController.RESTARTING, c.view()!!.notice?.text)
+
+        // The machine confirms this device's run is gone. Now, and only now, the fresh one starts.
+        c.receive(state(run = null))
+        assertEquals(1, wire.only<ClientMessage.CopilotStart>().size)
+
+        // The fresh run reporting in must not trigger a second start.
+        c.receive(state(run = "r2"))
+        assertEquals(1, wire.only<ClientMessage.CopilotStart>().size)
+    }
+
+    @Test
+    fun `restart with nothing running is simply a start`() {
+        val wire = Wire()
+        val c = opened(wire, run = null)
+        c.restart()
+        assertEquals(0, wire.only<ClientMessage.CopilotStop>().size)
+        assertEquals(1, wire.only<ClientMessage.CopilotStart>().size)
+    }
+
+    @Test
+    fun `a drop cancels a restart that was waiting to start`() {
+        val wire = Wire()
+        val c = opened(wire, run = "r1")
+        c.restart()
+        wire.clear()
+        // The socket goes before the stop's state frame lands. The held start must not fire on the
+        // next socket against a run the person is no longer restarting.
+        c.dropped()
+        c.receive(state(run = null))
+        assertEquals(0, wire.only<ClientMessage.CopilotStart>().size)
+    }
 }
