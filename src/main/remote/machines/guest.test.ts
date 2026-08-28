@@ -1284,3 +1284,218 @@ describe('asking that machine about a window it holds', () => {
 function heldRow(session: string, n = 1): HeldSession {
   return { session, windows: [{ n, title: '', url: '', host: '' }] }
 }
+
+/**
+ * The host over the relay, from the client half.
+ *
+ * "The relay is the network": a server page reaches the box this way even when
+ * its SSH address is a Tailscale name that has dropped. The three verbs are the
+ * exact mirror of what a phone drives, and — as with every capability on this
+ * link — refused before anything is sent when the far machine never advertised
+ * `host.control`, because the far end answers an unadvertised verb by closing the
+ * channel, which would take every terminal session on the link with it.
+ */
+describe('the host over the relay', () => {
+  function hostState(rid: string, note: string | null = null): ServerMessage {
+    return {
+      t: 'host.state',
+      rid,
+      host: {
+        running: true,
+        version: '0.14.0',
+        address: '',
+        pid: 4321,
+        startedAt: 1_000,
+        uptimeSeconds: 3_600,
+        managed: 'systemd',
+        note,
+      },
+    }
+  }
+
+  it('puts host.status on the wire and settles on the reading', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['host.control'] }))
+
+    const pending = link.hostStatus()
+    await settle()
+    const frame = JSON.parse(rig.fakes[0].sent.at(-1) as string) as { t: string; rid: string }
+    expect(frame.t).toBe('host.status')
+    expect(frame.rid).not.toBe('')
+
+    rig.fakes[0].say(hostState(frame.rid))
+    const reading = await pending
+    expect(reading).toMatchObject({ running: true, version: '0.14.0', managed: 'systemd' })
+    link.disconnect()
+  })
+
+  it('carries the note a restart sends back before it acts', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['host.control'] }))
+
+    const pending = link.hostRestart()
+    await settle()
+    const frame = JSON.parse(rig.fakes[0].sent.at(-1) as string) as { t: string; rid: string }
+    expect(frame.t).toBe('host.restart')
+
+    rig.fakes[0].say(hostState(frame.rid, 'Restarting — it will be back in a moment.'))
+    expect((await pending)?.note).toBe('Restarting — it will be back in a moment.')
+    link.disconnect()
+  })
+
+  it('answers null when the connection drops before the reply — the ordinary restart case', async () => {
+    // A restart drops the very connection the answer travels on, so a `null` is
+    // not a failure — the reconnection is the real signal. `drop` settles every
+    // outstanding request rather than leaving the card spinning for a minute.
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['host.control'] }))
+
+    const pending = link.hostRestart()
+    await settle()
+    rig.fakes[0].hangUp('the host restarted')
+    expect(await pending).toBeNull()
+    link.disconnect()
+  })
+
+  it('sends nothing and answers null over a machine that never advertised the capability', async () => {
+    // The far end answers an unadvertised verb by closing the channel, so a
+    // hopeful send is a disconnection, not a failed request. Refused here.
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['create'] }))
+
+    const before = rig.fakes[0].sent.length
+    expect(await link.hostStop()).toBeNull()
+    expect(rig.fakes[0].sent.length).toBe(before)
+    link.disconnect()
+  })
+})
+
+/**
+ * That machine's GitHub, from the client half.
+ *
+ * The account lives on the machine now: it holds its own token and this desktop
+ * only triggers it, never holding a secret. Four verbs, gated the same way — and
+ * a sign-in a person completes on github.com finishes on its own, arriving later
+ * as an unsolicited `github.changed` with no `rid`.
+ */
+describe('that machine’s GitHub', () => {
+  function githubState(rid: string, partial: Record<string, unknown> = {}): ServerMessage {
+    return {
+      t: 'github.state',
+      rid,
+      github: {
+        connected: false,
+        login: null,
+        name: null,
+        avatarUrl: null,
+        source: null,
+        appConfigured: true,
+        installUrl: null,
+        pending: null,
+        failure: null,
+        disconnect: null,
+        ...partial,
+      },
+    }
+  }
+
+  it('puts github.read on the wire and settles on the reading', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['github'] }))
+
+    const pending = link.githubRead()
+    await settle()
+    const frame = JSON.parse(rig.fakes[0].sent.at(-1) as string) as { t: string; rid: string }
+    expect(frame.t).toBe('github.read')
+
+    rig.fakes[0].say(githubState(frame.rid, { connected: true, login: 'asadev' }))
+    expect((await pending)?.login).toBe('asadev')
+    link.disconnect()
+  })
+
+  it('hands a connect its device code back inside the reading', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['github'] }))
+
+    const pending = link.githubConnect()
+    await settle()
+    const frame = JSON.parse(rig.fakes[0].sent.at(-1) as string) as { t: string; rid: string }
+    expect(frame.t).toBe('github.connect')
+
+    rig.fakes[0].say(
+      githubState(frame.rid, {
+        pending: { userCode: 'WXYZ-1234', verificationUri: 'https://github.com/login/device', expiresAt: 9_000 },
+      }),
+    )
+    expect((await pending)?.pending?.userCode).toBe('WXYZ-1234')
+    link.disconnect()
+  })
+
+  it('hands an unsolicited github.changed to the listener, with no request behind it', async () => {
+    // A sign-in a person finished on github.com while nobody was watching. No
+    // `rid` to settle — it is handed straight out, which is what makes the connect
+    // flow finish on its own without this end polling anything.
+    const rig = harness()
+    const changed: unknown[] = []
+    const link = createMachineLink({
+      id: 'machine-1',
+      secrets: secrets(),
+      onState: () => {},
+      onOutput: () => {},
+      onWelcome: () => {},
+      onGithubChanged: (github) => changed.push(github),
+      dial: rig.dial,
+      baseBackoffMs: 5,
+      maxBackoffMs: 10,
+    })
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['github'] }))
+    rig.fakes[0].say({
+      t: 'github.changed',
+      github: {
+        connected: true,
+        login: 'asadev',
+        name: 'Asad',
+        avatarUrl: null,
+        source: 'device-flow',
+        appConfigured: true,
+        installUrl: null,
+        pending: null,
+        failure: null,
+        disconnect: 'This signs the machine out.',
+      },
+    })
+    await settle()
+
+    expect(changed).toHaveLength(1)
+    expect(changed[0]).toMatchObject({ connected: true, login: 'asadev' })
+    // And the link did not close over a frame it does not settle.
+    expect(link.state().state).toBe('online')
+    link.disconnect()
+  })
+
+  it('sends nothing and answers null over a machine that never advertised github', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome({ capabilities: ['create'] }))
+
+    const before = rig.fakes[0].sent.length
+    expect(await link.githubDisconnect()).toBeNull()
+    expect(rig.fakes[0].sent.length).toBe(before)
+    link.disconnect()
+  })
+})

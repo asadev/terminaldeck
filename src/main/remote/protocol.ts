@@ -3614,6 +3614,18 @@ export const MAX_ACCOUNT_NAME_LENGTH = 120
 /** The longest an account or connector id may be. Ids are slugs. */
 export const MAX_ACCOUNT_ID_LENGTH = 200
 /**
+ * The bounds on the display strings a `host.state` and a `github.state` carry —
+ * text off an authenticated-but-not-trusted channel that a card draws and a log
+ * then stores, so it is stripped and clipped like every other display string on
+ * this wire. An address is a pasteable server token (~180 chars); a note or a
+ * failure sentence is one line a person reads; a URL is a device-flow
+ * verification link or an avatar. Generous enough for any real value, small
+ * enough that a hostile host cannot make one a wall.
+ */
+export const MAX_HOST_ADDRESS_LENGTH = 400
+export const MAX_HOST_NOTE_LENGTH = 300
+export const MAX_HOST_URL_LENGTH = 512
+/**
  * The longest sentence a machine may send about one login.
  *
  * A sentence rather than a name, so it gets its own cap: `SignInReport.detail`
@@ -8960,6 +8972,79 @@ function parseAccounts(value: unknown): AccountWire[] {
 }
 
 /**
+ * A machine's own host, read off `host.state` — running, its build, how it is
+ * supervised, how long it has been up, and the note a restart/stop sent before
+ * it dropped the connection.
+ *
+ * Total and defensive like every parser here: it never rejects the frame for a
+ * bad sub-field, it clips. Every display string is stripped and bounded — this
+ * is text off an authenticated-but-not-trusted channel that lands in a desktop
+ * list and from there in a log — and every number is read as an integer or
+ * folded to zero. `null` only when the whole object is missing, which is the one
+ * shape the caller reads as "the host said nothing about itself".
+ */
+function parseHostControlWire(value: unknown): HostControlWire | null {
+  if (!isRecord(value)) return null
+  const managed = asString(value.managed)
+  return {
+    // Always true on this wire — the host answered, so it is running — but read
+    // rather than asserted, so a garbled `running: false` is carried honestly.
+    running: value.running === true,
+    version: label(asString(value.version) ?? '', MAX_CONTROL_VALUE_LENGTH),
+    address: label(asString(value.address) ?? '', MAX_HOST_ADDRESS_LENGTH),
+    pid: asWhole(value.pid) ?? 0,
+    startedAt: asWhole(value.startedAt) ?? 0,
+    uptimeSeconds: asWhole(value.uptimeSeconds) ?? 0,
+    managed: managed === 'systemd' || managed === 'direct' ? managed : 'unknown',
+    // A restart or a stop sends one; a plain status does not. Absent-is-null, so
+    // a reader keeps the last note through a status re-read rather than wiping it.
+    note: value.note === null || value.note === undefined ? null : label(asString(value.note) ?? '', MAX_HOST_NOTE_LENGTH),
+  }
+}
+
+/** The device-flow prompt off a `github.state`, or null when there is no code to type. */
+function parseGitHubPrompt(value: unknown): GitHubHostPromptWire | null {
+  if (!isRecord(value)) return null
+  const userCode = label(asString(value.userCode) ?? '', MAX_CONTROL_VALUE_LENGTH)
+  if (userCode === '') return null
+  return {
+    userCode,
+    verificationUri: label(asString(value.verificationUri) ?? '', MAX_HOST_URL_LENGTH),
+    expiresAt: asWhole(value.expiresAt) ?? 0,
+  }
+}
+
+/**
+ * A machine's own GitHub login, read off `github.state` / `github.changed`.
+ *
+ * Total and defensive like {@link parseHostControlWire}: display strings are
+ * stripped and bounded, booleans are read as literal `true`, and a sub-object
+ * that will not read (`pending`) folds to null rather than rejecting the frame.
+ * `null` only when the whole object is missing. `login`/`name`/`source` fold an
+ * empty string to null so a reader tells "signed out" from "signed in with no
+ * name" the way the field's own contract intends.
+ */
+function parseGitHubHostWire(value: unknown): GitHubHostWire | null {
+  if (!isRecord(value)) return null
+  const readText = (raw: unknown, max: number): string | null => {
+    const cleaned = label(asString(raw) ?? '', max)
+    return cleaned === '' ? null : cleaned
+  }
+  return {
+    connected: value.connected === true,
+    login: readText(value.login, MAX_CONTROL_VALUE_LENGTH),
+    name: readText(value.name, MAX_ACCOUNT_NAME_LENGTH),
+    avatarUrl: readText(value.avatarUrl, MAX_HOST_URL_LENGTH),
+    source: readText(value.source, MAX_CONTROL_VALUE_LENGTH),
+    appConfigured: value.appConfigured === true,
+    installUrl: readText(value.installUrl, MAX_HOST_URL_LENGTH),
+    pending: parseGitHubPrompt(value.pending),
+    failure: readText(value.failure, MAX_HOST_NOTE_LENGTH),
+    disconnect: readText(value.disconnect, MAX_HOST_NOTE_LENGTH),
+  }
+}
+
+/**
  * The connectors off a `controls.reading`, or absent.
  *
  * Absent and empty are different answers here and the difference decides
@@ -10067,6 +10152,43 @@ export function parseServerFrame(parsed: unknown): ServerParse {
           message: asString(parsed.message) ?? '',
         },
       }
+    }
+    /* ---- capability `github` ----------------------------------------------- */
+    /*
+     * That machine's own GitHub login, read totally and clipped rather than
+     * rejected — the same reader `account.state` uses on its wire. A `github.state`
+     * answers one `github.read`/`connect`/`cancel`/`disconnect` and carries the
+     * `rid` that names it; a `github.changed` is the unsolicited push a device
+     * flow finishing sends, and carries none. The object folds to an empty reading
+     * rather than rejecting the frame, so a garbled field is a card that draws less
+     * rather than a channel that closes.
+     */
+    case 'github.state': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'github.state without a request id' }
+      const github = parseGitHubHostWire(parsed.github)
+      if (github === null) return { ok: false, reason: 'github.state without a reading' }
+      return { ok: true, message: { t: 'github.state', rid: requestId, github } }
+    }
+    case 'github.changed': {
+      const github = parseGitHubHostWire(parsed.github)
+      if (github === null) return { ok: false, reason: 'github.changed without a reading' }
+      return { ok: true, message: { t: 'github.changed', github } }
+    }
+    /* ---- capability `host.control` ----------------------------------------- */
+    /*
+     * The machine's own host, read off the relay — the answer to `host.status`,
+     * and what a `host.restart`/`host.stop` echoes back with a `note` before it
+     * drops the connection. Read totally and clipped like the readings above; the
+     * `rid` names the ask, and a reading that will not read at all rejects the
+     * frame rather than composing a fake "running" state.
+     */
+    case 'host.state': {
+      const requestId = id(parsed.rid)
+      if (requestId === null) return { ok: false, reason: 'host.state without a request id' }
+      const host = parseHostControlWire(parsed.host)
+      if (host === null) return { ok: false, reason: 'host.state without a reading' }
+      return { ok: true, message: { t: 'host.state', rid: requestId, host } }
     }
     /* ---- capability `devices` ------------------------------------------- */
     case 'devices.rows': {

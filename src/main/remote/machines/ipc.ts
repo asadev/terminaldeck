@@ -104,6 +104,25 @@ export const MACHINES_COPILOT_CHAT_CHANNEL = 'machines:copilot:chat'
  */
 export const MACHINES_UPLOAD_CHANNEL = 'machines:upload:progress'
 
+/**
+ * A machine's own GitHub login changed on its own, pushed rather than asked for.
+ *
+ * Its own channel for the same reason the copilot ones are not folded into
+ * `machines:state`: it is a `github.changed` the far host sent with no `rid`,
+ * meant for whatever server page is drawing that machine's Connect-GitHub card —
+ * a sign-in a person finished on github.com while nobody was watching, or another
+ * device changing the login. The `machineId` rides with it exactly as it does on
+ * the copilot and upload channels, because a window can have one machine's GitHub
+ * card open and be attached to another, and the change belongs to a particular
+ * machine.
+ *
+ * There is deliberately no `machines:host:changed` beside it: a restart of the
+ * host drops the very connection, so the signal that it happened is the link
+ * reconnecting (a fresh `machines:state`), not a pushed frame — see
+ * `MachineLink.hostRestart`.
+ */
+export const MACHINES_GITHUB_CHANGED_CHANNEL = 'machines:github:changed'
+
 /** What one screen needs to draw every row, in one message. */
 export interface MachinesView {
   machines: Machine[]
@@ -618,6 +637,19 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
         // neither "this belongs to a run that is over" nor "throw away what you
         // are holding" can be recovered from them.
         deps.broadcast(MACHINES_COPILOT_CHAT_CHANNEL, { machineId: machine.id, chat })
+      },
+      /*
+       * That machine's GitHub login changed on its own — the completion of a
+       * sign-in a person authorised on github.com, or another device changing it.
+       * Broadcast with the machine id the same way the copilot frames are, and for
+       * the same reason: the server page keys on it, one machine's card must not be
+       * updated by another's push. Always wired — unlike `onWindowCall`, this
+       * callback advertises no capability the far end would then try to use, so a
+       * broadcast into a window that has no GitHub card open is simply nobody
+       * listening rather than a frame that closes a channel.
+       */
+      onGithubChanged: (github) => {
+        deps.broadcast(MACHINES_GITHUB_CHANGED_CHANNEL, { machineId: machine.id, github })
       },
       onWelcome: (platform) => store.sawWelcome(machine.id, platform),
       /*
@@ -1562,6 +1594,73 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     if (typeof id !== 'string' || typeof url !== 'string' || url === '') return false
     if (url.length > MAX_URL_LENGTH) return false
     return links.get(id)?.openThere(url) ?? false
+  })
+
+  /**
+   * The host on another machine, managed over the relay — status, restart, stop.
+   *
+   * ## "The relay is the network." — Asad's rule, pinned
+   *
+   * A server page reaches one box two roads: an SSH address it was added with,
+   * and the relay it is paired over. The SSH address can be a Tailscale name that
+   * drops on its own, and then the page reports the box unreachable while every
+   * session on it is still running over the public relay. So the status a
+   * headless server has no screen to show, and the restart/stop it has no screen
+   * to press, are answered here whenever that server is a connected machine — the
+   * renderer correlates the SSH `Server` to its live machine and calls these with
+   * the machine id. See {@link MachinesIpc.linkStanding}, which is the join the
+   * server-page offer's `linkedAs` is built from.
+   *
+   * All three answer the `HostControlWire` the far end sent, or `null` — the same
+   * shape `machines:controls:read` degrades to, and treated the same way in the
+   * renderer: it keeps the last status it read rather than blanking on a missed
+   * round trip. A `null` from a restart is not a failure — the host answers a
+   * `note` and then drops this very connection, and the reconnection is the real
+   * signal. There is no `machines:host:start`: a stopped host is not connected
+   * over the relay, so bringing one up stays on SSH.
+   */
+  ipcMain.handle('machines:host:read', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.hostStatus()) ?? null
+  })
+  ipcMain.handle('machines:host:restart', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.hostRestart()) ?? null
+  })
+  ipcMain.handle('machines:host:stop', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.hostStop()) ?? null
+  })
+
+  /**
+   * That machine's own GitHub login, driven over the relay — read it, start a
+   * device-flow sign-in on it, cancel one in flight, sign it out.
+   *
+   * The account lives on the machine now: it holds its own token and this desktop
+   * only triggers it, never holding a secret. The four answer the
+   * `GitHubHostWire` the far end sent, or `null` for "nobody answered" — a link
+   * that is down, a build older than `github`, or this desktop being a guest on
+   * it. A refusal a person can act on (no GitHub App configured) rides *inside*
+   * the wire as `appConfigured: false` with a `failure` sentence rather than as a
+   * `null`. The completion of a sign-in a person then authorises on github.com
+   * arrives later on {@link MACHINES_GITHUB_CHANGED_CHANNEL}, not as an answer to
+   * any of these.
+   */
+  ipcMain.handle('machines:github:read', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.githubRead()) ?? null
+  })
+  ipcMain.handle('machines:github:connect', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.githubConnect()) ?? null
+  })
+  ipcMain.handle('machines:github:cancel', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.githubCancel()) ?? null
+  })
+  ipcMain.handle('machines:github:disconnect', async (_event, id: unknown): Promise<unknown> => {
+    if (typeof id !== 'string') return null
+    return (await links.get(id)?.githubDisconnect()) ?? null
   })
 
   /*

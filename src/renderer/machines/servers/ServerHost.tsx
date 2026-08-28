@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../settings/controls'
 import { ServerTerminal } from './ServerTerminal'
+import { ServerHostRelayControl } from './ServerHostRelayControl'
+import { ServerConnectGitHub } from './ServerConnectGitHub'
 import { BRAND } from '../../../shared/brand'
 import { hostUpdateAvailable } from '../../../shared/host-version'
+import { useMachines } from '../useMachines'
 import { asHostOffer, asHostState, succeeded } from './types'
 import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from './types'
 
@@ -97,6 +100,19 @@ export function ServerHost({
   const [alsoData, setAlsoData] = useState(false)
   const [refusal, setRefusal] = useState('')
 
+  /*
+   * The machines this desktop is paired with, read here so a server that is one
+   * of them can be managed **over the relay** — the client half of "the relay is
+   * the network". `useMachines` hands back only the machines whose link is online
+   * (`reachableMachines`), which is exactly the set the relay-control card and the
+   * Connect-GitHub card below may be drawn for: a box that dropped off the relay
+   * cannot be restarted over it, and a card over one would be a control that
+   * reaches nothing. The correlation to a particular machine is by the name the
+   * main process resolved from the host id that server prints — `offer.linkedAs`,
+   * built from `MachinesIpc.linkStanding` — see the render below.
+   */
+  const machines = useMachines()
+
   const look = useCallback(() => {
     if (!bridge?.serverHost) return
     void bridge.serverHost(server.id).then(
@@ -168,7 +184,29 @@ export function ServerHost({
   const step = state?.step ?? 'idle'
   const working = step !== 'idle' && step !== 'done' && step !== 'failed'
 
+  /*
+   * This server, as one of the online machines this desktop is paired with — or
+   * null. The join is `offer.linkedAs`, the name the main process resolved from
+   * the host id that server prints in its own status (`MachinesIpc.linkStanding`),
+   * matched against the machine list `useMachines` already holds. Null when this
+   * server is not a machine, or is one that is offline over the relay, and then
+   * neither relay card is drawn — the SSH controls above are the whole of it.
+   *
+   * The two cards then self-gate a second time on the *capability* each needs, so
+   * a machine that is a headless server but was paired before it advertised these
+   * verbs shows the SSH page exactly as it was, never a control that reaches
+   * nothing.
+   */
+  const linkedMachine =
+    offer.linkedAs === null
+      ? null
+      : machines.machines.find((row) => row.machine.name === offer.linkedAs) ?? null
+  const linkedCapabilities = linkedMachine?.link?.capabilities ?? []
+  const canRelayControl = linkedMachine !== null && linkedCapabilities.includes('host.control')
+  const canConnectGitHub = linkedMachine !== null && linkedCapabilities.includes('github')
+
   return (
+    <>
     <section className="servers-setup servers-host">
       {/* What it is for, in the words of what a person gets. The product's own
           name is not the heading, because "install the host" answers a question
@@ -387,6 +425,24 @@ export function ServerHost({
         </details>
       )}
     </section>
+
+    {/*
+      Manage the host over the relay, and connect its GitHub — both for a server
+      that is a connected machine, both reaching it independently of its SSH
+      address. "The relay is the network": these are exactly the two cards a
+      phone shows on the same page (`HostRelayControlView`, `ConnectGitHubView`),
+      ported here. Each is drawn only when the machine is online and advertised
+      the verb it needs, so an SSH-only server, an older host, or a guest gets the
+      page it always had. Sessions on this server has no relay Restart of its own,
+      so there is never a second one to hide.
+    */}
+    {canRelayControl && linkedMachine !== null && (
+      <ServerHostRelayControl machineId={linkedMachine.machine.id} bridge={machines.bridge} />
+    )}
+    {canConnectGitHub && linkedMachine !== null && (
+      <ServerConnectGitHub machineId={linkedMachine.machine.id} bridge={machines.bridge} />
+    )}
+    </>
   )
 }
 

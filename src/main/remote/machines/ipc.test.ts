@@ -15,6 +15,7 @@ import { MachineStore } from './store'
 import {
   MACHINES_COPILOT_CHAT_CHANNEL,
   MACHINES_COPILOT_STATE_CHANNEL,
+  MACHINES_GITHUB_CHANGED_CHANNEL,
   MACHINES_OUTPUT_CHANNEL,
   MACHINES_STATE_CHANNEL,
   registerMachinesIpc,
@@ -97,6 +98,10 @@ interface Rig {
     sends: Array<{ sessionId: string; data: string }>
     /** And everything the four copilot channels handed it. Empty is the assertion again. */
     copilot: { attached: number; started: number; refreshed: number; said: string[] }
+    /** The host-over-the-relay verbs the server page can press. Zero is the assertion. */
+    host: { status: number; restart: number; stop: number }
+    /** And that machine's GitHub verbs. Zero is the assertion. */
+    github: { read: number; connect: number; cancel: number; disconnect: number }
   }>
   beacons: Array<{ options: BeaconOptions; stopped: boolean }>
   store: MachineStore
@@ -190,6 +195,11 @@ function rig(
         // that the press reaches the link at all — a handler that resolved a
         // cheerful sentence and sent nothing would look identical from outside.
         copilot: { attached: 0, started: 0, refreshed: 0, said: [] as string[] },
+        // And the host-over-the-relay and GitHub verbs, counted for the same
+        // reason: the property under test is that a press on the server page
+        // reaches the link at all.
+        host: { status: 0, restart: 0, stop: 0 },
+        github: { read: 0, connect: 0, cancel: 0, disconnect: 0 },
       }
       links.push(record)
       return {
@@ -280,6 +290,41 @@ function rig(
         send: (sessionId: string, data: string) => {
           record.sends.push({ sessionId, data })
           return Promise.resolve({ ok: true, message: 'Sent.' })
+        },
+        // The host over the relay, and that machine's GitHub. Counted rather than
+        // answered with a reading, because the property these channels have to
+        // have is that the press reaches the link at all — a handler that resolved
+        // a cheerful reading and called nothing would look identical from outside.
+        // Null is also the honest shape a machine whose build predates the
+        // capability really answers, which is what the renderer keeps its last
+        // status through.
+        hostStatus: () => {
+          record.host.status += 1
+          return Promise.resolve(null)
+        },
+        hostRestart: () => {
+          record.host.restart += 1
+          return Promise.resolve(null)
+        },
+        hostStop: () => {
+          record.host.stop += 1
+          return Promise.resolve(null)
+        },
+        githubRead: () => {
+          record.github.read += 1
+          return Promise.resolve(null)
+        },
+        githubConnect: () => {
+          record.github.connect += 1
+          return Promise.resolve(null)
+        },
+        githubCancel: () => {
+          record.github.cancel += 1
+          return Promise.resolve(null)
+        },
+        githubDisconnect: () => {
+          record.github.disconnect += 1
+          return Promise.resolve(null)
         },
       }
     },
@@ -376,6 +421,23 @@ describe('launching', () => {
         'machines:disconnect',
         'machines:drive-windows',
         'machines:forget',
+        // That machine's own GitHub login, driven over the relay — read it, start
+        // a device-flow sign-in on it, cancel one, sign it out. Four channels
+        // because they are four verbs on the far host, and the account lives on
+        // that machine now: this desktop only triggers it and never holds the
+        // token. See `CAPABILITY.github`.
+        'machines:github:cancel',
+        'machines:github:connect',
+        'machines:github:disconnect',
+        'machines:github:read',
+        // The host on that machine, managed over the relay — its status, and the
+        // restart/stop it has no screen of its own to press. "The relay is the
+        // network": a server page reaches the box this way even when its SSH
+        // address is a Tailscale name that has dropped. No `start` — a stopped
+        // host is not on the relay. See `CAPABILITY.hostControl`.
+        'machines:host:read',
+        'machines:host:restart',
+        'machines:host:stop',
         'machines:input',
         'machines:list',
         /*
@@ -861,6 +923,72 @@ describe('the rest of the list', () => {
   })
 })
 
+describe('the host over the relay, and that machine’s GitHub', () => {
+  it('carries every host and github verb to the link', async () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    // The renderer correlates the SSH server to its live machine and calls these
+    // with the machine id. The property under test is the one the copilot verbs
+    // above assert too: the press reaches the link at all. A `null` answer is the
+    // honest shape a machine whose build predates the capability gives, and it is
+    // what the server-page cards keep their last reading through.
+    expect(await app.invoke('machines:host:read', hostId)).toBeNull()
+    expect(await app.invoke('machines:host:restart', hostId)).toBeNull()
+    expect(await app.invoke('machines:host:stop', hostId)).toBeNull()
+    expect(app.links[0].host).toEqual({ status: 1, restart: 1, stop: 1 })
+
+    expect(await app.invoke('machines:github:read', hostId)).toBeNull()
+    expect(await app.invoke('machines:github:connect', hostId)).toBeNull()
+    expect(await app.invoke('machines:github:cancel', hostId)).toBeNull()
+    expect(await app.invoke('machines:github:disconnect', hostId)).toBeNull()
+    expect(app.links[0].github).toEqual({ read: 1, connect: 1, cancel: 1, disconnect: 1 })
+  })
+
+  it('answers null for a machine nobody paired with, and reaches no link', async () => {
+    const dir = tempDir()
+    paired(dir)
+    const app = rig({ dir })
+
+    expect(await app.invoke('machines:host:restart', 'nobody')).toBeNull()
+    expect(await app.invoke('machines:github:connect', 'nobody')).toBeNull()
+    // Not an id at all is the same answer, on the same defensive path.
+    expect(await app.invoke('machines:host:read', 42)).toBeNull()
+    expect(await app.invoke('machines:github:read', 42)).toBeNull()
+    expect(app.links[0].host).toEqual({ status: 0, restart: 0, stop: 0 })
+    expect(app.links[0].github).toEqual({ read: 0, connect: 0, cancel: 0, disconnect: 0 })
+  })
+
+  it('pushes a machine’s GitHub change with the machine it came from', () => {
+    const dir = tempDir()
+    const hostId = paired(dir)
+    const app = rig({ dir })
+
+    const github = {
+      connected: true,
+      login: 'asadev',
+      name: 'Asad',
+      avatarUrl: null,
+      source: 'device-flow',
+      appConfigured: true,
+      installUrl: null,
+      pending: null,
+      failure: null,
+      disconnect: 'This signs the machine out.',
+    }
+    // The unsolicited completion of a sign-in a person finished on github.com.
+    // The machine id has to ride with it, exactly as it does on the copilot
+    // channels, because a window can have one machine's card open and be attached
+    // to another — a push with no machine on it would land on the wrong card.
+    app.links[0].options.onGithubChanged?.(github)
+    expect(app.broadcasts).toContainEqual({
+      channel: MACHINES_GITHUB_CHANGED_CHANNEL,
+      payload: { machineId: hostId, github },
+    })
+  })
+})
+
 describe('waking', () => {
   it('redials every link, because a suspended one is dead and still looks fine', () => {
     const dir = tempDir()
@@ -962,6 +1090,15 @@ describe('waking', () => {
                 session: null,
               }),
             send: () => Promise.resolve({ ok: true, message: 'Sent.' }),
+            // The host over the relay and that machine's GitHub — null, the shape
+            // a machine whose build predates the capability really answers.
+            hostStatus: () => Promise.resolve(null),
+            hostRestart: () => Promise.resolve(null),
+            hostStop: () => Promise.resolve(null),
+            githubRead: () => Promise.resolve(null),
+            githubConnect: () => Promise.resolve(null),
+            githubCancel: () => Promise.resolve(null),
+            githubDisconnect: () => Promise.resolve(null),
           }
         },
       },

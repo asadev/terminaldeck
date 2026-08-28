@@ -720,6 +720,64 @@ const api = {
   signOutMachineLogin: (id: string, accountId: string): Promise<unknown> =>
     ipcRenderer.invoke('machines:logins:signout', id, accountId),
   /*
+   * The host on one of his other machines, managed over the relay — status,
+   * restart, stop. The desktop half of `host.control`, and the exact mirror of
+   * what a phone drives through `HostControlLink`.
+   *
+   * "The relay is the network": a server page reaches one box by an SSH address
+   * and by the relay it is paired over, and the SSH address can be a Tailscale
+   * name that drops on its own while every session on the box still runs over the
+   * relay. So when that server is a connected machine, its status and its
+   * restart/stop go here, over the relay, and the SSH page is the fallback for a
+   * machine that is not connected as one.
+   *
+   * All three answer the host's own reading, or `null` when nobody answered — the
+   * same shape `readMachineControls` degrades to, kept rather than blanked by the
+   * card. A `null` from restart/stop is the ordinary case, not a failure: the
+   * host answers a note and then drops this very connection, and the reconnection
+   * is the real signal. There is no `startMachineHost` — a stopped host is not on
+   * the relay, so bringing one up stays on the SSH page.
+   */
+  readMachineHost: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:host:read', id),
+  restartMachineHost: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:host:restart', id),
+  stopMachineHost: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:host:stop', id),
+  /*
+   * That machine's own GitHub login, driven over the relay. The desktop half of
+   * `github`, mirroring `GitHubLink` on the phone: read it, start a device-flow
+   * sign-in over there, cancel one, sign it out. The token lives on the machine —
+   * this desktop only triggers it and never holds a secret.
+   *
+   * The four answer the machine's own `GitHubHostWire`, or `null` when nobody
+   * answered (a link that is down, an older build, or this desktop being a guest
+   * on it). A refusal a person can act on — no GitHub App configured — arrives
+   * inside the reading with `appConfigured: false`, not as a `null`, so the card
+   * draws the reason. The moment a person actually authorises a sign-in on
+   * github.com the host pushes an unsolicited change on the subscription below,
+   * with no request behind it.
+   */
+  readMachineGitHub: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:github:read', id),
+  connectMachineGitHub: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:github:connect', id),
+  cancelMachineGitHub: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:github:cancel', id),
+  disconnectMachineGitHub: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:github:disconnect', id),
+  /*
+   * The machine id is split out of the payload here rather than sent as its own
+   * IPC argument, the same way the two copilot subscriptions below do it and for
+   * the same reason: `broadcast(channel, payload)` carries exactly one value, so
+   * main sends one object and this splits it into the two arguments the card
+   * asked for. Read defensively — a malformed push reaches the callback as an
+   * empty id it can drop, never as a throw inside an `ipcRenderer.on` handler.
+   */
+  onMachineGitHubChanged: (cb: (machineId: string, github: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, payload: unknown): void => {
+      const row: { machineId?: unknown; github?: unknown } =
+        typeof payload === 'object' && payload !== null ? payload : {}
+      cb(typeof row.machineId === 'string' ? row.machineId : '', row.github)
+    }
+    ipcRenderer.on('machines:github:changed', handler)
+    return () => ipcRenderer.off('machines:github:changed', handler)
+  },
+  /*
    * The copilot on one of his other machines.
    *
    * The pipe under *"the same switch we have for sessions"* at the top of the

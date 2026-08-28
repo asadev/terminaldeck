@@ -3,7 +3,9 @@ import {
   asAddResult,
   asFact,
   asFacts,
+  asGitHubHostWire,
   asGrant,
+  asHostControlWire,
   asLogLines,
   asOutcome,
   asPreview,
@@ -319,5 +321,85 @@ describe('the permission', () => {
     // A permission with no expiry is the one thing a grant may never be.
     expect(asGrant({ serverId: 's1' })).toBeNull()
     expect(asGrant(null)).toBeNull()
+  })
+})
+
+describe('the host over the relay, as the server page reads it', () => {
+  it('reads a status, and keeps "no note" as null', () => {
+    const wire = asHostControlWire({
+      running: true,
+      version: '0.14.0',
+      address: '',
+      pid: 4321,
+      startedAt: 1000,
+      uptimeSeconds: 3600,
+      managed: 'systemd',
+      note: null,
+    })
+    expect(wire).toEqual({
+      running: true,
+      version: '0.14.0',
+      address: '',
+      pid: 4321,
+      startedAt: 1000,
+      uptimeSeconds: 3600,
+      managed: 'systemd',
+      note: null,
+    })
+  })
+
+  it('carries the note a restart sends, and falls unreadable supervision back to unknown', () => {
+    const wire = asHostControlWire({
+      running: true,
+      version: '',
+      managed: 'made up',
+      note: 'Restarting — back in a moment.',
+    })
+    expect(wire?.managed).toBe('unknown')
+    expect(wire?.note).toBe('Restarting — back in a moment.')
+  })
+
+  it('is null for anything that is not a reading', () => {
+    expect(asHostControlWire(null)).toBeNull()
+    expect(asHostControlWire('nope')).toBeNull()
+  })
+})
+
+describe('that machine’s GitHub, as the server page reads it', () => {
+  it('reads a connected login', () => {
+    const wire = asGitHubHostWire({
+      connected: true,
+      login: 'asadev',
+      name: 'Asad',
+      avatarUrl: null,
+      source: 'device-flow',
+      appConfigured: true,
+      installUrl: 'https://github.com/apps/x/installations/new',
+      pending: null,
+      failure: null,
+      disconnect: 'This signs the machine out.',
+    })
+    expect(wire).toMatchObject({ connected: true, login: 'asadev', name: 'Asad' })
+    expect(wire?.pending).toBeNull()
+  })
+
+  it('reads a device-flow prompt, and drops one with no code to type', () => {
+    const good = asGitHubHostWire({
+      connected: false,
+      appConfigured: true,
+      pending: { userCode: 'WXYZ-1234', verificationUri: 'https://github.com/login/device', expiresAt: 9000 },
+    })
+    expect(good?.pending?.userCode).toBe('WXYZ-1234')
+
+    // A prompt with no code is not a prompt — it would draw a sign-in screen with
+    // nothing on it. Dropped, so the card falls back to whatever else the reading
+    // names.
+    const empty = asGitHubHostWire({ connected: false, appConfigured: true, pending: { verificationUri: 'x' } })
+    expect(empty?.pending).toBeNull()
+  })
+
+  it('is null for anything that is not a reading', () => {
+    expect(asGitHubHostWire(null)).toBeNull()
+    expect(asGitHubHostWire(42)).toBeNull()
   })
 })

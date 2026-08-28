@@ -203,6 +203,16 @@ function rig(options: { online: boolean }): Rig {
           Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
         signOutLogin: (_accountId: string) =>
           Promise.resolve({ ok: false, message: 'That machine does not manage its logins from here.', session: null }),
+        // The host over the relay and that machine's GitHub — null, present so
+        // this fake still satisfies `MachineLink`. Nothing here presses them; this
+        // file is about reaching a port.
+        hostStatus: () => Promise.resolve(null),
+        hostRestart: () => Promise.resolve(null),
+        hostStop: () => Promise.resolve(null),
+        githubRead: () => Promise.resolve(null),
+        githubConnect: () => Promise.resolve(null),
+        githubCancel: () => Promise.resolve(null),
+        githubDisconnect: () => Promise.resolve(null),
       }
     },
   })
