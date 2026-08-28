@@ -165,6 +165,11 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'Ed25519 public key slots the signed catalogue is checked against, read by ' +
     'src/main/store-index.ts and by the Electron crypto probe. Delete this entry the moment ' +
     'the department loads an index.',
+  'src/main/store-index.ts':
+    'unreachable on purpose while the Community department is unbuilt: it fetches the signed ' +
+    'catalogue, checks its signature and serial, keeps the last good copy and serves it ' +
+    'offline. It is exercised by store-index.test.ts and by sealed.electron-probe.ts under ' +
+    'Electron. Delete this entry the moment src/main/index.ts wires the department to it.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +
