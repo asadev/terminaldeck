@@ -1054,3 +1054,38 @@ export function contextShare(reading: ContextReading | null): number | null {
   if (!reading || reading.state !== 'ok' || reading.percent === null) return null
   return Math.max(0, Math.min(100, reading.percent))
 }
+
+/**
+ * Whether the on-bar context figure is current enough to be shown at all.
+ *
+ * ## The lie this closes
+ *
+ * The bar has always drawn the context reading whenever there was one, on the
+ * claim in `UsageBar.tsx` that it "is current by construction — the agent writes
+ * the figure as it works and this only looks." That is true only while the agent
+ * *is* working. The figure lives in the transcript on disk, so a session that
+ * has paused keeps its last figure there, and the bar went on showing a token
+ * count for a conversation that had stopped — a memory presented as *now*. It is
+ * the same class of thing Asad caught on the panel's own age row, *"Written 7d
+ * ago"* on a session he had opened minutes earlier.
+ *
+ * ## The boundary is the app's own definition of "current"
+ *
+ * Not a new number: {@link describeAge}'s `just now`, its `< 2 min`, is the line
+ * the whole app already treats as where "current" ends — it is the exact
+ * boundary {@link contextPanel} starts captioning a reading's age against
+ * (beyond it the panel prints `Updated 3m ago`). So the figure sits on the bar
+ * for precisely as long as the app would not caption it, and disappears the
+ * moment it would — the bar and the panel telling one consistent story about the
+ * same reading rather than two.
+ *
+ * `reportedAt` is when the agent wrote the figure; a reading with no stamp
+ * (`reportedAt <= 0`, which `describeAge` answers `''` for) is not "fresh", it is
+ * of unknown age, so it is withheld. `now` is threaded in the same way every
+ * other age on this bar is, so the reading ages off the same clock the panel and
+ * the plan rows do.
+ */
+export function contextIsFresh(reading: ContextReading | null, now: number): boolean {
+  if (!reading || reading.state !== 'ok' || reading.tokens === null) return false
+  return describeAge(reading.reportedAt, now) === 'just now'
+}

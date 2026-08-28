@@ -199,9 +199,12 @@ describe('the two scopes that cannot carry these settings', () => {
   it('tells the truth about a server, and draws no control at all', () => {
     const html = renderToStaticMarkup(<ServerScraping />)
     expect(html).not.toMatch(CONTROL)
-    // The two measured facts: the window is here, and the tools are not on that
-    // session's list. Either alone would argue for a control somewhere.
-    expect(html).toContain('A server has no browser')
+    // The two measured facts: the SSH server's session scrapes with the browser
+    // *here*, and the scraping tools are not on that session's list. It no longer
+    // claims the old falsehood that a server has none — a host-installed server
+    // runs its own — so the sentence is scoped to the SSH kind this pane means.
+    expect(html).not.toContain('A server has no browser')
+    expect(html).toContain('scrapes with a browser here, not one of its own')
     // And it points at the button by the button's own name. A paragraph saying
     // "the settings under **This machine**" beside a button reading a hostname
     // is the same confusion one layer down.

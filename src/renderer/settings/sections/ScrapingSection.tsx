@@ -71,8 +71,9 @@ import {
  * Nothing, and the reason is the same one on both — traced to where the chain
  * stops rather than assumed:
  *
- *  - **A server has no browser.** A session on one drives a window in *this*
- *    app, on this machine (`main/servers/window-belong.ts`), so what it scrapes
+ *  - **A server you reach over SSH scrapes with a browser here, not one of its
+ *    own.** A session on one drives a window in *this* app, on this machine
+ *    (`main/servers/window-belong.ts`), so what it scrapes
  *    with is a profile here. It cannot arm a scrape at all: its token is minted
  *    with `ELSEWHERE_TOOLS` — `SESSION_TOOLS` minus the family whose answers are
  *    files on this computer — so `browser.network` and every `assets.*` tool are
@@ -251,8 +252,16 @@ export function ServerScraping({ here = ThisMachine() }: { here?: string }) {
           required so this stays renderable on its own, which is the whole reason
           it is exported.
         */}
-        A server has no browser. A session on one drives a window in this app, on this machine, so
-        the settings under <strong>{here}</strong> are the ones it scrapes with.
+        {/*
+          Not "a server has no browser" any more — a server you install our host
+          on runs its own (`headless/machine-browser.ts`), and you manage that as
+          the machine it becomes, not here. This scope is the SSH kind: a session
+          on one drives a window in *this* app, on this machine, so the browser it
+          scrapes with is the one here.
+        */}
+        A server you reach over SSH scrapes with a browser here, not one of its own: a session on it
+        drives a window in this app, on this machine, so the settings under <strong>{here}</strong>{' '}
+        are the ones it scrapes with.
       </p>
       <p className="settings-prose">
         It cannot start a scrape either: capture, the asset tools and the ledger are refused to
