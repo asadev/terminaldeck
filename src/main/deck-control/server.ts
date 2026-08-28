@@ -624,7 +624,15 @@ export async function startDeckControlServer(
   if (endpoint) return endpoint
   if (starting) return starting
 
-  starting = openServer(options)
+  starting = openServer(options).then((opened) => {
+    // The singleton the copilot owns, and the one `currentEndpoint()` returns.
+    // Set here rather than inside `openServer` so a *second*, standalone server
+    // (see `openStandaloneDeckControlServer`) can be built over the same code
+    // without stealing this global out from under the copilot.
+    server = opened.http
+    endpoint = opened.endpoint
+    return opened.endpoint
+  })
   try {
     return await starting
   } finally {
@@ -632,7 +640,76 @@ export async function startDeckControlServer(
   }
 }
 
-async function openServer(options: DeckControlServerOptions): Promise<DeckControlEndpoint> {
+/**
+ * A second deck-control endpoint that is **not** the module singleton.
+ *
+ * ## Why this exists
+ *
+ * `startDeckControlServer` is a singleton: the copilot claims it, and
+ * `currentEndpoint()` — which the routine runner reads as its "is the tool
+ * server up" guard — returns that one, full endpoint. That is right for the
+ * copilot, which needs this host's *whole* tool surface.
+ *
+ * An ordinary session needs none of it. It gets the browser verbs and nothing
+ * else, gated to the `SESSION_TOOLS` family by its own token. Handing a session
+ * the full endpoint is what broke every server on 0.14.0: the session's shell
+ * closed the moment it connected to the copilot's full assembly, where 0.13.0
+ * had given it a browser-only endpoint of its own and worked. So the two are
+ * kept apart again — Asad, on the fix: *"Normal sessions just need the browser
+ * only — they don't need anything else. The copilot needs all of them. Keep
+ * them separate."*
+ *
+ * This opener builds an independent listener over the exact same code as the
+ * singleton, but never touches the module globals, so `currentEndpoint()`,
+ * `stopDeckControlServer` and the copilot's own endpoint are all unaffected.
+ * Its port is claimed as one of ours the same way, and released when the caller
+ * stops it — the caller owns this handle's lifetime, because nothing global
+ * knows it is here.
+ */
+export interface StandaloneDeckControlServer {
+  /** The independent endpoint — never the one `currentEndpoint()` returns. */
+  endpoint: DeckControlEndpoint
+  /** Close this server and hand its port back. Safe to call more than once. */
+  stop(): Promise<void>
+}
+
+export async function openStandaloneDeckControlServer(
+  options: DeckControlServerOptions,
+): Promise<StandaloneDeckControlServer> {
+  const opened = await openServer(options)
+  let closed = false
+  return {
+    endpoint: opened.endpoint,
+    async stop(): Promise<void> {
+      if (closed) return
+      closed = true
+      // Released before the close completes, the same order the singleton's
+      // teardown uses: the port goes back to the operating system and a stale
+      // claim would refuse somebody a tunnel to whatever is handed it next.
+      releaseOwnPort(opened.endpoint.port)
+      await new Promise<void>((resolve) => {
+        opened.http.close(() => resolve())
+        opened.http.closeAllConnections?.()
+      })
+    },
+  }
+}
+
+/**
+ * The listener itself, with no opinion about whether it is the singleton.
+ *
+ * Returns the live endpoint and the raw HTTP server so its two callers can
+ * decide that: {@link startDeckControlServer} stores both in the module globals
+ * and {@link openStandaloneDeckControlServer} hands the pair back to a caller
+ * that owns them. Everything security-relevant — the tokens, the caller table,
+ * the loopback bind — is built per call and shared by neither.
+ */
+interface OpenedDeckControlServer {
+  endpoint: DeckControlEndpoint
+  http: HttpServer
+}
+
+async function openServer(options: DeckControlServerOptions): Promise<OpenedDeckControlServer> {
   const token = randomBytes(32).toString('hex')
   // Independently random, not derived from the first. A second secret computed
   // from the first is one secret with two spellings, and holding either would
@@ -708,9 +785,7 @@ async function openServer(options: DeckControlServerOptions): Promise<DeckContro
    * `own-ports.ts`; the bearer token is not the layer this should rest on.
    */
   claimOwnPort(address.port)
-  server = next
-  endpoint = live
-  return live
+  return { endpoint: live, http: next }
 }
 
 /** Stop the endpoint and forget the token, so nothing can call into a dead run. */

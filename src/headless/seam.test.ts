@@ -383,14 +383,18 @@ describe('the server’s own sessions are offered its own browser', () => {
    * keeps passing, which is precisely how the endpoint came to exist for a whole
    * release without a single session being pointed at it.
    */
-  it('starts the tool endpoint and hands the core a seam to mint from', () => {
+  it('starts a browser-only session endpoint and hands the core a seam to mint from', () => {
     const source = readSource('src/headless/host.ts')
-    // The endpoint is now started inside `startHeadlessCopilot`, which builds the
-    // full control (surface + browser verbs) rather than the browser-only one —
-    // so a host session mints its `SESSION_TOOLS` token on the copilot's own
-    // endpoint, one dispatcher for both doors.
+    // A host session mints its `SESSION_TOOLS` token on a *browser-only* endpoint
+    // of its own — a standalone `deck-control` over `browserControl` — kept
+    // separate from the copilot's full endpoint. 0.14.0 folded sessions onto the
+    // copilot's endpoint and that closed every server session's shell the moment
+    // it connected; a session gets the browser verbs and nothing else.
+    expect(source).toContain('openStandaloneDeckControlServer({ control: browserControl })')
+    expect(source).toContain('createSessionTools(sessionControl.endpoint, {')
+    // The copilot is still assembled — its own full endpoint, for the owner's run
+    // and the routines that run through it, never for an ordinary session.
     expect(source).toContain('headlessCopilot = await startHeadlessCopilot({')
-    expect(source).toContain('createSessionTools(headlessCopilot.endpoint, {')
     expect(source).toContain('prepare: (inside) => sessionTools?.prepare(inside) ?? null,')
     expect(source).toContain('hostHoldsWindows: () => true,')
   })
