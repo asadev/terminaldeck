@@ -228,6 +228,44 @@ describe('the headless build never reaches Electron', () => {
     ).toEqual([])
   })
 
+  /*
+   * The server is the Mac app minus its screen — nothing more is taken away.
+   *
+   * Asad's rule, verbatim in intent: *"the headless server does everything the
+   * Mac app does; the only difference is it has no screen, so the things that
+   * only make sense in front of a person live in the connected app, not on the
+   * server."* Two desktop modules are exactly those screen-bound things, and
+   * neither belongs in a process nobody is looking at:
+   *
+   *  - **`lid-awake.ts`** — keeping the machine awake with the *lid* shut. A
+   *    server has no lid. (`powerSaveBlocker`, `disablesleep`, `caffeinate`.)
+   *  - **`title-bar.ts`** — the window's *appearance/theme* chrome. A server has
+   *    no window to paint; the connected app carries its own theme.
+   *
+   * The Help section, Appearance and Power controls are all in
+   * `renderer/settings/settings-schema.ts`, which the connected app draws — so
+   * they are already where the rule wants them, on the client. (That file *is*
+   * reachable here, but only for its settings **data model** — `coerce`,
+   * `getSetting`, `SETTINGS` — which validates tool-setting values and is not a
+   * screen; so it is deliberately not forbidden below.)
+   *
+   * `lid-awake.ts` is also caught by the Electron walk above (it imports
+   * `powerSaveBlocker`); `title-bar.ts` is a pure module and would *not* be, so
+   * without this its leaking into the server would pass every other check. This
+   * is the named guard that says why it must never be here.
+   */
+  it('never pulls the screen-bound desktop surfaces into a screenless server', () => {
+    const screenOnly = ['src/main/lid-awake.ts', 'src/main/title-bar.ts']
+    const leaked = screenOnly.filter((module) => files.includes(module))
+    expect(
+      leaked,
+      'The headless server is the Mac app minus its screen. These are UI-only, ' +
+        'screen-bound modules (keep-awake-with-the-lid-shut; window appearance/theme) ' +
+        'and must not be reachable from the headless entry points — their place is the ' +
+        'desktop shell (src/main/index.ts) and, for the controls, the connected app.',
+    ).toEqual([])
+  })
+
   it('keeps the crypto on the one implementation both runtimes share', () => {
     // `sealed.ts` deliberately has no "native when available" path: Electron's
     // BoringSSL ships no ChaCha, and a fallback would mean the tests exercise
