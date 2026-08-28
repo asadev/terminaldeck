@@ -239,22 +239,40 @@ describe('every section id still resolves to a pane', () => {
      * missing. A `<=` is satisfied by a rail that grew from ten to twelve without
      * anybody writing the two paragraphs above, which is precisely what happened:
      * two lanes raised the number, both tests passed, and the only symptom was
-     * two entries calling themselves the eleventh. `12` fails the day a
-     * thirteenth section is declared, and the failure is the prompt to write down
-     * what it paid for.
+     * two entries calling themselves the eleventh. The number fails the day a
+     * section is declared or removed without a paragraph, and the failure is the
+     * prompt to write down what changed.
+     *
+     * ## Servers left, and the count came back down to eleven
+     *
+     * The twelfth was **Servers**, and it is gone. It was a full mirror of the
+     * server's own page inside this window — a pill picking one server, then its
+     * install, host, folder, permissions and record — built on an earlier ask to
+     * put *"proper settings inside too exactly like local machine"*. Asad
+     * reversed that on review: the desktop's server management was split and
+     * confusing across this pane and the Machines panel, and he asked for ONE
+     * clear place, like the phone's `ServerDetailView`. That place is the
+     * server's own page in the Machines panel, which already draws every one of
+     * those controls, so the mirror here was pure duplication and was removed.
+     *
+     * Nothing was dropped by removing it: every control it held is the same
+     * component the server's own page draws (`ServerSetup`, `ServerHost`,
+     * `ServerFolderPicker`, `ServerAdvanced`), and Coding AI keeps its `servers`
+     * scope (which logins are on a server). So the ceiling comes back to eleven
+     * — the ten that survived the 2026-08-17 regroup plus Scraping — which is a
+     * *fall*, and this ledger records a fall the same way it records a raise.
      */
-    expect(sectionsFor('mac').length).toBe(12)
+    expect(sectionsFor('mac').length).toBe(11)
     /*
      * Windows derived rather than restated, so the two platforms cannot be raised
      * apart — and so this file holds one number instead of two. Linux is the only
      * per-platform row (`SECTION_PLATFORMS`), so the difference is exactly one.
      *
      * It also makes the uncomfortable fact checkable rather than deniable:
-     * Windows now sits at thirteen, which is the length that started the
-     * complaint. It got there by adding two subjects that had no screen at all,
-     * not by letting nine grow back into thirteen — but the next entry is the one
-     * that would make that sentence a lie, and this line is what stops it being
-     * added quietly.
+     * Windows now sits at twelve — thirteen once, when Servers was a pane, and
+     * back down by the one this ledger's paragraph above accounts for. The next
+     * entry is the one that would let it grow quietly again, and this line is
+     * what stops it being added without a reason.
      */
     expect(sectionsFor('windows').length).toBe(sectionsFor('mac').length + 1)
   })

@@ -4,7 +4,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ServersSection } from './ServersSection'
 import { ServerPage } from './ServerPage'
-import { ServerRecord } from '../../settings/sections/ServerControl'
 import { asServers } from './types'
 import type { Server } from './types'
 
@@ -14,16 +13,21 @@ import type { Server } from './types'
  * ## The finding
  *
  * Asad's Office PC is on port 2222. The app dialled it perfectly and then told
- * him, on every screen, that it was at `192.0.2.11` — the Address row in
- * Settings → Servers, the row under Machines, the server's own page, and the
- * server rows on the Coding AI pane. Four surfaces, one wrong claim, and not one
- * of them could have done better: `ServerSummary` carried no `port` field at
- * all, so the number never left the main process.
+ * him, on every screen, that it was at `192.0.2.11` — the row under Machines,
+ * the server's own page, and the server rows on the Coding AI pane. Three
+ * surfaces, one wrong claim, and not one of them could have done better:
+ * `ServerSummary` carried no `port` field at all, so the number never left the
+ * main process.
+ *
+ * (There was a fourth once — the Address row in a Settings → Servers pane — but
+ * that pane was a full mirror of the server's own page, and server management is
+ * consolidated to one place now, so it is gone. The composer it shared with the
+ * others is what this file still guards.)
  *
  * That is why this file tests the whole run — the narrower that takes the wire
- * apart, the three surfaces that can be rendered, and a scan for a fifth surface
- * that composes its own line. `main/servers/summary.test.ts` covers the half
- * before this one, out of a real `ServerStore`.
+ * apart, the surfaces that can be rendered, and a scan for one more that
+ * composes its own line. `main/servers/summary.test.ts` covers the half before
+ * this one, out of a real `ServerStore`.
  *
  * ## Why 2222 and 22, everywhere, and never only 2222
  *
@@ -80,12 +84,6 @@ function page(server: Server): string {
   )
 }
 
-function settingsRecord(server: Server): string {
-  return plain(
-    renderToStaticMarkup(<ServerRecord server={server} bridge={null} onStored={() => {}} />),
-  )
-}
-
 describe('the wire, taken apart', () => {
   it('keeps the port the main process sent', () => {
     const [server] = asServers([
@@ -119,17 +117,9 @@ describe('every screen that says where a server is', () => {
     expect(page(office())).toContain('admin at 192.0.2.11:2222')
   })
 
-  it('names it on the Address row in Settings', () => {
-    // The row with the strongest label in the app: it says **Address**, and
-    // nothing beside it qualifies what that means.
-    const html = settingsRecord(office())
-    expect(html).toContain('192.0.2.11:2222')
-    expect(html).toContain('Address')
-  })
-
   it('says nothing extra about a server on the usual port', () => {
     const usual = office({ port: 22 })
-    for (const html of [list(usual), page(usual), settingsRecord(usual)]) {
+    for (const html of [list(usual), page(usual)]) {
       expect(html).toContain('192.0.2.11')
       expect(html).not.toContain('192.0.2.11:22')
       expect(html).not.toContain(':22')
@@ -150,7 +140,7 @@ describe('every screen that says where a server is', () => {
 /**
  * The servers area, as files, minus their comments.
  *
- * Comments are stripped because this file and `ServerControl.tsx` both *name*
+ * Comments are stripped because this file and the servers surfaces both *name*
  * the mistake in prose — "`serverAddress`, not `server.address`" — and a scan
  * that could not tell an example from an occurrence would be a test nobody can
  * write a warning next to.
@@ -179,7 +169,6 @@ describe('nobody composes a second one', () => {
     const names = surfaces().map((file) => file.path)
     expect(names).toContain('ServersSection.tsx')
     expect(names).toContain('ServerPage.tsx')
-    expect(names).toContain('ServerControl.tsx')
     expect(names).toContain('ServerAccounts.tsx')
   })
 
