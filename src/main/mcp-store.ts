@@ -670,9 +670,19 @@ export function resolveInstall(raw: unknown): { id: string; scope: McpAddScope; 
  * `available` tells this function which keys those are — it is the measured set
  * from {@link readEnvironmentNames}, never a guess — and a required field that
  * is neither typed nor present is refused by name.
+ *
+ * ## Why the parameter is three fields rather than a whole catalogue row
+ *
+ * It only ever read three of them, and there is a second caller now: the
+ * community store composes a command out of a manifest, and a manifest is not a
+ * catalogue row — it has no shelf, no logo and no origin. Widening this to what
+ * the body actually uses lets that caller share this exact substitution instead
+ * of growing a second one, which is the only way the rule *one place builds a
+ * command line* stays true. Every existing caller passes a full row and is
+ * unaffected.
  */
 export function buildInstall(
-  entry: McpCatalogueEntry,
+  entry: Pick<McpCatalogueEntry, 'name' | 'command' | 'inputs'>,
   values: Record<string, string>,
   available: ReadonlySet<string>,
 ): { command: string; extras: string[]; inherited: string[] } {
