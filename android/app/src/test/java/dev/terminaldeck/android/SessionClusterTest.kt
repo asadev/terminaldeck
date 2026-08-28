@@ -480,4 +480,116 @@ class SessionClusterTest {
         b.release(second)
         assertFalse(b.isFollowing)
     }
+
+    /* ========================================================= usage freshness == */
+
+    private fun deliverPlan(rec: Recorder, b: SessionBarController, fraction: Double) {
+        val ask = rec.only<ClientMessage.UsageRead>().last { it.want == UsageWant.Plan }
+        b.receive(
+            ServerMessage.UsageReading(
+                ask.rid, "s1", UsageWant.Plan,
+                UsageAnswerWire(json("""{"readings":[{"used":{"state":"reported","fraction":$fraction}}]}""")),
+            )
+        )
+    }
+
+    @Test
+    fun `the plan ring is drawn while fresh and hidden once it has aged out`() {
+        val rec = Recorder()
+        var now = 1_000L
+        val expiry = FakeExpiry()
+        val b = bar(rec, expiry, clock = { now })
+        b.follow("s1")
+        deliverPlan(rec, b, 0.6)
+        // Just read: a real figure, drawn.
+        assertEquals(0.6, b.view()!!.plan!!, 1e-9)
+
+        // Aged past the freshness window with no fresh read: hidden rather than shown as if it were
+        // now. The one-shot re-fold fires here; in the app it is what makes the ring disappear on its
+        // own. The view reads the clock either way.
+        now += SessionBarController.PLAN_FRESH_MS + 1
+        expiry.fireAll()
+        assertNull(b.view()!!.plan)
+        // The account chip is untouched — only the stale figure goes.
+        assertTrue(b.view() != null)
+    }
+
+    @Test
+    fun `a stale ring comes back the moment a fresh reading lands`() {
+        val rec = Recorder()
+        var now = 0L
+        val b = bar(rec, FakeExpiry(), clock = { now })
+        b.follow("s1")
+        deliverPlan(rec, b, 0.6)
+
+        now += SessionBarController.PLAN_FRESH_MS + 1
+        assertNull(b.view()!!.plan)
+
+        // A finger presses the ring; the fresh answer re-stamps it and it draws again.
+        b.refresh()
+        val refresh = rec.only<ClientMessage.UsageRead>().single { it.want == UsageWant.Refresh }
+        b.receive(
+            ServerMessage.UsageReading(
+                refresh.rid, "s1", UsageWant.Refresh,
+                UsageAnswerWire(json("""{"report":{"readings":[{"used":{"state":"reported","fraction":0.42}}]}}""")),
+            )
+        )
+        assertEquals(0.42, b.view()!!.plan!!, 1e-9)
+    }
+
+    /* =============================================================== sign-out == */
+
+    @Test
+    fun `sign-out is offered only where the machine serves logins`() {
+        val without = bar(Recorder(), FakeExpiry(), caps = { setOf("usage", "account", "chat", "send") })
+        without.follow("s1")
+        assertFalse(without.view()!!.canSignOut)
+
+        val with = bar(Recorder(), FakeExpiry(), caps = { setOf("account", "logins") })
+        with.follow("s1")
+        assertTrue(with.view()!!.canSignOut)
+    }
+
+    @Test
+    fun `signing out sends the verb and re-reads the list only when it took`() {
+        val rec = Recorder()
+        val b = bar(rec, FakeExpiry(), caps = { setOf("account", "logins") })
+        b.follow("s1")
+        rec.sent.clear()
+
+        b.signOut("a2")
+        assertTrue(b.view()!!.busy)
+        val out = rec.only<ClientMessage.LoginsSignout>().single()
+        assertEquals("a2", out.accountId)
+
+        // It took: the row settles and the account list is re-read so the signed-out login drops out.
+        b.receive(ServerMessage.LoginsSignedout(out.rid, ok = true, message = "Signed out."))
+        assertFalse(b.view()!!.busy)
+        assertEquals(1, rec.only<ClientMessage.AccountRead>().size)
+    }
+
+    @Test
+    fun `a refused sign-out settles the row and does not re-read`() {
+        val rec = Recorder()
+        val b = bar(rec, FakeExpiry(), caps = { setOf("account", "logins") })
+        b.follow("s1")
+        rec.sent.clear()
+
+        b.signOut("a2")
+        val out = rec.only<ClientMessage.LoginsSignout>().single()
+        b.receive(ServerMessage.LoginsSignedout(out.rid, ok = false, message = "That agent has no logout."))
+        assertFalse(b.view()!!.busy)
+        // Nothing changed on the far machine, so the list still stands — no re-read.
+        assertEquals(0, rec.only<ClientMessage.AccountRead>().size)
+    }
+
+    @Test
+    fun `sign-out is refused without the logins capability`() {
+        val rec = Recorder()
+        val b = bar(rec, FakeExpiry(), caps = { setOf("usage", "account") })
+        b.follow("s1")
+        rec.sent.clear()
+        b.signOut("a2")
+        assertEquals(0, rec.only<ClientMessage.LoginsSignout>().size)
+    }
 }

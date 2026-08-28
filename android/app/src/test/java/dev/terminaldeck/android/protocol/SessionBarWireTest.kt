@@ -206,4 +206,42 @@ class SessionBarWireTest {
         assertTrue(frame.ok)
         assertNotNull(frame.session)
     }
+
+    /* --------------------------------------------------------------- sign-out -- */
+
+    @Test
+    fun `sign-out encodes as the desktop parses it, and its answer decodes`() {
+        assertEquals(
+            """{"t":"logins.signout","rid":"bar-7","accountId":"acc-9"}""",
+            ClientFrames.encode(ClientMessage.LoginsSignout("bar-7", "acc-9")),
+        )
+        val frame = ok(
+            """{"t":"logins.signedout","rid":"bar-7","ok":true,"message":"Signed out.","session":null}"""
+        ) as ServerMessage.LoginsSignedout
+        assertTrue(frame.ok)
+        assertEquals("Signed out.", frame.message)
+        // A logout opens nothing to attach to, so the session is always null.
+        assertNull(frame.session)
+    }
+
+    @Test
+    fun `a sign-out control belongs only on a signed-in row whose agent can log out`() {
+        val claudeIn = AccountWire("a1", "Work", provider = "claude", signIn = SignInWire("signed-in", "w@x.com"))
+        val codexIn = AccountWire("a2", "Home", provider = "codex", signIn = SignInWire("signed-in"))
+        val geminiIn = AccountWire("a3", "G", provider = "gemini", signIn = SignInWire("signed-in"))
+        val claudeOut = AccountWire("a4", "Old", provider = "claude", signIn = SignInWire("signed-out"))
+        val claudeUnknown = AccountWire("a5", "?", provider = "claude", signIn = null)
+
+        // Claude and Codex carry a logout; a signed-in row gets the control.
+        assertTrue(accountCanSignOut(claudeIn))
+        assertTrue(accountCanSignOut(codexIn))
+        // Gemini has no logout command — no control, and this bar draws no note in its place.
+        assertFalse(accountCanSignOut(geminiIn))
+        // Signed out, or a state the machine did not report, has nothing to end.
+        assertFalse(accountCanSignOut(claudeOut))
+        assertFalse(accountCanSignOut(claudeUnknown))
+        // An agent this build never heard of answers no, the catalog's own conservative default.
+        assertFalse(agentHasSignOut("someagent"))
+        assertFalse(agentHasSignOut(null))
+    }
 }

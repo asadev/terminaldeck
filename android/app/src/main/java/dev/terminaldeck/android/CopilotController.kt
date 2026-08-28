@@ -85,6 +85,12 @@ class CopilotController(
     /** True while a `copilot.log` is outstanding, so a second scroll does not ask twice. */
     private var readingLog = false
 
+    /**
+     * A Restart in flight: `copilot.stop` has gone and the fresh `copilot.start` is held until the
+     * machine confirms this device's run is actually gone. See [restart] and [receive].
+     */
+    private var restarting = false
+
     /** Whether the machine advertises a copilot at all. The first of the two gates. */
     fun offered(): Boolean = capabilities().contains(Capability.COPILOT)
 
@@ -200,6 +206,9 @@ class CopilotController(
         attached = false
         helloed = false
         readingLog = false
+        // A Restart that was waiting on a state frame will never get one over a dead channel; drop it
+        // rather than fire `copilot.start` on the next socket for a stop the person has forgotten.
+        restarting = false
         state = null
         question = null
         pending = emptyList()
@@ -225,6 +234,7 @@ class CopilotController(
         wanted = false
         attached = false
         helloed = false
+        restarting = false
         link = null
         state = null
         entries = emptyList()
@@ -263,6 +273,36 @@ class CopilotController(
     fun stopRun() {
         if (!access().canAct) return
         if (!send(ClientMessage.CopilotStop)) say(false, NOT_CONNECTED)
+    }
+
+    /**
+     * End this device's run and start a fresh one in its place — the copilot's **Restart**.
+     *
+     * Asad's intent (gap 10, iOS + desktop have this): the copilot has no session list, no +, and no
+     * per-row Delete, so Restart is the *only* way to end a muddled conversation and begin again in
+     * the same folder — the machine's own configured copilot folder, which `copilot.start` always
+     * uses. iOS does it as close-then-create (`HostLink.restartSession`); the desktop as `copilot:stop`
+     * then `copilot:ensure` (`useCopilot.restart`). Both make the same point: the two halves run **in
+     * order, never in parallel**, because `copilot.start` is idempotent — the machine "answers with the
+     * running copilot if there is one" (`CopilotRemote.start`) — so firing the start before the stop has
+     * landed hands back the old run and restarts nothing.
+     *
+     * So this stops first and holds the start: [receive] fires it the moment the machine's next
+     * `copilot.state` says this device's run is gone. With no run to replace, it is simply a start —
+     * the desktop's `ensure` on a stopped copilot.
+     */
+    fun restart() {
+        if (!access().canAct) return
+        if (state?.hasRun != true) {
+            start()
+            return
+        }
+        if (!send(ClientMessage.CopilotStop)) {
+            say(false, NOT_CONNECTED)
+            return
+        }
+        restarting = true
+        say(true, RESTARTING)
     }
 
     /**
@@ -417,6 +457,13 @@ class CopilotController(
                     open = true,
                     grant = message.state.grant,
                 )
+                // Restart's second half: once the machine confirms this device's run is gone, the
+                // fresh one can start — `copilot.start` will no longer find the old (idempotent) run
+                // to hand back. See [restart].
+                if (restarting && !message.state.hasRun) {
+                    restarting = false
+                    start()
+                }
             }
 
             is ServerMessage.CopilotChat -> {
@@ -497,6 +544,7 @@ class CopilotController(
         const val ECHO_WAIT_MS = 30_000L
 
         const val NOT_CONNECTED = "Not connected, so that did not reach the machine."
+        const val RESTARTING = "Starting a fresh conversation…"
         const val TOO_LONG = "That message is longer than the machine will take at once."
         const val UNUSABLE =
             "That message has a line break or a control character in it, which the agent would read " +

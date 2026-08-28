@@ -145,6 +145,15 @@ fun CopilotScreen(
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onStopRun: () -> Unit,
+    /**
+     * Restart — end this run and start a fresh one in the same folder, one tap.
+     *
+     * The copilot has no session list, no +, and no per-row Delete (those belong to ordinary
+     * sessions), so this is the *only* way to a clean conversation — Asad's *"keep restart for copilot
+     * only."* It sits beside End the run, and the controller sequences the stop and the start so the
+     * idempotent `copilot.start` cannot hand the old run straight back. Mirrors iOS's `restartCopilot`.
+     */
+    onRestart: () -> Unit,
     onSay: (String) -> Boolean,
     onCopy: (String) -> Unit,
     onOpened: () -> Unit,
@@ -455,6 +464,7 @@ fun CopilotScreen(
                         onStart = onStart,
                         onCancel = onCancel,
                         onStopRun = onStopRun,
+                        onRestart = onRestart,
                     )
                 }
             }
@@ -583,6 +593,7 @@ private fun Composer(
     onStart: () -> Unit,
     onCancel: () -> Unit,
     onStopRun: () -> Unit,
+    onRestart: () -> Unit,
 ) {
     val colors = DeckTheme.colors
 
@@ -746,6 +757,16 @@ private fun Composer(
                     DeckQuietButton(label = "Stop the turn", onClick = onCancel, modifier = Modifier.weight(1f))
                     DeckQuietButton(label = "End the run", onClick = onStopRun, modifier = Modifier.weight(1f))
                 }
+                Spacer(Modifier.height(Space.x2))
+                // Restart — the copilot's *"keep restart for copilot only"*. End the run and start a
+                // fresh one in the same folder, one tap: with no session list, no +, and no Delete
+                // here, this is the only clean slate. Full width because it is the whole-conversation
+                // act, set apart from the two turn/run controls above it. See [onRestart].
+                DeckQuietButton(
+                    label = "Restart",
+                    onClick = onRestart,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             else -> Unit

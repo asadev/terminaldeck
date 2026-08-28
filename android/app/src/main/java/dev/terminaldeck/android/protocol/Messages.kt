@@ -690,6 +690,33 @@ sealed interface ClientMessage {
     @SerialName("browser.surfaces")
     data class BrowserSurfaces(val rid: String) : ClientMessage
 
+    /**
+     * **That person is me.** Claim the login the machine's agent is waiting on.
+     *
+     * The client half of a `browser.handover` — the agent saying *I need a person for this one*, so
+     * somebody can type the email and password it cannot. Sent only when a handover is actually
+     * outstanding on [window]; the far end refuses a claim for a window with none, and the host's own
+     * guard (this connection may watch the window) is not repeated here because a screen only reaches
+     * this from a surface it is already being cast. Answered with a `browser.handover.state` carrying
+     * this [rid], after which this device's frames arrive unmasked. Mirrors iOS `.browserHandoverTake`.
+     */
+    @Serializable
+    @SerialName("browser.handover.take")
+    data class BrowserHandoverTake(val rid: String, val window: String) : ClientMessage
+
+    /**
+     * Hand the login back, and say which of the two things that means.
+     *
+     * [carryOn] `true` returns the baton and the agent's blocked call resolves — *done, carry on*;
+     * `false` ends the drive — *stop, I'll take over*. Only ever sent from the device that holds it
+     * (`mine`), which both ends enforce, because a second watcher handing back a page mid-password on
+     * behalf of the person typing into it is exactly what they are written to refuse. Mirrors iOS
+     * `.browserHandoverDone`.
+     */
+    @Serializable
+    @SerialName("browser.handover.done")
+    data class BrowserHandoverDone(val rid: String, val window: String, val carryOn: Boolean) : ClientMessage
+
     /* ---- capability `usage`. The two figures a session's bar draws. ---------------------- */
 
     /**
@@ -735,6 +762,21 @@ sealed interface ClientMessage {
         val id: String,
         val accountId: String,
     ) : ClientMessage
+
+    /* ---- capability `logins`. Ending a login on the far machine. ------------------------- */
+
+    /**
+     * Sign one login out on the far machine — the phone half of the desktop's Accounts sign-out.
+     *
+     * Runs the agent's own logout on that computer (`claude auth logout`, `codex logout`), so it is
+     * offered only for an account whose agent has such a command and that is signed in — the same
+     * gate the desktop's `DeviceAccounts` row draws behind. Served only to one of the owner's own
+     * devices, exactly as the machine withholds the `logins` capability from a guest. Answered with
+     * [ServerMessage.LoginsSignedout] — ok or refusal in the machine's own words, never a silent one.
+     */
+    @Serializable
+    @SerialName("logins.signout")
+    data class LoginsSignout(val rid: String, val accountId: String) : ClientMessage
 
     /* ---- capability `send`. A whole message, rather than keystrokes. --------------------- */
 
@@ -1774,6 +1816,38 @@ sealed interface ServerMessage {
         val surfaces: kotlin.collections.List<BrowserSurfaceWire> = emptyList(),
     ) : ServerMessage
 
+    /**
+     * Who holds the handover on one browser window. Host→client.
+     *
+     * A `browser.handover` is the machine's agent saying *I need a person for this one* — Asad's
+     * *"Claude can ask for the input to put password and put email and then he can continue."* Until
+     * this frame, the only thing the cast sent a phone was the opposite of an invitation: a curtained
+     * [BrowserFrame] with `masked=true` and input refused at the source. This frame is the question
+     * itself, and [asking] separates it from a page that merely has a password box on it.
+     *
+     * Answer and unsolicited push are the same shape — the state is the whole truth either way, so
+     * [rid] is optional and not matched, there is nothing to resolve. [mine] is the only per-connection
+     * field: *whether I may type* is not a property of the page, and it is also what unmasks the pixels
+     * — a host that granted this connection the baton stops curtaining **its** frames, so the cast
+     * needs no change to show them. [taken] is *anybody holds it*, carried rather than derived so the
+     * bar can tell `!taken` (claimable) from `taken && !mine` (somebody else's) without inferring it
+     * from the shape of the pushes. Mirrors iOS `BrowserWatchWire.BrowserHandoverState`.
+     */
+    @Serializable
+    @SerialName("browser.handover.state")
+    data class BrowserHandover(
+        val window: String,
+        val rid: String? = null,
+        val asking: Boolean = false,
+        val prompt: String = "",
+        val mine: Boolean = false,
+        val taken: Boolean = false,
+    ) : ServerMessage {
+        /** The agent's own sentence, bounded the way every prompt on this wire is. Never empty-padded. */
+        val sentence: String
+            get() = prompt.take(Protocol.MAX_WATCH_PROMPT_LENGTH)
+    }
+
     /* ---- capability `usage` ---------------------------------------------------------------- */
 
     /**
@@ -1823,6 +1897,24 @@ sealed interface ServerMessage {
     data class AccountSwitched(
         val rid: String,
         val id: String,
+        val ok: Boolean = false,
+        val message: String = "",
+        val session: String? = null,
+    ) : ServerMessage
+
+    /**
+     * What happened to one `logins.signout`, in the far machine's own words.
+     *
+     * [ok] is the far machine's own answer, settled against its login probe rather than the logout
+     * command's exit status, which lies about a logout that removed nothing. [message] is the sentence
+     * to show either way — there is no `logins.signout.failed`, a refusal is this frame with `ok=false`
+     * and the reason. [session] is always null (a logout opens nothing to attach to) and is kept only
+     * so this reads the same shape as the sign-in answer on the far side.
+     */
+    @Serializable
+    @SerialName("logins.signedout")
+    data class LoginsSignedout(
+        val rid: String,
         val ok: Boolean = false,
         val message: String = "",
         val session: String? = null,

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -21,10 +22,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.WebAsset
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -45,13 +48,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import dev.terminaldeck.android.BrowserHandover
 import dev.terminaldeck.android.LocalhostAddress
 import dev.terminaldeck.android.MachineBrowserController
 import dev.terminaldeck.android.MachineBrowserView
+import dev.terminaldeck.android.SessionHandover
 import dev.terminaldeck.android.WatchController
+import dev.terminaldeck.android.WatchView
 import dev.terminaldeck.android.protocol.BrowserWindowAction
+import dev.terminaldeck.android.ui.kit.DeckPrimaryButton
+import dev.terminaldeck.android.ui.kit.DeckQuietButton
 import dev.terminaldeck.android.ui.kit.DeckTextField
 import dev.terminaldeck.android.ui.theme.DeckTheme
+import dev.terminaldeck.android.ui.theme.DeckType
+import dev.terminaldeck.android.ui.theme.Space
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.min
@@ -102,13 +112,15 @@ import kotlin.math.roundToInt
  * the window arrives and again only when the pane really changes width, never per frame, because it
  * re-lays-out a document on another machine.
  *
- * ## The handover bar is a follow-up
+ * ## The handover bar
  *
- * iOS draws a *take / hand-back / refusal* bar here off `browser.handover.state`/`.take`/`.done`. Those
- * frames are **not in this branch's protocol** (only the masked-frame curtain is), so this overlay
- * draws the address, the Delete and the fold, and the handover is left for the lane that lands the
- * wire. The curtain itself is already honoured by [WatchSurfaceView], which draws a lock card and takes
- * no taps on a masked frame.
+ * When the machine's agent needs a person for a login — email and password it cannot type — it raises
+ * a `browser.handover`, and the cast curtains (`masked`, no pixels) until somebody claims it. This
+ * overlay draws the take / hand-back / refusal bar off `browser.handover.state`/`.take`/`.done`, the
+ * mirror of iOS's `handoverBar`: *I'll do it* claims the login, the pixels then arrive unmasked, the
+ * person taps the field and types with the keyboard [WatchSurfaceView] already raises, and *Done —
+ * carry on* hands it back so the agent's blocked call resolves. [WatchController] owns the wire and
+ * the state; [SessionHandover] decides which of the four states the bar draws.
  */
 @Composable
 fun SessionBrowserOverlay(
@@ -117,6 +129,9 @@ fun SessionBrowserOverlay(
     /** The cast, or null when this machine drives its browser but does not offer it for watching — the
      *  strip still draws, because knowing which page the agent is on is worth saying with no picture. */
     watch: WatchController?,
+    /** The watch snapshot from the ui state — where the handover bar reads whether a login is being
+     *  asked on the shown window, and whether an answer of ours is in flight. Null mirrors [watch]. */
+    watchView: WatchView?,
     hostId: String,
     sessionId: String,
     /** Whether the session screen holding this is the one being looked at — gates the cast, not the
@@ -135,6 +150,8 @@ fun SessionBrowserOverlay(
                 window = window,
                 controller = controller,
                 watch = watch,
+                handover = watchView?.handoverFor(window.id),
+                handoverBusy = watchView?.awaitingFor(window.id) == true,
                 hostId = hostId,
                 sessionId = sessionId,
                 frontmost = frontmost,
@@ -149,6 +166,10 @@ private fun OverlayWindow(
     window: dev.terminaldeck.android.protocol.MachineWindow,
     controller: MachineBrowserController,
     watch: WatchController?,
+    /** The login handover outstanding on this window, or null — what the handover bar draws off. */
+    handover: BrowserHandover?,
+    /** Whether a claim or hand-back of ours is in flight, so the bar's buttons show busy. */
+    handoverBusy: Boolean,
     hostId: String,
     sessionId: String,
     frontmost: Boolean,
@@ -183,6 +204,13 @@ private fun OverlayWindow(
     // Written on every change of the two kept decisions, keyed by machine and session.
     LaunchedEffect(folded, shown) {
         SessionPaneMemory.remember(hostId, sessionId, folded, shown)
+    }
+
+    // A login the agent is waiting on must not sit behind a folded pane. iOS opens the pane on a
+    // handover arriving; so does this. Keyed on there being one, so it fires when the handover
+    // appears rather than on every frame, and leaves a person's own fold alone the rest of the time.
+    LaunchedEffect(handover != null) {
+        if (handover != null) folded = false
     }
 
     // The address follows the page, but never while a thumb is in the field — a redirect would land its
@@ -285,6 +313,17 @@ private fun OverlayWindow(
                     onFold = { folded = true },
                     dragModifier = dragModifier,
                 )
+                // The handover bar, between the address and the picture so the three read as one piece
+                // of chrome. Drawn only when the agent is asking for a person here; the claim unmasks
+                // the cast below and the person types straight into it. See [HandoverBar].
+                handover?.let { state ->
+                    HandoverBar(
+                        state = state,
+                        busy = handoverBusy,
+                        onTake = { watch?.take(window.id) },
+                        onHandBack = { carryOn -> watch?.handBack(window.id, carryOn) },
+                    )
+                }
                 FloatingPicture(
                     watch = watch,
                     windowId = window.id,
@@ -347,6 +386,83 @@ private fun Strip(
         // something representing a window… both are windows instead of arrow."*
         IconButton(onClick = onFold, modifier = Modifier.size(34.dp)) {
             Icon(Icons.Filled.Minimize, contentDescription = "Fold the window away", tint = colors.secondary)
+        }
+    }
+}
+
+/**
+ * The agent has stopped and is waiting for a person — and this is the way in.
+ *
+ * Four states, each a different sentence rather than the same one with a control enabled or disabled
+ * — the mirror of iOS's `handoverBar`:
+ *  - **Nobody has answered yet.** The agent's own words, and one button: *I'll do it*. This is the
+ *    whole feature — the person holding the phone becomes the person the handover was waiting for; the
+ *    claim unmasks the cast below and the login is typed straight into it.
+ *  - **This device holds it.** The two ways out, and they say what they do. The pixels below are
+ *    already live and the field already typeable; nothing here made that happen — the host stopped
+ *    curtaining this connection.
+ *  - **Somebody else answered it** (`taken`, not `mine`). A sentence and no control: the only thing a
+ *    second device could do from here is reach into a page somebody is typing a password into.
+ *  - **A claim was refused.** The machine's own sentence, and the claim becomes *Try again* — this end
+ *    cannot know a refusal was permanent, and the likeliest one is a race.
+ *
+ * On `surface` like the strip above it, so the two read as one piece of chrome over the page.
+ */
+@Composable
+private fun HandoverBar(
+    state: BrowserHandover,
+    busy: Boolean,
+    onTake: () -> Unit,
+    onHandBack: (Boolean) -> Unit,
+) {
+    val colors = DeckTheme.colors
+    val tone = if (state.mine) colors.positive else colors.warning
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Space.x2),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PANE_INSET)
+            .background(colors.surface)
+            .border(0.5.dp, colors.hairlineStrong)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.x15),
+        ) {
+            Icon(Icons.Filled.Lock, contentDescription = null, tint = tone, modifier = Modifier.size(14.dp))
+            Text(SessionHandover.headline(state), style = DeckType.caption, color = tone)
+        }
+        // The agent's own instruction — *sign in with the account you use for billing* — drawn whole,
+        // because a truncated instruction is not one.
+        if (state.prompt.isNotEmpty()) {
+            Text(state.prompt, style = DeckType.footnote, color = colors.primary)
+        }
+        state.refusal?.let { refusal ->
+            Text(refusal, style = DeckType.caption, color = colors.warning)
+        }
+        when (SessionHandover.offer(state)) {
+            SessionHandover.Offer.HandBack -> Row(horizontalArrangement = Arrangement.spacedBy(Space.x2)) {
+                DeckPrimaryButton(
+                    label = "Done — carry on",
+                    onClick = { onHandBack(true) },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                )
+                DeckQuietButton(
+                    label = "Stop — I'll take over",
+                    onClick = { onHandBack(false) },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            // Nothing. The sentence above is the whole answer, and there is deliberately no way from
+            // here to reach into a page somebody else is typing a password into.
+            SessionHandover.Offer.Elsewhere -> Unit
+            SessionHandover.Offer.Claim ->
+                DeckPrimaryButton(label = "I'll do it", onClick = onTake, enabled = !busy)
+            SessionHandover.Offer.Retry ->
+                DeckPrimaryButton(label = "Try again", onClick = onTake, enabled = !busy)
         }
     }
 }

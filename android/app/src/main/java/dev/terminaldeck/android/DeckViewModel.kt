@@ -724,6 +724,11 @@ class DeckViewModel(
                 // `error` already says — so a refusal has to reach the row that asked, or it sits at
                 // "Opening…" forever. A no-op when nothing was opening.
                 link.localhost?.failed(message.message.ifEmpty { "That was refused." })
+                // And a handover claim or hand-back this phone had in flight: the error frame names no
+                // request, so the watcher treats one arriving while exactly one answer was outstanding
+                // as that answer's refusal, and draws Try again beside the machine's sentence. A no-op
+                // when nothing was outstanding. Mirrors iOS `HostLink` → `WatchLink.wireErrored`.
+                link.watch?.wireErrored(message.message)
             }
 
             is ServerMessage.Attached -> link.binding?.takeIf { it.sessionId == message.id }?.onAttached()
@@ -810,6 +815,13 @@ class DeckViewModel(
                 link.watch?.receive(message)
             }
 
+            // Who holds the login handover on a watched window — an answer to a take/done of ours or an
+            // unsolicited push. It changes what the overlay draws (the handover bar), so it does not
+            // return early: it falls through to the fold like the strip does.
+            is ServerMessage.BrowserHandover -> {
+                link.watch?.receive(message)
+            }
+
             /*
              * A screencast frame goes straight to the viewer and returns before the fold, for the
              * reason `output` does: it is the chattiest thing on this socket — one per drawn frame
@@ -831,6 +843,14 @@ class DeckViewModel(
             is ServerMessage.SessionSent,
             -> {
                 link.bar?.receive(message)
+            }
+
+            // A login sign-out settling. The controller settles the row and, on success, re-reads the
+            // account list so the signed-out login drops out. The machine's own sentence — ok or
+            // refusal — is surfaced here as a toast, because the bar itself draws no sentences.
+            is ServerMessage.LoginsSignedout -> {
+                val claimed = link.bar?.receive(message) == true
+                if (claimed && message.message.isNotEmpty()) notify(say(link, message.message))
             }
 
             is ServerMessage.Ports,
@@ -1481,6 +1501,25 @@ class DeckViewModel(
     }
 
     /**
+     * Open the session a notification tap named — the phone half of tap-to-open.
+     *
+     * [AlertCenter] wrote the machine and the session onto the notification's intent; nothing read
+     * them back until now, so a tap on a "your session needs you" alert only ever brought the app to
+     * the front. This is the read, mirroring iOS `NotificationRouter` → `DeckModel.open`.
+     *
+     * The id is validated the way every id off the back stack is — a notification's tag survives
+     * process death and a machine being forgotten, so an id that no longer names anything is a normal
+     * thing to arrive with, not a crash. It is funnelled through the same [OpenRequest] the machine's
+     * `created` frame uses, so the one navigation effect lands the person on the sessions stack and
+     * then the terminal; [open] there selects the machine and attaches, and the route pops itself if
+     * the session has since gone.
+     */
+    fun openFromAlert(hostId: String, sessionId: String) {
+        if (hostId.isEmpty() || !Protocol.isValidSessionId(sessionId)) return
+        _created.value = OpenRequest(hostId, sessionId)
+    }
+
+    /**
      * Open a session on one machine.
      *
      * The `attach` frame is not sent here. It goes out when the view reports its measured size, so
@@ -1600,6 +1639,11 @@ class DeckViewModel(
         following()?.refresh()
     }
 
+    /** Sign one login out on the machine of the session on screen. See [SessionBarController.signOut]. */
+    fun signOutAccount(accountId: String) {
+        following()?.signOut(accountId)
+    }
+
     fun switchAccount(accountId: String) {
         following()?.switchAccount(accountId)
     }
@@ -1682,6 +1726,17 @@ class DeckViewModel(
 
     fun stopCopilotRun() {
         selected?.copilot?.stopRun()
+    }
+
+    /**
+     * End this device's run and start a fresh one in the same folder — the copilot's Restart.
+     *
+     * The copilot has no list, no +, and no per-row Delete, so this is the only way to a clean slate.
+     * Mirrors iOS's `restartCopilot` and the desktop's `useCopilot.restart`; the sequencing (stop, then
+     * start once the run is confirmed gone) lives in [CopilotController.restart].
+     */
+    fun restartCopilot() {
+        selected?.copilot?.restart()
     }
 
     /** Show or hide the copilot's scan on that machine's screen — driving mode. */

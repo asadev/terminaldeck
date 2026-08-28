@@ -1,6 +1,7 @@
 package dev.terminaldeck.android.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -186,6 +187,42 @@ class BrowserWatchWireTest {
         assertEquals(astral, WatchMath.cleanPaste(astral, maxBytes = 5))
         assertEquals("", WatchMath.cleanPaste(astral, maxBytes = 3))
         assertEquals(Protocol.MAX_INPUT_BYTES, WatchMath.cleanPaste("x".repeat(100_000)).length)
+    }
+
+    /* -------------------------------------------------------------- handover -- */
+
+    @Test
+    fun `a handover state is read whole, and reads the safe way round when a field is missing`() {
+        val full = ok(
+            """{"t":"browser.handover.state","window":"slot-a","rid":"r1","asking":true,"prompt":"Sign in","mine":true,"taken":true}"""
+        ) as ServerMessage.BrowserHandover
+        assertEquals("slot-a", full.window)
+        assertEquals("r1", full.rid)
+        assertTrue(full.asking)
+        assertEquals("Sign in", full.prompt)
+        assertTrue(full.mine)
+        assertTrue(full.taken)
+
+        // Everything but the window may be absent, and each missing field reads the safe way: not
+        // asking, not mine, not taken — never a claim button under a question nobody asked.
+        val bare = ok("""{"t":"browser.handover.state","window":""}""") as ServerMessage.BrowserHandover
+        assertEquals("", bare.window)
+        assertFalse(bare.asking)
+        assertFalse(bare.mine)
+        assertFalse(bare.taken)
+        assertEquals("", bare.prompt)
+    }
+
+    @Test
+    fun `the take and done frames are the two flat claims`() {
+        assertEquals(
+            """{"t":"browser.handover.take","rid":"h1","window":"slot-a"}""",
+            ClientFrames.encode(ClientMessage.BrowserHandoverTake("h1", "slot-a")),
+        )
+        assertEquals(
+            """{"t":"browser.handover.done","rid":"h2","window":"","carryOn":true}""",
+            ClientFrames.encode(ClientMessage.BrowserHandoverDone("h2", "", carryOn = true)),
+        )
     }
 
     private companion object {
