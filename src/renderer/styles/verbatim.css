@@ -452,6 +452,16 @@
 .scheme-preview-line,
 .settings-input.colour-hex,
 .scheme-paste,
+/* Added with the Community department. Three surfaces, and all three are
+   somebody else's machine text rather than ours: the version a publisher put on
+   a release, the counts read off GitHub's API, and the absolute paths the
+   install sheet lists before it writes into any of them. The paths are the one
+   that matters most — a folder is compared by eye against what is on the disk,
+   and a ligature welding two characters into one glyph is exactly the
+   difference somebody would be looking for. */
+.cs-store-version,
+.cs-store-github,
+.cs-sheet-paths code,
 .servers-host-status pre {
   font-variant-ligatures: none;
 }

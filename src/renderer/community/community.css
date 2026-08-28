@@ -1,0 +1,412 @@
+/* ============================================================================
+   The Community department.
+
+   Its own stylesheet, `cs-` prefixed and self-contained, for the reason
+   `storefront.css` states about its own: a class borrowed from the browser
+   department would be an unstyled rectangle the moment either surface is drawn
+   without the other's stylesheet loaded. Every value here is a token from
+   `styles/tokens.css`, so the department takes whichever theme it is sitting on
+   with it and nothing new is invented for the store's sake.
+
+   Two rules below reach into another component's class, and both are the same
+   pattern `store-page.css` already uses for `.storelogo`: a *context* changing
+   how a shared control is drawn, never the control's own styling moving here.
+   ============================================================================ */
+
+/* One row: the mark down the left, everything else stacked beside it. The same
+   two-column arrangement the browser department's rows use, so all three
+   departments' shelves read as one shop. */
+.cs-store-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+  align-items: start;
+  padding: var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+/*
+  Everything but the mark is in the second column, and the mark is left where
+  auto-placement puts it — row one, column one.
+
+  The first version spanned the mark down `1 / span 6` rows, which forced the
+  grid to six rows whether the row had six things to say or not: a shelf row
+  with five drew an empty sixth and wore one row-gap of dead space under it. The
+  column keeps its width from the mark regardless, so the span bought nothing.
+*/
+.cs-store-row > *:not(.storelogo) {
+  grid-column: 2;
+}
+
+.cs-store-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+
+.cs-store-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A version is a number somebody reads off a release, so it takes the mono face
+   — the design brief keeps that face for data and this is data. */
+.cs-store-version {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+/*
+  The chips, on their own line under the name.
+
+  Not in the head, and that was found by rendering it and looking: five chips —
+  one of them the sentence *Runs a program on this machine* — wrapped to three
+  lines inside the head at a half-width column and dragged the name into the
+  middle of them, so what read first was **Skill · MIT** and the name came
+  second. That is the same class of defect `store-page.css` records about the
+  MCP head, where the Install button dropped to a line of its own under the
+  name, belonging to nothing.
+*/
+.cs-store-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  margin: 0;
+  min-width: 0;
+}
+
+.cs-store-chip {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+/*
+  The tier chip, and the one place this department spends colour.
+
+  Tier 3 — *Runs a program on this machine* — is the single fact that decides
+  whether the button below it is worth pressing, and it is the fact a shelf of
+  twenty rows will otherwise flatten into the fourth grey chip along. Tinted
+  with the accent rather than the critical colour: it is not an error and it is
+  not a warning about something that went wrong, it is what this item is.
+*/
+.cs-store-chip[data-tier='3'] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.cs-grow {
+  flex: 1;
+}
+
+.cs-store-install {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--t-footnote);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.cs-store-install:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.cs-store-install:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cs-text-button {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+}
+
+.cs-text-button:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.cs-text-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cs-store-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+/* Whose it is, and GitHub's numbers about it. */
+.cs-store-by {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  margin: 0;
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+.cs-store-handle {
+  color: var(--text-secondary);
+}
+
+/*
+  The publisher's link, drawn inline rather than as a button.
+
+  `StoreLinkOut` is the app's one door out of the renderer — it opens in this
+  app's own browser and offers the system one on a right-click — and using
+  anything else here would mean a second door with a second set of behaviours.
+  What it must not keep is the *shape* of a Get-it button, which belongs to a
+  control that fetches something. So this is the context rule described at the
+  top of the file: the same component, drawn as the piece of the sentence it is.
+*/
+.cs-store-by .storefront-getit {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--t-caption);
+}
+
+.cs-store-by .storefront-getit:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+
+/* Somebody else's counts, in the face this app keeps for data, so they read as
+   a measurement taken elsewhere rather than as this store's opinion. */
+.cs-store-github {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.cs-store-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--sp-3);
+  margin: var(--sp-2) 0 0;
+}
+
+.cs-store-facts > div {
+  display: contents;
+}
+
+.cs-store-facts dt {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.cs-store-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+/* The answer to the last thing pressed on this row. Secondary, never critical:
+   an install that worked, printed in red, reads as a failure. */
+.cs-store-said {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+.cs-error {
+  margin: 0;
+  color: var(--color-critical);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+.cs-quiet {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ the shelves -- */
+
+.cs-store-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+.cs-store-heading {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: 600;
+}
+
+.cs-store-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-store-note {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+/* How old the list is, why it could not be made newer, and the way to try. One
+   line, because they are one situation. */
+.cs-store-catalogue {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-caption);
+}
+
+.cs-store-dated {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------- the install sheet -- */
+
+.cs-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/*
+  The one line at the top of the sheet: what this can reach on this machine.
+
+  Given a tinted panel of its own rather than left as the first paragraph,
+  because it is the sentence the four rows below are qualifying and a person
+  who reads nothing else must read this one.
+*/
+.cs-sheet-tier {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+}
+
+.cs-sheet-tier[data-tier='3'] {
+  background: var(--accent-soft);
+}
+
+.cs-sheet-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+}
+
+.cs-sheet-facts > div {
+  display: contents;
+}
+
+.cs-sheet-facts dt {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.cs-sheet-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+.cs-sheet-paths,
+.cs-sheet-agents,
+.cs-sheet-needs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-sheet-paths code {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+.cs-sheet-agents li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.cs-sheet-agent {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+}
+
+/* The short line beside a box. Never a paragraph — anything longer than this
+   lives behind the ⓘ, which is the whole of house rule 1. */
+.cs-sheet-aside {
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+/* A need and, where it applies, the two words saying it is not here. A flex row
+   rather than two spans in a line: they ran together as one word without it —
+   found by rendering it and reading it. */
+.cs-sheet-needs li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.cs-sheet-needs li[data-missing] {
+  color: var(--color-critical);
+}
