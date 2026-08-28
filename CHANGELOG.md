@@ -10,6 +10,31 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-28
+
+### Fixed
+
+- **Sessions on a server no longer die.** A session started on a headless server was closing on its own right after it began; it now runs normally. (The copilot's tools had been rerouting every session through the copilot's own channel; a plain session gets the simple browser-only tools again, and the copilot runs on its own.)
+- **The desktop no longer says a server "can't run a copilot" or "has no browser"** — both are true now, and the text said otherwise.
+
+### Added
+
+- **The copilot is a real chat now.** Your messages sit in a box, its replies are plain text, each has a copy button and a time; a suggested command comes with a Run button; there's a typing indicator; and you can attach files and use the plus button. The floating browser pill is gone while you're in it.
+- **Manage a server entirely from its page** — Restart / Stop / Start the host over the relay (so an offline address no longer breaks it), Connect GitHub, on the phone *and* the desktop.
+- **Sign in and out of your Claude / Codex accounts from the phone** (it was desktop-only).
+- **Connect GitHub on a relay-paired machine**, not only an SSH server.
+
+### Changed
+
+- **Machines page:** a connected server shows **once**, under Servers — not in both lists.
+- **Desktop server management is one place** now (the duplicate in Settings is gone), matching the phone.
+- **The usage/limit reading only shows when it's fresh** and hides cleanly when it would be stale — no number left lying, and nothing runs in the background to keep it updated.
+- Wording: **"Remove Terminal Deck from this server"**; **"Forget this server" is red** on the desktop too.
+
+### Android
+
+- The **copilot can be restarted**; a **login the browser asks for can be typed** (handover); **tapping a "needs you" notification opens that session**; **sign out of an account** from the bar.
+
 ## [0.14.0] — 2026-08-27
 
 ### The server page — a full control panel for a headless box
@@ -2209,7 +2234,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.15.0
 [0.14.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.14.0
 [0.13.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.13.0
 [0.12.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.12.0
