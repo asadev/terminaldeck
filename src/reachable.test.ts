@@ -142,34 +142,17 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
   // below: an entry that outlives its reason is documentation asserting the
   // opposite of the code.
-  // The four files of the community store's contract. They are the foundation
-  // the Community department is built on and they landed first, on purpose: the
-  // manifest grammar, where the catalogue is fetched from, the keys that say it
-  // is ours, and the fetch-check-keep that uses all three. Nothing imports them
-  // from a screen yet, because the department itself is the next plan.
-  //
-  // Every one of these entries names the single import that deletes it, so an
-  // entry cannot outlive its reason without somebody reading the sentence that
-  // says it should have gone.
-  'src/shared/store-manifest.ts':
-    'unreachable on purpose while the Community department is unbuilt: it is the manifest ' +
-    'grammar, and its readers today are src/main/store-index.ts (itself unreached), the ' +
-    'terminaldeck-commons indexer and the site validator. Delete this entry the moment a ' +
-    'screen or the headless host imports it.',
-  'src/shared/store-api.ts':
-    'unreachable on purpose while the Community department is unbuilt: it holds the catalogue ' +
-    'base and the TERMINALDECK_STORE_API override, whose only caller today is ' +
-    'src/main/store-index.ts. Delete this entry the moment the department asks it where to fetch.',
-  'src/shared/store-key.ts':
-    'unreachable on purpose while the Community department is unbuilt: it is the pair of ' +
-    'Ed25519 public key slots the signed catalogue is checked against, read by ' +
-    'src/main/store-index.ts and by the Electron crypto probe. Delete this entry the moment ' +
-    'the department loads an index.',
-  'src/main/store-index.ts':
-    'unreachable on purpose while the Community department is unbuilt: it fetches the signed ' +
-    'catalogue, checks its signature and serial, keeps the last good copy and serves it ' +
-    'offline. It is exercised by store-index.test.ts and by sealed.electron-probe.ts under ' +
-    'Electron. Delete this entry the moment src/main/index.ts wires the department to it.',
+  // The four files of the community store's contract were listed here, and none
+  // is any more: `src/main/index.ts` builds the Community store and registers
+  // its three channels, so `store-api.ts`, `store-key.ts`, `store-manifest.ts`
+  // and `store-index.ts` are all reached from the running app through
+  // `store-install-ipc.ts` → `store-install.ts`. Every one of those entries named
+  // the import that would delete it, and this is that import.
+  'src/main/store-archive.fixture.ts':
+    'unreachable on purpose: it builds the tar.gz archives `store-archive.test.ts` and ' +
+    '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +
+    'climbs out of the folder, a symlink, a header that lies about its size. The same reason ' +
+    '`browser-extension-zip.fixture.ts` below is here.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

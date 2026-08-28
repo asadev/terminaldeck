@@ -205,6 +205,8 @@ import {
   installedBrowserTools,
   registerBrowserStoreIpc,
 } from './browser-store-ipc'
+import { installCommunityStore, registerCommunityIpc } from './store-install-ipc'
+import { storeApiBase } from '../shared/store-api'
 import type { StoreResult, StoreView, ToolStore } from './browser-store'
 import { removeMcpServer } from './mcp-add'
 import { desktopMachineBrowser } from './machine-browser-desktop'
@@ -3960,6 +3962,22 @@ function registerIpc(): void {
    */
   browserToolStore = installBrowserStore({ userData: () => app.getPath('userData') })
   registerBrowserStoreIpc(ipcMain)
+
+  /*
+   * The Community shelf, which is the first list in this app that comes off the
+   * internet rather than out of its own source.
+   *
+   * Built here for the same reason the tool store above is: this is the only
+   * place that knows where `userData` is, and `storeApiBase` needs a real
+   * environment to read the `TERMINALDECK_STORE_API` override out of. Both are
+   * read per call rather than captured, so pointing the app at a different
+   * catalogue takes effect on the next press instead of the next launch.
+   */
+  installCommunityStore({
+    userData: () => app.getPath('userData'),
+    base: () => storeApiBase(process.env),
+  })
+  registerCommunityIpc(ipcMain)
 
   /*
    * The extension store, and the replay that makes it mean anything.
