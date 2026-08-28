@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../settings/controls'
 import { ServerTerminal } from './ServerTerminal'
+import { BRAND } from '../../../shared/brand'
 import { hostUpdateAvailable } from '../../../shared/host-version'
 import { asHostOffer, asHostState, succeeded } from './types'
 import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from './types'
@@ -69,13 +70,15 @@ import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from '.
  *
  * ## What is deliberately not drawn
  *
- * A **Sign in**-shaped control for the copilot on a server. `HEADLESS.md` is
- * explicit that a headless host passes no copilot layer at all, because
- * `deck-control` cannot be imported into that bundle — so a device paired to a
- * server gets no Copilot, of either kind. That is stated in this pane's own
- * words once the host is up rather than discovered on a phone, because on the
- * wire *"this host has no copilot"* and *"you were approved as a guest"* arrive
- * as the same absence.
+ * A **Sign in**-shaped control for the copilot on a server. Not because a server
+ * has no copilot — it has one now: `headless/host.ts` assembles a full copilot
+ * (`startHeadlessCopilot`) and advertises it to the owner's own devices, and
+ * {@link SERVER_COPILOT} says so in this pane's words. It is not drawn *here*
+ * because this is the install pane; a copilot is reached from the copilot's own
+ * surface once the device is paired, not from the panel that put the host on the
+ * box. The guest boundary is stated rather than left to the wire, because on it
+ * *"you were approved as a guest"* and *"this host has no copilot"* arrive as
+ * the same absence.
  */
 export function ServerHost({
   server,
@@ -218,8 +221,13 @@ export function ServerHost({
             </Button>
           )}
           {controls.remove && (
+            /* Named, not "Remove it" — "it" beside a list of a person's own
+               websites reads as delete-the-server. This says what actually goes:
+               our host, off that machine. Word-for-word the phone's own button
+               (`HostProbe.removeLabel` = "Remove {Brand.name} from this
+               server"), through the one place the name lives. */
             <Button tone="danger" onClick={() => setAsking('remove')}>
-              Remove it from this server
+              Remove {BRAND.name} from this server
             </Button>
           )}
           {controls.stop && <Button onClick={stop}>Stop</Button>}
@@ -258,7 +266,7 @@ export function ServerHost({
       */}
       {here && <ServerAddress address={offer.host.address} running={offer.host.running} />}
 
-      {here && <p className="servers-card-why">{NO_COPILOT}</p>}
+      {here && <p className="servers-card-why">{SERVER_COPILOT}</p>}
 
       {/* Every step that has finished, in order, each already a sentence. This
           is the answer to the complaint the whole feature exists for: a person
@@ -577,20 +585,27 @@ export function awayLine(name: string): string {
 }
 
 /**
- * What a device paired to a server does not get, said here rather than
- * discovered on a phone.
+ * What a device paired to a server now gets from its copilot, said here rather
+ * than discovered on a phone.
  *
- * The sentence `cli.ts` prints for the same reason — the wire cannot say it: on
- * the far side *"this host has no copilot"* and *"you were approved as a guest"*
- * arrive as the same absence, and a person cannot otherwise tell which happened.
- * The reason is in `HEADLESS.md`: `deck-control/index.ts` pulls `browserDrive`
- * out of the Electron browser module, so the copilot's whole tool surface cannot
- * be imported into a bundle with no Electron in it — and `CopilotRuns` refuses a
- * run with no tools rather than starting an agent that cannot do anything.
+ * This constant used to say a server never runs a copilot — the sentence
+ * `cli.ts` printed back when a headless host withheld `CAPABILITY.copilot`. It
+ * runs one now: `headless/host.ts` assembles a full copilot
+ * (`startHeadlessCopilot`) and advertises it to the owner's own devices, and
+ * `cli.ts`'s own approval line says the same — *"It gets the copilot too — its
+ * chat, files, routines and settings — driven from the app, because this server
+ * has no screen of its own to run it on."*
+ *
+ * The one thing that has not changed is the guest boundary: a device approved as
+ * a guest is still never offered the copilot. It is said in this pane's own
+ * words because on the wire *"you were approved as a guest"* and *"this host has
+ * no copilot"* still arrive as the same absence, so a person cannot otherwise
+ * tell a guest's withheld copilot from a host that has none.
  */
-export const NO_COPILOT =
-  'There is no copilot on a server: the copilot’s tools only run in the desktop app, so a device ' +
-  'paired to this one gets sessions, folders and the terminal, and no Copilot.'
+export const SERVER_COPILOT =
+  'A device you sign in as your own gets the copilot on this server too — its chat, files, ' +
+  'routines and settings — driven from here, because the server has no screen of its own. A ' +
+  'device you add as a guest never gets it.'
 
 /**
  * Which controls this section draws, as a function of what the server said.

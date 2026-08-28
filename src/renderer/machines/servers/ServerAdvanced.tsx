@@ -496,8 +496,15 @@ export function ServerAdvanced({
         <div className="servers-card-actions">
           {/* Not "Forget this server" again — that is the heading directly above
               it, and a button that repeats its own heading reads as two
-              controls to somebody scanning the column. */}
-          <Button onClick={() => setConfirmForget(true)}>Forget it</Button>
+              controls to somebody scanning the column.
+
+              Danger-toned like the phone's, so the one destructive control in
+              this section carries its warning colour before the confirm rather
+              than only inside it — the same tone the Forget inside the ask, and
+              the Remove-host button, already wear. */}
+          <Button tone="danger" onClick={() => setConfirmForget(true)}>
+            Forget it
+          </Button>
         </div>
       )}
     </section>

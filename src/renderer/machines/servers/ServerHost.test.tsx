@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   ADDRESS_HOW,
-  NO_COPILOT,
+  SERVER_COPILOT,
   PairingCode,
   ServerAddress,
   awayLine,
@@ -313,13 +313,21 @@ describe('the address for a phone', () => {
   })
 })
 
-describe('what a server cannot give a device', () => {
+describe('what the copilot on a server gives a device, and what it withholds', () => {
   /*
-   * Said here rather than discovered on a phone: on the wire "this host has no
-   * copilot" and "you were approved as a guest" arrive as the same absence.
+   * The truth after `headless/host.ts` began running a full copilot and
+   * advertising it to the owner's own devices: one of your own devices does get
+   * the copilot on a server now, driven from the app. Said in this pane's words
+   * because on the wire a guest's withheld copilot and a host that has none
+   * arrive as the same absence.
    */
-  it('says there is no copilot on a server', () => {
-    expect(NO_COPILOT).toContain('no copilot')
-    expect(NO_COPILOT).toContain('desktop app')
+  it('says an owner device gets the copilot, and a guest does not', () => {
+    expect(SERVER_COPILOT).toContain('copilot')
+    // The two facts that flipped and the one that did not: your own device gets
+    // it, driven from here; a guest still never does.
+    expect(SERVER_COPILOT).toMatch(/your own/)
+    expect(SERVER_COPILOT).toMatch(/guest never gets it/)
+    // And it must no longer claim the old falsehood that a server has none.
+    expect(SERVER_COPILOT).not.toContain('no copilot on a server')
   })
 })

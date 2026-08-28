@@ -9,6 +9,7 @@ import { useOneMenu } from './one-menu'
 import { useSheetRoom } from './sheet-room'
 import {
   contextFigure,
+  contextIsFresh,
   contextLevel,
   contextPanel,
   contextShare,
@@ -1101,7 +1102,23 @@ export function UsageBarView({
    * is a view whose honesty depends on its caller remembering. Nulling it here
    * makes the absence a property of the component instead.
    */
-  const reading = withheld === null ? context : null
+  const liveReading = withheld === null ? context : null
+  /*
+   * ...and only while the figure is genuinely current.
+   *
+   * The comment on the context control below says it "is current by construction
+   * — the agent writes the figure as it works and this only looks." That holds
+   * while the agent is working and fails the moment it stops: the figure lives in
+   * the transcript on disk, so a paused session keeps its last one there and the
+   * bar went on showing a token count for a conversation that had stopped. Asad
+   * caught exactly this shape on the panel's age row — a figure captioned as if
+   * it were live when it was a memory. `contextIsFresh` gates the *bar* on the
+   * reading's own age against the app's own `just now` boundary, so the number
+   * outside the dropdown is only ever one you can trust, and it clears cleanly
+   * rather than lying. The reading and its age are still whole inside the panel;
+   * see `contextIsFresh` for why this is the honest cut and not a new threshold.
+   */
+  const reading = contextIsFresh(liveReading, now) ? liveReading : null
   const figure = contextFigure(reading, tight)
   const figureName = contextSummary(reading, now)
   const figureLevel = contextLevel(reading)
@@ -1195,8 +1212,12 @@ export function UsageBarView({
         A reading first, and drawn as one: a number and a unit and no label at
         rest, because the bar it sits on is already carrying a session name, a
         folder, an account and three pickers, and because the word "context" is
-        the one part of it a reader can infer. It is current by construction —
-        the agent writes the figure as it works and this only looks.
+        the one part of it a reader can infer. It is current *while shown* —
+        the agent writes the figure as it works and this only looks, but a paused
+        session keeps its last figure on disk, so what is on the bar is gated on
+        the reading being fresh (`contextIsFresh`, above) and the whole control is
+        absent once it is not. A stale token count presented as now is a memory
+        wearing the clothes of a measurement.
 
         It does take a press, since 2026-08-19, and that is the one thing about
         it that changed. The detail behind it — the split against the window,
@@ -1206,11 +1227,13 @@ export function UsageBarView({
         drawn as pressable; see `UsageBar.css`, which gives it no border, no fill
         and no hover chip.
 
-        Absent entirely, rather than dashed or zeroed, when there is no reading.
-        `contextFigure` returns null for a Gemini session (verified on this
+        Absent entirely, rather than dashed or zeroed, when there is no reading
+        to trust. `figure` is null for a Gemini session (verified on this
         machine: nine session files under `~/.gemini/tmp/*` and no token count
-        in any of them), for a plain shell, and for a Claude session that has
-        not taken a turn yet. A dash in the place a number goes is still an
+        in any of them), for a plain shell, for a Claude session that has not
+        taken a turn yet — and now for one whose last figure has gone stale,
+        because `reading` is nulled above the moment `contextIsFresh` says the
+        number is no longer current. A dash in the place a number goes is still an
         element claiming this app is measuring something.
       */}
       {figure === null || figureIsControl ? null : (

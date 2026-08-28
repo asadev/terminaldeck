@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { nextPanelState, opensPlan, panelNote, planStatus, retryOffered, UsageBarView } from './UsageBar'
 import {
   contextFigure,
+  contextIsFresh,
   contextLevel,
   contextPanel,
   contextSummary,
@@ -324,6 +325,36 @@ describe('the context figure, which is the whole of what is outside the dropdown
     // never will, and only one of those is worth waiting for.
     const fresh = context({ state: 'nothing-yet', tokens: null, window: null, percent: null })
     expect(contextFigure(fresh)).toBeNull()
+  })
+
+  it('counts a reading as current only inside the app’s own "just now" boundary', () => {
+    /*
+     * The bar used to draw the reading whenever there was one, on the claim it
+     * was "current by construction". A paused session keeps its last figure on
+     * disk, so that showed a token count for a conversation that had stopped.
+     * The cut is describeAge()'s `just now` — < 2 min — the same line the panel
+     * starts captioning an age against, so bar and panel tell one story.
+     */
+    expect(contextIsFresh(context({ reportedAt: NOW - MINUTE }), NOW)).toBe(true)
+    expect(contextIsFresh(context({ reportedAt: NOW - 10 * MINUTE }), NOW)).toBe(false)
+    // No stamp is unknown age, not "fresh": it is withheld rather than trusted.
+    expect(contextIsFresh(context({ reportedAt: 0 }), NOW)).toBe(false)
+    expect(contextIsFresh(null, NOW)).toBe(false)
+  })
+
+  it('draws no context on the bar once the figure has gone stale, and never a wrong number', () => {
+    // Fresh: the strip is there, carrying the real share.
+    const live = render({ context: context({ reportedAt: NOW - MINUTE }) })
+    expect(live).toContain('ub-cx-strip')
+    // Stale by the app's own boundary: the whole context control is gone — not a
+    // dash, not a zero, not a stale count. The reading and its age still live in
+    // the model (`contextPanel`); only the untrustworthy figure leaves the bar.
+    const stale = render({ context: context({ reportedAt: NOW - 10 * MINUTE }) })
+    expect(stale).not.toContain('ub-context')
+    expect(stale).not.toContain('ub-cx-strip')
+    expect(text(stale)).not.toContain('154')
+    // And the account label beside it is untouched — the usage model stays.
+    expect(stale).toContain('app.imatch.ae@gmail.com')
   })
 
   it('gives a token count with no percentage rather than inventing a denominator', () => {
