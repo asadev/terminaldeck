@@ -105,6 +105,9 @@
  */
 
 import SwiftUI
+import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct CopilotView: View {
     let model: DeckModel
@@ -146,6 +149,30 @@ struct CopilotView: View {
     /// Whether the foot of the conversation is on screen. See the anchor in
     /// `timeline`, and the scroll effect that reads this.
     @State private var atBottom = true
+
+    /**
+     * Files the person has attached to the next message.
+     *
+     * Asad, bringing the composer up to standard: *"The input box must match a
+     * modern AI chat: a plus button and attach files, and the usual essentials.
+     * The current copilot input is bare — bring it up to Claude-chat standard."*
+     * So the plus opens the file and photo pickers and what they return lands
+     * here as chips over the field, removable, cleared when the message is sent.
+     *
+     * **The bytes do not cross this wire, and the chips are honest about it.** A
+     * `copilot.say` is one line of text into a pty — there is no `copilot.attach`
+     * frame on the wire and the copilot's own run is hidden from this phone, so a
+     * file picked here cannot be uploaded to the copilot. What *can* reach it is
+     * the one thing that always does: the message. So the names are carried into
+     * the text — see `composedMessage` — and the copilot, which is on the machine
+     * with a filesystem of its own, is told what it is being pointed at rather
+     * than handed a copy. Delivering the bytes needs a new frame the desktop does
+     * not yet speak; that is the one part of this the phone cannot finish alone.
+     */
+    @State private var attachments: [CopilotAttachment] = []
+    @State private var showingFileImporter = false
+    @State private var showingPhotoPicker = false
+    @State private var photoSelection: [PhotosPickerItem] = []
 
     /// What the scroll watches: how many rows there are, and what the last one
     /// says. Both, because a streaming answer only ever moves the second.
@@ -566,13 +593,26 @@ struct CopilotView: View {
                     ForEach(link?.timeline ?? []) { entry in
                         switch entry {
                         case let .message(message):
-                            CopilotBubble(message: message)
+                            CopilotMessageRow(message: message, link: link)
                         case let .action(action):
                             CopilotActionRow(action: action)
                         case let .mine(outgoing):
                             CopilotOutgoingBubble(outgoing: outgoing)
                         }
                     }
+
+                    /*
+                     * The three-dot typing pulse, where the reply will land.
+                     *
+                     * Asad, turning this into a proper AI chat: *"a
+                     * typing/waiting animation while awaiting a reply — a
+                     * three-dot typing pulse… so it's obvious something is
+                     * happening."* Drawn on the left with no box, so the pulse is
+                     * standing exactly where the copilot's words will replace it.
+                     * `awaitingReply` reads the timeline rather than a flag — see
+                     * `CopilotLink`.
+                     */
+                    if link?.awaitingReply == true { CopilotTypingIndicator() }
 
                     if (link?.timeline.isEmpty ?? true) { nothingYet }
 
@@ -1018,52 +1058,154 @@ struct CopilotView: View {
      * answer never came.
      */
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            TextField("Ask the copilot…", text: $draft, axis: .vertical)
-                .lineLimit(1 ... 5)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.primary)
-                .textInputAutocapitalization(.sentences)
-                .focused($composing)
-                .onChange(of: draft) { _, typed in
-                    let flattened = CopilotLink.oneUtterance(typed)
-                    // Compared before assigning, and the trailing space is why:
-                    // `oneUtterance` trims, so assigning unconditionally would
-                    // eat the space a person types between two words the instant
-                    // they type it.
-                    if flattened != typed.trimmingCharacters(in: .whitespacesAndNewlines) {
-                        draft = flattened
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .accessibilityIdentifier("copilot.composer")
+        VStack(alignment: .leading, spacing: 8) {
+            if !attachments.isEmpty { attachmentStrip }
 
-            Button {
-                if link?.say(draft) == true { draft = "" }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(canSend ? Theme.accent : Theme.faint)
+            HStack(alignment: .bottom, spacing: 10) {
+                /*
+                 * The plus. A modern chat's leading control, and the door to
+                 * everything that is not typing — *"a plus button and attach
+                 * files, and the usual essentials."* A `Menu` rather than a bare
+                 * paperclip because there is more than one kind of thing to add
+                 * and Claude's own plus is a menu; the two the phone can offer
+                 * are a file and a photo, each a system picker.
+                 */
+                Menu {
+                    Button {
+                        showingFileImporter = true
+                    } label: {
+                        Label("Attach files", systemImage: "doc")
+                    }
+                    Button {
+                        showingPhotoPicker = true
+                    } label: {
+                        Label("Photos", systemImage: "photo")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 34, height: 34)
+                        .background(Theme.surfaceHigh, in: Circle())
+                }
+                .accessibilityLabel("Add")
+                .accessibilityIdentifier("copilot.plus")
+
+                TextField("Ask the copilot…", text: $draft, axis: .vertical)
+                    .lineLimit(1 ... 5)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.primary)
+                    .textInputAutocapitalization(.sentences)
+                    .focused($composing)
+                    .onChange(of: draft) { _, typed in
+                        let flattened = CopilotLink.oneUtterance(typed)
+                        // Compared before assigning, and the trailing space is
+                        // why: `oneUtterance` trims, so assigning unconditionally
+                        // would eat the space a person types between two words the
+                        // instant they type it.
+                        if flattened != typed.trimmingCharacters(in: .whitespacesAndNewlines) {
+                            draft = flattened
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .accessibilityIdentifier("copilot.composer")
+
+                Button {
+                    send()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(canSend ? Theme.accent : Theme.faint)
+                }
+                .disabled(!canSend)
+                .accessibilityLabel("Send")
+                .accessibilityIdentifier("copilot.send")
             }
-            .disabled(!canSend)
-            .accessibilityLabel("Send")
-            .accessibilityIdentifier("copilot.send")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+        .fileImporter(isPresented: $showingFileImporter,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            if case let .success(urls) = result {
+                for url in urls { attachments.append(CopilotAttachment(name: url.lastPathComponent)) }
+            }
+        }
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoSelection, matching: .images)
+        .onChange(of: photoSelection) { _, items in
+            for _ in items { attachments.append(CopilotAttachment(name: "Photo")) }
+            photoSelection = []
+        }
     }
 
-    /// Disabled on an empty field only. Not on the connection: `Transport.send`
-    /// refuses rather than queues, so a press over a dead socket answers *"Not
-    /// connected — that was not sent"* and keeps the text, which tells somebody
-    /// more than a greyed button ever does.
-    private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// The attached files, as removable chips over the field. A horizontal
+    /// scroller so a fistful of them never pushes the composer off the screen.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { item in
+                    HStack(spacing: 6) {
+                        Image(systemName: "paperclip").font(.system(size: 11))
+                        Text(item.name)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                        Button {
+                            attachments.removeAll { $0.id == item.id }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .accessibilityLabel("Remove \(item.name)")
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(Theme.secondary)
+                    .background(Theme.surfaceHigh, in: Capsule())
+                }
+            }
+        }
+        .accessibilityIdentifier("copilot.attachments")
     }
+
+    /// Send the composed message, and clear the field and the chips **only when
+    /// the frame went** — the same rule the composer has always kept, extended
+    /// to the attachments so a message refused over a dead socket keeps both the
+    /// words and what was pinned to them.
+    private func send() {
+        guard link?.say(composedMessage) == true else { return }
+        draft = ""
+        attachments = []
+    }
+
+    /// The words, plus the names of anything attached. The bytes cannot cross
+    /// this wire — see the note on `attachments` — so the copilot is told what it
+    /// is being pointed at in the one channel that reaches it.
+    private var composedMessage: String {
+        let base = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !attachments.isEmpty else { return base }
+        let names = attachments.map(\.name).joined(separator: ", ")
+        return base.isEmpty ? "Attached: \(names)" : "\(base) (attached: \(names))"
+    }
+
+    /// Disabled on an empty field with nothing attached. Not on the connection:
+    /// `Transport.send` refuses rather than queues, so a press over a dead socket
+    /// answers *"Not connected — that was not sent"* and keeps the text, which
+    /// tells somebody more than a greyed button ever does.
+    private var canSend: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+}
+
+/// One thing pinned to the next message. A value with its own id so the chip row
+/// can remove exactly the one whose ✕ was pressed, even when two files share a
+/// name.
+struct CopilotAttachment: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
 }
 
 /**
@@ -1119,66 +1261,127 @@ enum CopilotPrompt: Identifiable {
 /* Rows in the timeline                                                        */
 /* -------------------------------------------------------------------------- */
 
-/// One turn of the conversation.
-///
-/// The person's own words are tinted and pushed right; the agent's are a card on
-/// the left. That is the one place on this screen the accent is spent, and it is
-/// spent on the cheapest possible question — *which of these did I say* — which
-/// on a small screen full of tool rows is genuinely hard to answer from
-/// indentation alone.
-private struct CopilotBubble: View {
+/**
+ * One turn of the conversation, in **Claude's chat layout**.
+ *
+ * Asad, turning this into a proper AI chat: *"My messages sit in a
+ * light-gray/white rounded box; the copilot's replies sit on the base
+ * background with NO box around them — exactly Claude's chat layout."*
+ *
+ * So the two roles are two different shapes, and the difference is a box rather
+ * than a colour. This replaced a design where **both** sides were cards and the
+ * accent tint was spent saying *which did I say*; the accent is now spent on
+ * nothing, because the box already answers it — the person's words are a card
+ * pushed to the right, the copilot's are plain text the width of the screen,
+ * and a screen full of the copilot's own paragraphs reads the way a page of
+ * writing reads rather than the way a chat of two robots does.
+ *
+ * The copilot's side also grows two things straight out of the text: the
+ * commands it suggested, each in its own card with a Run button
+ * (`CopilotCommandCard`), and, under every message either way, the time it was
+ * said and a copy button — see `CopilotMessageMeta`.
+ */
+private struct CopilotMessageRow: View {
     let message: CopilotChatMessage
+    let link: CopilotLink?
+
+    /// Whether the copy button is showing. Off until a long-press or a pointer
+    /// hover asks for it — *"appearing on hover/long-press, hidden otherwise."*
+    @State private var revealed = false
+
+    private var mine: Bool { message.role == .you }
 
     var body: some View {
-        HStack {
-            if message.role == .you { Spacer(minLength: 40) }
-
-            VStack(alignment: .leading, spacing: 6) {
-                // Already stripped of the escape sequences a shell writes into
-                // its own transcript — see `CopilotWire.prose`, which does it at
-                // the decoder because that is the only place the `ESC` that
-                // begins one still exists. Scrubbing here as well would be two
-                // regex passes per redraw over the row a streaming answer is
-                // extending, for nothing left to find.
-                Text(message.text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // Somebody who asked what happened overnight will want to
-                    // paste the answer somewhere. A chat bubble that cannot be
-                    // copied is a chat bubble that has to be retyped.
-                    .textSelection(.enabled)
-
-                if message.truncated {
-                    // Said, because a bubble that was shortened and does not say
-                    // so misquotes an agent — and the full text is still on the
-                    // machine, where the transcript viewer can show all of it.
-                    Text("Shortened to fit — the whole message is in the transcript on the machine.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.faint)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
+            HStack(spacing: 0) {
+                if mine { Spacer(minLength: 40) }
+                content
+                if !mine { Spacer(minLength: 40) }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(message.role == .you ? Theme.accent.opacity(0.14) : Theme.surface,
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            if message.role == .agent { Spacer(minLength: 40) }
+            if message.truncated {
+                // Said, because a bubble that was shortened and does not say so
+                // misquotes an agent — and the full text is still on the machine,
+                // where the transcript viewer can show all of it.
+                Text("Shortened to fit — the whole message is in the transcript on the machine.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+            }
+
+            CopilotMessageMeta(text: message.text, at: message.at,
+                               revealed: revealed, mine: mine)
+        }
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.3) {
+            withAnimation(.easeOut(duration: 0.15)) { revealed = true }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { revealed = hovering }
+        }
+        // The native long-press path as well, so copy is reachable even where the
+        // reveal gesture loses to text selection.
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = message.text
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(message.role == .you ? "You said: \(message.text)"
-                                                 : "Copilot said: \(message.text)")
+        .accessibilityLabel(mine ? "You said: \(message.text)"
+                                 : "Copilot said: \(message.text)")
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if mine {
+            // Boxed, pushed right — the person's own words. `surfaceHigh` is the
+            // app's "a surface on a surface" grey, which reads as a distinct box
+            // on the chat's ground in both appearances: a darker grey on the
+            // light ground, a lighter grey on the dark one.
+            Text(message.text)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.primary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Theme.surfaceHigh,
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        } else {
+            // No box. Plain text on the base ground, with any command the copilot
+            // suggested pulled out of the prose into its own card — see
+            // `CopilotProse` for the split and `CopilotCommandCard` for the card.
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(CopilotProse.segments(message.text).enumerated()), id: \.offset) { _, segment in
+                    switch segment {
+                    case let .prose(text):
+                        Text(text)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.primary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case let .command(command, language):
+                        CopilotCommandCard(command: command, language: language, link: link)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
 /**
  * Something this phone said, before the machine has said it back.
  *
- * The **same bubble** as `CopilotBubble` on the same side in the same tint, plus
- * one quiet line of status — because it is not a different message, it is this
- * message drawn early. Anything that made it a visibly different kind of row
+ * The **same box** as `CopilotMessageRow`'s own-message side, on the same side,
+ * plus one quiet line of status — because it is not a different message, it is
+ * this message drawn early. Anything that made it a visibly different kind of row
  * would trade one confusion for another: a person would see their sentence
  * twice, once faint and once solid, with nothing saying which counted.
  *
@@ -1192,35 +1395,332 @@ private struct CopilotBubble: View {
 private struct CopilotOutgoingBubble: View {
     let outgoing: CopilotOutgoing
 
+    @State private var revealed = false
+
     var body: some View {
-        HStack {
-            Spacer(minLength: 40)
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 40)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(outgoing.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(outgoing.text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-
-                Text(outgoing.unacknowledged
-                     ? "That machine has not echoed this back."
-                     : "sending\u{2026}")
-                    .font(.system(size: 11))
-                    .foregroundStyle(outgoing.unacknowledged ? Theme.warning : Theme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(outgoing.unacknowledged
+                         ? "That machine has not echoed this back."
+                         : "sending\u{2026}")
+                        .font(.system(size: 11))
+                        .foregroundStyle(outgoing.unacknowledged ? Theme.warning : Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Theme.surfaceHigh,
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(Theme.accent.opacity(0.14),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            CopilotMessageMeta(text: outgoing.text,
+                               at: outgoing.at.timeIntervalSince1970 * 1000,
+                               revealed: revealed, mine: true)
+        }
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.3) {
+            withAnimation(.easeOut(duration: 0.15)) { revealed = true }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { revealed = hovering }
+        }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = outgoing.text
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(outgoing.unacknowledged
                             ? "You said, not acknowledged: \(outgoing.text)"
                             : "You said, sending: \(outgoing.text)")
         .accessibilityIdentifier("copilot.sending")
+    }
+}
+
+/**
+ * The line under a message: when it was said, and a copy button.
+ *
+ * Asad: *"A copy button on BOTH my messages and its replies, appearing on
+ * hover/long-press, hidden otherwise; a timestamp under each message."* So the
+ * time is always here and the button is not — it fades in when the row is
+ * long-pressed (or hovered with a pointer), which is what `revealed` carries
+ * down from the row that owns the gesture.
+ *
+ * Copy puts the raw message on the pasteboard, not the rendered view: somebody
+ * who asked what happened overnight wants the words, and a chat that cannot be
+ * copied is one that has to be retyped.
+ */
+private struct CopilotMessageMeta: View {
+    let text: String
+    /// Epoch milliseconds, or 0 for a line the transcript did not date.
+    let at: Double
+    let revealed: Bool
+    /// Which side to hug — the person's meta sits under the box on the right, the
+    /// copilot's under the text on the left.
+    let mine: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if mine { Spacer(minLength: 0) }
+
+            if let stamp = CopilotClock.time(at) {
+                Text(stamp)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faint)
+                    .accessibilityIdentifier("copilot.timestamp")
+            }
+
+            if revealed {
+                Button {
+                    UIPasteboard.general.string = text
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy")
+                .accessibilityIdentifier("copilot.copy")
+                .transition(.opacity)
+            }
+
+            if !mine { Spacer(minLength: 0) }
+        }
+        .padding(.horizontal, 2)
+    }
+}
+
+/**
+ * The three-dot typing pulse, shown while the copilot owes a reply.
+ *
+ * Asad: *"a typing/waiting animation while awaiting a reply — a three-dot typing
+ * pulse (a nicer native motion is fine if trivial; otherwise three dots), so
+ * it's obvious something is happening."* Three dots, each pulsing on the same
+ * loop a fifth of a second behind the last, which is the motion every chat uses
+ * for exactly this and reads instantly as *typing*.
+ *
+ * Drawn on the left with no box, in the copilot's own place, so the pulse turns
+ * into the answer where the answer will be. `CopilotLink.awaitingReply` decides
+ * when it is on.
+ */
+private struct CopilotTypingIndicator: View {
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0 ..< 3, id: \.self) { index in
+                Circle()
+                    .fill(Theme.faint)
+                    .frame(width: 7, height: 7)
+                    .opacity(animating ? 1 : 0.3)
+                    .scaleEffect(animating ? 1 : 0.7)
+                    .animation(.easeInOut(duration: 0.6)
+                        .repeatForever(autoreverses: true)
+                        .delay(Double(index) * 0.2),
+                        value: animating)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Copilot is replying")
+        .accessibilityIdentifier("copilot.typing")
+        .onAppear { animating = true }
+    }
+}
+
+/**
+ * A command the copilot suggested, with a **Run** button — the way Claude Code
+ * shows a command with a run affordance.
+ *
+ * Asad: *"When the copilot suggests a command to run, show it with a Run button
+ * — tapping it runs the command inside the chat and the output AND full errors
+ * appear IN the chat."* Run hands the command to the copilot to execute (see
+ * `CopilotLink.run`), and the run, the tool row and the reply come back down the
+ * same conversation, which is where the output and any error land — verbatim, in
+ * the copilot's own words, exactly as a `CopilotActionRow` and a reply.
+ *
+ * **Copy is always here; Run only when the wire can carry the command whole.** A
+ * `copilot.say` is one line — `oneUtterance` flattens newlines to spaces — so a
+ * multi-line block is Copy-only rather than run as one wrong line, and a command
+ * is never runnable at all from a phone that may only watch. `runnable` is that
+ * decision, made once.
+ */
+private struct CopilotCommandCard: View {
+    let command: String
+    let language: String?
+    let link: CopilotLink?
+
+    /// One tap, one run. After it, the button says so and disables — running a
+    /// suggested command spends money on the machine, and a card that can be
+    /// pressed twice by a thumb resting on it is a second bill.
+    @State private var ran = false
+
+    private var runnable: Bool {
+        link?.grant.canDirect == true
+            && !command.contains("\n")
+            && command.utf8.count <= Copilot.maxSayBytes
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(command)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Theme.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+            }
+
+            HStack(spacing: 10) {
+                if let language, !language.isEmpty {
+                    Text(language)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                }
+                Spacer(minLength: 0)
+
+                Button {
+                    UIPasteboard.general.string = command
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.secondary)
+                .accessibilityIdentifier("copilot.command.copy")
+
+                if runnable {
+                    Button {
+                        if link?.run(command) == true { ran = true }
+                    } label: {
+                        Label(ran ? "Ran" : "Run", systemImage: ran ? "checkmark" : "play.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+                    .disabled(ran)
+                    .accessibilityIdentifier("copilot.command.run")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.surfaceHigh)
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Theme.hairline, lineWidth: 0.5)
+        )
+        .accessibilityIdentifier("copilot.command")
+    }
+}
+
+/// One piece of a copilot reply: prose, or a command it suggested.
+enum CopilotSegment: Equatable {
+    case prose(String)
+    case command(String, language: String?)
+}
+
+/**
+ * Splitting a reply into its prose and the commands inside it.
+ *
+ * Asad wants a suggested command drawn with a Run button, and the copilot writes
+ * its commands the way Claude does — in fenced code blocks. So this finds the
+ * ``` fences and hands each one back as a `.command`, the prose between them as
+ * `.prose`.
+ *
+ * **Only a closed fence becomes a command.** A streaming answer routinely has a
+ * half-open fence for a second while the closing ``` is still on its way, and a
+ * Run button over a command that is still arriving would run half of it — so an
+ * unclosed fence is left as prose until it closes, and the card appears only
+ * when the whole command is in hand.
+ */
+enum CopilotProse {
+    static func segments(_ text: String) -> [CopilotSegment] {
+        let lines = text.components(separatedBy: "\n")
+        var segments: [CopilotSegment] = []
+        var prose: [String] = []
+
+        func flushProse() {
+            let joined = prose.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { segments.append(.prose(joined)) }
+            prose = []
+        }
+
+        var i = 0
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                let language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                var body: [String] = []
+                var j = i + 1
+                var closed = false
+                while j < lines.count {
+                    if lines[j].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                        closed = true
+                        break
+                    }
+                    body.append(lines[j])
+                    j += 1
+                }
+                if closed {
+                    flushProse()
+                    let command = body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !command.isEmpty {
+                        segments.append(.command(command, language: language.isEmpty ? nil : language))
+                    }
+                    i = j + 1
+                } else {
+                    // Open fence with no close yet: keep the rest as prose.
+                    for k in i ..< lines.count { prose.append(lines[k]) }
+                    i = lines.count
+                }
+            } else {
+                prose.append(lines[i])
+                i += 1
+            }
+        }
+        flushProse()
+        return segments.isEmpty ? [.prose(text)] : segments
+    }
+}
+
+/**
+ * A short clock time under a message.
+ *
+ * The locale's own short time — "9:41 AM" for one phone, "09:41" for another —
+ * because a timestamp read at a glance should look like the phone it is read on.
+ * The formatter is held rather than built per row: one is measurable on a long
+ * conversation, and this one is asked for every bubble on screen.
+ */
+enum CopilotClock {
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
+
+    /// Nil for a zero stamp — an undated transcript line draws no time rather
+    /// than 1970.
+    static func time(_ epochMilliseconds: Double) -> String? {
+        guard epochMilliseconds > 0 else { return nil }
+        return formatter.string(from: Date(timeIntervalSince1970: epochMilliseconds / 1000))
     }
 }
 
