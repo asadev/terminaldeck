@@ -11,10 +11,11 @@
  *
  *  1. Say which shell this is (`installPaths`), because everything below asks
  *     where the files are and `platform/paths.ts` deliberately has no default.
- *  2. Refuse to be the second host for one state directory. Two processes with
- *     one relay identity is two hosts claiming the same name at the rendezvous,
- *     and a phone would reach whichever answered first — an intermittent failure
- *     with no error anywhere.
+ *  2. Be the only host for one state directory — taking it over from a host
+ *     still running here if there is one. Two processes with one relay identity
+ *     is two hosts claiming the same slot at the rendezvous, and they knock each
+ *     other off it on every reconnect, so a phone attaches and drops every few
+ *     seconds with no error anywhere. See `host-eviction.ts`.
  *  3. Build the core and the remote endpoint, which dials the relay on its own.
  *  4. **Restore the sessions that were open**, from launching rather than from a
  *     command. This is the bug class this repository cares most about, and it is
@@ -48,6 +49,7 @@ import {
 } from './control'
 import { createHeadlessHost, type HeadlessHost } from './host'
 import { createHostLifecycle } from './host-lifecycle'
+import { cmdlineIsOurHost, evictStaleHost } from './host-eviction'
 import { hostVersion } from './version'
 
 const platform = currentPlatform()
@@ -99,15 +101,36 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   const stateDir = userDataDir()
   const existing = readDaemonRecord(stateDir)
-  if (existing !== null && processAlive(existing.pid)) {
-    process.stderr.write(
-      `A ${BRAND.name} host is already running here as pid ${existing.pid}.\n` +
-        `Stop it with "${BRAND.id} stop" before starting another.\n`,
-    )
-    return 1
+  if (existing !== null && existing.pid !== process.pid && processAlive(existing.pid)) {
+    // A host is recorded here and still alive. The restart and update paths end
+    // the old host before this one starts, so normally the record names a dead
+    // pid and this is skipped; reaching it means a host is running that this
+    // start was not coordinated with. The one that bites is a host started
+    // outside systemd that reparented to init — it keeps this machine's relay
+    // identity, and two hosts on one identity knock each other off the relay's
+    // single slot, so a phone connects and drops every few seconds forever.
+    // Refusing (the old behaviour) left that host running with no way for a
+    // restart to clear it, so take the directory over instead. See
+    // `host-eviction.ts` for why SIGTERM here is safe even for a systemd host.
+    const outcome = await evictStaleHost(existing.pid, {
+      alive: processAlive,
+      isOurHost: cmdlineIsOurHost,
+      signal: (pid, sig) => process.kill(pid, sig),
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
+    })
+    if (outcome === 'not-ours') {
+      logger.info('headless', 'stale host record names a reused pid; leaving it', {
+        pid: existing.pid,
+      })
+    } else {
+      logger.info('headless', 'took over a running host', { pid: existing.pid, outcome })
+      process.stderr.write(
+        `Took over from a ${BRAND.name} host that was still running as pid ${existing.pid}.\n`,
+      )
+    }
   }
-  // Only reached when nothing live holds this directory, which is what makes it
-  // safe to take the socket file away from a host that died without cleaning up.
+  // Nothing live holds this directory now — safe to take the socket file from a
+  // host that died (or that we just ended) without cleaning up.
   clearDaemonRecord(stateDir, platform)
 
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
