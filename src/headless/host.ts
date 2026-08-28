@@ -59,7 +59,12 @@ import { boundKey, BrowserDrive, OWN_TARGET } from '../main/browser-driver'
 import type { DriveStatus } from '../main/browser-drive'
 import { frontTab, screencastOver, type CastWindow } from '../main/screencast-host'
 import { createHeadlessBrowserControl } from '../main/browser-headless-control'
-import { currentEndpoint, stopDeckControlServer } from '../main/deck-control/server'
+import {
+  currentEndpoint,
+  openStandaloneDeckControlServer,
+  stopDeckControlServer,
+  type StandaloneDeckControlServer,
+} from '../main/deck-control/server'
 import { createSessionTools, type SessionTools } from '../main/deck-control/session-tools'
 import { copilotPaths } from '../main/copilot-home'
 import { createRoutines, type RoutinesHandle } from '../main/routines'
@@ -500,6 +505,21 @@ export async function createHeadlessHost(
   let sessionTools: SessionTools | null = null
 
   /*
+   * The browser-only endpoint `sessionTools` is built over, kept as its own
+   * handle so it can be torn down on the way out.
+   *
+   * A session gets the browser verbs and nothing else. This is the endpoint that
+   * gives it exactly that — a `deck-control` over `browserControl` alone, the
+   * way 0.13.0 wired it — and it is deliberately **separate** from the copilot's
+   * full endpoint below. Folding sessions onto the copilot's endpoint is what
+   * closed every server session's shell on 0.14.0; Asad: *"Normal sessions just
+   * need the browser only … The copilot needs all of them. Keep them separate."*
+   * It is a standalone server rather than `startDeckControlServer` because that
+   * one is the singleton the copilot owns and `currentEndpoint()` returns.
+   */
+  let sessionControl: StandaloneDeckControlServer | null = null
+
+  /*
    * The copilot, once it is assembled — the tools, the run manager, the files.
    *
    * A `let` for the same reason `sessionTools` is one: it is built after the
@@ -870,20 +890,58 @@ export async function createHeadlessHost(
    * rather than being given flags naming a socket that is not there.
    */
   if (options.publicHost === undefined) {
+    /*
+     * The session endpoint and the copilot endpoint, built as **two** servers
+     * and on purpose.
+     *
+     * 0.14.0 collapsed them into one: every session was handed the copilot's
+     * full endpoint, and on a real server that closed the shell the instant it
+     * connected — a regression against 0.13.0, which gave a session a
+     * browser-only `deck-control` of its own. Asad, on the fix: *"Normal
+     * sessions just need the browser only — they don't need anything else. The
+     * copilot needs all of them. Keep them separate."*
+     *
+     * So they are separate again, and independently: a session gets its browser
+     * verbs even if the copilot fails to assemble, exactly as it did before the
+     * copilot existed, and the copilot's absence is the only thing that turns
+     * off the copilot.
+     */
+
+    /*
+     * **The session endpoint.** A `deck-control` over `browserControl` alone —
+     * the six browser verbs and nothing else — which `createSessionTools` then
+     * narrows further to the `SESSION_TOOLS` family per session token. This is
+     * the 0.13.0 wiring restored, and it is a *standalone* server rather than
+     * `startDeckControlServer` so it never becomes the singleton the copilot
+     * owns and `currentEndpoint()` returns.
+     *
+     * A failure to bind is logged and is not fatal: sessions then launch with no
+     * verbs and are told the `early` sentence, exactly as when the endpoint did
+     * not exist.
+     */
     try {
-      /*
-       * The copilot, and the one tool endpoint that serves it and every session
-       * on this host at once.
-       *
-       * This used to start a `deck-control` holding the browser verbs alone —
-       * enough for a session here to open a page, and nothing the owner's phone
-       * could drive. It now builds the *full* control over this host's own core
-       * (`src/headless/copilot.ts`), so the same loopback endpoint answers a
-       * host session's browser verbs (gated to the browser family by the
-       * `SESSION_TOOLS` token `createSessionTools` mints) and a phone's copilot
-       * run's whole catalogue (tier-gated by that device's grant). One
-       * dispatcher, one budget, one action log for both doors.
-       */
+      sessionControl = await openStandaloneDeckControlServer({ control: browserControl })
+      sessionTools = createSessionTools(sessionControl.endpoint, {
+        dir: join(stateDir, 'session-tools'),
+      })
+      logger.info('headless', 'the browser tools endpoint is up', {
+        port: sessionControl.endpoint.port,
+      })
+    } catch (error) {
+      logger.error('headless', 'the browser tools endpoint did not start; sessions here get no verbs', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    /*
+     * **The copilot endpoint.** The *full* control over this host's own core
+     * (`src/headless/copilot.ts`), tier-gated per device by that device's grant.
+     * It serves the owner's copilot run and the routines that run through it, and
+     * never an ordinary session — that is what the browser-only endpoint above is
+     * for. This one is the singleton, so `currentEndpoint()` and the routine
+     * runner below read it.
+     */
+    try {
       headlessCopilot = await startHeadlessCopilot({
         userData: stateDir,
         browserDrive,
@@ -896,15 +954,12 @@ export async function createHeadlessHost(
         announce: () => tellDevices?.(),
       })
       if (headlessCopilot !== null) {
-        sessionTools = createSessionTools(headlessCopilot.endpoint, {
-          dir: join(stateDir, 'session-tools'),
-        })
         logger.info('headless', 'the copilot and its tool endpoint are up', {
           port: headlessCopilot.endpoint.port,
         })
       }
     } catch (error) {
-      logger.error('headless', 'the copilot did not start; sessions here get no verbs and none is offered', {
+      logger.error('headless', 'the copilot did not start; none is offered', {
         error: error instanceof Error ? error.message : String(error),
       })
     }
@@ -1904,6 +1959,10 @@ export async function createHeadlessHost(
     // `killAll` above; this clears the countdowns and the caller-table entries.
     headlessCopilot?.stop()
     sessionTools?.stop()
+    // The session endpoint is this host's own standalone server, not the
+    // singleton, so it is closed here by its handle rather than by
+    // `stopDeckControlServer` below (which closes the copilot's).
+    await sessionControl?.stop().catch(() => undefined)
     await stopDeckControlServer().catch(() => undefined)
     // The server's browser is this host's to end — the CDP pipe closing never
     // kills Chromium, so this is the one place the child processes stop. [wave-2 Lane D]
