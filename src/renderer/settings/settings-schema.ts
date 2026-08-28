@@ -350,50 +350,19 @@ export const SECTIONS = [
     blurb: 'What runs your sessions, the logins it uses, and what is installed.',
   },
   /*
-   * The servers, one at a time, with a pill naming which.
+   * There is no `servers` section here any more, and that is the point.
    *
-   *   > *"build a proper version for scrapping and server control with switching
-   *   > pill just like in coding ai page in settings but build proper settings
-   *   > inside too exactly like local machine, exactly means exactly and all
-   *   > other applicaple places too"*
-   *
-   * ## Why it is a rail entry and not a group inside Coding AI
-   *
-   * On this table's own rule — a section is a *subject*. Coding AI answers
-   * "which AI runs my sessions, as which login, with what installed", and it
-   * already asks that of servers: its `servers` scope lists the coding logins on
-   * all of them, and that stays where it is. This entry answers a different
-   * question about one machine — its identity, the sign-in this computer holds,
-   * the folder its sessions start in, the two permissions it can be given, and
-   * whether anything of ours is installed on it. Four of those five are not
-   * about AI at all, and folding them under "Coding AI" is where somebody stops
-   * finding them.
-   *
-   * It is also the entry that pays for itself in the other direction: every one
-   * of those controls existed already, behind an **Advanced** door on the
-   * server's own page in the Machines panel, which is a screen you reach by
-   * leaving Settings.
-   *
-   * ## What it costs, stated rather than glossed
-   *
-   * It raised the rail's ceiling by one, and it is the **second** entry to do
-   * that on 2026-08-22 — Scraping went in the same day, further down this list.
-   * Both first claimed to be the eleventh, which is the reason no length is
-   * spelled in this file any more. `nothing-dropped.test.tsx` carries the
-   * argument for raising it, beside the ceiling itself and beside the number,
-   * because that is what that ceiling asks of anything that raises it.
+   * It was a rail entry once — a full mirror of a server's own page, pill and
+   * all — built on an earlier ask (*"build proper settings inside too exactly
+   * like local machine"*). Asad reversed that on review: the desktop's server
+   * management was split and confusing across this pane and the Machines page,
+   * so he asked for ONE clear place, like the phone's `ServerDetailView` —
+   * *"one clear server page with install / update / start / stop / remove /
+   * Connect-GitHub / restart right there"*. That place is the server's own page
+   * in the Machines panel (`ServerPage`), which already draws every one of those
+   * controls. Coding AI keeps its `servers` scope (which logins are on a server);
+   * everything else about a server now lives in exactly one place.
    */
-  {
-    id: 'servers',
-    label: 'Servers',
-    /*
-     * "What each of your servers is set to do" was the first draft and it says
-     * *set* twice by the time the reader gets to the first group heading. This
-     * one names the two halves a person arrives with: which machine, and what
-     * about it.
-     */
-    blurb: 'Each server you have added, and what it can be told to do.',
-  },
   /*
    * The id stays `features` and the label says Tools.
    *

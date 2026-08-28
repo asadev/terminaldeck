@@ -38,7 +38,6 @@ import { ToolsSection } from './sections/ToolsSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
-import { ServerControlSection } from './sections/ServerControl'
 import { BrowserSection } from './sections/BrowserSection'
 import { ScrapingSection } from './sections/ScrapingSection'
 import { PowerSection } from './sections/PowerSection'
@@ -94,15 +93,15 @@ const PowerSectionView: ComponentType<SectionProps> = () => <PowerSection />
  */
 const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
 
-/**
- * Wrapped for the fourth time, and for the reason `PowerSectionView` records:
- * this pane resolves the **server** channels off `window.deck` and holds none of
- * this window's values. Handing it `SectionProps` would give it the settings
- * bridge as its own and it would decide this build cannot reach a server while
- * every method sat on the preload — which is the mistake `RemoteSection` shipped
- * once.
+/*
+ * There is no `ServerControlView` here any more.
+ *
+ * A server's settings were a rail entry once — a full mirror of the server's own
+ * page inside this window. Asad consolidated it away: server management now lives
+ * in exactly one place, the server's own page in the Machines panel, so this
+ * window no longer draws a second copy of it. See the note where `servers` used
+ * to be in `settings-schema.ts`.
  */
-const ServerControlView: ComponentType<SectionProps> = () => <ServerControlSection />
 
 /**
  * Wrapped for the third time, and for the strongest version of the reason.
@@ -151,9 +150,6 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   // rename, for the reason the schema gives beside that entry. Accounts and
   // Setup are assembled into it — see the note in `AgentsSection.tsx`.
   agents: AgentsSection,
-  // One server at a time, with the pill naming which. Resolves its own bridge —
-  // see `ServerControlView`.
-  servers: ServerControlView,
   // The id is `features` and the label is "Tools": `App.tsx` names this id and
   // is a file no agent may edit while others are working here.
   features: ToolsSection,
