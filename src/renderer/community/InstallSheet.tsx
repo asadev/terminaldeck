@@ -69,6 +69,16 @@ export interface InstallSheetBodyProps {
   /** Which agents are ticked. The container holds it so a re-read cannot lose it. */
   chosen: readonly ManifestAgent[]
   onChoose(next: readonly ManifestAgent[]): void
+  /**
+   * What the last attempt from this sheet answered, or `''`.
+   *
+   * The sheet deliberately stays open on a refusal, so the choice that produced
+   * it is still there to change. That only helps if the reason is *in* the
+   * sheet: a tampered download was refused with exactly the right sentence and
+   * it was printed on the row **behind the dialog**, where the one person who
+   * needed it could not read a word of it.
+   */
+  said?: string
 }
 
 /**
@@ -79,7 +89,7 @@ export interface InstallSheetBodyProps {
  * no DOM in this project's test setup, so a test that rendered the dialog would
  * be asserting on nothing. This is what a person actually reads.
  */
-export function InstallSheetBody({ item, agents, chosen, onChoose }: InstallSheetBodyProps) {
+export function InstallSheetBody({ item, agents, chosen, onChoose, said = '' }: InstallSheetBodyProps) {
   const presence = new Map(agents.map((one) => [one.id, one]))
   const toggle = (id: ManifestAgent, on: boolean): void => {
     onChoose(on ? [...chosen, id] : chosen.filter((one) => one !== id))
@@ -245,6 +255,14 @@ export function InstallSheetBody({ item, agents, chosen, onChoose }: InstallShee
           <dd>Terminal Deck did not write this and has not run it.</dd>
         </div>
       </dl>
+
+      {/*
+        What the last press answered, if it refused.
+        Last, directly above the button that produced it, in the sheet rather
+        than on the row underneath — a refusal a dialog is covering is a refusal
+        nobody read.
+      */}
+      {said !== '' && <p className="cs-sheet-said">{said}</p>}
     </div>
   )
 }
@@ -281,6 +299,7 @@ export function InstallSheet({
   onChoose,
   onClose,
   onConfirm,
+  said = '',
 }: InstallSheetProps) {
   return (
     <Modal
@@ -312,7 +331,7 @@ export function InstallSheet({
         </>
       }
     >
-      <InstallSheetBody item={item} agents={agents} chosen={chosen} onChoose={onChoose} />
+      <InstallSheetBody item={item} agents={agents} chosen={chosen} onChoose={onChoose} said={said} />
     </Modal>
   )
 }

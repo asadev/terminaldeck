@@ -323,7 +323,19 @@ export async function projectItem(
     sha256: row.artifact?.sha256 ?? '',
     bytes: row.artifact?.bytes ?? 0,
     network: row.network,
-    updatedAt: row.updatedAt,
+    /*
+     * The repository's own push date, not the listing's.
+     *
+     * The row draws this string inside GitHub's cluster — `★ 279,022 · updated
+     * today · 331 open` — so every number in that line has to be GitHub's or the
+     * line is three facts about two different things. The catalogue's own
+     * `updatedAt` is when the *listing* was written, which for a seed catalogue
+     * is the day it was hand-made; drawing it here made a skill last touched in
+     * August read as "updated today", which is the store telling somebody a
+     * stranger's work is fresher than it is. When there are no repository stats
+     * there is no date either, and the row draws none.
+     */
+    updatedAt: row.repoStats?.pushedAt ?? '',
     stars: row.repoStats?.stars ?? -1,
     openIssues: row.repoStats?.openIssues ?? -1,
     /* Ratings are people, and people live in a database nobody has stood up yet.

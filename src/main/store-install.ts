@@ -883,10 +883,32 @@ export function createStoreInstaller(deps: StoreInstallDeps): StoreInstaller {
 
     const opened = readArchive(downloaded.bytes, limits)
     if (!opened.ok) return { ok: false, message: opened.why }
-    const inRepo = stripSingleRoot(opened.files)
-    const files = filesUnder(inRepo, row.source.path)
+    /*
+     * The archive IS the item, and `source.path` is a fact about the repository.
+     *
+     * Both readings were live for a while and they cannot both be: the archive
+     * is either the whole repository at the pinned commit, with the item somewhere
+     * inside it at `source.path`, or it is the item's own subtree with nothing
+     * else in it. This build takes the second, for three reasons.
+     *
+     *  - The digest then covers exactly the bytes that get installed and nothing
+     *    else, which is the stronger promise. Under the other reading the
+     *    fingerprint is over a great deal of code that never lands on the disk.
+     *  - One of the two seed items is a single skill inside a repository with a
+     *    quarter of a million stars. Shipping all of it to install eleven
+     *    markdown files is not a trade anybody would make twice, and it walks
+     *    straight through the size ceilings.
+     *  - `source.path` stays on the row as what it says it is: where in the
+     *    repository this came from, so somebody can open the commit and read the
+     *    same files. That is a fact for a person, not an instruction to a reader.
+     *
+     * The wrapper folder is still stripped, because a host that serves a subtree
+     * as an archive still wraps it, and stripping is detected rather than
+     * predicted — an archive with two things at the top has no wrapper.
+     */
+    const files = stripSingleRoot(opened.files)
     if (files.length === 0) {
-      return { ok: false, message: `This item's archive has nothing at ${row.source.path}.` }
+      return { ok: false, message: 'This item’s archive is empty.' }
     }
 
     /* ---- the manifest, read by the same grammar that read the row ---- */

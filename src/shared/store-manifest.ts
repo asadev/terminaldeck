@@ -545,7 +545,13 @@ export type ManifestParse = { ok: true; manifest: Manifest } | { ok: false; why:
 const SAFE_ID = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/
 const VERSION = /^\d+\.\d+\.\d+$/
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/
-const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/
+/**
+ * A tag: lower-case letters, digits and hyphens.
+ *
+ * Exported because `store-index.ts` holds a catalogue row to the same rule. A
+ * second copy of this expression is a second rule the day one of them changes.
+ */
+export const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/
 const PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]{0,127}(?:@[A-Za-z0-9._-]{1,64})?$/
 const MCP_INPUT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/
 const ARG_LITERAL = /^[A-Za-z0-9._:/@=-]{1,120}$/

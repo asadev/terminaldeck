@@ -237,6 +237,7 @@ export function CommunityDepartment({ api, filter, onFilter, detail, onDetail, o
           agents={view.agents}
           chosen={chosen}
           busy={busy === open.id}
+          said={said[open.id] ?? ''}
           onChoose={setChosen}
           onClose={() => setSheet('')}
           onConfirm={() => install(open.id, chosen)}
@@ -270,6 +271,7 @@ export function CommunityDepartment({ api, filter, onFilter, detail, onDetail, o
           agents={view.agents}
           chosen={chosen}
           busy={busy === sheetItem.id}
+          said={said[sheetItem.id] ?? ''}
           onChoose={setChosen}
           onClose={() => setSheet('')}
           onConfirm={() => install(sheetItem.id, chosen)}

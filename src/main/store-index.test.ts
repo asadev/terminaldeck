@@ -450,3 +450,64 @@ describe('loading the catalogue, on a machine that may be anywhere', () => {
     }
   })
 })
+
+describe('what the indexer already produces', () => {
+  const accepted = (over: Record<string, unknown>): StoreIndex => {
+    const result = checkIndexBytes(good({ items: [{ ...ROW, ...over }] }), options)
+    if (!result.ok) throw new Error(`this catalogue was refused: ${result.why}`)
+    return result.index
+  }
+
+  it('keeps an icon that names one of this app’s own logos', () => {
+    expect(accepted({ icon: 'github' }).items[0].icon).toBe('github')
+  })
+
+  it('refuses an icon that is a link, so a shelf never fetches from a publisher', () => {
+    expect(refusal(good({ items: [{ ...ROW, icon: 'https://acme.example/logo.png' }] }))).toBe(
+      "item 1.icon must name one of this app's own logos, never a link",
+    )
+  })
+
+  it('keeps the host’s own counts, and the date they were read', () => {
+    const stats = {
+      stars: 12,
+      openIssues: 3,
+      pushedAt: '2026-07-01T00:00:00.000Z',
+      readAt: '2026-08-28T00:00:00.000Z',
+    }
+    expect(accepted({ repoStats: stats }).items[0].repoStats).toEqual(stats)
+  })
+
+  it('refuses an unknown key inside repoStats, by name', () => {
+    expect(
+      refusal(
+        good({
+          items: [
+            {
+              ...ROW,
+              repoStats: {
+                stars: 1,
+                openIssues: 0,
+                pushedAt: '2026-07-01T00:00:00.000Z',
+                readAt: '2026-07-01T00:00:00.000Z',
+                forks: 4,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe('item 1.repoStats has a key this app does not know about: forks')
+  })
+
+  it('accepts a row with neither, because a monogram and no counts is an honest row', () => {
+    const item = accepted({ icon: null, repoStats: null }).items[0]
+    expect(item.icon).toBeNull()
+    expect(item.repoStats).toBeNull()
+  })
+
+  it('holds a row’s tags to the very rule the manifest holds a publisher to', () => {
+    expect(refusal(good({ items: [{ ...ROW, tags: ['root cause'] }] }))).toBe(
+      'item 1.tags[0] must be lower-case letters, digits and hyphens',
+    )
+  })
+})

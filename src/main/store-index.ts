@@ -74,6 +74,7 @@ import {
   STORE_KINDS,
   STORE_LICENCES,
   STORE_NEEDS,
+  TAG,
   readInstallBlock,
   type InstallBlock,
   type ManifestAgent,
@@ -538,6 +539,17 @@ function row(where: string, raw: unknown): StoreRow {
   if (raw.tags.length > 12) fail(`${where}.tags may hold at most 12 entries`)
   for (const [index, entry] of raw.tags.entries()) {
     const tag = text(`${where}.tags[${index}]`, entry, 24)
+    /*
+     * The same rule the manifest applies, deliberately restated rather than
+     * loosened. A row that accepted `root cause` while `parseManifest` refuses
+     * it would let an item be *listed* under a tag it could never *declare* — so
+     * the shelf would carry a word the publisher's own file cannot contain, and
+     * the disagreement would only ever show up as an install refusing at the
+     * last moment for a reason nobody could see on the row.
+     */
+    if (!TAG.test(tag)) {
+      fail(`${where}.tags[${index}] must be lower-case letters, digits and hyphens`)
+    }
     if (!tags.includes(tag)) tags.push(tag)
   }
 
@@ -832,10 +844,23 @@ export const httpsFetchIndex: FetchIndex = async (url, limit) => {
     }
     return { ok: true, text: buffer.toString('utf8'), message: '' }
   } catch (error) {
+    /*
+     * One sentence a person can read, not the runtime's word for it.
+     *
+     * Node answers a dead host with `fetch failed`, and that string went
+     * straight onto the screen in red beside the date — three words that tell
+     * somebody who is not a programmer nothing at all except that something is
+     * wrong. The two cases worth separating are the two a person can act on:
+     * the wait ran out, or the machine could not be found. Everything else is
+     * the same sentence without a cause bolted onto it.
+     */
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
     return {
       ok: false,
       text: '',
-      message: error instanceof Error ? `the store could not be reached: ${error.message}` : 'the store could not be reached',
+      message: timedOut
+        ? 'the store did not answer in time'
+        : 'the store could not be reached from this machine',
     }
   }
 }

@@ -239,7 +239,12 @@ export function CommunityRow({ item, busy, said, onOpen, onInstall, onRemove }: 
               <dt>Download</dt>
               <dd>
                 {item.artifactUrl}
-                {item.bytes > 0 ? ` — ${item.bytes.toLocaleString('en-GB')} bytes, exactly` : ''}
+                {/* "exactly 15,422 bytes", not "15,422 bytes, exactly" — the word
+                    belongs in front of the number it qualifies. Read on screen it
+                    landed at the end of a long URL line and looked like a
+                    truncation. The claim itself is the point: a download longer
+                    or shorter than this is refused before it is opened. */}
+                {item.bytes > 0 ? ` — exactly ${item.bytes.toLocaleString('en-GB')} bytes` : ''}
               </dd>
             </div>
           )}

@@ -410,3 +410,13 @@
 .cs-sheet-needs li[data-missing] {
   color: var(--color-critical);
 }
+
+/* The answer to the last press, inside the sheet rather than on the row behind
+   it. Same words and the same weight as `.cs-store-said`, with the space above
+   that separates it from the facts it is not one of. */
+.cs-sheet-said {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
