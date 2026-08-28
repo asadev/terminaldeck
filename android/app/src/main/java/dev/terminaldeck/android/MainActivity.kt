@@ -1331,7 +1331,12 @@ fun TerminalDeckApp(
             val serverId = entry.arguments?.getString(ARG_SERVER_ID).orEmpty()
             val servers by viewModel.serverConnector.state.collectAsStateWithLifecycle()
             val ops = rememberCoroutineScope()
-            LaunchedEffect(serverId) { viewModel.openGitHub() }
+            LaunchedEffect(serverId) {
+                viewModel.openGitHub()
+                // "The relay is the network": ask the linked machine for its host status over the
+                // relay, so the page shows it running even when the SSH address is offline.
+                viewModel.openHostControl()
+            }
             ServerDetailScreen(
                 serverId = serverId,
                 state = servers,
@@ -1357,6 +1362,12 @@ fun TerminalDeckApp(
                 onConnectGitHub = viewModel::connectGitHub,
                 onCancelGitHub = viewModel::cancelGitHub,
                 onDisconnectGitHub = viewModel::disconnectGitHub,
+                // The host over the relay — status, restart, stop. Null when the linked machine is
+                // not connected or is an older host that does not speak the verb, in which case the
+                // page keeps its SSH lifecycle controls.
+                hostControl = state.hostControl,
+                onRestartOverRelay = viewModel::restartHostOverRelay,
+                onStopOverRelay = viewModel::stopHostOverRelay,
             )
         }
 

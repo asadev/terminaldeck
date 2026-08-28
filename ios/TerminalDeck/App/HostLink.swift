@@ -257,6 +257,13 @@ final class HostLink: Identifiable {
     private(set) lazy var github: GitHubLink = GitHubLink(wire: WireProxy { [weak self] message in
         self?.transport?.send(message) ?? false
     })
+    /// The host's own lifecycle over the relay — status, restart, stop. "The
+    /// relay is the network": when a server is a connected machine, its server
+    /// page reaches the host here rather than over an SSH address that can drop.
+    @ObservationIgnored
+    private(set) lazy var hostControl: HostControlLink = HostControlLink(wire: WireProxy { [weak self] message in
+        self?.transport?.send(message) ?? false
+    })
 
     private var bridges: [String: TerminalBridge] = [:]
     /// Confirmed by the host.
@@ -1839,6 +1846,7 @@ final class HostLink: Identifiable {
             devices.welcomed(capabilities: capabilities)
             watch.welcomed(capabilities: capabilities)
             github.welcomed(capabilities: capabilities)
+            hostControl.welcomed(capabilities: capabilities)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -2120,6 +2128,14 @@ final class HostLink: Identifiable {
             // the rid on a state and takes a changed push as-is, so an answer to a
             // question it did not ask is dropped and an unsolicited change lands.
             github.receive(message)
+
+        case .hostState:
+            // The host's own lifecycle over the relay, driven by `HostControlLink`.
+            // It matches the rid, so an answer to a question it did not ask is
+            // dropped. "The relay is the network" — this is the status a server
+            // page shows when its SSH address is offline, and the answer to a
+            // restart/stop it sent over the relay.
+            hostControl.receive(message)
 
         case .tunnelOpened, .tunnelClosed, .netData, .netAck, .netClose:
             break

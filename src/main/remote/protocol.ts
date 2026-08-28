@@ -509,6 +509,30 @@ export const CAPABILITY = {
    * owner's to set, not something a granted folder carries.
    */
   github: 'github',
+  /**
+   * The machine's own lifecycle — its status, and the restart/stop of the host
+   * itself — driven from a phone over the relay.
+   *
+   * **"The relay is the network."** Asad's rule, pinned. A server page reaches
+   * one box by two roads: an SSH address it was added with, and the relay it is
+   * paired over. The SSH address can be a Tailscale name that goes offline on
+   * its own — then the page says "did not answer" even though the box is fully
+   * reachable, its sessions still running, over the public relay. The relay does
+   * not drop like that, and a machine whose sessions work is a machine whose
+   * host is plainly running. So the status a headless server has no screen to
+   * show, and the restart/stop it has no screen to press, are answered here,
+   * over the relay, and fall back to SSH only when the machine is not connected
+   * as one.
+   *
+   * `host.start` is deliberately **not** here: a stopped host is not connected
+   * over the relay, so there is nothing on this wire to start — that verb stays
+   * on SSH. Install and update stay on SSH too, because they replace the very
+   * binary that would answer this.
+   *
+   * Owner-only, withheld from a guest in `capabilitiesFor` on the same question
+   * as `settings` and `github`: restarting the machine is the owner's to do.
+   */
+  hostControl: 'host.control',
   devserver: 'devserver',
   copilot: 'copilot',
   /**
@@ -1034,6 +1058,7 @@ export const CAPABILITIES: string[] = [
    */
   CAPABILITY.credential,
   CAPABILITY.github,
+  CAPABILITY.hostControl,
   CAPABILITY.devserver,
   CAPABILITY.copilot,
   /*
@@ -3662,6 +3687,58 @@ export interface GitHubHostWire {
 }
 
 /**
+ * How the host on a machine is supervised, so a phone can word what a restart
+ * will do rather than guessing.
+ *
+ *  - `systemd` — a systemd **user** unit owns it (`terminaldeck.service`), so a
+ *    restart is `systemctl --user restart` and it comes back on its own.
+ *  - `direct` — it was started by hand or by `nohup` with nothing supervising,
+ *    so a restart re-launches it once the old process has let go.
+ *  - `unknown` — the host could not tell, which a phone shows as a plain restart.
+ */
+export type HostManagedBy = 'systemd' | 'direct' | 'unknown'
+
+/**
+ * The machine's own host, as a phone reads it **over the relay** — the answer to
+ * `host.status`, and the answer a `host.restart` / `host.stop` echoes back.
+ *
+ * It carries only what the host can know about *itself*, in its own process: it
+ * is running (it is answering, so `running` is always true here), what build it
+ * is, how it is supervised, and how long it has been up. It is deliberately not
+ * the machine survey — disk, CPU, services, the package manager — which reads
+ * the whole box and stays on the SSH probe (`ProbeScripts`). "The relay is the
+ * network" covers *is the host alive and can I manage it*; the fuller portrait
+ * of the server underneath it is a different question with a different door.
+ */
+export interface HostControlWire {
+  /** Always true on this wire: the host answered, so it is running. */
+  running: boolean
+  /** The build the host is on, e.g. `0.14.0`. */
+  version: string
+  /**
+   * The relay server address this host prints, when it has one — the same
+   * string a fresh pairing would dial. Empty when the host does not expose it;
+   * a phone reading this is already connected and does not need it to dial.
+   */
+  address: string
+  /** The host process id, so a person reading a log can find it. */
+  pid: number
+  /** When the host process started, epoch milliseconds. */
+  startedAt: number
+  /** How long the host has been up, in seconds. */
+  uptimeSeconds: number
+  /** How the host is supervised — what a restart will actually do. */
+  managed: HostManagedBy
+  /**
+   * A sentence about what a `host.restart` / `host.stop` just set in motion, or
+   * null for a plain `host.status`. The connection drops as the host acts, so
+   * this is the last thing the phone hears — it is the confirmation, sent before
+   * the socket goes.
+   */
+  note: string | null
+}
+
+/**
  * One login on the far machine, as its own account list holds it.
  *
  * `color` is a custom property **name** and never a colour value, exactly as
@@ -4887,6 +4964,35 @@ export type ClientMessage =
    * machine, and the state comes back as `github.state`.
    */
   | { t: 'github.disconnect'; rid: string }
+  /* ---- capability `host.control`. Refused when it is not advertised. ----- */
+  /**
+   * Read this machine's own host — running, version, how it is supervised, how
+   * long it has been up. Answered as `host.state`.
+   *
+   * The whole point of it is the moment the SSH address is dark: a phone whose
+   * server page cannot reach the box over its stored SSH name asks this over the
+   * relay instead, and the box answers because it is plainly there. `rid` names
+   * the ask, the same reason `github.read`'s does.
+   */
+  | { t: 'host.status'; rid: string }
+  /**
+   * Restart the host on this machine. "The relay is the network": a headless
+   * server has no screen to press this on, and its SSH address can be offline
+   * while the relay is not, so the button lives here too.
+   *
+   * The host answers `host.state` with a `note` **before** it acts, because the
+   * restart drops this very connection — a reply after would never arrive. A
+   * systemd-managed host comes back on its own; a directly-started one is
+   * re-launched once the old process lets go.
+   */
+  | { t: 'host.restart'; rid: string }
+  /**
+   * Stop the host on this machine. Answered as `host.state` with a `note` before
+   * the connection drops, the same shape as `host.restart`. There is no
+   * `host.start` on this wire — a stopped host is not connected over the relay,
+   * so bringing one up is left to SSH.
+   */
+  | { t: 'host.stop'; rid: string }
   /* ---- capability `send`. Refused when it is not advertised. ------------- */
   /**
    * Put text into that session **without subscribing to it**.
@@ -5831,6 +5937,18 @@ export type ServerMessage =
    * `github`. A build that never asked for the capability never sees the frame.
    */
   | { t: 'github.changed'; github: GitHubHostWire }
+  /* ---- capability `host.control` ----------------------------------------- */
+  /**
+   * The answer to one `host.status`, `host.restart` or `host.stop`, and only
+   * ever to one. `rid` matches it to the frame that caused it.
+   *
+   * For `restart` and `stop` this is the *last* thing the phone hears on the
+   * connection: the host sends it, carrying the sentence in `host.note`, and
+   * then does the thing that drops the socket. There is no unsolicited "host
+   * changed" push to pair with it — a host that has restarted simply reconnects,
+   * and the phone's own reconnection is the signal, not a frame.
+   */
+  | { t: 'host.state'; rid: string; host: HostControlWire }
   /* ---- capability `send` ------------------------------------------------- */
   /**
    * What happened to one `session.send`, and only ever to one.
@@ -7906,6 +8024,20 @@ export function parseClientMessage(raw: unknown): ParseResult {
       // an `unknown` `parsed.t` does not narrow it to the literal a union member
       // needs, and the four share one body.
       const t = parsed.t as 'github.read' | 'github.connect' | 'github.cancel' | 'github.disconnect'
+      const requestId = id(parsed.rid)
+      if (!requestId) return bad(`${t} without a request id`)
+      return { ok: true, message: { t, rid: requestId } }
+    }
+
+    /* ---- capability `host.control` -------------------------------------- */
+    // Shape only, like `github.*` above: each verb acts on the machine's single
+    // host, so there is nothing a phone supplies but the request id and the
+    // intent. Whether this host can manage its own lifecycle, and whether this
+    // device is one of the owner's own, are the server's questions.
+    case 'host.status':
+    case 'host.restart':
+    case 'host.stop': {
+      const t = parsed.t as 'host.status' | 'host.restart' | 'host.stop'
       const requestId = id(parsed.rid)
       if (!requestId) return bad(`${t} without a request id`)
       return { ok: true, message: { t, rid: requestId } }

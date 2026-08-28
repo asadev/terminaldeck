@@ -110,6 +110,9 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'github.connect': true,
   'github.cancel': true,
   'github.disconnect': true,
+  'host.status': true,
+  'host.restart': true,
+  'host.stop': true,
   'dev.status': true,
   'dev.start': true,
   'copilot.hello': true,
@@ -248,6 +251,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'settings.changed': true,
   'github.state': true,
   'github.changed': true,
+  'host.state': true,
   'session.sent': true,
   'devices.rows': true,
   'devices.revoked': true,
@@ -447,6 +451,13 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'github.connect', rid: 'gh-2' },
   { t: 'github.cancel', rid: 'gh-3' },
   { t: 'github.disconnect', rid: 'gh-4' },
+  // The machine's own host, driven from a phone over the relay: read its status,
+  // restart it, stop it. Each is a request id and nothing else — "the relay is
+  // the network", and there is no address to dial because the phone is already
+  // on it.
+  { t: 'host.status', rid: 'hc-1' },
+  { t: 'host.restart', rid: 'hc-2' },
+  { t: 'host.stop', rid: 'hc-3' },
   { t: 'devices.list', rid: 'dev-1' },
   { t: 'devices.revoke', rid: 'dev-2', device: DEVICE_ID },
   { t: 'window.result', id: 'win-1', ok: true, body: '{"url":"https://example.com"}' },
@@ -1193,6 +1204,36 @@ const VALID_SERVER: ServerMessage[] = [
       pending: null,
       failure: null,
       disconnect: 'Signs this machine out of GitHub locally.',
+    },
+  },
+  // The machine's own host over the relay, in both shapes: a plain status (no
+  // note), and the answer to a restart (a note, sent before the socket drops).
+  {
+    t: 'host.state',
+    rid: 'hc-1',
+    host: {
+      running: true,
+      version: '0.14.0',
+      address: '',
+      pid: 4242,
+      startedAt: 1_900_000_000_000,
+      uptimeSeconds: 3600,
+      managed: 'systemd',
+      note: null,
+    },
+  },
+  {
+    t: 'host.state',
+    rid: 'hc-2',
+    host: {
+      running: true,
+      version: '0.14.0',
+      address: 'terminaldeck://abc.relay.terminaldeck.dev',
+      pid: 4242,
+      startedAt: 1_900_000_000_000,
+      uptimeSeconds: 3600,
+      managed: 'systemd',
+      note: 'Restarting over the relay. It drops for a moment and comes back on its own.',
     },
   },
 

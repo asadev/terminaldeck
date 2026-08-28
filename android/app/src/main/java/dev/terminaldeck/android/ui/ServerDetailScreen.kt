@@ -1,6 +1,7 @@
 package dev.terminaldeck.android.ui
 
 import dev.terminaldeck.android.github.ConnectGitHubView
+import dev.terminaldeck.android.hostcontrol.HostControlView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,6 +105,12 @@ fun ServerDetailScreen(
     onConnectGitHub: () -> Unit = {},
     onCancelGitHub: () -> Unit = {},
     onDisconnectGitHub: () -> Unit = {},
+    // The host over the relay — status, restart, stop. "The relay is the network": null (and drawing
+    // nothing) until the linked machine is connected and advertises `host.control`, in which case
+    // the SSH lifecycle row below withholds its own Restart/Stop so there are never two.
+    hostControl: HostControlView? = null,
+    onRestartOverRelay: () -> Unit = {},
+    onStopOverRelay: () -> Unit = {},
 ) {
     val colors = DeckTheme.colors
     val server = state.servers.firstOrNull { it.id == serverId }
@@ -218,7 +225,30 @@ fun ServerDetailScreen(
                 onRestart = onRestart,
                 onDisconnect = onDisconnect,
                 onRemove = onRemove,
+                // "The relay is the network": when the linked machine answers the relay's own
+                // lifecycle verbs, the section below owns Restart/Stop, so this card withholds its
+                // SSH row rather than draw a second copy of the same verb.
+                relayControlsActive = hostControl != null,
             )
+
+            /*
+             * **Manage the host over the relay** — "the relay is the network."
+             *
+             * The card above reaches this server over its SSH address, which for Asad is a Tailscale
+             * name that goes offline on its own — and then it reports the box as unreachable while
+             * every session on it still runs over the public relay. This section is the other road:
+             * when the server is a connected machine, its status and its restart/stop go over the
+             * relay, independent of the SSH address. It is absent (drawing nothing) until the linked
+             * machine is connected and advertises `host.control`, so an SSH-only server is exactly as
+             * it was — and [HostStepCard] withholds its own SSH Restart/Stop row when this is live.
+             */
+            hostControl?.let {
+                HostRelayControlSection(
+                    view = it,
+                    onRestart = onRestartOverRelay,
+                    onStop = onStopOverRelay,
+                )
+            }
 
             /*
              * **Connect GitHub, right here on the server.**

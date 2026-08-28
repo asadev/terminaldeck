@@ -441,6 +441,17 @@ enum WireCodec {
             }
             return .ok(.githubChanged(github: github), activity: [:])
 
+        /* ---- capability `host.control` ------------------------------------- */
+
+        case "host.state":
+            guard let rid = string(object["rid"]) else {
+                return .failed(reason: "host.state without a request")
+            }
+            guard let host = hostControl(object["host"]) else {
+                return .failed(reason: "host.state without a host object")
+            }
+            return .ok(.hostState(rid: rid, host: host), activity: [:])
+
         /* ---- capability `copilot` ------------------------------------------ */
 
         case "copilot.state":
@@ -1110,6 +1121,19 @@ enum WireCodec {
             object = ["t": "github.cancel", "rid": rid]
         case let .githubDisconnect(rid):
             object = ["t": "github.disconnect", "rid": rid]
+
+        /*
+         * The host's own lifecycle over the relay — read, restart, stop. "The
+         * relay is the network": a request id and nothing else, because there is
+         * no address to dial (the phone is already on it) and each verb acts on
+         * the machine's single host.
+         */
+        case let .hostStatus(rid):
+            object = ["t": "host.status", "rid": rid]
+        case let .hostRestart(rid):
+            object = ["t": "host.restart", "rid": rid]
+        case let .hostStop(rid):
+            object = ["t": "host.stop", "rid": rid]
 
         /*
          * The copilot verbs. Note what is *not* in any of them: a tool id, an

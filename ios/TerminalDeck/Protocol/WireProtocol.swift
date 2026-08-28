@@ -369,6 +369,28 @@ enum WireCapability {
     static let github = "github"
 
     /**
+     * The host owns its own lifecycle, and this phone drives it **over the
+     * relay** — its status, and the restart/stop of the host itself.
+     *
+     * **"The relay is the network."** Asad's rule, pinned. A server page reaches
+     * one box by two roads: an SSH address it was added with, and the relay it
+     * is paired over. The SSH address can be a Tailscale name that drops on its
+     * own — then the page reports the box as unreachable while every session on
+     * it is still running over the relay. The relay does not drop like that, and
+     * a machine whose sessions work is a machine whose host is plainly running.
+     * So the status a headless server has no screen to show, and the restart and
+     * stop it has no screen to press, are answered over these `host.*` frames
+     * when the box is a connected machine, and SSH is the fallback for the case
+     * the relay cannot cover.
+     *
+     * A machine that advertises this speaks `host.status` / `host.restart` /
+     * `host.stop`. There is no `host.start`: a stopped host is not connected over
+     * the relay, so bringing one up stays on SSH. The one screen that drives it
+     * is `HostRelayControlView`, over `HostControlLink`, reading `HostControlWire`.
+     */
+    static let hostControl = "host.control"
+
+    /**
      * The desktop can say what a project's dev server is doing, and start it.
      *
      * Its own name rather than part of `localhost`, and the split is not
@@ -1120,6 +1142,32 @@ enum ClientMessage: Equatable {
     /// `github.state` that reports `connected: false`.
     case githubDisconnect(rid: String)
 
+    /* ---- capability `host.control`. "The relay is the network." ----------- */
+
+    /**
+     * Read this machine's own host over the relay — running, version, how it is
+     * supervised, how long it has been up. Answered with a `host.state`.
+     *
+     * The point of it is the moment the SSH address is dark: a phone whose
+     * server page cannot reach the box over its stored Tailscale name asks this
+     * over the relay instead, and the box answers because it is plainly there.
+     * `rid` is minted here and matched on the way back, the same shape
+     * `github.read` uses.
+     */
+    case hostStatus(rid: String)
+    /**
+     * Restart the host on this machine, over the relay. The answer is a
+     * `host.state` whose `note` is the last thing this phone hears before the
+     * connection drops — a systemd-managed host comes back on its own.
+     */
+    case hostRestart(rid: String)
+    /**
+     * Stop the host on this machine, over the relay. Answered with a `host.state`
+     * carrying a `note` before the drop. There is no `host.start` — a stopped
+     * host is not on the relay, so bringing one up is left to SSH.
+     */
+    case hostStop(rid: String)
+
     /* ---- capability `copilot`. Never sent unless the desktop offered it, and
        never sent unless this device's grant covers it. See `CopilotWire.swift`
        for why the second gate is here as well as on the desktop. ------------ */
@@ -1822,6 +1870,20 @@ enum ServerMessage: Equatable {
      * signed the host out. The same shape of push `settings.changed` gives.
      */
     case githubChanged(github: GitHubHostWire)
+
+    /* ---- capability `host.control` ---------------------------------------- */
+
+    /**
+     * The machine's own host over the relay, the answer to `host.status`,
+     * `host.restart` or `host.stop`. Matched to the ask by `rid`.
+     *
+     * For restart and stop this is the *last* frame this phone hears on the
+     * connection: the host sends it, carrying the sentence in `HostControlWire.note`,
+     * and then does the thing that drops the socket. There is no unsolicited
+     * "host changed" push to pair with it — a restarted host simply reconnects,
+     * and the phone's own reconnection is the signal.
+     */
+    case hostState(rid: String, host: HostControlWire)
 
     /* ---- capability `copilot` --------------------------------------------- */
 

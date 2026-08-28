@@ -249,6 +249,16 @@ export interface HeadlessHostOptions {
    * "the process started" is a different and misleading fact.
    */
   onRelayState?: Parameters<typeof registerRemoteIpc>[1]['onRelayState']
+  /**
+   * The host's own lifecycle — status, restart, stop — as a phone drives it over
+   * the relay. **"The relay is the network."**
+   *
+   * Passed by the daemon (`src/headless/daemon.ts`), which is the one process
+   * that owns this host's shutdown and knows how it is supervised. Absent
+   * everywhere else, and absence is the switch: with no seam, `registerRemoteIpc`
+   * advertises no `host.control` capability and a phone falls back to SSH.
+   */
+  hostLifecycle?: Parameters<typeof registerRemoteIpc>[1]['hostLifecycle']
 }
 
 export interface HeadlessHost {
@@ -1240,6 +1250,16 @@ export async function createHeadlessHost(
       logger.error('headless', 'remote access did not come up at launch', { reason })
     },
     ...(options.onRelayState ? { onRelayState: options.onRelayState } : {}),
+    /*
+     * The host's own lifecycle over the relay — status, restart, stop. "The
+     * relay is the network": a server page whose SSH address is an offline
+     * Tailscale name still reaches the box here, because the box is plainly on
+     * the relay. Passed only by the daemon, which owns the shutdown this drives;
+     * absent is the switch that withholds `host.control` and drops a phone back
+     * to SSH. A lifecycle-adjacent option, next to `onRelayState`/`autoStart`
+     * and deliberately far from the Lane D browser fields below.
+     */
+    ...(options.hostLifecycle ? { hostLifecycle: options.hostLifecycle } : {}),
     ...(options.relayEnabled === undefined ? {} : { relayEnabled: options.relayEnabled }),
     ...(options.readTailnet ? { readTailnet: options.readTailnet } : {}),
     ...(options.serve ? { serve: options.serve } : {}),

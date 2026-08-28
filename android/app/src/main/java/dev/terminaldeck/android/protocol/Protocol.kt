@@ -353,6 +353,24 @@ object Capability {
     const val GITHUB = "github"
 
     /**
+     * The host owns its own lifecycle, and this phone drives it **over the relay** — its status,
+     * and the restart/stop of the host itself.
+     *
+     * **"The relay is the network."** A server page reaches one box by two roads: an SSH address it
+     * was added with, and the relay it is paired over. The SSH address can be a Tailscale name that
+     * drops on its own — then the page reports the box as unreachable while every session on it is
+     * still running over the relay. The relay does not drop like that, and a machine whose sessions
+     * work is a machine whose host is plainly running. So the status a headless server has no screen
+     * to show, and the restart/stop it has no screen to press, are answered over these `host.*`
+     * frames when the box is a connected machine, and SSH is the fallback.
+     *
+     * A machine that advertises this speaks `host.status` / `host.restart` / `host.stop`. There is no
+     * `host.start`: a stopped host is not connected over the relay. Not claimed back in [CLAIMED] —
+     * there is no unsolicited push to hear; a restarted host simply reconnects.
+     */
+    const val HOST_CONTROL = "host.control"
+
+    /**
      * The roster of every device signed in here, and the one verb that takes one away.
      *
      * A desktop lists it in `welcome.capabilities` for one of the owner's own devices only — never a

@@ -190,6 +190,7 @@ import {
 // sockets a different object from the one sessions are keyed against.
 import type { CredentialMessage, CredentialProxy } from './credentials'
 import type { GitHubHostAccess } from './host-github'
+import { hostControlWire, type HostLifecycle } from './host-lifecycle'
 // Type-only for the same reason again, plus one of its own: `dev-server.ts`
 // reads `package.json` files off the disk, and a socket server whose module
 // graph reaches `node:fs` is a socket server that has to be tested with a
@@ -1206,6 +1207,18 @@ export interface RemoteEndpointOptions {
    * way its GitHub gets connected at all.
    */
   hostGitHub?: GitHubHostAccess
+  /**
+   * The machine's own host lifecycle — status, restart, stop — as a phone drives
+   * it over the relay. "The relay is the network": a headless server's SSH
+   * address can be an offline Tailscale name while the relay is fine, so the
+   * status and the controls it has no screen for are answered here too.
+   *
+   * **Optional, and absent is the switch**, the same negotiation `hostGitHub`
+   * gets: a host built without it never advertises `host.control`, so a phone
+   * draws no relay controls and falls back to SSH. The headless daemon supplies
+   * it; a desktop (its own screen) and the public demo box do not.
+   */
+  hostLifecycle?: HostLifecycle
   /**
    * Is this device one of the owner's own, rather than a guest?
    *
@@ -2353,6 +2366,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // narrows it further to the owner's own devices; this is only whether the
     // host speaks it at all.
     if (name === CAPABILITY.github) return options.hostGitHub !== undefined
+    // The host's own lifecycle, gated on the thing that makes it possible: a
+    // lifecycle seam that can restart/stop this process and report its status. A
+    // host without one — a desktop, the public box — does not advertise
+    // `host.control`, so a phone draws no relay controls and stays on SSH.
+    // `capabilitiesFor` narrows it further to the owner's own devices.
+    if (name === CAPABILITY.hostControl) return options.hostLifecycle !== undefined
     // Same rule once more: the roster is the thing that makes the feature
     // possible, so a host with none does not advertise `devices` and a phone
     // never draws a device screen or sends a frame this endpoint would refuse.
@@ -2697,6 +2716,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // stripped here so the capability never even welcomes them, the same as
     // `settings`.
     if (!ownDevice(deviceId)) withheld.push(CAPABILITY.github)
+    // And `host.control` with it, on the same question: restarting or stopping
+    // this machine's host is an act on the machine, not on a folder somebody was
+    // lent. A guest that could press Restart could take the box down under
+    // everyone. Stripped here so a guest is never welcomed the capability, the
+    // same as `settings` and `github` — no push frame corrects a welcome later.
+    if (!ownDevice(deviceId)) withheld.push(CAPABILITY.hostControl)
     // And `watch` with them, and for the same reason (wave-3): watching a window
     // is seeing the owner's signed-in browser — his mail, his bank — which is as
     // much an owner act as clicking in it, and no push frame could correct a
@@ -5977,6 +6002,60 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   }
 
   /**
+   * Serve one `host.status`, `host.restart` or `host.stop`.
+   *
+   * "The relay is the network." A phone whose server page cannot reach the box
+   * over its stored SSH address asks the box directly, over the relay it is
+   * already paired on, and the box answers because it is plainly there.
+   *
+   * The order for the two mutating verbs matters and is the same order the local
+   * `stop` on the control socket takes: read the status of the still-running
+   * host, send the answer **first** with its `note`, and only then let the act
+   * that drops this connection run. A reply written after the restart would land
+   * on a socket that has gone, and the phone would report a host that "did not
+   * answer" for a restart that worked perfectly.
+   */
+  async function hostControlServe(
+    connection: LiveConnection,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'host.status' | 'host.restart' | 'host.stop' }>,
+  ): Promise<void> {
+    const lifecycle = options.hostLifecycle
+    if (!lifecycle || !advertised.includes(CAPABILITY.hostControl)) {
+      // `unavailable`, not `unauthorized`: the device may ask, this build has no
+      // lifecycle seam to answer — a desktop is its own screen, the demo box has
+      // no owner — and the two have different remedies.
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: `This ${machineNoun(currentPlatform())} does not manage its host from here.`,
+      })
+      return
+    }
+    if (!ownDevice(deviceId)) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Only this machine’s own devices manage its host.',
+      })
+      return
+    }
+
+    // The status is read while the host is still up — true for all three verbs,
+    // because restart and stop only *schedule* their act (see `HostLifecycle`),
+    // so the process is alive at the moment its own facts are gathered.
+    const note =
+      message.t === 'host.restart'
+        ? await lifecycle.restart()
+        : message.t === 'host.stop'
+          ? await lifecycle.stop()
+          : null
+    const facts = await lifecycle.status()
+    if (!live.has(connection.id)) return
+    send(connection, { t: 'host.state', rid: message.rid, host: hostControlWire(facts, note) })
+  }
+
+  /**
    * Serve one `usage.read`.
    *
    * ## The same two doors, and the second one is still the one that matters
@@ -6845,6 +6924,22 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'error',
             code: 'unavailable',
             message: 'This machine’s GitHub sign-in could not be reached.',
+          })
+        })
+        return
+      case 'host.status':
+      case 'host.restart':
+      case 'host.stop':
+        // Not awaited, the same as `github.*` above: a socket that stopped
+        // reading while a restart scheduled itself would freeze every session on
+        // the connection in the moment before it drops anyway.
+        void hostControlServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] a host lifecycle request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'This machine’s host could not be reached.',
           })
         })
         return
@@ -8511,6 +8606,13 @@ export interface RemoteIpcDeps {
   /** The machine's own GitHub login, driven from a phone. Absent is the switch. */
   hostGitHub?: GitHubHostAccess
   /**
+   * The machine's own host lifecycle — status, restart, stop — driven from a
+   * phone over the relay. Absent is the switch: a host that passes none
+   * advertises no `host.control` and answers the verbs with nothing. The
+   * headless daemon passes it; a desktop and the public box do not.
+   */
+  hostLifecycle?: HostLifecycle
+  /**
    * Which of this machine's logins each device may use — the third axis.
    *
    * Passed in for exactly the reason `folders` and `sessionGrants` are: the
@@ -9227,6 +9329,10 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
      */
     ...(deps.serverSettings ? { serverSettings: deps.serverSettings } : {}),
     ...(deps.hostGitHub ? { hostGitHub: deps.hostGitHub } : {}),
+    // The host's own lifecycle over the relay, on the same rule: absent means
+    // this host does not advertise `host.control`, so a phone draws no relay
+    // controls and stays on SSH. Only the headless daemon passes it.
+    ...(deps.hostLifecycle ? { hostLifecycle: deps.hostLifecycle } : {}),
     /*
      * And whether a device is one of his own, which decides whether it may
      * manage this machine's logins at all.

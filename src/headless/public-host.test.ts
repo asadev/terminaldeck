@@ -369,6 +369,15 @@ describe('what a public host offers', () => {
        * withheld twice, the belt-and-braces `copilot` gets.
        */
       CAPABILITY.github,
+      /*
+       * `host.control` is withheld for the same reason `github` above it is: it
+       * restarts and stops the *machine's* host, and the demo box is a shared
+       * machine handed to a stranger for the App Store review. A visitor who
+       * could press Restart would take the box down under everyone on it. The
+       * public assembly also passes no `hostLifecycle`, so it could not
+       * advertise it even if this list let it — withheld twice.
+       */
+      CAPABILITY.hostControl,
       // `devserver` joined this list the day it was built, and it is exactly the
       // kind of capability this test exists to catch. It reads a `package.json`
       // and then *runs a command out of it* — on a box that is handed to
