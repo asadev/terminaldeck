@@ -55,6 +55,7 @@ function manifest(over: Record<string, unknown>): string {
     delivery: 'repo',
     pricing: { model: 'free', note: null, url: null },
     licenceEnv: null,
+    aiFile: null,
     links: { repo: 'https://github.com/commons/items', home: null, docs: null },
     needs: [],
     version: '1.0.0',

@@ -82,6 +82,7 @@ function manifestFor(options: ItemOptions): string {
     delivery: 'repo',
     pricing: { model: 'free', note: null, url: null },
     licenceEnv: null,
+    aiFile: null,
     links: { repo: 'https://github.com/pub/thing', home: null, docs: null },
     needs: [],
     install: options.install,

@@ -532,6 +532,15 @@ export interface Manifest {
   pricing: ManifestPricing
   /** One environment variable name this item reads, or null. */
   licenceEnv: string | null
+  /**
+   * A plain-text or markdown file in the item's own tree, written for AI readers.
+   *
+   * The publisher's own words about their own product, served by the store at
+   * `/@publisher/id/llms.txt` so an assistant reading the listing page is handed
+   * the description its author wrote rather than one scraped off the markup.
+   * Null when they supplied none, or typed one into the publish form instead.
+   */
+  aiFile: string | null
   links: ManifestLinks
   needs: readonly StoreNeed[]
   /** Absent for `tool`, and for anything delivered off-site. */
@@ -861,6 +870,7 @@ export function parseManifest(bytes: string, expected: { publisher: string; id: 
       'delivery',
       'pricing',
       'licenceEnv',
+      'aiFile',
       'links',
       'needs',
       'install',
@@ -930,6 +940,12 @@ export function parseManifest(bytes: string, expected: { publisher: string; id: 
       fail('licenceEnv must be an environment variable name, in capitals')
     }
 
+    const aiFile =
+      raw.aiFile === undefined || raw.aiFile === null ? null : insidePath('aiFile', raw.aiFile, false)
+    if (aiFile !== null && !(aiFile.toLowerCase().endsWith('.txt') || aiFile.toLowerCase().endsWith('.md'))) {
+      fail('aiFile must be a .txt or a .md file')
+    }
+
     if (!isRecord(raw.links)) fail('links must be an object')
     onlyKeys('links', raw.links, ['repo', 'home', 'docs'])
     const links: ManifestLinks = {
@@ -985,6 +1001,7 @@ export function parseManifest(bytes: string, expected: { publisher: string; id: 
         delivery,
         pricing: { model, note, url },
         licenceEnv,
+        aiFile,
         links,
         needs,
         install,
