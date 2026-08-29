@@ -1371,6 +1371,7 @@ function rowFromRecord(record: InstalledRecord): StoreRow {
        star count it had the day it was installed would be a number about a
        repository nobody has looked at since. */
     icon: null,
+    ai: null,
     repoStats: null,
     network: [],
     publishedAt: record.installedAt,

@@ -39,6 +39,7 @@ function row(over: Partial<StoreRow> = {}): StoreRow {
     artifact: { url: 'https://x/t.tgz', sha256: 'b'.repeat(64), bytes: 10, files: 1, unpacked: 20 },
     install: { kind: 'skill', dir: '.' },
     icon: null,
+    ai: null,
     repoStats: null,
     network: [],
     publishedAt: '2026-01-01T00:00:00.000Z',

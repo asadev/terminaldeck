@@ -510,4 +510,44 @@ describe('what the indexer already produces', () => {
       'item 1.tags[0] must be lower-case letters, digits and hyphens',
     )
   })
+
+  /*
+   * The address of the publisher's own words for an AI reader.
+   *
+   * The store serves one plain-text file per listing, and the row carries where
+   * it is rather than what it says: 16 kB of prose per row would be most of a
+   * signed catalogue that is cached and read on a phone. What matters here is
+   * that this is the ONE field on a row naming a page rather than bytes pinned by
+   * a digest — so a catalogue we signed could otherwise hand a reader to whoever
+   * holds a domain this week, and it is held to our own.
+   */
+  it('takes the address of a listing’s own file for AI readers', () => {
+    expect(accepted({ ai: 'https://terminaldeck.dev/@acme/pr-review/llms.txt' }).items[0].ai).toBe(
+      'https://terminaldeck.dev/@acme/pr-review/llms.txt',
+    )
+  })
+
+  it('accepts a row that has none, because most publishers will not write one', () => {
+    expect(accepted({ ai: null }).items[0].ai).toBeNull()
+    /* And a catalogue written before this field existed, which has no key at all. */
+    expect(checkIndexBytes(good({ items: [ROW] }), options).ok).toBe(true)
+  })
+
+  it('refuses to send a reader anywhere but our own domain for it', () => {
+    expect(refusal(good({ items: [{ ...ROW, ai: 'https://terminaldeck.dev.evil.example/x/llms.txt' }] }))).toBe(
+      'item 1.ai must be an https address on terminaldeck.dev',
+    )
+  })
+
+  it('refuses one that is not https', () => {
+    expect(refusal(good({ items: [{ ...ROW, ai: 'http://terminaldeck.dev/@acme/x/llms.txt' }] }))).toBe(
+      'item 1.ai must be an https address on terminaldeck.dev',
+    )
+  })
+
+  it('refuses one that is not a web address at all', () => {
+    expect(refusal(good({ items: [{ ...ROW, ai: 'javascript:alert(1)' }] }))).toBe(
+      'item 1.ai must be an https address on terminaldeck.dev',
+    )
+  })
 })

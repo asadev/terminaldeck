@@ -131,6 +131,7 @@ function makeItem(options: ItemOptions): { archive: Buffer; row: StoreRow } {
     install: parsedInstall.install,
     network: [],
     icon: null,
+    ai: null,
     repoStats: null,
     publishedAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-08-01T00:00:00.000Z',

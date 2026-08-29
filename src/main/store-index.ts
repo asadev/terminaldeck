@@ -175,6 +175,15 @@ export interface StoreRow {
   network: readonly string[]
   /** A key into the app's own logo table, never a URL. Null for a monogram. */
   icon: string | null
+  /**
+   * Where this listing's own description for AI readers is served, or null.
+   *
+   * A URL and not the text: the catalogue is signed, cached and read on a phone,
+   * and 16 kB of prose per row would be most of the file. Null when the publisher
+   * wrote nothing, so a screen never offers an address that answers "there is
+   * nothing here".
+   */
+  ai: string | null
   /** The host's own counts, or null when the indexer could not read them. */
   repoStats: StoreRepoStats | null
   publishedAt: string
@@ -418,6 +427,7 @@ function row(where: string, raw: unknown): StoreRow {
     'artifact',
     'install',
     'icon',
+    'ai',
     'network',
     'repoStats',
     'publishedAt',
@@ -522,6 +532,29 @@ function row(where: string, raw: unknown): StoreRow {
     }
   }
 
+  /*
+   * The address of the publisher's own words for an AI reader, or nothing.
+   *
+   * https only, and on terminaldeck.dev. The catalogue is signed by us and this
+   * is the one field on a row that names a page rather than bytes we pinned by
+   * digest, so a row that could point it anywhere would be a signed row handing
+   * a reader to whoever holds a domain this week. Everything else about this
+   * file already lives on our side; the URL has no reason to leave it.
+   */
+  let ai: string | null = null
+  if (raw.ai !== undefined && raw.ai !== null) {
+    ai = text(`${where}.ai`, raw.ai, 300)
+    let parsed: URL | null = null
+    try {
+      parsed = new URL(ai)
+    } catch {
+      parsed = null
+    }
+    if (parsed === null || parsed.protocol !== 'https:' || parsed.hostname !== 'terminaldeck.dev') {
+      fail(`${where}.ai must be an https address on terminaldeck.dev`)
+    }
+  }
+
   let repoStats: StoreRepoStats | null = null
   if (raw.repoStats !== undefined && raw.repoStats !== null) {
     if (!isRecord(raw.repoStats)) fail(`${where}.repoStats must be an object`)
@@ -575,6 +608,7 @@ function row(where: string, raw: unknown): StoreRow {
     artifact,
     install,
     icon,
+    ai,
     network,
     repoStats,
     publishedAt: stamp(`${where}.publishedAt`, raw.publishedAt),
