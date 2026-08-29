@@ -26,8 +26,15 @@ describe('the keys this build will believe a catalogue from', () => {
     expect(STORE_KEYS).toHaveLength(2)
   })
 
-  it('leaves the production slot empty rather than inventing a key nobody holds', () => {
-    expect(STORE_KEYS[0]).toBeNull()
+  it('carries the production key in the first slot, and it is not one anybody can recompute', () => {
+    const live = STORE_KEYS[0]
+    expect(live).not.toBeNull()
+    expect(live?.id).toBe('td-store-1')
+    expect(live?.hex).toMatch(/^[0-9a-f]{64}$/)
+    /* The whole point of slot one: unlike the development key, its private half
+     * cannot be derived from anything printed in this repository. If these ever
+     * matched, the production catalogue would be forgeable by any reader. */
+    expect(live?.hex).not.toBe(devKeyFromPhrase(DEV_KEY_PHRASE))
   })
 
   it('carries the development key in the second slot, and it is the one the phrase makes', () => {

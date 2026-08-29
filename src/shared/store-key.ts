@@ -74,14 +74,27 @@ export const DEV_KEY_PHRASE = 'terminaldeck commons local development key'
  * track of which one is signing.
  */
 export const STORE_KEYS: readonly [StoreKey | null, StoreKey | null] = Object.freeze([
-  null,
+  Object.freeze({
+    id: 'td-store-1',
+    hex: '66d8a2ecd199a16c8080c00e108911034d9b93932203ec8037d1fb4543257c34',
+    because:
+      'the production key: it signs the catalogue served from https://terminaldeck.dev/store. ' +
+      'Its private half was generated on 29 August 2026, exists in exactly one place — ' +
+      'credentials/terminaldeck-store-signing-key.json, mode 0600, on the machine that signs — ' +
+      'and has never been in this repository, a transcript, or the site repo.',
+  }),
   Object.freeze({
     id: 'td-store-dev-1',
     hex: '09e1704496b19517e5376f24700f45eb9f95d322993624013756c6542b7e2e80',
     because:
       'the local development key: it signs the hand-written index served from this machine, ' +
       'its private half is derivable by anyone from DEV_KEY_PHRASE, and it must never sign ' +
-      'a catalogue anybody else fetches. Delete it in the same commit that fills slot one.',
+      'a catalogue anybody else fetches. DELETE THIS SLOT IN THE RELEASE THAT SHIPS COMMONS. ' +
+      'Slot one was filled on 29 August 2026 and the live catalogue is signed by it; this key ' +
+      'now only serves local work, and four test files still build on it (store-key.test.ts, ' +
+      'store-index.test.ts, store-install.proof.test.ts and this slot itself), which is why it ' +
+      'outlived the commit that filled slot one. A shipped build that carries it would believe ' +
+      'a catalogue any reader of DEV_KEY_PHRASE can forge.',
   }),
 ])
 
