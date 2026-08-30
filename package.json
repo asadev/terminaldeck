@@ -1,7 +1,7 @@
 {
   "name": "terminaldeck",
   "version": "0.11.0",
-  "description": "Run your coding agents on one deck — sessions, browsers, cost and context in a single window.",
+  "description": "Run your coding agents on one deck \u2014 Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
     "name": "Asad Iqbal",
@@ -82,15 +82,27 @@
     "url": "https://github.com/asadev/terminaldeck.git"
   },
   "keywords": [
-    "claude",
     "claude-code",
-    "ai-agents",
-    "terminal",
-    "ide",
-    "electron",
+    "claude-code-gui",
+    "claude",
+    "codex-cli",
     "codex",
-    "gemini",
+    "gemini-cli",
+    "ai-agents",
+    "ai-coding-assistant",
     "coding-agent",
-    "developer-tools"
-  ]
+    "agentic-ai",
+    "agent-orchestration",
+    "multi-agent",
+    "llm",
+    "mcp",
+    "developer-tools",
+    "desktop-app",
+    "electron",
+    "terminal",
+    "ide"
+  ],
+  "bugs": {
+    "url": "https://github.com/asadev/terminaldeck/issues"
+  }
 }

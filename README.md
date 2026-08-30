@@ -1,31 +1,66 @@
 # Terminal Deck
 
-A desktop workspace for running AI coding agents.
+A desktop workspace for AI coding agents. Run Claude Code, Codex CLI and Gemini
+CLI sessions side by side in one window, see which ones are working and which
+are waiting on you, and reach any of them from your phone.
 
-Run several Claude Code, Codex or Gemini sessions side by side, see at a glance
-which ones are working and which are waiting on you, and know what they cost.
+Free and MIT-licensed. No account, no telemetry, no analytics. macOS and Windows
+get a window; Linux runs the same core as a headless host with no Electron in it.
 
-[terminaldeck.dev](https://terminaldeck.dev) — the site lives in its own
-repository, `asadev/terminaldeck-site`, because it changes for its own reasons.
-Its CI checks out this repo and fails any page describing a feature nothing
-here can reach.
+**[terminaldeck.dev](https://terminaldeck.dev)** ·
+[Download](https://terminaldeck.dev/download.html) ·
+[Docs](https://terminaldeck.dev/docs) ·
+[Store](https://terminaldeck.dev/store/) ·
+[Help](https://terminaldeck.dev/faq)
 
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![Platform: macOS, Windows, Linux headless](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20(headless)-lightgrey.svg)
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
-<!--
-  SCREENSHOT PLACEHOLDER — add before publishing.
-  Save a window shot to docs/screenshot.png and replace this comment with:
-  ![Terminal Deck](docs/screenshot.png)
-  Take it with two live sessions in different states so the status dots read,
-  and take a second one in light mode for docs/screenshot-light.png.
--->
+## How it works, in the parts that are not obvious
 
-> **A screenshot goes here.** Not committed yet — see the comment in this file's
-> source for what it should show.
+Most of this is not visible from a feature list, so it is written out plainly.
+Every claim here is a thing in this repository, and the file is named.
 
----
+- **The status dot is read off the screen, not off the process.** Each session's
+  output is fed to a headless terminal emulator in the main process, and what
+  that emulator has drawn is classified into working, waiting, needs-input or
+  exited. It is therefore accurate for tabs you are not looking at, and it
+  survives a CLI repainting its own interface — which a process-state check
+  cannot do, because a CLI waiting on you and a CLI thinking look identical from
+  outside.
+
+- **Usage is read out of Claude Code's own JSONL transcripts** — tokens, cache
+  hit rate, and how much of the context window is left — rather than being
+  counted here or asked for over an API.
+
+- **It shows no prices, deliberately.** A per-token figure misleads somebody on
+  a subscription, and a subscription figure cannot be computed from anything any
+  provider publishes. A pricing display was built and then removed; there is no
+  dollar figure anywhere in the app.
+
+- **The copilot is a real session, not a special case.** The assistant that
+  works the app itself runs in the same sandbox as any other session, addressed
+  the same way, with routines that fire on an event — a session finishing, git
+  state changing, a file changing — rather than on a clock.
+
+- **Your phone reaches your desktop with nothing to set up.** No port
+  forwarding, no VPN, nothing on anybody's network. Both ends dial out to a
+  rendezvous server that staples the two sockets together and carries a Noise IK
+  channel it holds no key for. It keeps no accounts and no database, and maps a
+  host name to a socket in memory only.
+
+- **The embedded browser can be driven by an agent, and hands the page back the
+  instant a human touches it.** Clicking an element sends the agent a CSS
+  selector rather than your description of what you clicked.
+
+- **Nothing here handles your API keys or logins.** It launches the CLI you
+  already have and inherits whatever authentication that CLI already uses.
+
+- **A Kanban board was built and then deleted, code and all** — a board is a
+  thing you keep up to date by hand, and nothing else in this app asks that.
+  The QR code and the pairing link went the same way; pairing is six digits
+  shown on the desktop and approved there.
 
 ## Why
 
@@ -36,20 +71,45 @@ your files when it decides to do something drastic.
 
 ## Status
 
-**Alpha**, and honest about it. It runs and is used daily on macOS, and the mac
-build is unsigned — the signing chain works end to end but the certificate needs
-one interactive sign-in that has not happened, so the first launch still needs
-the step below.
+**Alpha**, and specific about what that means. Version 0.15.0 is published for
+both desktop platforms.
 
-Windows is packaged in CI and parts of it have been measured on a real Windows
-machine — the localhost tunnel against `::1`, and silent updates. Nothing there
-is used daily. Linux has the headless host and no window.
+- **macOS**, Apple silicon only. Signed with an Apple Developer ID certificate
+  and **not notarised**, so the first launch needs one trip through System
+  Settings — see [Install](#install). There is no Intel build: macOS 27 does not
+  run on Intel Macs at all.
+- **Windows**, x64 only, as an installer and a portable `.exe`, **not signed**,
+  so the first launch warns once. It is packaged natively in CI and has been run
+  on a real Windows 11 machine — it installs, launches, opens projects, starts
+  sessions both agent and plain shell, and remote access works there. The whole
+  test suite runs on a Windows runner in CI and gates the installer. In-place
+  updating works, and the localhost tunnel works against `::1`, which is where
+  most dev servers on Windows actually bind. Windows on ARM runs the x64 build
+  under emulation.
+- **Linux** has no window. It has the headless host — plain Node, no Electron,
+  no GPU — which is what makes a Linux server or a WSL distribution a machine
+  your phone or your desktop can open a session on. One line installs it:
+  `curl -fsSL https://terminaldeck.dev/install.sh | sh`. It has been left
+  running in WSL under a user service holding real agent sessions.
 
-**The largest features in this repository are not in any released build.**
-Machine-to-machine pairing, per-device folder grants, the credential proxy, WSL
-sessions, the headless host and the feature store are all in `main` and none of
-them is in a tag. See [Unreleased](CHANGELOG.md) before believing a release does
-anything described below.
+**Not built yet:** notarisation on macOS and a Windows signing certificate;
+translations; voice dictation, so the microphone is off by default and the app
+hands over to the operating system's own dictation; an App Store release of the
+iPhone client, which is on TestFlight, internal testing only; and a Play listing
+for the Android client, whose signed APK ships with every release but cannot
+update itself without one.
+
+Machine-to-machine pairing has been run end to end with both ends in one macOS
+process on loopback. A Mac has never talked to a Windows PC.
+
+[CHANGELOG.md](CHANGELOG.md) is grouped by what changed rather than by commit
+order, and its **Unreleased** section is the honest answer to whether a tag
+contains the thing you just read about.
+
+**A note on this branch.** Releases are tags, and `v0.15.0` is the newest. This
+branch trails it: development happens on a working branch and lands here when a
+batch is released, so the code you are reading may be older than the app you can
+download. `git checkout v0.15.0` is what shipped.
 
 ## Requirements
 
@@ -113,8 +173,8 @@ each with a `.blockmap`. Named from the slug, so no download URL contains an
 escaped space:
 
 ```
-terminaldeck-0.1.0-arm64.dmg   114 MiB
-terminaldeck-0.1.0-arm64.zip   114 MiB
+terminaldeck-0.15.0-arm64.dmg   114 MiB
+terminaldeck-0.15.0-arm64.zip   114 MiB
 ```
 
 …plus `latest-mac.yml`, the update manifest. `npm run release:check` verifies
@@ -167,8 +227,6 @@ you switch on first — see [Choosing what the app is](#choosing-what-the-app-is
 - Titles derived from the task rather than the folder name
 - Unread markers when output arrives on a background tab
 - Desktop notifications and sounds when a session finishes or needs you
-- **Chat mode** — a message view over the same session, if you would rather type
-  into a composer than a terminal
 
 ### Cost and context
 
