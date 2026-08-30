@@ -1,0 +1,92 @@
+# Terminal Deck
+
+> A desktop workspace for AI coding agents. It runs Claude Code, Codex CLI and
+> Gemini CLI — or any agent you add by naming its command — as real terminal
+> sessions in one window, with a tab and a live status dot per session, and the
+> same sessions reachable from a phone or a browser. Free, MIT-licensed, no
+> account, no telemetry, no analytics. macOS and Windows have a window; Linux
+> runs the same core as a headless host with no Electron in it. Version 0.15.0.
+
+This file is the repository's index. The site keeps a fuller one:
+https://terminaldeck.dev/llms.txt is a short index of every page, and
+https://terminaldeck.dev/llms-full.txt is every page as one markdown file.
+
+## What it is
+
+One window that runs coding agents as real processes on pseudo-terminals.
+Nothing is reimplemented and nothing sits between you and the CLI: whatever
+`claude`, `codex` or `gemini` does in your own terminal it does here, including
+anything a version released after this app gains.
+
+## The parts that are not obvious from a feature list
+
+- The status dot is read off the SCREEN, not off the process. Each session's
+  output is fed to a headless terminal emulator in the main process, and what
+  that emulator has drawn is classified into working, waiting, needs-input or
+  exited. It is therefore accurate for tabs nobody is looking at, and it
+  survives a CLI repainting its own interface — which a process-state check
+  cannot do, because a CLI waiting on a human and a CLI thinking look identical
+  from outside.
+- Token use, cache hit rate and context-window pressure are read out of Claude
+  Code's own JSONL transcripts, not counted here and not asked for over an API.
+- There is no dollar figure anywhere in the app, deliberately. A per-token price
+  misleads somebody on a subscription and a subscription price cannot be
+  computed from anything any provider publishes. A pricing display was built and
+  then removed.
+- The copilot — the assistant that works the app itself — is a real session in
+  the same sandbox as any other, with routines that fire on an event (a session
+  finishing, git state changing, a file changing) rather than on a clock.
+- A phone reaches a desktop with no port forwarding, no VPN and nothing to set
+  up on anybody's network: both ends dial out to a rendezvous server that
+  staples the two sockets together and carries a Noise IK channel it holds no
+  key for. It keeps no accounts and no database and maps a host name to a socket
+  in memory only.
+- The embedded browser can be driven by an agent through the browser's own
+  debugging protocol and hands the page back the instant a human touches it.
+  Clicking an element sends the agent a CSS selector rather than a description
+  of what was clicked.
+- Nothing here handles API keys or logins. It launches the CLI that is already
+  installed and inherits whatever authentication that CLI already uses.
+- A Kanban board was built and then deleted, code and all, because a board is a
+  thing kept up to date by hand and nothing else in the app asks that. The QR
+  code and the pairing link went the same way: pairing is six digits shown on
+  the desktop and approved there.
+
+## Where things are
+
+- [README.md](README.md): what it is, what ships today, how to install it and
+  how to build it from source.
+- [CHANGELOG.md](CHANGELOG.md): grouped by what changed rather than by commit
+  order. Its Unreleased section is the honest answer to whether a tag contains
+  a given feature.
+- [BUILDING.md](BUILDING.md): the build, the packaging and the release process.
+- [HEADLESS.md](HEADLESS.md): the Linux/WSL host — plain Node, no Electron.
+- [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- `src/main/` the Electron main process, which owns every session and is the
+  only part allowed to start a program or open a file.
+- `src/renderer/` the window. It cannot reach a process or a file directly;
+  everything goes through one narrow IPC surface.
+- `src/shared/` the types and constants both halves agree on. The product name
+  lives in `src/shared/brand.ts` and nowhere else.
+- `host/` the headless host. `android/`, `ios/`, `pwa/` the clients.
+
+## What is not built yet
+
+Notarisation on macOS and a Windows signing certificate. Translations. Voice
+dictation — the app cannot transcribe, so the microphone is off by default and
+it hands over to the operating system's own dictation. An App Store release of
+the iPhone client, which is on TestFlight, internal testing only. A Google Play
+listing for the Android client, whose signed APK ships with every release but
+cannot update itself without one. There is no Linux window. On macOS, Apple
+silicon only; on Windows, x64 only.
+
+## Links
+
+- Site: https://terminaldeck.dev
+- Download: https://terminaldeck.dev/download.html
+- Docs: https://terminaldeck.dev/docs
+- Help, 45 questions: https://terminaldeck.dev/faq
+- Store, the community catalogue: https://terminaldeck.dev/store/
+- Repository: https://github.com/asadev/terminaldeck
+- npm, the headless host: https://www.npmjs.com/package/terminaldeck
+- Licence: MIT. Built by Asad Iqbal.
