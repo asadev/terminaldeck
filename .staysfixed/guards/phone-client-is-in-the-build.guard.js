@@ -69,7 +69,14 @@ export default {
             try {
               const head = Buffer.alloc(16);
               await file.read(head, 0, 16, 0);
-              const base = 16 + head.readUInt32LE(12);
+              // NOT `16 + size`. The archive's header is a pickle padded to a four-byte
+              // boundary, and this one is two bytes short of one, so the unpadded offset hands
+              // back every file shifted by two bytes. Found on 2026-09-02 by a guard that
+              // checked its own arithmetic against the archive's recorded SHA-256: unpadded
+              // mismatched, padded matched. Here it would have read two bytes into the phone
+              // client's HTML and reported the page missing from a build that contains it.
+              const size = head.readUInt32LE(12);
+              const base = 16 + size + ((4 - (size % 4)) % 4);
               const buf = Buffer.alloc(Math.min(Number(page.size), 400));
               await file.read(buf, 0, buf.length, base + Number(page.offset));
               return buf.toString('utf8');
