@@ -135,7 +135,7 @@ describe('the panel only exists when there is something behind it', () => {
   })
 
   it('draws nothing before it has any rows', () => {
-    const bridge = { devServers: async () => [], startDevServer: async () => null }
+    const bridge = { listDevServers: async () => [], startDevServer: async () => null }
     expect(renderToStaticMarkup(<DevServerPanel onOpen={() => {}} bridge={bridge} />)).toBe('')
   })
 })
@@ -189,5 +189,24 @@ describe('projectName', () => {
 
   it('ignores a trailing separator', () => {
     expect(projectName('/Users/asad/Projects/shop/')).toBe('shop')
+  })
+})
+
+/*
+ * The panel reads its methods off the preload by name, and `bridge?` makes a
+ * misspelt name silently optional: the panel just never appears. That is what
+ * happened — it asked for `devServers` while the preload exported
+ * `listDevServers` — and every test here passed because they inject their own
+ * bridge. So the names the bridge declares are checked against the preload's
+ * source text, which is the one place they have to agree with.
+ */
+describe('the bridge names exist in the preload', () => {
+  it('asks for methods the preload actually exports', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const preload = readFileSync(join(__dirname, '../../preload/index.ts'), 'utf8')
+    for (const name of ['listDevServers', 'startDevServer', 'onDevServerState']) {
+      expect(preload).toContain(`  ${name}: `)
+    }
   })
 })

@@ -55,7 +55,7 @@ export interface DevServerView {
 
 export interface DevServerBridge {
   /** Every open project's dev-server state. */
-  devServers?(): Promise<unknown>
+  listDevServers?(): Promise<unknown>
   /** Start one. Answers with `starting`; the rest arrives on the subscription. */
   startDevServer?(folder: string): Promise<unknown>
   /** Pushed state changes. Returns an unsubscribe function, like every other `on*`. */
@@ -150,7 +150,7 @@ export function mergeRow(current: readonly DevServerView[], incoming: DevServerV
 
 export function DevServerPanel({ onOpen, bridge }: Props) {
   const api = bridge ?? (globalThis as { deck?: DevServerBridge }).deck
-  const list = api?.devServers
+  const list = api?.listDevServers
   const startOne = api?.startDevServer
   const subscribe = api?.onDevServerState
   const [rows, setRows] = useState<DevServerView[]>([])

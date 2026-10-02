@@ -2046,7 +2046,7 @@ const api: Record<string, unknown> = new Proxy(
     // And the same function every time it is asked for, which the real preload
     // also guarantees: its methods are properties of one object, fixed at load.
     // A fresh fallback per read made every effect keyed on a missing method
-    // re-run on every render — `DevServerPanel` keys one on `devServers`, and
+    // re-run on every render — `DevServerPanel` keys one on `listDevServers`, and
     // from the moment a browser window opened the harness spun at ~70% of a
     // core and stopped acknowledging real mouse input, so a pointer press on
     // the bar never returned. Measured 2026-10-03; nothing in Electron does it.
