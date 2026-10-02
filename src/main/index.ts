@@ -223,6 +223,10 @@ import { desktopMachineBrowser } from './machine-browser-desktop'
 import type { MachineBrowser } from './remote/browser-control'
 import { storeTools } from './deck-control/store-tools'
 import { extensionTools } from './deck-control/extension-tools'
+import { deviceTools } from './deck-control/device-tools'
+import { deviceToolDeps } from './devices/tool-deps'
+import { deviceManager, registerDevicesIpc } from './devices/ipc'
+import { registerBrowserAnnotateIpc } from './browser-annotate'
 import {
   currentProfileId as currentBrowserProfileId,
   installBrowserExtensions,
@@ -4022,6 +4026,14 @@ function registerIpc(): void {
    */
   registerStageIpc(ipcMain, { dir: () => join(app.getPath('downloads'), BRAND.name) })
   registerBrowserIpc(ipcMain)
+  /*
+   * Annotate's later picks on a frozen page, beside the browser they ask; and
+   * the Simulators page with its device engine. Both before the copilot's tools
+   * are built — those close over the same device manager, which is one object
+   * per process however many times `deviceManager()` is asked for it.
+   */
+  registerBrowserAnnotateIpc(ipcMain)
+  registerDevicesIpc(ipcMain)
   // Beside the browser, because that is where a link now lands. The two
   // channels are the explicit way *out* — `link:system` and the context menu —
   // which only exists because in-app became the default.
@@ -4964,6 +4976,14 @@ app.whenReady().then(() => {
           base: () => storeApiBase(process.env),
         },
       }),
+      /*
+       * Phones and simulators, and what a person marked with Annotate. The
+       * same manager the Simulators page drives, so a tool and a click can never
+       * be two ways of touching a device. Mac only in effect: on anything else
+       * every tool but devices.list and devices.annotations refuses with the
+       * engine's own sentence. `deck-control/device-tools.ts` has the rest.
+       */
+      ...deviceTools(deviceToolDeps(deviceManager())),
       /*
        * The rest of driving a session, projects, files, the copilot's own
        * management and the window's clicks. Every binding is in

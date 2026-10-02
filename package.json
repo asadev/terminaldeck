@@ -105,5 +105,8 @@
   ],
   "bugs": {
     "url": "https://github.com/asadev/terminaldeck/issues"
+  },
+  "optionalDependencies": {
+    "@toolingtools/simview": "0.4.4"
   }
 }

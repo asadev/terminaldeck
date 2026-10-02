@@ -215,6 +215,19 @@ export const TOOL_AREAS: readonly ToolArea[] = [
     prefixes: ['agents', 'accounts', 'mcp', 'hooks', 'routines', 'usage', 'voice', 'setup', 'readiness', 'store'],
   },
   {
+    /*
+     * Its own area rather than a corner of `machines`, added in 0.16.0. A
+     * simulator is not another computer and nothing about reaching it is like
+     * reaching one; what a model looking for "tap the app" needs is one word
+     * that obviously means phones.
+     */
+    id: 'devices',
+    covers:
+      'iOS Simulators, Android emulators and USB Android phones on this Mac: list, start, see, tap, swipe, type, ' +
+      'buttons, the elements on screen, and what a person marked with Annotate',
+    prefixes: ['devices'],
+  },
+  {
     id: 'app',
     covers:
       'this app itself: version, logs, diagnostics, updates, settings, notifications, the in-app copilot, clicks in ' +

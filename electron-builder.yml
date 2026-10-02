@@ -88,6 +88,16 @@ files:
   - '!relay/**'
   # The npm name-claim placeholder. Published separately, ships nothing.
   - '!packages/**'
+  # The simulator engine (`@toolingtools/simview`, an optional dependency that
+  # only installs on Apple-silicon Macs). Its own browser preview and agent
+  # skills are not used: this app has its own Simulators page and Annotate.
+  - '!**/node_modules/@toolingtools/simview/{app,skills,assets}/**'
+  # Its command line is a Bun executable that statically links LGPL-2
+  # JavaScriptCore, and redistributing it is a licence decision nobody has made
+  # yet — see THIRD-PARTY-LICENSES.md. Without it React Native apps are read
+  # through the native accessibility tree: labels and test ids, no component
+  # names or source files. `src/main/devices/session.ts` checks for it.
+  - '!**/node_modules/@toolingtools/simview/bin/simview'
 
 # The headless host, beside the asar rather than inside it.
 #
@@ -116,6 +126,10 @@ asarUnpack:
   - '**/*.node'
   - '**/node_modules/node-pty/**'
   - '**/node_modules/better-sqlite3/**'
+  # The simulator engine is programs, not a library: spawn() cannot start an
+  # executable inside an archive, and its xctest-provider is a folder of app
+  # bundles the engine hands to an iOS Simulator by path.
+  - '**/node_modules/@toolingtools/simview/**'
 
 mac:
   # The platform `files` list REPLACES the top-level allowlist rather than adding
@@ -148,6 +162,16 @@ mac:
     - '!android/**'
     - '!relay/**'
     - '!packages/**'
+    # The simulator engine (`@toolingtools/simview`, an optional dependency that
+    # only installs on Apple-silicon Macs). Its own browser preview and agent
+    # skills are not used: this app has its own Simulators page and Annotate.
+    - '!**/node_modules/@toolingtools/simview/{app,skills,assets}/**'
+    # Its command line is a Bun executable that statically links LGPL-2
+    # JavaScriptCore, and redistributing it is a licence decision nobody has made
+    # yet — see THIRD-PARTY-LICENSES.md. Without it React Native apps are read
+    # through the native accessibility tree: labels and test ids, no component
+    # names or source files. `src/main/devices/session.ts` checks for it.
+    - '!**/node_modules/@toolingtools/simview/bin/simview'
 
   # Apple silicon only. Not universal, and no separate Intel build.
   #
@@ -206,6 +230,15 @@ mac:
   notarize: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
+  # Keep SimView's own signatures on its simulator-side test runner. The engine
+  # checks those files against a manifest of SHA-256 hashes before it starts
+  # them inside a Simulator, so re-signing them would make it fall back to the
+  # plainer accessibility tree for every third-party app. They are iOS
+  # Simulator binaries and never run on the Mac itself. `simview-core` and the
+  # probe are signed as usual (checked: re-signed with the inherit entitlements
+  # and hardened runtime, the engine still starts, captures and screenshots).
+  signIgnore:
+    - '/node_modules/@toolingtools/simview/bin/xctest-provider/'
 
   extendInfo:
     NSSupportsAutomaticGraphicsSwitching: true
@@ -261,6 +294,9 @@ win:
     - '!android/**'
     - '!relay/**'
     - '!packages/**'
+    # Mac-only programs; an optional dependency that is never installed on a
+    # Windows runner, excluded by name in case a local build has it.
+    - '!**/node_modules/@toolingtools/simview/**'
 
   # x64 only, and for the mirror image of the macOS reasoning. There, Rosetta
   # translates Intel to Apple silicon and never the reverse, so arm64 reaches

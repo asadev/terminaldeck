@@ -1808,6 +1808,51 @@ const api = {
     ipcRenderer.on('browser:element', handler)
     return () => ipcRenderer.off('browser:element', handler)
   },
+  /*
+   * Annotate's later picks on a frozen page: the element under a point, asked
+   * of the real page beneath the photograph. `src/main/browser-annotate.ts`.
+   */
+  browserAnnotatePick: (id: string, x: number, y: number): Promise<unknown> =>
+    ipcRenderer.invoke('browser:annotate-pick', id, x, y),
+
+  /* ------------------------------------------------- simulators + annotate -- */
+
+  /*
+   * The Simulators page and Annotate's saved rounds — `src/main/devices/ipc.ts`
+   * has every channel and what it answers. Pictures arrive on `devices:frame`
+   * as bytes (a JPEG, now and then a PNG), newest only.
+   */
+  deviceList: (): Promise<unknown> => ipcRenderer.invoke('devices:list'),
+  deviceBoot: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:boot', id),
+  deviceShutDown: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:shutdown', id),
+  deviceOpen: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:open', id),
+  deviceWatch: (id: string, on: boolean): Promise<void> => ipcRenderer.invoke('devices:watch', id, on),
+  deviceTap: (id: string, x: number, y: number, holdMs?: number): Promise<void> =>
+    ipcRenderer.invoke('devices:tap', id, x, y, holdMs),
+  deviceTouch: (id: string, phase: string, x: number, y: number): Promise<void> =>
+    ipcRenderer.invoke('devices:touch', id, phase, x, y),
+  deviceSwipe: (id: string, from: unknown, to: unknown, ms?: number): Promise<void> =>
+    ipcRenderer.invoke('devices:swipe', id, from, to, ms),
+  deviceType: (id: string, text: string): Promise<void> => ipcRenderer.invoke('devices:type', id, text),
+  deviceKey: (id: string, key: string, modifiers?: string[]): Promise<void> =>
+    ipcRenderer.invoke('devices:key', id, key, modifiers),
+  deviceButton: (id: string, button: string): Promise<void> => ipcRenderer.invoke('devices:button', id, button),
+  deviceRotate: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:rotate', id),
+  deviceScreenshot: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:screenshot', id),
+  deviceFreeze: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:freeze', id),
+  annotateSave: (png: string, round: unknown): Promise<unknown> => ipcRenderer.invoke('annotate:save', png, round),
+  annotateSent: (roundId: string, sentTo: unknown): Promise<void> =>
+    ipcRenderer.invoke('annotate:sent', roundId, sentTo),
+  onDeviceFrame: (cb: (id: string, jpeg: Uint8Array) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, jpeg: Uint8Array) => cb(id, jpeg)
+    ipcRenderer.on('devices:frame', handler)
+    return () => ipcRenderer.off('devices:frame', handler)
+  },
+  onDeviceClosed: (cb: (id: string, reason: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, reason: string) => cb(id, reason)
+    ipcRenderer.on('devices:closed', handler)
+    return () => ipcRenderer.off('devices:closed', handler)
+  },
 
   /* ------------------------------------------------------------ links -- */
 

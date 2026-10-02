@@ -9,6 +9,14 @@ them, and Annotates them with the same surface. Device tools for MCP are in
 Everything below is paste-ready. `App.tsx` needs **nothing**: the page is a
 `PanelId` drawn by `PanelView`, which this lane edited directly.
 
+**Status (2026-10-03, on `wip/0.10.0`): §1–§5 are applied.** The dependency is
+in `package.json` and `package-lock.json`, the builder settings are in
+`electron-builder.yml`, the three `index.ts` lines and the preload snippet are
+in, the device tools are in `assembled-catalogue.fixture.ts` (so the budget and
+name-clash tests measure them), and `describe-tool.ts` has a sixth area,
+`devices`. §6 is settled in the commits that follow: the session list and the
+device input budget.
+
 ---
 
 ## 1. `package.json`

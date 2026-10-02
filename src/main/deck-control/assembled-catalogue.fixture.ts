@@ -39,6 +39,7 @@ import { windowTools } from './browser-window-tools'
 import type { ToolSpec } from './catalogue'
 import { communityTools } from './community-tools'
 import { DeckControl } from './control'
+import { deviceTools, type DeviceToolDeps } from './device-tools'
 import { copilotAdminTools, type CopilotAdminDeps } from './copilot-admin-tools'
 import { coverageTool } from './coverage-tool'
 import { extensionTools } from './extension-tools'
@@ -106,6 +107,9 @@ export function assembledExtraTools(): ToolSpec[] {
     ...scrapingTools({} as never),
     ...toolsStoreTools({} as never),
     ...communityTools({} as never),
+    // The Simulators page's tools, after the browser's and before the sessions
+    // lane's — the order `src/main/index.ts` lists them in.
+    ...deviceTools({} as DeviceToolDeps),
     // `sessionsLaneTools`, factory by factory.
     ...sessionMoreTools({} as SessionMoreDeps),
     ...projectTools({} as ProjectToolDeps),
