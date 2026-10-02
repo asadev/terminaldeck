@@ -212,8 +212,17 @@ describe('the preload forwards what the handler reads', () => {
     // The other half: an argument that travels to a handler ignoring it is the
     // same defect wearing the opposite jacket.
     for (const channel of scoped) {
+      /*
+       * The registration up to the blank line after it, or 400 characters.
+       *
+       * It used to end at a `\n  )` or `\n  })` — the shape of a handler whose
+       * body spans lines — and on 2026-10-03 `mcp:connect` became a one-line
+       * arrow that ends in `)` on the same line, so the pattern found no
+       * handler at all for a handler that was right there and read the path.
+       * A blank line is how this file separates one registration from the next.
+       */
       const handler =
-        new RegExp(`ipcMain\\.handle\\('${channel}'[\\s\\S]{0,400}?\\n  \\}?\\)`).exec(main)?.[0] ?? ''
+        new RegExp(`ipcMain\\.handle\\('${channel}'[\\s\\S]{0,400}?(?=\\n\\s*\\n|$)`).exec(main)?.[0] ?? ''
       expect(handler, `${channel} has no handler`).not.toBe('')
       expect(handler, `${channel} ignores the project path the preload now sends`).toContain(
         'projectPath',

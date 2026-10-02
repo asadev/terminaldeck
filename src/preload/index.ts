@@ -1634,6 +1634,28 @@ const api = {
     return () => ipcRenderer.off('deck-control:action', handler)
   },
 
+  /* -------------------------------------------------------- ai apps -- */
+  // Settings → Connect an AI app. Access keys for AI apps outside this one, and
+  // the switch that lets them reach this Mac through the relay. Every channel is
+  // refused in main unless the sender is the app's own window, because every one
+  // of them changes who can reach this machine. `aiAppsCreate` is the only
+  // answer that carries a key, and it carries it once.
+  aiAppsState: (): Promise<unknown> => ipcRenderer.invoke('ai-apps:state'),
+  aiAppsCreate: (input: { name: string; level: string; askFirst: boolean; folders: string[] | null }): Promise<unknown> =>
+    ipcRenderer.invoke('ai-apps:create', input),
+  aiAppsRename: (id: string, name: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:rename', id, name),
+  aiAppsLevel: (id: string, level: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:level', id, level),
+  aiAppsAskFirst: (id: string, on: boolean): Promise<unknown> => ipcRenderer.invoke('ai-apps:ask-first', id, on),
+  aiAppsFolders: (id: string, folders: string[] | null): Promise<unknown> =>
+    ipcRenderer.invoke('ai-apps:folders', id, folders),
+  aiAppsRevoke: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:revoke', id),
+  aiAppsInternet: (on: boolean): Promise<unknown> => ipcRenderer.invoke('ai-apps:internet', on),
+  onAiAppsChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('ai-apps:changed', handler)
+    return () => ipcRenderer.off('ai-apps:changed', handler)
+  },
+
   /* --------------------------------------------------------- driving -- */
 
   /**

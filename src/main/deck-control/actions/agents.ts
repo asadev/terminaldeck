@@ -20,6 +20,18 @@ import type { CoverageMap } from './types'
 const PUSH_PLUMBING =
   'The window asking to be sent live updates as they happen; a tool asks for the current answer whenever it wants one instead.'
 
+/**
+ * Settings → Connect an AI app: who outside this app may reach these tools.
+ *
+ * Every one of these is a grant — a change to who can reach this machine, from
+ * this Mac or from the internet — and a grant is only ever changed by the owner
+ * at this machine (`COPILOT-REMOTE.md` §5 rule 9: *the approval screen at this
+ * keyboard is the only door*). An AI that could make a key could let itself back
+ * in; one that could raise a level could raise its own.
+ */
+const KEYS_ARE_THE_OWNERS =
+  'Access keys decide which outside AI apps may reach this computer, so they are changed only by the owner in Settings, never by a tool an AI could call.'
+
 export const agentsCoverage: CoverageMap = {
   'accounts:history-share': { tool: 'accounts.share_history' },
   'accounts:history-state': { tool: 'accounts.status' },
@@ -30,6 +42,24 @@ export const agentsCoverage: CoverageMap = {
   'agents:add': { tool: 'agents.add' },
   'agents:list': { tool: 'agents.list' },
   'agents:remove': { tool: 'agents.remove' },
+  'ai-apps:ask-first': { skip: KEYS_ARE_THE_OWNERS },
+  'ai-apps:create': {
+    skip: 'Making an access key hands back a secret and mints a new way into this computer, so only the owner does it, in Settings.',
+  },
+  'ai-apps:folders': { skip: KEYS_ARE_THE_OWNERS },
+  'ai-apps:internet': {
+    skip: 'Opening this computer to AI apps on the internet is the owner’s switch in Settings, never something a tool turns on.',
+  },
+  'ai-apps:level': {
+    skip: 'A tool that changed what an access key may do would let an AI raise its own key, so levels are changed only in Settings.',
+  },
+  'ai-apps:rename': {
+    skip: 'A key’s name is how the owner recognises an outside app in the activity log, so only the owner renames one, in Settings.',
+  },
+  'ai-apps:revoke': { skip: KEYS_ARE_THE_OWNERS },
+  'ai-apps:state': {
+    skip: 'The list of which outside AI apps hold keys is the owner’s audit screen; an app holding one has no business listing the others.',
+  },
   'brand:get': { tool: 'app.about' },
   'cost:project': { tool: 'usage.cost' },
   'cost:session': { tool: 'usage.cost' },
