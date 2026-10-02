@@ -8,7 +8,6 @@ import { COPILOT_ICON } from './identity'
 import { useCopilotMachines } from './useCopilotMachines'
 import type { Copilot } from './useCopilot'
 import './copilot.css'
-import { SessionVoice } from '../chat/voice/SessionVoice'
 
 /**
  * The copilot's **window** — what fills the pane when its tab is the one in
@@ -422,19 +421,6 @@ export function CopilotView({
         )}
       </div>
 
-      {/* Talking to it — a sibling of the body, not a child of it.
-
-          It was inside `cp-body` first and was invisible there, with a correct
-          box and the right colours: `.terminal-host` is `position: absolute;
-          inset: 0`, so the terminal escapes the flex column and paints over the
-          whole body including a row laid out above it. Caught by hit-testing
-          the bar's own coordinates — `elementFromPoint` answered
-          `xterm-link-layer`, not the button. Out here the page's flex column
-          gives it a row nothing is painted over.
-
-          It draws nothing at all when there is no session or no on-device
-          speech engine; see `SessionVoice`. */}
-      <SessionVoice sessionId={sessionId} cwd={root} />
       <div className="cp-body">
         {elsewhere && machine !== null ? (
           /*

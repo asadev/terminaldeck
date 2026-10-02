@@ -62,7 +62,6 @@ import {
 import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
 import { registerVoiceIpc } from './voice'
-import { registerNativeSpeechIpc, shutdownNativeSpeech, speechBinary } from './native-speech'
 import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
@@ -2425,17 +2424,6 @@ function registerIpc(): void {
   // thunk rather than a value because `pinUserData` can move the directory, and
   // a path captured at wiring time would outlive the move.
   registerVoiceIpc(ipcMain, () => app.getPath('userData'))
-  // The Mac's own ear and voice, which need no key at all — the on-device
-  // engine macOS 26 added. Registered *after* the key path and never in place
-  // of it: this one does not exist on Windows or Linux, and cannot hear a
-  // language this Mac has not installed, so the key stays the answer for both.
-  // The binary is resolved per call rather than captured, because a developer
-  // who builds it while the app is running should not have to restart.
-  registerNativeSpeechIpc(
-    ipcMain,
-    () => speechBinary(process.resourcesPath, app.getAppPath()),
-    () => mainWindow,
-  )
   // Which session is what, asked once and shared by both halves of the usage
   // feature. Two copies of this lookup would be two answers to "whose account is
   // this session on", and the write side and the read side disagreeing about
@@ -5122,10 +5110,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', (event) => {
-  // The microphone and any sentence still being spoken. Both are child
-  // processes, and a child holding the input device after the window has gone
-  // is a recording light with nothing behind it.
-  shutdownNativeSpeech()
   /*
    * The one decision this whole feature is: does quitting end the machine's
    * work, or only put the window away?
