@@ -39,7 +39,7 @@ import { fileLiftRequest } from '../browser-lift-requests'
 import { slotName, windowsOf } from '../browser-binding'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { withEmptiness } from './empty-result'
-import { Refused } from './surface'
+import { Refused, actsAsOwner } from './surface'
 
 const SCHEMA: JsonSchema = {
   type: 'object',
@@ -73,7 +73,9 @@ const SCHEMA: JsonSchema = {
 function mayAsk(context: ToolContext): void {
   const caller = context.caller
   const isSession = caller.kind === 'session' && caller.sessionId !== undefined
-  if (!isSession && caller.kind !== 'local') {
+  // An AI app on an access key asks as the owner's copilot does: the ask lands
+  // in his Scraping panel under that app's name, and he answers it there.
+  if (!isSession && !actsAsOwner(caller)) {
     throw new Refused(
       'not-granted',
       'browser.lift_request only works for sessions at this machine. Asking for a person’s logins from a ' +
@@ -108,6 +110,8 @@ export function askerName(context: ToolContext): string {
     if (slots.length > 0) return `The session driving ${slots[0]}`
     return 'A session in this app'
   }
+  // By the name he gave its key, so the inbox row says which app is asking.
+  if (caller.kind === 'key') return `“${caller.keyName ?? 'An AI app'}”, an AI app you gave a key to`
   return 'The copilot'
 }
 

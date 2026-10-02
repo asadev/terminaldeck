@@ -410,7 +410,7 @@ export function serverRoomTools(deps: ServerRoomToolsDeps): ToolSpec[] {
       'A real terminal on a server, signed in as that server’s account. Whatever you type runs with that ' +
       'account’s full power and cannot be undone — prefer servers.control’s named actions when one fits. Every ' +
       'call asks the person first and shows them exactly what will be typed; being given control of a server does ' +
-      'not change that. do: "open" a terminal (folder optional) and get its shellId; "type" one line of text ' +
+      'not change that (an outside app’s key the person set not to ask is the one exception). do: "open" a terminal (folder optional) and get its shellId; "type" one line of text ' +
       `(submit presses return, default true; at most ${MAX_SHELL_CHARS} characters, no newlines); "keys" presses ` +
       'named keys such as enter, ctrl-c, up; "set" changes the model, effort, fast or permission mode of the agent ' +
       'running in it; "close" it. Read what it shows with servers.details about "shell".',
@@ -437,6 +437,13 @@ export function serverRoomTools(deps: ServerRoomToolsDeps): ToolSpec[] {
       additionalProperties: false,
     },
     precheck: (args, context) => {
+      /*
+       * A key caller reaches this as the owner (`hereOnly`), and it needs Full
+       * control because the tool is `alter` and stays `alter` — there is no
+       * escalation or grant here that lowers it. "Ask me before big changes"
+       * is honoured: on, every line is put to him; off, it runs, and each line
+       * is a row in the log under that app's name.
+       */
       hereOnly(context.caller, 'A terminal on a server')
       const verb = oneOf(args, 'do', SHELL_VERBS)
       if (verb === 'open') {

@@ -119,6 +119,21 @@ function gate(context: ToolContext): void {
   mayDrive(context, 'browser.passwords')
 }
 
+/**
+ * A fill is put to a person, always — even for an AI app whose key is set not
+ * to ask.
+ *
+ * The one call in this file that hands something over that cannot be taken
+ * back: once a saved password is in a page, the caller can read the page. An
+ * access key with "Ask me before big changes" off runs other alter calls
+ * without a question, because he chose that; this one he did not choose by
+ * flipping a switch about settings. So `control.ts` asks — on the desktop or on
+ * one of his phones — whatever the key says. See `ToolSpec.ownerMustAnswer`.
+ */
+export function fillMustBeAnswered(args: Record<string, unknown>): boolean {
+  return args.action === 'fill'
+}
+
 export function passwordTools(deps: PasswordToolDeps): ToolSpec[] {
   const profileFrom = (args: Record<string, unknown>): { id: string; name: string } => {
     const state = deps.profiles()
@@ -168,6 +183,7 @@ export function passwordTools(deps: PasswordToolDeps): ToolSpec[] {
         'Saved logins, never the passwords: list, fill one into a page (asks), save, forget.',
       inputSchema: SCHEMA,
       escalate: escalateBy(TIERS, 'list'),
+      ownerMustAnswer: fillMustBeAnswered,
       precheck: (args, context: ToolContext) => {
         gate(context)
         const action = actionOf(args, ACTIONS, 'list')

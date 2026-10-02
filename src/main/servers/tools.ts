@@ -77,7 +77,7 @@
  */
 
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from '../deck-control/catalogue'
-import { Refused, type Tier } from '../deck-control/surface'
+import { Refused, actsAsOwner, type Tier } from '../deck-control/surface'
 import {
   ACTION_IDS,
   ActionFailed,
@@ -213,11 +213,19 @@ export function serverTools({ room, grants }: ServerToolsDeps): ToolSpec[] {
    * server id. Then the facts.
    */
   const controlPrecheck = (args: Record<string, unknown>, context: ToolContext): void => {
-    if (context.caller.kind !== 'local') {
+    /*
+     * An AI app on an access key acts as the owner here too (`actsAsOwner`),
+     * and it never rides the copilot's "control of this server" grant —
+     * `grants.granted` answers false for every caller that is not `local` — so
+     * for a key this is always `alter`: a Full control key, asked first unless
+     * he turned asking off for it.
+     */
+    if (!actsAsOwner(context.caller)) {
       throw new Refused(
         'not-granted',
-        'Changing anything on a server only works for the person at this machine. A paired device cannot do ' +
-          'it and cannot be given permission to. Say what you would have done and let them do it.',
+        'Changing anything on a server only works for the person at this machine, or an AI app they gave an ' +
+          'access key to. A paired device cannot do it and cannot be given permission to. Say what you would ' +
+          'have done and let them do it.',
       )
     }
     const serverId = str(args, 'serverId')

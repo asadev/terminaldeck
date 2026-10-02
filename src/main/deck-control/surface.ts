@@ -195,6 +195,44 @@ export interface Caller {
  */
 export const LOCAL_CALLER: Caller = Object.freeze({ kind: 'local', tiers: ALL_TIERS })
 
+/**
+ * Does this caller act as the owner of this computer?
+ *
+ * True for the person at this keyboard (and the copilot they are talking to),
+ * and for an AI app holding an **access key** the owner made for it. False for a
+ * paired device, an ordinary session, and any kind added later.
+ *
+ * ## Why a key acts as the owner
+ *
+ * Because he made it for himself, to do from another app what he does here:
+ *
+ *   > *"Everything that I can do manually should be able to do through the
+ *   > MCP… any other AI from any other application from internet through the
+ *   > MCP can connect to it."*
+ *
+ * The gates that ask this question — `hereOnly` for the whole machines area,
+ * `mayDrive` for the browser, worker profiles, the ask for logins,
+ * `servers.control` — were all written `kind !== 'local'` so that a caller kind
+ * nobody had thought of would be refused by default. A key is not that kind any
+ * more; it has been thought about, here, and this is the one function that says
+ * so. What still bounds it is everything that bounds the owner's own copilot,
+ * plus its level: the tier check reads `tiersFor(level)` per call, so a Look only
+ * key reaches only `read` tools whatever this answers, and an alter call still
+ * asks unless he turned asking off for that key.
+ *
+ * ## What this does not open
+ *
+ * A paired device (`remote`) and an ordinary session (`session`) answer false
+ * exactly as before — a device's protocol has no frame for these and a
+ * session's allow-list does not name them. Some things stay the person's even
+ * for a key: a tour (somebody has to be watching the screen it moves), and the
+ * calls a tool marks {@link ToolSpec.ownerMustAnswer}, which are put to him even
+ * when the key's own setting would skip the question.
+ */
+export function actsAsOwner(caller: Caller): boolean {
+  return caller.kind === 'local' || caller.kind === 'key'
+}
+
 /* -------------------------------------------------------------- refusals -- */
 
 /**

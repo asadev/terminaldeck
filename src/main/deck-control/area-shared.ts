@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, normalize, sep } from 'node:path'
 import { BadArgument } from './catalogue'
 import { KeyError, NAMED_KEYS as NAMED_KEYS_TABLE, resolveKeys, type ResolvedKey } from './session-typing'
-import { Refused, type Caller } from './surface'
+import { Refused, actsAsOwner, type Caller } from './surface'
 
 /**
  * What the machine, server, device and GitHub tools share, in one place.
@@ -105,11 +105,19 @@ export function verbOf(args: Record<string, unknown>): string {
  * beside it.**
  */
 export function hereOnly(caller: Caller, what: string): void {
-  if (caller.kind === 'local') return
+  /*
+   * Widened, deliberately, on 2026-10-03, as the paragraph above asked: an AI app
+   * holding an access key the owner made acts as the owner here. Its level is
+   * still the bound — the tier check reads it per call — so a Look only key
+   * reads these and a Full control key changes them, asking first unless he
+   * turned that off. `actsAsOwner` in `surface.ts` carries the argument; a
+   * paired device and an ordinary session are refused exactly as before.
+   */
+  if (actsAsOwner(caller)) return
   throw new Refused(
     'not-granted',
-    `${what} only works for the person at this computer and the copilot they are talking to. A paired device ` +
-      'cannot do it from here. Say what you would have done and let them do it.',
+    `${what} only works for the person at this computer, the copilot they are talking to, and AI apps they ` +
+      'gave an access key to. A paired device cannot do it from here. Say what you would have done and let them do it.',
   )
 }
 

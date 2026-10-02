@@ -10,7 +10,7 @@ import {
 } from '../browser-driver'
 import { HANDOVER_WINDOW_MS } from '../browser-drive'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
-import { Refused, type Tier } from './surface'
+import { Refused, actsAsOwner, type Tier } from './surface'
 
 /**
  * The six browser tools, and the decisions inside them.
@@ -651,7 +651,14 @@ export interface VerbForwarder {
  *    to drive by posting an alert.
  */
 export function mayDrive(context: ToolContext, tool: string): void {
-  if (callingSession(context) === null && context.caller.kind !== 'local') {
+  /*
+   * An AI app on an access key drives as the owner's copilot does — he made the
+   * key to do from another app what he does here. Its level bounds it: a Look
+   * only key can read a page and not touch one, and the first change on a
+   * public website is still put to him (`browser.step`'s own escalation),
+   * unless he turned asking off for that key. See `actsAsOwner`.
+   */
+  if (callingSession(context) === null && !actsAsOwner(context.caller)) {
     throw new Refused(
       'not-granted',
       `${tool} only works for the person at this machine. Driving a browser from a paired device is ` +

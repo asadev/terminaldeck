@@ -2,7 +2,7 @@ import { slotName, windowsOf } from '../browser-binding'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { emptySummary, withEmptiness } from './empty-result'
 import { liftAskTool } from './lift-ask-tool'
-import { Refused } from './surface'
+import { Refused, actsAsOwner } from './surface'
 
 /**
  * The two worker verbs, and — much more importantly — the one that is not here.
@@ -131,6 +131,9 @@ function holderOf(context: ToolContext): string {
   if (caller.kind === 'session' && caller.sessionId !== undefined) {
     return `session:${caller.machineId ?? ''}:${caller.sessionId}`
   }
+  // Each outside AI app holds its own leases, so ChatGPT cannot release the
+  // copilot's worker or another app's — the reason the holder exists at all.
+  if (caller.kind === 'key' && caller.keyId !== undefined) return `key:${caller.keyId}`
   return 'copilot'
 }
 
@@ -151,7 +154,8 @@ function callingSession(context: ToolContext): { sessionId: string; machineId: s
  * judgement that file makes about writing `mayDrive` out per tool.
  */
 function mayUseWorkers(context: ToolContext, tool: string): void {
-  if (callingSession(context) === null && context.caller.kind !== 'local') {
+  // An AI app on an access key, as the owner — see `actsAsOwner`.
+  if (callingSession(context) === null && !actsAsOwner(context.caller)) {
     throw new Refused(
       'not-granted',
       `${tool} only works for the person at this machine. Driving a browser from a paired device is not ` +

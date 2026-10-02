@@ -934,6 +934,13 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
       required: ['do'],
       additionalProperties: false,
     },
+    /*
+     * Asked every time, even for an AI app whose key is set not to ask, for the
+     * reason `remote.manage` gives: pairing is who reaches whom, and "show-code"
+     * hands back a code another computer types to be let in. See
+     * `ToolSpec.ownerMustAnswer`.
+     */
+    ownerMustAnswer: () => true,
     precheck: (args, context) => {
       hereOnly(context.caller, 'Changing which computers this app is paired to')
       const verb = oneOf(args, 'do', MANAGE_VERBS)

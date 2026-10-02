@@ -544,6 +544,23 @@ export interface ToolSpec {
    * unchanged is the same as not implementing it.
    */
   redactArgs?(args: Record<string, unknown>): Record<string, unknown>
+  /**
+   * These arguments must be put to a person, whoever is calling and whatever
+   * their standing permission says.
+   *
+   * An access key whose owner turned "Ask me before big changes" off runs
+   * alter-tier calls without a question (`control.ts`). For most of them that is
+   * exactly what he chose. A few are different in kind, because what they hand
+   * over cannot be taken back by the person reading the log afterwards: a saved
+   * password filled into a page is a page the caller can then read back. A tool
+   * that has one of those says so here, and the call is asked — on the desktop
+   * or on one of his phones — even then.
+   *
+   * Only ever tightens: a call this answers true for is raised to `alter` if it
+   * was lower, and the question is never skipped. Returning false is the same as
+   * not implementing it.
+   */
+  ownerMustAnswer?(args: Record<string, unknown>): boolean
   /** One sentence naming what will happen. Shown in the dialog, kept in the log. */
   summary(args: Record<string, unknown>, context: ToolContext): string
   run(args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput>

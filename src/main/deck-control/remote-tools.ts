@@ -270,6 +270,17 @@ export function remoteTools(deps: RemoteToolsDeps): ToolSpec[] {
       required: ['do'],
       additionalProperties: false,
     },
+    /*
+     * Asked every time, for every caller — including an AI app whose key is set
+     * not to ask. This tool changes *who can reach this computer*: it mints
+     * pairing codes and approves devices as the owner's own. An outside app
+     * that could do that without a question could hand itself, or anybody, a
+     * paired device with full copilot access — a way in that outlives its key
+     * being revoked. `COPILOT-REMOTE.md` §5 rule 9: the approval at this
+     * keyboard is the only door, and from a key it is his answer, on his Mac or
+     * his phone. See `ToolSpec.ownerMustAnswer`.
+     */
+    ownerMustAnswer: () => true,
     precheck: (args, context) => {
       hereOnly(context.caller, 'Changing who can reach this computer')
       const verb = oneOf(args, 'do', MANAGE_VERBS)

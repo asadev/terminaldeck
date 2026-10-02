@@ -740,6 +740,21 @@ export class DeckControl {
      * a missing one.
      */
     let tier: Tier = spec.tier
+    /*
+     * A call the tool says a person must answer, whoever asks. Raised to
+     * `alter` so it reaches the question, and remembered so the one path that
+     * skips the question — a key set not to ask — does not skip this one. A
+     * rule that throws is read as "must answer", the direction every other
+     * reading of arguments here falls.
+     */
+    let mustAnswer = false
+    try {
+      mustAnswer = spec.ownerMustAnswer?.(args) === true
+    } catch (error) {
+      console.error('[deck-control] an ownerMustAnswer rule threw; asking:', error)
+      mustAnswer = true
+    }
+    if (mustAnswer) tier = 'alter'
     try {
       const escalated = spec.escalate?.(args, context)
       if (escalated && TIER_RANK[escalated] > TIER_RANK[tier]) tier = escalated
@@ -925,7 +940,13 @@ export class DeckControl {
 
     /* --- the gate --------------------------------------------------------- */
     let confirmed: ConfirmationRecord = unconfirmed(false)
-    if (tier === 'alter' && caller.kind === 'key' && caller.keyId !== undefined && caller.askFirst === false) {
+    if (
+      tier === 'alter' &&
+      !mustAnswer &&
+      caller.kind === 'key' &&
+      caller.keyId !== undefined &&
+      caller.askFirst === false
+    ) {
       /*
        * The owner turned "Ask me before big changes" off for this key.
        *
