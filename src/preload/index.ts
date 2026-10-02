@@ -2318,6 +2318,25 @@ const api = {
   browserStoreRemove: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-store:remove', id),
 
+  /* ------------------------------------------------ community store -- */
+
+  /*
+   * The Community shelf. Three invokes and no push, for the reason
+   * `store-install-ipc.ts` gives: a row here changes only when somebody presses
+   * Install or Remove in the panel already on screen, and `community:list`
+   * fetches the catalogue every time, so a Refresh is that same call again
+   * rather than a fourth channel that would drift from it.
+   *
+   * The choice travels as its own argument and is read as `unknown` on the far
+   * side: which coding tools to write into, the values for an MCP item's own
+   * declared inputs, and the folder a routine will run in. None of it can widen
+   * what an install does — the app composes every command and every path itself.
+   */
+  community: (): Promise<unknown> => ipcRenderer.invoke('community:list'),
+  communityInstall: (id: string, choice?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('community:install', id, choice),
+  communityRemove: (id: string): Promise<unknown> => ipcRenderer.invoke('community:remove', id),
+
   /* ------------------------------------------ browser extension store -- */
 
   /*

@@ -93,7 +93,50 @@ const SERVERS: StoreDepartmentInput = {
   ],
 }
 
+/**
+ * The third department, which is the check on whether this is a model or a pair.
+ *
+ * Its shelves are the seven kinds and its rows are strangers' work. Nothing in
+ * `store-nav.ts` learned anything to accommodate it — which is the property
+ * being asserted below rather than a coincidence worth mentioning once.
+ */
+const COMMUNITY: StoreDepartmentInput = {
+  id: 'community',
+  name: 'Community',
+  wired: true,
+  filter: NO_FILTER,
+  shelves: [
+    { id: 'skill', name: 'Skill' },
+    { id: 'mcp', name: 'MCP server' },
+    { id: 'hooks', name: 'Hooks' },
+  ],
+  rows: [
+    row({
+      id: 'acme/pr-review',
+      name: 'Pull request review',
+      summary: 'Reads a diff and writes the review.',
+      category: 'skill',
+      categoryName: 'Skill',
+      tags: [],
+      compat: 'unknown',
+      source: 'community',
+    }),
+    row({
+      id: 'lumen/postgres',
+      name: 'Postgres',
+      summary: 'Queries a database.',
+      category: 'mcp',
+      categoryName: 'MCP server',
+      tags: [],
+      cost: 'paid',
+      compat: 'unknown',
+      source: 'community',
+    }),
+  ],
+}
+
 const BOTH = [EXTENSIONS, SERVERS]
+const ALL = [EXTENSIONS, SERVERS, COMMUNITY]
 
 /** Both departments handed the same query, which is what the page's one box does. */
 const asking = (query: string): StoreDepartmentInput[] =>
@@ -147,6 +190,42 @@ describe('the rail', () => {
   it('drops a department the build cannot draw, rather than greying it', () => {
     const nav = storeNav([{ ...EXTENSIONS, wired: false }, SERVERS])
     expect(nav.map((one) => one.id)).toEqual(['servers'])
+  })
+
+  it('counts a third department the same way, having learned nothing new', () => {
+    /*
+     * The Community department's shelves are the seven kinds and its rows are
+     * other people's work, and none of that reached this file. If a third
+     * department had needed a line here, the model would have been two things
+     * with a shared word rather than a model.
+     */
+    const nav = storeNav(ALL)
+    expect(nav.map((one) => [one.id, one.count])).toEqual([
+      ['extensions', 3],
+      ['servers', 2],
+      ['community', 2],
+    ])
+    expect(nav[2].shelves.map((shelf) => [shelf.id, shelf.count])).toEqual([
+      ['skill', 1],
+      ['mcp', 1],
+    ])
+    expect(navTotal(nav)).toBe(7)
+  })
+
+  it('lets the community chips alone empty only the community', () => {
+    // `paid` is a word the other two catalogues have and the community one uses
+    // differently; one shared filter is the bug this whole arrangement exists to
+    // stop, and a third department is one more chance to reintroduce it.
+    const nav = storeNav([
+      EXTENSIONS,
+      SERVERS,
+      { ...COMMUNITY, filter: { ...NO_FILTER, cost: 'paid' } },
+    ])
+    expect(nav.map((one) => [one.id, one.count])).toEqual([
+      ['extensions', 3],
+      ['servers', 2],
+      ['community', 1],
+    ])
   })
 })
 
@@ -236,11 +315,26 @@ describe('what an empty store says', () => {
     expect(empty?.detail).toContain('came back empty')
   })
 
-  it('names the other department when this one has nothing', () => {
+  it('points at the rest of the store when this department has nothing', () => {
+    /*
+     * "In the other one" was true of a shop with two departments and became a
+     * lie the day it had three. The sentence names the number and sends somebody
+     * to the rail, which is the same answer the shelf case gives.
+     */
     const place = { kind: 'department', department: 'servers' } as const
     const empty = storeEmpty(asking('password'), place)
     expect(empty?.title).toBe('Nothing in this department matches that')
+    expect(empty?.detail).toContain('1 thing elsewhere in the store does')
     expect(empty?.elsewhere).toBe(1)
+  })
+
+  it('counts every department it searched, not two of them', () => {
+    const empty = storeEmpty(
+      ALL.map((one) => ({ ...one, filter: { ...one.filter, query: 'kubernetes' } })),
+      EVERYTHING,
+    )
+    expect(empty?.detail).toContain('all 7 of them')
+    expect(empty?.detail).toContain('all 3 departments')
   })
 })
 

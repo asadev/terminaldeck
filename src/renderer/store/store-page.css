@@ -360,7 +360,8 @@
 }
 
 .store-detail .bw-store-name,
-.store-detail .mcp-store-name {
+.store-detail .mcp-store-name,
+.store-detail .cs-store-name {
   font-size: var(--t-title2);
   font-weight: 600;
 }
@@ -413,8 +414,15 @@
   row-gap: var(--sp-1);
 }
 
+/* The community head wraps by declaration rather than by this rule — its own
+   stylesheet sets it, because that department has only ever been drawn on this
+   page and a head that wraps everywhere is one less thing conditional on where
+   it is. Its chips are grouped the way the MCP ones are, so the cluster is what
+   yields and the name keeps the top line with its button. */
+
 .store-page .bw-store-list,
-.store-page .mcp-store-list {
+.store-page .mcp-store-list,
+.store-page .cs-store-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(30rem, 1fr));
   gap: var(--sp-2);
@@ -424,6 +432,7 @@
 /* Except in the detail view, which is about one thing and must not put it in a
    half-width column with air beside it. */
 .store-detail .bw-store-list,
-.store-detail .mcp-store-list {
+.store-detail .mcp-store-list,
+.store-detail .cs-store-list {
   display: block;
 }

@@ -142,6 +142,21 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
   // below: an entry that outlives its reason is documentation asserting the
   // opposite of the code.
+  // The four files of the community store's contract were listed here, and none
+  // is any more: `src/main/index.ts` builds the Community store and registers
+  // its channels, so `store-api.ts`, `store-key.ts`, `store-manifest.ts` and
+  // `store-index.ts` are all reached from the running app two ways over —
+  // through `store-install-ipc.ts` → `store-install.ts` in the main process, and
+  // through `renderer/community/bridge.ts`, which reads the seven kinds, the
+  // three tier sentences and the need words out of `store-manifest.ts` so the
+  // vocabulary on screen is the same object the manifest parser refuses against
+  // rather than a second copy of the same words. Every one of those entries
+  // named the import that would delete it, and these are those imports.
+  'src/main/store-archive.fixture.ts':
+    'unreachable on purpose: it builds the tar.gz archives `store-archive.test.ts` and ' +
+    '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +
+    'climbs out of the folder, a symlink, a header that lies about its size. The same reason ' +
+    '`browser-extension-zip.fixture.ts` below is here.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

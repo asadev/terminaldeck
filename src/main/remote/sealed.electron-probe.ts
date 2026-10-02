@@ -59,6 +59,8 @@
 
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   diffieHellman,
   generateKeyPairSync,
   getCiphers,
@@ -67,6 +69,7 @@ import {
   randomBytes,
   scrypt as scryptCallback,
   scryptSync,
+  sign,
   timingSafeEqual,
 } from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -81,6 +84,8 @@ import {
   type PendingInitiator,
   type StaticKeyPair,
 } from '../../shared/sealed'
+import { DEV_KEY_PHRASE, type StoreKey } from '../../shared/store-key'
+import { checkIndexBytes } from '../store-index'
 import { HOST_IDENTITY_FILE, loadHostIdentity } from './host-identity'
 import { RENDEZVOUS_SALT, rendezvousIdentity } from './machines/rendezvous'
 
@@ -166,6 +171,66 @@ check('randomBytes and timingSafeEqual', () => {
   const value = randomBytes(32)
   assert(timingSafeEqual(value, Buffer.from(value)), 'timingSafeEqual disagreed with itself')
   assert(!timingSafeEqual(value, randomBytes(32)), 'timingSafeEqual matched two random buffers')
+})
+
+/*
+ * Ed25519, and it is here for the same reason everything else in this file is.
+ *
+ * The community store believes a catalogue because a signature over the bytes
+ * verifies against a key compiled into the app (`store-index.ts`). Nothing in
+ * `scripts/check-electron-crypto.mjs`'s scan can see that call: it matches the
+ * string argument of `createCipheriv`/`createHash`/`createHmac`/`hkdfSync`, and
+ * `verify(null, …)` names no algorithm at all. So a runtime that dropped
+ * Ed25519 would take the store quiet — every catalogue refused, no error a
+ * person could act on — with every test still green. That is precisely the
+ * shape of the ChaCha bug, one feature over.
+ *
+ * It runs the product's own checker rather than `verify` directly, so what is
+ * measured is the path that ships.
+ */
+check('ed25519 verification, through the checker the store actually uses', () => {
+  const seed = createHash('sha256').update(DEV_KEY_PHRASE, 'utf8').digest()
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]),
+    format: 'der',
+    type: 'pkcs8',
+  })
+  const document = Buffer.from(
+    JSON.stringify({
+      v: 1,
+      serial: 1,
+      issuedAt: new Date().toISOString(),
+      expiresAt: null,
+      generator: 'sealed.electron-probe',
+      truncated: false,
+      items: [],
+      revoked: [],
+    }),
+    'utf8',
+  )
+  const keys: StoreKey[] = [
+    {
+      id: 'td-store-dev-1',
+      hex: Buffer.from((createPublicKey(privateKey).export({ format: 'jwk' }) as { x: string }).x, 'base64url')
+        .toString('hex'),
+      because: 'the development key, rebuilt here so this probe needs nothing on disk',
+    },
+  ]
+  const envelope = (signed: Buffer): string =>
+    JSON.stringify({
+      v: 1,
+      keyId: 'td-store-dev-1',
+      alg: 'ed25519',
+      sig: sign(null, document, privateKey).toString('base64'),
+      signed: signed.toString('base64'),
+    })
+
+  const good = checkIndexBytes(envelope(document), { keys })
+  assert(good.ok, `a real signature did not verify under this runtime: ${good.ok ? '' : good.why}`)
+
+  const tampered = Buffer.from(document)
+  tampered[10] ^= 0x01
+  assert(!checkIndexBytes(envelope(tampered), { keys }).ok, 'a tampered catalogue verified')
 })
 
 check('chacha20-poly1305 through sealed.ts, whatever it is built on', () => {

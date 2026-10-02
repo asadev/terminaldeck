@@ -45,8 +45,17 @@ import {
  * off one rail without either one's words leaking into the other's.
  */
 
-/** Which half of the store. */
-export type StoreDepartmentId = 'extensions' | 'servers'
+/**
+ * Which department of the store.
+ *
+ * Three, since the community catalogue landed, and nothing else in this file
+ * changed to accommodate it — which was the test of whether the model was
+ * actually general or merely two things with a shared word. `storeNav` already
+ * dropped empty shelves, `filterFor` already handed a shelf to the one
+ * department that owns it, and `storeEmpty` already wrote a sentence that can
+ * see the whole shop.
+ */
+export type StoreDepartmentId = 'extensions' | 'servers' | 'community'
 
 /**
  * One department, as the rail needs to see it.
@@ -261,8 +270,8 @@ export function storeEmpty(
     return {
       title: 'Nothing to browse in this build',
       detail:
-        'Neither half of the store is available here — the browser pane and MCP servers are ' +
-        'what stock it, and this window has neither.',
+        'None of the store’s departments is available here — the browser pane, MCP servers and ' +
+        'the community catalogue are what stock it, and this window has none of them.',
       elsewhere: 0,
     }
   }
@@ -294,9 +303,13 @@ export function storeEmpty(
   if (place.kind === 'department' && everywhere > 0) {
     return {
       title: 'Nothing in this department matches that',
+      /* "Elsewhere in the store" rather than "in the other one", which was true
+         of a shop with two departments and became a lie the day it had three.
+         The same sentence the shelf case uses, so the two answers to the same
+         situation cannot drift apart. */
       detail:
-        `${everywhere} ${everywhere === 1 ? 'thing' : 'things'} in the other one ` +
-        `${everywhere === 1 ? 'does' : 'do'}.`,
+        `${everywhere} ${everywhere === 1 ? 'thing' : 'things'} elsewhere in the store ` +
+        `${everywhere === 1 ? 'does' : 'do'}. The rail on the left says where.`,
       elsewhere: everywhere,
     }
   }
@@ -308,7 +321,9 @@ export function storeEmpty(
     detail:
       stock === 0
         ? 'The catalogues came back empty, which is not something you can fix from here.'
-        : `Searched all ${stock} of them, across ${wired.length === 1 ? 'one department' : 'both departments'}.`,
+        : `Searched all ${stock} of them, across ${
+            wired.length === 1 ? 'one department' : `all ${wired.length} departments`
+          }.`,
     elsewhere: 0,
   }
 }

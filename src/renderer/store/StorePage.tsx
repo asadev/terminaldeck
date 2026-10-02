@@ -10,6 +10,12 @@ import {
 } from '../browser/StorePanel'
 import { extensionsAvailable, resolveExtensionsApi } from '../browser/extensions-bridge'
 import { resolveStoreApi, storeAvailable } from '../browser/store-bridge'
+import { CommunityDepartment } from '../community/CommunityDepartment'
+import {
+  COMMUNITY_SHELVES,
+  communityAvailable,
+  resolveCommunityApi,
+} from '../community/bridge'
 import { McpStore } from '../components/McpStore'
 import {
   MCP_CATEGORY_NAMES,
@@ -56,14 +62,21 @@ import './store-page.css'
  * used at full size. `shell/panels.ts` carries the argument for why a store
  * earns a row in the rail where a pop-up and a window do not.
  *
- * ## One store, two departments
+ * ## One store, three departments
  *
- * The two halves genuinely install different kinds of thing — one fetches a
- * program and fingerprints it, the other writes a command line into your agent's
- * configuration — and `store/storefront.ts` spends a section on why they must
- * **not** be forced to share a vocabulary they did not both measure. So they are
- * departments, not a merged list: each keeps its own rows, its own words, its own
- * chips and its own honesty about what it did and did not measure.
+ * They genuinely install different kinds of thing — one fetches a program and
+ * fingerprints it, one writes a command line into your agent's configuration,
+ * and the third fetches somebody else's work off a signed catalogue that nothing
+ * in this app has ever run — and `store/storefront.ts` spends a section on why
+ * they must **not** be forced to share a vocabulary they did not all measure. So
+ * they are departments, not a merged list: each keeps its own rows, its own
+ * words, its own chips and its own honesty about what it did and did not
+ * measure.
+ *
+ * The third arrived without changing anything about the first two, and that is
+ * the check on whether this was a model or a pair: `store-nav.ts` gained one
+ * word in a union, this file gained a third entry in three records, and nothing
+ * else here moved.
  *
  * What the page adds on top is the part a dialog could not have:
  *
@@ -71,7 +84,7 @@ import './store-page.css'
  *    extension and the MCP server in one go, and the rail says how many of each.
  *    Two boxes would have meant whichever half you typed into decided what you
  *    concluded the store contained.
- *  - **A rail of every shelf, with a count on each**, across both departments —
+ *  - **A rail of every shelf, with a count on each**, across every department —
  *    which is the *"separation of the categories … so they can categorize and
  *    choose which specific tool they want"* he asked for, at a size where it
  *    fits.
@@ -129,6 +142,7 @@ export function StorePage({ projectPath }: Props) {
   const store = useMemo(() => resolveStoreApi(), [])
   const extensions = useMemo(() => resolveExtensionsApi(), [])
   const mcp = useMemo(() => resolveMcpStoreApi(), [])
+  const community = useMemo(() => resolveCommunityApi(), [])
 
   /*
    * Which departments this window can honestly draw.
@@ -148,6 +162,24 @@ export function StorePage({ projectPath }: Props) {
   const browserWired =
     features.on('browser') && (storeAvailable(store) || extensionsAvailable(extensions))
   const serversWired = features.on('mcp') && mcpStoreAvailable(mcp)
+  /*
+   * The third department asks only the first of those two questions, and that is
+   * not an omission.
+   *
+   * The other two are gated on a feature because each of them *configures*
+   * something a person can uninstall — the browser pane, the MCP servers page —
+   * and with that gone every button in the department writes to something that
+   * is not there. The community catalogue configures nothing: it installs into
+   * whichever agents are on the machine, and the things it installs go on
+   * working with this window closed. There is nothing here a reasonable person
+   * would want permanently gone, which is the test `features/registry.ts` sets
+   * for what belongs in that table at all.
+   *
+   * So the one question left is whether this build can honestly draw it —
+   * `communityAvailable` wants all four channels — and a build that cannot has
+   * the department **absent** rather than greyed, like the other two.
+   */
+  const communityWired = communityAvailable(community)
 
   /**
    * The one search box, and the two sets of chips.
@@ -164,21 +196,23 @@ export function StorePage({ projectPath }: Props) {
   const [chips, setChips] = useState<Record<StoreDepartmentId, StoreFilter>>({
     extensions: NO_FILTER,
     servers: NO_FILTER,
+    community: NO_FILTER,
   })
   const [place, setPlace] = useState<StorePlace>(EVERYTHING)
   /**
    * The one row being read on its own, as a prefixed key, or `''`.
    *
-   * Prefixed because three kinds of row can be opened and they are numbered
-   * independently — `e:` an extension, `t:` a built-in tool, `m:` a server. The
-   * prefix is also what tells this page which department owns the key without
-   * asking either of them.
+   * Prefixed because four kinds of row can be opened and they are numbered
+   * independently — `e:` an extension, `t:` a built-in tool, `m:` a server,
+   * `c:` something somebody published. The prefix is also what tells this page
+   * which department owns the key without asking any of them.
    */
   const [detail, setDetail] = useState('')
   /** What each department reported it had, for the rail's counts. */
   const [rows, setRows] = useState<Record<StoreDepartmentId, StoreFacets[]>>({
     extensions: [],
     servers: [],
+    community: [],
   })
 
   const reportExtensions = useCallback((found: StoreFacets[]) => {
@@ -186,6 +220,9 @@ export function StorePage({ projectPath }: Props) {
   }, [])
   const reportServers = useCallback((found: StoreFacets[]) => {
     setRows((was) => ({ ...was, servers: found }))
+  }, [])
+  const reportCommunity = useCallback((found: StoreFacets[]) => {
+    setRows((was) => ({ ...was, community: found }))
   }, [])
 
   const departments: StoreDepartmentInput[] = [
@@ -204,6 +241,17 @@ export function StorePage({ projectPath }: Props) {
       shelves: MCP_CATEGORY_ORDER.map((id) => ({ id, name: MCP_CATEGORY_NAMES[id] })),
       rows: rows.servers,
       filter: { ...chips.servers, query },
+    },
+    {
+      id: 'community',
+      name: 'Community',
+      wired: communityWired,
+      /* The seven kinds, in the catalogue's own order. `storeNav` drops the ones
+         with nothing on them, so a shop of four skills draws one shelf rather
+         than seven headings over six empty grids. */
+      shelves: COMMUNITY_SHELVES,
+      rows: rows.community,
+      filter: { ...chips.community, query },
     },
   ]
 
@@ -243,11 +291,20 @@ export function StorePage({ projectPath }: Props) {
       onClear={() => {
         setDetail('')
         setQuery('')
-        setChips({ extensions: NO_FILTER, servers: NO_FILTER })
+        setChips({ extensions: NO_FILTER, servers: NO_FILTER, community: NO_FILTER })
         setPlace(EVERYTHING)
       }}
       department={(id) =>
-        id === 'extensions' ? (
+        id === 'community' ? (
+          <CommunityDepartment
+            api={community}
+            filter={filterFor(place, departments[2])}
+            onFilter={setChipsFor('community')}
+            detail={detail}
+            onDetail={setDetail}
+            onRows={reportCommunity}
+          />
+        ) : id === 'extensions' ? (
           <BrowserStoreDepartment
             store={store}
             extensions={extensions}
@@ -288,12 +345,12 @@ export function StorePage({ projectPath }: Props) {
 /**
  * Which department owns a row key, or `null` when nothing is open.
  *
- * The three prefixes are minted here — `e:` an extension, `t:` a built-in tool,
- * `m:` a server — because three kinds of row are numbered independently and a
- * bare id could name two of them. Reading them back is what lets the frame put
- * the *other* department away while one row is being read: without it, opening
- * uBlock Origin left eighteen MCP servers still on screen underneath it, which
- * is a detail view that is not one.
+ * The four prefixes are minted here — `e:` an extension, `t:` a built-in tool,
+ * `m:` a server, `c:` something somebody published — because four kinds of row
+ * are numbered independently and a bare id could name two of them. Reading them
+ * back is what lets the frame put the *other* departments away while one row is
+ * being read: without it, opening uBlock Origin left eighteen MCP servers still
+ * on screen underneath it, which is a detail view that is not one.
  *
  * Pure and exported so the harness stands the page in the same states the app
  * does, and so the mapping is one thing rather than a `startsWith` in three
@@ -302,6 +359,7 @@ export function StorePage({ projectPath }: Props) {
 export function departmentOfRow(key: string): StoreDepartmentId | null {
   if (key.startsWith('e:') || key.startsWith('t:')) return 'extensions'
   if (key.startsWith('m:')) return 'servers'
+  if (key.startsWith('c:')) return 'community'
   return null
 }
 
