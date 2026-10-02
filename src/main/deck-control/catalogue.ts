@@ -64,6 +64,8 @@ import {
 } from './report'
 import { remoteDevice, requireDeviceFolder } from './remote-start'
 import { checkSettingsValues, problemSentence } from './settings-validate'
+import { typeLine } from './session-typing'
+import { chooseAccountFrom } from './account-choice'
 import {
   Refused,
   type Caller,
@@ -562,7 +564,7 @@ export interface ToolSpec {
 
 class BadArgument extends Error {}
 
-function str(args: Record<string, unknown>, key: string): string {
+export function str(args: Record<string, unknown>, key: string): string {
   const value = args[key]
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new BadArgument(`${key} is required and must be a non-empty string`)
@@ -570,14 +572,14 @@ function str(args: Record<string, unknown>, key: string): string {
   return value
 }
 
-function optBool(args: Record<string, unknown>, key: string, fallback: boolean): boolean {
+export function optBool(args: Record<string, unknown>, key: string, fallback: boolean): boolean {
   const value = args[key]
   if (value === undefined || value === null) return fallback
   if (typeof value !== 'boolean') throw new BadArgument(`${key} must be true or false`)
   return value
 }
 
-function optInt(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
+export function optInt(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
   const value = args[key]
   if (value === undefined || value === null) return fallback
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -586,14 +588,14 @@ function optInt(args: Record<string, unknown>, key: string, fallback: number, mi
   return Math.min(Math.max(Math.trunc(value), min), max)
 }
 
-function optStr(args: Record<string, unknown>, key: string): string | null {
+export function optStr(args: Record<string, unknown>, key: string): string | null {
   const value = args[key]
   if (value === undefined || value === null || value === '') return null
   if (typeof value !== 'string') throw new BadArgument(`${key} must be a string`)
   return value
 }
 
-function record(args: Record<string, unknown>, key: string): Record<string, unknown> {
+export function record(args: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = args[key]
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new BadArgument(`${key} must be an object`)
@@ -601,6 +603,12 @@ function record(args: Record<string, unknown>, key: string): Record<string, unkn
   return value as Record<string, unknown>
 }
 
+/*
+ * Exported, with the five checks above, so the tools contributed beside this
+ * catalogue refuse a malformed call in the same words this one does. A model
+ * that has learned what "sessionId is required and must be a non-empty string"
+ * means should not have to learn a second sentence for it from the next file.
+ */
 export { BadArgument }
 
 /* ------------------------------------------------------------- view model -- */
@@ -677,8 +685,13 @@ export function viewOf(context: ToolContext, meta: ReturnType<DeckSurface['listS
  * budgeted and attributed, and a `Bash` line is not, so the value of keeping
  * this door narrow is that the wide one leaves a trail and this one would not
  * have to.
+ *
+ * Exported, with {@link requireKnownFolder} and {@link requireSession}, for the
+ * tools contributed beside this catalogue — files, projects, chats, the rest of
+ * the session verbs. A second copy of "which folders may be named" in each of
+ * those files would be a rule that one of them eventually widens.
  */
-function knownFolders(surface: DeckSurface): Set<string> {
+export function knownFolders(surface: DeckSurface): Set<string> {
   const folders = new Set<string>()
   for (const project of surface.listProjects()) folders.add(project.path)
   for (const session of surface.listSessions()) folders.add(session.cwd)
@@ -844,6 +857,35 @@ function relativePath(root: string, child: string): string | null {
   if (child === root) return ''
   const prefix = root.endsWith(sep) ? root : `${root}${sep}`
   return child.startsWith(prefix) ? child.slice(prefix.length) : null
+}
+
+/**
+ * The account a start asked for, checked against the accounts that exist.
+ *
+ * Checked rather than passed through, because the start path does not refuse an
+ * id it does not know — `resolveProfileId` falls back to the default — and a
+ * session started as the wrong login while the result said otherwise is the
+ * silent substitution this app has spent a release removing. A name is matched
+ * as well as an id, case-insensitively, because a model hears "my work account"
+ * and the id is an opaque string it has never been shown; two accounts with one
+ * name is refused rather than guessed between.
+ *
+ * Null when none was asked for. Throws `BadArgument` listing the real names
+ * when the one asked for is not there, so the next call can be right.
+ */
+function chooseAccount(
+  context: ToolContext,
+  args: Record<string, unknown>,
+): { id: string; name: string; provider: ProviderId } | null {
+  const wanted = optStr(args, 'account')
+  if (wanted === null) return null
+  const accounts = context.surface.accounts?.()
+  if (accounts === undefined) {
+    throw new BadArgument('this app cannot choose an account for a session here; leave `account` out')
+  }
+  const choice = chooseAccountFrom(accounts, wanted, optStr(args, 'provider'))
+  if (!choice.ok) throw new BadArgument(choice.message)
+  return choice.account
 }
 
 /**
@@ -1313,6 +1355,12 @@ export function buildCatalogue(): ToolSpec[] {
         properties: {
           cwd: { type: 'string', description: 'An open project folder. See projects.list.' },
           provider: { type: 'string', enum: [...PROVIDERS] },
+          account: {
+            type: 'string',
+            description:
+              'Which login to run as, by name or id (e.g. "Work"). Omit for the default. An account belongs to ' +
+              'one agent, so it also decides the agent when `provider` is left out.',
+          },
           resume: { type: 'boolean', description: 'Continue the most recent conversation in that folder.' },
           brief: {
             type: 'string',
@@ -1332,9 +1380,9 @@ export function buildCatalogue(): ToolSpec[] {
       summary: (args) => {
         const where = optStr(args, 'cwd') ?? '?'
         const what = optStr(args, 'title')
-        return what === null
-          ? `Start a ${optStr(args, 'provider') ?? 'default'} session in ${where}`
-          : `Start a ${optStr(args, 'provider') ?? 'default'} session in ${where} to ${what}`
+        const as = optStr(args, 'account')
+        const kind = `${optStr(args, 'provider') ?? 'default'} session${as === null ? '' : ` as ${as}`}`
+        return what === null ? `Start a ${kind} in ${where}` : `Start a ${kind} in ${where} to ${what}`
       },
       // Ahead of the budget: a call that was never going to be allowed should
       // not consume one of the five sessions the copilot may start in ten
@@ -1345,6 +1393,7 @@ export function buildCatalogue(): ToolSpec[] {
         refuseSecondSessionHere(context, cwd)
         refuseOverCeiling(context)
         checkBrief(args)
+        chooseAccount(context, args)
       },
       run: async (args, context) => {
         const cwd = requireStartableFolder(context, str(args, 'cwd'))
@@ -1352,16 +1401,20 @@ export function buildCatalogue(): ToolSpec[] {
         refuseSecondSessionHere(context, cwd)
         refuseOverCeiling(context)
         const brief = checkBrief(args)
-        const provider = optStr(args, 'provider')
-        if (provider !== null && !PROVIDERS.includes(provider as ProviderId)) {
+        const account = chooseAccount(context, args)
+        const asked = optStr(args, 'provider')
+        if (asked !== null && !PROVIDERS.includes(asked as ProviderId)) {
           throw new BadArgument(`provider must be one of ${PROVIDERS.join(', ')}`)
         }
+        // An account is a login of one agent, so naming one names the agent.
+        const provider = asked ?? account?.provider ?? null
         const input: CreateSessionInput = {
           cwd,
           cols: START_COLS,
           rows: START_ROWS,
           resume: optBool(args, 'resume', false),
           ...(provider === null ? {} : { provider: provider as ProviderId }),
+          ...(account === null ? {} : { profileId: account.id }),
           /*
            * Who wanted this session, written onto the session itself.
            *
@@ -1481,7 +1534,8 @@ export function buildCatalogue(): ToolSpec[] {
         'Type a line into a running session, as if a person had typed it. Printable text only — no newlines, ' +
         'tabs or control keys — and `submit` decides whether it is sent. Sending into a session YOU started is ' +
         'an ordinary action. Sending into a session the person started needs their confirmation each time, ' +
-        'because that session is theirs and they may be mid-thought in it.',
+        'because that session is theirs and they may be mid-thought in it. To get the answer, pass the ' +
+        'result\'s `sentAt` to sessions.wait; for a menu or a yes/no prompt, use sessions.keys instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1514,11 +1568,25 @@ export function buildCatalogue(): ToolSpec[] {
         if (session.exitCode !== null) {
           throw new BadArgument(`session ${session.id} has already exited; there is nothing to type into`)
         }
-        // The carriage return is appended here rather than accepted in `text`,
-        // so one call is at most one submitted line. See `sanitizeSendText`.
-        context.surface.writeToSession(session.id, submit ? `${text}\r` : text)
+        /*
+         * The carriage return is added here rather than accepted in `text`, so
+         * one call is at most one submitted line — see `sanitizeSendText` — and
+         * it is a **second write**, after a gap, never the end of the first.
+         *
+         * This was `writeToSession(id, `${text}\r`)` until 0.16.0, and that is
+         * the defect `session-typing.ts` is named for: a chunk of 64 bytes or
+         * more is read by the agent CLIs as a paste, the return inside it is a
+         * newline, and the message sits in the input box unsent. Short test
+         * prompts went through, which is how it survived; a real one did not.
+         *
+         * `sentAt` is the moment the line was committed, on this machine's
+         * clock, handed back so `sessions.wait` can tell an answer to *this*
+         * message from one that was already on screen.
+         */
+        const sentAt = context.now()
+        await typeLine((data) => context.surface.writeToSession(session.id, data), text, submit)
         return {
-          value: { sessionId: session.id, sent: text.length, submitted: submit },
+          value: { sessionId: session.id, sent: text.length, submitted: submit, sentAt },
           summary: { sessionId: session.id, chars: text.length, submitted: submit, text },
         }
       },

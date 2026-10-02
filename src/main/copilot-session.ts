@@ -1280,3 +1280,17 @@ export function registerCopilotIpc(ipcMain: IpcMain, deps: CopilotRuntimeDeps): 
     return { ...result, state: copilotState(deps) }
   })
 }
+
+/**
+ * The copilot's files, as the channels above resolve them, for a caller with no window.
+ *
+ * `deck-control/copilot-admin-tools.ts` reads and writes the same instruction
+ * files the Settings pane does, through the same functions, and it has to find
+ * them the same way — including the fallback when a chosen folder has gone
+ * away, which is decided in {@link resolve} and nowhere else. Exporting the one
+ * answer is what keeps a second idea of "where the copilot lives" from growing
+ * there.
+ */
+export function copilotLayerPaths(deps: CopilotRuntimeDeps): CopilotPaths {
+  return resolve(deps).paths
+}

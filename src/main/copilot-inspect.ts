@@ -722,7 +722,11 @@ export interface CopilotInspectDeps {
   revealInFileManager?(path: string, kind: 'file' | 'folder'): Promise<{ opened: boolean; message: string }>
 }
 
-function pathsOf(deps: CopilotInspectDeps): { paths: CopilotPaths; userData: string } {
+/*
+ * Exported for `deck-control/copilot-admin-tools.ts`, which reads the same
+ * memory folder and opens the same places, and must find them by the same rule.
+ */
+export function pathsOf(deps: CopilotInspectDeps): { paths: CopilotPaths; userData: string } {
   const userData = deps.userData?.() ?? userDataDir()
   return {
     paths: copilotPaths(
@@ -795,37 +799,45 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
 
   ipcMain.handle(
     'copilot:reveal',
-    async (_event: IpcMainInvokeEvent, place: unknown): Promise<RevealResult> => {
-      const { paths, userData } = pathsOf(deps)
-      if (typeof place !== 'string' || !(place in PLACE_KIND)) {
-        return { opened: false, path: null, message: 'There is nothing by that name to open.' }
-      }
-      const known = place as CopilotPlace
-      const path = copilotPlacePath(paths, known, userData)
-      try {
-        statSync(path)
-      } catch {
-        return {
-          opened: false,
-          path,
-          message: 'That has not been created yet, so there is nothing to open.',
-        }
-      }
-      // No file manager to open onto — a headless server has no screen. Said
-      // rather than faked: the desktop injects `revealInFileManager` (over
-      // `shell`), a server passes none, and a phone reading these files on a
-      // server never presses reveal — it opens the file in-app.
-      if (deps.revealInFileManager === undefined) {
-        return { opened: false, path, message: 'This host has no file manager to open — it is a server.' }
-      }
-      // A file is revealed in its folder rather than opened, because opening a
-      // Markdown file hands it to whatever the machine has registered for
-      // Markdown, which on a developer's Mac is as likely to be an editor they
-      // have not used in a year as the one they want. A folder is opened,
-      // because that is what opening a folder means. Which of the two this is
-      // travels to the injected action as its `kind`.
-      const revealed = await deps.revealInFileManager(path, PLACE_KIND[known])
-      return { opened: revealed.opened, path, message: revealed.message }
-    },
+    (_event: IpcMainInvokeEvent, place: unknown): Promise<RevealResult> => revealCopilotPlace(deps, place),
   )
+}
+
+/**
+ * Open one of the copilot's places in the file manager — what `copilot:reveal`
+ * does, as a function, so the tool that offers the same button from outside
+ * the window is this code rather than a copy of its allowlist. The allowlist is
+ * the part that went stale once already (see {@link PLACE_KIND}).
+ */
+export async function revealCopilotPlace(deps: CopilotInspectDeps, place: unknown): Promise<RevealResult> {
+  const { paths, userData } = pathsOf(deps)
+  if (typeof place !== 'string' || !(place in PLACE_KIND)) {
+    return { opened: false, path: null, message: 'There is nothing by that name to open.' }
+  }
+  const known = place as CopilotPlace
+  const path = copilotPlacePath(paths, known, userData)
+  try {
+    statSync(path)
+  } catch {
+    return {
+      opened: false,
+      path,
+      message: 'That has not been created yet, so there is nothing to open.',
+    }
+  }
+  // No file manager to open onto — a headless server has no screen. Said
+  // rather than faked: the desktop injects `revealInFileManager` (over
+  // `shell`), a server passes none, and a phone reading these files on a
+  // server never presses reveal — it opens the file in-app.
+  if (deps.revealInFileManager === undefined) {
+    return { opened: false, path, message: 'This host has no file manager to open — it is a server.' }
+  }
+  // A file is revealed in its folder rather than opened, because opening a
+  // Markdown file hands it to whatever the machine has registered for
+  // Markdown, which on a developer's Mac is as likely to be an editor they
+  // have not used in a year as the one they want. A folder is opened,
+  // because that is what opening a folder means. Which of the two this is
+  // travels to the injected action as its `kind`.
+  const revealed = await deps.revealInFileManager(path, PLACE_KIND[known])
+  return { opened: revealed.opened, path, message: revealed.message }
 }

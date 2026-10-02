@@ -527,6 +527,21 @@ export interface DeckSurface {
    */
   sessionScrollback(id: string): string
 
+  /**
+   * The accounts a session may be started as — ids and names, never a credential.
+   *
+   * `profiles.ts`'s `listProfiles()`, narrowed to the three fields a choice is
+   * made by. Here because `sessions.start` takes an `account` and has to check
+   * it: `resolveProfileId` quietly falls back to the default for an id it does
+   * not know, so an unchecked typo would start a session as the *wrong* login
+   * and report success — the silent downgrade this app has removed everywhere
+   * else.
+   *
+   * Optional, and absent means "this host cannot choose an account", which the
+   * tool says rather than ignoring the argument.
+   */
+  accounts?(): Array<{ id: string; name: string; provider: ProviderId }>
+
   /* --- projects ---------------------------------------------------------- */
   listProjects(): Array<{ path: string; provider?: ProviderId; lastOpenedAt: number }>
   /**

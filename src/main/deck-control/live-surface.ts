@@ -35,6 +35,7 @@ import type { PtyManager } from '../pty-manager'
  * `browser-drive-current.ts`.
  */
 import { getStoredSettings, patchStoredSettings, writeSettingsSnapshot } from '../settings-store'
+import { listProfiles } from '../profiles'
 import { store } from '../store'
 import { readToolTrail } from '../tool-trail'
 import { listTranscripts, readTranscript, transcriptDirs } from '../transcript'
@@ -183,6 +184,11 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
     sessionScrollback: (id) => deps.ptys.scrollback(id),
 
     listProjects: () => store().getProjects(),
+
+    // The same list the account picker draws, cut to what a choice is made by.
+    // `configDir` stays behind: it is a path into somebody's login, and nothing
+    // about choosing one needs it.
+    accounts: () => listProfiles().map((profile) => ({ id: profile.id, name: profile.name, provider: profile.provider })),
 
     // Read on every call rather than captured, for the reason every other path
     // helper in this app gives: `pinUserData` can move the directory before the
