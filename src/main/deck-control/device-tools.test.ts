@@ -299,6 +299,20 @@ describe('the catalogue these tools add', () => {
     })
   })
 
+  it('spends from the device input budget for fingers on the glass, and only for those', () => {
+    // Starting and stopping a device stay on the shared change budget; they
+    // are not part of tapping through an app. See `Budgets.deviceInput`.
+    const spending = Object.fromEntries(tools.map((tool) => [tool.id, tool.spends ?? 'changes']))
+    expect(spending).toMatchObject({
+      'devices.tap': 'device-input',
+      'devices.swipe': 'device-input',
+      'devices.type': 'device-input',
+      'devices.button': 'device-input',
+      'devices.open': 'changes',
+      'devices.shutdown': 'changes',
+    })
+  })
+
   it('spells every wire name as the dotted id with underscores', () => {
     for (const tool of tools) {
       expect(tool.wire).toBe(tool.id.replace(/\./g, '_'))

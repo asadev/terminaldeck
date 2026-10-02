@@ -1119,6 +1119,9 @@ export function deviceTools(deps: DeviceToolDeps): ToolSpec[] {
     id: 'devices.tap',
     wire: 'devices_tap',
     tier: 'act',
+    // Input to a device: its own budget, never the shared thirty — see
+    // `Budgets.deviceInput` in `control.ts`.
+    spends: 'device-input',
     title: 'Tap a device screen',
     description:
       'Tap one point, or tap an element found by name. Give x and y — fractions of the screen, 0 to 1, x ' +
@@ -1189,6 +1192,8 @@ export function deviceTools(deps: DeviceToolDeps): ToolSpec[] {
     id: 'devices.swipe',
     wire: 'devices_swipe',
     tier: 'act',
+    // Input to a device, like `devices.tap`.
+    spends: 'device-input',
     title: 'Swipe on a device screen',
     description:
       'Drag a finger across the screen. Give from and to, each {x, y} as fractions of the screen (0 to 1, x ' +
@@ -1236,6 +1241,8 @@ export function deviceTools(deps: DeviceToolDeps): ToolSpec[] {
     id: 'devices.type',
     wire: 'devices_type',
     tier: 'act',
+    // Input to a device, like `devices.tap`.
+    spends: 'device-input',
     title: 'Type on a device',
     description:
       'Type text into whatever field has focus on the device, and/or press one named key — return, enter, ' +
@@ -1324,6 +1331,8 @@ export function deviceTools(deps: DeviceToolDeps): ToolSpec[] {
     id: 'devices.button',
     wire: 'devices_button',
     tier: 'act',
+    // Input to a device, like `devices.tap`.
+    spends: 'device-input',
     title: 'Press a button or rotate a device',
     description:
       `Press a hardware button — ${DEVICE_BUTTONS.join(', ')} — or turn the device to an orientation: ` +

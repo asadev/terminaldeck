@@ -109,12 +109,33 @@ export interface Budgets {
    * than anybody asks for on purpose.
    */
   sessionStarts: Budget
+  /**
+   * Fingers on a phone: taps, swipes, typing and hardware buttons on a device.
+   *
+   * Its own window rather than a share of {@link Budgets.changes}, and the two
+   * numbers say why. Thirty changes in five minutes is right for a model
+   * starting sessions and writing settings, and it is used up by the first
+   * screen of an app: checking a fix on a simulator is open, tap the tab, tap
+   * the row, type into the field, tap save, swipe back — a dozen inputs for
+   * one look, several looks for one fix. Charging those against `changes`
+   * would either refuse the agent halfway through its own check or, if the
+   * shared number were raised to fit, let the same allowance start sessions
+   * and change settings at tapping speed.
+   *
+   * So a tool that is input to a device says so (`ToolSpec.spends`) and spends
+   * here instead, and `changes` is exactly what it was. Three hundred in five
+   * minutes is one input a second, sustained — a person tapping through an app
+   * — and a loop that taps the same button forever still stops. The per-minute
+   * `all` window applies to these as to everything.
+   */
+  deviceInput: Budget
 }
 
 export const DEFAULT_BUDGETS: Budgets = {
   all: { limit: 240, windowMs: 60_000 },
   changes: { limit: 30, windowMs: 300_000 },
   sessionStarts: { limit: 5, windowMs: 600_000 },
+  deviceInput: { limit: 300, windowMs: 300_000 },
 }
 
 /**
@@ -337,6 +358,7 @@ interface Windows {
   all: Window
   changes: Window
   sessionStarts: Window
+  deviceInput: Window
 }
 
 function windowsFrom(budgets: Budgets): Windows {
@@ -344,6 +366,7 @@ function windowsFrom(budgets: Budgets): Windows {
     all: new Window(budgets.all),
     changes: new Window(budgets.changes),
     sessionStarts: new Window(budgets.sessionStarts),
+    deviceInput: new Window(budgets.deviceInput),
   }
 }
 
@@ -422,6 +445,7 @@ export class DeckControl {
       all: options.budgets?.all ?? DEFAULT_BUDGETS.all,
       changes: options.budgets?.changes ?? DEFAULT_BUDGETS.changes,
       sessionStarts: options.budgets?.sessionStarts ?? DEFAULT_BUDGETS.sessionStarts,
+      deviceInput: options.budgets?.deviceInput ?? DEFAULT_BUDGETS.deviceInput,
     }
     this.budgets = budgets
     this.windows = windowsFrom(budgets)
@@ -936,7 +960,20 @@ export class DeckControl {
       })
     }
 
-    if (tier !== 'read' && !windows.changes.take(startedAt)) {
+    /*
+     * Input to a device spends from its own window and never from `changes` —
+     * see `Budgets.deviceInput` for why the two must not share. Read off the
+     * spec, not the arguments: what kind of spending a tool is does not depend
+     * on what it was asked to do.
+     */
+    if (tier !== 'read' && spec.spends === 'device-input') {
+      if (!windows.deviceInput.take(startedAt)) {
+        return overBudget(
+          'too many taps, swipes and keystrokes on a device in the last few minutes; pause, look at the screen ' +
+            'with devices.tree, then carry on',
+        )
+      }
+    } else if (tier !== 'read' && !windows.changes.take(startedAt)) {
       return overBudget('too many changes in the last few minutes; ask the person to act instead')
     }
     if (spec.id === 'sessions.start' && !windows.sessionStarts.take(startedAt)) {

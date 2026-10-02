@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ActionLog, type ActionRow } from './action-log'
-import { DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_CHARS } from './catalogue'
+import { DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_CHARS, type ToolSpec } from './catalogue'
 import { ConsentBroker, type ConsentRequest } from './consent'
-import { DeckControl } from './control'
+import { DEFAULT_BUDGETS, DeckControl } from './control'
 import type { DeckSurface, TranscriptMessage } from './surface'
 import type { CreateSessionInput, SessionMeta, SessionStatus } from '../../shared/types'
 
@@ -198,7 +198,9 @@ let asked: ConsentRequest[] = []
 /** What the fake approver does next. `null` means there is no approver at all. */
 let answer: boolean | null = null
 
-function build(options: { budgets?: ConstructorParameters<typeof DeckControl>[0]['budgets'] } = {}): {
+function build(
+  options: { budgets?: ConstructorParameters<typeof DeckControl>[0]['budgets']; extraTools?: ToolSpec[] } = {},
+): {
   control: DeckControl
   state: Recorder
   log: ActionLog
@@ -227,6 +229,7 @@ function build(options: { budgets?: ConstructorParameters<typeof DeckControl>[0]
     log,
     consent,
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
+    ...(options.extraTools === undefined ? {} : { extraTools: options.extraTools }),
   })
   return { control, state, log }
 }
@@ -1186,6 +1189,62 @@ describe('the budgets', () => {
     await control.call('sessions_start', { cwd: '/work/api' })
     expect((await control.call('sessions_start', { cwd: '/work/web' })).refusal).toBe('rate-limited')
     expect((await control.call('projects_list', {})).ok).toBe(true)
+  })
+
+  /*
+   * Fingers on a phone. An agent checking its own fix on a simulator taps a
+   * dozen times for one look; those taps must not use up the thirty changes
+   * that bound starting sessions and writing settings, and the thirty must not
+   * be raised to fit them. See `Budgets.deviceInput`.
+   */
+  function tapTool(taps: string[]): ToolSpec {
+    return {
+      id: 'devices.tap',
+      wire: 'devices_tap',
+      tier: 'act',
+      spends: 'device-input',
+      title: 'Tap',
+      description: 'Tap a device.',
+      inputSchema: { type: 'object', properties: {} },
+      summary: () => 'Tap',
+      run: async () => {
+        taps.push('tap')
+        return { value: { tapped: true }, summary: {} }
+      },
+    }
+  }
+
+  it('spends device input from its own window, leaving the change budget whole', async () => {
+    const taps: string[] = []
+    const { control } = build({
+      budgets: { changes: { limit: 1, windowMs: 60_000 } },
+      extraTools: [tapTool(taps)],
+    })
+    for (let i = 0; i < 10; i++) expect((await control.call('devices_tap', {})).ok).toBe(true)
+    expect(taps).toHaveLength(10)
+    // The one change is still there to spend.
+    expect((await control.call('sessions_start', { cwd: '/work/api' })).ok).toBe(true)
+    expect((await control.call('sessions_start', { cwd: '/work/web' })).refusal).toBe('rate-limited')
+  })
+
+  it('stops a loop of taps at the device budget, in words that say what to do instead', async () => {
+    const taps: string[] = []
+    const { control } = build({
+      budgets: { deviceInput: { limit: 3, windowMs: 60_000 } },
+      extraTools: [tapTool(taps)],
+    })
+    for (let i = 0; i < 3; i++) await control.call('devices_tap', {})
+    const fourth = await control.call('devices_tap', {})
+    expect(fourth.refusal).toBe('rate-limited')
+    expect(fourth.error).toContain('devices.tree')
+    expect(taps).toHaveLength(3)
+    // And an ordinary change is not refused because the phone budget is spent.
+    expect((await control.call('sessions_start', { cwd: '/work/api' })).ok).toBe(true)
+  })
+
+  it('keeps the shared budget at thirty in five minutes and gives taps a few hundred', () => {
+    expect(DEFAULT_BUDGETS.changes).toEqual({ limit: 30, windowMs: 300_000 })
+    expect(DEFAULT_BUDGETS.deviceInput).toEqual({ limit: 300, windowMs: 300_000 })
   })
 })
 

@@ -561,6 +561,20 @@ export interface ToolSpec {
    * not implementing it.
    */
   ownerMustAnswer?(args: Record<string, unknown>): boolean
+  /**
+   * Which budget an `act` or `alter` call spends from, when it is not the
+   * shared one.
+   *
+   * Absent — every tool but four — means `changes`, the thirty-in-five-minutes
+   * window that bounds starting things and changing things. `'device-input'` is
+   * a tap, swipe, keystroke or button on a phone or simulator, and spends from
+   * `Budgets.deviceInput` instead, because tapping through an app to check a fix
+   * takes dozens of inputs and none of them is the kind of change `changes`
+   * exists to slow down. `control.ts` has the whole argument. A field on the
+   * spec rather than a list of ids in the dispatcher, so the tool that is input
+   * says so where it is written and a renamed tool cannot fall out of a list.
+   */
+  spends?: 'device-input'
   /** One sentence naming what will happen. Shown in the dialog, kept in the log. */
   summary(args: Record<string, unknown>, context: ToolContext): string
   run(args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput>

@@ -208,7 +208,11 @@ screenshot popup's Reveal uses: device pictures land in the same
    Adding the `devices.*` ids there is one line per tool; devices are not bound
    to a session the way browser windows are, so any session could then touch
    any simulator on the Mac. Owner of that file decides.
-2. **The act budget.** `control.ts` allows 30 act/alter calls per five minutes.
+2. **Settled 2026-10-03 — device input has its own budget.** Taps, swipes,
+   typing and buttons (`ToolSpec.spends: 'device-input'`) spend from
+   `Budgets.deviceInput`, 300 in five minutes, and never from `changes`, which
+   stays 30 in five minutes. Opening and shutting down a device still spend
+   `changes`. The note that was here, for the record: **The act budget.** `control.ts` allows 30 act/alter calls per five minutes.
    Driving a phone tap by tap reaches that quickly (so does `browser.step`).
 
 ## 7. Headless host
