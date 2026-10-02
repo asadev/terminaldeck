@@ -184,6 +184,8 @@ async function boot(options: { trustEveryWindow?: boolean } = {}): Promise<void>
   relay = { asked: [], settled: [], delivers: false, throws: false }
 
   handle = await registerDeckControlIpc(ipc as unknown as IpcMain, {
+    // Any free port, never the remembered one: see `DeckControlDeps.port`.
+    port: 0,
     ptys: {
       list: () => [],
       write: () => undefined,
@@ -271,6 +273,7 @@ describe('registration', () => {
   it('refuses to register twice rather than taking the app down on a duplicate channel', async () => {
     await expect(
       registerDeckControlIpc(ipc as unknown as IpcMain, {
+        port: 0,
         ptys: {
       list: () => [],
       write: () => undefined,

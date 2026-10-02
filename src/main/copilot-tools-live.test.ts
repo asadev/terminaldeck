@@ -163,6 +163,8 @@ describe.skipIf(!live)('the copilot, against the real CLI', () => {
 
     const ipc = new FakeIpcMain()
     handle = await registerDeckControlIpc(ipc as unknown as IpcMain, {
+      // Any free port, never the remembered one: see `DeckControlDeps.port`.
+      port: 0,
       ptys: core.ptys,
       startSession: (input) => (core as HostCore).startSession(input),
       sessionStatus: () => undefined as { status: SessionStatus; at: number } | undefined,

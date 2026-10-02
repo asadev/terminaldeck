@@ -157,7 +157,7 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
       index: 'Read or change the copilot’s instructions — yours, its folder’s, the generated part, or all composed.',
       description:
         'The copilot’s instructions, the same four the Settings pane shows. "read" with `which`: "yours" (the ' +
-        'part the person edits), "folder" (the working folder’s own CLAUDE.md), "contract" (generated from what ' +
+        'part the person edits), "folder" (the working folder’s own instructions file), "contract" (generated from what ' +
         'is wired — read only), "composed" (everything it was handed at its last start). "write" replaces ' +
         '"yours" or "folder" with `text`; the previous file is kept beside it. "reset" puts this build’s default ' +
         'wording back. Writes are confirmed, and reach the copilot only at its next start.',

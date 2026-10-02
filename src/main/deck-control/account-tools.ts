@@ -144,7 +144,7 @@ export function accountTools(deps: AccountToolDeps): ToolSpec[] {
       inputSchema: {
         type: 'object',
         properties: {
-          agent: { type: 'string', description: 'Only this agent’s accounts, e.g. claude or codex.' },
+          agent: { type: 'string', description: 'Only this agent’s accounts: claude, codex or gemini.' },
           projectPath: { type: 'string', description: 'An open folder: also say which account it would use.' },
         },
         additionalProperties: false,

@@ -298,7 +298,16 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
   isApprover(contents: Electron.WebContents): boolean
   /** Push to the renderer. Pass the main process's own `send`. */
   broadcast(channel: string, ...args: unknown[]): void
-  /** Fixed port and shortened timeouts, for tests. */
+  /**
+   * Fixed port and shortened timeouts, for tests.
+   *
+   * **A test should pass `port: 0`.** Left out, the assembly prefers the port
+   * the tools were last served on (47821 the first time) so an outside AI app's
+   * setup survives a restart — and two tests that each start and stop a server
+   * on that one port leave the second one's HTTP client reusing a pooled
+   * connection to the first, which answers `ECONNRESET` under load. Seen in
+   * `index.test.ts` the day the stable port landed.
+   */
   port?: number
   consentTimeoutMs?: number
   budgets?: Partial<Budgets>
