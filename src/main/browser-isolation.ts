@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { app, session, type IpcMain, type Session } from 'electron'
 import { attachDownloads } from './browser-downloads'
 import { writeRecordPreload } from './browser-record-preload'
+import { cleanUserAgent } from './browser-user-agent'
 
 /**
  * Per-tab isolation: a browser tab that shares nothing with the others.
@@ -36,9 +37,11 @@ import { writeRecordPreload } from './browser-record-preload'
  * A guest page is untrusted whichever partition it is in. Everything
  * `browser-tab.ts` does to the shared session is done here too — permissions
  * refused, downloads taken by `browser-downloads.ts` rather than by Chromium's
- * own Save-As sheet — and the flow recorder's session preload is registered as
- * well, or recording would silently stop working the moment a tab was switched
- * to Isolated. All three are easy to forget and none of them fails loudly.
+ * own Save-As sheet, the user agent cleaned of Electron's token — and the flow
+ * recorder's session preload is registered as well, or recording would silently
+ * stop working the moment a tab was switched to Isolated. All four are easy to
+ * forget and none of them fails loudly: the user agent was forgotten here until
+ * 2026-10-03, and the only symptom was Google refusing to sign in.
  *
  * ## The seam
  *
@@ -83,7 +86,8 @@ export function newIsolationKey(): string {
  *
  * Deliberately the same list as `hardenedGuestSession()` in `browser-tab.ts`: a
  * page being looked at has no business asking for the camera, the clipboard or a
- * notification, and there is no UI here to ask the user with.
+ * notification, and there is no UI here to ask the user with — and it says the
+ * same thing about itself as that session does, which is the user agent below.
  *
  * Downloads are wired for the same reason they are wired there, and the wiring
  * has to be in both copies. An isolated tab that refused a download while an
@@ -95,6 +99,25 @@ function harden(ses: Session): Session {
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   ses.setPermissionCheckHandler(() => false)
   attachDownloads(ses)
+
+  /*
+   * The user agent, which this copy of the list was missing.
+   *
+   * `hardenedGuestSession()` and `workerSession()` in `browser-tab.ts` both set
+   * it, and this one did not — so an Isolated tab sent Electron's own default,
+   * `Electron/41.10.5` and all, on every request. Measured on the wire on
+   * 2026-09-02 by running Electron 41.10.5 against a real HTTP server, and it is
+   * the token `browser-user-agent.ts` records Google routing down its legacy
+   * sign-in path. Isolated is exactly the tab somebody opens to sign in as a
+   * second user, so it was the tab where sign-in was refused.
+   *
+   * The same cleaner and the same source as the other two, never a string of
+   * its own: an Isolated tab that announced a different browser from the tab
+   * beside it would be a second fingerprint, and a fix written twice is a fix
+   * that drifts. Set on the session, before any view is made in it, so the
+   * first request a page sends already carries it.
+   */
+  ses.setUserAgent(cleanUserAgent(app.userAgentFallback))
 
   // The recorder's guest script is attached per *session*, so an isolated tab
   // that skipped this would look like it was recording and capture nothing.

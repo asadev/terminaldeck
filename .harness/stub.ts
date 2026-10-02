@@ -390,6 +390,9 @@ let folderInstructions = new URLSearchParams(location.search).has('folder-instru
   ? '# CLAUDE.md\n\nYou are Nova, the assistant for this workspace. Call them Asad.\n\nAlways read `README.md` before answering.\n'
   : ''
 
+/** One fallback per missing method name, so its identity holds — see the `get` trap below. */
+const stableFallbacks = new Map<string, unknown>()
+
 const api: Record<string, unknown> = new Proxy(
   {
     getBrand: async () => ({ name: 'Deck', tagline: 'Run and watch your Claude sessions' }),
@@ -2039,8 +2042,23 @@ const api: Record<string, unknown> = new Proxy(
     // Mirror the real preload's shape: on* methods are subscriptions that
     // return an unsubscribe function; everything else is a promise. Getting
     // this wrong is what made the harness disagree with Electron.
-    get: (t: Record<string, unknown>, k: string) =>
-      t[k] ?? (k.startsWith('on') ? () => () => {} : async () => null),
+    //
+    // And the same function every time it is asked for, which the real preload
+    // also guarantees: its methods are properties of one object, fixed at load.
+    // A fresh fallback per read made every effect keyed on a missing method
+    // re-run on every render — `DevServerPanel` keys one on `devServers`, and
+    // from the moment a browser window opened the harness spun at ~70% of a
+    // core and stopped acknowledging real mouse input, so a pointer press on
+    // the bar never returned. Measured 2026-10-03; nothing in Electron does it.
+    get: (t: Record<string, unknown>, k: string) => {
+      if (t[k] !== undefined) return t[k]
+      let fallback = stableFallbacks.get(k)
+      if (fallback === undefined) {
+        fallback = k.startsWith('on') ? () => () => {} : async () => null
+        stableFallbacks.set(k, fallback)
+      }
+      return fallback
+    },
   },
 )
 ;(globalThis as unknown as { terminaldeck: unknown }).deck = api

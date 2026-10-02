@@ -1,6 +1,13 @@
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { DEV_KEY_PHRASE, liveStoreKeys, STORE_KEYS } from './store-key'
+import {
+  DEV_KEY_PHRASE,
+  DEV_STORE_KEY,
+  liveStoreKeys,
+  STORE_DEV_KEY_ENV,
+  STORE_KEYS,
+  storeKeysFor,
+} from './store-key'
 
 /** The 16 bytes in front of a raw Ed25519 seed that make it a PKCS#8 private key. */
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
@@ -37,10 +44,24 @@ describe('the keys this build will believe a catalogue from', () => {
     expect(live?.hex).not.toBe(devKeyFromPhrase(DEV_KEY_PHRASE))
   })
 
-  it('carries the development key in the second slot, and it is the one the phrase makes', () => {
-    const dev = STORE_KEYS[1]
-    expect(dev).not.toBeNull()
-    expect(dev?.hex).toBe(devKeyFromPhrase(DEV_KEY_PHRASE))
+  /*
+   * The slot the development key sat in until 2026-10-03, with a note on it
+   * saying to delete it in the release that ships the Store. While it was
+   * there, every build — the notarised one on a stranger's Mac included —
+   * believed a catalogue any reader of `DEV_KEY_PHRASE` could sign.
+   */
+  it('leaves the second slot empty, so no build believes a key anyone can recompute', () => {
+    expect(STORE_KEYS[1]).toBeNull()
+    const recomputable = devKeyFromPhrase(DEV_KEY_PHRASE)
+    for (const key of liveStoreKeys()) expect(key.hex).not.toBe(recomputable)
+  })
+
+  it('keeps the development key out of the slots, and it is the one the phrase makes', () => {
+    expect(DEV_STORE_KEY.hex).toBe(devKeyFromPhrase(DEV_KEY_PHRASE))
+    // The id the site repository's signer stamps on a preview catalogue. A key
+    // is never edited in place, and that includes its name.
+    expect(DEV_STORE_KEY.id).toBe('td-store-dev-1')
+    expect(STORE_KEYS.some((key) => key?.hex === DEV_STORE_KEY.hex)).toBe(false)
   })
 
   it('writes every key as 64 lower-case hex characters, which is the raw 32 bytes', () => {
@@ -55,11 +76,42 @@ describe('the keys this build will believe a catalogue from', () => {
   })
 
   it('says out loud that the development key must never sign a public catalogue', () => {
-    expect(STORE_KEYS[1]?.because).toContain('never sign')
+    expect(DEV_STORE_KEY.because).toContain('never sign')
   })
 
   it('never lists the same key twice, which is a rotation nobody can watch', () => {
     const hexes = liveStoreKeys().map((key) => key.hex)
     expect(new Set(hexes).size).toBe(hexes.length)
+  })
+})
+
+/**
+ * The one way the development key is believed.
+ *
+ * Every case that must refuse is a real way a run gets started: a packaged build
+ * on a machine where somebody once exported the variable, a contributor's
+ * checkout that never asked, a value that looks like yes and is not the switch.
+ */
+describe('which keys a run believes', () => {
+  const dev = { [STORE_DEV_KEY_ENV]: '1' }
+
+  it('never adds the development key to a packaged build, whatever the environment says', () => {
+    expect(storeKeysFor({ env: dev, packaged: true })).toEqual(liveStoreKeys())
+  })
+
+  it('does not add it to an unpackaged run that did not ask', () => {
+    expect(storeKeysFor({ env: {}, packaged: false })).toEqual(liveStoreKeys())
+  })
+
+  it('counts only the exact value 1 as asking', () => {
+    for (const value of ['true', 'yes', 'on', '0', '', ' 1', '1 ']) {
+      expect(storeKeysFor({ env: { [STORE_DEV_KEY_ENV]: value }, packaged: false })).toEqual(liveStoreKeys())
+    }
+  })
+
+  it('adds it last for an unpackaged run that asked, so the production key still answers first', () => {
+    const keys = storeKeysFor({ env: dev, packaged: false })
+    expect(keys).toEqual([...liveStoreKeys(), DEV_STORE_KEY])
+    expect(new Set(keys.map((key) => key.hex)).size).toBe(keys.length)
   })
 })
