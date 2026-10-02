@@ -2647,6 +2647,35 @@ const api = {
   saveVoiceKey: (request: { provider: string; key: string }): Promise<unknown> =>
     ipcRenderer.invoke('voice:save', request),
   forgetVoiceKey: (): Promise<unknown> => ipcRenderer.invoke('voice:forget'),
+
+  /**
+   * The Mac's own ear and voice — the on-device engine, no key.
+   *
+   * A separate set of names rather than an option on the ones above, because
+   * they answer different questions and fail differently. `voiceStatus` asks
+   * *is there a proved key*; `nativeSpeechProbe` asks *can this machine hear
+   * for free*. A caller has to be able to ask the second and fall through to
+   * the first, which one merged call could not express.
+   */
+  nativeSpeechProbe: (): Promise<unknown> => ipcRenderer.invoke('nspeech:probe'),
+  nativeSpeechVoices: (): Promise<unknown> => ipcRenderer.invoke('nspeech:voices'),
+  startNativeSpeech: (request: { locale?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('nspeech:start', request),
+  stopNativeSpeech: (): Promise<unknown> => ipcRenderer.invoke('nspeech:stop'),
+  /** Resolves when the sentence has actually finished being spoken. */
+  speakNative: (request: {
+    text: string
+    voice?: string
+    rate?: number
+    pitch?: number
+    volume?: number
+  }): Promise<unknown> => ipcRenderer.invoke('nspeech:speak', request),
+  hushNative: (): Promise<unknown> => ipcRenderer.invoke('nspeech:hush'),
+  onNativeSpeech: (cb: (line: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, line: unknown) => cb(line)
+    ipcRenderer.on('nspeech:event', handler)
+    return () => ipcRenderer.off('nspeech:event', handler)
+  },
   transcribeAudio: (request: { audio: Uint8Array; filename: string }): Promise<unknown> =>
     ipcRenderer.invoke('voice:transcribe', request),
   applyAgentControl: (request: {

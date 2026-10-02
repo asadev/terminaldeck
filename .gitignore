@@ -104,3 +104,10 @@ REFERENCES.local.md
 # a bundle and a folder of screenshots, written when it is run with no --out.
 .drive-check/
 .vercel
+
+# Stays Fixed — evidence from the last run, not the promise
+.staysfixed/results/
+.staysfixed/report.html
+.staysfixed/watch-window.json
+.staysfixed/v2/
+.staysfixed/history.json

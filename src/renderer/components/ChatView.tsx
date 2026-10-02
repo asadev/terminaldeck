@@ -9,6 +9,8 @@ import { runningProvider, useAgentPresence } from '../shell/agent-presence'
 import { CHAT_SESSION_ATTR } from '../driving/where'
 import type { ProviderId } from '@shared/types'
 import './ChatView.css'
+import { VoiceBar } from '../chat/voice/VoiceBar'
+import { speakable, useVoiceLoop } from '../chat/voice/useVoiceLoop'
 
 /**
  * A session as a conversation: what the user asked, what the agent said, and
@@ -1393,6 +1395,68 @@ export function ChatView({
     [echoing, onSend],
   )
 
+  /**
+   * The voice conversation.
+   *
+   * It lives here rather than in the composer because it needs both halves —
+   * the box to send into, and the messages to read back — and only this
+   * component holds both. `onTurn` returns whether the turn actually went, so
+   * the loop can show "working on it" for a sent turn and stay listening for
+   * one that could not be sent.
+   */
+  const voice = useVoiceLoop({
+    onTurn: (spoken) => {
+      if (onSend === undefined) return false
+      handleSend(spoken)
+      return true
+    },
+  })
+
+  /**
+   * Read the copilot's answer out loud — once per message, and only the newest.
+   * `agent` is this view's word for the far end; `you` is the other role.
+   *
+   * The id is remembered rather than the count, because a transcript that is
+   * re-read from disk (a pane remount, a tail that resets) arrives as the same
+   * messages again and a count-based guard would read the whole conversation
+   * aloud. `spokenRef` starts holding whatever is already on screen at the
+   * moment voice is switched on, so turning it on mid-conversation does not
+   * make it recite the backlog.
+   */
+  const spokenRef = useRef<string | null>(null)
+  const voiceOn = voice.handsFree
+  useEffect(() => {
+    if (!voiceOn) return
+    const last = [...messages].reverse().find((m) => m.role === 'agent')
+    if (!last) return
+    if (spokenRef.current === null) {
+      // First look after switching on: adopt the current tail as already said.
+      spokenRef.current = last.id
+      return
+    }
+    if (spokenRef.current === last.id) return
+    spokenRef.current = last.id
+    if (!speakable(last.text)) return
+    void voice.say(last.text)
+  }, [messages, voiceOn, voice])
+
+  // Forget what was spoken when the loop is switched off, so switching it on
+  // again adopts the new tail rather than replaying from an old mark.
+  useEffect(() => {
+    if (!voiceOn) spokenRef.current = null
+  }, [voiceOn])
+
+  const toggleHandsFree = useCallback(() => {
+    if (voice.handsFree) {
+      voice.setHandsFree(false)
+      void voice.stopEar()
+      void voice.hush()
+      return
+    }
+    voice.setHandsFree(true)
+    void voice.startEar()
+  }, [voice])
+
   /*
    * Retire an echo the moment its own line arrives. Watching `messages` rather
    * than doing it inside `apply`, because the same line can arrive through the
@@ -1594,6 +1658,24 @@ export function ChatView({
              five-hour and weekly limits. It lives in the session inspector,
              with the rest of "what has this session done".
       */}
+      {/* The voice strip. Above the composer and outside it: while it is on
+          the app holds the microphone and sends without a press, and a mode
+          that acts on its own has to be visible the whole time it is on.
+          Draws nothing on a machine with no free on-device engine. */}
+      <VoiceBar
+        ready={voice.availability.ready && onSend !== undefined}
+        reason={voice.availability.reason}
+        phase={voice.phase}
+        heard={voice.heard}
+        problem={voice.problem}
+        handsFree={voice.handsFree}
+        onToggleHandsFree={toggleHandsFree}
+        onStop={() => {
+          voice.setHandsFree(false)
+          void voice.stopEar()
+        }}
+        onHush={() => void voice.hush()}
+      />
       <ChatComposer
         // Wrapped, so what you typed is on screen before the agent has written
         // it down. `handleSend` calls straight through to `onSend`; everything
