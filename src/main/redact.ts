@@ -43,6 +43,17 @@ export interface RedactOptions {
    * caught even when they look like ordinary text.
    */
   extraSecrets?: readonly string[]
+  /**
+   * Leave home directories and the account name as they are; remove only
+   * secrets.
+   *
+   * For text that is read back and *used* rather than pasted into an issue: the
+   * copilot's view of an MCP server's arguments is what it sends back to change
+   * that server, and `/Users/<user>/Projects` written into a config is a server
+   * pointed at a folder that does not exist. `home: ''` alone does not do this —
+   * layer five folds any `/Users/<name>` it sees, which is right for a bundle.
+   */
+  keepIdentity?: boolean
 }
 
 export interface RedactionResult {
@@ -386,6 +397,7 @@ export function redactWithCount(text: string, options: RedactOptions = {}): Reda
   })
 
   // 5. Identity, last — by now nothing else needs to read the real paths.
+  if (options.keepIdentity === true) return { text: out, count }
   const folded = foldIdentity(out, home, username)
   return { text: folded.text, count: count + folded.count }
 }

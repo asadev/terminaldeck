@@ -2344,7 +2344,12 @@ function basenameOf(path: string): string {
 
 /* -------------------------------------------------------------------- ipc -- */
 
-const FIX_IDS: ReadonlySet<string> = new Set<ReadinessFixId>([
+/*
+ * Exported so the copilot's `readiness.fix` (`deck-control/setup-tools.ts`)
+ * accepts exactly the fixes this channel accepts and no others — a second list
+ * there would be a second answer to "which fixes may be asked for by id".
+ */
+export const FIX_IDS: ReadonlySet<string> = new Set<ReadinessFixId>([
   'create-claude-md',
   'create-readme',
   'create-gitignore',

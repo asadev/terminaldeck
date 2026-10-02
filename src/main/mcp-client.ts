@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
-import { addMcpServer, quoteArgv, removeMcpServer, type McpAddScope } from './mcp-add'
+import { addMcpServer, quoteArgv, removeMcpServer, type McpAddResult, type McpAddScope } from './mcp-add'
 import { editMcpServer, type McpExisting } from './mcp-edit'
 import { readToolFile, toolFileName, toolFileText } from './mcp-share'
 import {
@@ -1294,6 +1294,77 @@ function existingForEdit(
   }
 }
 
+/* ------------------------------------------------- the operations, named -- */
+
+/*
+ * The channel bodies below that read the configuration, lifted out so the
+ * copilot's MCP tools (`deck-control/mcp-server-tools.ts`) call exactly these
+ * and not a copy of them. Two reasons it has to be the same code rather than
+ * the same idea:
+ *
+ *  - `findServer` is the whole security story for connecting: a caller names a
+ *    server that is already in the person's own configuration and the command
+ *    is read from there. A second lookup written for the tools would be a
+ *    second place that story has to stay true.
+ *  - `existingForEdit` is the one reader that hands an environment *value* to
+ *    anything, and the edit merge depends on it. Keeping it private to this
+ *    file and exporting the edit that uses it keeps the values where the header
+ *    of `mcp-edit.ts` promises they stay: in this process, never on a wire.
+ */
+
+/** `mcp:list`, without the subscription the window's read also takes out. */
+export function listMcpServers(projectPath?: unknown): McpServerStatus[] {
+  return pool.statusFor(loadServers(optionalProjectPath(projectPath)))
+}
+
+/** `mcp:edit`: change one server, keeping any value left blank. */
+export function editConfiguredMcpServer(request: unknown): Promise<McpAddResult> {
+  return editMcpServer(request, { read: existingForEdit })
+}
+
+/**
+ * The shareable definition of one configured server — `mcp:export`'s file,
+ * as text. Holds variable *names* and never their values; see `mcp-share.ts`.
+ */
+export function mcpToolFile(
+  name: unknown,
+  scope: unknown,
+  projectPath?: unknown,
+): { name: string; fileName: string; text: string } | null {
+  const project = optionalProjectPath(projectPath)
+  const wanted = typeof name === 'string' ? name : ''
+  const server = configuredForStore(project).find((one) => one.name === wanted && one.scope === scope)
+  if (server === undefined) return null
+  return { name: server.name, fileName: toolFileName(server.name), text: toolFileText(server) }
+}
+
+/** `mcp:connect`. */
+export function connectMcpServer(id: unknown, projectPath?: unknown): Promise<McpServerStatus> {
+  return pool.connect(findServer(id, optionalProjectPath(projectPath)))
+}
+
+/** `mcp:disconnect`. */
+export function disconnectMcpServer(id: unknown): Promise<McpServerStatus | null> {
+  if (typeof id !== 'string') throw new Error('mcp: a server id is required')
+  return pool.disconnect(id)
+}
+
+/** `mcp:inventory`: connects if it has to, then lists tools, resources and prompts. */
+export function mcpServerInventory(id: unknown, projectPath?: unknown): Promise<McpInventory> {
+  return pool.inventory(findServer(id, optionalProjectPath(projectPath)))
+}
+
+/** `mcp:call`. */
+export function callMcpTool(
+  id: unknown,
+  tool: unknown,
+  args: unknown,
+  projectPath?: unknown,
+): Promise<McpCallResult> {
+  if (typeof tool !== 'string' || tool.length === 0) throw new Error('mcp: a tool name is required')
+  return pool.callTool(findServer(id, optionalProjectPath(projectPath)), tool, argsObject(args))
+}
+
 /**
  * Wire the MCP channels into the main process.
  * Call once during startup: `registerMcpIpc(ipcMain)`.
@@ -1345,7 +1416,7 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {})
     const contents = event.sender
     subscribers.add(contents)
     onWebContentsDestroyed(contents, 'mcp', () => subscribers.delete(contents))
-    return pool.statusFor(loadServers(optionalProjectPath(projectPath)))
+    return listMcpServers(projectPath)
   })
 
   // The one channel here that writes. It does not write this file — it shells
@@ -1387,9 +1458,7 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {})
    * `existingForEdit`: a field left blank keeps whatever is saved, and the value
    * never crosses the bridge in either direction.
    */
-  ipcMain.handle('mcp:edit', (_e, request: unknown) =>
-    editMcpServer(request, { read: existingForEdit }),
-  )
+  ipcMain.handle('mcp:edit', (_e, request: unknown) => editConfiguredMcpServer(request))
 
   /*
    * Sharing one, as a file a person can read. See `mcp-share.ts` for why this
@@ -1399,20 +1468,16 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {})
   ipcMain.handle('mcp:export', async (_e, name: unknown, scope: unknown, projectPath?: unknown) => {
     const choose = deps.chooseSaveFile
     if (choose === undefined) return { ok: false, message: 'This build cannot save a file.' }
-    const project = optionalProjectPath(projectPath)
-    const wanted = typeof name === 'string' ? name : ''
-    const server = configuredForStore(project).find(
-      (one) => one.name === wanted && one.scope === scope,
-    )
-    if (server === undefined) {
+    const server = mcpToolFile(name, scope, projectPath)
+    if (server === null) {
       return { ok: false, message: 'That server is not in your configuration.' }
     }
-    const where = await choose(toolFileName(server.name))
+    const where = await choose(server.fileName)
     // Changing your mind is not a failure and must not be drawn as one. An
     // empty message is the panel's signal to print nothing at all.
     if (where === null) return { ok: true, message: '' }
     try {
-      writeFileSync(where, toolFileText(server), 'utf8')
+      writeFileSync(where, server.text, 'utf8')
     } catch (error) {
       return {
         ok: false,
@@ -1459,24 +1524,15 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain, deps: McpIpcDeps = {})
     }
   })
 
-  ipcMain.handle('mcp:connect', (_e, id: unknown, projectPath?: unknown) =>
-    pool.connect(findServer(id, optionalProjectPath(projectPath))),
+  ipcMain.handle('mcp:connect', (_e, id: unknown, projectPath?: unknown) => connectMcpServer(id, projectPath))
+
+  ipcMain.handle('mcp:disconnect', (_e, id: unknown) => disconnectMcpServer(id))
+
+  ipcMain.handle('mcp:inventory', (_e, id: unknown, projectPath?: unknown) => mcpServerInventory(id, projectPath))
+
+  ipcMain.handle('mcp:call', (_e, id: unknown, tool: unknown, args: unknown, projectPath?: unknown) =>
+    callMcpTool(id, tool, args, projectPath),
   )
-
-  ipcMain.handle('mcp:disconnect', (_e, id: unknown) => {
-    if (typeof id !== 'string') throw new Error('mcp: a server id is required')
-    return pool.disconnect(id)
-  })
-
-  ipcMain.handle('mcp:inventory', (_e, id: unknown, projectPath?: unknown) => {
-    const project = optionalProjectPath(projectPath)
-    return pool.inventory(findServer(id, project))
-  })
-
-  ipcMain.handle('mcp:call', (_e, id: unknown, tool: unknown, args: unknown, projectPath?: unknown) => {
-    if (typeof tool !== 'string' || tool.length === 0) throw new Error('mcp: a tool name is required')
-    return pool.callTool(findServer(id, optionalProjectPath(projectPath)), tool, argsObject(args))
-  })
 
   ipcMain.handle('mcp:read-resource', (_e, id: unknown, uri: unknown, projectPath?: unknown) => {
     if (typeof uri !== 'string' || uri.length === 0) throw new Error('mcp: a resource uri is required')
