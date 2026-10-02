@@ -390,6 +390,74 @@ let folderInstructions = new URLSearchParams(location.search).has('folder-instru
   ? '# CLAUDE.md\n\nYou are Nova, the assistant for this workspace. Call them Asad.\n\nAlways read `README.md` before answering.\n'
   : ''
 
+/**
+ * Settings → Connect an AI app: access keys, internet reach, the local address.
+ *
+ * Every shape is `ai-apps-ipc.ts`'s, field for field — `AiAppsState`, and the
+ * `{ ok, state }` / `{ ok, key, id, state }` / `{ ok: false, message, state }`
+ * results — and the behaviour is the store's in miniature: a level, a name, an
+ * ask-first switch and folders that really change, a revoke that really
+ * removes, a key shown only in the create answer. `?ai-apps-empty` starts with
+ * no keys and internet reach off, which is a fresh install; the default is a
+ * machine that has been used, because the populated list is the screen worth
+ * looking at.
+ */
+const aiAppsEmpty = new URLSearchParams(location.search).has('ai-apps-empty')
+const aiAppsListeners = new Set<() => void>()
+let aiAppsInternetOn = !aiAppsEmpty
+let aiAppsKeys: Array<Record<string, unknown>> = aiAppsEmpty
+  ? []
+  : [
+      {
+        id: 'k-chatgpt',
+        name: 'ChatGPT',
+        level: 'full',
+        askFirst: true,
+        folders: null,
+        createdAt: launchedAt - 86_400_000 * 3,
+        lastUsedAt: launchedAt - 240_000,
+        lastApp: 'openai-mcp 1.0.0',
+        lastVia: 'internet',
+      },
+      {
+        id: 'k-cursor',
+        name: 'Cursor on my laptop',
+        level: 'work',
+        askFirst: true,
+        folders: ['/Users/apple/Projects/terminaldeck'],
+        createdAt: launchedAt - 86_400_000,
+        lastUsedAt: null,
+        lastApp: null,
+        lastVia: null,
+      },
+    ]
+function aiAppsState(): Record<string, unknown> {
+  return {
+    keys: [...aiAppsKeys].sort((a, b) => Number(b.createdAt) - Number(a.createdAt)),
+    internet: {
+      on: aiAppsInternetOn,
+      base: 'https://relay.terminaldeck.dev/mcp/K7QZ2M4HXN9PRT3VWB6CJD8FGA',
+      relayHost: 'relay.terminaldeck.dev',
+      connected: true,
+      reason: null,
+    },
+    local: { url: 'http://127.0.0.1:47821/mcp', movedFrom: null },
+    folders: ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/website'],
+    problem: null,
+  }
+}
+function aiAppsChange(edit: () => string | null): Record<string, unknown> {
+  const refused = edit()
+  for (const listener of [...aiAppsListeners]) listener()
+  return refused === null ? { ok: true, state: aiAppsState() } : { ok: false, message: refused, state: aiAppsState() }
+}
+function aiAppsEdit(id: unknown, patch: Record<string, unknown>): string | null {
+  const found = aiAppsKeys.find((key) => key.id === id)
+  if (!found) return 'That key no longer exists. It may have been revoked.'
+  aiAppsKeys = aiAppsKeys.map((key) => (key.id === id ? { ...key, ...patch } : key))
+  return null
+}
+
 const api: Record<string, unknown> = new Proxy(
   {
     getBrand: async () => ({ name: 'Deck', tagline: 'Run and watch your Claude sessions' }),
@@ -2027,6 +2095,51 @@ const api: Record<string, unknown> = new Proxy(
      * a screen this app also has, and the harness would then be showing the
      * wrong one of the two.
      */
+    aiAppsState: async () => aiAppsState(),
+    aiAppsCreate: async (input: { name?: unknown; level?: unknown; askFirst?: unknown; folders?: unknown }) => {
+      const name = typeof input?.name === 'string' ? input.name.trim() : ''
+      if (name === '') return { ok: false, message: 'Give the key a name, such as the app it is for.', state: aiAppsState() }
+      const id = `k-${(sessionCounter += 1)}`
+      // A made-up key of the real shape: `ak_` and 43 base64url characters.
+      const key = `ak_${'Zq3vR8mX1pT6wK0nB4yH7cL2sD9fJ5gE'}${'aQ7uW1xY3zV'}`
+      aiAppsKeys = [
+        ...aiAppsKeys,
+        {
+          id,
+          name,
+          level: input.level === 'look' || input.level === 'full' ? input.level : 'work',
+          askFirst: input.askFirst !== false,
+          folders: Array.isArray(input.folders) && input.folders.length > 0 ? input.folders : null,
+          createdAt: Date.now(),
+          lastUsedAt: null,
+          lastApp: null,
+          lastVia: null,
+        },
+      ]
+      for (const listener of [...aiAppsListeners]) listener()
+      return { ok: true, key, id, state: aiAppsState() }
+    },
+    aiAppsRename: async (id: unknown, name: unknown) =>
+      aiAppsChange(() => (typeof name === 'string' && name.trim() !== '' ? aiAppsEdit(id, { name: name.trim() }) : 'Give the key a name, such as the app it is for.')),
+    aiAppsLevel: async (id: unknown, level: unknown) => aiAppsChange(() => aiAppsEdit(id, { level })),
+    aiAppsAskFirst: async (id: unknown, on: unknown) => aiAppsChange(() => aiAppsEdit(id, { askFirst: on !== false })),
+    aiAppsFolders: async (id: unknown, folders: unknown) =>
+      aiAppsChange(() => aiAppsEdit(id, { folders: Array.isArray(folders) && folders.length > 0 ? folders : null })),
+    aiAppsRevoke: async (id: unknown) =>
+      aiAppsChange(() => {
+        const before = aiAppsKeys.length
+        aiAppsKeys = aiAppsKeys.filter((key) => key.id !== id)
+        return aiAppsKeys.length === before ? 'That key was already gone.' : null
+      }),
+    aiAppsInternet: async (on: unknown) =>
+      aiAppsChange(() => {
+        aiAppsInternetOn = on === true
+        return null
+      }),
+    onAiAppsChanged: (callback: () => void) => {
+      aiAppsListeners.add(callback)
+      return () => aiAppsListeners.delete(callback)
+    },
     serverSetup: async () => ({ ok: false, sentence: 'The harness has no server to set up.' }),
     serverSetupState: async () => null,
     installOnServer: async () => ({ ok: false, sentence: 'The harness cannot install anything.' }),

@@ -220,7 +220,18 @@ export interface ActionRow {
    * a reader can tell "before the field existed" from "local". A row with no
    * `caller` is a row from an older build, not a local call.
    */
-  caller?: { kind: 'local' | 'remote' | 'session'; deviceId?: string }
+  caller?: {
+    kind: 'local' | 'remote' | 'session' | 'key'
+    deviceId?: string
+    /**
+     * The access key an outside AI app called with, and the name the owner gave
+     * it. The name is written down as it was *at the time*, so a key renamed
+     * later still reads in the log the way it read on the day — and a revoked
+     * key, which has no record left to look the id up in, still has a name.
+     */
+    keyId?: string
+    keyName?: string
+  }
   /** Wall-clock duration of the call, including any time spent waiting on a human. */
   ms: number
   /**

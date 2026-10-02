@@ -262,7 +262,23 @@ describe('every section id still resolves to a pane', () => {
      * — the ten that survived the 2026-08-17 regroup plus Scraping — which is a
      * *fall*, and this ledger records a fall the same way it records a raise.
      */
-    expect(sectionsFor('mac').length).toBe(11)
+    /*
+     * ## The twelfth is **Connect an AI app**, 0.16.0, and this is what it paid
+     *
+     * Raised, and for the reason this ledger asks for: it is the first screen
+     * its subject has had, not a second screen for an old one. Access keys for
+     * AI apps outside this app, the internet switch that lets claude.ai and
+     * ChatGPT reach this Mac through the relay, and copy-ready setup for seven
+     * apps — none of it existed anywhere before, because the only caller the
+     * tools had was the copilot. Asad: *"any other AI from any other
+     * application from internet through the MCP can connect to it."*
+     *
+     * Folding it into Copilot was considered and loses on this table's rule
+     * that a section is a subject: Copilot is that one agent's files, memory,
+     * log and reach, and this is every *other* agent's way in. Putting a list
+     * of keys for ChatGPT under "Copilot" is where somebody stops finding it.
+     */
+    expect(sectionsFor('mac').length).toBe(12)
     /*
      * Windows derived rather than restated, so the two platforms cannot be raised
      * apart — and so this file holds one number instead of two. Linux is the only

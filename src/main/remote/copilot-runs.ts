@@ -100,7 +100,7 @@ import {
   type CopilotSessionRow,
   type CopilotStateReport,
 } from './protocol'
-import { deviceSurface, type ConsentOutcome, type ConsentRequest } from '../deck-control/consent'
+import { deviceSurface, isKeySurface, type ConsentOutcome, type ConsentRequest } from '../deck-control/consent'
 import type { Caller } from '../deck-control/surface'
 
 /**
@@ -504,7 +504,12 @@ export class CopilotRuns implements CopilotRemote {
    */
   pending(deviceId: string): CopilotPendingRow[] {
     const surface = deviceSurface(deviceId)
-    return this.questions().map((request) => toPendingRow(request, request.origin === surface))
+    // A key's question is answerable from any device of his that holds
+    // `alter`, so it is `mine` there — see `ask` above.
+    const answersKeys = this.granted(deviceId).alter
+    return this.questions().map((request) =>
+      toPendingRow(request, request.origin === surface || (answersKeys && isKeySurface(request.origin))),
+    )
   }
 
   /**
@@ -828,6 +833,28 @@ export class CopilotRuns implements CopilotRemote {
     // pending list has to contain its own question, or a client that draws its
     // count from that list disagrees with the dialog on its own screen.
     this.pushPending()
+
+    /*
+     * An AI app on an access key asked, and the question is the owner's.
+     *
+     * Every device of his that is watching gets it with an Allow button, not
+     * only one — there is no "owning device" for a key, and the Mac mini this
+     * is usually raised on has nobody at it, so the phone in his pocket is the
+     * approver that makes "ask me first" usable at all. `ConsentBroker.respond`
+     * takes the answer from any `device:` surface for a key's question, and
+     * the grant is re-read here for each watcher for the reason the comment
+     * below gives: this is the moment a dialog appears on somebody's phone.
+     */
+    if (isKeySurface(request.origin)) {
+      const question = toConsentQuestion(request)
+      let delivered = false
+      for (const watcher of this.watchers) {
+        if (!this.granted(watcher.deviceId).alter) continue
+        watcher.sink.ask(question)
+        delivered = true
+      }
+      return delivered
+    }
 
     const deviceId = deviceIdOf(request.origin)
     if (deviceId === null) return false

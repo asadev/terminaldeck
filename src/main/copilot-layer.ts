@@ -288,6 +288,7 @@ They are all ${BRAND.name}'s records of what *you* did:
   - \`${fenced.routineState}\` — the routine engine's state. Read, not write.
   - \`${fenced.remoteCopilot}\` — which devices may reach you.
   - \`${fenced.remoteAuth}\` — which devices are trusted at all.
+  - \`${fenced.accessKeys}\` — which AI apps outside ${BRAND.name} may reach your tools.
 ${
   enforced
     ? `

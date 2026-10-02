@@ -121,7 +121,9 @@ export class GrantRefused extends Error {
  * `local`, so an ordinary session never reaches a grant question at all.
  */
 export interface GrantAsker {
-  kind: 'local' | 'remote' | 'session'
+  // `key` (an AI app with an access key) joins for the same assignability
+  // reason, and is refused by the same `!== 'local'` checks below.
+  kind: 'local' | 'remote' | 'session' | 'key'
 }
 
 export interface ServerGrantsOptions {

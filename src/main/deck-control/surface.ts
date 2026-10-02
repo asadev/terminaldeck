@@ -131,9 +131,39 @@ export interface Caller {
    * every session (T29) adds ids to one list, and session-driving (T28) is not
    * on it and is not listable.
    */
-  kind: 'local' | 'remote' | 'session'
+  kind: 'local' | 'remote' | 'session' | 'key'
   /** The paired device, when the call came from one. Recorded in the action log. */
   deviceId?: string
+  /**
+   * The access key, for `kind: 'key'` — an AI app outside this one that the
+   * owner made a key for. See `access-keys.ts`.
+   *
+   * ## Why a fourth kind rather than `local`
+   *
+   * The same reason `session` is a third: every gate written
+   * `caller.kind !== 'local'` refuses it without a line changing, and that is
+   * the direction a new caller's default has to fall. A key is the owner's own
+   * — he made it for himself — but it arrives from an app this one cannot see
+   * into, possibly from the far side of the internet, and the handful of tools
+   * that are only for the person at this keyboard (granting a server, playing a
+   * tour on a screen) should go on saying so until somebody decides otherwise
+   * for each of them, on purpose.
+   *
+   * The name travels with the id so the action log and the confirmation
+   * dialog can say *which* app asked without a second lookup on the call path.
+   */
+  keyId?: string
+  keyName?: string
+  /**
+   * Put alter-tier calls to the owner first. Read only for `kind: 'key'`, and
+   * absent means yes — the narrow reading. See `AccessKeyView.askFirst`.
+   */
+  askFirst?: boolean
+  /**
+   * Folders a session may be started in, for a key limited to some. Absent
+   * means every folder the app has open, exactly as for the owner at the desk.
+   */
+  folders?: readonly string[]
   /**
    * Which session is calling, for `kind: 'session'`, and the machine it runs on
    * — `''` for this computer, a machine id for a paired device, a server id for

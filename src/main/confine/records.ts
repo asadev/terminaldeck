@@ -205,6 +205,20 @@ export interface RecordsFencePaths {
    * no secret at all.
    */
   remoteAuth: string
+  /**
+   * `<userData>/remote/access-keys.json` — the keys AI apps outside this one
+   * reach this machine's tools with, from this Mac and from the internet.
+   *
+   * Fenced for the sharpest version of the reason the two above are. The store
+   * keeps a SHA-256 of each key, so a copilot that could append a record would
+   * not need to steal anything: it would choose a key, hash it, write the hash,
+   * and hold a way into this machine's tools from anywhere on the internet —
+   * with no tool call, no confirmation and no row in the log. It could also
+   * raise a key's level or switch its "ask me first" off. Write is refused;
+   * reading stays allowed, like the other remote stores, because there is no
+   * secret in it to read.
+   */
+  accessKeys: string
 }
 
 /**
@@ -259,12 +273,15 @@ export function recordsFencePaths(
     // spelling and `recordsFenceAgrees` is what pins the two together.
     remoteCopilot: resolver.real(join(remote, 'remote-device-kinds.json')),
     remoteAuth: resolver.real(join(remote, 'remote-auth.json')),
+    // `deck-control/access-keys.ts` owns this spelling; `recordsFenceAgrees`
+    // pins the two together from that module's own test.
+    accessKeys: resolver.real(join(remote, 'access-keys.json')),
   }
 }
 
 /** Every fenced path, in one list, for anything that needs to show them. */
 export function recordsFenceList(paths: RecordsFencePaths): string[] {
-  return [paths.routines, paths.routineState, paths.log, paths.remoteCopilot, paths.remoteAuth]
+  return [paths.routines, paths.routineState, paths.log, paths.remoteCopilot, paths.remoteAuth, paths.accessKeys]
 }
 
 /**
@@ -396,6 +413,12 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; hashes — but approving a phone already sitting in the pending list needs',
     '; no secret at all.',
     `(deny file-write* (literal ${seatbeltString(paths.remoteAuth)}))`,
+    '',
+    '; The access keys AI apps reach these tools with. Hashes, not secrets — so',
+    '; an edit is not theft, it is minting: choose a key, write its hash, and',
+    '; hold a way in from the internet with no tool call and no log row. Or',
+    '; raise a key that exists, or switch its "ask me first" off.',
+    `(deny file-write* (literal ${seatbeltString(paths.accessKeys)}))`,
     '',
   ].join('\n')
 }
@@ -615,6 +638,7 @@ export function recordsFenceAgrees(
     log: string
     remoteCopilot?: string
     remoteAuth?: string
+    accessKeys?: string
   },
   resolver: PathResolver = realFsResolver,
 ): boolean {
@@ -625,7 +649,8 @@ export function recordsFenceAgrees(
     paths.routineState === resolver.real(actual.routineState) &&
     paths.log === resolver.real(actual.log) &&
     agrees(paths.remoteCopilot, actual.remoteCopilot) &&
-    agrees(paths.remoteAuth, actual.remoteAuth)
+    agrees(paths.remoteAuth, actual.remoteAuth) &&
+    agrees(paths.accessKeys, actual.accessKeys)
   )
 }
 

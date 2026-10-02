@@ -377,7 +377,30 @@ const NAMED_IN_THE_REVIEW = /\bCLAUDE\.md\b|\bGEMINI\.md\b|\bVS ?Code\b|\bVisual
  * file, which fails if the table itself ever holds one agent's file and not the
  * others.
  */
-const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string }> = []
+/*
+ * ## One entry again, 0.16.0, and it is scoped to one file
+ *
+ * Settings → Connect an AI app hands out copy-ready setup for every app that can
+ * hold an access key to this machine's tools, and one of them is an editor. That
+ * pane is the first screen in this app whose subject genuinely *is* somebody
+ * else's editor — the file it reads, the shape of the JSON it wants — which is
+ * part 1 of the rule ("naming is fine when the text is about that app"), and
+ * leaving it out would be part 3's failure ("don't give only one single
+ * option").
+ *
+ * Scoped by `file` so the escape hatch cannot widen: the name is blanked only in
+ * the one module whose subject it is, and "similar to VS Code" anywhere else in
+ * the tree still fails both rules exactly as before.
+ */
+const DISCLOSED_FILENAMES: ReadonlyArray<{ text: string; because: string; file?: string }> = [
+  {
+    text: 'VS Code',
+    file: 'src/renderer/settings/sections/ai-apps-setup.ts',
+    because:
+      'it is one of the seven apps the Connect an AI app pane gives setup for — the label on its own tab, ' +
+      'naming the app whose configuration file the snippet under it is written for, not an illustration of anything',
+  },
+]
 
 /* --------------------------------------------------------------- collecting -- */
 
@@ -852,9 +875,13 @@ const show = (item: Found): string => `${item.file}:${item.line}  ${item.text.tr
  * may name the file it accepts, and it still cannot go on to say "similar to VS
  * Code" in the next clause.
  */
-function withoutDisclosures(text: string): string {
+function withoutDisclosures(text: string, file?: string): string {
   let rest = text
-  for (const entry of DISCLOSED_FILENAMES) rest = rest.split(entry.text).join(' ')
+  for (const entry of DISCLOSED_FILENAMES) {
+    // A scoped entry blanks its name in its own file and nowhere else.
+    if (entry.file !== undefined && entry.file !== file) continue
+    rest = rest.split(entry.text).join(' ')
+  }
   return rest
 }
 
@@ -878,7 +905,7 @@ describe('no shared screen holds up somebody else’s product as an example', ()
      * "similar to" is a command anybody types.
      */
     const offenders = STRINGS.filter(
-      (item) => comparisons(prosePartOf(withoutDisclosures(item.text), 'unwrap')).length > 0,
+      (item) => comparisons(prosePartOf(withoutDisclosures(item.text, item.file), 'unwrap')).length > 0,
     )
     expect(offenders.map(show)).toEqual([])
   })
@@ -887,7 +914,7 @@ describe('no shared screen holds up somebody else’s product as an example', ()
     // The absolute half of part 2. No exemption list, because there is no screen
     // in this app whose subject is somebody else's editor — see `EDITORS`.
     const offenders = STRINGS.filter((item) =>
-      EDITORS.test(prosePartOf(withoutDisclosures(item.text), 'unwrap')),
+      EDITORS.test(prosePartOf(withoutDisclosures(item.text, item.file), 'unwrap')),
     )
     expect(offenders.map(show)).toEqual([])
   })
@@ -901,7 +928,7 @@ describe('no shared screen holds up somebody else’s product as an example', ()
      * a location on a disk, not a sentence recommending an editor.
      */
     const offenders = STRINGS.filter((item) =>
-      NAMED_IN_THE_REVIEW.test(prosePartOf(withoutDisclosures(item.text), 'unwrap')),
+      NAMED_IN_THE_REVIEW.test(prosePartOf(withoutDisclosures(item.text, item.file), 'unwrap')),
     )
     expect(offenders.map(show)).toEqual([])
   })
@@ -910,7 +937,7 @@ describe('no shared screen holds up somebody else’s product as an example', ()
     // A list that only grows is a list that stops describing the code.
     for (const entry of DISCLOSED_FILENAMES) {
       expect(
-        STRINGS.some((item) => item.text.includes(entry.text)),
+        STRINGS.some((item) => item.text.includes(entry.text) && (entry.file === undefined || item.file === entry.file)),
         `nothing says ${JSON.stringify(entry.text)} any more — delete the entry`,
       ).toBe(true)
     }

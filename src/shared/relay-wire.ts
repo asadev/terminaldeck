@@ -230,3 +230,260 @@ export function readSealedHandshake(payload: Buffer, expected: number): SealedOp
   if (payload[0] !== RELAY_SEALED_VERSION) return { ok: false, reason: 'wrong-version' }
   return { ok: true, message: Buffer.from(payload.subarray(1)) }
 }
+
+/* -------------------------------------------------------------------------- */
+/* An AI app, reaching this Mac's tools over HTTPS through the relay           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ## What this half of the wire is for
+ *
+ * Everything above carries a phone's *sealed* channel. This carries something
+ * else: an AI app on the internet — claude.ai, ChatGPT, a Claude Code on
+ * another machine — calling this Mac's `deck-control` tools with an **access
+ * key** the owner made for it. Those apps speak MCP over plain HTTPS and
+ * nothing else; none of them will ever run a Noise handshake. So the relay
+ * gains one HTTP route, `POST /mcp/<hostId>`, and passes each request down the
+ * host's existing socket in an envelope of its own, and the answer back up.
+ *
+ * ## Be plain about what that costs
+ *
+ * **This path is not sealed.** TLS ends at the relay's reverse proxy, so the
+ * relay process sees the MCP request and its answer in the clear — the tool
+ * name, the arguments, the transcript text that comes back. That is a real
+ * difference from a phone, whose bytes the relay cannot read at all, and the
+ * settings page says so in those words. The two things that keep it acceptable:
+ *
+ *  1. **The relay still decides nothing.** It never checks a key — it cannot,
+ *     it holds no list of them — and it forwards the credential it was handed
+ *     to the desktop, which checks it against a hash on its own disk. A hostile
+ *     relay can read and drop requests; it cannot forge a valid key, and every
+ *     tier, confirmation and log row is applied on the Mac exactly as it is for
+ *     the copilot at the desk.
+ *  2. **Anybody who minds can point the app at their own relay.**
+ *     `TERMINALDECK_RELAY_URL` already exists for that, and the relay is one
+ *     dependency-free file.
+ *
+ * ## Why a second family of envelope types rather than reusing `data`
+ *
+ * A channel envelope's payload is ciphertext the desktop decrypts; this one is
+ * an HTTP request the desktop answers. Overloading `data` would mean the
+ * desktop guessing which of two things a frame was from its contents, and a
+ * guess on a permission edge is not a rule. Separate type bytes, starting at
+ * 0x10 so the two families cannot be confused at a glance in a hex dump.
+ *
+ * And it degrades cleanly in both directions. An **old desktop** decodes these
+ * types as "not an envelope" and drops them, which is why the desktop announces
+ * itself with `reach` — the relay only forwards to a host that has said it
+ * answers MCP, and everybody else gets a fast 404 instead of a two-minute wait.
+ * An **old relay** drops the desktop's `reach` frame the same way, and no
+ * request ever arrives.
+ *
+ * The 16 bytes after the type are a **request id** the relay mints per HTTP
+ * request — the same shape as a channel id, which is why `encodeEnvelope`
+ * serves both. `reach` carries no request and sends sixteen zero bytes there.
+ */
+export const MCP_ENVELOPE = { request: 0x10, reply: 0x11, cancel: 0x12, reach: 0x13 } as const
+
+/** Where an AI app's request arrives at the relay: `/mcp/<hostId>[/<key>]`. */
+export const RELAY_MCP_PREFIX = '/mcp/'
+
+/**
+ * Largest request body the relay will forward.
+ *
+ * A JSON-RPC envelope is small — the loopback endpoint's own reasoning is that
+ * the largest legitimate call is a four-thousand-character prompt. 64 KiB is
+ * sixteen of those and still leaves the whole envelope, head included, under
+ * {@link MAX_PAYLOAD_BYTES}, which is what lets a request ride in one frame.
+ */
+export const MCP_MAX_REQUEST_BYTES = 64 * 1024
+
+/**
+ * The answer travels in pieces no larger than this.
+ *
+ * Unlike a request, an answer can be big — a transcript read comes back as tens
+ * of kilobytes of text — and one WebSocket frame on the host socket is capped
+ * at {@link MAX_PAYLOAD_BYTES}. So the desktop cuts its answer into slices that
+ * fit with room for the envelope, and the relay writes each to the HTTP
+ * response as it lands.
+ */
+export const MCP_REPLY_CHUNK_BYTES = 60 * 1024
+
+/**
+ * Largest answer the relay will pass on, all pieces together.
+ *
+ * A ceiling on the relay's memory per request, not on what the tools may say:
+ * the biggest bounded tool result in the catalogue is a 64 KiB transcript page,
+ * so 8 MiB is a hundred times the real maximum and still a number that cannot
+ * be used to make the relay hold a gigabyte.
+ */
+export const MCP_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+/**
+ * How long the relay holds an HTTP request open waiting for the desktop.
+ *
+ * It has to outlast the slowest honest answer, and the slowest honest answer is
+ * a person deciding: an alter-tier call put to the owner waits up to the
+ * consent timeout — two minutes for the copilot's own questions, less for a key
+ * caller's — before the desktop refuses it. A relay that gave up first would
+ * turn a clean "nobody answered" into a gateway error, and a person tapping
+ * Allow after that would change something the AI had already been told failed.
+ * 150 seconds is the longest consent window plus room.
+ */
+export const MCP_RELAY_WAIT_MS = 150_000
+
+/** Most MCP requests one host may receive through the relay per minute. */
+export const MCP_RATE_PER_MINUTE = 120
+
+/** Most MCP requests one host may have in flight through the relay at once. */
+export const MCP_MAX_IN_FLIGHT = 8
+
+/** What the relay tells the desktop about one HTTP request. */
+export interface RelayMcpHead {
+  v: 1
+  /** The `<key>` path segment, for apps that cannot set a header. */
+  pathKey: string | null
+  /** The `Authorization` header as it arrived, prefix and all. */
+  authorization: string | null
+  /** `Mcp-Protocol-Version`, passed through so the desktop's SDK can judge it. */
+  protocolVersion: string | null
+  /** `User-Agent`, for "last used by" when the client never said its name. */
+  userAgent: string | null
+}
+
+/** What the desktop tells the relay to put in front of the answer. */
+export interface RelayMcpReplyHead {
+  status: number
+  contentType: string | null
+}
+
+/** Flag bits on a reply envelope's first byte. */
+export const MCP_REPLY_FIRST = 0x01
+export const MCP_REPLY_LAST = 0x02
+
+/** All zeroes: the request id slot of a frame that carries no request. */
+export const MCP_NO_REQUEST = Buffer.alloc(CHANNEL_BYTES)
+
+function withHead(head: unknown, rest: Buffer): Buffer {
+  const json = Buffer.from(JSON.stringify(head), 'utf8')
+  if (json.length > 0xffff) throw new Error('an MCP envelope head must fit in 64 KiB')
+  const length = Buffer.alloc(2)
+  length.writeUInt16BE(json.length, 0)
+  return Buffer.concat([length, json, rest])
+}
+
+function readHead(payload: Buffer): { head: Record<string, unknown>; rest: Buffer } | null {
+  if (payload.length < 2) return null
+  const length = payload.readUInt16BE(0)
+  if (payload.length < 2 + length) return null
+  try {
+    const head: unknown = JSON.parse(payload.subarray(2, 2 + length).toString('utf8'))
+    if (typeof head !== 'object' || head === null || Array.isArray(head)) return null
+    return { head: head as Record<string, unknown>, rest: Buffer.from(payload.subarray(2 + length)) }
+  } catch {
+    return null
+  }
+}
+
+function textOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+/** Relay → desktop: one HTTP request, head then body. */
+export function encodeMcpRequest(head: RelayMcpHead, body: Buffer): Buffer {
+  return withHead(head, body)
+}
+
+/** Null for anything that is not a request this build can read. Callers drop it. */
+export function decodeMcpRequest(payload: Buffer): { head: RelayMcpHead; body: Buffer } | null {
+  const read = readHead(payload)
+  if (!read || read.head.v !== 1) return null
+  return {
+    head: {
+      v: 1,
+      pathKey: textOrNull(read.head.pathKey),
+      authorization: textOrNull(read.head.authorization),
+      protocolVersion: textOrNull(read.head.protocolVersion),
+      userAgent: textOrNull(read.head.userAgent),
+    },
+    body: read.rest,
+  }
+}
+
+/**
+ * Desktop → relay: one slice of an answer.
+ *
+ * The first slice carries the status and content type; the last is flagged so
+ * the relay knows to end the response. A one-slice answer is both at once,
+ * which is the common case.
+ */
+export function encodeMcpReply(flags: number, head: RelayMcpReplyHead | null, chunk: Buffer): Buffer {
+  const flag = Buffer.from([flags & 0xff])
+  if ((flags & MCP_REPLY_FIRST) !== 0) {
+    if (!head) throw new Error('the first slice of an MCP reply must carry its head')
+    return Buffer.concat([flag, withHead(head, chunk)])
+  }
+  return Buffer.concat([flag, chunk])
+}
+
+export interface McpReplySlice {
+  first: boolean
+  last: boolean
+  head: RelayMcpReplyHead | null
+  chunk: Buffer
+}
+
+export function decodeMcpReply(payload: Buffer): McpReplySlice | null {
+  if (payload.length < 1) return null
+  const flags = payload[0]
+  const first = (flags & MCP_REPLY_FIRST) !== 0
+  const last = (flags & MCP_REPLY_LAST) !== 0
+  const rest = Buffer.from(payload.subarray(1))
+  if (!first) return { first, last, head: null, chunk: rest }
+  const read = readHead(rest)
+  if (!read) return null
+  const status = read.head.status
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) return null
+  return { first, last, head: { status, contentType: textOrNull(read.head.contentType) }, chunk: read.rest }
+}
+
+/** Null for anything that is not an MCP-family envelope. */
+export function decodeMcpEnvelope(frame: Buffer): Envelope | null {
+  if (frame.length < ENVELOPE_HEADER) return null
+  const type = frame[0]
+  if (
+    type !== MCP_ENVELOPE.request &&
+    type !== MCP_ENVELOPE.reply &&
+    type !== MCP_ENVELOPE.cancel &&
+    type !== MCP_ENVELOPE.reach
+  ) {
+    return null
+  }
+  return {
+    type,
+    channel: Buffer.from(frame.subarray(1, ENVELOPE_HEADER)),
+    payload: Buffer.from(frame.subarray(ENVELOPE_HEADER)),
+  }
+}
+
+/**
+ * The one answer for "nothing here", byte for byte, from both ends.
+ *
+ * The relay sends it when the host is offline or has not said it answers MCP;
+ * the desktop sends exactly the same status and bytes for a key it does not
+ * recognise, a revoked key, and internet reach switched off. So a stranger
+ * holding a host id — which is printed in every pairing QR code — learns
+ * nothing by trying keys: "that Mac is offline" and "that key is wrong" look
+ * identical from the outside. The guest route makes the same choice for the
+ * same reason ("a 404 here would turn the endpoint into an oracle for which
+ * machines are online"); this route has to answer *something* fast, so it
+ * answers the same something for both.
+ *
+ * Shaped as a JSON-RPC error because the reader is an MCP client, and a client
+ * that gets JSON it can parse shows the person a sentence instead of a parse
+ * failure.
+ */
+export const MCP_NOT_FOUND_STATUS = 404
+export const MCP_NOT_FOUND_BODY =
+  '{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Nothing answered at this address. The computer ' +
+  'may be off or not connected, or this link may have been turned off."}}'

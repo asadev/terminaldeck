@@ -141,6 +141,10 @@ import { MAX_TOURS_KEPT, TourStage } from './tour-stage'
 import { tourTool } from './tour-tool'
 import { WHERE_CALL, whereTool } from './where-tool'
 import { browserDrive } from '../browser-drive-current'
+import { relayMcp } from '../remote/relay-mcp'
+import { AccessKeys } from './access-keys'
+import { registerAiAppsIpc } from './ai-apps-ipc'
+import { AccessKeyDoor } from './key-door'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -219,6 +223,22 @@ export function mcpConfigPath(): string {
  */
 export function unattendedMcpConfigPath(): string {
   return join(paths().root, 'deck-control-unattended.json')
+}
+
+/**
+ * The loopback port the tools are first offered on, before one is remembered.
+ *
+ * Any number nothing else on a Mac commonly uses. It only matters on the very
+ * first launch: after that the port actually served is remembered with the
+ * access keys and asked for again, so a local AI app's setup survives a
+ * restart. If it is taken, the server takes any free port and the settings
+ * page shows the new address — see `DeckControlServerOptions.preferredPort`.
+ */
+export const DEFAULT_TOOLS_PORT = 47821
+
+/** `<userData>/remote` — beside the device trust store, inside the records fence. */
+function accessKeysDir(): string {
+  return join(userDataDir(), 'remote')
 }
 
 /* ------------------------------------------------------------------ types -- */
@@ -300,6 +320,8 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
   surface?: DeckSurface
   /** Overrides the copilot log directory. Tests only. */
   logDir?: string
+  /** Overrides where access keys are kept. Tests only. */
+  keysDir?: string
 }
 
 export interface DeckControlHandle {
@@ -332,6 +354,15 @@ export interface DeckControlHandle {
    * missing feature.
    */
   tours: TourStage
+  /**
+   * Access keys for AI apps outside this one, and the door they come through.
+   *
+   * On the handle so `src/main/index.ts` could reach them if it ever needs to;
+   * nothing there has to today. The door is already installed behind the
+   * relay's switchboard and already passed to the loopback server.
+   */
+  keys: AccessKeys
+  door: AccessKeyDoor
   stop(): Promise<void>
 }
 
@@ -476,6 +507,15 @@ export async function registerDeckControlIpc(
     },
   })
 
+  /*
+   * Access keys: the door for AI apps outside this one. Built before the server
+   * so the server can be handed it, and read by the door at request time so
+   * nothing here has to be ordered more carefully than that.
+   */
+  const keys = new AccessKeys({ dir: deps.keysDir ?? accessKeysDir() })
+  let controlRef: DeckControl | null = null
+  const door = new AccessKeyDoor({ keys, control: () => controlRef, consent: () => consent })
+
   const control = new DeckControl({
     surface,
     log,
@@ -523,10 +563,26 @@ export async function registerDeckControlIpc(
     onRow: (row: ActionRow) => deps.broadcast(ACTION_CHANNEL, row),
   })
 
+  controlRef = control
+  const rememberedPort = keys.port()
   const endpoint = await startDeckControlServer({
     control,
-    ...(deps.port === undefined ? {} : { port: deps.port }),
+    keys: door,
+    ...(deps.port === undefined
+      ? { preferredPort: rememberedPort ?? DEFAULT_TOOLS_PORT }
+      : { port: deps.port }),
   })
+  /*
+   * Remember the port the tools are actually on, so the next launch asks for it
+   * again — and say so when it is not the one the last launch used, because a
+   * local AI app set up against the old one now needs the new address.
+   */
+  const movedFrom = rememberedPort !== null && rememberedPort !== endpoint.port ? rememberedPort : null
+  try {
+    keys.setPort(endpoint.port)
+  } catch (error) {
+    console.error('[deck-control] could not remember the tools port:', error)
+  }
 
   /*
    * The config is written after the server is listening, because it carries the
@@ -540,13 +596,34 @@ export async function registerDeckControlIpc(
   try {
     configs = writeMcpConfig(endpoint)
   } catch (error) {
+    door.stop()
     await stopDeckControlServer()
     registered = false
     throw error
   }
   const configPath = configs.attended
 
+  // Behind the relay's switchboard: from here on, an AI app's request that
+  // arrives through the relay is answered by this door. After the config
+  // write, so an assembly that failed to start never answers anybody.
+  relayMcp.install(door)
+
   /* ------------------------------------------------------------ channels -- */
+
+  const unwatchAiApps = registerAiAppsIpc(ipcMain, {
+    keys,
+    isApprover: deps.isApprover,
+    port: () => endpoint.port,
+    movedFrom: () => movedFrom,
+    relay: () => {
+      const link = relayMcp.linkState()
+      return link === null
+        ? null
+        : { url: link.url, hostId: link.hostId, connected: link.connected, reason: link.reason }
+    },
+    folders: () => surface.listProjects().map((project) => project.path),
+    broadcast: deps.broadcast,
+  })
 
   ipcMain.handle('deck-control:status', () => ({
     running: true,
@@ -675,7 +752,19 @@ export async function registerDeckControlIpc(
     tours,
     configPath,
     unattendedConfigPath: configs.unattended,
+    keys,
+    door,
     stop: async () => {
+      // The door first: nothing new comes in from an AI app while the rest is
+      // torn down, and every request still in flight is aborted.
+      relayMcp.install(null)
+      door.stop()
+      unwatchAiApps()
+      try {
+        keys.flush()
+      } catch (error) {
+        console.error('[deck-control] could not save when the access keys were last used:', error)
+      }
       // The broker first: every outstanding question is refused before anything
       // it might have been guarding is torn down.
       consent.stop()

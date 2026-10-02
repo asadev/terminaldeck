@@ -88,7 +88,15 @@ export function toConsentQuestion(request: ConsentRequest): CopilotConsentQuesti
     tier: request.tier,
     summary: request.summary,
     args: request.args,
-    origin: request.origin,
+    /*
+     * A key's question carries who asked *in words* where the surface id would
+     * go. A phone that does not recognise an origin shows it verbatim, and
+     * `key:<uuid>` on a consent sheet tells a person nothing about which app
+     * is about to change their machine — the context-free prompt §4.3 says
+     * becomes a reflex Yes. The id is not needed out there: answering goes by
+     * the question's own id, and the broker checks who may.
+     */
+    origin: request.label !== undefined && request.origin.startsWith('key:') ? request.label : request.origin,
     requestedAt: request.requestedAt,
     expiresAt: request.expiresAt,
   }

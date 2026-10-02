@@ -131,3 +131,39 @@ export function requireDeviceFolder(
   }
   return granted
 }
+
+/**
+ * Narrow a folder to the ones an access key was limited to, or refuse.
+ *
+ * The owner can limit a key — "ChatGPT may only start sessions in my website
+ * folder" — and this is where that limit is held. A key with no limit answers
+ * the folder unchanged, because a key is the owner's own and reaches what the
+ * owner reaches: every folder this app has open, which `requireKnownFolder`
+ * has already checked before this runs.
+ *
+ * A folder *inside* a chosen one counts, because choosing a project folder and
+ * then being refused its `packages/web` would be a limit nobody meant. The
+ * comparison is `sameFolder`, the one `session-create.ts` uses, so a trailing
+ * separator cannot get a folder past it or keep one out.
+ *
+ * Like {@link requireDeviceFolder}, the refusal names the folders the key *may*
+ * use and not the one it asked for, and for the same reason.
+ *
+ * What the limit is not, said on the settings page too: a session started in a
+ * folder runs as the owner and has a shell. The limit decides where a key may
+ * *start* one; it does not fence what that session can then touch.
+ */
+export function requireKeyFolder(caller: Caller, folder: string): string {
+  if (caller.kind !== 'key' || caller.folders === undefined || caller.folders.length === 0) return folder
+  const within = caller.folders.some((allowed) => {
+    if (sameFolder(allowed, folder)) return true
+    const base = allowed.endsWith('/') || allowed.endsWith('\\') ? allowed : `${allowed}/`
+    return folder.startsWith(base)
+  })
+  if (within) return folder
+  throw new Refused(
+    'not-permitted',
+    `the access key this app is using may only start sessions in: ${caller.folders.join(', ')}. ` +
+      'Nothing was started. Use one of those, or say what you would have needed — the owner chooses the folders in Settings.',
+  )
+}

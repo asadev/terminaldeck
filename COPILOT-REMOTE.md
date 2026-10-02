@@ -948,6 +948,23 @@ learns nothing.
 The desktop is exempt from the ownership rule because the desktop is the machine:
 somebody standing at it can already do by hand whatever they would be approving.
 
+> **Widened for one kind of question, 0.16.0.** An AI app outside this one —
+> claude.ai, ChatGPT, a Claude Code on another machine — can now reach these
+> tools with an **access key** the owner made in Settings → Connect an AI app,
+> and its alter-tier calls are put to the owner first unless he switched that
+> off for the key. Such a question has origin `key:<id>`, and it may be answered
+> by the desktop **or by any of his own devices** — not only "the surface that
+> raised it", because no device raised it. The rule above exists so that device
+> A cannot approve device B's action; a key's question is neither device's, it
+> is an app asking *him*, and every device of his is him for the same reason the
+> desktop is. That is what makes "ask me first" usable on a Mac mini nobody sits
+> at. `ConsentBroker.respond` holds the rule (`mayAnswerFor`); `copilot-runs.ts`
+> re-checks `alter` before it shows a key's question to a watching phone, and
+> `copilotFrameAllowed` refuses `copilot.answer` to anything below `alter`, so a
+> guest still answers nothing. The phone has to be open and connected to see
+> it — §4.6's push limitation applies unchanged — and the question waits 45
+> seconds rather than 120, because the AI app's own client gives up sooner.
+
 ### 4.3 What a device must be shown, or the gate is worse than nothing
 
 This is where it goes wrong in practice. **A consent prompt without enough
