@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
 import { assetTools } from './asset-tools'
+import { createMachineArea } from './machine-area'
 import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
 import { storeTools } from './store-tools'
@@ -83,6 +84,8 @@ function shipped(): ToolSpec[] {
     }),
     ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
     ...serverTools({} as ServerToolsDeps),
+    // Machines, servers, devices and GitHub — fourteen index lines, 0.16.0.
+    ...createMachineArea().tools({ servers: { openShells: () => [], shellScreen: async () => null }, userData: () => '/tmp' }),
   ])
 }
 

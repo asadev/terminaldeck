@@ -935,6 +935,17 @@ the whole of this section is a use of them.
 > the kind of thing to revisit against a permission model that has been used in
 > anger, not before.
 
+> **Revisited for 0.16.0 (2026-10-03).** The release's ask was *"everything that
+> I can do manually should be able to do through the MCP"*, and a person can open
+> this terminal and type. So the terminal is now a tool — `servers.shell`, in
+> `src/main/deck-control/server-room-tools.ts` — on the terms this section would
+> set for anything this sharp: `alter` on every call with no grant able to lower
+> it (§6.2 still holds: a grant never covers zone three), the exact line shown in
+> the dialog and anything too long to show refused first, one line per call, and
+> refused outright for any caller but the person at this computer. The named
+> tools above are unchanged and remain closed lists. Agent setup (§7.1) and the
+> host install (§7.2) are reachable the same way, through `servers.manage`.
+
 ### 6.2 The grant
 
 The escalation is the same shape `browser-tools.ts` already uses for a browser

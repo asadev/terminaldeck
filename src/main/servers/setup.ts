@@ -55,12 +55,15 @@
  * installer's real output scrolling past is the most truthful progress bar
  * available.
  *
- * ## No copilot, ever
+ * ## Not in `tools.ts` — and since 0.16.0, behind a person's yes elsewhere
  *
- * There is no entry for any of this in `tools.ts` and there must not be.
- * §6.1: *"There is no `servers.run`, and there will not be one in v1."* This is
- * a person pressing a button in zone three, and `no-run-tool.test.ts` pins the
- * tool list at three names.
+ * There is no entry for any of this in `tools.ts` and there must not be:
+ * `no-run-tool.test.ts` pins that list at three named actions. What 0.16.0
+ * changed is the ask — *everything a person can do, a copilot can ask to do* —
+ * so `deck-control/server-room-tools.ts` reaches these same handlers as
+ * `servers.manage`, `alter` on every call, refused for anybody but the person at
+ * this computer. It is still a person pressing the button: the dialog is the
+ * button, and the consequence sentence on it is the one written here.
  */
 
 import {

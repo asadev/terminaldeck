@@ -34,6 +34,14 @@
  * been used in anger, not before. `no-run-tool.test.ts` fails if anything here
  * grows a free-text command argument.
  *
+ * **0.16.0 revisited it, and the answer lives beside this file rather than in
+ * it.** The ask became *everything a person can do*, and a person can open a
+ * server's terminal and type. `deck-control/server-room-tools.ts` has that
+ * terminal as `servers.shell`: `alter` on every call, the exact line shown to a
+ * person before it runs, one line per call, never lowered by a grant, and only
+ * for the person at this computer. The three tools here are unchanged and still
+ * closed lists; the grant still covers only them.
+ *
  * ## Why three tools and not eight
  *
  * The design document lists eight tool names. Eight tool *definitions* is not
