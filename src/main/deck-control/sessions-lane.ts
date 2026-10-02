@@ -67,6 +67,7 @@ import type { SessionSwitch } from '../session-switch-run'
 import { store } from '../store'
 import type { ToolSpec } from './catalogue'
 import { copilotAdminTools } from './copilot-admin-tools'
+import { coverageTool } from './coverage-tool'
 import { deckControlStatus } from './deck-status'
 import { filesTools } from './files-tools'
 import type { DeckControlHandle } from './index'
@@ -313,5 +314,8 @@ export function sessionsLaneTools(parts: SessionsLaneParts): ToolSpec[] {
     }),
 
     ...uiTools({ evaluate }),
+
+    // The table of what every tool covers, and why the rest is not a tool.
+    coverageTool(),
   ]
 }

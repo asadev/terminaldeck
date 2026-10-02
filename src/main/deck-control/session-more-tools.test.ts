@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextFor, fakeClock, fakeSurface, session, toolNamed } from './lane-fakes'
+import { contextFor, fakeClock, fakeSurface, session, toolNamed } from './sessions-lane.fixture'
 import {
   SETTLE_MS,
   sessionMoreTools,

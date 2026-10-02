@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextFor, fakeSurface, toolNamed } from './lane-fakes'
+import { contextFor, fakeSurface, toolNamed } from './sessions-lane.fixture'
 import { projectTools, type FolderEntry, type ProjectToolDeps } from './project-tools'
 import { Refused } from './surface'
 

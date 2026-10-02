@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { copilotAdminTools, type CopilotAdminDeps } from './copilot-admin-tools'
-import { contextFor, fakeSurface, toolNamed } from './lane-fakes'
+import { contextFor, fakeSurface, toolNamed } from './sessions-lane.fixture'
 
 function depsWith(): { deps: CopilotAdminDeps; calls: string[] } {
   const calls: string[] = []

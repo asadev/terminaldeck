@@ -5,6 +5,7 @@ import { UI_COMMANDS, UI_GESTURES } from './actions/ui'
 import { browserTools } from './browser-tools'
 import { buildCatalogue, catalogueCost, estimateTokens, type ToolSpec } from './catalogue'
 import { copilotAdminTools, type CopilotAdminDeps } from './copilot-admin-tools'
+import { coverageTool } from './coverage-tool'
 import { advertisedCatalogue, describeIndex, withDescribe } from './describe-tool'
 import { filesTools, type FilesToolDeps } from './files-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
@@ -27,6 +28,7 @@ function laneTools(): ToolSpec[] {
     ...filesTools({} as FilesToolDeps),
     ...copilotAdminTools({} as CopilotAdminDeps),
     ...uiTools({ evaluate: async () => null }),
+    coverageTool(),
   ]
 }
 
@@ -81,7 +83,7 @@ describe('the sessions lane', () => {
 
   it('costs the index a measured amount, written down so a longer line is visible', () => {
     /*
-     * Measured 2026-10-03: 32 tools, 3,526 characters, ~1,010 estimated tokens of index lines — the copilot’s listing goes from ~3,210 to ~4,230 with this lane added to the built-ins.
+     * Measured 2026-10-03: 33 tools (with `tools.coverage`), 3,654 characters, ~1,044 estimated tokens of index lines.
      * Every line is a sentence a model chooses by, so the cap is per line as
      * well as in total: a line long enough to be a description belongs in the
      * description.

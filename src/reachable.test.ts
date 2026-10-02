@@ -216,6 +216,16 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'deliberately narrower than the library and mixing the two would leave the next reader unable ' +
     'to tell which declarations are load bearing. Nothing in the app may import it, and ' +
     '`host-key-checked.test.ts` enforces that structurally.',
+  'src/main/deck-control/agents-area.fixture.ts':
+    'test data: the fake surface and tool context the agents-area tool tests share, so nine test ' +
+    'files check their tools against one surface rather than nine hand-written ones that each ' +
+    'answer a little differently. The same reason `servers/test-fixtures.ts` below is here. Anything ' +
+    'off the surface it describes throws, so a tool that starts reaching for more fails loudly.',
+  'src/main/deck-control/sessions-lane.fixture.ts':
+    'test data: the fake surface, clock and tool context the sessions-lane tool tests share — ' +
+    'sessions, files, projects, the window bridge — for the reason `agents-area.fixture.ts` above ' +
+    'gives. It lives in src/ so tsc checks it against `DeckSurface` itself; a fake that drifted from ' +
+    'the interface would pin the rules against a surface the app never builds.',
   'src/main/servers/test-fixtures.ts':
     'test data, and deliberately shared rather than copied. Four test files in that folder ' +
     'describe the same server through it — facts, cards and a room measured off ' +

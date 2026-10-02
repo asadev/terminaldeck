@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { UI_COMMANDS } from './actions/ui'
-import { contextFor, fakeSurface, toolNamed } from './lane-fakes'
+import { contextFor, fakeSurface, toolNamed } from './sessions-lane.fixture'
 import { Refused } from './surface'
 import { UI_GLOBAL, UI_REFUSED, uiDoCall, uiTools } from './ui-tools'
 

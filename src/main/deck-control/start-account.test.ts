@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CreateSessionInput } from '../../shared/types'
 import { buildCatalogue } from './catalogue'
-import { contextFor, fakeSurface, toolNamed } from './lane-fakes'
+import { contextFor, fakeSurface, toolNamed } from './sessions-lane.fixture'
 
 /**
  * `sessions.start` with an account — "run it as my work login".

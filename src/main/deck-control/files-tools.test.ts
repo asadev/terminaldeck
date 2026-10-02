@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../shared/brand'
-import { contextFor, fakeSurface, toolNamed } from './lane-fakes'
+import { contextFor, fakeSurface, toolNamed } from './sessions-lane.fixture'
 import { filesTools, MAX_UPLOAD_BYTES, rankMatches, secretShapeOf, type FilesToolDeps } from './files-tools'
 
 function depsWith(overrides: Partial<FilesToolDeps> = {}): { deps: FilesToolDeps; calls: string[] } {
