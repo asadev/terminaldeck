@@ -24,6 +24,8 @@ interface FakeSession {
   events: string[]
   preloads: unknown[]
   cleared: number
+  /** Every user agent the module set on this session, in order. */
+  userAgents: string[]
 }
 
 const created = new Map<string, FakeSession>()
@@ -38,8 +40,12 @@ function fakeSession(partition: string): FakeSession {
     events: [],
     preloads: [],
     cleared: 0,
+    userAgents: [],
   }
   Object.assign(ses, {
+    setUserAgent: (userAgent: string) => {
+      ses.userAgents.push(userAgent)
+    },
     setPermissionRequestHandler: (fn: unknown) => {
       ses.permissionRequestHandler = fn
     },
@@ -62,8 +68,20 @@ function fakeSession(partition: string): FakeSession {
   return ses
 }
 
+/**
+ * Electron 41.10.5's own default, character for character, as it was read off
+ * the wire on 2026-09-02. Kept whole rather than shortened to the one token so
+ * the assertion below also proves nothing *else* in it was disturbed.
+ */
+const ELECTRON_DEFAULT_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/146.0.7680.216 Electron/41.10.5 Safari/537.36'
+
 vi.mock('electron', () => ({
-  app: { getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-isolation-test-')) },
+  app: {
+    getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-isolation-test-')),
+    userAgentFallback: ELECTRON_DEFAULT_UA,
+  },
   session: { fromPartition: (partition: string) => fakeSession(partition) },
 }))
 
@@ -78,6 +96,7 @@ const {
   newIsolationKey,
   registerBrowserIsolationIpc,
 } = await import('./browser-isolation')
+const { cleanUserAgent, namesTheShell } = await import('./browser-user-agent')
 
 /* -------------------------------------------------------------------- keys -- */
 
@@ -144,6 +163,25 @@ describe('isolatedSession', () => {
      * defect the whole 2026-08-21 review is about.
      */
     expect(ses?.events).toContain('will-download')
+  })
+
+  /*
+   * The isolated tab used to keep Electron's default, so it sent
+   * `Electron/41.10.5` while the shared tab beside it did not — and Isolated is
+   * the tab a second sign-in happens in. Pinned against the cleaner itself
+   * rather than a literal, so the two halves of the app cannot come to disagree
+   * about what the browser is called.
+   */
+  it('says the same thing about itself as the shared tab, with no Electron in it', () => {
+    const key = newIsolationKey()
+    isolatedSession(key)
+    const sent = created.get(key)?.userAgents ?? []
+    expect(sent).toEqual([cleanUserAgent(ELECTRON_DEFAULT_UA)])
+    expect(namesTheShell(sent[0] ?? 'Electron/')).toBe(false)
+    expect(sent[0]).toBe(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+        'Chrome/146.0.7680.216 Safari/537.36',
+    )
   })
 
   it('registers the recorder preload, or recording dies the moment a tab is isolated', () => {
