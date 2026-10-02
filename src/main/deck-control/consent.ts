@@ -117,6 +117,27 @@ import type { RefusalReason, Tier } from './surface'
 export const DEFAULT_CONSENT_TIMEOUT_MS = 120_000
 
 /**
+ * How long a question raised by an AI app on an access key waits.
+ *
+ * Shorter than the copilot's two minutes, and the number is set by the client
+ * on the far end rather than by the person. claude.ai, ChatGPT and most other
+ * MCP clients are built on the official SDKs, and the TypeScript one gives up
+ * on a request after sixty seconds unless told otherwise. A question that is
+ * still on the owner's screen when that clock fires is the hole `caller-gone`
+ * exists for, one hop further out: the app has stopped listening, and an
+ * approval landing afterwards changes something it was already told failed.
+ *
+ * Forty-five seconds answers inside that, with the clean refusal sentence an
+ * unattended Mac mini owes an AI app — "nobody answered, nothing was changed,
+ * tell them what you wanted" — instead of a transport timeout the model can
+ * only retry. It is long enough to see a notification on a phone that is
+ * already in a hand and decide. It is not long enough for a person who has to
+ * walk to the desk, and that is the honest trade: the alternative is a window
+ * that is mostly spent after the asker has hung up.
+ */
+export const OUTSIDE_APP_CONSENT_TIMEOUT_MS = 45_000
+
+/**
  * How many questions may be outstanding at once.
  *
  * Three. Not a resource limit — it is an anti-fatigue limit. An agent in a loop
@@ -143,6 +164,41 @@ export const WINDOW_SURFACE = 'window'
 /** The surface id for one paired device's copilot run. */
 export function deviceSurface(deviceId: string): string {
   return `device:${deviceId}`
+}
+
+/**
+ * The surface id for a question raised by an AI app holding an access key.
+ *
+ * ## Who may answer one, and why it is wider than a device's
+ *
+ * A device's question may be answered by that device or by the desktop, and
+ * the rule exists so that device A cannot approve device B's action — two
+ * phones are two conversations and two authorisations (`COPILOT-REMOTE.md`
+ * §4.2). A key's question is neither device's. It is an app the owner let in,
+ * asking the owner, and **every device of his is him**: the desktop may answer
+ * because somebody at it could do the thing by hand, and one of his own phones
+ * may answer for exactly the same reason, because it already holds `alter` on
+ * this machine in its own right.
+ *
+ * That is what makes "ask me first" usable on a Mac mini nobody sits at — the
+ * question reaches the phone in his pocket. The broker does not know what a
+ * device *is*; it knows that a `device:` surface reached `respond` at all,
+ * which `copilotFrameAllowed` permits only for a device holding `alter`, and
+ * `copilot-runs.ts` re-checks that grant before it shows a key's question to
+ * anybody. A guest never gets either far enough.
+ */
+export function keySurface(keyId: string): string {
+  return `key:${keyId}`
+}
+
+export function isKeySurface(surface: string): boolean {
+  return surface.startsWith('key:') && surface.length > 'key:'.length
+}
+
+/** May this surface answer a question raised on that one? The rule, in one place. */
+function mayAnswerFor(origin: string, by: string): boolean {
+  if (by === WINDOW_SURFACE || by === origin) return true
+  return isKeySurface(origin) && by.startsWith('device:')
 }
 
 /** The question, as it reaches a window and as it is written to the log. */
@@ -182,6 +238,16 @@ export interface ConsentRequest {
    * by a device that has since walked out of the building.
    */
   origin: string
+  /**
+   * Who asked, in words, when the surface id alone would not say.
+   *
+   * Set for a key's question: `“ChatGPT” — an AI app you gave a key to`. A
+   * phone shows `origin` verbatim when it does not recognise it, and an
+   * opaque `key:<uuid>` on a consent sheet is exactly the context-free prompt
+   * §4.3 warns turns into a reflex Yes. `copilot-consent.ts` puts this on the
+   * wire in its place.
+   */
+  label?: string
 }
 
 export interface ConsentGranted {
@@ -256,6 +322,19 @@ export class ConsentBroker {
     signal?: AbortSignal
     /** Which surface raised it. Defaults to the window. See {@link ConsentRequest.origin}. */
     origin?: string
+    /** Who asked, in words. See {@link ConsentRequest.label}. */
+    label?: string
+    /**
+     * A shorter wait than the broker's own, for a caller whose client will not
+     * wait as long.
+     *
+     * Only ever shorter: `Math.min` with the broker's timeout, so a mistake
+     * here cannot hold a question on screen longer than the person was told it
+     * would be. An AI app's MCP client gives up on its own clock, and a refusal
+     * that arrives before it does is a sentence the model reads, where one that
+     * arrives after is a transport error it can only retry.
+     */
+    timeoutMs?: number
   }): Promise<ConsentOutcome> {
     const at = this.now()
     if (this.stopped) return { granted: false, reason: 'shutting-down', by: null, at }
@@ -266,6 +345,10 @@ export class ConsentBroker {
       return { granted: false, reason: 'too-many-pending', by: null, at }
     }
 
+    const wait =
+      input.timeoutMs !== undefined && Number.isFinite(input.timeoutMs)
+        ? Math.max(Math.min(Math.trunc(input.timeoutMs), this.timeoutMs), 1)
+        : this.timeoutMs
     const request: ConsentRequest = {
       id: randomUUID(),
       tool: input.tool,
@@ -273,13 +356,14 @@ export class ConsentBroker {
       summary: input.summary,
       args: input.args,
       requestedAt: at,
-      expiresAt: at + this.timeoutMs,
+      expiresAt: at + wait,
       // Defaulted rather than required, and the default is the *narrow* value:
       // an unnamed origin can only be answered at the desk. A caller that
       // forgot to say where it came from therefore loses the ability to answer
       // its own question, which is the failure direction this file exists to
       // stay in.
       origin: input.origin ?? WINDOW_SURFACE,
+      ...(input.label === undefined ? {} : { label: input.label }),
     }
 
     /*
@@ -320,7 +404,7 @@ export class ConsentBroker {
 
     entry.timer = setTimeout(() => {
       this.finish(request.id, { granted: false, reason: 'timeout', by: null, at: this.now() })
-    }, this.timeoutMs)
+    }, wait)
     // Vitest keeps the event loop alive for a pending timer, so a suite that
     // exercised a long timeout would hang after its assertions passed.
     entry.timer.unref?.()
@@ -384,7 +468,7 @@ export class ConsentBroker {
      * probing for other devices' question ids learns nothing from the reply that
      * it did not already know from its own `copilot.pending` list.
      */
-    if (by !== WINDOW_SURFACE && by !== entry.request.origin) return false
+    if (!mayAnswerFor(entry.request.origin, by)) return false
     const at = this.now()
     this.finish(
       id,
@@ -407,7 +491,7 @@ export class ConsentBroker {
   mayAnswer(id: string, by: string): boolean {
     const entry = this.pending.get(id)
     if (!entry) return false
-    return by === WINDOW_SURFACE || by === entry.request.origin
+    return mayAnswerFor(entry.request.origin, by)
   }
 
   /**

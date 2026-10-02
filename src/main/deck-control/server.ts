@@ -36,6 +36,30 @@
  * neither is anything else the app could do here, because that attacker can
  * read the settings and the transcripts directly.
  *
+ * ## Access keys, and the one thing they change here (0.16.0)
+ *
+ * AI apps outside this one — Claude Code in a terminal, Cursor, Codex — reach
+ * this same socket with an **access key** the owner made in Settings, in the
+ * `Authorization` header or as the last segment of `/mcp/<key>`. A key is not a
+ * per-run token: it outlives every run, so it is resolved per *request* by the
+ * door in `key-door.ts` (hash, constant-time compare across all keys) and
+ * never registered in the caller table. Every guard above applies to it
+ * unchanged — loopback bind, loopback `Host`, no `Origin`, body cap — and every
+ * call it makes goes through the same `createMcpServer` and the same
+ * dispatcher as the copilot's.
+ *
+ * What a key does change is the **port**. A config file a person pasted into
+ * Cursor names one, and a port picked fresh at every launch would break it at
+ * the next restart; so the singleton asks for the port it was last served on
+ * and falls back honestly when something else holds it. See
+ * {@link DeckControlServerOptions.preferredPort}. The per-run tokens keep every
+ * property they had: regenerated each start, so a stale config file
+ * authenticates nothing.
+ *
+ * AI apps on the *internet* never reach this listener at all. They come through
+ * the relay and are answered by the door over the SDK's web-standard transport
+ * — the same handler, a different road. `relay-mcp.ts` is the switchboard.
+ *
  * ## Why a new Server per request
  *
  * Stateless: each POST is parsed, answered and forgotten. That is the SDK's
@@ -69,11 +93,13 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../../shared/brand'
 import { claimOwnPort, releaseOwnPort } from '../own-ports'
-import { CallerTable, type TokenGrant } from './callers'
+import { CallerTable, bearerOf, type KeyDoor, type KeyedGrant, type TokenGrant } from './callers'
 import { advertiseTool } from './catalogue'
+import { OUTSIDE_APP_CONSENT_TIMEOUT_MS } from './consent'
 import { advertisedCatalogue, visibleTo } from './describe-tool'
 import type { DeckControl } from './control'
-import { LOCAL_CALLER } from './surface'
+import { RUN_ID } from './run-tool'
+import { LOCAL_CALLER, type Caller } from './surface'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -163,6 +189,29 @@ export interface DeckControlServerOptions {
   control: DeckControl
   /** Fixed port, for tests. Zero (the default) takes whatever is free. */
   port?: number
+  /**
+   * The port to try first when {@link port} is not given, falling back to any
+   * free one when something else holds it.
+   *
+   * For AI apps on this Mac holding an access key. Their configuration names a
+   * port, and a port that changed at every launch — which this server's did,
+   * deliberately, while the only callers were handed a fresh config file per
+   * run — would break every one of them on the next restart. So the port the
+   * tools were last served on is remembered (`access-keys.ts` keeps it) and
+   * asked for again.
+   *
+   * The fallback is honest rather than clever: if the port is taken, the server
+   * still starts, on another one, and the settings page shows the new address
+   * and says the old one moved. Refusing to start would cost the copilot its
+   * tools over a port number; taking the old port by force is not possible and
+   * should not be.
+   */
+  preferredPort?: number
+  /**
+   * Access keys, for AI apps outside this one. Absent on every endpoint but the
+   * copilot's own — a session's browser-only endpoint never accepts a key.
+   */
+  keys?: KeyDoor
 }
 
 /* --------------------------------------------------------------- guarding -- */
@@ -338,6 +387,8 @@ function toolResult(value: unknown, error: string | null): {
  * not be able to disagree.
  */
 function instructionsFor(grant: TokenGrant): string {
+  const caller = grant.caller()
+  if (caller.kind === 'key') return keyInstructions(caller)
   if (grant.tools !== undefined) {
     return (
       `Browser windows in ${BRAND.name}. A window attached to this session is named B1, B2 — open one with ` +
@@ -354,6 +405,67 @@ function instructionsFor(grant: TokenGrant): string {
     'person started, is put to them as a confirmation first and refused if they do not answer. Every call ' +
     'you make here is written to the action log they can read.'
   )
+}
+
+/**
+ * What an AI app outside this one is told the server is for.
+ *
+ * Written for a model that has never seen this app — claude.ai or ChatGPT,
+ * handed a link — so it says what the thing is, how the held-back tools are
+ * reached by a client that can only call what it is listed, and what this
+ * particular key may do. Built per request from the key as it stands, so a
+ * level changed a moment ago is described the way it now is.
+ */
+function keyInstructions(caller: Caller): string {
+  const { act, alter } = caller.tiers
+  const level = alter
+    ? 'it may look, do routine work such as starting and driving sessions, and make bigger changes such as settings'
+    : act
+      ? 'it may look and do routine work such as starting and driving sessions, but not change settings or delete anything'
+      : 'it may only look: list and read sessions, projects, git changes and alerts'
+  const ask =
+    alter && caller.askFirst !== false
+      ? ` Bigger changes are put to the owner on their Mac or phone first, and refused if nobody answers within ${Math.round(
+          OUTSIDE_APP_CONSENT_TIMEOUT_MS / 1000,
+        )} seconds.`
+      : ''
+  const folders =
+    caller.folders !== undefined && caller.folders.length > 0
+      ? ` Sessions can only be started in: ${caller.folders.join(', ')}.`
+      : ''
+  return (
+    `${BRAND.name} runs AI coding sessions (Claude Code, Codex, Gemini and plain shells) on its owner's computer, ` +
+    'and these tools see and drive it: start a session in one of their projects, send it a message, read what it ' +
+    'answered, look at git changes and alerts. Start with sessions_list and projects_list. Many tools are held ' +
+    'back to keep this list short — tools_describe lists them and gives any one’s arguments, and tools_run calls ' +
+    `it. The owner made the key you are using for this app: ${level}.${ask}${folders} ` +
+    'Every call is written to an activity log the owner reads, under this app’s name.'
+  )
+}
+
+/**
+ * `tools.run`'s hints, told the truth for this caller.
+ *
+ * A wrapper's honest `readOnlyHint` depends on what it can reach, and that is a
+ * fact about the key, not the tool. ChatGPT asks its user before every call to a
+ * tool not marked read-only; marking this read-only for a key that can change
+ * settings would be a lie that switches that check off, and marking it
+ * destructive for a key that can only look would be a lie that trains the user
+ * to click through.
+ */
+function runHints(listed: Record<string, unknown>, caller: Caller): Record<string, unknown> {
+  const annotations =
+    typeof listed.annotations === 'object' && listed.annotations !== null
+      ? (listed.annotations as Record<string, unknown>)
+      : {}
+  return {
+    ...listed,
+    annotations: {
+      ...annotations,
+      readOnlyHint: !caller.tiers.act && !caller.tiers.alter,
+      destructiveHint: caller.tiers.alter,
+    },
+  }
 }
 
 export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_ATTENDED): Server {
@@ -396,9 +508,21 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
    * `catalogue-cost.test.ts` measures the output of this same pair, because
    * this is the payload the budget is about.
    */
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: advertisedCatalogue(control.tools().filter(allowed)).map(advertiseTool),
-  }))
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    /*
+     * A key caller is also shown `tools.run`, because the clients that hold
+     * keys — claude.ai, ChatGPT — can call nothing they were not listed, and
+     * most of the catalogue is behind `tools.describe`. Everyone else's
+     * listing is unchanged; see `run-tool.ts`.
+     */
+    const caller = grant.caller()
+    const run = caller.kind === 'key'
+    return {
+      tools: advertisedCatalogue(control.tools().filter(allowed), { run }).map((spec) =>
+        spec.id === RUN_ID ? runHints(advertiseTool(spec), caller) : advertiseTool(spec),
+      ),
+    }
+  })
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     /*
@@ -517,11 +641,33 @@ export function currentEndpoint(): DeckControlEndpoint | null {
   return endpoint
 }
 
+/**
+ * The app's own name, out of an MCP `initialize`, or null.
+ *
+ * `clientInfo.name` and `.version`, which is how an MCP client introduces
+ * itself — "claude-ai", "openai-mcp", "cursor-vscode". Read from a batch too,
+ * because the older protocol version allowed one.
+ */
+export function clientNameOf(parsed: unknown): string | null {
+  const messages = Array.isArray(parsed) ? parsed : [parsed]
+  for (const message of messages) {
+    if (typeof message !== 'object' || message === null) continue
+    const record = message as Record<string, unknown>
+    if (record.method !== 'initialize') continue
+    const params = record.params as Record<string, unknown> | undefined
+    const info = params?.clientInfo as Record<string, unknown> | undefined
+    if (typeof info?.name !== 'string') return null
+    return typeof info.version === 'string' ? `${info.name} ${info.version}` : info.name
+  }
+  return null
+}
+
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
   live: DeckControlEndpoint,
   control: DeckControl,
+  keys: KeyDoor | undefined,
 ): Promise<void> {
   if (!isLoopback(req.socket.remoteAddress)) return deny(res, 403)
   if (!hostIsLocal(req.headers.host)) return deny(res, 403)
@@ -547,13 +693,45 @@ async function handle(
    * header: with one entry per paired device, a short-circuit would turn "how far
    * down the table is your token" into a measurable quantity.
    */
-  const grant = live.callers.match(req.headers.authorization)
+  const path = (req.url ?? '').split('?')[0]
+  /*
+   * An access key may also arrive in the path, `/mcp/<key>`, for the local apps
+   * that cannot set a header — the same secret-link form the relay offers. Only
+   * a key: the per-run tokens stay header-only, as they always were.
+   */
+  const pathKey = path.startsWith(`${MCP_PATH}/`) ? path.slice(MCP_PATH.length + 1) : null
+  let grant: TokenGrant | null = pathKey === null ? live.callers.match(req.headers.authorization) : null
+  /*
+   * Then the access keys, when this endpoint takes them — after the table,
+   * whichever one a request holds: a per-run token is never a key and a key is
+   * never in the table, so the order decides nothing but which lookup runs
+   * first. The key's grant is built for this request alone; see `KeyedGrant`.
+   */
+  let keyed: KeyedGrant | null = null
+  if (grant === null && keys !== undefined) {
+    const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null
+    keyed = keys.grant(pathKey ?? bearerOf(req.headers.authorization), 'this-mac', { userAgent })
+    grant = keyed
+  }
   if (!grant) return deny(res, 403)
 
-  const path = (req.url ?? '').split('?')[0]
-  if (path !== MCP_PATH) return deny(res, 404)
-  if (req.method !== 'POST') return deny(res, 405)
+  try {
+    if (path !== MCP_PATH && !(keyed !== null && pathKey !== null)) return deny(res, 404)
+    if (req.method !== 'POST') return deny(res, 405)
+    await answer(req, res, grant, keyed, control)
+  } finally {
+    keyed?.done()
+  }
+}
 
+/** The body, the parse, and the MCP exchange — the part every credential shares. */
+async function answer(
+  req: IncomingMessage,
+  res: ServerResponse,
+  grant: TokenGrant,
+  keyed: KeyedGrant | null,
+  control: DeckControl,
+): Promise<void> {
   let body: string
   try {
     body = await readBody(req)
@@ -567,6 +745,8 @@ async function handle(
   } catch {
     return deny(res, 400)
   }
+  // Which app this is, when it says — once, at `initialize`.
+  if (keyed !== null) keyed.noteClient(clientNameOf(parsed))
 
   const mcp = createMcpServer(control, grant)
   const transport = new StreamableHTTPServerTransport({
@@ -735,7 +915,7 @@ async function openServer(options: DeckControlServerOptions): Promise<OpenedDeck
   const live: DeckControlEndpoint = { port: 0, token, unattendedToken, url: '', callers }
 
   const next = createServer((req, res) => {
-    void handle(req, res, live, options.control).catch((error) => {
+    void handle(req, res, live, options.control, options.keys).catch((error) => {
       console.error('[deck-control] handler threw:', error)
       if (!res.headersSent) deny(res, 500)
       else if (!res.writableEnded) res.end()
@@ -746,24 +926,50 @@ async function openServer(options: DeckControlServerOptions): Promise<OpenedDeck
   next.headersTimeout = HEADERS_TIMEOUT_MS
   next.requestTimeout = REQUEST_TIMEOUT_MS
 
-  await new Promise<void>((resolve, reject) => {
-    const onListenError = (error: Error): void => {
-      next.close()
-      reject(error)
-    }
-    next.once('error', onListenError)
-    // Port 0: a fixed port would collide with whatever else on this machine
-    // already wanted it, and a second copy of the app would fail to start.
-    next.listen(options.port ?? 0, HOST, () => {
-      next.removeListener('error', onListenError)
-      // A permanent error listener from here on. An emitter with none rethrows,
-      // so a failed accept — EMFILE when the machine is out of descriptors —
-      // would take down the main process because a tool call could not be
-      // received.
-      next.on('error', (error) => console.error('[deck-control] server error:', error))
-      resolve()
+  const listen = (port: number): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const onListenError = (error: Error): void => {
+        next.removeListener('error', onListenError)
+        reject(error)
+      }
+      next.once('error', onListenError)
+      next.listen(port, HOST, () => {
+        next.removeListener('error', onListenError)
+        resolve()
+      })
     })
-  })
+
+  /*
+   * Port 0 by default: a fixed port would collide with whatever else on this
+   * machine already wanted it, and a second copy of the app would fail to
+   * start. A *preferred* port is tried first and given up gracefully — see
+   * {@link DeckControlServerOptions.preferredPort}.
+   */
+  const preferred =
+    options.port === undefined && options.preferredPort !== undefined && options.preferredPort > 0
+      ? options.preferredPort
+      : null
+  try {
+    if (preferred === null) {
+      await listen(options.port ?? 0)
+    } else {
+      try {
+        await listen(preferred)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'EADDRINUSE' && code !== 'EACCES') throw error
+        console.warn(`[deck-control] port ${preferred} is taken, so the tools are served on another one`)
+        await listen(0)
+      }
+    }
+  } catch (error) {
+    next.close()
+    throw error
+  }
+  // A permanent error listener from here on. An emitter with none rethrows, so
+  // a failed accept — EMFILE when the machine is out of descriptors — would
+  // take down the main process because a tool call could not be received.
+  next.on('error', (error) => console.error('[deck-control] server error:', error))
 
   const address = next.address() as AddressInfo | null
   if (!address) {

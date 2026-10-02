@@ -47,13 +47,33 @@
  * opaque payload. The phone side is unwrapped — a phone has one channel and
  * does not need to be told its own name.
  *
- * The relay never parses the payload. It could not if it wanted to.
+ * The relay never parses a channel's payload. It could not if it wanted to.
+ *
+ * ## The one thing it can read
+ *
+ * Since 0.16.0 it also carries MCP requests from AI apps to a Mac's tools —
+ * `mcp-route.ts`. Those arrive as HTTPS from apps that will never run a Noise
+ * handshake, so they are plaintext here, and that is said out loud on the
+ * settings page that hands out the link. The relay still decides nothing about
+ * them: it never sees a list of keys and never checks one.
  */
 
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { FrameReader, OPCODE, encodeFrame, handshakeResponse } from '../../src/shared/ws-frame'
+import {
+  MCP_ENVELOPE,
+  MCP_MAX_IN_FLIGHT,
+  MCP_RELAY_WAIT_MS,
+  McpHostState,
+  decodeMcpReply,
+  handleMcpHttp,
+  newRequestId,
+  type McpAdmission,
+  type McpRouting,
+  type McpSink,
+} from './mcp-route'
 
 /* -------------------------------------------------------------------------- */
 /* Envelope                                                                    */
@@ -256,6 +276,12 @@ interface Host {
   id: string
   socket: RelaySocket
   guests: Map<string, Guest>
+  /**
+   * Whether this host answers MCP requests from AI apps, and the ones it owes.
+   *
+   * Per host and in memory, like everything else here — see `mcp-route.ts`.
+   */
+  mcp: McpHostState
 }
 
 export interface RelayOptions {
@@ -265,6 +291,8 @@ export interface RelayOptions {
   maxGuestsPerHost?: number
   /** Most Macs this process will hold. */
   maxHosts?: number
+  /** How long an AI app's request waits for its Mac. See `MCP_RELAY_WAIT_MS`. */
+  mcpWaitMs?: number
   now?: () => number
 }
 
@@ -276,7 +304,7 @@ export interface RelayStats {
 /**
  * The routing table. Everything here is in memory and nothing is written down.
  */
-export class Rendezvous {
+export class Rendezvous implements McpRouting {
   private readonly hosts = new Map<string, Host>()
   private readonly options: Required<RelayOptions>
 
@@ -285,6 +313,7 @@ export class Rendezvous {
       heartbeatMs: options.heartbeatMs ?? 30_000,
       maxGuestsPerHost: options.maxGuestsPerHost ?? 8,
       maxHosts: options.maxHosts ?? 5_000,
+      mcpWaitMs: options.mcpWaitMs ?? MCP_RELAY_WAIT_MS,
       now: options.now ?? Date.now,
     }
   }
@@ -321,6 +350,7 @@ export class Rendezvous {
       id,
       socket: null as unknown as RelaySocket,
       guests: new Map(),
+      mcp: new McpHostState(this.options.now),
     }
     host.socket = new RelaySocket(
       socket,
@@ -356,6 +386,12 @@ export class Rendezvous {
 
   /** Host → relay: unwrap the envelope and hand the payload to one guest. */
   private fromHost(host: Host, frame: Buffer): void {
+    // The MCP family first, by its type byte: those are answers to HTTP
+    // requests this process is holding, never bytes for a guest.
+    if (frame.length >= ENVELOPE_HEADER && frame[0] >= MCP_ENVELOPE.request && frame[0] <= MCP_ENVELOPE.reach) {
+      this.fromHostMcp(host, frame)
+      return
+    }
     const envelope = decodeEnvelope(frame)
     // A host that cannot speak the envelope is a bug or an impostor with the
     // secret; either way there is nothing useful to do with the frame.
@@ -387,6 +423,68 @@ export class Rendezvous {
     if (this.hosts.get(host.id) === host) this.hosts.delete(host.id)
     for (const guest of host.guests.values()) guest.socket.close()
     host.guests.clear()
+    // Every HTTP request this host still owed an answer gets a 502 now, rather
+    // than holding an AI app's connection open until the deadline.
+    host.mcp.drop()
+  }
+
+  /* --------------------------------------------------------------- MCP -- */
+
+  /**
+   * A host's answer, or its announcement that it answers at all.
+   *
+   * `reach` is the host saying "I serve MCP" (or no longer do). Until it says
+   * so, every request for it is a fast 404 — which is what an old desktop, or
+   * one whose owner switched internet reach off, should look like from outside.
+   */
+  private fromHostMcp(host: Host, frame: Buffer): void {
+    const type = frame[0]
+    const id = frame.subarray(1, ENVELOPE_HEADER)
+    const payload = frame.subarray(ENVELOPE_HEADER)
+    if (type === MCP_ENVELOPE.reach) {
+      host.mcp.serving = payload.length >= 1 && payload[0] === 1
+      return
+    }
+    if (type !== MCP_ENVELOPE.reply) return
+    const key = id.toString('hex')
+    const sink = host.mcp.requests.get(key)
+    if (!sink) return
+    const slice = decodeMcpReply(Buffer.from(payload))
+    if (!slice) {
+      host.mcp.requests.delete(key)
+      sink.gone()
+      return
+    }
+    if (slice.last) host.mcp.requests.delete(key)
+    sink.slice(slice)
+  }
+
+  /** How long the HTTP route waits for a host's answer. */
+  mcpWaitMs(): number {
+    return this.options.mcpWaitMs
+  }
+
+  admit(hostId: string): McpAdmission {
+    const host = this.hosts.get(hostId)
+    if (!host || !host.mcp.serving) return 'offline'
+    if (host.mcp.requests.size >= MCP_MAX_IN_FLIGHT) return 'busy'
+    return host.mcp.take() ? 'ok' : 'rate'
+  }
+
+  forward(hostId: string, payload: Buffer, sink: McpSink): Buffer | null {
+    const host = this.hosts.get(hostId)
+    if (!host || !host.mcp.serving) return null
+    const id = newRequestId()
+    host.mcp.requests.set(id.toString('hex'), sink)
+    host.socket.send(encodeEnvelope(MCP_ENVELOPE.request, id, payload))
+    return id
+  }
+
+  cancel(hostId: string, id: Buffer): void {
+    const host = this.hosts.get(hostId)
+    if (!host) return
+    if (!host.mcp.requests.delete(id.toString('hex'))) return
+    host.socket.send(encodeEnvelope(MCP_ENVELOPE.cancel, Buffer.from(id), Buffer.alloc(0)))
   }
 }
 
@@ -440,6 +538,9 @@ export function createRelayServer(options: RelayOptions = {}): RelayServer {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
       return res.end(body)
     }
+    // The one route that is a website of sorts: AI apps calling a Mac's tools.
+    // It owns `/mcp/…` and the discovery probes, and nothing else.
+    if (handleMcpHttp(req, res, rendezvous, rendezvous.mcpWaitMs())) return
     res.writeHead(404, { 'content-type': 'text/plain' })
     res.end('not found\n')
   })

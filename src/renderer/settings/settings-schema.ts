@@ -469,6 +469,25 @@ export const SECTIONS = [
     blurb: 'Its files, its memory, what it did, and what it can reach.',
   },
   /*
+   * The door for AI apps outside this one — claude.ai, ChatGPT, a Claude Code
+   * or Codex on another machine — onto the same tools the copilot uses.
+   *
+   * Beside Copilot because the two answer one question from opposite ends: the
+   * copilot is the AI *inside* this app reaching these tools, and this is every
+   * AI outside it. Not folded into Copilot, on the rule this rail is built on —
+   * a section is a subject — and this subject is access keys, internet reach
+   * and setup for seven other apps, none of which is the copilot's files or
+   * memory. It stores no setting in the settings file either: the keys and the
+   * internet switch live in their own fenced store, `access-keys.ts`, because a
+   * file a settings write could reach would be a way for an agent to let itself
+   * in. `nothing-dropped.test.tsx` carries the ledger entry for the seat.
+   */
+  {
+    id: 'ai-apps',
+    label: 'Connect an AI app',
+    blurb: 'Let AI apps on this Mac or on the internet use your sessions, with a key you can take back.',
+  },
+  /*
    * There is no GitHub section here, and that is a decision rather than a gap.
    *
    * One existed for exactly one row — "Use classic GitHub sign-in", the switch

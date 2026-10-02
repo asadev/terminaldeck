@@ -44,6 +44,7 @@ import { PowerSection } from './sections/PowerSection'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
 import { CopilotSection } from './sections/CopilotSection'
+import { AiAppsSection } from './sections/AiAppsSection'
 import { HelpSection } from './sections/HelpSection'
 import { ShortcutsPopover } from './ShortcutsPopover'
 import { RailFooter } from './RailFooter'
@@ -124,6 +125,14 @@ const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
  */
 const ScrapingSectionView: ComponentType<SectionProps> = () => <ScrapingSection />
 
+/**
+ * Wrapped for the fifth time, and for the reason the four above give: this pane
+ * reads access keys and the internet switch off `window.deck`, none of which is
+ * a stored setting, and handed `SectionProps.bridge` it would take the settings
+ * bridge for its own and draw itself as missing from this build.
+ */
+const AiAppsSectionView: ComponentType<SectionProps> = () => <AiAppsSection />
+
 const CopilotSectionView: ComponentType<SectionProps> = ({ setUpCopilot }) => (
   // One prop, and it is a capability of the *window* rather than a setting —
   // see `SectionProps.setUpCopilot` for why the setup flow cannot open from
@@ -161,6 +170,9 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   scraping: ScrapingSectionView,
   // Reads only, and resolves its own bridge. See `CopilotSectionView`.
   copilot: CopilotSectionView,
+  // Resolves its own bridge, like Copilot and Power, and holds none of this
+  // window's values: keys live in their own store. See `AiAppsSection.tsx`.
+  'ai-apps': AiAppsSectionView,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings
   // bridge — and casting RemoteSection to this type handed it that object as
   // its `bridge` prop, so it decided remote access was "not wired into this

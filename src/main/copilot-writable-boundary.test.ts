@@ -322,14 +322,22 @@ describe.skipIf(!onMac)('the copilot, inside the fence it really runs in', () =>
      * drive it, and a store the copilot can write is a permission the copilot
      * grants itself. That is the one justification this assertion is asking for,
      * written where the count changed.
+     *
+     * Six since 0.16.0. The sixth is the access-key store
+     * (`deck-control/access-keys.ts`): the hashes of the keys AI apps outside
+     * this one reach these tools with, from the internet included. Same
+     * justification, sharper — an edit there is not a permission raised, it is
+     * a way in minted from nothing, because the copilot can choose a key and
+     * write its hash.
      */
     expect(profile).toContain('(allow default)')
-    expect(profile.match(/^\(deny /gm)).toHaveLength(5)
+    expect(profile.match(/^\(deny /gm)).toHaveLength(6)
     expect(profile).toContain(fenced.routines)
     expect(profile).toContain(fenced.routineState)
     expect(profile).toContain(fenced.log)
     expect(profile).toContain(fenced.remoteCopilot)
     expect(profile).toContain(fenced.remoteAuth)
+    expect(profile).toContain(fenced.accessKeys)
     // And the copilot's own folder is not in it: that is where it works.
     expect(profile).not.toContain(`(subpath "${paths.root}")`)
   })

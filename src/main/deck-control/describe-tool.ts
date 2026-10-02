@@ -109,6 +109,7 @@
  */
 
 import { advertiseTool, type ToolSpec } from './catalogue'
+import { RUN_ID } from './run-tool'
 import { Refused } from './surface'
 
 /** The canonical id and the wire spelling, in one place because five files name them. */
@@ -182,9 +183,21 @@ export function describeIndex(behind: readonly ToolSpec[]): string {
  * the payload — measuring the catalogue behind it would be measuring the thing
  * progressive disclosure exists to stop paying for.
  */
-export function advertisedCatalogue(visible: readonly ToolSpec[]): ToolSpec[] {
+export function advertisedCatalogue(
+  visible: readonly ToolSpec[],
+  /**
+   * Advertise `tools.run` as well. True for an AI app on an access key, which
+   * can only call what it is listed; false — the default — for every listing
+   * that existed before it, so the copilot's is byte-identical to what
+   * `catalogue-cost.test.ts` measured. See `run-tool.ts`.
+   */
+  options: { run?: boolean } = {},
+): ToolSpec[] {
   const behind = visible.filter((spec) => spec.index !== undefined)
-  const full = visible.filter((spec) => spec.index === undefined && spec.id !== DESCRIBE_ID)
+  const full = visible.filter(
+    (spec) =>
+      spec.index === undefined && spec.id !== DESCRIBE_ID && (spec.id !== RUN_ID || options.run === true),
+  )
   if (behind.length === 0) return full
   const describe = visible.find((spec) => spec.id === DESCRIBE_ID)
   /*
@@ -199,9 +212,15 @@ export function advertisedCatalogue(visible: readonly ToolSpec[]): ToolSpec[] {
    * them in full and let the budget say so.
    */
   if (describe === undefined) return [...full, ...behind]
+  /*
+   * One more sentence for a caller that is shown `tools.run`, because a client
+   * that can only call listed tools must be told *how* to call these — "then
+   * call them" is true for the copilot and a dead end for claude.ai.
+   */
+  const how = options.run === true ? ' Your client can only call listed tools, so call these through tools_run.' : ''
   return [
     ...full,
-    { ...describe, description: `${describe.description}\n\n${describeIndex(behind)}` },
+    { ...describe, description: `${describe.description}${how}\n\n${describeIndex(behind)}` },
   ]
 }
 

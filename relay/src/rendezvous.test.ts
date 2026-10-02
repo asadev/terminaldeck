@@ -15,7 +15,7 @@
 import { AddressInfo } from 'node:net'
 import { connect, type Socket } from 'node:net'
 import { randomBytes } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ENVELOPE,
   MAX_PAYLOAD_BYTES,
@@ -28,6 +28,16 @@ import {
   type RelayServer,
 } from './rendezvous'
 import { FrameReader, OPCODE, encodeFrame } from '../../src/shared/ws-frame'
+import { request as httpRequest } from 'node:http'
+import {
+  MCP_ENVELOPE,
+  MCP_MAX_IN_FLIGHT,
+  MCP_MAX_REQUEST_BYTES,
+  MCP_NOT_FOUND_BODY,
+  MCP_RATE_PER_MINUTE,
+  MCP_REPLY_FIRST,
+  MCP_REPLY_LAST,
+} from './mcp-route'
 import { finishHandshake, generateStatic, respondToHandshake, startHandshake } from '../../src/shared/sealed'
 
 /* -------------------------------------------------------------------------- */
@@ -488,5 +498,321 @@ describe('the relay cannot read what it carries', () => {
     expect(everything).not.toContain('denied')
     // Nor were the identities visible — IK encrypts the initiator's static key.
     expect(everything).not.toContain(phone.publicKey.toString('latin1'))
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* AI apps reaching a Mac's tools over HTTPS                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The relay's one HTTP route, end to end: a real HTTP client on one side, a
+ * real host WebSocket on the other playing the desktop's part by hand. The
+ * desktop's own half — key checks, the dispatcher — is proved in
+ * `src/main/remote/relay-mcp.test.ts` against this same relay.
+ */
+
+const KEY = 'ak_relay-test-key-0123456789abcdefghijklmnopqrstu'
+
+interface HttpAnswer {
+  status: number
+  headers: Record<string, string | string[] | undefined>
+  body: string
+}
+
+function http(
+  port: number,
+  init: { path: string; method?: string; headers?: Record<string, string>; body?: string | Buffer | null },
+): Promise<HttpAnswer> {
+  const body = init.body === undefined ? '{"jsonrpc":"2.0","id":1,"method":"ping"}' : init.body
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path: init.path,
+        method: init.method ?? 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(body === null ? {} : { 'content-length': Buffer.byteLength(body) }),
+          ...init.headers,
+        },
+      },
+      (response) => {
+        let text = ''
+        response.setEncoding('utf8')
+        response.on('data', (chunk: string) => (text += chunk))
+        response.on('end', () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: text }))
+      },
+    )
+    request.on('error', reject)
+    if (body !== null) request.write(body)
+    request.end()
+  })
+}
+
+/** Say "I answer MCP" (or not) the way the desktop does. */
+function reach(host: TestClient, on: boolean): void {
+  host.send(encodeEnvelope(MCP_ENVELOPE.reach, Buffer.alloc(16), Buffer.from([on ? 1 : 0])))
+}
+
+interface ForwardedRequest {
+  id: Buffer
+  head: Record<string, unknown>
+  body: Buffer
+}
+
+async function nextRequest(host: TestClient): Promise<ForwardedRequest> {
+  for (;;) {
+    const frame = await host.next()
+    if (frame[0] !== MCP_ENVELOPE.request) continue
+    const id = Buffer.from(frame.subarray(1, 17))
+    const payload = frame.subarray(17)
+    const length = payload.readUInt16BE(0)
+    const head = JSON.parse(payload.subarray(2, 2 + length).toString('utf8')) as Record<string, unknown>
+    return { id, head, body: Buffer.from(payload.subarray(2 + length)) }
+  }
+}
+
+function replySlice(id: Buffer, flags: number, head: { status: number; contentType: string } | null, chunk: Buffer): Buffer {
+  let payload: Buffer
+  if (head) {
+    const json = Buffer.from(JSON.stringify(head))
+    const length = Buffer.alloc(2)
+    length.writeUInt16BE(json.length, 0)
+    payload = Buffer.concat([Buffer.from([flags]), length, json, chunk])
+  } else {
+    payload = Buffer.concat([Buffer.from([flags]), chunk])
+  }
+  return encodeEnvelope(MCP_ENVELOPE.reply, id, payload)
+}
+
+async function servingHost(port: number): Promise<{ host: TestClient; hostId: string }> {
+  const secret = randomBytes(32)
+  const host = await openHost(port, secret)
+  reach(host, true)
+  // Give the reach frame a moment to land before the first request.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  return { host, hostId: hostIdFor(secret) }
+}
+
+describe('an AI app reaching a Mac through the relay', () => {
+  it('answers a fast 404 for a Mac that is offline, or has not said it serves MCP', async () => {
+    const { port } = await startRelay()
+    const absent = hostIdFor(randomBytes(32))
+    const offline = await http(port, { path: `/mcp/${absent}`, headers: { authorization: `Bearer ${KEY}` } })
+    expect(offline.status).toBe(404)
+    expect(offline.body).toBe(MCP_NOT_FOUND_BODY)
+
+    const secret = randomBytes(32)
+    await openHost(port, secret)
+    const silent = await http(port, { path: `/mcp/${hostIdFor(secret)}/${KEY}` })
+    // Byte for byte the same: a stranger cannot tell "no Mac" from "no MCP".
+    expect(silent.status).toBe(404)
+    expect(silent.body).toBe(offline.body)
+  })
+
+  it('forwards the request with its key to the Mac, and the Mac’s answer back', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    const pending = http(port, {
+      path: `/mcp/${hostId}`,
+      headers: { authorization: `Bearer ${KEY}`, 'mcp-protocol-version': '2025-06-18', 'user-agent': 'claude-ai/1' },
+      body: '{"jsonrpc":"2.0","id":7,"method":"tools/list"}',
+    })
+    const forwarded = await nextRequest(host)
+    expect(forwarded.head).toEqual({
+      v: 1,
+      pathKey: null,
+      authorization: `Bearer ${KEY}`,
+      protocolVersion: '2025-06-18',
+      userAgent: 'claude-ai/1',
+    })
+    expect(forwarded.body.toString()).toBe('{"jsonrpc":"2.0","id":7,"method":"tools/list"}')
+    host.send(
+      replySlice(forwarded.id, MCP_REPLY_FIRST | MCP_REPLY_LAST, { status: 200, contentType: 'application/json' }, Buffer.from('{"ok":1}')),
+    )
+    const answered = await pending
+    expect(answered.status).toBe(200)
+    expect(answered.body).toBe('{"ok":1}')
+    expect(answered.headers['content-type']).toBe('application/json')
+    expect(answered.headers['cache-control']).toBe('no-store')
+  })
+
+  it('carries the secret-link form’s key in the path, for apps that cannot set a header', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    const pending = http(port, { path: `/mcp/${hostId}/${KEY}/` })
+    const forwarded = await nextRequest(host)
+    expect(forwarded.head.pathKey).toBe(KEY)
+    expect(forwarded.head.authorization).toBeNull()
+    host.send(replySlice(forwarded.id, MCP_REPLY_FIRST | MCP_REPLY_LAST, { status: 202, contentType: 'application/json' }, Buffer.alloc(0)))
+    expect((await pending).status).toBe(202)
+  })
+
+  it('writes an answer that came in slices', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    const pending = http(port, { path: `/mcp/${hostId}/${KEY}` })
+    const forwarded = await nextRequest(host)
+    host.send(replySlice(forwarded.id, MCP_REPLY_FIRST, { status: 200, contentType: 'application/json' }, Buffer.from('["a",')))
+    host.send(replySlice(forwarded.id, 0, null, Buffer.from('"b",')))
+    host.send(replySlice(forwarded.id, MCP_REPLY_LAST, null, Buffer.from('"c"]')))
+    expect((await pending).body).toBe('["a","b","c"]')
+  })
+
+  it('refuses a body over the cap before it reaches the Mac', async () => {
+    const { port } = await startRelay()
+    const { hostId } = await servingHost(port)
+    const big = Buffer.alloc(MCP_MAX_REQUEST_BYTES + 1, 0x20)
+    const answered = await http(port, { path: `/mcp/${hostId}/${KEY}`, body: big })
+    expect(answered.status).toBe(413)
+  })
+
+  it('limits how many requests one Mac may be sent in a minute', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    // The Mac answers everything at once, so this measures the window and not
+    // the in-flight cap.
+    const answering = (async () => {
+      for (;;) {
+        let forwarded: ForwardedRequest
+        try {
+          forwarded = await nextRequest(host)
+        } catch {
+          return
+        }
+        host.send(replySlice(forwarded.id, MCP_REPLY_FIRST | MCP_REPLY_LAST, { status: 200, contentType: 'application/json' }, Buffer.from('{}')))
+      }
+    })()
+    let limited: HttpAnswer | null = null
+    for (let i = 0; i <= MCP_RATE_PER_MINUTE; i += 1) {
+      const answered = await http(port, { path: `/mcp/${hostId}/${KEY}` })
+      if (answered.status === 429) {
+        limited = answered
+        break
+      }
+      expect(answered.status).toBe(200)
+    }
+    expect(limited?.status).toBe(429)
+    expect(limited?.headers['retry-after']).toBe('60')
+    host.end()
+    await answering
+  })
+
+  it('limits how many requests may wait on one Mac at once', async () => {
+    const { port } = await startRelay()
+    const { hostId } = await servingHost(port)
+    const waiting = Array.from({ length: MCP_MAX_IN_FLIGHT }, () => http(port, { path: `/mcp/${hostId}/${KEY}` }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const turnedAway = await http(port, { path: `/mcp/${hostId}/${KEY}` })
+    expect(turnedAway.status).toBe(429)
+    void Promise.allSettled(waiting)
+  })
+
+  it('answers GET and DELETE as a stateless server does, and says there is no OAuth here', async () => {
+    const { port } = await startRelay()
+    const { hostId } = await servingHost(port)
+    const get = await http(port, { path: `/mcp/${hostId}/${KEY}`, method: 'GET', body: null })
+    expect(get.status).toBe(405)
+    expect(get.headers.allow).toBe('POST')
+    const del = await http(port, { path: `/mcp/${hostId}`, method: 'DELETE', body: null })
+    expect(del.status).toBe(405)
+    for (const probe of [
+      '/.well-known/oauth-protected-resource',
+      `/.well-known/oauth-protected-resource/mcp/${hostId}/${KEY}`,
+      '/.well-known/oauth-authorization-server',
+      `/mcp/${hostId}/${KEY}/.well-known/oauth-protected-resource`,
+    ]) {
+      const answered = await http(port, { path: probe, method: 'GET', body: null })
+      expect(answered.status).toBe(404)
+      expect(answered.headers['content-type']).toBe('application/json')
+      expect(JSON.parse(answered.body)).toMatchObject({ error: 'not_found' })
+    }
+    // Everything that is not this route still gets the old answer.
+    const elsewhere = await http(port, { path: '/somewhere', method: 'GET', body: null })
+    expect(elsewhere.status).toBe(404)
+    expect(elsewhere.body).toBe('not found\n')
+  })
+
+  it('refuses a path that is not a host id, or a key segment that cannot be one', async () => {
+    const { port } = await startRelay()
+    const { hostId } = await servingHost(port)
+    for (const path of ['/mcp/not-a-host', `/mcp/${hostId}/a.b`, `/mcp/${hostId}/${KEY}/more`]) {
+      expect((await http(port, { path })).status).toBe(404)
+    }
+  })
+
+  it('tells the Mac when the app hangs up, so a question on the owner’s screen is withdrawn', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    const body = '{"jsonrpc":"2.0","id":1,"method":"tools/call"}'
+    const request = httpRequest({
+      host: '127.0.0.1',
+      port,
+      path: `/mcp/${hostId}/${KEY}`,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    })
+    request.on('error', () => undefined)
+    request.end(body)
+    const forwarded = await nextRequest(host)
+    request.destroy()
+    for (;;) {
+      const frame = await host.next()
+      if (frame[0] !== MCP_ENVELOPE.cancel) continue
+      expect(Buffer.from(frame.subarray(1, 17)).equals(forwarded.id)).toBe(true)
+      break
+    }
+  })
+
+  it('answers 502 when the Mac goes away mid-answer, and 504 when it never answers', async () => {
+    const { port } = await startRelay({ mcpWaitMs: 150 })
+    const first = await servingHost(port)
+    const pending = http(port, { path: `/mcp/${first.hostId}/${KEY}` })
+    await nextRequest(first.host)
+    first.host.end()
+    expect((await pending).status).toBe(502)
+
+    const second = await servingHost(port)
+    const slow = await http(port, { path: `/mcp/${second.hostId}/${KEY}` })
+    expect(slow.status).toBe(504)
+  })
+
+  it('stops forwarding the moment the Mac says it no longer serves', async () => {
+    const { port } = await startRelay()
+    const { host, hostId } = await servingHost(port)
+    reach(host, false)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect((await http(port, { path: `/mcp/${hostId}/${KEY}` })).status).toBe(404)
+  })
+
+  it('never prints a key, whatever happens to the request', async () => {
+    const said: string[] = []
+    const capture = (...args: unknown[]): void => {
+      said.push(args.map((arg) => (arg instanceof Error ? `${arg.message} ${arg.stack ?? ''}` : String(arg))).join(' '))
+    }
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(capture),
+    )
+    try {
+      const { port } = await startRelay({ mcpWaitMs: 100 })
+      const { host, hostId } = await servingHost(port)
+      await http(port, { path: `/mcp/${hostId}/${KEY}`, body: Buffer.alloc(MCP_MAX_REQUEST_BYTES + 5) })
+      await http(port, { path: `/mcp/${hostId}/${KEY}`, method: 'GET', body: null })
+      await http(port, { path: `/.well-known/oauth-protected-resource/mcp/${hostId}/${KEY}`, method: 'GET', body: null })
+      await http(port, { path: `/mcp/${hostIdFor(randomBytes(32))}/${KEY}` })
+      const timed = http(port, { path: `/mcp/${hostId}/${KEY}`, headers: { authorization: `Bearer ${KEY}` } })
+      const forwarded = await nextRequest(host)
+      // A reply the relay cannot read, then the deadline.
+      host.send(encodeEnvelope(MCP_ENVELOPE.reply, forwarded.id, Buffer.from([MCP_REPLY_FIRST, 0xff])))
+      await timed
+      await http(port, { path: `/mcp/${hostId}/${KEY}` })
+      host.end()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+    expect(said.filter((line) => line.includes(KEY) || line.includes(KEY.slice(3)))).toEqual([])
   })
 })

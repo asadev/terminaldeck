@@ -1,0 +1,154 @@
+/**
+ * Settings → Connect an AI app.
+ *
+ * Almost everything on this pane is the window's own vocabulary — rows,
+ * switches, the segmented run, the profile list, the code well, the confirm
+ * strip — so this file only names the shapes that one has no word for: a key's
+ * edit area, the new-key panel, the one-time secret, and the numbered steps.
+ *
+ * Fills, never surfaces, for the reason `settings-surface.test.ts` enforces: a
+ * `--bg-*` names a colour and can come to name the colour of the page behind
+ * it, where a `--fill-*` is a lift off whatever is there, in either theme.
+ * Separation is by space first, then by a tint — no rules between rows.
+ */
+
+.ai-apps-quiet {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* A key's controls, opened under its name. Separated by space first and then by
+   a tint, never by a line — the house order. */
+.ai-key-edit {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+  /* A tint, once space alone was not enough: rendered open, the controls sat
+     as near the next key as their own, and read as belonging to either. */
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.ai-key-edit .settings-actions {
+  margin: 0;
+}
+
+/* And the key after an open one stands further off, for the same reason. */
+.ai-keys > .ai-key[data-open] + .ai-key {
+  margin-top: var(--sp-8);
+}
+
+/* One labelled control: its name, the control, and the line under it. The
+   gap is tighter than between two of them, so each reads as one thing. */
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+}
+
+.ai-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* The new-key panel, and the "it is ready" panel that replaces it. A tinted
+   block, because it is a thing that has appeared — the same reasoning
+   `.settings-notice` gives for being the one surface in a flat sheet. */
+.ai-new {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.ai-new > .settings-explain-title {
+  margin: 0;
+}
+
+/* Inside the panel the notice and the confirm strip keep their own fill; the
+   margins that space them on the bare sheet are the panel's gap here. */
+.ai-new > .settings-notice,
+.ai-new > .settings-confirm,
+.ai-new .settings-actions {
+  margin: 0;
+}
+
+/* The key, shown once. Mono and selectable, and wrapped rather than cut: an
+   ellipsis on a secret is a secret somebody copies a third of. */
+.ai-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ai-secret-value {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.ai-steps {
+  margin: 0;
+  padding-inline-start: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+}
+
+.ai-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The well wraps long lines rather than scrolling sideways: a command is read
+   end to end before it is pasted, and a horizontal scrollbar hides the key. */
+.ai-snippet > .settings-code {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.ai-folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+}
+
+.ai-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.ai-folder input {
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}

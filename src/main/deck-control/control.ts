@@ -56,8 +56,15 @@ import {
   type ToolContext,
   type ToolSpec,
 } from './catalogue'
-import { WINDOW_SURFACE, deviceSurface, type ConsentBroker } from './consent'
-import { advertisedCatalogue, withDescribe } from './describe-tool'
+import {
+  OUTSIDE_APP_CONSENT_TIMEOUT_MS,
+  WINDOW_SURFACE,
+  deviceSurface,
+  keySurface,
+  type ConsentBroker,
+} from './consent'
+import { advertisedCatalogue, visibleTo, withDescribe } from './describe-tool'
+import { RUN_ID, RUN_WIRE, runTarget, runToolSpec } from './run-tool'
 import { checkToolArgs } from './schema'
 import {
   LOCAL_CALLER,
@@ -321,11 +328,56 @@ export function refusedWhileDriving(toolId: string): boolean {
   )
 }
 
+interface Windows {
+  all: Window
+  changes: Window
+  sessionStarts: Window
+}
+
+function windowsFrom(budgets: Budgets): Windows {
+  return {
+    all: new Window(budgets.all),
+    changes: new Window(budgets.changes),
+    sessionStarts: new Window(budgets.sessionStarts),
+  }
+}
+
+/**
+ * The prefix a key caller's sentence carries, in the log and in the dialog.
+ *
+ * The owner reading the Activity pane, or a confirmation on his phone, has to
+ * be able to tell "my copilot asked" from "ChatGPT asked" at a glance, and the
+ * one line both of them show is the summary. So it says whose call it was,
+ * with the name he gave the key.
+ */
+function fromKey(caller: Caller, summary: string): string {
+  if (caller.kind !== 'key') return summary
+  return `From “${caller.keyName ?? 'an AI app'}”: ${summary}`
+}
+
+/** `by` on a confirmation that a key's own setting gave, rather than a person. */
+export function standingApproval(keyId: string): string {
+  return `standing:${keySurface(keyId)}`
+}
+
 export class DeckControl {
   private readonly specs: Map<string, ToolSpec>
   private readonly catalogue: ToolSpec[]
   private readonly started = new Set<string>()
-  private readonly windows: { all: Window; changes: Window; sessionStarts: Window }
+  private readonly windows: Windows
+  /**
+   * One set of budget windows per access key, beside the process's own.
+   *
+   * `COPILOT-REMOTE.md` §0.4 named the hole: the budgets are per process, so
+   * one caller in a loop spends everybody's. With AI apps outside this one that
+   * stops being theoretical — a ChatGPT stuck retrying would lock the copilot at
+   * the desk out of its own tools for a minute at a time. So a key spends from
+   * its own windows and never from the copilot's, and each key is held to the
+   * same numbers the copilot is. The bill this bounds is per key: five session
+   * starts in ten minutes, each.
+   */
+  private readonly keyWindows = new Map<string, Windows>()
+  private readonly budgets: Budgets
   private readonly now: () => number
 
   constructor(private readonly options: DeckControlOptions) {
@@ -340,7 +392,13 @@ export class DeckControl {
      * contributes a tool through `extraTools` gets it described without wiring
      * anything, which is the one way this stays true as the catalogue grows.
      */
-    this.catalogue = withDescribe([...buildCatalogue(), ...(options.extraTools ?? [])])
+    /*
+     * `tools.run` on the end too, for the same reason `tools.describe` is
+     * appended rather than declared: it reaches every tool in the assembled
+     * list, contributed ones included. It is not advertised to the copilot —
+     * see `run-tool.ts` and `advertisedCatalogue`.
+     */
+    this.catalogue = withDescribe([...buildCatalogue(), ...(options.extraTools ?? []), runToolSpec()])
     this.specs = new Map()
     for (const spec of this.catalogue) {
       // A contributed tool that reused a built-in's name would shadow it
@@ -360,12 +418,20 @@ export class DeckControl {
       changes: options.budgets?.changes ?? DEFAULT_BUDGETS.changes,
       sessionStarts: options.budgets?.sessionStarts ?? DEFAULT_BUDGETS.sessionStarts,
     }
-    this.windows = {
-      all: new Window(budgets.all),
-      changes: new Window(budgets.changes),
-      sessionStarts: new Window(budgets.sessionStarts),
-    }
+    this.budgets = budgets
+    this.windows = windowsFrom(budgets)
     this.now = options.now ?? Date.now
+  }
+
+  /** The budget windows this caller spends from. See {@link keyWindows}. */
+  private windowsFor(caller: Caller): Windows {
+    if (caller.kind !== 'key' || caller.keyId === undefined) return this.windows
+    let windows = this.keyWindows.get(caller.keyId)
+    if (!windows) {
+      windows = windowsFrom(this.budgets)
+      this.keyWindows.set(caller.keyId, windows)
+    }
+    return windows
   }
 
   /** The catalogue, for `tools/list`. */
@@ -525,7 +591,7 @@ export class DeckControl {
       const written = this.options.log.record({
         at: new Date(startedAt).toISOString(),
         action: `tool.${input.tool}`,
-        detail: detailFor(input.summary, input.outcome, input.confirmed, input.error),
+        detail: detailFor(fromKey(caller, input.summary), input.outcome, input.confirmed, input.error),
         ...(sessionId === undefined ? {} : { sessionId }),
         id,
         tool: input.tool,
@@ -538,7 +604,12 @@ export class DeckControl {
         // phone do" is unanswerable from a log where local calls are unmarked
         // and remote ones are marked, because a row written before the field
         // existed looks exactly like a local one.
-        caller: { kind: caller.kind, ...(caller.deviceId === undefined ? {} : { deviceId: caller.deviceId }) },
+        caller: {
+          kind: caller.kind,
+          ...(caller.deviceId === undefined ? {} : { deviceId: caller.deviceId }),
+          ...(caller.keyId === undefined ? {} : { keyId: caller.keyId }),
+          ...(caller.keyName === undefined ? {} : { keyName: caller.keyName }),
+        },
         ms: this.now() - startedAt,
         result: input.result,
         error: input.error,
@@ -561,6 +632,44 @@ export class DeckControl {
     }
 
     const spec = this.specs.get(name)
+
+    /*
+     * `tools.run`: re-enter with the tool it names, or refuse without saying
+     * whether that tool exists.
+     *
+     * Before everything else, so the call that runs is the named tool's own
+     * call — its own tier, budget, confirmation and row — and the wrapper
+     * spends nothing. One branch for "no such tool" and "not yours", with the
+     * sentence `server.ts` and `tools.describe` already use; see `run-tool.ts`.
+     * The arguments are kept out of a refusal's row, because without a tool
+     * there is no `redactArgs` to say which of them were page text or a typed
+     * password.
+     */
+    if (spec?.id === RUN_ID) {
+      const target = runTarget(args)
+      const inner = target.ok ? this.specs.get(target.name) : undefined
+      if (target.ok && inner !== undefined && inner.id !== RUN_ID && visibleTo(options.granted, inner)) {
+        return this.call(inner.id, target.args, options)
+      }
+      scrubbed = scrubArgs(target.ok ? { name: target.name } : {})
+      const problem = !target.ok
+        ? target.problem
+        : inner?.id === RUN_ID
+          ? `${RUN_WIRE} runs other tools; name the tool you want to run instead`
+          : `no tool called ${target.name}`
+      return record({
+        tool: RUN_ID,
+        tier: 'read',
+        summary: target.ok ? `Run ${target.name}` : 'Run a tool',
+        outcome: 'error',
+        confirmed: unconfirmed(false),
+        result: null,
+        error: problem,
+        refusal: null,
+        value: null,
+      })
+    }
+
     if (!spec) {
       return record({
         tool: name,
@@ -714,7 +823,8 @@ export class DeckControl {
         value: null,
       })
 
-    if (!this.windows.all.take(startedAt)) {
+    const windows = this.windowsFor(caller)
+    if (!windows.all.take(startedAt)) {
       return overBudget('too many tool calls in the last minute; slow down and try again')
     }
 
@@ -806,21 +916,51 @@ export class DeckControl {
       })
     }
 
-    if (tier !== 'read' && !this.windows.changes.take(startedAt)) {
+    if (tier !== 'read' && !windows.changes.take(startedAt)) {
       return overBudget('too many changes in the last few minutes; ask the person to act instead')
     }
-    if (spec.id === 'sessions.start' && !this.windows.sessionStarts.take(startedAt)) {
+    if (spec.id === 'sessions.start' && !windows.sessionStarts.take(startedAt)) {
       return overBudget('too many sessions started recently; each one costs money, so this is capped')
     }
 
     /* --- the gate --------------------------------------------------------- */
     let confirmed: ConfirmationRecord = unconfirmed(false)
-    if (tier === 'alter') {
+    if (tier === 'alter' && caller.kind === 'key' && caller.keyId !== undefined && caller.askFirst === false) {
+      /*
+       * The owner turned "Ask me before big changes" off for this key.
+       *
+       * The one path to an alter-tier call without a question, and it is the
+       * standing pre-authorisation `consent.ts` described before it existed:
+       * scoped to one key, decided in Settings rather than mid-interruption,
+       * revoked by one switch, and written down on every use with the key it
+       * spent — `by` names it, and `detailFor` says "without asking" rather
+       * than "allowed by the person". Every rule above this line still ran:
+       * the tier, the precheck that refuses the protected settings, the
+       * budgets. Only the question is skipped.
+       */
+      confirmed = {
+        required: true,
+        granted: true,
+        by: standingApproval(caller.keyId),
+        at: this.now(),
+        reason: null,
+      }
+    } else if (tier === 'alter') {
+      const keyed = caller.kind === 'key' && caller.keyId !== undefined
       const outcome = await this.options.consent.request({
         tool: spec.id,
         tier,
-        summary,
+        summary: fromKey(caller, summary),
         args: scrubbed,
+        /*
+         * An AI app's client waits on its own clock, which is shorter than a
+         * person deciding. Refusing inside it is the difference between a
+         * sentence the model reads and a transport error it can only retry —
+         * and on a Mac nobody is sitting at, a clean "nobody answered" is the
+         * answer that matters. See `OUTSIDE_APP_CONSENT_TIMEOUT_MS`.
+         */
+        ...(keyed ? { timeoutMs: OUTSIDE_APP_CONSENT_TIMEOUT_MS } : {}),
+        ...(keyed ? { label: `“${caller.keyName ?? 'An AI app'}” — an AI app you gave an access key to` } : {}),
         ...(signal === undefined ? {} : { signal }),
         /*
          * Which surface may answer this, besides the desktop.
@@ -837,7 +977,9 @@ export class DeckControl {
         origin:
           caller.kind === 'remote' && caller.deviceId !== undefined
             ? deviceSurface(caller.deviceId)
-            : WINDOW_SURFACE,
+            : caller.kind === 'key' && caller.keyId !== undefined
+              ? keySurface(caller.keyId)
+              : WINDOW_SURFACE,
       })
       if (!outcome.granted) {
         return record({
@@ -851,7 +993,7 @@ export class DeckControl {
             reason: outcome.reason,
           },
           result: null,
-          error: refusalSentence(outcome.reason, spec.id),
+          error: keyed ? keyRefusalSentence(outcome.reason, spec.id) : refusalSentence(outcome.reason, spec.id),
           refusal: outcome.reason,
           value: null,
         })
@@ -942,6 +1084,11 @@ function detailFor(
 ): string {
   if (outcome === 'ok') {
     if (!confirmed.granted) return `${summary} — done`
+    // A key's own "don't ask" setting is not a person, and must never read as
+    // one in a log somebody is scanning for the change they did not make.
+    if (confirmed.by?.startsWith('standing:') === true) {
+      return `${summary} — done without asking (this app’s key is set not to ask)`
+    }
     return confirmed.by?.startsWith('device:') === true
       ? `${summary} — allowed on a connected device`
       : `${summary} — allowed by the person`
@@ -966,6 +1113,7 @@ function detailFor(
  * string only invites the model to quote an opaque identifier at somebody.
  */
 function notGrantedSentence(caller: Caller, tool: string, tier: Tier): string {
+  if (caller.kind === 'key') return keyNotGrantedSentence(caller, tool, tier)
   const allowed = (['read', 'act', 'alter'] as const).filter((entry) => caller.tiers[entry])
   const has =
     allowed.length === 0
@@ -1030,5 +1178,64 @@ function refusalSentence(reason: RefusalReason, tool: string): string {
        * underneath that is a change they cannot attribute to anything.
        */
       return `${tool} cannot run while a tour is playing on their screen. Things are moving that they did not do, so anything you changed now is a change they could not attribute to you or to the tour. Nothing was changed. Wait until the tour ends and ask again then — say what you are waiting to do, if it matters.`
+  }
+}
+
+/**
+ * What an AI app on an access key is told when its key does not reach a tier.
+ *
+ * In the owner's words for the levels rather than the tier names, because the
+ * model will very likely repeat this sentence to him, and "it is set to Look
+ * only" is a thing he can find on the settings page where "it has read access"
+ * is not. A key with nothing at all is a key that was revoked between the
+ * request arriving and this check — the caller function re-reads the store on
+ * every call — and it is told so plainly.
+ */
+function keyNotGrantedSentence(caller: Caller, tool: string, tier: Tier): string {
+  const { read, act, alter } = caller.tiers
+  if (!read && !act && !alter) {
+    return `${tool} was refused: the access key this app is using has been revoked. Nothing was changed, and retrying will not help.`
+  }
+  const level = alter ? 'Full control' : act ? 'Work' : 'Look only'
+  const needs = tier === 'alter' ? 'Full control' : tier === 'act' ? 'Work or Full control' : 'any level'
+  return (
+    `${tool} needs a key set to ${needs}, and the key this app is using is set to ${level}. Nothing was changed. ` +
+    'Only the owner can change what a key allows, in Settings on their Mac, so do not retry: answer with what you ' +
+    'can do, and say what you would need.'
+  )
+}
+
+/**
+ * What an AI app on an access key is told when the owner did not say yes.
+ *
+ * Its own sentences, because the desktop's say "the person at the keyboard" —
+ * true of the copilot, and wrong for a question that went to a Mac mini nobody
+ * sits at *and* to the phone in the owner's pocket. The timeout one is the one
+ * that matters most: it is what an AI app hears from an unattended machine, and
+ * it has to stop a retry loop and say what to do instead.
+ */
+function keyRefusalSentence(reason: RefusalReason, tool: string): string {
+  const seconds = Math.round(OUTSIDE_APP_CONSENT_TIMEOUT_MS / 1000)
+  switch (reason) {
+    case 'timeout':
+      return (
+        `${tool} needs the owner to approve it, and nobody answered within ${seconds} seconds — not at their Mac ` +
+        'and not on their phone. Nothing was changed. Do not retry in a loop: tell them what you wanted to do and ' +
+        'why, so they can approve it when they are there, or do it themselves.'
+      )
+    case 'no-approver':
+      return (
+        `${tool} needs the owner to approve it, and there is nowhere to ask them right now: the app’s window is ` +
+        'not open on their Mac and no phone of theirs is connected. Nothing was changed. Tell them what you wanted ' +
+        'to do.'
+      )
+    case 'approver-gone':
+      return `${tool} needs the owner's approval, and the window asking them closed before they answered. Nothing was changed.`
+    case 'declined':
+      return `${tool} was turned down by the owner. Nothing was changed. Do not try it again unless they ask you to.`
+    case 'caller-gone':
+      return `${tool} was cancelled: the connection dropped while the owner was being asked. Nothing was changed.`
+    default:
+      return refusalSentence(reason, tool)
   }
 }

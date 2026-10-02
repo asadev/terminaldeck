@@ -208,8 +208,9 @@ describe('where the fence is held at all', () => {
       paths.log,
       paths.remoteCopilot,
       paths.remoteAuth,
+      paths.accessKeys,
     ])
-    expect(profile.match(/\(deny /g)).toHaveLength(5)
+    expect(profile.match(/\(deny /g)).toHaveLength(6)
   })
 
   it('resolves the remote stores through their parent, not each on its own', () => {

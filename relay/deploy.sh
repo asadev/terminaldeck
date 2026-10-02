@@ -48,6 +48,23 @@ check() {
   say "health"
   curl -fsS --max-time 15 "https://$DOMAIN/healthz" || { echo "relay is not answering"; return 1; }
   echo
+  # The HTTP route AI apps reach a Mac's tools through (relay/src/mcp-route.ts).
+  # A host id nobody holds must get the route's own JSON 404 — not the plain
+  # "not found" every other path gets — and the OAuth probe claude.ai makes
+  # must get a JSON 404 too, or the secret link will not add as a connector.
+  # Nothing here carries a real key: the route cannot be checked with one
+  # from outside, and the relay never validates keys anyway.
+  say "the AI-app route"
+  local body
+  body=$(curl -sS --max-time 15 -X POST "https://$DOMAIN/mcp/AAAAAAAAAAAAAAAAAAAAAAAAAA" \
+    -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+  [[ "$body" == *"Nothing answered at this address"* ]] || {
+    echo "POST /mcp/<hostId> did not give the route's own answer — this relay predates the AI-app route"
+    return 1
+  }
+  body=$(curl -sS --max-time 15 "https://$DOMAIN/.well-known/oauth-protected-resource")
+  [[ "$body" == *"does not use OAuth"* ]] || { echo "the OAuth discovery probe did not get its JSON 404"; return 1; }
+  echo "ok"
   say "container"
   ssh_ "docker inspect $CONTAINER --format 'restart={{.HostConfig.RestartPolicy.Name}} running={{.State.Running}}'"
   say "the neighbour we must not disturb"

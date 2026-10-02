@@ -209,3 +209,61 @@ export class CallerTable {
     return found
   }
 }
+
+/* ---------------------------------------------------------- access keys -- */
+
+/** How a call on an access key arrived. Recorded as "last used … from". */
+export type KeyVia = 'this-mac' | 'internet'
+
+/**
+ * One request's grant on an access key.
+ *
+ * Built per *request* rather than registered per run, which is the difference
+ * from every other entry in {@link CallerTable}: a key outlives any run, any
+ * port and any restart, so there is no moment to register it at and no moment
+ * to drop it. Resolving it on arrival — hash, compare, build — is what makes a
+ * revoke land on the very next request, and {@link TokenGrant.caller} re-reading
+ * the store on top is what makes a level change land on the very next *tool
+ * call* inside a request that was already in flight.
+ */
+export interface KeyedGrant extends TokenGrant {
+  /**
+   * The app said who it is, in an MCP `initialize`.
+   *
+   * Recorded as the key's "last used by", because the person reading the keys
+   * list wants to know *which* app is holding the key, and `clientInfo.name` is
+   * the only place an MCP client says. Its words, capped and cleaned — it came
+   * from the far side.
+   */
+  noteClient(name: string | null): void
+  /** The request is over. Stops it being aborted by a later revoke. */
+  done(): void
+}
+
+/**
+ * Access keys, as a transport needs them: a credential in, a grant or nothing
+ * out.
+ *
+ * An interface so `server.ts` — which the copilot, every routine and every
+ * session already depend on — does not import the key store, and so the relay
+ * path and the loopback path reach keys through one function rather than two
+ * copies of the lookup.
+ */
+export interface KeyDoor {
+  /**
+   * A grant for this credential, arriving this way, or null.
+   *
+   * Null for a missing, malformed, unknown or revoked key, and — when `via` is
+   * `internet` — for every key while internet reach is switched off. The
+   * transports answer all of those identically.
+   */
+  grant(credential: string | null, via: KeyVia, meta: { userAgent: string | null }): KeyedGrant | null
+}
+
+/** The bearer value out of an `Authorization` header, or null. */
+export function bearerOf(header: unknown): string | null {
+  if (typeof header !== 'string') return null
+  const trimmed = header.trim()
+  const value = /^bearer\s+/i.test(trimmed) ? trimmed.replace(/^bearer\s+/i, '') : trimmed
+  return value === '' ? null : value
+}

@@ -62,7 +62,7 @@ import {
   reportOnSession,
   transcriptFor,
 } from './report'
-import { remoteDevice, requireDeviceFolder } from './remote-start'
+import { remoteDevice, requireDeviceFolder, requireKeyFolder } from './remote-start'
 import { checkSettingsValues, problemSentence } from './settings-validate'
 import { typeLine } from './session-typing'
 import { chooseAccountFrom } from './account-choice'
@@ -725,7 +725,10 @@ export function requireKnownFolder(surface: DeckSurface, path: string): string {
 function requireStartableFolder(context: ToolContext, path: string): string {
   const known = requireKnownFolder(context.surface, path)
   const device = remoteDevice(context.caller)
-  return device === null ? known : requireDeviceFolder(context.surface, device, known)
+  // An AI app on an access key may have been limited to some folders. A key
+  // with no limit reaches what the owner reaches — see `requireKeyFolder`.
+  if (device === null) return requireKeyFolder(context.caller, known)
+  return requireDeviceFolder(context.surface, device, known)
 }
 
 /**

@@ -157,6 +157,12 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +
     'climbs out of the folder, a symlink, a header that lies about its size. The same reason ' +
     '`browser-extension-zip.fixture.ts` below is here.',
+  'src/main/deck-control/key-door.fixture.ts':
+    'test rig, shared on purpose: a whole deck-control with access keys in front of it — a real ' +
+    'dispatcher, consent broker, action log and key store over a temp directory — that the key ' +
+    'store, door, tools.run and relay end-to-end tests all drive. Four slightly different fakes of ' +
+    'one app is how one of them comes to disagree with the real surface; it lives in src/ so tsc ' +
+    'checks it against the modules it assembles, the same reason `servers/test-fixtures.ts` does.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

@@ -64,16 +64,27 @@ import {
   ENVELOPE_HEADER,
   HANDSHAKE_OPEN_BYTES,
   MAX_PAYLOAD_BYTES,
+  MCP_ENVELOPE,
+  MCP_MAX_IN_FLIGHT,
+  MCP_MAX_RESPONSE_BYTES,
+  MCP_NO_REQUEST,
+  MCP_REPLY_CHUNK_BYTES,
+  MCP_REPLY_FIRST,
+  MCP_REPLY_LAST,
   RELAY_HOST_PATH,
   RELAY_SECRET_HEADER,
   decodeEnvelope,
+  decodeMcpEnvelope,
+  decodeMcpRequest,
   encodeEnvelope,
+  encodeMcpReply,
   readSealedHandshake,
   withSealedVersion,
 } from '../../shared/relay-wire'
 import { SealedRefusal, respondToHandshake, type SealedTransport } from '../../shared/sealed'
 import { FrameReader, OPCODE, acceptKey, encodeMaskedFrame } from '../../shared/ws-frame'
 import type { HostIdentity } from './host-identity'
+import type { RelayMcpAnswer, RelayMcpDoor } from './relay-mcp'
 import type { AttachTransport, RemoteWire, WireHandlers } from './server'
 
 /* -------------------------------------------------------------- constants -- */
@@ -276,6 +287,17 @@ export interface RelayClientOptions {
    * cannot take the link down with it.
    */
   onState?: (state: RelayState) => void
+  /**
+   * Who answers AI apps' MCP requests that arrive through the relay.
+   *
+   * Absent on every link but this Mac's own identity — a pairing rendezvous
+   * slot in `machines/rendezvous.ts` is a different name at the relay and must
+   * never answer for this machine's tools. When it is present, the link tells
+   * the relay whether it is serving (the `reach` envelope) every time it
+   * connects and every time that changes, and hands each request to it. See
+   * the MCP section of `relay-wire.ts`.
+   */
+  mcp?: RelayMcpDoor
   now?: () => number
   baseBackoffMs?: number
   maxBackoffMs?: number
@@ -389,6 +411,9 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
   /** Throttle state for refused handshakes. See REFUSAL_LOG_INTERVAL_MS. */
   let refusalsSinceLog = 0
   let refusalLoggedAt = 0
+  /** MCP requests the relay handed us and we have not finished answering. */
+  const mcpPending = new Map<string, AbortController>()
+  let unsubscribeMcp: (() => void) | null = null
 
   /**
    * Say the link changed, once, and survive a listener that throws.
@@ -586,7 +611,115 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     sendEnvelope(ENVELOPE.data, channel.id, withSealedVersion(result.reply))
   }
 
+  /* -------------------------------------------------------- MCP requests */
+
+  /** Tell the relay whether to send AI apps' requests here. Cheap; said often. */
+  function sendReach(): void {
+    if (!options.mcp || !socket) return
+    let on = false
+    try {
+      on = options.mcp.serving()
+    } catch {
+      on = false
+    }
+    sendEnvelope(MCP_ENVELOPE.reach, MCP_NO_REQUEST, Buffer.from([on ? 1 : 0]))
+  }
+
+  /**
+   * Send one answer up, in slices that fit the relay's frame.
+   *
+   * Dropped silently when the request was cancelled meanwhile or the link went:
+   * the relay has already answered the app or forgotten the request, and there
+   * is nobody left to send it to.
+   */
+  function sendMcpAnswer(id: Buffer, answer: RelayMcpAnswer): void {
+    let { status, contentType, body } = answer
+    if (body.length > MCP_MAX_RESPONSE_BYTES) {
+      status = 502
+      contentType = 'application/json'
+      body = Buffer.from(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32603, message: 'That answer is too large to send through the relay.' },
+        }),
+      )
+    }
+    const head = { status, contentType }
+    if (body.length <= MCP_REPLY_CHUNK_BYTES) {
+      sendEnvelope(MCP_ENVELOPE.reply, id, encodeMcpReply(MCP_REPLY_FIRST | MCP_REPLY_LAST, head, body))
+      return
+    }
+    for (let at = 0; at < body.length; at += MCP_REPLY_CHUNK_BYTES) {
+      const chunk = body.subarray(at, at + MCP_REPLY_CHUNK_BYTES)
+      const flags = (at === 0 ? MCP_REPLY_FIRST : 0) | (at + MCP_REPLY_CHUNK_BYTES >= body.length ? MCP_REPLY_LAST : 0)
+      sendEnvelope(MCP_ENVELOPE.reply, id, encodeMcpReply(flags, at === 0 ? head : null, chunk))
+    }
+  }
+
+  function onMcpEnvelope(type: number, id: Buffer, payload: Buffer): void {
+    const key = id.toString('hex')
+    if (type === MCP_ENVELOPE.cancel) {
+      mcpPending.get(key)?.abort()
+      mcpPending.delete(key)
+      return
+    }
+    if (type !== MCP_ENVELOPE.request) return
+    const door = options.mcp
+    if (!door) return
+    if (mcpPending.has(key)) return
+    // The relay caps this per host too. This one protects this process, for
+    // the reason MAX_CHANNELS does: a relay is not trusted to have counted.
+    if (mcpPending.size >= MCP_MAX_IN_FLIGHT) {
+      sendMcpAnswer(id, {
+        status: 429,
+        contentType: 'application/json',
+        body: Buffer.from('{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"This computer is busy. Try again in a moment."}}'),
+      })
+      return
+    }
+    const request = decodeMcpRequest(payload)
+    if (!request) {
+      sendMcpAnswer(id, {
+        status: 400,
+        contentType: 'application/json',
+        body: Buffer.from('{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"That request could not be read."}}'),
+      })
+      return
+    }
+    const abort = new AbortController()
+    mcpPending.set(key, abort)
+    void door
+      .answer(request.head, request.body, abort.signal)
+      .then(
+        (answer) => {
+          if (abort.signal.aborted || mcpPending.get(key) !== abort) return
+          sendMcpAnswer(id, answer)
+        },
+        () => {
+          // `answer` promises never to reject; this is the belt to its braces,
+          // and the relay still hears *something* rather than waiting it out.
+          if (abort.signal.aborted || mcpPending.get(key) !== abort) return
+          sendMcpAnswer(id, {
+            status: 500,
+            contentType: 'application/json',
+            body: Buffer.from('{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"The computer could not answer that."}}'),
+          })
+        },
+      )
+      .finally(() => {
+        if (mcpPending.get(key) === abort) mcpPending.delete(key)
+      })
+  }
+
   function onEnvelope(frame: Buffer): void {
+    // The MCP family first, by type byte. An AI app's request is not a phone's
+    // channel and must never be mistaken for one.
+    const mcpFrame = decodeMcpEnvelope(frame)
+    if (mcpFrame) {
+      onMcpEnvelope(mcpFrame.type, mcpFrame.channel, mcpFrame.payload)
+      return
+    }
     const envelope = decodeEnvelope(frame)
     // A relay that cannot speak its own envelope is either broken or not the
     // relay; either way there is nothing useful to do with the frame.
@@ -675,6 +808,10 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     // than queued on a socket nobody is reading.
     for (const channel of [...channels.values()]) closeChannel(channel, why)
     channels.clear()
+    // Every AI app's request in flight goes with the link: the relay that was
+    // holding its HTTP connection is the thing that just went away.
+    for (const pending of mcpPending.values()) pending.abort()
+    mcpPending.clear()
 
     if (live) {
       live.removeAllListeners()
@@ -915,6 +1052,9 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     // before the heartbeat is armed, not after, and nothing below can fail in a
     // way that makes the link not connected.
     announce()
+    // And the relay is told, on every fresh link, whether to send AI apps'
+    // requests here. It forgets on every disconnect, deliberately.
+    sendReach()
 
     // Whatever rode in behind the `101`. Fed after `socket` is set, or the
     // framer would drop it for want of a link to belong to.
@@ -969,6 +1109,7 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       attach = next
       if (!stopped) return
       stopped = false
+      if (options.mcp && !unsubscribeMcp) unsubscribeMcp = options.mcp.subscribe(() => sendReach())
       attempts = 0
       lastTick = now()
       if (watchdogMs > 0) {
@@ -992,6 +1133,8 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     stop(): void {
       stopped = true
       attach = null
+      unsubscribeMcp?.()
+      unsubscribeMcp = null
       if (retry) clearTimeout(retry)
       retry = null
       retryAt = null

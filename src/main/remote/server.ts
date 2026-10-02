@@ -200,6 +200,7 @@ import { scanDevPortsDetailed } from '../dev-ports'
 import { ownPorts } from '../own-ports'
 import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
+import { relayMcp } from './relay-mcp'
 import { loadHostIdentity } from './host-identity'
 // Which kind of device a watching connection is. `browser-watch.ts` draws the
 // privacy card and only this file can say whose device it is drawing it for —
@@ -9105,6 +9106,11 @@ function relayFor(
             // a login, and a paired device still has to be approved.
             isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open() || enrollServed,
             ...(onState ? { onState } : {}),
+            // AI apps reaching this Mac's tools with an access key come in on
+            // this same link. The switchboard answers "not serving" until
+            // `deck-control` installs the key door behind it — see
+            // `relay-mcp.ts` — and the relay sends nothing here until then.
+            mcp: relayMcp,
           })
         } catch (error) {
           console.error('[relay] could not keep this host’s relay identity:', error)
@@ -9168,6 +9174,9 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
         relayStateFanout(deps.onRelayState, () => announceRemoteChange()),
       )
     : null
+  // The settings page that hands AI apps their internet link reads this
+  // machine's relay address and host id from here, rather than from a copy.
+  relayMcp.useLink(relay)
 
   /**
    * Tell every window that the remote picture moved.
