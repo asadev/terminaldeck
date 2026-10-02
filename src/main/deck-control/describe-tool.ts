@@ -106,6 +106,31 @@
  *
  * The index is filtered by the same predicate, so a caller that may use only
  * some tools reads an index of only those.
+ *
+ * ## By area, once the index itself became the bill (0.16.0)
+ *
+ * The rule above worked for fifteen tools and then the release that made
+ * "everything I can do manually" reachable added a hundred and twenty more, each
+ * with an honest one-line index. The lines alone came to ~3,850 tokens and the
+ * assembled listing to ~9,250, over `MAX_CATALOGUE_TOKENS` — and
+ * `catalogue-cost.test.ts` was passing only because its list left four sources
+ * out. The same mistake that file's header records twice, a third time.
+ *
+ * So the index has two shapes and the size of what is held back picks between
+ * them. A caller with a handful of held-back tools — an ordinary session, which
+ * holds eight scraping tools — reads them by name, exactly as before: one line
+ * each is cheaper than an extra round trip. A caller with more than
+ * {@link INLINE_INDEX_MAX} reads **areas**: five lines naming what each covers
+ * and how many tools it holds, and `tools.describe {area}` answers with that
+ * area's one-liners. Names still answer with schemas. So a turn that wants one
+ * tool it has not seen pays two short calls instead of every turn paying for a
+ * hundred and thirty-five lines.
+ *
+ * The security property is unchanged and carried into the new shape: the areas
+ * listed, the counts beside them and the lines an area answers with are all
+ * built from what this caller may see. An area with nothing in it for this
+ * caller is not listed, and asking for it answers **`no area called X`** — the
+ * same sentence an area that does not exist gets, from the same branch.
  */
 
 import { advertiseTool, type ToolSpec } from './catalogue'
@@ -126,6 +151,101 @@ export const DESCRIBE_WIRE = 'tools_describe'
  * rather than being pushed into fifteen.
  */
 export const MAX_DESCRIBE_NAMES = 20
+
+/**
+ * Most tools held back before the index is given by area instead of by name.
+ *
+ * Twelve, because that is where the two shapes cost about the same: twelve
+ * lines of ~110 characters against five area lines and the extra call a turn
+ * then makes. An ordinary session (eight held-back tools) stays on names; the
+ * copilot and every access-key caller (over a hundred) get areas.
+ */
+export const INLINE_INDEX_MAX = 12
+
+/** One area of the catalogue, as the standing description names it. */
+export interface ToolArea {
+  /** What a caller passes as `area`. One plain word. */
+  id: string
+  /** What the area covers, for a model choosing between five. */
+  covers: string
+  /** The tool-id prefixes (the part before the first dot) that belong here. */
+  prefixes: readonly string[]
+}
+
+/**
+ * The areas, and which tool prefixes fall in each.
+ *
+ * A table here rather than a field on `ToolSpec`, because a hundred and fifty
+ * tools in a dozen files written by four lanes would each have to remember it,
+ * and the one that forgot would be invisible. A prefix nobody listed still gets
+ * an area — its own name — so a tool can never be stranded; and
+ * `describe-tool.test.ts` fails the day the assembled catalogue holds a prefix
+ * this table does not, which is the prompt to put it where it belongs.
+ *
+ * Grouped by what a person would be trying to do, not by which lane built the
+ * tool: the Store's community shelf is skills, MCP servers and hooks for the
+ * agents, so it is under agents even though the browser lane wrote it.
+ */
+export const TOOL_AREAS: readonly ToolArea[] = [
+  {
+    id: 'sessions',
+    covers:
+      'sessions beyond the listed tools (wait for an answer, press keys, read the screen, rename, switch account, ' +
+      'held sessions), past conversations, projects, files, git, dev servers and the overview',
+    prefixes: ['sessions', 'chats', 'projects', 'files', 'git', 'dev', 'dashboard', 'artifacts', 'alerts', 'log', 'tour'],
+  },
+  {
+    id: 'browser',
+    covers:
+      'the built-in browser beyond the listed verbs: windows, toolbar, downloads, history, profiles, saved logins, ' +
+      'site data, imports, extensions, sign-in help, scraping, worker profiles and downloading files',
+    prefixes: ['browser', 'assets'],
+  },
+  {
+    id: 'machines',
+    covers:
+      'other paired computers and their sessions, servers (sites, logs, terminals), who can reach this computer, and GitHub',
+    prefixes: ['machines', 'servers', 'remote', 'github'],
+  },
+  {
+    id: 'agents',
+    covers:
+      'the coding agents, their logins, models and controls, their MCP servers and hooks, routines, usage and cost, ' +
+      'dictation, setup and readiness checks, and the community store',
+    prefixes: ['agents', 'accounts', 'mcp', 'hooks', 'routines', 'usage', 'voice', 'setup', 'readiness', 'store'],
+  },
+  {
+    id: 'app',
+    covers:
+      'this app itself: version, logs, diagnostics, updates, settings, notifications, the in-app copilot, clicks in ' +
+      'its window, opening links, and what this tool server covers',
+    prefixes: ['app', 'settings', 'updates', 'notifications', 'copilot', 'ui', 'links', 'tools'],
+  },
+]
+
+/** The area a tool belongs to. An unlisted prefix is an area of its own name. */
+export function areaOf(spec: { id: string }): string {
+  const prefix = spec.id.split('.')[0] ?? spec.id
+  return TOOL_AREAS.find((area) => area.prefixes.includes(prefix))?.id ?? prefix
+}
+
+function areaCovers(id: string): string {
+  return TOOL_AREAS.find((area) => area.id === id)?.covers ?? `the ${id} tools`
+}
+
+/** The areas a set of held-back tools falls into, in the table's order, each with its count. */
+function areasOf(behind: readonly ToolSpec[]): Array<{ id: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const spec of behind) counts.set(areaOf(spec), (counts.get(areaOf(spec)) ?? 0) + 1)
+  const order = TOOL_AREAS.map((area) => area.id)
+  return [...counts]
+    .sort(([a], [b]) => {
+      const ia = order.indexOf(a)
+      const ib = order.indexOf(b)
+      return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib) || a.localeCompare(b)
+    })
+    .map(([id, count]) => ({ id, count }))
+}
 
 /**
  * May this caller see this tool at all?
@@ -162,6 +282,25 @@ const DESCRIBE_DESCRIPTION =
   'Get the full schema for one of the tools listed below. They are real tools you can call; ' +
   'their arguments are fetched here rather than sent on every turn. ' +
   'Ask for the ones you need, then call them.'
+
+/**
+ * The standing description when the index is given by area.
+ *
+ * Three facts and no more, because it is paid on every turn: there are many
+ * more tools than are listed, they are grouped like this, and this is the order
+ * to ask in — area, then names, then the call.
+ */
+const AREA_DESCRIPTION =
+  'Most of this server’s tools are held back to keep this list short, grouped into the areas below. ' +
+  'Call this with an area to list what it has, then with the tool names you want to get their arguments, ' +
+  'then call them.'
+
+/** The area index, as it is appended to {@link AREA_DESCRIPTION}. */
+export function areaIndex(behind: readonly ToolSpec[]): string {
+  return areasOf(behind)
+    .map(({ id, count }) => `${id} — ${areaCovers(id)} (${count} tools)`)
+    .join('\n')
+}
 
 /**
  * The index, as it is appended to the description above.
@@ -218,10 +357,11 @@ export function advertisedCatalogue(
    * call them" is true for the copilot and a dead end for claude.ai.
    */
   const how = options.run === true ? ' Your client can only call listed tools, so call these through tools_run.' : ''
-  return [
-    ...full,
-    { ...describe, description: `${describe.description}${how}\n\n${describeIndex(behind)}` },
-  ]
+  const description =
+    behind.length > INLINE_INDEX_MAX
+      ? `${AREA_DESCRIPTION}${how}\n\n${areaIndex(behind)}`
+      : `${describe.description}${how}\n\n${describeIndex(behind)}`
+  return [...full, { ...describe, description }]
 }
 
 /**
@@ -260,18 +400,32 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
     description: DESCRIBE_DESCRIPTION,
     inputSchema: {
       type: 'object',
-      properties: { tools: { type: 'array', items: { type: 'string' } } },
-      required: ['tools'],
+      properties: {
+        /*
+         * No `enum`, deliberately. The schema is the same object for every
+         * caller, so an enum would name every area to a session that may see
+         * one — the leak the area index is careful not to make. The areas a
+         * caller may ask for are the ones its own description lists.
+         */
+        area: { type: 'string', description: 'One area from the list below, to see the tools in it.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Tool names, to get their full arguments.' },
+      },
       additionalProperties: false,
     },
     summary: (args) => {
       const names = asNames(args)
+      const area = asArea(args)
+      if (area !== null && names.length === 0) return `Describe the ${area} tools`
       return names.length === 0 ? 'Describe tools' : `Describe ${names.join(', ')}`
     },
     run: async (args, context) => {
       const names = asNames(args)
-      if (names.length === 0) {
-        throw new Refused('not-permitted', 'tools is required: name at least one tool to describe')
+      const area = asArea(args)
+      if (names.length === 0 && area === null) {
+        throw new Refused(
+          'not-permitted',
+          'name an area to see what it has, or tools to get their arguments',
+        )
       }
       if (names.length > MAX_DESCRIBE_NAMES) {
         throw new Refused(
@@ -282,6 +436,39 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
       const catalogue = deps.catalogue()
       const described: Record<string, unknown>[] = []
       const unknown: string[] = []
+
+      /*
+       * An area: its tools, as one-liners, of what this caller may see.
+       *
+       * Held-back tools come with their line and tier; tools already in the
+       * listing are only named, since their schemas are in front of the model.
+       * The meta-tools themselves are left out — describing `tools.describe`
+       * inside its own answer is a line that helps nobody.
+       *
+       * One branch for "no such area" and "nothing in it for you", for the
+       * reason the tool branch below gives, and with its wording's shape.
+       */
+      let areaAnswer: Record<string, unknown> | null = null
+      if (area !== null) {
+        const inside = catalogue.filter(
+          (spec) => spec.id !== DESCRIBE_ID && areaOf(spec) === area && visibleTo(context.granted, spec),
+        )
+        if (inside.length === 0) {
+          unknown.push(`no area called ${area}`)
+        } else {
+          areaAnswer = {
+            area,
+            covers: areaCovers(area),
+            // `held`, not `tools`: `tools` is always the schemas a name asked
+            // for, so a call naming an area *and* tools gets both, unmixed.
+            held: inside
+              .filter((spec) => spec.index !== undefined)
+              .map((spec) => ({ name: spec.wire, tier: spec.tier, does: spec.index ?? spec.title })),
+            alreadyListed: inside.filter((spec) => spec.index === undefined).map((spec) => spec.wire),
+          }
+        }
+      }
+
       for (const name of names) {
         const spec = catalogue.find((entry) => entry.id === name || entry.wire === name)
         /*
@@ -307,13 +494,29 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
         described.push(advertiseTool(spec))
       }
       return {
-        value: { tools: described, ...(unknown.length === 0 ? {} : { unknown }) },
+        value: {
+          ...(areaAnswer === null ? {} : areaAnswer),
+          ...(names.length === 0 ? {} : { tools: described }),
+          ...(unknown.length === 0 ? {} : { unknown }),
+        },
         // Counts, not the schemas. The action log is an audit trail and a
         // describe call's payload is text the model was going to be sent anyway.
-        summary: { described: described.length, unknown: unknown.length },
+        summary: {
+          ...(area === null ? {} : { area, held: areaAnswer === null ? 0 : (areaAnswer.held as unknown[]).length }),
+          described: described.length,
+          unknown: unknown.length,
+        },
       }
     },
   }
+}
+
+/** The `area` argument, trimmed and lower-cased, or null. */
+function asArea(args: Record<string, unknown>): string | null {
+  const raw = args['area']
+  if (typeof raw !== 'string') return null
+  const area = raw.trim().toLowerCase()
+  return area === '' ? null : area
 }
 
 /**

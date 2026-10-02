@@ -1,24 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserDrive } from '../browser-driver'
-import { serverTools, type ServerToolsDeps } from '../servers/tools'
-import { assetTools } from './asset-tools'
-import { createMachineArea } from './machine-area'
-import { browserNetworkTool } from './browser-network-tool'
-import { browserTools } from './browser-tools'
-import { storeTools } from './store-tools'
-import { workerTools } from './worker-tools'
-import {
-  buildCatalogue,
-  catalogueCost,
-  MAX_CATALOGUE_TOKENS,
-  MAX_CATALOGUE_TOOLS,
-  type ToolSpec,
-} from './catalogue'
-import { advertisedCatalogue, withDescribe } from './describe-tool'
+import { assembledCatalogue, assembledControl } from './assembled-catalogue.fixture'
+import { catalogueCost, MAX_CATALOGUE_TOKENS, MAX_CATALOGUE_TOOLS, type ToolSpec } from './catalogue'
+import { advertisedCatalogue, INLINE_INDEX_MAX, TOOL_AREAS } from './describe-tool'
+import { RUN_WIRE } from './run-tool'
 import { SESSION_TOOLS } from './session-tools'
-import { tourTool } from './tour-tool'
-import { whereTool } from './where-tool'
-import type { TourStage } from './tour-stage'
 
 /**
  * What the copilot's tool list actually costs, measured on the list that ships.
@@ -63,30 +48,31 @@ import type { TourStage } from './tour-stage'
  * The deps below are stand-ins because none of them is read to build a schema:
  * a tool's name, title, description and `inputSchema` are what cross to the
  * model, and those are literals in the factories. Nothing here calls a `run`.
+ *
+ * ## It happened a third time, and the list moved out of this file (0.16.0)
+ *
+ * Four areas landed in one release — sessions, machines, agents, the rest of the
+ * browser — and a hundred and twenty tools with them, every one an index line.
+ * This file still assembled the nine sources above, so it reported ~5,900
+ * tokens and passed while the real listing was **~9,250**, over the ceiling;
+ * the index lines alone were ~3,850. The miss was not one source this time but
+ * four, and the reason was the same as both times before: a list typed out
+ * here is a list that drifts from the app.
+ *
+ * So the list is not here any more. `assembled-catalogue.fixture.ts` builds it
+ * with `DeckControl`'s own constructor over every `extraTools` source the app
+ * hands in, and the name-clash test reads the same one. What this file measures
+ * is `control.cost()` — the figure the status channel shows — and the
+ * access-key caller's listing beside it.
+ *
+ * And the ceilings did not move. The index went **by area** instead
+ * (`describe-tool.ts`): five lines saying what each area covers, and the
+ * one-liners fetched by `tools.describe {area}` on the turn that wants them.
  */
 
-/** The list `main/index.ts` and `deck-control/index.ts` between them assemble. */
-function shipped(): ToolSpec[] {
-  return withDescribe([
-    ...buildCatalogue(),
-    tourTool({} as TourStage),
-    whereTool({ window: { read: async () => null }, page: () => null }),
-    ...browserTools({} as BrowserDrive),
-    browserNetworkTool({} as BrowserDrive),
-    ...workerTools({} as never),
-    ...assetTools({
-      userData: () => '/tmp',
-      probe: async () => ({}) as never,
-      // This file measures the catalogue's size; nothing here fetches.
-      open: () => {
-        throw new Error('catalogue-cost measures definitions, it does not fetch')
-      },
-    }),
-    ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
-    ...serverTools({} as ServerToolsDeps),
-    // Machines, servers, devices and GitHub — fourteen index lines, 0.16.0.
-    ...createMachineArea().tools({ servers: { openShells: () => [], shellScreen: async () => null }, userData: () => '/tmp' }),
-  ])
+/** Every tool the app serves, built the way the app builds it. */
+function shipped(): readonly ToolSpec[] {
+  return assembledCatalogue()
 }
 
 /** What `tools/list` puts on the wire for the copilot, which holds every tool. */
@@ -94,86 +80,100 @@ function advertised(): ToolSpec[] {
   return advertisedCatalogue(shipped())
 }
 
+/** What an AI app on an access key is listed: the same, plus `tools.run`. */
+function keyListing(): ToolSpec[] {
+  return advertisedCatalogue(shipped(), { run: true })
+}
+
 describe('the catalogue that ships', () => {
-  it('is the nine sources the app assembles, not the seven that were being measured', () => {
+  it('is every source the app assembles, not the nine that were being measured', () => {
     const wire = shipped().map((spec) => spec.wire)
     expect(new Set(wire).size, 'two tools share a wire name').toBe(wire.length)
     // Named rather than counted, so that a tool disappearing from the list is a
-    // failure here rather than a quietly smaller number.
-    expect(wire).toContain('tour_play')
-    expect(wire).toContain('app_where')
-    expect(wire).toContain('browser_open')
-    expect(wire).toContain('browser_close')
-    expect(wire).toContain('browser_network')
-    expect(wire).toContain('servers_look')
-    expect(wire).toContain('browser_extract')
-    // The two sources this file was missing until 2026-08-21.
-    expect(wire).toContain('browser_workers')
-    expect(wire).toContain('assets_ledger')
-    expect(wire).toContain('tools_describe')
+    // failure here rather than a quietly smaller number — one from each source.
+    for (const name of [
+      'tour_play',
+      'app_where',
+      'browser_open',
+      'browser_network',
+      'browser_workers',
+      'assets_ledger',
+      'browser_extract',
+      'browser_extensions',
+      'servers_look',
+      'machines_look',
+      'agents_list',
+      'browser_windows',
+      'store_community',
+      'sessions_wait',
+      'files_read',
+      'copilot_state',
+      'ui_do',
+      'tools_coverage',
+      RUN_WIRE,
+      'tools_describe',
+    ]) {
+      expect(wire, name).toContain(name)
+    }
+    // Well over a hundred: the release that made "everything" reachable.
+    expect(shipped().length).toBeGreaterThan(140)
   })
 
   it('costs what it costs, written down so a rewrite that doubles it is visible', () => {
-    const cost = catalogueCost(advertised())
+    const cost = assembledControl().cost()
     /*
-     * Measured 2026-08-21 on the assembled list, after `tools.describe`: **19
-     * tools advertised out of 34, 20,454 characters, ~5,844 estimated tokens.**
+     * Measured 2026-10-03 on every source, after the index went by area: **19
+     * tools advertised out of 155, 19,869 characters, ~5,677 estimated
+     * tokens.** It was 9,247 the same morning with the per-name index.
+     *
      * Pinned rather than bounded because the point of writing it down is that
      * somebody expanding a description sees the figure move — a `toBeLessThan`
-     * at a round number hides every change under it.
-     *
-     * Generous slack on the characters and none on the count: prose is edited
-     * constantly and a tool is added deliberately.
-     *
-     * ## What these numbers replaced
-     *
-     * The line above used to read *"26 tools, 27,982 characters, ~7,995
-     * estimated tokens"* with eighteen characters of headroom, and then said
-     * that the next tool could not be trimmed into the list. It could not, and
-     * four lanes added five tools anyway: the real assembled list on the night
-     * was 33 tools and 10,670 tokens, over both ceilings.
-     *
-     * Neither ceiling was raised. Fifteen tools moved behind `tools.describe`
-     * and the standing bill fell from 10,670 to 5,844 — 2,156 tokens of
-     * headroom under a cap that was breached by 2,670. `describe-tool.ts` holds
-     * which fifteen and the argument for each.
+     * at a round number hides every change under it. Generous slack on the
+     * characters and none on the count: prose is edited constantly and a tool
+     * is added deliberately.
      *
      * ## Read this before adding the next tool
      *
-     * There is room for one more advertised tool under the count cap and about
-     * 7,500 characters under the token one, and neither is the answer. **Give
-     * the new tool an `index` and let it cost one line**, unless a turn will
-     * genuinely reach for it before it has reached for anything else — that is
-     * the rule, it is written out in `describe-tool.ts`, and it is cheaper than
-     * this conversation every time.
+     * **Give it an `index` and let it be one line in its area**, unless a turn
+     * will genuinely reach for it before anything else — that is the rule in
+     * `describe-tool.ts`. A held-back tool now costs the standing listing
+     * nothing at all: it changes a count in one area line. A new advertised
+     * tool costs its whole description and schema, every turn.
      */
     expect(cost.tools).toBe(19)
     expect(cost.chars).toBeGreaterThan(18_000)
     expect(cost.chars).toBeLessThan(23_000)
   })
 
-  it('is inside the token ceiling', () => {
-    expect(catalogueCost(advertised()).tokens).toBeLessThanOrEqual(MAX_CATALOGUE_TOKENS)
+  it('is inside both ceilings, measured the way the status channel measures it', () => {
+    const cost = assembledControl().cost()
+    expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
+    expect(cost.tokens).toBeLessThanOrEqual(MAX_CATALOGUE_TOKENS)
+    expect(cost.overBudget).toBe(false)
+    // And `cost()` is this listing, not a different one.
+    expect(cost).toEqual(catalogueCost(advertised()))
   })
 
-  it('is inside the tool-count ceiling, which is the one that was breached', () => {
+  it('names the areas rather than every held-back tool, and every area it names', () => {
+    const meta = advertised().find((spec) => spec.wire === 'tools_describe')
+    const description = meta?.description ?? ''
+    for (const area of TOOL_AREAS) expect(description, area.id).toContain(`${area.id} — `)
+    // No per-tool lines: that is the bill this replaced.
+    expect(description).not.toContain('sessions_wait —')
+    expect(description).not.toContain('browser_passwords —')
+  })
+
+  it('keeps an access-key caller inside both ceilings too, with tools_run listed', () => {
     /*
-     * **This was a known breach and is not one any more.**
+     * The listing claude.ai and ChatGPT read. One tool more than the copilot's —
+     * `tools.run`, because those clients can only call what they are listed —
+     * and one sentence more in the meta-tool telling them to use it.
      *
-     * `MAX_CATALOGUE_TOOLS` is 20 and the app shipped 26 at `0.8.1`, then 33
-     * once four lanes landed on 2026-08-21. The count cap answers a different
-     * question from the token cap and it is the one that bound: past twenty
-     * tools the problem is not the bill, it is that a model choosing between
-     * thirty-three things chooses worse.
-     *
-     * The way out was written on `MAX_CATALOGUE_TOKENS` long before it was
-     * needed and it was followed rather than argued with: no number was raised,
-     * no tool was removed, no description was trimmed. Fifteen tools that a turn
-     * only reaches for *after* it has used another one now cost one index line
-     * each, and `control.cost()` reports `overBudget: false` for the first time
-     * since the ceilings were written.
+     * Measured 2026-10-03: **20 tools, ~5,922 estimated tokens.**
      */
-    const cost = catalogueCost(advertised())
+    const cost = catalogueCost(keyListing())
+    expect(keyListing().map((spec) => spec.wire)).toContain(RUN_WIRE)
+    expect(cost.tools).toBe(20)
     expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
     expect(cost.tokens).toBeLessThanOrEqual(MAX_CATALOGUE_TOKENS)
     expect(cost.overBudget).toBe(false)
@@ -186,13 +186,14 @@ describe('the catalogue that ships', () => {
      * every session in the app, so its tool list is a standing cost on somebody
      * else's context window as well.
      *
-     * Measured 2026-08-21: **7 tools, ~2,322 estimated tokens** — the six
-     * browser verbs and the meta-tool, whose index carries the eight scraping
-     * tools a session may also call. It was 14 full schemas before tonight.
+     * Measured 2026-10-03: **7 tools, ~2,492 estimated tokens** — the six
+     * browser verbs and the meta-tool. A session holds eleven tools behind it,
+     * under `INLINE_INDEX_MAX`, so it reads them by name: one line each is
+     * cheaper than sending it round an area first.
      */
-    const visible = shipped().filter(
-      (spec) => SESSION_TOOLS.has(spec.id) || SESSION_TOOLS.has(spec.wire),
-    )
+    const visible = shipped().filter((spec) => SESSION_TOOLS.has(spec.id) || SESSION_TOOLS.has(spec.wire))
+    const held = visible.filter((spec) => spec.index !== undefined)
+    expect(held.length).toBeLessThanOrEqual(INLINE_INDEX_MAX)
     const cost = catalogueCost(advertisedCatalogue(visible))
     expect(cost.tools).toBe(7)
     expect(cost.tokens).toBeLessThan(3_000)

@@ -1,34 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserDrive } from '../browser-driver'
-import { serverTools, type ServerToolsDeps } from '../servers/tools'
-import { agentsAreaTools, type AgentsAreaDeps } from './agents-area'
-import { assetTools } from './asset-tools'
-import { dataTools, importTools } from './browser-data-tools'
-import { downloadTools } from './browser-download-tools'
-import { historyTools, profileTools } from './browser-history-tools'
-import { browserNetworkTool } from './browser-network-tool'
-import { passwordTools } from './browser-password-tools'
-import { scrapingTools } from './browser-scraping-tools'
-import { signInTools } from './browser-signin-tools'
-import { browserTools } from './browser-tools'
-import { windowTools } from './browser-window-tools'
-import { buildCatalogue, type ToolSpec } from './catalogue'
-import { communityTools } from './community-tools'
-import { copilotAdminTools, type CopilotAdminDeps } from './copilot-admin-tools'
-import { coverageTool } from './coverage-tool'
-import { withDescribe } from './describe-tool'
-import { extensionTools } from './extension-tools'
-import { filesTools, type FilesToolDeps } from './files-tools'
-import { createMachineArea } from './machine-area'
-import { projectTools, type ProjectToolDeps } from './project-tools'
-import { sessionMoreTools, type SessionMoreDeps } from './session-more-tools'
-import { storeTools } from './store-tools'
-import { toolsStoreTools } from './tools-store-tools'
-import { tourTool } from './tour-tool'
-import type { TourStage } from './tour-stage'
-import { uiTools } from './ui-tools'
-import { whereTool } from './where-tool'
-import { workerTools } from './worker-tools'
+import { assembledCatalogue } from './assembled-catalogue.fixture'
+import { TOOL_AREAS, areaOf } from './describe-tool'
 
 /**
  * Every tool the app assembles, from every source, as one list — and no two of
@@ -52,67 +24,12 @@ import { workerTools } from './worker-tools'
  * adds; a source added there and not here is the gap this file exists to close,
  * so add it here in the same change.
  *
- * What this deliberately does not do is measure the cost of the listing. That
- * is `catalogue-cost.test.ts`, and the budget it guards is being redesigned
- * (a per-area index behind `tools.describe`) by the lane that owns it.
+ * The list itself is `assembled-catalogue.fixture.ts`, shared with
+ * `catalogue-cost.test.ts` so the names checked here and the bill measured
+ * there are the same tools — built by `DeckControl`'s own constructor.
  */
-/** A dep whose every member is a function that does nothing — for a definition that reads none. */
-function inert(): object {
-  return new Proxy({}, { get: () => () => undefined })
-}
-
-function inertDeps(keys: readonly string[]): Record<string, object> {
-  return Object.fromEntries(keys.map((key) => [key, inert()]))
-}
-
-function assembled(): ToolSpec[] {
-  return withDescribe([
-    // The built-ins, and the two `deck-control/index.ts` contributes.
-    ...buildCatalogue(),
-    tourTool({} as TourStage),
-    whereTool({ window: { read: async () => null }, page: () => null }),
-    // What `src/main/index.ts` hands in as `extraTools`, in its order.
-    ...browserTools({} as BrowserDrive),
-    browserNetworkTool({} as BrowserDrive),
-    ...workerTools({} as never),
-    ...assetTools({
-      userData: () => '/tmp',
-      probe: async () => ({}) as never,
-      open: () => {
-        throw new Error('this file checks names; it does not fetch')
-      },
-    }),
-    ...storeTools({ drive: {} as BrowserDrive, installed: () => [] }),
-    ...extensionTools({} as never),
-    ...serverTools({} as ServerToolsDeps),
-    ...createMachineArea().tools({ servers: { openShells: () => [], shellScreen: async () => null }, userData: () => '/tmp' }),
-    // Two of its deps are read by a definition — the hook providers and the
-    // readiness fix ids are enums its schemas advertise — so those two are real.
-    ...agentsAreaTools({
-      ...inertDeps(['agents', 'accounts', 'mcp', 'routines', 'app', 'usage', 'voice']),
-      hooks: { ...inert(), providers: ['claude', 'codex', 'gemini'] },
-      setup: { ...inert(), fixIds: new Set<string>() },
-    } as unknown as AgentsAreaDeps),
-    // `browserAreaTools`, factory by factory.
-    ...windowTools({} as never),
-    ...downloadTools({} as never),
-    ...historyTools({} as never),
-    ...profileTools({} as never),
-    ...passwordTools({} as never),
-    ...dataTools({} as never),
-    ...importTools({} as never),
-    ...signInTools({} as never),
-    ...scrapingTools({} as never),
-    ...toolsStoreTools({} as never),
-    ...communityTools({} as never),
-    // `sessionsLaneTools`, factory by factory.
-    ...sessionMoreTools({} as SessionMoreDeps),
-    ...projectTools({} as ProjectToolDeps),
-    ...filesTools({} as FilesToolDeps),
-    ...copilotAdminTools({} as CopilotAdminDeps),
-    ...uiTools({ evaluate: async () => null }),
-    coverageTool(),
-  ])
+function assembled() {
+  return assembledCatalogue()
 }
 
 describe('the catalogue every area assembles into', () => {
@@ -135,5 +52,11 @@ describe('the catalogue every area assembles into', () => {
       (row.tools ?? []).filter((id) => !built.has(id)).map((id) => `${row.area} ${row.action} → ${id}`),
     )
     expect(missing).toEqual([])
+  })
+
+  it('puts every tool in an area the describe index names, so none is stranded behind an unlisted prefix', () => {
+    const declared = new Set(TOOL_AREAS.map((area) => area.id))
+    const stray = assembled().filter((spec) => !declared.has(areaOf(spec))).map((spec) => spec.id)
+    expect(stray).toEqual([])
   })
 })

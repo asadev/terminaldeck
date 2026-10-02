@@ -157,6 +157,11 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +
     'climbs out of the folder, a symlink, a header that lies about its size. The same reason ' +
     '`browser-extension-zip.fixture.ts` below is here.',
+  'src/main/deck-control/assembled-catalogue.fixture.ts':
+    'the catalogue the app ships, built by DeckControl’s own constructor over every source the app ' +
+    'hands it, for the two tests that must agree with the app about it — the name-clash check and the ' +
+    'token budget. It is in src/ and shared because a copy typed into each test drifted from the app ' +
+    'three times, and the third time the budget passed while the real listing was over it.',
   'src/main/deck-control/key-door.fixture.ts':
     'test rig, shared on purpose: a whole deck-control with access keys in front of it — a real ' +
     'dispatcher, consent broker, action log and key store over a temp directory — that the key ' +

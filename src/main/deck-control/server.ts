@@ -437,7 +437,7 @@ function keyInstructions(caller: Caller): string {
     `${BRAND.name} runs AI coding sessions (Claude Code, Codex, Gemini and plain shells) on its owner's computer, ` +
     'and these tools see and drive it: start a session in one of their projects, send it a message, read what it ' +
     'answered, look at git changes and alerts. Start with sessions_list and projects_list. Many tools are held ' +
-    'back to keep this list short — tools_describe lists them and gives any one’s arguments, and tools_run calls ' +
+    'back to keep this list short — tools_describe lists them by area and gives any one’s arguments, and tools_run calls ' +
     `it. The owner made the key you are using for this app: ${level}.${ask}${folders} ` +
     'Every call is written to an activity log the owner reads, under this app’s name.'
   )

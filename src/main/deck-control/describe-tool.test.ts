@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { advertiseTool, buildCatalogue, type ToolContext, type ToolSpec } from './catalogue'
 import {
   advertisedCatalogue,
+  areaOf,
   describeTool,
   DESCRIBE_ID,
   DESCRIBE_WIRE,
+  INLINE_INDEX_MAX,
   MAX_DESCRIBE_NAMES,
+  TOOL_AREAS,
   visibleTo,
   withDescribe,
 } from './describe-tool'
@@ -239,5 +242,92 @@ describe('every index line', () => {
       expect(line, `${entry.id}'s index line is just its title`).not.toBe(entry.title)
       expect(line.trim(), `${entry.id}'s index line is not a sentence`).toMatch(/\.$/)
     }
+  })
+})
+
+describe('the index by area, once there is too much to list by name', () => {
+  /*
+   * Over `INLINE_INDEX_MAX` held-back tools the standing description names
+   * areas, and the one-liners come back from `tools.describe {area}`. Built here
+   * with more than the threshold in two areas and one in a third, so every
+   * branch has something to show.
+   */
+  const many = Array.from({ length: INLINE_INDEX_MAX }, (_, i) => spec(`browser.thing${i}`, `browser thing ${i}`))
+  const catalogue = withDescribe([
+    spec('sessions.list'),
+    spec('sessions.wait', 'block until the turn ends'),
+    ...many,
+    spec('machines.look', 'other computers'),
+  ])
+
+  async function call(args: Record<string, unknown>, granted?: ReadonlySet<string>): Promise<Record<string, unknown>> {
+    const tool = describeTool({ catalogue: () => catalogue })
+    return (await tool.run(args, ctx(granted))).value as Record<string, unknown>
+  }
+
+  it('names the areas and their counts, and none of the held-back tools', () => {
+    const meta = advertisedCatalogue(catalogue).find((entry) => entry.id === DESCRIBE_ID)
+    const description = meta?.description ?? ''
+    expect(description).toContain(`browser — ${TOOL_AREAS.find((area) => area.id === 'browser')?.covers} (${INLINE_INDEX_MAX} tools)`)
+    expect(description).toContain('sessions — ')
+    expect(description).toContain('(1 tools)')
+    expect(description).toContain('machines — ')
+    expect(description).not.toContain('browser_thing0')
+    expect(description).not.toContain('block until the turn ends')
+  })
+
+  it('answers an area with its one-liners and the tools already listed there', async () => {
+    const answer = await call({ area: 'sessions' })
+    expect(answer).toMatchObject({
+      area: 'sessions',
+      held: [{ name: 'sessions_wait', tier: 'read', does: 'block until the turn ends' }],
+      alreadyListed: ['sessions_list'],
+    })
+    expect(answer.tools).toBeUndefined()
+  })
+
+  it('still answers names with schemas, and both together, unmixed', async () => {
+    const both = await call({ area: 'machines', tools: ['sessions_wait'] })
+    expect(both.held).toEqual([{ name: 'machines_look', tier: 'read', does: 'other computers' }])
+    expect((both.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual(['sessions_wait'])
+  })
+
+  it('takes the area in any case and with spaces round it', async () => {
+    expect((await call({ area: '  Machines ' })).area).toBe('machines')
+  })
+
+  it('answers an area with nothing in it for this caller exactly as one that does not exist', async () => {
+    const granted: ReadonlySet<string> = new Set(['sessions.wait', DESCRIBE_ID, ...many.map((entry) => entry.id)])
+    const hidden = await call({ area: 'machines' }, granted)
+    const invented = await call({ area: 'teleports' }, granted)
+    expect(hidden).toEqual({ unknown: ['no area called machines'] })
+    expect(JSON.stringify(hidden)).toBe(JSON.stringify(invented).replace('teleports', 'machines'))
+  })
+
+  it('lists only the areas a caller may use, with only its own counts', () => {
+    const granted: ReadonlySet<string> = new Set([DESCRIBE_ID, 'sessions.wait', ...many.map((entry) => entry.id)])
+    const visible = catalogue.filter((entry) => visibleTo(granted, entry))
+    const description = advertisedCatalogue(visible).find((entry) => entry.id === DESCRIBE_ID)?.description ?? ''
+    expect(description).toContain('browser — ')
+    expect(description).toContain('sessions — ')
+    expect(description).not.toContain('machines — ')
+  })
+
+  it('stays on names for a caller with only a few held back', () => {
+    const few = withDescribe([spec('sessions.list'), spec('sessions.wait', 'block until the turn ends')])
+    const description = advertisedCatalogue(few).find((entry) => entry.id === DESCRIBE_ID)?.description ?? ''
+    expect(description).toContain('sessions_wait — block until the turn ends')
+    expect(description).not.toContain('sessions — ')
+  })
+
+  it('refuses a call that names neither an area nor a tool', async () => {
+    const tool = describeTool({ catalogue: () => catalogue })
+    await expect(tool.run({}, ctx())).rejects.toThrow(/name an area/)
+  })
+
+  it('gives an unlisted prefix an area of its own name, so nothing is stranded', () => {
+    expect(areaOf({ id: 'sessions.wait' })).toBe('sessions')
+    expect(areaOf({ id: 'chats.read' })).toBe('sessions')
+    expect(areaOf({ id: 'teleport.go' })).toBe('teleport')
   })
 })

@@ -54,7 +54,7 @@ export const RUN_WIRE = 'tools_run'
 
 /** What the model reads. Short: it is paid on every turn of a key caller. */
 const RUN_DESCRIPTION =
-  'Call one of the tools listed under tools_describe, by name. Get its arguments from tools_describe first, ' +
+  'Call one of the tools held behind tools_describe, by name. Find it by area and get its arguments there first, ' +
   'then pass them here as `arguments`. It runs with exactly the same permissions, confirmations and limits as ' +
   'calling the tool directly, and answers with that tool’s own result.'
 
