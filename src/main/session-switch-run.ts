@@ -44,7 +44,8 @@ import { join } from 'node:path'
 import type { ProviderId, SessionMeta } from '../shared/types'
 import { logger } from './app-log'
 import type { HostCore } from './host-core'
-import { findProfile, getState as profilesState, resolveProfile } from './profiles'
+import { findProfile, getState as profilesState, keptManaged, resolveProfile } from './profiles'
+import { vaultSignedIn } from './account-vault/runtime'
 import {
   conversationOnDisk,
   conversationScope,
@@ -182,6 +183,9 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
     const meta = core.ptys.list().find((session) => session.id === id) ?? null
     const saved = core.ledger.get(id)
     const target = wanted === '' ? null : findProfile(profilesState(), wanted)
+    // Known for certain only where the app keeps the login. See `switchRefusal`.
+    const targetSignedIn =
+      target === null ? null : vaultSignedIn(target, keptManaged(target))
 
     /*
      * The decision is only asked for once the cheap refusals have passed, and
@@ -191,7 +195,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      * answer a question that has already been answered — and, on a WSL machine,
      * doing it across a filesystem boundary.
      */
-    const refused = switchRefusal({ meta, saved, target })
+    const refused = switchRefusal({ meta, saved, target, targetSignedIn })
     if (refused !== null || saved === null || target === null) {
       /*
        * `switchRefusal` and not `planSwitch` for the question itself, and that
@@ -213,6 +217,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
           occupied: false,
           // Nothing was decided, so nothing is being said about a conversation.
           sharedStore: false,
+          targetSignedIn,
         }),
         saved,
         resume: false,
@@ -330,6 +335,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
       decision: decision ?? null,
       occupied,
       sharedStore,
+      targetSignedIn,
     })
 
     /*

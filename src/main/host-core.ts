@@ -72,6 +72,7 @@ import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
 import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
+import { vaultPath } from './account-vault/runtime'
 // Which login each session's agent is actually running as — the one place that
 // answers it, so that the control cluster names the same account the chip and
 // the usage bar do. See {@link HostCore.controlAccess}.
@@ -1899,6 +1900,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * it is a gap in the *proxy*, not in the isolation.
      */
     const guestPaths = guest?.paths ?? []
+    /*
+     * The `security` shim, first on the PATH of a session running as an account
+     * this app keeps the login of — and of no other session. `vaultPath` reads
+     * the ticket `sessionEnv` put in `profileEnv`, so the PATH and the ticket
+     * cannot disagree about which sessions are vault sessions. Composed here,
+     * before the confinement plan reads `path`, for the reason the open shim's
+     * placement gives above: a PATH entry the plan has no rule for is an exec
+     * the sandbox refuses. `account-vault/keychain-shim.ts` has the rest.
+     */
+    const sessionPath = vaultPath(path, profileEnv)
     const env =
       target === null
         ? profileEnv
@@ -2154,7 +2165,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
             folder: input.cwd,
             device: held,
             accountHome: homeDir(),
-            path,
+            path: sessionPath,
             // Absent for the system profile on purpose. `sessionEnv` returns
             // nothing for it — `profiles.ts` explains why — so the CLI finds
             // its own default, which with `HOME` redirected is inside the
@@ -2190,7 +2201,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       provider,
       command: launch.command,
       args: launch.args,
-      path,
+      path: sessionPath,
       env,
       ...(guest ? { removeEnv: guest.remove } : {}),
       /*

@@ -138,6 +138,7 @@ import { killTree, systemRootOf } from './kill-tree'
 import { identifyLimit, windowForScope, type PlanLimit } from './plan-limit'
 import { currentPlatform, withPath, type Platform } from './platform/host'
 import { findProfile, getState, sessionEnv, systemProfileFor, type Profile } from './profiles'
+import { vaultPath } from './account-vault/runtime'
 import { agentBinaries, loginPath, PROVIDERS } from './providers'
 import { launchSpec } from './tool-probe'
 import {
@@ -836,9 +837,12 @@ export async function probeUsage(
 
   const launch = launchSpec(binary?.runnable ?? bin, null, platform)
   const PATH = options.path ?? (await loginPath(platform))
+  // A kept login is read through the vault's shim, exactly as a session on this
+  // account reads it — see `account-vault/runtime.ts`, `vaultPath`.
+  const overrides = sessionEnv(profile, 'claude')
   const env: NodeJS.ProcessEnv = {
-    ...withPath(process.env, PATH, platform),
-    ...sessionEnv(profile, 'claude'),
+    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...overrides,
   }
   /*
    * The inherited identity, scrubbed.

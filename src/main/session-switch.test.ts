@@ -306,7 +306,9 @@ describe('the two passes the handler makes', () => {
     const handler = readFileSync(join(__dirname, 'session-switch-run.ts'), 'utf8')
     const subject = handler.slice(handler.indexOf('const subject = async'))
     const body = subject.slice(0, subject.indexOf('const perform = async'))
-    expect(body).toContain('switchRefusal({ meta, saved, target })')
+    // `targetSignedIn` rides along: it is the vault's answer, read from memory,
+    // so it is as cheap as the rest and belongs in the same first pass.
+    expect(body).toContain('switchRefusal({ meta, saved, target, targetSignedIn })')
     // And the plan is asked for exactly once afterwards, with a real decision.
     expect(body).toContain('await planSaved([switched])')
   })

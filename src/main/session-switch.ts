@@ -364,6 +364,13 @@ export function switchRefusal(input: {
   saved: SavedSession | null
   /** The account being asked for, or null when the id names nothing. */
   target: Profile | null
+  /**
+   * Whether the account being asked for holds a login, when that is known for
+   * certain — `false` only for an account whose login this app keeps and whose
+   * vault holds nothing. `null`/absent when it cannot be known without asking
+   * the agent, which is every account the agent keeps itself.
+   */
+  targetSignedIn?: boolean | null
 }): string | null {
   const { meta, saved, target } = input
 
@@ -413,6 +420,22 @@ export function switchRefusal(input: {
   if (target.id === meta.profileId) {
     return 'This session is already running as that account.'
   }
+  /*
+   * An account with no login, refused before anything is stopped.
+   *
+   * The switch proves the replacement is *alive* before it stops the session
+   * it replaces — and an agent with no login is alive: it sits at its own
+   * sign-in screen, waiting. So a switch to a signed-out account passed every
+   * check, stopped a working session mid-conversation and left a login prompt
+   * in its tab. Where the app keeps the login it knows the answer without
+   * asking anybody, and the answer comes first.
+   */
+  if (input.targetSignedIn === false) {
+    return (
+      `${target.name} is not signed in yet, so this session was left as it is. ` +
+      'Sign in to it first, then switch.'
+    )
+  }
   return null
 }
 
@@ -437,6 +460,8 @@ export function planSwitch(input: {
   decision: RestoreDecision | null
   /** Is another live tab already continuing the conversation this would? */
   occupied: boolean
+  /** See `switchRefusal`. */
+  targetSignedIn?: boolean | null
   /**
    * Do the two accounts read the same conversation history?
    *
@@ -474,7 +499,7 @@ export function planSwitch(input: {
   const to: SwitchAccount | null =
     target === null ? null : { id: target.id, name: target.name, provider: target.provider }
 
-  const refusal = switchRefusal({ meta, saved, target })
+  const refusal = switchRefusal({ meta, saved, target, targetSignedIn: input.targetSignedIn ?? null })
   if (refusal !== null) {
     return { sessionId, refusal, from, to, conversation: 'stays', resume: false }
   }

@@ -73,6 +73,16 @@ import {
   unsupportedAccountReason,
 } from './provider-accounts'
 import { claudeConfigDirIn, transcriptDir } from './transcript'
+import {
+  currentAccountVault,
+  followNewAccount,
+  forgetKeptLogin,
+  keptBy,
+  vaultEnv,
+  vaultSignedIn,
+  vaultSummary,
+  type KeptBy,
+} from './account-vault/runtime'
 
 /* ---------------------------------------------------------------- model -- */
 
@@ -100,6 +110,19 @@ export interface Profile {
   color: string
   createdAt: number
   lastUsedAt: number | null
+  /**
+   * `'app'` once this app keeps the account's login itself, in the account
+   * vault (`account-vault/`). Absent on every account made before the vault,
+   * and on any account the vault cannot keep — see `keptBy` for the rule.
+   *
+   * Persisted rather than derived because it is the one fact about an account
+   * that cannot be recovered from the disk afterwards: it is what stops an
+   * account that has *moved* into the vault from ever reading its old keychain
+   * item again, including the day its kept login is signed out and the vault
+   * holds nothing. Without it, "signed out" and "never moved" would look the
+   * same, and the second one reads the keychain.
+   */
+  credentials?: 'app'
 }
 
 export interface ProfilesState {
@@ -542,6 +565,9 @@ function sanitizeProfile(raw: unknown): Profile | null {
     color: typeof value.color === 'string' ? value.color : PROFILE_COLORS[0],
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : Date.now(),
     lastUsedAt: typeof value.lastUsedAt === 'number' ? value.lastUsedAt : null,
+    // Only the one value it may have. Anything else on disk is dropped rather
+    // than carried, so a hand-edited file cannot invent a storage mode.
+    ...(value.credentials === 'app' ? { credentials: 'app' as const } : {}),
   }
 }
 
@@ -858,7 +884,56 @@ export function supportsProfiles(provider: ProviderId): boolean {
  */
 export function sessionEnv(profile: Profile, provider: ProviderId): Record<string, string> {
   if (profile.system) return {}
-  return accountEnv(provider, profile)
+  const env = accountEnv(provider, profile)
+  /*
+   * And, for an account this app keeps the login of, the vault's address and
+   * this account's ticket — what lets the `security` shim answer the agent's
+   * lookup with this account's login and no other. Only when the directory
+   * itself is exported: a session that is not running as this account (the
+   * mismatch `accountEnv` refuses) must not be handed its ticket either.
+   *
+   * The PATH half is not here, because a PATH is the caller's to compose — see
+   * `vaultPath` and the three places that call it.
+   */
+  if (Object.keys(env).length === 0) return env
+  return { ...env, ...vaultEnv(profile, provider, keptManaged(profile)) }
+}
+
+/**
+ * `isManagedConfigDir`, asked only when there is a vault to ask it for.
+ *
+ * Without a vault every account is the agent's to keep and the answer cannot
+ * change anything — and the question itself reads the data folder, which a
+ * process that has not installed its platform paths (a unit test, a tool
+ * script) does not have. Answering `false` there is the same answer the rule
+ * would reach, without the read.
+ */
+export function keptManaged(profile: Profile): boolean {
+  return currentAccountVault() !== null && isManagedConfigDir(profile.configDir)
+}
+
+/**
+ * Where this account's login lives — the app's vault, the agent's own store, or
+ * moving from one to the other. See `account-vault/runtime.ts` for the rule.
+ */
+export function profileKeptBy(profile: Profile): KeptBy {
+  return keptBy(profile, keptManaged(profile))
+}
+
+/**
+ * Record that this account's login is now kept by the app.
+ *
+ * Called by the vault the first time it keeps something for an account that
+ * predates it, and never by anything a window can reach: it changes where a
+ * login is read from, and the only honest trigger for that is the login having
+ * actually arrived. Idempotent — the vault calls it on every write.
+ */
+export function markCredentialsKept(id: string): void {
+  const state = getState()
+  const profile = state.profiles.find((entry) => entry.id === id)
+  if (!profile || profile.credentials === 'app') return
+  profile.credentials = 'app'
+  persist(state)
 }
 
 /**
@@ -997,8 +1072,22 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
     lastUsedAt: null,
   }
 
+  /*
+   * Kept by the app from its first moment, when the app can keep it.
+   *
+   * Asked as "would this account be kept if it were marked kept?" so the answer
+   * comes from the one rule in `account-vault/runtime.ts` rather than a second
+   * copy of it here. A new account marked this way never reads the keychain at
+   * all — which is the fix for a re-made account coming back signed in as the
+   * account it replaced: same name, same id, same folder, and so the same
+   * keychain item name, still holding the deleted account's login.
+   */
+  const managed = keptManaged(profile)
+  if (keptBy({ ...profile, credentials: 'app' }, managed) === 'app') profile.credentials = 'app'
+
   state.profiles.push(profile)
   persist(state)
+  followNewAccount(profile, managed)
   return profile
 }
 
@@ -1102,6 +1191,18 @@ export function deleteProfile(
   // that the login survives a delete when it does not.
   const isolation = profileIsolation(platform, hasCredentialFile(profile))
 
+  /*
+   * The login the app kept for it goes first, and whether or not the files do.
+   *
+   * "Delete account" with the folder kept is still a delete of the account, and
+   * a token for an account that is no longer on the list is a token nobody can
+   * see, use or remove — the worst kind to leave behind. Its ticket is revoked
+   * in the same call, so a session still running as it is answered "not found"
+   * from here on rather than with a login that has been deleted.
+   */
+  const keptInApp = profileKeptBy(profile) === 'app'
+  forgetKeptLogin(profile)
+
   // Every reference goes with it, so nothing resolves to a profile that is gone.
   if (state.defaultProfileId === id) state.defaultProfileId = null
   for (const [path, assigned] of Object.entries(state.projectDefaults)) {
@@ -1124,7 +1225,10 @@ export function deleteProfile(
     removed: true,
     filesDeleted,
     // Nothing was deleted, or the credential is somewhere this did not touch.
-    credentialsRetained: !filesDeleted || isolation.store !== 'config-directory',
+    // A login the app kept is gone with the account whatever happened to the
+    // files — `forgetKeptLogin` above. Otherwise: nothing was deleted, or the
+    // credential is somewhere this did not touch.
+    credentialsRetained: keptInApp ? false : !filesDeleted || isolation.store !== 'config-directory',
   }
 }
 
@@ -1300,6 +1404,40 @@ export interface ProfilesSnapshot {
    * function for why it never guesses.
    */
   machine: string
+  /**
+   * Where each listed account's login lives, by account id — the one thing the
+   * Accounts screen needs to say *"kept in this app"* and to know, without
+   * spawning anything, whether an account the app keeps is signed in.
+   *
+   * Never a value. {@link AccountVaultView} is built from `VaultSummary`, which
+   * carries slot names and times and nothing an agent could sign in with.
+   */
+  vault: Record<string, AccountVaultView>
+}
+
+/** What the window may know about one account's kept login. */
+export interface AccountVaultView {
+  keptBy: KeptBy
+  /**
+   * `true` when the app holds a login for it, `false` when the app keeps it and
+   * holds nothing (signed out, definitively), `null` when the app cannot say.
+   */
+  signedIn: boolean | null
+  /** When the kept login last changed — a sign-in or a token refresh. */
+  updatedAt: number | null
+  /** The plan the agent recorded for the login, when it recorded one. */
+  plan: string | null
+}
+
+export function accountVaultView(profile: Profile): AccountVaultView {
+  const managed = keptManaged(profile)
+  const summary = vaultSummary(profile.id)
+  return {
+    keptBy: keptBy(profile, managed),
+    signedIn: vaultSignedIn(profile, managed),
+    updatedAt: summary?.updatedAt ?? null,
+    plan: summary?.plan ?? null,
+  }
 }
 
 /**
@@ -1310,12 +1448,14 @@ export interface ProfilesSnapshot {
  */
 function snapshot(provider: ProviderId | null = null): ProfilesSnapshot {
   const state = getState()
+  const profiles = provider === null ? listProfiles(state) : listProfilesForProvider(provider, state)
   return {
-    profiles: provider === null ? listProfiles(state) : listProfilesForProvider(provider, state),
+    profiles,
     defaultProfileId: state.defaultProfileId,
     projectDefaults: { ...state.projectDefaults },
     inherited: inheritedSystemInstalls(),
     machine: thisMachineName(),
+    vault: Object.fromEntries(profiles.map((profile) => [profile.id, accountVaultView(profile)])),
   }
 }
 

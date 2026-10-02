@@ -54,7 +54,9 @@
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
@@ -70,7 +72,8 @@ import { agentBinaries, loginPath, PROVIDERS } from './providers'
 import { binaryProblem, type AgentBinary } from './agent-binaries'
 import { describeGeminiSignIn, readGeminiSignIn } from './gemini-signin'
 import { launchSpec } from './tool-probe'
-import { findProfile, getState, sessionEnv, type Profile } from './profiles'
+import { findProfile, getState, keptManaged, sessionEnv, type Profile } from './profiles'
+import { recheckKeptLogin, vaultPath, vaultSignedIn, vaultSummary } from './account-vault/runtime'
 
 const run = promisify(execFile)
 
@@ -394,6 +397,66 @@ async function spawnProbe(
   }
 }
 
+/**
+ * The address a Claude Code login recorded for itself, read from the account's
+ * own `.claude.json` — where the CLI writes `oauthAccount` when a sign-in
+ * completes — or null.
+ *
+ * Not a credential: the file holds the account's name and organisation and the
+ * CLI's caches, and `usage-probe.ts` already reads the same file for the same
+ * account. The organisation is the fallback for a workspace login with no
+ * address, which is the order `parseAuthStatus` reads `auth status` in.
+ */
+export function claudeLoginName(configDir: string): string | null {
+  const file = join(configDir, '.claude.json')
+  try {
+    if (!existsSync(file)) return null
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      oauthAccount?: { emailAddress?: unknown; organizationName?: unknown }
+    }
+    return text(parsed?.oauthAccount?.emailAddress) ?? text(parsed?.oauthAccount?.organizationName)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The sign-in report for an account whose login the vault keeps, or null when
+ * the vault cannot say (the agent keeps it, or it is still moving across) and
+ * the CLI has to be asked as before.
+ *
+ * Claude Code only. A kept Codex login is a file in its place and `codex login
+ * status` reads it in a fraction of a second; asking the CLI there costs little
+ * and keeps the plan text ("using ChatGPT") the CLI alone knows.
+ *
+ * `command` is empty, because nothing was run — the rule `toSignInReport`
+ * keeps: the command shown is the command that produced the answer. The
+ * signed-out sentence names no terminal command either: `claude auth login`
+ * typed into somebody's own terminal signs in *that* install, not this account,
+ * whose login lives in the app.
+ */
+export function keptSignIn(profile: Profile, provider: ProviderId, now = Date.now()): SignInReport | null {
+  if (provider !== 'claude' || profile.provider !== 'claude') return null
+  const held = vaultSignedIn(profile, keptManaged(profile))
+  if (held === null) return null
+  const base = { profileId: profile.id, provider, command: '', checkedAt: now }
+  if (!held) {
+    return {
+      ...base,
+      state: 'signed-out',
+      account: null,
+      plan: null,
+      detail: 'Not signed in. Sign in to it here, and this app keeps the login.',
+    }
+  }
+  const answer: AuthAnswer = {
+    loggedIn: true,
+    account: claudeLoginName(profile.configDir),
+    plan: vaultSummary(profile.id)?.plan ?? null,
+  }
+  return { ...base, state: 'signed-in', account: answer.account, plan: answer.plan, detail: describeAnswer(answer) }
+}
+
 /** Answers still worth reusing, by profile id. See `SIGNIN_CACHE_MS`. */
 const cache = new Map<string, SignInReport>()
 
@@ -456,6 +519,23 @@ export async function readSignIn(
   if (options.refresh !== true) {
     const cached = cache.get(key)
     if (cached && Date.now() - cached.checkedAt < SIGNIN_CACHE_MS) return cached
+  }
+
+  /*
+   * A login this app keeps, answered from the vault — nothing spawned.
+   *
+   * The probe below is a process per account, three `--version` checks in
+   * front of it and a ten-second timeout behind it, all started at once by the
+   * Accounts screen — so the more accounts there were, the more of them came
+   * back `unknown`, and an agent whose every login read `unknown` stopped being
+   * offered an **Add account** at all. For an account the vault keeps, the
+   * vault *is* the store, so "is there a login?" is a lookup and not a
+   * question for a CLI. See {@link keptSignIn}.
+   */
+  const kept = keptSignIn(profile, provider)
+  if (kept !== null) {
+    cache.set(key, kept)
+    return kept
   }
 
   /*
@@ -548,12 +628,15 @@ export async function readSignIn(
   const launch = launchSpec(binary?.runnable ?? bin, null, platform)
 
   const PATH = options.path ?? (await loginPath(platform))
+  // The whole point: the same binary, pointed at this account's directory.
+  // Empty for the user's own install, which is what makes it the user's own
+  // install — see `sessionEnv`. For an account the app keeps the login of it
+  // also carries the vault's ticket, and `vaultPath` puts the shim in front so
+  // the probe reads the same login a session on this account would.
+  const overrides = sessionEnv(profile, provider)
   const env = {
-    ...withPath(process.env, PATH, platform),
-    // The whole point: the same binary, pointed at this account's directory.
-    // Empty for the user's own install, which is what makes it the user's own
-    // install — see `sessionEnv`.
-    ...sessionEnv(profile, provider),
+    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...overrides,
   }
 
   // `homedir()`, not a project folder. A status check must not be attributable
@@ -671,11 +754,15 @@ export async function signOutAccount(
 
   const launch = launchSpec(binary?.runnable ?? bin, null, platform)
   const PATH = options.path ?? (await loginPath(platform))
+  // The same binary, pointed at this account's directory — empty for the
+  // machine's own install, which is what makes it the machine's own install.
+  // A kept login is signed out through the shim like any other lookup, so the
+  // agent's own logout lands in the vault rather than in a keychain item it
+  // never used.
+  const overrides = sessionEnv(profile, provider)
   const env = {
-    ...withPath(process.env, PATH, platform),
-    // The same binary, pointed at this account's directory — empty for the
-    // machine's own install, which is what makes it the machine's own install.
-    ...sessionEnv(profile, provider),
+    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...overrides,
   }
 
   const spawnArgs = [...args]
@@ -690,6 +777,10 @@ export async function signOutAccount(
     )
   }
 
+  // A kept Codex login is a file the logout has just removed; read that now
+  // rather than when the watcher's debounce fires, so the re-read below and the
+  // vault agree about it.
+  recheckKeptLogin(profile, keptManaged(profile))
   // The machine's own answer, not the command's. Drop the memo first so the
   // re-read is of the login as it stands now rather than as it stood before.
   resetSignInCache()

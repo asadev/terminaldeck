@@ -157,6 +157,10 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +
     'climbs out of the folder, a symlink, a header that lies about its size. The same reason ' +
     '`browser-extension-zip.fixture.ts` below is here.',
+  'src/main/account-vault/fake-cipher.fixture.ts':
+    'unreachable on purpose: it is the `safeStorage` stand-in and the made-up logins the ' +
+    'account vault is tested with. A cipher whose ciphertext is not the plaintext and a login ' +
+    'nobody could sign in with — the app itself always uses `electron-cipher.ts`.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

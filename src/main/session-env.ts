@@ -19,6 +19,8 @@
  * change it.
  */
 
+import { VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './account-vault/keychain-shim'
+
 /**
  * Kept even though it matches the strip pattern: it is how a profile points the
  * CLI at an isolated login, set deliberately per session rather than inherited.
@@ -31,6 +33,19 @@ const KEEP = new Set(['CLAUDE_CONFIG_DIR'])
  * that depend on them. Only the parent *run's* identity is stripped.
  */
 const STRIP = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_AGENT_SDK_VERSION|CLAUDE_CODE_.*|CLAUDE_PREVIEW_.*)$/
+
+/**
+ * The account vault's two variables, never inherited.
+ *
+ * A session running as an account this app keeps is handed the vault's address
+ * and that account's ticket (`account-vault/runtime.ts`). If this app was itself
+ * launched from inside such a session, both are in `process.env` — and copying
+ * them into every new session would hand a session on the machine's own login a
+ * ticket for somebody else's account. The shim would refuse it (the address is
+ * another run's), but a session should never carry a ticket it was not given.
+ * Each spawn that is entitled to one sets it again explicitly, after this.
+ */
+const VAULT_VARS = new Set([VAULT_SOCKET_ENV, VAULT_TICKET_ENV])
 
 export function stripInheritedSessionEnv(
   env: Record<string, string | undefined>,
@@ -46,6 +61,7 @@ export function stripInheritedSessionEnv(
       continue
     }
     if (STRIP.test(key)) continue
+    if (VAULT_VARS.has(key)) continue
     out[key] = value
   }
   return out
