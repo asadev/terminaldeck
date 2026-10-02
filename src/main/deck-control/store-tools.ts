@@ -263,6 +263,19 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
       async run(args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput> {
         const installed = deps.installed()
         const wanted = optStr(args, 'tool')
+        /*
+         * Where an install happens, said to the caller that can act on it.
+         *
+         * Since 0.16.0 the copilot can install from the same store with
+         * `browser.store`. A session cannot — that tool is not on its list — and
+         * a sentence telling a session to call a tool it cannot find is the
+         * dead advice `browser-tools.ts` records removing once already. So the
+         * session keeps the old, true sentence and the copilot is told the call.
+         */
+        const isSession = context.caller?.kind === 'session'
+        const whereToInstall = isSession
+          ? `A person installs them from ${STORE_PLACE}; nothing on this surface can install one.`
+          : `A person installs them from ${STORE_PLACE}, or browser.store installs one (it asks them first).`
 
         if (wanted === null) {
           const tools = listInstalled(installed)
@@ -275,17 +288,13 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
                  * place rather than with a shrug — a model told "nothing is
                  * installed" and nothing else will invent a way to install one.
                  */
-                note:
-                  tools.length === 0
-                    ? `No browser tools are installed. They are installed by a person, from ${STORE_PLACE}.`
-                    : '',
+                note: tools.length === 0 ? `No browser tools are installed. ${whereToInstall}` : '',
               },
               {
                 produced: tools.length,
                 whenNone:
-                  'no browser tool is installed, so there is nothing here to run. A person installs ' +
-                  `them from ${STORE_PLACE}; nothing on this surface can install one. Say what you ` +
-                  'would have used and let them turn it on.',
+                  `no browser tool is installed, so there is nothing here to run. ${whereToInstall} ` +
+                  'Say what you would have used.',
               },
             ),
             summary: { tools: tools.length, ...emptySummary(tools.length) },
@@ -298,8 +307,7 @@ export function storeTools(deps: StoreToolDeps): ToolSpec[] {
           throw new Refused(
             'not-permitted',
             names.length === 0
-              ? `no browser tool called ${wanted} is installed, and nor is any other. ` +
-                `A person installs them from ${STORE_PLACE}.`
+              ? `no browser tool called ${wanted} is installed, and nor is any other. ${whereToInstall}`
               : `no browser tool called ${wanted} is installed. These are: ${names.join(', ')}.`,
           )
         }

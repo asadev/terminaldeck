@@ -1193,6 +1193,25 @@ async function clearImported(target: Session): Promise<{ removed: number }> {
 /* -------------------------------------------------------------------- ipc -- */
 
 /**
+ * What the last import left in the profile that is switched on — the body
+ * behind `cookie-import:status`. Counts and a source sentence; never a value.
+ *
+ * Exported, with {@link clearImportedCookies}, for the copilot's
+ * `browser.import` tool, so the panel and the tool read one ledger.
+ */
+export function cookieImportStatus(): Promise<CookieImportStatus> {
+  return statusOf(guestSession())
+}
+
+/**
+ * Remove exactly the cookies the import put in, and nothing a person signed
+ * into by hand — the body behind `cookie-import:clear`.
+ */
+export function clearImportedCookies(): Promise<{ removed: number }> {
+  return clearImported(guestSession())
+}
+
+/**
  * Wire the channels into the main process:
  *
  *     import { registerCookieImportIpc } from './cookie-import'
@@ -1209,7 +1228,7 @@ async function clearImported(target: Session): Promise<{ removed: number }> {
 export function registerCookieImportIpc(ipcMain: IpcMain): void {
   ipcMain.handle('cookie-import:sources', (): CookieSource[] => listCookieSources())
 
-  ipcMain.handle('cookie-import:status', (): Promise<CookieImportStatus> => statusOf(guestSession()))
+  ipcMain.handle('cookie-import:status', (): Promise<CookieImportStatus> => cookieImportStatus())
 
   ipcMain.handle('cookie-import:run', (_event, request: unknown): Promise<CookieImportReport> => {
     const asked = (typeof request === 'object' && request !== null ? request : {}) as Record<
@@ -1223,7 +1242,5 @@ export function registerCookieImportIpc(ipcMain: IpcMain): void {
     })
   })
 
-  ipcMain.handle('cookie-import:clear', (): Promise<{ removed: number }> =>
-    clearImported(guestSession()),
-  )
+  ipcMain.handle('cookie-import:clear', (): Promise<{ removed: number }> => clearImportedCookies())
 }

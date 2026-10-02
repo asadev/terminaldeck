@@ -37,7 +37,7 @@ vi.mock('electron', () => ({
   session: { fromPartition: () => GUEST_SESSION },
 }))
 
-const { FIND_CHANNEL, KEY_CHANNEL, guestChord, registerBrowserViewIpc, releaseAllBrowserViews } =
+const { FIND_CHANNEL, KEY_CHANNEL, findInBrowserView, guestChord, registerBrowserViewIpc, releaseAllBrowserViews } =
   await import('./browser-view')
 
 /* ------------------------------------------------------------------ harness -- */
@@ -329,5 +329,38 @@ describe('printing', () => {
     wc.printCb?.(false, 'no valid printers available')
     await expect(printed).rejects.toThrow(/could not be printed: no valid printers available/)
     releaseAllBrowserViews()
+  })
+})
+
+/* ------------------------------------------------------- asked for by a tool -- */
+
+describe('a find asked for by the copilot’s page tool', () => {
+  /*
+   * The window's find bar hears the count on `browser:find` and needs nothing
+   * back. `browser.page` has no bar, so the same function answers the count it
+   * waited for — and it must be the count for *its* search, not whichever one
+   * Chromium happened to report next.
+   */
+  it('answers the count Chromium reported for that search', async () => {
+    const wc = openTab('tool-find')
+    const pending = findInBrowserView('tool-find', 'price', { first: true })
+    const requestId = wc.finds.length
+    wc.emit('found-in-page', {}, { requestId, matches: 7, activeMatchOrdinal: 2, finalUpdate: true })
+    await expect(pending).resolves.toEqual({ matches: 7, active: 2 })
+  })
+
+  it('does not take another search’s count, or a count that is still arriving, for its own', async () => {
+    const wc = openTab('tool-find-2')
+    const pending = findInBrowserView('tool-find-2', 'total', { first: true })
+    const requestId = wc.finds.length
+    wc.emit('found-in-page', {}, { requestId: requestId + 99, matches: 1, activeMatchOrdinal: 1, finalUpdate: true })
+    wc.emit('found-in-page', {}, { requestId, matches: 2, activeMatchOrdinal: 1, finalUpdate: false })
+    wc.emit('found-in-page', {}, { requestId, matches: 3, activeMatchOrdinal: 1, finalUpdate: true })
+    await expect(pending).resolves.toEqual({ matches: 3, active: 1 })
+  })
+
+  it('answers no count for an emptied query, which ends the search', async () => {
+    openTab('tool-find-3')
+    await expect(findInBrowserView('tool-find-3', '', {})).resolves.toBeNull()
   })
 })

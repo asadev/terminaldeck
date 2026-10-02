@@ -980,6 +980,110 @@ export function steerBrowserTab(id: unknown, move: 'back' | 'forward' | 'reload'
   return stateOf(tab)
 }
 
+/**
+ * One view's state, or null when there is no such view — the body behind
+ * `browser:state`.
+ *
+ * Exported for the copilot's window tools (`deck-control/browser-window-tools.ts`),
+ * which answer "what is in W3" from the same `stateOf` the toolbar draws, so a
+ * page an agent reports as loading is the page the toolbar shows as loading.
+ */
+export function browserTabState(id: unknown): BrowserTabState | null {
+  const tab = typeof id === 'string' ? tabs.get(id) : undefined
+  return tab ? stateOf(tab) : null
+}
+
+/** Stop a load in progress — the body behind `browser:stop`. */
+export function stopBrowserTab(id: unknown): BrowserTabState {
+  const tab = requireTab(id)
+  liveContents(tab)?.stop()
+  return stateOf(tab)
+}
+
+/**
+ * Switch the element picker on or off — the body behind `browser:inspect`.
+ *
+ * `announce` is for a caller that is not the window: the window's own press
+ * learns the new state from this function's return value, and a tool call has
+ * no such window waiting on it, so without the push the toolbar's picker
+ * button would go on drawing whatever it last asked for over a page that had
+ * changed underneath it. The window's channel passes nothing and behaves
+ * exactly as before.
+ */
+export function setBrowserTabInspecting(
+  id: unknown,
+  enabled: boolean,
+  announce = false,
+): BrowserTabState {
+  const tab = requireTab(id)
+  tab.inspecting = enabled
+  tellGuest(tab)
+  if (announce) push(tab)
+  return stateOf(tab)
+}
+
+/**
+ * The sign-in form a page has announced, with the usernames saved for it, or
+ * null when it has announced none.
+ *
+ * Usernames and an origin only — the same two facts `browser:login-available`
+ * already hands the window, and for the reason that function's own comment
+ * gives: a username is on the screen the person is looking at, typed into the
+ * form. There is no shape here that could carry a password.
+ */
+export function signInOffer(id: unknown): { origin: string; usernames: string[] } | null {
+  const tab = typeof id === 'string' ? tabs.get(id) : undefined
+  if (!tab || tab.signIn === null) return null
+  return { origin: tab.signIn.origin, usernames: [...tab.signIn.usernames] }
+}
+
+/**
+ * Fill a saved login into the page it belongs to — the body behind
+ * `browser-password:fill`, and the one door to it.
+ *
+ * `from` is the renderer that pressed the panel's button. When it is given the
+ * fill is refused for any renderer other than the tab's own host, exactly as the
+ * channel always refused it: a second browser panel cannot fill a page it is not
+ * showing. When it is absent the caller is `deck-control/browser-password-tools.ts`,
+ * whose tool is `alter` — so a person has answered a dialog naming this site and
+ * this username before this line runs, every time, with no way to say "always".
+ * That answer is the press, given in the confirmation rather than on the page.
+ *
+ * Everything else is unchanged and applies to both: the origin is the one the
+ * view has committed, never the one remembered; an Isolated tab has nothing to
+ * fill; and the answer is whether a fill was sent, with no shape that could
+ * carry a password back.
+ */
+export function fillSavedLogin(id: unknown, username: unknown, from?: WebContents): boolean {
+  const tab = typeof id === 'string' ? tabs.get(id) : undefined
+  // The window that owns the tab, and no other renderer. Cheap, and it
+  // means a second browser panel cannot fill a page it is not showing.
+  if (!tab || (from !== undefined && tab.host !== from)) return false
+  if (tab.profileId === '' || tab.signIn === null) return false
+  const wc = liveContents(tab)
+  if (!wc) return false
+  /*
+   * The origin comes from the *view*, not from the tab's remembered
+   * announcement, for the reason the handlers above give: what Chromium
+   * committed is the fact. A page that announced a sign-in form and then
+   * navigated between the announcement and the press would otherwise be
+   * filled with the previous site's password.
+   */
+  const origin = originOf(wc.getURL())
+  if (origin === null || origin !== tab.signIn.origin) return false
+  const matches = loginsFor(allLogins(app.getPath('userData')), tab.profileId, origin)
+  if (matches.length === 0) return false
+  const wanted = typeof username === 'string' ? username : ''
+  const chosen =
+    matches.find((item) => item.username === wanted) ??
+    matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a))
+  // `true`: write over whatever is in the field. A person pressing this on
+  // a form the browser already filled with the other account is the ordinary
+  // case, and a press that silently declines is a dead control.
+  wc.send(GUEST_LOGIN_FILL_CHANNEL, chosen.username, chosen.password, true)
+  return true
+}
+
 function destroyTabsFor(host: WebContents): void {
   for (const tab of [...tabs.values()]) {
     if (tab.host === host) destroyTab(tab)
@@ -1552,27 +1656,17 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('browser:reload', (_event, id: unknown) => steerBrowserTab(id, 'reload'))
 
-  ipcMain.handle('browser:stop', (_event, id: unknown) => {
-    const tab = requireTab(id)
-    liveContents(tab)?.stop()
-    return stateOf(tab)
-  })
+  ipcMain.handle('browser:stop', (_event, id: unknown) => stopBrowserTab(id))
 
   ipcMain.handle('browser:back', (_event, id: unknown) => steerBrowserTab(id, 'back'))
 
   ipcMain.handle('browser:forward', (_event, id: unknown) => steerBrowserTab(id, 'forward'))
 
-  ipcMain.handle('browser:inspect', (_event, id: unknown, enabled: unknown) => {
-    const tab = requireTab(id)
-    tab.inspecting = enabled === true
-    tellGuest(tab)
-    return stateOf(tab)
-  })
+  ipcMain.handle('browser:inspect', (_event, id: unknown, enabled: unknown) =>
+    setBrowserTabInspecting(id, enabled === true),
+  )
 
-  ipcMain.handle('browser:state', (_event, id: unknown) => {
-    const tab = typeof id === 'string' ? tabs.get(id) : undefined
-    return tab ? stateOf(tab) : null
-  })
+  ipcMain.handle('browser:state', (_event, id: unknown) => browserTabState(id))
 
   ipcMain.handle('browser:close', (_event, id: unknown) => {
     const tab = typeof id === 'string' ? tabs.get(id) : undefined
@@ -1770,21 +1864,26 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
    * was Settings → Browser → Saved passwords → Copy → click the field → paste.
    * A name in a list on the page it belongs to is one press instead of six.
    *
-   * ## Why an agent cannot reach it
+   * ## Who can reach it
    *
-   * Two independent reasons, and the second is the one that holds if the first
-   * is ever weakened:
+   * The window's own press, through this channel, with the sender checked
+   * against the tab's own host renderer. A guest page cannot invoke it at all
+   * (the guest preload is sandboxed, exposes nothing through `contextBridge`
+   * and holds no `invoke`), and a page driven by CDP is a guest page —
+   * `browser-cdp.ts` denies `Runtime.evaluate` outright, so there is not even a
+   * script to try it from.
    *
-   *  - It is an `ipcMain.handle` channel. The tool surface is an MCP endpoint
-   *    (`deck-control/server.ts`) with a written-out allow-list, and there is no
-   *    bridge from it to `ipcMain` — the same door `browser-workers-ipc.ts`
-   *    puts session-lifting behind, for the same reason, argued in
-   *    `session-tools.ts`.
-   *  - The sender is checked against the tab's own host renderer below. A guest
-   *    page cannot invoke it anyway (the guest preload is sandboxed, exposes
-   *    nothing through `contextBridge` and holds no `invoke`), and a page driven
-   *    by CDP is a guest page — `browser-cdp.ts` denies `Runtime.evaluate`
-   *    outright, so there is not even a script to try it from.
+   * And, since 0.16.0, one tool: `browser.passwords` with `action: "fill"`
+   * (`deck-control/browser-password-tools.ts`). Asad asked for everything he
+   * does by hand to be reachable from a copilot in another application, and
+   * pressing a saved login's name is one of those things. What keeps it his
+   * press rather than an agent's is that the tool is `alter`: every single call
+   * puts a dialog in front of a person naming the site and the username, there
+   * is no "allow always" anywhere in `consent.ts`, it is refused outright when
+   * nobody is at the machine, and it is refused to a paired device and to an
+   * ordinary session. The automatic fill `browser-fill-gate.ts` withholds on an
+   * agent's page stays withheld — an agent still cannot get a page filled by
+   * navigating to it.
    *
    * ## What it answers
    *
@@ -1795,34 +1894,7 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
    */
   ipcMain.handle(
     'browser-password:fill',
-    (event: IpcMainInvokeEvent, id: unknown, username: unknown) => {
-      const tab = typeof id === 'string' ? tabs.get(id) : undefined
-      // The window that owns the tab, and no other renderer. Cheap, and it
-      // means a second browser panel cannot fill a page it is not showing.
-      if (!tab || tab.host !== event.sender) return false
-      if (tab.profileId === '' || tab.signIn === null) return false
-      const wc = liveContents(tab)
-      if (!wc) return false
-      /*
-       * The origin comes from the *view*, not from the tab's remembered
-       * announcement, for the reason the two handlers above give: what Chromium
-       * committed is the fact. A page that announced a sign-in form and then
-       * navigated between the announcement and the press would otherwise be
-       * filled with the previous site's password.
-       */
-      const origin = originOf(wc.getURL())
-      if (origin === null || origin !== tab.signIn.origin) return false
-      const matches = loginsFor(allLogins(app.getPath('userData')), tab.profileId, origin)
-      if (matches.length === 0) return false
-      const wanted = typeof username === 'string' ? username : ''
-      const chosen =
-        matches.find((item) => item.username === wanted) ??
-        matches.reduce((a, b) => (b.updatedAt > a.updatedAt ? b : a))
-      // `true`: write over whatever is in the field. A person pressing this on
-      // a form the browser already filled with the other account is the ordinary
-      // case, and a press that silently declines is a dead control.
-      wc.send(GUEST_LOGIN_FILL_CHANNEL, chosen.username, chosen.password, true)
-      return true
-    },
+    (event: IpcMainInvokeEvent, id: unknown, username: unknown) =>
+      fillSavedLogin(id, username, event.sender),
   )
 }

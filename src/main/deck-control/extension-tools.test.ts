@@ -172,18 +172,89 @@ describe('switching', () => {
 })
 
 describe('what the tool never offers', () => {
-  it('has no way to install or remove', () => {
+  it('never takes a path to add an extension from', () => {
     /*
-     * An install downloads and unpacks a program that then runs on every page of
-     * a profile. That is a decision for the person whose profile it is, having
-     * read what it reaches — and a catalogue an agent can work through is one
-     * that can install nine programs while nobody is looking.
+     * Until 0.16.0 this test read "has no way to install or remove", and it
+     * pinned a decision that has since been reversed at Asad's word —
+     * *"Everything that I can do manually should be able to do through the
+     * MCP"*. What survives of it is the rule that made adding your own safe at
+     * the panel: an extension added from disk is one a person pointed at in the
+     * native chooser, never a path a caller composed. So the schema must have no
+     * field a path could travel in, whatever else it grows.
      */
     const [tool] = extensionTools(depsWith([]))
     const keys = Object.keys(tool.inputSchema.properties ?? {})
-    expect(keys).toEqual(['extension', 'on', 'profile'])
+    expect(keys).toEqual(['action', 'extension', 'name', 'on', 'profile'])
+    expect(keys.some((key) => /^(path|folder|file|dir|directory|url|source|origin)$/i.test(key))).toBe(false)
     expect(tool.inputSchema.additionalProperties).toBe(false)
-    expect(tool.description.toLowerCase()).toContain('cannot install, remove or drive one')
+  })
+
+  it('makes every change to what is installed alter, so a person says yes to each', () => {
+    const [tool] = extensionTools(depsWith([]))
+    for (const action of ['install', 'remove', 'reload', 'rename', 'addfolder', 'addcrx', 'switch']) {
+      expect(tool.escalate?.({ action, extension: 'a' }, CONTEXT), action).toBe('alter')
+    }
+    expect(tool.escalate?.({}, CONTEXT)).toBe('read')
+    expect(tool.escalate?.({ action: 'catalogue' }, CONTEXT)).toBe('read')
+    expect(tool.escalate?.({ action: 'popup', extension: 'a' }, CONTEXT)).toBe('act')
+    // A word nobody wrote down reads as the dangerous one.
+    expect(tool.escalate?.({ action: 'uninstall' }, CONTEXT)).toBe('alter')
+  })
+
+  it('says plainly that an extension is a program, and that it cannot click inside one', () => {
+    const [tool] = extensionTools(depsWith([]))
+    expect(tool.description).toContain('is a program that runs on every page')
+    expect(tool.description).toContain('Nothing here can click inside an extension')
+  })
+})
+
+describe('the panel’s other buttons', () => {
+  it('installs through the function the panel calls, in the profile named by its name', async () => {
+    const install = vi.fn(async (): Promise<ExtensionResult> => ({ ok: true, message: 'Installed.' }))
+    const deps: ExtensionToolDeps = {
+      ...depsWith([]),
+      install,
+      profiles: () => [
+        { id: 'default', name: 'Default' },
+        { id: 'p2', name: 'Work' },
+      ],
+    }
+    const [tool] = extensionTools(deps)
+    await tool.run({ action: 'install', extension: 'ublock', profile: 'work' }, CONTEXT)
+    expect(install).toHaveBeenCalledWith('p2', 'ublock')
+  })
+
+  it('opens the chooser for the person rather than taking a path, and reads a cancel as no change', async () => {
+    const addOwn = vi.fn(async (): Promise<ExtensionResult> => ({ ok: true, message: '' }))
+    const [tool] = extensionTools({ ...depsWith([]), addOwn })
+    const out = (await tool.run({ action: 'addfolder' }, CONTEXT)).value as { added: boolean }
+    expect(addOwn).toHaveBeenCalledWith('default', 'folder')
+    expect(out.added).toBe(false)
+  })
+
+  it('refuses to open a chooser nobody is there to answer', async () => {
+    const addOwn = vi.fn(async (): Promise<ExtensionResult> => ({ ok: true, message: 'x' }))
+    const [tool] = extensionTools({ ...depsWith([]), addOwn })
+    await expect(
+      tool.run({ action: 'addcrx' }, { ...CONTEXT, attended: false } as ToolContext),
+    ).rejects.toThrow('nobody is there')
+    expect(addOwn).not.toHaveBeenCalled()
+  })
+
+  it('says a build without the button cannot do it, rather than answering success', async () => {
+    const [tool] = extensionTools(depsWith([installed('a', {})]))
+    await expect(tool.run({ action: 'remove', extension: 'a' }, CONTEXT)).rejects.toThrow(
+      'this build cannot remove an extension',
+    )
+  })
+
+  it('refuses a remove of something that is not installed, naming the listing call', async () => {
+    const remove = vi.fn((): ExtensionResult => ({ ok: true, message: '' }))
+    const [tool] = extensionTools({ ...depsWith([]), remove })
+    await expect(tool.run({ action: 'remove', extension: 'nope' }, CONTEXT)).rejects.toThrow(
+      'Call this tool with no extension',
+    )
+    expect(remove).not.toHaveBeenCalled()
   })
 })
 
@@ -209,6 +280,19 @@ describe('a session asking', () => {
     const out = (await tool.run({}, SESSION)).value as { profile: string; extensions: unknown[] }
     expect(out.profile).toBe('default')
     expect(out.extensions).toHaveLength(1)
+  })
+
+  it('cannot install, remove or add one, and is told who can', async () => {
+    const install = vi.fn(async (): Promise<ExtensionResult> => ({ ok: true, message: '' }))
+    const addOwn = vi.fn(async (): Promise<ExtensionResult> => ({ ok: true, message: '' }))
+    const [tool] = extensionTools({ ...depsWith([installed('a', {})], new Set(['a'])), install, addOwn })
+    for (const action of ['install', 'remove', 'addfolder', 'catalogue', 'popup']) {
+      await expect(tool.run({ action, extension: 'a' }, SESSION), action).rejects.toThrow(
+        'a session can list the extensions and switch one',
+      )
+    }
+    expect(install).not.toHaveBeenCalled()
+    expect(addOwn).not.toHaveBeenCalled()
   })
 
   it('still switches one in the profile it is driving', async () => {
