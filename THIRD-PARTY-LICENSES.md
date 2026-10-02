@@ -74,6 +74,41 @@ a licensing one: they are all MIT, and an unused MIT dependency creates no
 obligation. They are listed because this file claims to describe what is in
 `package.json`.
 
+## The simulator engine — `@toolingtools/simview` 0.4.4 (Apache-2.0)
+
+Added in 0.16.0 for the Simulators page and Annotate on devices. Read from the
+package's own `package.json` (`"license": "Apache-2.0"`) and its `LICENSE` and
+`THIRD_PARTY_NOTICES.md`, which ship inside the package and therefore inside
+the app.
+
+It is an npm package of **compiled programs**, not source this app imports.
+Terminal Deck runs them as child processes and speaks the engine's documented
+socket protocol from its own code (`src/main/devices/`); no SimView source is
+copied into this repository. What ships, from `node_modules/@toolingtools/simview/bin`
+(unpacked from the asar, because a program inside an archive cannot be run):
+
+| File | What it is | Licence notes |
+|---|---|---|
+| `simview-core` | Swift engine: screen capture, input, accessibility | Apache-2.0. Its notices name adapted Apache-2.0 work from serve-sim (Evan Bacon) and MIT work from IDB (Meta). |
+| `simview-android-agent.jar` | Pushed to an Android device for a session, removed after | Apache-2.0 |
+| `libSimViewProbe.dylib` | Optional UIKit probe | Apache-2.0 |
+| `xctest-provider/` | A UI-test runner the engine starts inside an iOS Simulator | Apache-2.0 for SimView's code; the runner bundle carries Apple's test frameworks as every built UI-test runner does |
+| `simview` | The engine's command line, used only for React Native component trees | **Not shipped by default — see below** |
+
+**The command line is held back, and that needs a decision.** `simview` is a
+`bun build --compile` executable. Bun is MIT, but its own licence documentation
+says it statically links LGPL-2 JavaScriptCore/WebKit and that the LGPL then
+requires a way for the recipient to modify and relink that library; SimView's
+`docs/binary-redistribution.md` lists the obligations (a written offer for the
+patched WebKit source, relinking materials, counsel review). Redistributing it
+inside this app would make those obligations this app's. So
+`electron-builder.yml` excludes it (see `WIRING-annotate.md`), and the app
+falls back to the native accessibility tree for React Native apps — labels and
+test ids, without component names or source files. Shipping it is a one-line
+change once somebody has decided the LGPL terms are acceptable.
+
+---
+
 ## Bundled from devDependencies
 
 Vite inlines these into the renderer bundle, so they are distributed with the

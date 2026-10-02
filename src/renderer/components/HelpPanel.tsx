@@ -89,6 +89,7 @@ export const PANEL_HELP: Record<PanelId, string> = {
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
   artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
+  simulators: 'The iOS Simulators, Android emulators and Android phones on this Mac, live. Click to tap, drag to swipe, type to type. Annotate freezes the screen: click what you want changed, write a note on each, and send them all to a session with a marked picture. Needs Xcode or Android Studio.',
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',
   store: 'One store for everything you can add to the app: extensions for the built-in browser, and the MCP servers your agents can reach. One search box covers both; the rail on the left is every shelf, with how much is on it.',
   readiness: 'How ready this repo is for an agent to work in — instructions, tests, structure — with a fix offered where one is safe.',

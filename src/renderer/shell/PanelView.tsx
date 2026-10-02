@@ -8,6 +8,7 @@ import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
 import { StorePage } from '../store/StorePage'
+import { DevicesPage } from '../devices/DevicesPage'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { PageScope } from '../components/PageScope'
@@ -349,6 +350,14 @@ export function PanelView({
        */
       case 'store':
         return <StorePage projectPath={projectPath} />
+      /*
+       * Above the project gate as well. A simulator is not inside a folder, and
+       * the first thing somebody does with a fresh install and an app to look
+       * at is open it — before any project. Annotate's notes still go to a
+       * session, and the session is what carries the folder.
+       */
+      case 'simulators':
+        return <DevicesPage />
       /*
        * Above the project gate, deliberately — like `hooks` and `mcp`.
        *

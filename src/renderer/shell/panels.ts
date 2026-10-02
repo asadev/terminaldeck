@@ -1,5 +1,7 @@
 /** Single source of truth for the sidebar's views — icons and labels. */
 
+import { detectPlatform } from '../platform'
+
 /**
  * There is no `machines` here any more, and that is the point of the entry
  * missing rather than an oversight.
@@ -115,11 +117,21 @@
  * uninstalled the extensions half is absent, not disabled, and the store is
  * still a store.
  */
+/**
+ * There is a `simulators` here too, added in 0.16.0, and it is a page for the
+ * same reason `store` is: it is a place you go — open a phone, look at it,
+ * point at what is wrong, send it — and come back to. Not a pop-up, because
+ * the screen is the whole of what you came for; not a window in the strip,
+ * because a device's screen is a picture of something that keeps running on its
+ * own, and coming back to it costs a reconnect rather than a lost page.
+ * `devices/DevicesPage.tsx` has the longer version of that argument.
+ */
 export type PanelId =
   | 'overview'
   | 'files'
   | 'artifacts'
   | 'git'
+  | 'simulators'
   | 'github'
   | 'readiness'
   | 'store'
@@ -221,6 +233,28 @@ export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = 
   { id: 'integrations', label: 'Integrations' },
 ]
 
+const SIMULATORS_PANEL: PanelSpec = {
+  /*
+   * The iOS Simulators and Android emulators and phones on this Mac, live, with
+   * Annotate. Under Project because what it is for is the app this project
+   * builds: look at it running, point at what is wrong, send that to the
+   * session building it.
+   *
+   * Called Simulators, not Devices, because Machines already lists *devices*
+   * — the phones paired to this computer as remotes — and one word for two
+   * different lists is how people end up on the wrong page. "Simulators" is
+   * also the word Asad used for it.
+   *
+   * No `command`, like Store: the palette finds it by name, and a chord spent
+   * on a page that is opened a few times a day is a chord taken from
+   * something used every minute.
+   */
+  id: 'simulators',
+  label: 'Simulators',
+  group: 'project',
+  icon: 'M8.5 3h7A1.5 1.5 0 0 1 17 4.5v15a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 7 19.5v-15A1.5 1.5 0 0 1 8.5 3zM11 18h2',
+}
+
 /**
  * The views, ordered by how often they are wanted.
  *
@@ -280,6 +314,18 @@ export const PANELS: PanelSpec[] = [
     command: 'view.git',
     icon: 'M7 5.5v8.2a3 3 0 0 0 3 3h4.5M7 19.5a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM7 8.3a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM17 19.1a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
   },
+  /*
+   * Mac only, and left out of the list rather than drawn as a dead end.
+   *
+   * The engine behind the page is Apple-silicon macOS software — an iOS
+   * Simulator exists nowhere else — so on Windows the row would lead to a page
+   * that can only say so. A row that goes nowhere is the inert control this
+   * rail refuses to draw. Spread in by platform rather than gated by a feature,
+   * because there is nothing to install on a PC that would make it work.
+   * `'other'` keeps it: that is Node under vitest, where the page's own tests
+   * and `reachable.test.ts` need it present.
+   */
+  ...(detectPlatform() === 'windows' ? [] : [SIMULATORS_PANEL]),
   {
     /*
      * First in the run, and above GitHub, because it is the door the rest of

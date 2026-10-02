@@ -31,6 +31,25 @@ interface Props {
    * decision for every surface in the app; this is one of its callers.
    */
   attach?: { path: string }
+  /**
+   * Make the attached file at the moment of the press, instead of before it.
+   *
+   * Annotate's picture is the frozen screen with the numbered markers drawn on
+   * it, and the markers change with every click until the moment somebody
+   * presses Send. Writing a file to Pictures on every change would leave a
+   * folder of drafts nobody asked for, so the picture is drawn and saved here,
+   * once, at the press — and then travels exactly like {@link Props.attach}.
+   * Null means it could not be made, and nothing is sent.
+   */
+  prepare?: () => Promise<{ path: string } | null>
+  /**
+   * Why there is nothing to send yet, when the sender itself knows.
+   *
+   * An Annotate round with no notes written is a session picked and a button
+   * with nothing behind it. Said on the button's own hover and under it, the
+   * same way the no-session reason is, so the two reasons share one slot.
+   */
+  notReady?: string
   placeholder: string
   /** The word on the button before anything has been sent. */
   action: string
@@ -57,7 +76,7 @@ interface Props {
  * moment the field is touched again — a button that says Sent about a line
  * nobody has sent is the same lie as one that says nothing at all.
  */
-export function SendToAgent({ agent, compose, attach, placeholder, action, onSent }: Props) {
+export function SendToAgent({ agent, compose, attach, prepare, notReady = '', placeholder, action, onSent }: Props) {
   const [instruction, setInstruction] = useState('')
   const [sent, setSent] = useState(false)
   const [sending, setSending] = useState(false)
@@ -71,7 +90,8 @@ export function SendToAgent({ agent, compose, attach, placeholder, action, onSen
    */
   const [trouble, setTrouble] = useState('')
 
-  const blocked = agent.target === null
+  const blocked = agent.target === null || notReady !== ''
+  const reason = agent.target === null ? agent.reason : notReady
 
   /*
    * Awaited, since a target can be on another computer.
@@ -107,12 +127,21 @@ export function SendToAgent({ agent, compose, attach, placeholder, action, onSen
      */
     void (async (): Promise<void> => {
       let handed = ''
-      if (attach) {
+      let file = attach
+      if (prepare) {
+        const made = await prepare()
+        if (made === null) {
+          setTrouble('The picture could not be saved, so nothing was sent.')
+          return
+        }
+        file = made
+      }
+      if (file) {
         // The row the picker is set to *now*, which is what decides whether
         // anything crosses a wire. Read at the press for the same reason
         // `useAgentTarget` re-resolves there: the gap between rendering an
         // enabled button and pressing it is where a choice changes.
-        const outcome = await pathForSession(agent.target, { path: attach.path })
+        const outcome = await pathForSession(agent.target, { path: file.path })
         if (!outcome.ok) {
           setTrouble(outcome.message)
           return
@@ -176,7 +205,7 @@ export function SendToAgent({ agent, compose, attach, placeholder, action, onSen
         disabled={blocked || sending}
         // The reason, on the control that is refusing. A greyed button with no
         // explanation is what this whole change is against.
-        title={blocked ? agent.reason : `Send to ${agent.target?.label ?? ''}`}
+        title={blocked ? reason : `Send to ${agent.target?.label ?? ''}`}
         onClick={send}
       >
         {sending ? 'Sending…' : sent ? 'Sent' : action}
@@ -194,7 +223,7 @@ export function SendToAgent({ agent, compose, attach, placeholder, action, onSen
       */}
       {(blocked || trouble !== '' || agent.problem !== '') && (
         <p className="bw-send-reason" role="status">
-          {blocked ? agent.reason : trouble !== '' ? trouble : agent.problem}
+          {blocked ? reason : trouble !== '' ? trouble : agent.problem}
         </p>
       )}
     </div>

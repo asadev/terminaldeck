@@ -4,7 +4,7 @@ import { AnchoredPopup } from './AnchoredPopup'
 import { BrowserMenu } from './BrowserMenu'
 import { DownloadsPanel } from './DownloadsPanel'
 import { ProfileMenu } from './ProfileMenu'
-import { CapturePopup } from './CapturePopup'
+import { BrowserAnnotate } from './BrowserAnnotate'
 import { DeviceBar } from './DeviceBar'
 import { PasswordOffer } from './PasswordOffer'
 import { SavedLoginBar, type SavedLoginOffer } from './SavedLoginBar'
@@ -44,7 +44,7 @@ import {
 } from './downloads-bridge'
 import { resolveStoreApi, storeAvailable } from './store-bridge'
 import { extensionsAvailable, resolveExtensionsApi } from './extensions-bridge'
-import { anchorInWindow, type Box } from './popup-anchor'
+import type { Box } from './popup-anchor'
 import {
   historyAvailable,
   passwordsAvailable,
@@ -1215,11 +1215,13 @@ export function BrowserWorkspace({
           sessionOpen,
           covered,
           drawing: frame !== null,
-          shotOpen: shot !== null,
+          // An Annotate round is a surface over the page exactly like the shot
+          // popup, and needs the same frame-early park for the same reason.
+          shotOpen: shot !== null || (isActive && captures[tab.key] !== undefined),
         }),
       )
     }
-  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen, covered, frame, shot])
+  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen, covered, frame, shot, captures])
 
   /* -- events from the main process, matched to tabs by id. */
   useEffect(() => {
@@ -3345,15 +3347,29 @@ export function BrowserWorkspace({
         did *not* park the page would be painted behind the website and could not
         be seen at all. See `AnchoredPopup`.
       */}
-      {capture && (
-        <CapturePopup
-          // Remount per element. The typed line and the "Sent" state belong to
-          // the thing that was clicked; carrying them over means the button
-          // reads Sent about an element nobody has sent.
-          key={[activeKey, capture.selector, capture.url].join('|')}
+      {/*
+        Annotate's round, opened by the first click while Annotate is on.
+
+        It replaced the capture popup, which sent one element with one line;
+        this is the same first click, frozen, with room for as many more as he
+        wants to point at and a note on each. See `BrowserAnnotate.tsx` and
+        `annotate/AnnotateSurface.tsx` — the Simulators page opens the same
+        surface. Remounted per capture, for the reason the popup was: a new
+        round must not inherit the last one's notes or its Sent.
+      */}
+      {capture && active?.id && (
+        <BrowserAnnotate
+          key={[activeKey, capture.selector, capture.url, capture.pageImage.length].join('|')}
           capture={capture}
-          anchor={anchorInWindow(capture.rect, fit.rect)}
+          rect={fit.rect}
+          zoom={zoom}
+          tabId={active.id}
+          title={active.title}
           agent={agent}
+          pickAt={api.browserAnnotatePick?.bind(api)}
+          save={api.annotateSave?.bind(api)}
+          sent={api.annotateSent?.bind(api)}
+          drawApi={drawApi}
           onClose={() =>
             setCaptures((prev) => {
               const next = { ...prev }

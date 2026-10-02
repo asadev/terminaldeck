@@ -1,5 +1,6 @@
 /**
- * Inspect, Record and Draw, and the rule that never more than one is on.
+ * Annotate (once called Inspect), Record and Draw, and the rule that never more
+ * than one is on.
  *
  * ## The bug this is
  *
@@ -118,7 +119,7 @@ export function modeChanges(
  * a page is parked is how to get it back.
  */
 export function modeHint(modes: BrowserModes, state: { hasCapture: boolean }): string {
-  if (modes.inspecting && !state.hasCapture) return 'Click any element in the page. Escape stops.'
+  if (modes.inspecting && !state.hasCapture) return 'Click what you want to change. Escape stops.'
   if (modes.drawing) return 'Drag on the page to mark it. Escape leaves without saving.'
   return ''
 }

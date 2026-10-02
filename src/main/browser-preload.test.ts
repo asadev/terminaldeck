@@ -14,6 +14,8 @@ import {
   GUEST_CANCEL_CHANNEL,
   GUEST_ELEMENT_CHANNEL,
   GUEST_INSPECT_CHANNEL,
+  GUEST_PICK_AT_CHANNEL,
+  GUEST_PICKED_CHANNEL,
   GUEST_PRELOAD_FILENAME,
   GUEST_PRELOAD_SOURCE,
   writeGuestPreload,
@@ -168,6 +170,10 @@ interface Harness {
   fire: (target: 'document' | 'window', type: string, event: Record<string, unknown>) => void
   setInspect: (enabled: boolean) => void
   overlay: () => FakeElement | undefined
+  /** Annotate's "what is at this point?", asked the way the main process asks it. */
+  pickAt: (request: unknown) => void
+  /** What `document.elementFromPoint` answers. Settable per test. */
+  pointAt: { current: (x: number, y: number) => FakeElement | null }
 }
 
 /** Builds the fake page, runs the guest script inside it, and hands back probes. */
@@ -200,8 +206,10 @@ function boot(build: (body: FakeElement) => void): Harness {
     throw new Error(`fake querySelectorAll cannot parse ${selector}`)
   }
 
+  const pointAt = { current: (_x: number, _y: number): FakeElement | null => null }
   const document = {
     documentElement,
+    elementFromPoint: (x: number, y: number) => pointAt.current(x, y),
     createElement: (tag: string) => new FakeElement(tag),
     querySelectorAll: (selector: string) => descendants(documentElement).filter((el) => matches(el, selector)),
     addEventListener: addTo(docListeners),
@@ -260,6 +268,12 @@ function boot(build: (body: FakeElement) => void): Harness {
     },
     overlay: () =>
       documentElement.children.find((c) => c.getAttribute('data-terminaldeck-inspector') !== null),
+    pickAt: (request: unknown) => {
+      const handler = ipcHandlers.get(GUEST_PICK_AT_CHANNEL)
+      if (!handler) throw new Error('guest preload never subscribed to the pick channel')
+      handler(null, request)
+    },
+    pointAt,
   }
 }
 
@@ -716,5 +730,43 @@ describe('writeGuestPreload', () => {
     expect(readFileSync(victim, 'utf8')).toBe('do not overwrite me')
     expect(lstatSync(path).isSymbolicLink()).toBe(false)
     expect(readFileSync(path, 'utf8')).toBe(GUEST_PRELOAD_SOURCE)
+  })
+})
+
+describe('Annotate: the element at a point of a frozen page', () => {
+  it('describes it exactly as a click would, and echoes the question’s nonce', () => {
+    let target: FakeElement | null = null
+    const h = boot((body) => {
+      target = listPage(body)
+    })
+    h.pointAt.current = (x, y) => (x === 40 && y === 30 ? target : null)
+    h.pickAt({ x: 40, y: 30, nonce: 'n-1' })
+    const answer = h.sent.find((m) => m.channel === GUEST_PICKED_CHANNEL)
+    expect(answer).toBeDefined()
+    const payload = answer?.payload as Record<string, unknown>
+    expect(payload.nonce).toBe('n-1')
+    expect(payload.rect).toEqual({ x: 10, y: 20, width: 120, height: 32 })
+    // The same parser the click goes through, so the same selector comes out.
+    const capture = parseCapture(payload, 'https://example.test/')
+    expect(capture?.tag).toBe('button')
+    expect(capture?.label).toBe('Delete row 2')
+  })
+
+  it('answers "nothing there" rather than staying silent, so the main process is not left waiting', () => {
+    const h = boot(listPage)
+    h.pickAt({ x: 1, y: 1, nonce: 'n-2' })
+    expect(h.sent.find((m) => m.channel === GUEST_PICKED_CHANNEL)?.payload).toEqual({ v: 1, nonce: 'n-2', none: true })
+  })
+
+  it('does not turn inspection on, highlight anything, or click the page', () => {
+    let target: FakeElement | null = null
+    const h = boot((body) => {
+      target = listPage(body)
+    })
+    h.pointAt.current = () => target
+    h.pickAt({ x: 5, y: 5, nonce: 'n-3' })
+    expect(h.docListeners).toEqual(h.atRest)
+    expect(h.overlay()).toBeUndefined()
+    expect(h.sent.some((m) => m.channel === GUEST_ELEMENT_CHANNEL)).toBe(false)
   })
 })

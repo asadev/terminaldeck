@@ -1,0 +1,301 @@
+/* ============================================================================
+   Simulators — the device list, and one device's live screen.
+
+   Tokens only. The screen is the content: it gets the whole stage on a sunken
+   ground so a white app reads as a phone rather than a hole in the page, and the
+   controls above it are quiet icons named on hover, the same weight as the
+   browser's bar. One filled button on the page at most — the Send in Annotate.
+   ============================================================================ */
+
+/*
+  With a device open the page takes the whole pane, like Files does: the screen
+  is the content, and the centred reading measure that suits a list would leave
+  a phone in a narrow column with an empty margin either side of it.
+*/
+.panel-page[data-panel='simulators']:has(> .dv-page[data-open]) {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-page[data-panel='simulators'] > .dv-page[data-open] {
+  flex: 1;
+}
+
+.dv-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.dv-loading {
+  background: var(--bg-primary);
+}
+
+/* ------------------------------------------------------------ the list -- */
+
+.dv-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  width: 100%;
+  max-width: var(--page-measure);
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-5);
+  overflow-y: auto;
+}
+
+.dv-group-title {
+  margin: 0 0 var(--sp-2);
+  padding: 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+}
+
+.dv-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: calc(var(--row-h) * 1.6);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-lg);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.dv-row:hover {
+  background: var(--fill-quaternary);
+}
+
+.dv-row-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.dv-row[data-ready] .dv-row-icon {
+  color: var(--status-completed);
+}
+
+.dv-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dv-row-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dv-row-sub {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dv-row-busy {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.dv-secondary {
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.dv-secondary:hover {
+  background: var(--fill-secondary);
+}
+
+.dv-problem {
+  margin: var(--sp-2) var(--sp-5) 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+}
+
+/*
+  With a device open, a sentence floats over the top of the stage instead of
+  pushing it down: the screen under the pointer must not jump by a line the
+  moment something is said, and then jump back six seconds later.
+*/
+.dv-page[data-open] {
+  position: relative;
+}
+
+.dv-page[data-open] > .dv-problem,
+.dv-said {
+  position: absolute;
+  top: calc(var(--toolbar-h) + var(--sp-2));
+  left: 50%;
+  z-index: 2;
+  max-width: min(36rem, calc(100% - 2 * var(--sp-5)));
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-pill);
+  background: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  transform: translateX(-50%);
+}
+
+/* ---------------------------------------------------------- one device -- */
+
+.dv-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--toolbar-h);
+  padding: 0 var(--sp-3);
+  flex-shrink: 0;
+}
+
+.dv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.dv-back:hover {
+  background: var(--bg-hover);
+}
+
+.dv-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dv-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+}
+
+.dv-tool {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.dv-tool:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.dv-tool[data-on] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dv-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dv-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-4);
+  background: var(--bg-sunken);
+}
+
+.dv-screen-stage {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A phone's corners, a shadow to lift it off the ground, and nothing else —
+   no drawn bezel: a bezel is a picture of a device, and this is the device. */
+.dv-screen {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-2xl);
+  background: var(--bg-tertiary);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.dv-screen:focus-visible {
+  box-shadow: var(--shadow-lg), 0 0 0 3px var(--accent-line);
+}
+
+.dv-screen:not([data-ready]) {
+  width: 0;
+  height: 0;
+}
+
+.dv-screen-wait,
+.dv-freezing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  pointer-events: none;
+}
+
+.dv-page[data-annotating] .an {
+  flex: 1;
+}

@@ -9,6 +9,8 @@
  * honest by hand — so each one names the module it mirrors.
  */
 
+import type { AnnotationRound } from '../../shared/annotate'
+
 /* ---------------------------------------------------- mirrors of src/main -- */
 
 /** Mirrors `BrowserTabState` in `src/main/browser-tab.ts`. */
@@ -236,6 +238,17 @@ export interface BrowserBridge {
   browserVisible(id: string, visible: boolean): void
   onBrowserState(cb: (state: BrowserTabState) => void): () => void
   onBrowserElement(cb: (id: string, capture: BrowserCapture) => void): () => void
+  /**
+   * Annotate's later picks: the element under a point of the frozen page, in
+   * the view's own pixels. Optional and feature-detected — a build without it
+   * still annotates, with the first click's element and plain positions after.
+   * See `src/main/browser-annotate.ts`.
+   */
+  browserAnnotatePick?(id: string, x: number, y: number): Promise<BrowserCapture | null>
+  /** Keep a marked Annotate picture and the round it belongs to. `src/main/devices/ipc.ts`. */
+  annotateSave?(png: string, round: AnnotationRound): Promise<{ path: string; width: number; height: number }>
+  /** The round reached a session. */
+  annotateSent?(roundId: string, sentTo: { sessionId: string; label: string }): Promise<void>
 
   /* browser-view.ts */
   browserClaim(id: string): Promise<{ ok: boolean; reason?: string }>
