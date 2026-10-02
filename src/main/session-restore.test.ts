@@ -914,7 +914,16 @@ describe('restoring is wired to launch', () => {
      * text for the same reason the assertion above is — this is a wiring fact,
      * and every logic test in this file passed while the wiring was wrong.
      */
-    const retry = index.slice(index.indexOf("ipcMain.handle('session:held-retry'"))
+    /*
+     * The handler is one line naming a module-level function, which holds the
+     * body: lifted in 0.16.0 so the `sessions.held` tool runs the very retry the
+     * button does. Both halves are pinned — the handler points at it, and the
+     * function is the one checked below, up to its own closing brace.
+     */
+    expect(index).toMatch(/ipcMain\.handle\('session:held-retry', \(_e, key: unknown\) => retryHeld\(key\)\)/)
+    const from = index.indexOf('async function retryHeld(')
+    expect(from, 'the Try again body moved; follow it').toBeGreaterThan(0)
+    const retry = index.slice(from, index.indexOf('\n}\n', from))
     expect(
       retry.slice(0, retry.indexOf('restoreSpawn(')),
       `the retry handler does not call ${planName}, so a second attempt is planned by ` +
