@@ -108,7 +108,9 @@ import type { ForwardingConnection } from './forward'
  * itself now names: one program, into the account's own home, no administrator
  * access, with a way back, driven by a person pressing a button. It is wired
  * here and it is deliberately **not** wired into `tools.ts` — §6.1, and
- * `no-run-tool.test.ts` pins the copilot's tool list at three names.
+ * `no-run-tool.test.ts` pins the copilot's tool list at three names. Since
+ * 0.16.0 `deck-control/server-room-tools.ts` reaches these handlers too, as an
+ * `alter` call a person answers; the button is then the dialog.
  */
 import {
   ServerSetups,
@@ -811,6 +813,24 @@ export interface ServersIpc {
   room: ServerRoom
   /** The copilot's per-server permission, for `tools.ts` and for a settings screen. */
   grants: ServerGrants
+  /**
+   * Every terminal open on a server right now, oldest first — the window's and
+   * a tool's alike, since both are opened by `servers:shell:open`.
+   *
+   * For `deck-control/server-room-tools.ts`, which has to be able to say which
+   * terminals exist before it can read one. Read off the same maps the handlers
+   * keep, so a shell that closed is gone from here the moment it is gone there.
+   */
+  openShells(): Array<{ shellId: string; serverId: string; openedAt: number | null }>
+  /**
+   * What is on one terminal's screen now, or null for one that is not open.
+   *
+   * The shadow terminal each shell already has — the one the agent controls
+   * read the model and effort off — handed out rather than built a second time
+   * beside it: *"one shadow terminal per session, read by everyone — a second one
+   * fed the same bytes would drift the moment a resize was missed."*
+   */
+  shellScreen(shellId: string): Promise<string | null>
   /** Close every shell and drop every connection. For shutdown. */
   stop(): void
 }
@@ -2670,6 +2690,13 @@ export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDep
     belongingOf: (shellId) => windowDrives.belonging(shellId),
     room,
     grants,
+    openShells: () =>
+      [...shells.keys()].map((shellId) => ({
+        shellId,
+        serverId: shellServers.get(shellId) ?? '',
+        openedAt: shellOpenedAt.get(shellId) ?? null,
+      })),
+    shellScreen: (shellId) => shellControls.screen(shellId),
     stop: () => {
       /*
        * The setups first, and this ordering is the rule rather than tidiness:
