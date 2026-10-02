@@ -7,7 +7,9 @@ import {
   hereOnly,
   int,
   KEY_NAMES,
-  keyBytes,
+  keysFrom,
+  pressKeys,
+  typeLine,
   oneOf,
   optBool,
   optStr,
@@ -436,7 +438,11 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
         agent: { type: 'string', enum: [...AGENTS], description: 'start: which agent. Default: that computer’s own.' },
         text: { type: 'string', description: 'send: printable text, one line.' },
         submit: { type: 'boolean', description: 'send: press return afterwards. Default true.' },
-        keys: { type: 'array', items: { type: 'string', enum: KEY_NAMES }, description: 'keys: pressed in order.' },
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `keys: pressed in order — ${KEY_NAMES.join(', ')}, or one printable character such as "y" or "2".`,
+        },
         title: { type: 'string', description: 'rename: the new title. Empty puts back that computer’s own name.' },
         control: { type: 'string', enum: [...CONTROL_IDS], description: 'set: which control.' },
         value: { type: 'string', description: 'set: the value, as the session’s own picker names it.' },
@@ -473,7 +479,7 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
       const verb = oneOf(args, 'do', SESSION_VERBS)
       if (verb !== 'start') str(args, 'sessionId')
       if (verb === 'send') sanitizeSendText(str(args, 'text'))
-      if (verb === 'keys') keyBytes(strList(args, 'keys'))
+      if (verb === 'keys') keysFrom(strList(args, 'keys'))
       if (verb === 'set') {
         oneOf(args, 'control', CONTROL_IDS)
         str(args, 'value')
@@ -563,14 +569,20 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
       const target = await requireSession(machineId, sessionId)
 
       if (verb === 'send' || verb === 'keys') {
-        const data =
-          verb === 'send'
-            ? `${sanitizeSendText(str(args, 'text'))}${optBool(args, 'submit', true) ? '\r' : ''}`
-            : keyBytes(strList(args, 'keys'))
         if (target.exitCode !== null) {
           throw new BadArgument(`session ${sessionId} has already exited; there is nothing to type into`)
         }
-        okOr(await deps.call('machines:send', machineId, sessionId, data))
+        /*
+         * Each write is its own `machines:send`, with the gap `session-typing.ts`
+         * measured between them — the line, then its Enter; one key, then the
+         * next. A line and its return in one frame land as one chunk in the
+         * agent on that computer, which reads it as a paste and never sends it.
+         */
+        const write = async (data: string): Promise<void> => {
+          okOr(await deps.call('machines:send', machineId, sessionId, data))
+        }
+        if (verb === 'send') await typeLine(write, sanitizeSendText(str(args, 'text')), optBool(args, 'submit', true))
+        else await pressKeys(write, keysFrom(strList(args, 'keys')))
         return {
           value: { machineId, sessionId, sent: true },
           summary: {

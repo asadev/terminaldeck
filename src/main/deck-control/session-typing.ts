@@ -36,6 +36,11 @@
  * what a menu choice is (`y`, `n`, `1`), and is no wider than `sessions.send`
  * already is.
  *
+ * One table for the whole app: `sessions.keys` here, `machines.session` on
+ * another paired computer and `servers.shell` on a server all press keys from
+ * it (`area-shared.ts` re-exports it for the last two), so a key has one name
+ * and one set of bytes wherever a tool presses it.
+ *
  * Each key is its own write with a gap after it. Two keys arriving in one chunk
  * are read as one input event by an Ink-based CLI, and Escape followed at once by
  * a digit is not "Escape, then 1" — it is Alt-1. The gap after Escape is longer
@@ -67,7 +72,16 @@ export const ESCAPE_GAP_MS = 150
 /** Most keys one call may press. A menu needs a handful; a loop needs a cap. */
 export const MAX_KEYS = 24
 
-export type Write = (data: string) => void
+/**
+ * One write into a terminal.
+ *
+ * A promise is awaited, so the gap is between two writes *landing* rather than
+ * between two calls being made — the same rule `sendToTerminal` in the renderer
+ * keeps. It matters for the writes that travel: a session on another paired
+ * computer, a shell on a server. A write that throws stops the sequence, so an
+ * Enter is never sent after the line it belongs to failed to arrive.
+ */
+export type Write = (data: string) => void | Promise<unknown>
 export type Sleep = (ms: number) => Promise<void>
 
 export const realSleep: Sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -82,10 +96,10 @@ export const realSleep: Sleep = (ms) => new Promise((done) => setTimeout(done, m
  */
 export async function typeLine(write: Write, text: string, submit: boolean, sleep: Sleep = realSleep): Promise<void> {
   const [typed, enter] = replayWrites(text, submit)
-  write(typed)
+  await write(typed)
   if (!submit) return
   await sleep(KEY_GAP_MS)
-  write(enter)
+  await write(enter)
 }
 
 /** One named key: what it is called, what a person would call it, and its bytes. */
@@ -196,7 +210,7 @@ export function resolveKeys(raw: unknown): ResolvedKey[] {
 /** Press them, one write each, with the gap each one needs after it. */
 export async function pressKeys(write: Write, keys: readonly ResolvedKey[], sleep: Sleep = realSleep): Promise<void> {
   for (const [index, key] of keys.entries()) {
-    write(key.bytes)
+    await write(key.bytes)
     if (index === keys.length - 1) break
     await sleep(key.bytes === '\x1b' ? ESCAPE_GAP_MS : KEY_GAP_MS)
   }

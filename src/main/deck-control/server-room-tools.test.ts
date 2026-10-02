@@ -108,7 +108,10 @@ describe('the terminal', () => {
 
   it('types the line and presses return', async () => {
     await tool('servers.shell').run({ do: 'type', shellId: 's1 abc', text: 'uptime' }, context())
-    expect(calls).toContainEqual(['servers:shell:write', 's1 abc', 'uptime\r'])
+    expect(calls.filter((call) => call[0] === 'servers:shell:write')).toEqual([
+      ['servers:shell:write', 's1 abc', 'uptime'],
+      ['servers:shell:write', 's1 abc', '\r'],
+    ])
   })
 
   it('is the only tool in this file that takes free text a server would run', () => {

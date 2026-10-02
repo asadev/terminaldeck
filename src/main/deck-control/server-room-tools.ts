@@ -8,7 +8,9 @@ import {
   hereOnly,
   int,
   KEY_NAMES,
-  keyBytes,
+  keysFrom,
+  pressKeys,
+  typeLine,
   oneOf,
   optBool,
   optStr,
@@ -423,7 +425,11 @@ export function serverRoomTools(deps: ServerRoomToolsDeps): ToolSpec[] {
         shellId: { type: 'string', description: 'Every do except open.' },
         text: { type: 'string', description: 'type: one line, printable characters only.' },
         submit: { type: 'boolean', description: 'type: press return afterwards. Default true.' },
-        keys: { type: 'array', items: { type: 'string', enum: KEY_NAMES } },
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `keys: pressed in order — ${KEY_NAMES.join(', ')}, or one printable character.`,
+        },
         control: { type: 'string', enum: [...CONTROL_IDS], description: 'set.' },
         value: { type: 'string', description: 'set.' },
       },
@@ -446,7 +452,7 @@ export function serverRoomTools(deps: ServerRoomToolsDeps): ToolSpec[] {
           )
         }
       }
-      if (verb === 'keys') keyBytes(strList(args, 'keys'))
+      if (verb === 'keys') keysFrom(strList(args, 'keys'))
       if (verb === 'set') {
         oneOf(args, 'control', CONTROL_IDS)
         str(args, 'value')
@@ -502,9 +508,19 @@ export function serverRoomTools(deps: ServerRoomToolsDeps): ToolSpec[] {
         return { value: answer, summary: { serverId, shellId, control, value: str(args, 'value') } }
       }
       const text = verb === 'type' ? sanitizeSendText(str(args, 'text')) : null
-      const data = text === null ? keyBytes(strList(args, 'keys')) : `${text}${optBool(args, 'submit', true) ? '\r' : ''}`
-      const written = await deps.call('servers:shell:write', shellId, data)
-      if (!written.written) throw new Refused('not-permitted', 'That terminal closed before anything was typed.')
+      /*
+       * One write per piece, with the measured gap between — the line, then its
+       * Enter. At a bare shell prompt one write would do, but this terminal is
+       * the one a person runs `claude` in on that server, and an agent CLI reads
+       * a line and its return arriving together as a paste and never sends it.
+       * See `session-typing.ts`.
+       */
+      const write = async (data: string): Promise<void> => {
+        const written = await deps.call('servers:shell:write', shellId, data)
+        if (!written.written) throw new Refused('not-permitted', 'That terminal closed before anything was typed.')
+      }
+      if (text === null) await pressKeys(write, keysFrom(strList(args, 'keys')))
+      else await typeLine(write, text, optBool(args, 'submit', true))
       return {
         value: { shellId, typed: true, note: 'servers.details about "shell" shows what it printed.' },
         // Kept whole in the log, on purpose: what was run on a server is exactly

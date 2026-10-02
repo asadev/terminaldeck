@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { isAbsolute, normalize, sep } from 'node:path'
 import { BadArgument } from './catalogue'
+import { KeyError, NAMED_KEYS as NAMED_KEYS_TABLE, resolveKeys, type ResolvedKey } from './session-typing'
 import { Refused, type Caller } from './surface'
 
 /**
@@ -114,50 +115,36 @@ export function hereOnly(caller: Caller, what: string): void {
 
 /* -------------------------------------------------------------- keys ---- */
 
-/**
- * The named keys a tool may press in a terminal, and the bytes each one is.
+/*
+ * The keys a tool may press, and how a line is typed, are `session-typing.ts`'s
+ * — one table and one send sequence for every terminal a tool reaches, here or
+ * on another computer.
  *
- * A closed table rather than a free byte string, for the reason
- * `sanitizeSendText` refuses control characters in typed text: one call should be
- * legible in the action log as what a person would have pressed. `ctrl-c` reads
- * as an interrupt; `\x03` reads as nothing. The table is the set an agent CLI's
- * prompts actually need — confirm, cancel, move through a menu, interrupt — and
- * nothing that rewrites the terminal itself.
+ * This file had its own table, sixteen keys joined into one string and written
+ * in one go, and its own `${text}\r` for a line. Both were the bug class
+ * `session-typing.ts` is named for: one chunk of 64 bytes or more is a paste to
+ * the agent CLIs, so the return inside it is a newline and the message is never
+ * sent; and Escape followed in the same chunk by a digit is read as Alt-digit,
+ * not as two keys. Two tables would also have given one key two names on two
+ * kinds of session. So the names, the cap and the writing all come from there.
  */
-export const NAMED_KEYS: Readonly<Record<string, string>> = Object.freeze({
-  enter: '\r',
-  escape: '\u001b',
-  tab: '\t',
-  'shift-tab': '\u001b[Z',
-  backspace: '\u007f',
-  up: '\u001b[A',
-  down: '\u001b[B',
-  right: '\u001b[C',
-  left: '\u001b[D',
-  'ctrl-c': '\u0003',
-  'ctrl-d': '\u0004',
-  y: 'y',
-  n: 'n',
-  '1': '1',
-  '2': '2',
-  '3': '3',
-})
+export { pressKeys, typeLine } from './session-typing'
 
-export const KEY_NAMES = Object.keys(NAMED_KEYS)
+/** The key names, for a description. A single printable character is also a key. */
+export const KEY_NAMES = Object.keys(NAMED_KEYS_TABLE)
 
-/** Most keys one call may press, so a call stays one gesture rather than a script. */
-export const MAX_KEYS = 12
-
-export function keyBytes(names: readonly string[]): string {
-  if (names.length === 0) throw new BadArgument('keys must name at least one key')
-  if (names.length > MAX_KEYS) throw new BadArgument(`keys may name at most ${MAX_KEYS} keys in one call`)
-  return names
-    .map((name) => {
-      const bytes = NAMED_KEYS[name]
-      if (bytes === undefined) throw new BadArgument(`${name} is not a key this tool presses. These are: ${KEY_NAMES.join(', ')}`)
-      return bytes
-    })
-    .join('')
+/**
+ * The keys a call named, checked, or a refusal a model can act on.
+ *
+ * Run in the precheck — so a dialog never quotes a key that does not exist —
+ * and again in the handler before anything is pressed.
+ */
+export function keysFrom(names: unknown): ResolvedKey[] {
+  try {
+    return resolveKeys(names)
+  } catch (error) {
+    throw new BadArgument(error instanceof KeyError ? error.message : String(error))
+  }
 }
 
 /* --------------------------------------------------------- local files -- */

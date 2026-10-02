@@ -192,7 +192,11 @@ describe('machines.session', () => {
   it('presses named keys as the bytes a terminal expects', async () => {
     rig.answers['machines:send'] = () => ({ ok: true, message: 'sent' })
     await rig.tool('machines.session').run({ machineId: 'm1', do: 'keys', sessionId: 's-theirs', keys: ['up', 'enter'] }, rig.context())
-    expect(rig.calls).toContainEqual(['machines:send', 'm1', 's-theirs', '\u001b[A\r'])
+    // One key per write: a terminal reads two keys in one chunk as one input.
+    expect(rig.calls.filter((call) => call[0] === 'machines:send')).toEqual([
+      ['machines:send', 'm1', 's-theirs', '\u001b[A'],
+      ['machines:send', 'm1', 's-theirs', '\r'],
+    ])
   })
 
   it('refuses a newline inside sent text before a dialog could quote it', () => {
@@ -206,8 +210,13 @@ describe('machines.session', () => {
     const session = rig.tool('machines.session')
     await session.run({ machineId: 'm1', do: 'send', sessionId: 's-theirs', text: 'hello' }, rig.context())
     await session.run({ machineId: 'm1', do: 'send', sessionId: 's-theirs', text: 'draft', submit: false }, rig.context())
-    expect(rig.calls).toContainEqual(['machines:send', 'm1', 's-theirs', 'hello\r'])
-    expect(rig.calls).toContainEqual(['machines:send', 'm1', 's-theirs', 'draft'])
+    // The line and its Enter as two writes, never `hello\r` in one — that is a
+    // paste to the agent on the far computer and is never sent.
+    expect(rig.calls.filter((call) => call[0] === 'machines:send')).toEqual([
+      ['machines:send', 'm1', 's-theirs', 'hello'],
+      ['machines:send', 'm1', 's-theirs', '\r'],
+      ['machines:send', 'm1', 's-theirs', 'draft'],
+    ])
   })
 
   it('names a session the machine does not have', async () => {
