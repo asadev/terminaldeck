@@ -146,7 +146,9 @@ import { isProviderId } from './preferences'
 import { AutoTitler } from './auto-title'
 import { useSessionNotifier } from './useSessionNotifier'
 import { useAppSettings } from './settings/useAppSettings'
-import { booleanSetting, numberSetting, stringSetting } from './settings/settings-schema'
+import { booleanSetting, numberSetting, sectionsFor, stringSetting } from './settings/settings-schema'
+import { publishUi, type UiHandlers } from './driving/ui-bridge'
+import { detectPlatform } from './platform'
 import { readLastFolder, writeLastFolder } from './session-start'
 import { chordFor, resolveCommand, scopeForTarget } from './keymap'
 import './shell/shell.css'
@@ -4404,6 +4406,31 @@ function Workspace() {
   // Menu items dispatch the same commands the palette runs, so a menu entry
   // and its shortcut can never drift apart.
   useEffect(() => window.deck.onMenuCommand((command) => void run(command)), [run])
+
+  /*
+   * The window's own clicks, for an AI that is not in front of it — `ui.do` and
+   * `ui.list` in `main/deck-control/ui-tools.ts`. One ref kept current on every
+   * render and published once, so the bridge always reads this render's
+   * commands; see `driving/ui-bridge.ts`.
+   */
+  const uiHandlers = useRef<UiHandlers | null>(null)
+  uiHandlers.current = {
+    commands: () => commands,
+    run,
+    sessions: () => sessions.map((session) => ({ id: session.id, title: session.title })),
+    focusSession: (id) => openTabWindow(id),
+    // The rail's own rule (`SettingsWindow.tsx`): this platform's sections, less
+    // the ones whose feature is not installed.
+    sections: () =>
+      sectionsFor(detectPlatform())
+        .filter((entry) => features.sectionOn(entry.id))
+        .map((entry) => entry.id),
+    openSettings: (section) => openSettings(section as SectionId),
+    addProject: (path) => {
+      addProject(path)
+    },
+  }
+  useEffect(() => publishUi(() => uiHandlers.current), [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

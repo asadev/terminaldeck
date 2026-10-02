@@ -186,6 +186,32 @@ describe('nothing changes while a tour is playing', () => {
     expect(refusedWhileDriving('tour.play')).toBe(true)
   })
 
+  it('holds the 0.16.0 tools that move the screen or the session under it', () => {
+    /*
+     * Pressing a key, renaming, swapping a login, clicking in the window,
+     * resetting settings or installing an update while a tour plays is the same
+     * unattributable change a message would be.
+     */
+    for (const id of [
+      'sessions.keys',
+      'sessions.rename',
+      'sessions.account',
+      'sessions.held',
+      'ui.do',
+      'copilot.run',
+      'settings.reset',
+      'agents.set_control',
+      'accounts.sign_in',
+      'updates.install',
+    ]) {
+      expect(refusedWhileDriving(id), id).toBe(true)
+    }
+    // Looking, waiting and reading the screen change nothing about it.
+    for (const id of ['sessions.wait', 'sessions.screen', 'ui.list', 'files.read']) {
+      expect(refusedWhileDriving(id), id).toBe(false)
+    }
+  })
+
   it('leaves reading alone, because a read changes nothing about the screen', () => {
     expect(refusedWhileDriving('sessions.list')).toBe(false)
     expect(refusedWhileDriving('git.status')).toBe(false)

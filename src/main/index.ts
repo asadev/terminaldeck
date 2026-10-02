@@ -37,7 +37,7 @@ import {
  * beside the handler down in this file, which is a fact about
  * `preload/contract.test.ts` as much as about the house rule.
  */
-import { savedFrom, SESSIONS_HELD_CHANNEL } from './session-held'
+import { savedFrom, SESSIONS_HELD_CHANNEL, type HeldSession } from './session-held'
 import {
   personalSessions,
   restoreOpenSessions,
@@ -58,6 +58,7 @@ import {
   registerDevServerIpc,
   DEV_SERVER_STATE_CHANNEL,
   type DevServerState,
+  type SessionOpener,
 } from './dev-server'
 import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
@@ -89,6 +90,15 @@ import { ServerStore } from './servers/store'
 import { ServerCredentials } from './servers/credentials'
 import { ServerConnections } from './servers/connection'
 import { serverTools } from './servers/tools'
+/*
+ * The 0.16.0 tool areas, each one call. They are imported here and only here:
+ * every one closes over Electron-side modules, and `deck-control/index.ts` is
+ * also loaded by the headless host, which must not pull them in.
+ */
+import { machineArea } from './deck-control/machine-area'
+import { liveAgentsAreaTools } from './deck-control/agents-area-live'
+import { browserAreaTools, extensionManageDeps } from './deck-control/browser-area-tools'
+import { sessionsLaneTools } from './deck-control/sessions-lane'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -139,11 +149,11 @@ import {
 } from './switch-later'
 import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects'
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
-import { copilotState, registerCopilotIpc } from './copilot-session'
+import { copilotState, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
 import { copilotFilesHere } from './copilot-files'
-import { registerCopilotInspectIpc } from './copilot-inspect'
+import { registerCopilotInspectIpc, type CopilotInspectDeps } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { INTERACTIVE_KEY } from './deck-control/tour-tool'
 import { createSessionTools, type SessionTools } from './deck-control/session-tools'
@@ -402,6 +412,12 @@ let rendererAlive = false
  * app with every window closed is still running.
  */
 function send(channel: string, ...args: unknown[]): boolean {
+  /*
+   * First, ahead of the "is there a window" checks: a tool waiting for the push
+   * it is owed — a new remote session's id, a far copilot's reply — needs it
+   * whether or not a window is open to draw it. See `deck-control/channel-tap.ts`.
+   */
+  machineArea.tap.pushed(channel, args)
   if (quitting || !rendererAlive) return false
   const window = mainWindow
   if (!window || window.isDestroyed()) return false
@@ -646,6 +662,17 @@ let copilotRuns: CopilotRuns | null = null
  * matters.
  */
 let deckControl: DeckControlHandle | null = null
+
+/**
+ * What the copilot's channels were handed, kept so its tools are handed the same.
+ *
+ * Set in `registerIpc()` — the objects close over the window and the deck-control
+ * handle, which exist only from there — and read by `sessionsLaneTools`, so
+ * `copilot.state` and Settings → Copilot resolve the copilot's folder, account
+ * and files through one object rather than two that agree today.
+ */
+let copilotRuntimeDeps: CopilotRuntimeDeps | null = null
+let copilotInspectDeps: CopilotInspectDeps | null = null
 
 /**
  * The per-session tool tokens, once there is an endpoint to mint them against.
@@ -1176,6 +1203,20 @@ const devServers = createDevServers({
   read: (id) => ptys.scrollback(id),
   alive: (id) => ptys.list().some((meta) => meta.id === id),
 })
+
+/**
+ * How a dev server gets its session: a plain shell in the folder.
+ *
+ * Named, rather than an inline closure on `registerDevServerIpc`, so the
+ * `dev.servers` tool starts one by exactly the route the window's button does.
+ * A shell, not an agent: this session exists to run one command. 120x30 because
+ * a dev server's output is read, not worked in — and a pty with no size prints
+ * its progress bars into a single column.
+ */
+const openDevServerSession: SessionOpener = async (folder) => {
+  const meta = await startSession({ cwd: folder, cols: 120, rows: 30, provider: 'shell' })
+  return { ok: true, sessionId: meta.id }
+}
 
 /**
  * The appearance the window's own chrome has to be painted in.
@@ -2213,6 +2254,223 @@ function browserStoreTools(): ReturnType<typeof storeTools> {
   return drive === null ? [] : storeTools({ drive, installed: installedBrowserTools })
 }
 
+/* ------------------------------------------ typing, holding, switching -- */
+/*
+ * Lifted out of `registerIpc()` for 0.16.0, unchanged in behaviour, so the
+ * tools in `deck-control/sessions-lane.ts` call the very bodies the window's
+ * channels call. Each handler below is now one line pointing at its function.
+ */
+
+/**
+ * Try a held session again, now — the body of `session:held-retry`.
+ *
+ * Everything about this goes through the same two functions the launch used —
+ * `planSaved` and `startSession` — because a retry that resolved the
+ * conversation differently, or spawned differently, would be a second kind of
+ * restore that only ever runs when the first one has already failed.
+ *
+ * The entry is released only once a session actually exists. A retry that
+ * removed the row and then threw would be the original bug in miniature.
+ */
+async function retryHeld(key: unknown): Promise<HeldSession[]> {
+  const held = typeof key === 'string' ? ledger.held.get(key) : null
+  if (!held) return ledger.held.list()
+
+  const [decision] = await planSaved([savedFrom(held)])
+  if (!decision || decision.outcome === 'skip') {
+    ledger.held.fail(held.key, decision?.reason ?? 'it could not be planned')
+    announceHeld()
+    return ledger.held.list()
+  }
+
+  try {
+    // `restoreSpawn`, not the plain `startSession`: a held session a device
+    // started is confined work, and Try again has to bring it back inside its
+    // folder — never loose — exactly as the launch restore does. It re-applies
+    // the boundary, or refuses rather than start it unconfined, and the retry
+    // then reports that the same way as any other failure. A tab opened at the
+    // keyboard has no device and starts exactly as before.
+    const meta = await restoreSpawn(
+      {
+        cwd: held.cwd,
+        cols: held.cols,
+        rows: held.rows,
+        provider: held.provider,
+        profileId: held.profileId,
+        resume: decision.outcome === 'resume',
+        // As the same tab it was before it failed, not as a new one on the end
+        // of the bar. See `SavedSession.tabKey`.
+        ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
+      },
+      held.confineDeviceId ?? null,
+    )
+    ledger.held.release(held.key)
+    send(SESSION_CREATED_CHANNEL, meta)
+    logger.info('restore', 'came back on a retry', {
+      folder: held.cwd,
+      agent: held.provider,
+    })
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error)
+    ledger.held.fail(held.key, `it could not be started again: ${why}`)
+    logger.warn('restore', `retry failed: ${why}`, { folder: held.cwd, agent: held.provider })
+  }
+  announceHeld()
+  return ledger.held.list()
+}
+
+/** Stop holding one — the body of `session:held-forget`. */
+function forgetHeld(key: unknown): HeldSession[] {
+  if (typeof key === 'string' && ledger.held.release(key)) announceHeld()
+  return ledger.held.list()
+}
+
+/**
+ * Switches waiting for the session they are on to be spoken to again.
+ *
+ * The default Asad described, and the one difference from the channel above
+ * is *when*: the running agent is left alone to finish, and the restart
+ * happens in the gap before his next message is delivered. `switch-later.ts`
+ * carries the whole argument, including why the typed line has to be carried
+ * across and what happens when this app cannot be sure it read it correctly.
+ */
+const pending = new PendingSwitches()
+
+/**
+ * Arm one. The plan is computed now, and shown now, for the reason the
+ * immediate switch computes one: a person agrees to something they have read,
+ * and nothing here may be the first they hear of a consequence.
+ *
+ * It is re-planned at the moment it fires, and this stored copy is never
+ * acted on — the account could be removed, or another tab could take the
+ * conversation, in between arming and sending. `sessionSwitch.perform` asks again.
+ */
+async function armSwitchLater(
+  sessionId: unknown,
+  profileId: unknown,
+): Promise<{ sessionId: string; profileId: string; note: string }> {
+  const { plan } = await sessionSwitch.subject(sessionId, profileId)
+  if (plan.refusal !== null || plan.to === null) {
+    throw new Error(plan.refusal ?? 'This session cannot be switched.')
+  }
+  const armed = pending.arm({
+    sessionId: plan.sessionId,
+    profileId: plan.to.id,
+    accountName: plan.to.name,
+    plan,
+  })
+  return { sessionId: armed.sessionId, profileId: armed.profileId, note: armedNote(armed) }
+}
+
+/** What is armed right now — the body of `session:switch-armed`. */
+function armedSwitches(): Array<{ sessionId: string; profileId: string; accountName: string; note: string }> {
+  return pending.list().map((armed) => ({
+    sessionId: armed.sessionId,
+    profileId: armed.profileId,
+    accountName: armed.accountName,
+    note: armedNote(armed),
+  }))
+}
+
+/**
+ * Run an armed switch, then deliver the message it was waiting for.
+ *
+ * The order is what makes it safe. `sessionSwitch.perform` starts the replacement,
+ * proves it is alive and only then stops the old session — so a switch that
+ * fails leaves the old session running with the typed line still in its
+ * prompt, exactly where the person left it, and the window is told why.
+ *
+ * The Enter is replayed only when `switch-later.ts` is certain its copy of
+ * the line is the line. Where it is not, the text is placed in the prompt and
+ * left there: sending a message on somebody's behalf that is not the message
+ * they typed is worse than making them press Enter.
+ */
+async function fireSwitch(armed: ArmedSwitch, line: string, submit: boolean): Promise<void> {
+  let meta: SessionMeta
+  try {
+    meta = await sessionSwitch.perform(armed.sessionId, armed.profileId)
+  } catch (cause) {
+    const why = cause instanceof Error ? cause.message : String(cause)
+    // The account id travels with the reason so the window can reopen the
+    // sheet naming the account that was not reached. A sentence on its own
+    // would leave it saying "an account" about a switch he chose by name.
+    send(SESSION_SWITCH_FAILED_CHANNEL, armed.sessionId, armed.profileId, why)
+    return
+  }
+  send(
+    SESSION_SWITCHED_CHANNEL,
+    armed.sessionId,
+    meta,
+    switchedNote(armed.accountName, submit, line),
+  )
+  if (line === '') return
+  // A short settle, then the line. `REPLAY_SETTLE_MS` says why this is not
+  // zero and why it is not longer.
+  await new Promise((done) => setTimeout(done, REPLAY_SETTLE_MS))
+  /*
+   * Two writes, never one. `replayWrites` carries the measurement: a single
+   * chunk of about 64 bytes or more is read by the CLI as pasted text, where
+   * the carriage return is a newline rather than submit — so `${line}\r`
+   * silently fails to send for almost every real prompt, and `switchedNote`
+   * would say it had been delivered.
+   */
+  const [typed, enter] = replayWrites(line, submit)
+  ptys.write(meta.id, typed)
+  if (!submit) return
+  await new Promise((done) => setTimeout(done, REPLAY_SUBMIT_GAP_MS))
+  ptys.write(meta.id, enter)
+}
+
+/**
+ * Everything typed into a session on this machine — by a person in the window,
+ * or by a tool — goes through here.
+ *
+ * It was the body of `session:write`, and it moved to module scope so the
+ * copilot's `sessions.send` and `sessions.keys` take the same road: the "you
+ * were using this one" touch, and above all the deferred account switch, which
+ * fires on the Enter of the next message and fires nowhere else. A tool that
+ * wrote to the pty directly would type past an armed switch into the very
+ * account the person asked to leave.
+ */
+function typeIntoSession(id: string, data: string): void {
+  // Typing into a session is the only honest "you were using this one"
+  // signal the main process gets — the active tab is renderer state and
+  // never crosses the bridge. It decides which tab in a folder gets to
+  // continue the conversation on the next launch, because `--continue` is
+  // per folder and only one can (see `session-restore.ts`).
+  //
+  // Memory only. This runs per keystroke, and persisting on a keystroke
+  // would turn typing into disk traffic for a field that is a tiebreak. The
+  // freshened value reaches the file on the next open or close, and on
+  // `before-quit` — which is where a clean shutdown makes it exact.
+  ledger.touch(id)
+
+  /*
+   * The one place a deferred account switch can fire.
+   *
+   * Everything a person sends an agent arrives here, so this is where "his
+   * next message" is a fact rather than a guess. Ordinary typing is passed
+   * straight through and is only *copied* on the way past — `observe` answers
+   * `pass` for every session with nothing armed, which is all of them almost
+   * always.
+   *
+   * The Enter is the byte that is not passed on. Delivering it would submit
+   * the message to the account he has already asked to leave, which is the
+   * whole thing this feature exists to prevent; `fireSwitch` replays it into
+   * the replacement instead.
+   */
+  const action = pending.observe(id, data)
+  if (action.kind === 'switch') {
+    // What he typed before the Enter still goes to the old session, so the
+    // screen he is looking at does not lose characters in the moment before
+    // it is replaced.
+    if (action.before !== '') ptys.write(id, action.before)
+    void fireSwitch(action.armed, action.line, action.submit)
+    return
+  }
+  ptys.write(id, data)
+}
+
 /**
  * The last set of held windows this app told the paired machines about.
  *
@@ -2224,11 +2482,33 @@ function browserStoreTools(): ReturnType<typeof storeTools> {
  */
 let announcedWindows = ''
 
+/**
+ * Which agents are installed: the catalogue's, plus the ones somebody added.
+ *
+ * Shared by `providers:detect` and the copilot's `agents.list`, so the picker and
+ * the tool cannot disagree about what is startable. The reasoning for each half
+ * is on the `providers:detect` handler, which used to hold this body inline.
+ */
+async function detectAllProviders(): Promise<Record<string, boolean>> {
+  const builtin = await detectProviders(currentPlatform(), wsl.defaultTarget())
+  const added = await Promise.all(
+    core.agents.list().map(async (agent) => {
+      const found = await lookupCommand(agent.command, currentPlatform())
+      return [agent.id, found !== null] as const
+    }),
+  )
+  return { ...builtin, ...Object.fromEntries(added) }
+}
+
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
   // Off unless the user turned Debug mode on. Consulted per call rather than
   // captured, so toggling the setting takes effect without a relaunch.
   traceIpc(ipcMain, { enabled: () => storedValue(TRACE_SETTING) === true })
+  // Keep every handler registered below reachable in-process, for the machines,
+  // servers, devices and GitHub tools — so a tool runs the button's own code. See
+  // `deck-control/channel-tap.ts`.
+  machineArea.tap.attach(ipcMain)
 
   ipcMain.handle('brand:get', () => ({ name: BRAND.name, tagline: BRAND.tagline }))
 
@@ -2315,16 +2595,7 @@ function registerIpc(): void {
    * function `startSession` re-checks with, so the picker and the spawn cannot
    * disagree about what is startable.
    */
-  ipcMain.handle('providers:detect', async () => {
-    const builtin = await detectProviders(currentPlatform(), wsl.defaultTarget())
-    const added = await Promise.all(
-      core.agents.list().map(async (agent) => {
-        const found = await lookupCommand(agent.command, currentPlatform())
-        return [agent.id, found !== null] as const
-      }),
-    )
-    return { ...builtin, ...Object.fromEntries(added) }
-  })
+  ipcMain.handle('providers:detect', () => detectAllProviders())
 
   /*
    * A dialog opened or closed over the window, so the OS's own buttons have to
@@ -2407,13 +2678,7 @@ function registerIpc(): void {
   registerDevServerIpc(ipcMain, {
     servers: devServers,
     projects: () => store().getProjects().map((project) => project.path),
-    open: async (folder) => {
-      // A plain shell, not an agent: this session exists to run one command.
-      // 120x30 because a dev server's output is read, not worked in — and a pty
-      // with no size prints its progress bars into a single column.
-      const meta = await startSession({ cwd: folder, cols: 120, rows: 30, provider: 'shell' })
-      return { ok: true, sessionId: meta.id }
-    },
+    open: openDevServerSession,
     broadcast: (state: DevServerState) => send(DEV_SERVER_STATE_CHANNEL, state),
   })
   // Controls are read off the rendered screen and applied by typing, exactly as
@@ -3532,7 +3797,7 @@ function registerIpc(): void {
    * is three of this app's own files, measured per start — see
    * `confine/records.ts`.
    */
-  registerCopilotIpc(ipcMain, {
+  copilotRuntimeDeps = {
     /**
      * The same `startSession` everything else uses — announced, which it was
      * not.
@@ -3603,7 +3868,8 @@ function registerIpc(): void {
      * a copilot started before the server is listening.
      */
     tools: () => deckControl?.control.tools() ?? [],
-  })
+  }
+  registerCopilotIpc(ipcMain, copilotRuntimeDeps)
   /*
    * Choosing the folder, and the native panel that does it.
    *
@@ -3688,7 +3954,7 @@ function registerIpc(): void {
    * file name and a place key, both checked in `copilot-inspect.ts`, and mixing
    * the two sets would make that sentence false in the file that relies on it.
    */
-  registerCopilotInspectIpc(ipcMain, {
+  copilotInspectDeps = {
     userData: () => app.getPath('userData'),
     home: () => storedValue(COPILOT_HOME_SETTING) as string | null,
     /*
@@ -3714,7 +3980,8 @@ function registerIpc(): void {
       const problem = await shell.openPath(path)
       return problem === '' ? { opened: true, message: 'Opened.' } : { opened: false, message: problem }
     },
-  })
+  }
+  registerCopilotInspectIpc(ipcMain, copilotInspectDeps)
   registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
@@ -4182,52 +4449,7 @@ function registerIpc(): void {
    * removed the row and then threw would be the original bug in miniature: press
    * the button, the row disappears, the session is gone.
    */
-  ipcMain.handle('session:held-retry', async (_e, key: unknown) => {
-    const held = typeof key === 'string' ? ledger.held.get(key) : null
-    if (!held) return ledger.held.list()
-
-    const [decision] = await planSaved([savedFrom(held)])
-    if (!decision || decision.outcome === 'skip') {
-      ledger.held.fail(held.key, decision?.reason ?? 'it could not be planned')
-      announceHeld()
-      return ledger.held.list()
-    }
-
-    try {
-      // `restoreSpawn`, not the plain `startSession`: a held session a device
-      // started is confined work, and Try again has to bring it back inside its
-      // folder — never loose — exactly as the launch restore does. It re-applies
-      // the boundary, or refuses rather than start it unconfined, and the retry
-      // then reports that the same way as any other failure. A tab opened at the
-      // keyboard has no device and starts exactly as before.
-      const meta = await restoreSpawn(
-        {
-          cwd: held.cwd,
-          cols: held.cols,
-          rows: held.rows,
-          provider: held.provider,
-          profileId: held.profileId,
-          resume: decision.outcome === 'resume',
-          // As the same tab it was before it failed, not as a new one on the end
-          // of the bar. See `SavedSession.tabKey`.
-          ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),
-        },
-        held.confineDeviceId ?? null,
-      )
-      ledger.held.release(held.key)
-      send(SESSION_CREATED_CHANNEL, meta)
-      logger.info('restore', 'came back on a retry', {
-        folder: held.cwd,
-        agent: held.provider,
-      })
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error)
-      ledger.held.fail(held.key, `it could not be started again: ${why}`)
-      logger.warn('restore', `retry failed: ${why}`, { folder: held.cwd, agent: held.provider })
-    }
-    announceHeld()
-    return ledger.held.list()
-  })
+  ipcMain.handle('session:held-retry', (_e, key: unknown) => retryHeld(key))
 
   /**
    * Stop holding it.
@@ -4238,10 +4460,7 @@ function registerIpc(): void {
    * beyond the entry itself: the conversation is in the agent's own transcript
    * and is not this app's to remove.
    */
-  ipcMain.handle('session:held-forget', (_e, key: unknown) => {
-    if (typeof key === 'string' && ledger.held.release(key)) announceHeld()
-    return ledger.held.list()
-  })
+  ipcMain.handle('session:held-forget', (_e, key: unknown) => forgetHeld(key))
 
   /* ------------------------------------ running this session as somebody else -- */
 
@@ -4266,39 +4485,10 @@ function registerIpc(): void {
 
   /* ------------------------------- the same switch, at his next message -- */
 
-  /**
-   * Switches waiting for the session they are on to be spoken to again.
-   *
-   * The default Asad described, and the one difference from the channel above
-   * is *when*: the running agent is left alone to finish, and the restart
-   * happens in the gap before his next message is delivered. `switch-later.ts`
-   * carries the whole argument, including why the typed line has to be carried
-   * across and what happens when this app cannot be sure it read it correctly.
-   */
-  const pending = new PendingSwitches()
 
-  /**
-   * Arm one. The plan is computed now, and shown now, for the reason the
-   * immediate switch computes one: a person agrees to something they have read,
-   * and nothing here may be the first they hear of a consequence.
-   *
-   * It is re-planned at the moment it fires, and this stored copy is never
-   * acted on — the account could be removed, or another tab could take the
-   * conversation, in between arming and sending. `sessionSwitch.perform` asks again.
-   */
-  ipcMain.handle(SESSION_SWITCH_LATER_CHANNEL, async (_e, sessionId: unknown, profileId: unknown) => {
-    const { plan } = await sessionSwitch.subject(sessionId, profileId)
-    if (plan.refusal !== null || plan.to === null) {
-      throw new Error(plan.refusal ?? 'This session cannot be switched.')
-    }
-    const armed = pending.arm({
-      sessionId: plan.sessionId,
-      profileId: plan.to.id,
-      accountName: plan.to.name,
-      plan,
-    })
-    return { sessionId: armed.sessionId, profileId: armed.profileId, note: armedNote(armed) }
-  })
+  ipcMain.handle(SESSION_SWITCH_LATER_CHANNEL, (_e, sessionId: unknown, profileId: unknown) =>
+    armSwitchLater(sessionId, profileId),
+  )
 
   /** Changed his mind. Nothing was stopped, so nothing has to be put back. */
   ipcMain.handle(SESSION_SWITCH_CANCEL_CHANNEL, (_e, sessionId: unknown) =>
@@ -4312,102 +4502,10 @@ function registerIpc(): void {
    * fired while a settings window was open is gone, and a chip drawing from its
    * own memory would still be promising it.
    */
-  ipcMain.handle(SESSION_SWITCH_ARMED_CHANNEL, () =>
-    pending.list().map((armed) => ({
-      sessionId: armed.sessionId,
-      profileId: armed.profileId,
-      accountName: armed.accountName,
-      note: armedNote(armed),
-    })),
-  )
+  ipcMain.handle(SESSION_SWITCH_ARMED_CHANNEL, () => armedSwitches())
 
-  /**
-   * Run an armed switch, then deliver the message it was waiting for.
-   *
-   * The order is what makes it safe. `sessionSwitch.perform` starts the replacement,
-   * proves it is alive and only then stops the old session — so a switch that
-   * fails leaves the old session running with the typed line still in its
-   * prompt, exactly where the person left it, and the window is told why.
-   *
-   * The Enter is replayed only when `switch-later.ts` is certain its copy of
-   * the line is the line. Where it is not, the text is placed in the prompt and
-   * left there: sending a message on somebody's behalf that is not the message
-   * they typed is worse than making them press Enter.
-   */
-  const fireSwitch = async (armed: ArmedSwitch, line: string, submit: boolean): Promise<void> => {
-    let meta: SessionMeta
-    try {
-      meta = await sessionSwitch.perform(armed.sessionId, armed.profileId)
-    } catch (cause) {
-      const why = cause instanceof Error ? cause.message : String(cause)
-      // The account id travels with the reason so the window can reopen the
-      // sheet naming the account that was not reached. A sentence on its own
-      // would leave it saying "an account" about a switch he chose by name.
-      send(SESSION_SWITCH_FAILED_CHANNEL, armed.sessionId, armed.profileId, why)
-      return
-    }
-    send(
-      SESSION_SWITCHED_CHANNEL,
-      armed.sessionId,
-      meta,
-      switchedNote(armed.accountName, submit, line),
-    )
-    if (line === '') return
-    // A short settle, then the line. `REPLAY_SETTLE_MS` says why this is not
-    // zero and why it is not longer.
-    await new Promise((done) => setTimeout(done, REPLAY_SETTLE_MS))
-    /*
-     * Two writes, never one. `replayWrites` carries the measurement: a single
-     * chunk of about 64 bytes or more is read by the CLI as pasted text, where
-     * the carriage return is a newline rather than submit — so `${line}\r`
-     * silently fails to send for almost every real prompt, and `switchedNote`
-     * would say it had been delivered.
-     */
-    const [typed, enter] = replayWrites(line, submit)
-    ptys.write(meta.id, typed)
-    if (!submit) return
-    await new Promise((done) => setTimeout(done, REPLAY_SUBMIT_GAP_MS))
-    ptys.write(meta.id, enter)
-  }
 
-  ipcMain.on('session:write', (_e, id: string, data: string) => {
-    // Typing into a session is the only honest "you were using this one"
-    // signal the main process gets — the active tab is renderer state and
-    // never crosses the bridge. It decides which tab in a folder gets to
-    // continue the conversation on the next launch, because `--continue` is
-    // per folder and only one can (see `session-restore.ts`).
-    //
-    // Memory only. This runs per keystroke, and persisting on a keystroke
-    // would turn typing into disk traffic for a field that is a tiebreak. The
-    // freshened value reaches the file on the next open or close, and on
-    // `before-quit` — which is where a clean shutdown makes it exact.
-    ledger.touch(id)
-
-    /*
-     * The one place a deferred account switch can fire.
-     *
-     * Everything a person sends an agent arrives here, so this is where "his
-     * next message" is a fact rather than a guess. Ordinary typing is passed
-     * straight through and is only *copied* on the way past — `observe` answers
-     * `pass` for every session with nothing armed, which is all of them almost
-     * always.
-     *
-     * The Enter is the byte that is not passed on. Delivering it would submit
-     * the message to the account he has already asked to leave, which is the
-     * whole thing this feature exists to prevent; `fireSwitch` replays it into
-     * the replacement instead.
-     */
-    const action = pending.observe(id, data)
-    if (action.kind === 'switch') {
-      // What he typed before the Enter still goes to the old session, so the
-      // screen he is looking at does not lose characters in the moment before
-      // it is replaced.
-      if (action.before !== '') ptys.write(id, action.before)
-      void fireSwitch(action.armed, action.line, action.submit)
-      return
-    }
-    ptys.write(id, data)
-  })
+  ipcMain.on('session:write', (_e, id: string, data: string) => typeIntoSession(id, data))
   ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) => {
     // The tracker parses a rendered screen, so it has to be the same size.
     notePlanResize(id, cols, rows)
@@ -4742,7 +4840,20 @@ app.whenReady().then(() => {
    * bound would be the wrong trade by a wide margin.
    */
   void registerDeckControlIpc(ipcMain, {
-    ptys,
+    /*
+     * The live terminals, with one difference: typing goes through
+     * `typeIntoSession`, the road a person's keystrokes take, rather than straight
+     * to the pty. A tool's `sessions.send` then fires a deferred account switch on
+     * its Enter, and touches the session as used, exactly as typing in the window
+     * does. Everything else is the manager itself.
+     */
+    ptys: {
+      list: () => ptys.list(),
+      write: (id, data) => typeIntoSession(id, data),
+      kill: (id) => ptys.kill(id),
+      screen: (id) => ptys.screen(id),
+      scrollback: (id) => ptys.scrollback(id),
+    },
     /*
      * The browser tools, contributed rather than declared.
      *
@@ -4807,8 +4918,87 @@ app.whenReady().then(() => {
         currentProfileId: () => currentBrowserProfileId(),
         profileName: (profileId) => browserProfileNameFor(profileId),
         setEnabled: (profileId, id, on) => setExtensionEnabled(profileId, id, on),
+        // Install, remove, reload, rename, add-your-own and open a window: the
+        // extension store's other buttons, through `browser-extensions-ipc.ts`.
+        ...extensionManageDeps(),
       }),
       ...(servers === null ? [] : serverTools({ room: servers.room, grants: servers.grants })),
+      /*
+       * Machines, servers, paired devices and GitHub, over the channel tap — so a
+       * tool calls `machines:connect` and runs the button's own code. When
+       * `servers` is null the server-room tools are left out and the rest load.
+       */
+      ...machineArea.tools({ servers, userData: () => app.getPath('userData') }),
+      /*
+       * The agents area: agents and their controls, accounts, the agents' MCP
+       * servers, hooks, routines, the app itself (about, logs, diagnostics,
+       * updates, settings reset), setup and readiness, usage and cost, and
+       * dictation. Every dep is the function the matching channel calls; see
+       * `deck-control/agents-area-live.ts`.
+       */
+      ...liveAgentsAreaTools({
+        agents: core.agents,
+        controlAccess: core.controlAccess,
+        routines: routines.api,
+        updates: () => updates,
+        describeSession: (id) => ptys.list().find((meta) => meta.id === id) ?? null,
+        detectProviders: detectAllProviders,
+        ipcMain,
+      }),
+      /*
+       * The rest of the browser — every window, every toolbar control, downloads,
+       * history, profiles, saved logins, site data, the Chrome import, sign-in
+       * help, the Scraping panel and both stores. Each one calls the function the
+       * browser's own control calls; `deck-control/browser-area-tools.ts` has the
+       * list.
+       */
+      ...browserAreaTools({
+        send: (channel, payload) => send(channel, payload),
+        // Read per call: the drive is published after this list is composed.
+        drive: () => browserDrive(),
+        reach: () => browserReach,
+        machineOfSession: (sessionId) => machineOfSession(sessionId),
+        // The same two the Store's own `registerCommunityIpc` is given in registerIpc().
+        community: {
+          userData: () => app.getPath('userData'),
+          base: () => storeApiBase(process.env),
+        },
+      }),
+      /*
+       * The rest of driving a session, projects, files, the copilot's own
+       * management and the window's clicks. Every binding is in
+       * `deck-control/sessions-lane.ts`, beside the module it calls; what is
+       * passed here is only what this file holds.
+       */
+      ...(copilotRuntimeDeps === null || copilotInspectDeps === null
+        ? []
+        : sessionsLaneTools({
+            ptys,
+            announceRenamed: (id, title) => {
+              // What `session:rename` does after the rename, for a rename the
+              // window did not make: the row, the devices, the dialled machines.
+              send(SESSION_RENAMED_CHANNEL, id, title)
+              remoteLayer?.server.sessionsChanged()
+              machinesIpc?.announceSessions()
+            },
+            held: { list: () => ledger.held.list(), retry: retryHeld, forget: forgetHeld },
+            sessionSwitch,
+            laterSwitches: {
+              later: (sessionId, profileId) => armSwitchLater(sessionId, profileId),
+              cancel: (sessionId) => pending.cancel(sessionId),
+              armed: () => armedSwitches(),
+            },
+            tellSwitched: (oldId, meta, accountName) =>
+              send(SESSION_SWITCHED_CHANNEL, oldId, meta, switchedNote(accountName, false, '')),
+            copilotDeps: copilotRuntimeDeps,
+            copilotInspectDeps,
+            devServers,
+            devServerOpener: openDevServerSession,
+            stageDir: () => join(app.getPath('downloads'), BRAND.name),
+            home: () => wsl.home() ?? app.getPath('home'),
+            window: () => mainWindow,
+            deckControl: () => deckControl,
+          })),
     ],
     /*
      * The one session starter, shared with the window and with a paired phone —

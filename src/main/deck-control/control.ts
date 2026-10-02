@@ -301,6 +301,12 @@ export const NOT_WHILE_DRIVING: readonly string[] = [
   'sessions.account',
   'sessions.held',
   'settings.write',
+  // The agents area (`agents-area.ts`): each changes what the person is looking
+  // at, or restarts the thing they are looking at, while the tour has the screen.
+  'settings.reset',
+  'agents.set_control',
+  'accounts.sign_in',
+  'updates.install',
   'tour.play',
   // The window's own clicks (`ui-tools.ts`). A tour owns the screen while it
   // plays; a view switched under it is the screen moving twice at once.
