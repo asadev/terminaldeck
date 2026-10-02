@@ -48,7 +48,7 @@ export default {
     //   pwa/src    the phone client
     //   relay      the server both ends meet on
     //   scripts    the release machinery, and it is what breaks a release when it breaks
-    //   native     the speech and confinement helpers
+    //   native     the Windows confinement helper
     folders: ['src', 'packages', 'pwa/src', 'relay', 'scripts', 'native'],
   },
 
