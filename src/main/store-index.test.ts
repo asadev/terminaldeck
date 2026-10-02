@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DEV_KEY_PHRASE, type StoreKey } from '../shared/store-key'
+import { DEV_KEY_PHRASE, STORE_DEV_KEY_ENV, storeKeysFor, type StoreKey } from '../shared/store-key'
 import {
   artifactMatches,
   cachedHighWater,
@@ -156,6 +156,25 @@ describe('a catalogue is believed only after its signature over the bytes that a
 
   it('refuses when this build carries no key at all, rather than passing by default', () => {
     expect(refusal(good(), { keys: [] })).toBe('this build carries no key to check a catalogue with')
+  })
+
+  /*
+   * The hole the development key was while it sat in slot two: every build
+   * believed a catalogue signed with a private key anybody can recompute from a
+   * sentence in this repository. Asked of the default — no keys handed in —
+   * because that is what every caller that does not decide for itself gets, and
+   * then of the one gate that may let the key in, both ways round.
+   */
+  it('refuses a catalogue signed with the development key unless a developer asked for it', () => {
+    const byDefault = checkIndexBytes(good(), { now: NOW })
+    expect(byDefault.ok).toBe(false)
+    if (!byDefault.ok) expect(byDefault.why).toContain('not signed by Terminal Deck')
+
+    const asked = { [STORE_DEV_KEY_ENV]: '1' }
+    expect(checkIndexBytes(good(), { keys: storeKeysFor({ env: asked, packaged: true }), now: NOW }).ok).toBe(false)
+    const local = checkIndexBytes(good(), { keys: storeKeysFor({ env: asked, packaged: false }), now: NOW })
+    expect(local.ok, local.ok ? '' : local.why).toBe(true)
+    if (local.ok) expect(local.keyId).toBe('td-store-dev-1')
   })
 
   it('refuses an algorithm it does not check', () => {

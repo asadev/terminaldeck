@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
-import type { IpcMain } from 'electron'
+import { app, type IpcMain } from 'electron'
+import { storeKeysFor } from '../shared/store-key'
 import {
   machineProbe,
   projectView,
@@ -59,10 +60,25 @@ export interface CommunityStoreDeps {
   base(): string
 }
 
-/** Build the store. Called once from `registerIpc()`, before the panel can ask. */
+/**
+ * Build the store. Called once from `registerIpc()`, before the panel can ask.
+ *
+ * The keys are decided here because this is the one place in the chain that
+ * can ask Electron whether this is a packaged build — `store-install.ts` and
+ * `store-index.ts` import no Electron, on purpose, and left to themselves they
+ * believe the two slots and nothing else. `storeKeysFor` adds the development
+ * key only for an unpackaged run that was started with
+ * `TERMINALDECK_STORE_DEV_KEY=1`, which is what the site repository's local
+ * preview catalogue is signed with. Read once, at launch, like the variable
+ * beside it is typed: a key this run believes does not change under it.
+ */
 export function installCommunityStore(deps: CommunityStoreDeps): StoreInstaller {
   where = itemsDir(deps.userData())
-  store = createStoreInstaller({ userData: deps.userData, base: deps.base })
+  store = createStoreInstaller({
+    userData: deps.userData,
+    base: deps.base,
+    keys: storeKeysFor({ env: process.env, packaged: app.isPackaged }),
+  })
   return store
 }
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { DEV_KEY_PHRASE, liveStoreKeys } from '../shared/store-key'
+import { DEV_KEY_PHRASE, DEV_STORE_KEY, STORE_DEV_KEY_ENV, storeKeysFor } from '../shared/store-key'
 import { STORE_INDEX_PATH } from '../shared/store-api'
 import { tarGz } from './store-archive.fixture'
 import { createStoreInstaller, itemsDir, readLedger } from './store-install'
@@ -22,8 +22,12 @@ import { createStoreInstaller, itemsDir, readLedger } from './store-install'
  * installs nothing, so here they are all real:
  *
  *  - a genuine Ed25519 signature, made with the development key whose private
- *    half is derived from `DEV_KEY_PHRASE` and checked against the public half
- *    compiled into this build;
+ *    half is derived from `DEV_KEY_PHRASE`, and checked against the keys an
+ *    unpackaged run started with `TERMINALDECK_STORE_DEV_KEY=1` believes — the
+ *    site repository's local preview, which is the one place that key is for.
+ *    Handed in by name rather than taken from the slots: no slot carries it any
+ *    more, and the last case below proves a run that did not ask believes none
+ *    of this;
  *  - a real HTTP server on a loopback port the operating system picks, serving
  *    the signed catalogue and two real `.tar.gz` artifacts;
  *  - the real fetcher, the real digest check, the real unpacker, the real
@@ -34,6 +38,13 @@ import { createStoreInstaller, itemsDir, readLedger } from './store-install'
  * actual configuration, which is the thing this repository refuses to do in a
  * test. What they were *asked* to run is asserted as argv instead.
  */
+
+/**
+ * The keys this proof runs with: what `storeKeysFor` gives a developer's
+ * unpackaged run that asked for the development key. The same call
+ * `store-install-ipc.ts` makes, with the answers a local preview would give it.
+ */
+const LOCAL_PREVIEW_KEYS = storeKeysFor({ env: { [STORE_DEV_KEY_ENV]: '1' }, packaged: false })
 
 /** The development key's private half, from the sentence anyone can recompute. */
 function devSigningKey(): ReturnType<typeof createPrivateKey> {
@@ -250,7 +261,7 @@ function envelope(): string {
   const signed = Buffer.from(JSON.stringify(index), 'utf8')
   return JSON.stringify({
     v: 1,
-    keyId: liveStoreKeys()[0].id,
+    keyId: DEV_STORE_KEY.id,
     alg: 'ed25519',
     sig: sign(null, signed, devSigningKey()).toString('base64'),
     signed: signed.toString('base64'),
@@ -266,6 +277,7 @@ function realStore(): ReturnType<typeof createStoreInstaller> {
     base: () => base,
     env: {},
     home: () => home,
+    keys: LOCAL_PREVIEW_KEYS,
     runAgent: async (agent, argv) => {
       ran.push({ agent, argv: [...argv] })
       return { ok: true, message: '' }
@@ -329,12 +341,28 @@ describe('the whole chain, over a socket', () => {
       base: () => 'http://127.0.0.1:1',
       env: {},
       home: () => home,
+      keys: LOCAL_PREVIEW_KEYS,
     })
     const view = await offline.view()
     expect(view.ok, view.why ?? '').toBe(true)
     expect(view.from).toBe('kept')
     expect(view.because).not.toBeNull()
     expect(view.items).toHaveLength(2)
+  })
+
+  /*
+   * The same catalogue, the same socket, the same kept copy on disk — and a run
+   * that never asked for the development key, which is every packaged build and
+   * every checkout that did not export the variable. Until 2026-10-03 the key sat
+   * in slot two and this run believed all of it.
+   */
+  it('believes none of it on a run that did not ask for the development key, kept copy included', async () => {
+    for (const keys of [undefined, storeKeysFor({ env: { [STORE_DEV_KEY_ENV]: '1' }, packaged: true })]) {
+      const stranger = createStoreInstaller({ userData: () => userData, base: () => base, env: {}, home: () => home, keys })
+      const view = await stranger.view()
+      expect(view.ok).toBe(false)
+      expect(view.items).toEqual([])
+    }
   })
 
   it('puts everything back', async () => {
