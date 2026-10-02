@@ -319,6 +319,11 @@ export const NOT_WHILE_DRIVING: readonly string[] = [
   // plays; a view switched under it is the screen moving twice at once.
   'ui.do',
   'copilot.run',
+  // Typing into a session or a terminal on another machine (`machine-tools.ts`,
+  // `server-room-tools.ts`). The tour may be showing that very session, and a
+  // line that appears in it mid-tour is a change nobody watching could place.
+  'machines.session',
+  'servers.shell',
   'routines.',
 ]
 

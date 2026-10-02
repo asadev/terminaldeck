@@ -203,11 +203,14 @@ describe('nothing changes while a tour is playing', () => {
       'agents.set_control',
       'accounts.sign_in',
       'updates.install',
+      // Typing into a session on another computer, or a terminal on a server.
+      'machines.session',
+      'servers.shell',
     ]) {
       expect(refusedWhileDriving(id), id).toBe(true)
     }
     // Looking, waiting and reading the screen change nothing about it.
-    for (const id of ['sessions.wait', 'sessions.screen', 'ui.list', 'files.read']) {
+    for (const id of ['sessions.wait', 'sessions.screen', 'ui.list', 'files.read', 'machines.look', 'servers.details']) {
       expect(refusedWhileDriving(id), id).toBe(false)
     }
   })
@@ -371,5 +374,36 @@ describe('interactive mode', () => {
       changes: [{ key: 'copilot.interactive', value: false }],
     })
     expect(result.ok).toBe(false)
+  })
+})
+
+describe('the remote typing tools, mid-tour, through the dispatcher', () => {
+  it('refuses machines.session and servers.shell while a tour plays, and says to wait', async () => {
+    const { assembledExtraTools } = await import('./assembled-catalogue.fixture')
+    const { ActionLog } = await import('./action-log')
+    const { ConsentBroker } = await import('./consent')
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'td-tour-remote-'))
+    try {
+      const control = new DeckControl({
+        surface: {} as never,
+        log: new ActionLog({ dir }),
+        consent: new ConsentBroker({ ask: () => false }),
+        extraTools: assembledExtraTools(),
+        driving: () => true,
+      })
+      for (const [tool, args] of [
+        ['machines.session', { do: 'type', machineId: 'm1', sessionId: 's1', text: 'ls' }],
+        ['servers.shell', { do: 'type', shellId: 'sh1', text: 'ls' }],
+      ] as const) {
+        const result = await control.call(tool, args)
+        expect(result.refusal, tool).toBe('not-permitted-while-driving')
+        expect(result.error, tool).toMatch(/Wait until the tour ends/)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
