@@ -195,7 +195,13 @@ screenshot popup's Reveal uses: device pictures land in the same
 
 ## 6. Two decisions left open on purpose
 
-1. **Sessions cannot drive simulators yet.** `devices.*` is not in
+1. **Settled 2026-10-03 — sessions drive simulators.** `devices.list`, `open`,
+   `screenshot`, `tree`, `find`, `tap`, `swipe`, `type`, `button` and
+   `annotations` are on `SESSION_TOOLS`; `devices.shutdown` is not (it can pull
+   a device out from under the person or another session). None of them is on
+   `ELSEWHERE_TOOLS`: a session on another computer reaches this Mac through the
+   browser-window switch, and a simulator is not a browser window. The note
+   that was here, for the record: **Sessions cannot drive simulators yet.** `devices.*` is not in
    `SESSION_TOOLS` (`deck-control/session-tools.ts`), so the copilot and outside
    MCP callers can use them and an ordinary session cannot — an agent fixing an
    app after an Annotate round could not tap the simulator to check its work.

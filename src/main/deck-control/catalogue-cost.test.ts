@@ -187,16 +187,30 @@ describe('the catalogue that ships', () => {
      * else's context window as well.
      *
      * Measured 2026-10-03: **7 tools, ~2,492 estimated tokens** — the six
-     * browser verbs and the meta-tool. A session holds eleven tools behind it,
-     * under `INLINE_INDEX_MAX`, so it reads them by name: one line each is
-     * cheaper than sending it round an area first.
+     * browser verbs and the meta-tool, with eleven tools held behind it by
+     * name.
+     *
+     * Re-measured the same day when sessions were given the phones and
+     * simulators (ten `devices.*` tools, `session-tools.ts` has why): **7 tools,
+     * ~2,158 tokens** — cheaper, not dearer. Twenty-one held tools is over
+     * `INLINE_INDEX_MAX`, so the index turns into areas, and the two lines a
+     * session is shown — browser and devices, nothing it may not call — cost
+     * less than the eleven one-liners did. The rule `describe-tool.ts` chose for
+     * the copilot is the right one here too.
      */
     const visible = shipped().filter((spec) => SESSION_TOOLS.has(spec.id) || SESSION_TOOLS.has(spec.wire))
     const held = visible.filter((spec) => spec.index !== undefined)
-    expect(held.length).toBeLessThanOrEqual(INLINE_INDEX_MAX)
-    const cost = catalogueCost(advertisedCatalogue(visible))
+    expect(held.length).toBeGreaterThan(INLINE_INDEX_MAX)
+    const listing = advertisedCatalogue(visible)
+    const cost = catalogueCost(listing)
     expect(cost.tools).toBe(7)
     expect(cost.tokens).toBeLessThan(3_000)
     expect(cost.overBudget).toBe(false)
+    // The areas are this caller's: the two it holds tools in, and not the
+    // sessions, machines, agents or app areas it cannot reach.
+    const description = listing.find((spec) => spec.id === 'tools.describe')?.description ?? ''
+    expect(description).toContain('browser — ')
+    expect(description).toContain('devices — ')
+    for (const hidden of ['sessions — ', 'machines — ', 'agents — ', 'app — ']) expect(description).not.toContain(hidden)
   })
 })

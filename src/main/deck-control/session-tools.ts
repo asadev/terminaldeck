@@ -236,6 +236,68 @@ import { NO_TIERS, type Caller, type TierGrant } from './surface'
  * just downloaded, this app's own scrape folder — is already inside the reach of
  * a session that has a shell.
  */
+/**
+ * Phones and simulators, for a session — added in 0.16.0, and the reason the
+ * Simulators page exists in the shape it does.
+ *
+ * ## What he asked for
+ *
+ * The SimView way of working, which Asad pointed at by name: *"The way this
+ * application is doing, I think we need to bring exactly the same way."* An
+ * agent makes a change to an app, the app reloads in the simulator, and the
+ * agent taps through it to check its own work — before the person looks. A
+ * session that can edit the app and cannot touch the simulator it runs in has
+ * to ask a person to look every time, which is the round trip the whole
+ * feature is for removing. And Annotate hands a session notes about a screen;
+ * `devices.annotations` and `devices.tree` are how it reads the round back and
+ * finds the elements it was told about.
+ *
+ * ## What it reaches, and why that is not a widening
+ *
+ * The simulators and emulators on this Mac, and Android phones the person has
+ * plugged in and allowed. All of it is a test device for the app being built:
+ * the same person can already tap it with the mouse, and the session runs in
+ * that person's folder under their account. Unlike a browser window there is
+ * no binding to draw — a simulator holds no logins of his that a session should
+ * not see, which is the whole reason `boundOf` exists for windows — so a
+ * session may name any device `devices.list` shows it. Every call still goes
+ * through the dispatcher: tier, its own input budget (`control.ts`), the
+ * action log with the session on the row.
+ *
+ * ## What stays off
+ *
+ * `devices.shutdown`. Stopping a simulator is not a step in checking one's own
+ * work, and the simulator a session would stop may be the one the person is
+ * looking at, or another session's — one agent finishing early would pull the
+ * device out from under the next. The person shuts devices down from the page;
+ * the copilot and an AI app on a key can too. `devices.open` stays **on**,
+ * though it starts a device that is off: starting a simulator takes nothing
+ * from anybody, and an agent told "check it on the iPhone" with no way to bring
+ * the iPhone up has been handed a dead instruction.
+ */
+const DEVICE_SESSION_TOOLS: readonly string[] = [
+  'devices.list',
+  'devices_list',
+  'devices.open',
+  'devices_open',
+  'devices.screenshot',
+  'devices_screenshot',
+  'devices.tree',
+  'devices_tree',
+  'devices.find',
+  'devices_find',
+  'devices.tap',
+  'devices_tap',
+  'devices.swipe',
+  'devices_swipe',
+  'devices.type',
+  'devices_type',
+  'devices.button',
+  'devices_button',
+  'devices.annotations',
+  'devices_annotations',
+]
+
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
   'browser_open',
@@ -303,6 +365,7 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
    */
   'browser.extensions',
   'browser_extensions',
+  ...DEVICE_SESSION_TOOLS,
   /*
    * The meta-tool, and it has to be on the list rather than exempt from it.
    *
@@ -335,6 +398,21 @@ const FILES_ON_THIS_MACHINE: ReadonlySet<string> = new Set([
   'browser.network',
   'browser_network',
 ])
+
+/**
+ * The device tools, which a session on **another computer** does not get.
+ *
+ * Written down as the second narrowing, beside {@link FILES_ON_THIS_MACHINE},
+ * and for a reason of the same kind: the thing they act on is on this Mac. The
+ * path a session elsewhere arrives by is granted by the person's *"may that
+ * computer act on browser windows here"* switch (`window-serve.ts`), and a
+ * simulator is not a browser window — reading that switch as permission to tap
+ * the phones on this desk would give it a meaning nobody chose. Nor could the
+ * session use them for what they are for: it cannot install its build on this
+ * Mac's simulator, so it would be tapping an app it did not make. Not listed,
+ * so not found — the same property the files family has.
+ */
+const DEVICES_HERE: ReadonlySet<string> = new Set(DEVICE_SESSION_TOOLS)
 
 /**
  * What a session on **another computer** may see and call.
@@ -371,7 +449,7 @@ const FILES_ON_THIS_MACHINE: ReadonlySet<string> = new Set([
  * *narrowing*, which is the part that is specific to being on another computer.
  */
 export const ELSEWHERE_TOOLS: ReadonlySet<string> = new Set(
-  [...SESSION_TOOLS].filter((name) => !FILES_ON_THIS_MACHINE.has(name)),
+  [...SESSION_TOOLS].filter((name) => !FILES_ON_THIS_MACHINE.has(name) && !DEVICES_HERE.has(name)),
 )
 
 /**

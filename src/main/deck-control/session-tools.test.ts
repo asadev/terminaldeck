@@ -10,6 +10,7 @@ import { browserNetworkTool } from './browser-network-tool'
 import { browserTools } from './browser-tools'
 import { ConsentBroker, WINDOW_SURFACE } from './consent'
 import { DeckControl } from './control'
+import { deviceTools, type DeviceToolDeps } from './device-tools'
 import { createSessionTools, ELSEWHERE_TOOLS, SESSION_TOOLS, type SessionTools } from './session-tools'
 import { startDeckControlServer, stopDeckControlServer, type DeckControlEndpoint } from './server'
 import type { DeckSurface } from './surface'
@@ -251,6 +252,60 @@ describe('what that token may reach', () => {
       tools: [],
       unknown: ['no tool called sessions_send', 'no tool called sessions_teleport'],
     })
+
+    await client.close()
+    mine.stop()
+  })
+
+  it('finds the phone tools in its index, taps one, and cannot shut a device down', async () => {
+    /*
+     * The SimView way of working, end to end through a session's own token: it
+     * reads its index, fetches the tool it wants and taps — and the one device
+     * verb it was not given answers as a tool that does not exist, not as a
+     * refusal that confirms it. Eleven held tools here, so the index is by
+     * name; the whole catalogue puts a session over the line into areas, which
+     * `catalogue-cost.test.ts` measures.
+     */
+    const taps: Array<{ id: string; x: number; y: number }> = []
+    const deps = {
+      unavailable: () => null,
+      list: async () => [],
+      tap: async (id: string, x: number, y: number) => void taps.push({ id, x, y }),
+      tree: async () => {
+        throw new Error('not asked')
+      },
+      rounds: () => [],
+    } as unknown as DeviceToolDeps
+    const own = new DeckControl({
+      surface: {} as DeckSurface,
+      log: new ActionLog({ dir: join(dir, 'log-devices') }),
+      consent: new ConsentBroker({ ask: () => false, timeoutMs: 10 }),
+      extraTools: [...browserTools(fakeDrive()), browserNetworkTool(fakeDrive()), ...deviceTools(deps)],
+    })
+    await stopDeckControlServer()
+    const point = await startDeckControlServer({ control: own })
+    const mine = createSessionTools(point, { dir: join(dir, 'sessions-devices') })
+    const prepared = mine.prepare()
+    prepared?.started('s1')
+    const client = await dial(configOf(prepared?.args ?? []))
+
+    const meta = (await client.listTools()).tools.find((tool) => tool.name === 'tools_describe')
+    expect(meta?.description).toContain('devices_tap —')
+    expect(meta?.description).toContain('devices_tree —')
+    expect(meta?.description).not.toContain('devices_shutdown')
+    const fetched = await client.callTool({ name: 'tools_describe', arguments: { tools: ['devices_tap'] } })
+    expect((fetched.structuredContent as { tools: Array<{ name: string }> }).tools[0]?.name).toBe('devices_tap')
+
+    const tapped = await client.callTool({
+      name: 'devices_tap',
+      arguments: { deviceId: 'ios:ABC-123', x: 0.5, y: 0.475 },
+    })
+    expect(tapped.isError).not.toBe(true)
+    expect(taps).toEqual([{ id: 'ios:ABC-123', x: 0.5, y: 0.475 }])
+
+    const stopped = await client.callTool({ name: 'devices_shutdown', arguments: { deviceId: 'ios:ABC-123' } })
+    expect(stopped.isError).toBe(true)
+    expect(JSON.stringify(stopped.content)).toContain('no tool called')
 
     await client.close()
     mine.stop()
@@ -616,6 +671,29 @@ describe('the list itself', () => {
     ]) {
       expect(SESSION_TOOLS.has(id)).toBe(false)
       expect(ELSEWHERE_TOOLS.has(id)).toBe(false)
+    }
+  })
+
+  /*
+   * The SimView way of working: an agent changes the app, then taps through
+   * the simulator to check its own fix. Both spellings, every verb that is part
+   * of checking — and not the one that stops a device somebody else may be
+   * looking at.
+   */
+  it('lets a session look at and drive the phones and simulators on this Mac, but not shut one down', () => {
+    for (const verb of ['list', 'open', 'screenshot', 'tree', 'find', 'tap', 'swipe', 'type', 'button', 'annotations']) {
+      expect(SESSION_TOOLS.has(`devices.${verb}`), verb).toBe(true)
+      expect(SESSION_TOOLS.has(`devices_${verb}`), verb).toBe(true)
+    }
+    expect(SESSION_TOOLS.has('devices.shutdown')).toBe(false)
+    expect(SESSION_TOOLS.has('devices_shutdown')).toBe(false)
+  })
+
+  it('does not hand this Mac’s devices to a session on another computer', () => {
+    // Its way in is the "may act on browser windows" switch, and a simulator is
+    // not a browser window; nor can that session put its build on this Mac.
+    for (const name of SESSION_TOOLS) {
+      if (name.startsWith('devices')) expect(ELSEWHERE_TOOLS.has(name), name).toBe(false)
     }
   })
 
