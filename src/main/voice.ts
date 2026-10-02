@@ -415,6 +415,53 @@ export function voiceStatus(userData: string): VoiceStatus {
 }
 
 /**
+ * Check a key against its provider, and store it only if it works — the whole
+ * of `voice:save`.
+ *
+ * Named so the copilot's `voice.save_key` goes through this same ordering and
+ * cannot store a key that was never tried. The key is used and never returned.
+ */
+export async function saveCheckedVoiceKey(
+  userData: string,
+  request: { provider?: string; key?: string } | null | undefined,
+): Promise<{ ok: boolean; message: string }> {
+  const provider = voiceProvider(String(request?.provider ?? ''))
+  const key = String(request?.key ?? '').trim()
+  if (!provider) return { ok: false, message: 'Pick a provider first.' }
+  if (key === '') return { ok: false, message: 'Paste a key first.' }
+
+  // Checked *before* it is stored, so a key that does not work never becomes
+  // the thing that makes the microphone appear. That ordering is the whole
+  // gate: "it should not come there in live until it is solved."
+  const check = await checkVoiceKey(provider, key)
+  if (!check.ok) return { ok: false, message: check.message }
+
+  const saved = saveVoiceKey(userData, { provider: provider.id, key })
+  return saved.ok ? { ok: true, message: check.message } : saved
+}
+
+/**
+ * Turn recorded audio into words with the stored key — the whole of
+ * `voice:transcribe`, named for the copilot's `voice.transcribe`.
+ */
+export async function transcribeWithStoredKey(
+  userData: string,
+  request: { audio?: unknown; filename?: unknown } | null | undefined,
+): Promise<TranscriptionResult> {
+  const stored = readVoiceKey(userData)
+  if (!stored) return { ok: false, text: '', message: 'No transcription key is set.' }
+  const provider = voiceProvider(stored.provider)
+  if (!provider) return { ok: false, text: '', message: 'The stored key is for a provider this build does not have.' }
+  const audio = request?.audio
+  if (!(audio instanceof Uint8Array) && !ArrayBuffer.isView(audio) && !(audio instanceof ArrayBuffer)) {
+    return { ok: false, text: '', message: 'No audio arrived.' }
+  }
+  const bytes = audio instanceof ArrayBuffer ? new Uint8Array(audio) : new Uint8Array((audio as ArrayBufferView).buffer)
+  const filename = typeof request?.filename === 'string' && request.filename !== '' ? request.filename : 'speech.webm'
+  return transcribe(provider, stored.key, bytes, filename)
+}
+
+/**
  * Every channel this feature needs, and no channel that hands the key back.
  *
  * `voice:status` reports *whether* there is a key and which provider it is for.
@@ -427,38 +474,16 @@ export function registerVoiceIpc(ipcMain: IpcMain, userData: () => string): void
   ipcMain.handle('voice:providers', () => VOICE_PROVIDERS)
   ipcMain.handle('voice:status', () => voiceStatus(userData()))
 
-  ipcMain.handle('voice:save', async (_event, request: { provider?: string; key?: string }) => {
-    const provider = voiceProvider(String(request?.provider ?? ''))
-    const key = String(request?.key ?? '').trim()
-    if (!provider) return { ok: false, message: 'Pick a provider first.' }
-    if (key === '') return { ok: false, message: 'Paste a key first.' }
-
-    // Checked *before* it is stored, so a key that does not work never becomes
-    // the thing that makes the microphone appear. That ordering is the whole
-    // gate: "it should not come there in live until it is solved."
-    const check = await checkVoiceKey(provider, key)
-    if (!check.ok) return { ok: false, message: check.message }
-
-    const saved = saveVoiceKey(userData(), { provider: provider.id, key })
-    return saved.ok ? { ok: true, message: check.message } : saved
-  })
+  ipcMain.handle('voice:save', (_event, request: { provider?: string; key?: string }) =>
+    saveCheckedVoiceKey(userData(), request),
+  )
 
   ipcMain.handle('voice:forget', () => {
     clearVoiceKey(userData())
     return { ok: true, message: 'Key removed. The microphone goes with it.' }
   })
 
-  ipcMain.handle('voice:transcribe', async (_event, request: { audio?: unknown; filename?: unknown }) => {
-    const stored = readVoiceKey(userData())
-    if (!stored) return { ok: false, text: '', message: 'No transcription key is set.' }
-    const provider = voiceProvider(stored.provider)
-    if (!provider) return { ok: false, text: '', message: 'The stored key is for a provider this build does not have.' }
-    const audio = request?.audio
-    if (!(audio instanceof Uint8Array) && !ArrayBuffer.isView(audio) && !(audio instanceof ArrayBuffer)) {
-      return { ok: false, text: '', message: 'No audio arrived.' }
-    }
-    const bytes = audio instanceof ArrayBuffer ? new Uint8Array(audio) : new Uint8Array((audio as ArrayBufferView).buffer)
-    const filename = typeof request?.filename === 'string' && request.filename !== '' ? request.filename : 'speech.webm'
-    return transcribe(provider, stored.key, bytes, filename)
-  })
+  ipcMain.handle('voice:transcribe', (_event, request: { audio?: unknown; filename?: unknown }) =>
+    transcribeWithStoredKey(userData(), request),
+  )
 }

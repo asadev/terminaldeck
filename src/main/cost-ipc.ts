@@ -171,6 +171,91 @@ export function refreshCostWatchers(): void {
 }
 
 /**
+ * What a project has cost, across its recent sessions — the read behind
+ * `cost:project`.
+ *
+ * Lifted out of the channel so the copilot's `usage.cost` reads exactly this,
+ * reusing a live watcher when the window already holds one.
+ */
+export async function readProjectCost(cwd: unknown): Promise<ProjectSummary> {
+  const key = projectKey(cwd)
+  // Reuse a live watcher when one exists — it already has the numbers, and a
+  // second full scan of the same directory would be pure waste.
+  const entry = entries.get(key)
+  if (entry) {
+    await entry.started
+    return entry.watcher.summary()
+  }
+
+  // Bounded the same way the watcher is. Reading *every* transcript a project
+  // has ever produced is unbounded work on the main process — some of these
+  // directories hold hundreds of files and hundreds of megabytes.
+  const cutoff = Date.now() - DEFAULT_MAX_AGE_MS
+  // Every store, merged and then capped, for the reason `TranscriptWatcher`
+  // gives at the same point: the cap is an answer about the project, so
+  // applying it per directory would make the number depend on how many devices
+  // had been paired.
+  const all = (await Promise.all(transcriptDirs(key).map((dir) => listTranscripts(dir))))
+    .flat()
+    .sort((a, b) => b.modifiedAt - a.modifiedAt)
+  const recent = all.filter((file) => file.modifiedAt >= cutoff)
+  const candidates = recent.slice(0, DEFAULT_MAX_SESSIONS * SCAN_FACTOR)
+
+  /*
+   * Read until `DEFAULT_MAX_SESSIONS` transcripts have actually recorded
+   * something, not until that many files have been opened.
+   *
+   * This is the same correction `TranscriptWatcher.drain` makes, and it has to
+   * be made here as well because this is the path the Overview tile takes on a
+   * folder with nothing running in it — `cost:project`, not `cost:watch`. With
+   * the cap counted in files, the tile read "Nothing recorded yet" over the
+   * folder this app is built in, whose 40 newest transcripts are all sessions
+   * that were opened and closed without being given anything to do. The
+   * measurements, and why the ceiling is what it is, are on `SCAN_FACTOR`.
+   *
+   * What the loop keeps is each transcript's *aggregator*, not the summary it
+   * produces. A summary is already a total, and a project total cannot be
+   * built by adding totals together — the same API request appears in more
+   * than one of them. `summarizeStandalone` makes that argument in full; the
+   * fold is the thing that has to survive this loop for it to be able to.
+   *
+   * Forty folds rather than forty totals is the memory a `TranscriptWatcher`
+   * already holds for any folder it is tailing — one small entry per request,
+   * measured at a few megabytes for the largest project on this machine — and
+   * here it is transient: nothing keeps them once the summary below is built.
+   */
+  const opened: SessionAggregator[] = []
+  let carrying = 0
+  let read = 0
+  for (const file of candidates) {
+    if (carrying >= DEFAULT_MAX_SESSIONS) break
+    read += 1
+    const aggregator = await readAggregate(file.path)
+    opened.push(aggregator)
+    if (!aggregator.isEmpty) carrying += 1
+  }
+
+  // Whatever was never opened — too old, past the ceiling, or beyond the point
+  // the scan had found what it needed. `summarizeStandalone` turns the count
+  // into the sentence the tile prints; see `ProjectSummary.truncated`.
+  return summarizeStandalone(key, opened, all.length - read)
+}
+
+/** One session's cost, from its transcript — `cost:session`. Refuses a path outside the store. */
+export function readSessionCost(transcriptPath: unknown): ReturnType<typeof readTranscript> {
+  return readTranscript(assertTranscriptPath(transcriptPath))
+}
+
+/** A project's transcripts, newest first across every store — `cost:sessions`. */
+export async function listProjectTranscripts(cwd: unknown): Promise<TranscriptFile[]> {
+  const found = await Promise.all(transcriptDirs(projectKey(cwd)).map((dir) => listTranscripts(dir)))
+  // `listTranscripts` sorts each directory newest first; the merge has to
+  // re-sort, or a device's sessions would all land after the owner's however
+  // recent they are.
+  return found.flat().sort((a, b) => b.modifiedAt - a.modifiedAt)
+}
+
+/**
  * Register the cost/context IPC handlers.
  *
  * Channels:
@@ -188,85 +273,15 @@ export function refreshCostWatchers(): void {
  * for a renderer that no longer draws it is arithmetic that can only go stale.
  */
 export function registerCostIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('cost:project', async (_e: IpcMainInvokeEvent, cwd: string) => {
-    const key = projectKey(cwd)
-    // Reuse a live watcher when one exists — it already has the numbers, and a
-    // second full scan of the same directory would be pure waste.
-    const entry = entries.get(key)
-    if (entry) {
-      await entry.started
-      return entry.watcher.summary()
-    }
-
-    // Bounded the same way the watcher is. Reading *every* transcript a project
-    // has ever produced is unbounded work on the main process — some of these
-    // directories hold hundreds of files and hundreds of megabytes.
-    const cutoff = Date.now() - DEFAULT_MAX_AGE_MS
-    // Every store, merged and then capped, for the reason `TranscriptWatcher`
-    // gives at the same point: the cap is an answer about the project, so
-    // applying it per directory would make the number depend on how many devices
-    // had been paired.
-    const all = (await Promise.all(transcriptDirs(key).map((dir) => listTranscripts(dir))))
-      .flat()
-      .sort((a, b) => b.modifiedAt - a.modifiedAt)
-    const recent = all.filter((file) => file.modifiedAt >= cutoff)
-    const candidates = recent.slice(0, DEFAULT_MAX_SESSIONS * SCAN_FACTOR)
-
-    /*
-     * Read until `DEFAULT_MAX_SESSIONS` transcripts have actually recorded
-     * something, not until that many files have been opened.
-     *
-     * This is the same correction `TranscriptWatcher.drain` makes, and it has to
-     * be made here as well because this is the path the Overview tile takes on a
-     * folder with nothing running in it — `cost:project`, not `cost:watch`. With
-     * the cap counted in files, the tile read "Nothing recorded yet" over the
-     * folder this app is built in, whose 40 newest transcripts are all sessions
-     * that were opened and closed without being given anything to do. The
-     * measurements, and why the ceiling is what it is, are on `SCAN_FACTOR`.
-     *
-     * What the loop keeps is each transcript's *aggregator*, not the summary it
-     * produces. A summary is already a total, and a project total cannot be
-     * built by adding totals together — the same API request appears in more
-     * than one of them. `summarizeStandalone` makes that argument in full; the
-     * fold is the thing that has to survive this loop for it to be able to.
-     *
-     * Forty folds rather than forty totals is the memory a `TranscriptWatcher`
-     * already holds for any folder it is tailing — one small entry per request,
-     * measured at a few megabytes for the largest project on this machine — and
-     * here it is transient: nothing keeps them once the summary below is built.
-     */
-    const opened: SessionAggregator[] = []
-    let carrying = 0
-    let read = 0
-    for (const file of candidates) {
-      if (carrying >= DEFAULT_MAX_SESSIONS) break
-      read += 1
-      const aggregator = await readAggregate(file.path)
-      opened.push(aggregator)
-      if (!aggregator.isEmpty) carrying += 1
-    }
-
-    // Whatever was never opened — too old, past the ceiling, or beyond the point
-    // the scan had found what it needed. `summarizeStandalone` turns the count
-    // into the sentence the tile prints; see `ProjectSummary.truncated`.
-    return summarizeStandalone(key, opened, all.length - read)
-  })
+  ipcMain.handle('cost:project', (_e: IpcMainInvokeEvent, cwd: string) => readProjectCost(cwd))
 
   ipcMain.handle('cost:session', (_e: IpcMainInvokeEvent, transcriptPath: string) =>
-    readTranscript(assertTranscriptPath(transcriptPath)),
+    readSessionCost(transcriptPath),
   )
 
   ipcMain.handle(
     'cost:sessions',
-    async (_e: IpcMainInvokeEvent, cwd: string): Promise<TranscriptFile[]> => {
-      const found = await Promise.all(
-        transcriptDirs(projectKey(cwd)).map((dir) => listTranscripts(dir)),
-      )
-      // `listTranscripts` sorts each directory newest first; the merge has to
-      // re-sort, or a device's sessions would all land after the owner's however
-      // recent they are.
-      return found.flat().sort((a, b) => b.modifiedAt - a.modifiedAt)
-    },
+    (_e: IpcMainInvokeEvent, cwd: string): Promise<TranscriptFile[]> => listProjectTranscripts(cwd),
   )
 
   ipcMain.handle('cost:watch', async (event: IpcMainInvokeEvent, cwd: string) => {

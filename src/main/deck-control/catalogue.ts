@@ -18,19 +18,17 @@
  * charset, and — see {@link MAX_CATALOGUE_TOKENS} — the token cost of the whole
  * assembled listing, which is what a tool actually charges on every turn.
  *
- * ## What is deliberately absent
+ * ## What used to be deliberately absent, and where it is now
  *
- * `routines.list`, `routines.create`, `routines.delete`. They are in the design
- * document, and there is no routine engine — no trigger subscriptions, no
- * runner, no `routines/` folder being read by anything. A tool that returns an
- * empty list and a tool that writes a file nothing ever executes would both
- * pass a demo and lie to the user about what their copilot can do. House rule
- * three: a tool that cannot do the thing must not exist. They land with the
- * engine.
- *
- * Nothing exposes cost, either. The cost work is landing in parallel and this
- * task may not touch it; a tool built against an API in motion would be wrong
- * by the time it shipped.
+ * `routines.*` were held back here because there was no routine engine, and a
+ * tool that writes a file nothing ever executes would pass a demo and lie —
+ * house rule three: a tool that cannot do the thing must not exist. The engine
+ * landed (`src/main/routines/`), so they exist now, in `routine-tools.ts`,
+ * built on the `RoutineApi` that engine hands out. Cost was held back for the
+ * same kind of reason — an API still in motion — and it too has settled: see
+ * `usage-tools.ts`. Both are contributed through `extraTools` from
+ * `agents-area.ts` rather than declared in this file, which is why
+ * `catalogue.test.ts` still finds no routine tool *here*.
  *
  * ## The one tool here that exists to take a capability away
  *
@@ -687,7 +685,7 @@ function knownFolders(surface: DeckSurface): Set<string> {
   return folders
 }
 
-function requireKnownFolder(surface: DeckSurface, path: string): string {
+export function requireKnownFolder(surface: DeckSurface, path: string): string {
   if (knownFolders(surface).has(path)) return path
   throw new Refused(
     'not-permitted',
@@ -733,7 +731,7 @@ function requireStartableFolder(context: ToolContext, path: string): string {
  * arrived at by inference from a message about identity. A model that cannot
  * tell "you asked about nothing" from "you asked too late" will keep asking.
  */
-function requireSession(context: ToolContext, id: string): SessionView {
+export function requireSession(context: ToolContext, id: string): SessionView {
   const meta = context.surface.listSessions().find((session) => session.id === id)
   if (!meta) {
     throw new BadArgument(

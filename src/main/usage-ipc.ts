@@ -967,6 +967,57 @@ function sessionKey(value: unknown): string {
 }
 
 /**
+ * How full a session's context window is — the read behind `usage:context`.
+ *
+ * Lifted out of the channel so the copilot's `usage.read` asks exactly this,
+ * with the same account resolution, rather than a second reading of the same
+ * file that could come to disagree with the bar about whose conversation it is.
+ */
+export async function readSessionContext(
+  sessionId: unknown,
+  options: UsageOptions = {},
+): Promise<ContextWindowReading> {
+  const id = sessionKey(sessionId)
+  const session = options.describeSession?.(id) ?? null
+  if (!session) {
+    return blankContextReading(null, 'not-reported', UNKNOWN_SESSION_CONTEXT)
+  }
+  /*
+   * Which store to look in, which is a question about this session's
+   * *account* and was not being asked at all.
+   *
+   * `readContextWindow` defaults its scope to `claudeConfigDir()` — the
+   * machine's own install — so a session running under a named account had
+   * its context read out of the wrong directory entirely. It found either
+   * nothing or, worse, the default login's own conversation in the same
+   * folder. `accountFor` is the one place that resolves a session's login,
+   * and it is asked here rather than a second copy of the resolution being
+   * written, for the reason `index.ts` gives where `describeSession` is
+   * declared: two answers to "whose account is this session on" is how one
+   * login's figure lands on another login's bar.
+   *
+   * Only for the agents whose transcripts live in a Claude store. Codex
+   * takes `codexHome` below and reads nothing from `scope`.
+   */
+  const store =
+    session.provider === 'codex' ? null : accountFor('claude', session).configDir
+  return await readContextWindow({
+    provider: contextProvider(session),
+    cwd: session.cwd,
+    // The conversation this app named at spawn, when it named one. Present
+    // for a Claude session this app started fresh; absent for a resumed one,
+    // for another agent, and for every session started somewhere else — all
+    // of which keep the inference and are labelled as inferred.
+    ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
+    ...(store === null ? {} : { scope: { configDir: store } }),
+    // Only a Codex session has one, and `codexHomeFor` is what already
+    // decides that here — asking it again keeps one answer to the question
+    // rather than two that can disagree about which account a tab reads.
+    codexHome: codexHomeFor(session) ?? undefined,
+  })
+}
+
+/**
  * Register the usage-window IPC.
  *
  * Channels:
@@ -1034,46 +1085,8 @@ export function registerUsageIpc(ipcMain: IpcMain, options: UsageOptions = {}): 
    */
   ipcMain.handle(
     'usage:context',
-    async (_e: IpcMainInvokeEvent, sessionId: unknown): Promise<ContextWindowReading> => {
-      const id = sessionKey(sessionId)
-      const session = options.describeSession?.(id) ?? null
-      if (!session) {
-        return blankContextReading(null, 'not-reported', UNKNOWN_SESSION_CONTEXT)
-      }
-      /*
-       * Which store to look in, which is a question about this session's
-       * *account* and was not being asked at all.
-       *
-       * `readContextWindow` defaults its scope to `claudeConfigDir()` — the
-       * machine's own install — so a session running under a named account had
-       * its context read out of the wrong directory entirely. It found either
-       * nothing or, worse, the default login's own conversation in the same
-       * folder. `accountFor` is the one place that resolves a session's login,
-       * and it is asked here rather than a second copy of the resolution being
-       * written, for the reason `index.ts` gives where `describeSession` is
-       * declared: two answers to "whose account is this session on" is how one
-       * login's figure lands on another login's bar.
-       *
-       * Only for the agents whose transcripts live in a Claude store. Codex
-       * takes `codexHome` below and reads nothing from `scope`.
-       */
-      const store =
-        session.provider === 'codex' ? null : accountFor('claude', session).configDir
-      return await readContextWindow({
-        provider: contextProvider(session),
-        cwd: session.cwd,
-        // The conversation this app named at spawn, when it named one. Present
-        // for a Claude session this app started fresh; absent for a resumed one,
-        // for another agent, and for every session started somewhere else — all
-        // of which keep the inference and are labelled as inferred.
-        ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
-        ...(store === null ? {} : { scope: { configDir: store } }),
-        // Only a Codex session has one, and `codexHomeFor` is what already
-        // decides that here — asking it again keeps one answer to the question
-        // rather than two that can disagree about which account a tab reads.
-        codexHome: codexHomeFor(session) ?? undefined,
-      })
-    },
+    (_e: IpcMainInvokeEvent, sessionId: unknown): Promise<ContextWindowReading> =>
+      readSessionContext(sessionId, options),
   )
 
   ipcMain.on('usage:unwatch', (event, sessionId: unknown) => {
