@@ -1,5 +1,9 @@
 # WIRING — lane `mcp-door` (0.16.0)
 
+> **Applied 2026-10-03** in `wip/0.10.0`: §2 (preload) and §3 (checklist) are in
+> `a3b6956`; §6 is done in `18d4e41` (keys act as the owner through `actsAsOwner`).
+> What is left for the integrator is §5 — deploying the relay and the proof.
+
 The way in for AI apps outside this one, onto the existing `deck-control` MCP:
 named access keys, a stable loopback port, internet reach through the relay,
 `tools.run`, and Settings → **Connect an AI app**.
@@ -150,6 +154,10 @@ curl -s -X POST "$BASE" "${H[@]}" -H "authorization: Bearer $KEY" -H 'mcp-protoc
 # 4. a real call → the live session list
 curl -s -X POST "$BASE/$KEY" "${H[@]}" -H 'mcp-protocol-version: 2025-06-18' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sessions_list","arguments":{}}}'
+
+# 4b. the held-back tools, by area (the index names five areas, not 135 tools)
+curl -s -X POST "$BASE/$KEY" "${H[@]}" -H 'mcp-protocol-version: 2025-06-18' \
+  -d '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"tools_describe","arguments":{"area":"sessions"}}}'
 
 # 5. a held-back tool through tools_run (what claude.ai/ChatGPT must do)
 curl -s -X POST "$BASE/$KEY" "${H[@]}" -H 'mcp-protocol-version: 2025-06-18' \
