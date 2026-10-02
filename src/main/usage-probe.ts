@@ -137,8 +137,9 @@ import type { AgentBinary } from './agent-binaries'
 import { killTree, systemRootOf } from './kill-tree'
 import { identifyLimit, windowForScope, type PlanLimit } from './plan-limit'
 import { currentPlatform, withPath, type Platform } from './platform/host'
-import { findProfile, getState, sessionEnv, systemProfileFor, type Profile } from './profiles'
+import { findProfile, getState, keptUnavailable, sessionEnv, systemProfileFor, type Profile } from './profiles'
 import { vaultPath } from './account-vault/runtime'
+import { withoutVaultEnv } from './session-env'
 import { agentBinaries, loginPath, PROVIDERS } from './providers'
 import { launchSpec } from './tool-probe'
 import {
@@ -835,13 +836,24 @@ export async function probeUsage(
     )
   }
 
+  /*
+   * An account whose login this app keeps and cannot reach in this process is
+   * not probed at all: the CLI would fall back to the keychain item its folder
+   * names, which the app stopped keeping up to date, and the figures would be a
+   * stale login's — or none.
+   */
+  const unavailable = keptUnavailable(profile)
+  if (unavailable !== null) return done('unreadable', [], unavailable)
+
   const launch = launchSpec(binary?.runnable ?? bin, null, platform)
   const PATH = options.path ?? (await loginPath(platform))
   // A kept login is read through the vault's shim, exactly as a session on this
-  // account reads it — see `account-vault/runtime.ts`, `vaultPath`.
+  // account reads it — see `account-vault/runtime.ts`, `vaultPath`. The vault's
+  // variables this app may itself have inherited are taken out first, so only
+  // this account's own ticket is ever in the probe's environment.
   const overrides = sessionEnv(profile, 'claude')
   const env: NodeJS.ProcessEnv = {
-    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...withPath(withoutVaultEnv(process.env), vaultPath(PATH, overrides), platform),
     ...overrides,
   }
   /*

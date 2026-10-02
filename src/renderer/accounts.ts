@@ -154,6 +154,8 @@ export interface AccountView {
    *                sign-in, and removing the account deletes it.
    *  - `adopting`  an account made before the app kept logins; it moves in the
    *                first time a session or a status check reads it.
+   *  - `unavailable` this app keeps it and cannot open its store right now; the
+   *                account is not usable until it can, and nothing falls back.
    *  - `agent`     the agent keeps it, as before — the machine's own install,
    *                always, and every account on a build with no vault.
    *
@@ -162,7 +164,7 @@ export interface AccountView {
    * holding anything — which is the safe direction to be wrong in, because
    * "kept in this app" is a promise that a removal deletes a login.
    */
-  keptBy?: 'app' | 'adopting' | 'agent'
+  keptBy?: 'app' | 'adopting' | 'unavailable' | 'agent'
   /**
    * Whether the app holds a login for it, when the app keeps it: true, false
    * (kept here and signed out — definitively), or null when the app cannot say.
@@ -325,7 +327,7 @@ export function parseSnapshot(value: unknown): AccountsSnapshot {
       const entry = asRecord(vault[account.id])
       if (!entry) continue
       const kept = entry.keptBy
-      if (kept === 'app' || kept === 'adopting' || kept === 'agent') account.keptBy = kept
+      if (kept === 'app' || kept === 'adopting' || kept === 'unavailable' || kept === 'agent') account.keptBy = kept
       const signed = entry.signedIn
       if (signed === true || signed === false || signed === null) account.keptSignedIn = signed
     }
@@ -984,7 +986,16 @@ export function accountHoldingLogin(
   if (wanted === '') return null
   for (const account of accounts) {
     if (account.provider !== provider) continue
-    const live = accountLabel(signIn[account.id])
+    const facts = signIn[account.id]
+    const live = accountLabel(facts)
+    if (facts?.state === 'signed-in' && live === null) {
+      // Signed in, and the agent names no address — Codex, whose status line
+      // never carries one. The name it was added under is the only label it
+      // has, and it is a login, finished: a second Add of that address is a
+      // duplicate, not a sign-in to finish.
+      if (!isGeneratedAccount(account) && account.name.trim().toLowerCase() === wanted) return account
+      continue
+    }
     if (live !== null) {
       /*
        * Signed in: what it *is* signed in as is the only thing that counts.
@@ -1026,7 +1037,9 @@ export function accountAwaitingLogin(
 ): AccountView | null {
   const held = accountHoldingLogin(accounts, signIn, provider, address)
   if (held === null) return null
-  return accountLabel(signIn[held.id]) === null && held.keptSignedIn !== true ? held : null
+  // The state, not the address: a signed-in Codex login has no address and is
+  // nonetheless finished.
+  return signIn[held.id]?.state !== 'signed-in' && held.keptSignedIn !== true ? held : null
 }
 
 /**

@@ -24,10 +24,15 @@ import { homedir } from 'node:os'
 import { join, posix } from 'node:path'
 import { BRAND } from '../../shared/brand'
 import { currentPlatform, type Platform } from '../platform/host'
-import { findProfile, getState, markCredentialsKept, profileKeptBy } from '../profiles'
-import { CodexAuthKeeper, type DirWatch } from './codex-auth'
+import { findProfile, getState, keptManaged, markSlotKept, profileKeptBy } from '../profiles'
+import { CODEX_AUTH_SLOT, CodexAuthKeeper, type DirWatch } from './codex-auth'
 import { REAL_SECURITY, removeSecurityShim, writeSecurityShim } from './keychain-shim'
-import { installAccountVault, uninstallAccountVault, type AccountVaultRuntime } from './runtime'
+import {
+  installAccountVault,
+  slotAdopting,
+  uninstallAccountVault,
+  type AccountVaultRuntime,
+} from './runtime'
 import { startVaultSocket, TicketBook, type VaultServerDeps, type VaultSocket } from './server'
 import { AccountVault, type VaultCipher } from './store'
 
@@ -60,6 +65,8 @@ export interface WireAccountVaultOptions {
   realSecurity?: string
   home?: string
   watch?: DirWatch
+  /** Is a Codex folder in use outside this app? Tests answer it; see `codex-auth.ts`. */
+  inUse?: (dir: string) => boolean
   /** One line per notable event. Never a value — only ids, slots and kinds. */
   log?(message: string, detail?: Record<string, unknown>): void
   /**
@@ -98,6 +105,19 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
     log('account vault off: no secure store on this computer')
     return null
   }
+  /*
+   * Opened here, before anything is installed, and refused if it will not
+   * open. The first decrypt is the one that can raise a keychain prompt, and it
+   * must not happen inside a session's lookup, where it would outlast the
+   * shim's timeout; and a vault that will not decrypt is a vault full of
+   * somebody's logins behind a key that is not available right now — so the
+   * app runs without it, every account it keeps reads "unavailable" rather than
+   * falling back to the keychain, and nothing touches the file.
+   */
+  if (vault.open() === 'locked') {
+    log('account vault off: the saved logins would not unlock; the file is left exactly as it is')
+    return null
+  }
   const socketPath = vaultSocketPath(dir, options.home)
   if (socketPath === null) {
     log('account vault off: no socket path short enough for this data folder', { dir })
@@ -109,11 +129,12 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
     vault,
     tickets,
     providerOf: (id) => findProfile(getState(), id)?.provider ?? null,
-    adopting: (id) => {
+    configDirOf: (id) => findProfile(getState(), id)?.configDir ?? null,
+    adopting: (id, slot) => {
       const profile = findProfile(getState(), id)
-      return profile !== null && profileKeptBy(profile) === 'adopting'
+      return profile !== null && slotAdopting(profile, keptManaged(profile), slot)
     },
-    markKept: (id) => markCredentialsKept(id),
+    markKept: (id, slot) => markSlotKept(id, slot),
     onCapture: (event) => {
       log('account vault: kept a login', { account: event.accountId, slot: event.slot, kind: event.kind })
       options.onChanged?.(event.accountId)
@@ -130,12 +151,17 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
     return null
   }
 
-  const shimDir = writeSecurityShim(dir, socketPath, options.realSecurity ?? REAL_SECURITY)
+  // In the data folder beside the vault, not inside it — see `vaultShimDir`.
+  const shimDir = writeSecurityShim(options.userDataDir, socketPath, options.realSecurity ?? REAL_SECURITY)
   if (shimDir === null) log('account vault: no system security command, so Claude Code logins stay with the agent')
 
   const codex = new CodexAuthKeeper(vault, {
     ...(options.watch ? { watch: options.watch } : {}),
+    ...(options.inUse ? { inUse: options.inUse } : {}),
     onCapture: (event) => {
+      // Something was kept for it, or signed out of it: from now on an empty
+      // vault means "signed out" for this account, not "cannot tell".
+      markSlotKept(event.accountId, CODEX_AUTH_SLOT)
       log('account vault: kept a login', { account: event.accountId, slot: 'file:auth.json', kind: event.kind })
       options.onChanged?.(event.accountId)
     },
@@ -178,7 +204,7 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
       }
       codex.dispose()
       uninstallAccountVault()
-      removeSecurityShim(dir)
+      removeSecurityShim(options.userDataDir)
       await socket.close()
     },
   }

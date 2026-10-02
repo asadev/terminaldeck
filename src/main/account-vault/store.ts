@@ -154,6 +154,11 @@ export const NO_SECURE_STORE =
   'This computer has no secure store available, so this app cannot keep logins itself. ' +
   'Each agent keeps its own login instead, as it always has.'
 
+/** The sentence while the vault is there and will not open. See `AccountVault.state`. */
+export const VAULT_LOCKED =
+  'The logins this app keeps could not be unlocked just now, so nothing was changed. ' +
+  'They are safe; quit and reopen the app to try again.'
+
 /* ------------------------------------------------------------ validation -- */
 
 /**
@@ -265,6 +270,8 @@ export class AccountVault {
    * `profiles.ts` keeps the same flag for the same reason.
    */
   private setAsideBeforeWrite = false
+  /** The file is there and would not decrypt. See {@link AccountVault.state}. */
+  private lockedOut = false
 
   constructor(options: AccountVaultOptions) {
     this.dir = options.dir
@@ -283,23 +290,72 @@ export class AccountVault {
     }
   }
 
+  /**
+   * Whether the vault could be opened, as of the last attempt.
+   *
+   *  - `ready`   opened (or there was nothing to open yet).
+   *  - `locked`  the file is there and **would not decrypt** — the keychain
+   *              entry that holds the key was denied, the keychain is locked,
+   *              or this is a different build of the app (a dev build and a
+   *              release one have different keys) reading the other's file.
+   *
+   * The second is not "empty". It is every login this app keeps, behind a key
+   * that is not available right now, and the only safe things to do with it
+   * are nothing and try again later: no write (a write would replace it), no
+   * setting it aside (the next write would then start a new, empty vault over
+   * every login the person had), and no caching of the failure (the next ask
+   * might succeed).
+   */
+  state(): 'ready' | 'locked' {
+    return this.lockedOut ? 'locked' : 'ready'
+  }
+
+  /**
+   * Open the vault now, rather than on the first lookup. Called at boot so the
+   * first decrypt — the one that can raise a keychain prompt — never happens
+   * inside a session's lookup, where a prompt would outlast the shim's timeout.
+   */
+  open(): 'ready' | 'locked' {
+    this.load()
+    return this.state()
+  }
+
   private load(): Map<string, StoredEntry> {
     if (this.loaded !== null) return this.loaded
-    this.loaded = new Map()
-    if (!existsSync(this.path)) return this.loaded
+    if (!existsSync(this.path)) {
+      this.lockedOut = false
+      this.loaded = new Map()
+      return this.loaded
+    }
     protectSecretFile(this.dir, this.path)
+
+    let plain: string
     try {
       if (statSync(this.path).size > MAX_FILE_BYTES) {
+        // Not a vault this app could have written. Moved aside on the next
+        // write, which is safe because it was never anybody's logins.
         this.setAsideBeforeWrite = true
+        this.lockedOut = false
+        this.loaded = new Map()
         return this.loaded
       }
       const blob = Buffer.from(readFileSync(this.path, 'utf8'), 'base64')
-      const parsed = JSON.parse(this.cipher.decrypt(blob)) as unknown
-      this.loaded = readEntries(parsed)
+      plain = this.cipher.decrypt(blob)
     } catch {
-      // Unreadable is the same as empty from here: every account then signs in
-      // again and is kept again. What it must not be is *overwritten* — see
-      // `setAsideBeforeWrite`.
+      // Would not decrypt. See `state()`: nothing is cached and nothing is
+      // marked for setting aside, so the file is exactly as it was and the next
+      // ask tries again.
+      this.lockedOut = true
+      return new Map()
+    }
+
+    this.lockedOut = false
+    try {
+      this.loaded = readEntries(JSON.parse(plain) as unknown)
+    } catch {
+      // It decrypted, so it is ours, and it does not parse — damaged. That one
+      // is set aside before the next write rather than overwritten, so whatever
+      // can be recovered from it still can be.
       this.setAsideBeforeWrite = true
       this.loaded = new Map()
     }
@@ -308,8 +364,18 @@ export class AccountVault {
 
   private persist(next: Map<string, StoredEntry>): VaultWrite {
     if (!this.available()) return { ok: false, changed: false, message: NO_SECURE_STORE }
+    if (this.lockedOut) return { ok: false, changed: false, message: VAULT_LOCKED }
     const entries = [...next.values()]
-    const blob = this.cipher.encrypt(JSON.stringify({ version: VAULT_VERSION, entries }))
+    let blob: Buffer
+    try {
+      blob = this.cipher.encrypt(JSON.stringify({ version: VAULT_VERSION, entries }))
+    } catch (cause) {
+      return {
+        ok: false,
+        changed: false,
+        message: `The login could not be encrypted: ${cause instanceof Error ? cause.message : String(cause)}`,
+      }
+    }
     if (this.setAsideBeforeWrite) {
       try {
         renameSync(this.path, `${this.path}.unreadable-${this.now()}`)
@@ -442,7 +508,16 @@ export class AccountVault {
     const next = new Map(current)
     next.delete(accountId)
     const result = this.persist(next)
-    if (result.ok) this.announce(accountId)
+    /*
+     * Gone from memory whether or not the disk took it. An account that has
+     * been removed must not be answered for one more request — least of all to
+     * an account re-made under the same id — and a failed write is reported to
+     * the caller rather than quietly leaving the login live. What can still be
+     * on disk is cleared the next time the vault is written, and `createProfile`
+     * forgets an id before reusing it.
+     */
+    if (this.loaded !== null) this.loaded = next
+    this.announce(accountId)
     return result
   }
 
@@ -478,5 +553,6 @@ export class AccountVault {
   reload(): void {
     this.loaded = null
     this.setAsideBeforeWrite = false
+    this.lockedOut = false
   }
 }

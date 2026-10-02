@@ -38,13 +38,14 @@
  * {@link VaultServerDeps.adopting}).
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
 import { dirname } from 'node:path'
 import type { ProviderId } from '../../shared/types'
 import {
+  directorySuffixes,
   EXIT_NOT_FOUND,
   NOT_FOUND_TEXT,
   readShimCall,
@@ -114,21 +115,32 @@ export interface VaultServerDeps {
   /** Which agent an account belongs to, or null when it no longer exists. */
   providerOf(accountId: string): ProviderId | null
   /**
-   * True while this account still has its login where the agent kept it before
-   * the app kept logins — an account made before this release.
-   *
-   * For those, and only until something is kept, a lookup is answered
-   * `capture`: the shim runs the agent's own command against the real keychain
-   * exactly as it would have run without this app, and hands back what it
-   * printed. That is the whole migration — no prompt, because it is the same
-   * command from the same binary that has always read that item, and no second
-   * sign-in. The first answer captured, or the first write, ends it for good
-   * ({@link markKept}), so an item left in the keychain afterwards is never read
-   * again.
+   * The account's own config directory, whose hash every lookup must carry.
+   * See `keychain-requests.ts` — this is what stops a nested process with some
+   * other directory, holding an inherited ticket, being answered as this one.
    */
-  adopting(accountId: string): boolean
-  /** Record that this account's login is now kept here. Persisted by the caller. */
-  markKept(accountId: string): void
+  configDirOf(accountId: string): string | null
+  /**
+   * True while this slot of this account still lives where the agent kept it
+   * before the app kept logins — an account made before this release, and a
+   * slot of it nothing has settled yet.
+   *
+   * Per slot, not per account: an account has two keychain items (the login and
+   * the API key), and settling one must not strand the other in the keychain.
+   *
+   * For such a slot a lookup is answered `capture`: the shim runs the agent's
+   * own command against the real keychain exactly as it would have run without
+   * this app, and hands back what it printed. That is the whole migration — no
+   * prompt, because it is the same command from the same binary that has always
+   * read that item, and no second sign-in. A sign-out is handed to the real
+   * command too, so the item really goes. Whatever happens first — a capture, a
+   * "not found", a write, a sign-out — settles the slot for good
+   * ({@link markKept}), so an item left in the keychain afterwards is never
+   * read again.
+   */
+  adopting(accountId: string, slot: string): boolean
+  /** Record that this slot of this account now lives here. Persisted by the caller. */
+  markKept(accountId: string, slot: string): void
   /** Told when an agent signs an account in, refreshes it, or signs it out. */
   onCapture?(event: { accountId: string; slot: string; kind: 'sign-in' | 'refresh' | 'adopted' | 'signed-out' }): void
 }
@@ -195,18 +207,38 @@ function answerOne(
       // fall back to its own file, which is the behaviour it has without us.
       return { code: 1, stdout: '', stderr: `security: ${written.message}` }
     }
-    deps.markKept(accountId)
+    deps.markKept(accountId, request.slot)
     if (written.changed) deps.onCapture?.({ accountId, slot: request.slot, kind })
     return { code: 0, stdout: '', stderr: '' }
   }
   // delete — a sign-out, or the agent giving up on a login it could not
-  // refresh. Either way the account is signed out, here as everywhere.
+  // refresh. Either way the account is signed out, here as everywhere, and the
+  // slot is settled: an empty slot is an answer, and it must stay the answer.
   const held = deps.vault.read(accountId, request.slot) !== null
+  deps.markKept(accountId, request.slot)
   if (!held) return notFound()
-  deps.vault.drop(accountId, request.slot)
-  deps.markKept(accountId)
+  const dropped = deps.vault.drop(accountId, request.slot)
+  if (!dropped.ok) return { code: 1, stdout: '', stderr: `security: ${dropped.message}` }
   deps.onCapture?.({ accountId, slot: request.slot, kind: 'signed-out' })
   return { code: 0, stdout: '', stderr: '' }
+}
+
+/** `sha256` as hex, the hash the CLI names a keychain item with. */
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+/**
+ * Does this request carry this account's own directory hash?
+ *
+ * `locked?` names no service and is always this account's to answer. Anything
+ * else must carry the suffix the CLI derives from the account's own config
+ * directory; the bare, unsuffixed name is the machine's own install, which no
+ * ticket ever speaks for.
+ */
+function carriesOwnHash(request: KeychainRequest, own: ReadonlySet<string>): boolean {
+  if (request.op === 'locked?') return true
+  return request.suffix !== null && own.has(request.suffix)
 }
 
 /** The wire answer: `pass`, `capture`, or `exit <code>` + stderr + stdout. */
@@ -234,18 +266,49 @@ export function answerShim(body: Buffer, deps: VaultServerDeps): WireAnswer {
     return { kind: 'exit', answer: locked ? { code: 0, stdout: '', stderr: '' } : notFound() }
   }
 
-  // An account still on its pre-vault login: let the agent read it once, the
-  // way it always has, and keep what it reads. Only a pure lookup of something
-  // the vault does not hold — a write or a delete is the agent telling us what
-  // the login is now, and that is taken as it comes.
+  /*
+   * Somebody else's lookup, carrying this account's ticket.
+   *
+   * The ticket is inherited by everything the session runs, so a nested agent
+   * with its own `CLAUDE_CONFIG_DIR` — or none, which is the machine's own
+   * install — arrives here holding it. Its keychain item is named after *its*
+   * directory, so it goes to the real `security`, untouched, as if this app
+   * were not here: never answered from this account's slot, and never able to
+   * overwrite or delete it.
+   */
+  const configDir = deps.configDirOf(accountId)
+  const own = configDir === null ? new Set<string>() : directorySuffixes(configDir, sha256)
+  if (!call.requests.every((request) => carriesOwnHash(request, own))) return { kind: 'pass' }
+
+  /*
+   * A slot still on its pre-vault login. Two cases, and nothing else is let
+   * through to the keychain:
+   *
+   *  - a lookup of something the vault does not hold: the agent reads it once,
+   *    the way it always has, and what it reads is kept (`capture`). Only for a
+   *    lookup on the command line — `acceptCapture` is handed the argv and the
+   *    output, not stdin, so an interactive-mode lookup could never be kept and
+   *    would pass through for ever; it is passed as what it is instead.
+   *  - a sign-out of something the vault does not hold: the agent is deleting
+   *    the item it has, so the real command deletes it, and the slot is settled
+   *    so the next lookup cannot read the login back.
+   *
+   * A write is the agent saying what the login is now, and is taken as it comes.
+   */
+  const only = call.requests.length === 1 ? call.requests[0] : undefined
   if (
-    deps.adopting(accountId) &&
-    call.requests.length === 1 &&
-    call.requests[0]?.op === 'find' &&
-    call.requests[0].wantsPassword &&
-    deps.vault.read(accountId, call.requests[0].slot) === null
+    only !== undefined &&
+    only.op !== 'locked?' &&
+    only.op !== 'add' &&
+    deps.adopting(accountId, only.slot) &&
+    deps.vault.read(accountId, only.slot) === null
   ) {
-    return { kind: 'capture' }
+    if (only.op === 'delete') {
+      deps.markKept(accountId, only.slot)
+      return { kind: 'pass' }
+    }
+    const interactive = read.argv.length === 1 && read.argv[0] === '-i'
+    return only.wantsPassword && !interactive ? { kind: 'capture' } : { kind: 'pass' }
   }
 
   let last: ShimAnswer = { code: 0, stdout: '', stderr: '' }
@@ -273,17 +336,30 @@ export function acceptCapture(body: Buffer, deps: VaultServerDeps): boolean {
   if (read === null) return false
   const accountId = deps.tickets.accountFor(read.ticket)
   const provider = accountId === null ? null : deps.providerOf(accountId)
-  if (accountId === null || provider === null || !deps.adopting(accountId)) return false
+  if (accountId === null || provider === null) return false
   const call = readShimCall(read.argv, '')
   if (call.kind !== 'ours' || call.requests.length !== 1) return false
   const request = call.requests[0]
   if (request?.op !== 'find' || !request.wantsPassword) return false
+  if (!deps.adopting(accountId, request.slot)) return false
+  const configDir = deps.configDirOf(accountId)
+  if (configDir === null || !carriesOwnHash(request, directorySuffixes(configDir, sha256))) return false
+  /*
+   * "Not found" in the real keychain settles the slot too: there was nothing
+   * there to move, and the next sign-in lands in the vault directly. Any other
+   * failure — 36, the keychain is locked — settles nothing, so the next lookup
+   * tries again.
+   */
+  if (codeText === String(EXIT_NOT_FOUND)) {
+    deps.markKept(accountId, request.slot)
+    return true
+  }
   if (codeText !== '0') return false
   const value = read.rest.trim()
   if (value === '') return false
   const written = deps.vault.put(accountId, provider, request.slot, value, 'adopted')
   if (!written.ok) return false
-  deps.markKept(accountId)
+  deps.markKept(accountId, request.slot)
   deps.onCapture?.({ accountId, slot: request.slot, kind: 'adopted' })
   return true
 }

@@ -308,7 +308,7 @@ describe('the two passes the handler makes', () => {
     const body = subject.slice(0, subject.indexOf('const perform = async'))
     // `targetSignedIn` rides along: it is the vault's answer, read from memory,
     // so it is as cheap as the rest and belongs in the same first pass.
-    expect(body).toContain('switchRefusal({ meta, saved, target, targetSignedIn })')
+    expect(body).toContain('switchRefusal({ meta, saved, target, targetSignedIn, targetUnavailable })')
     // And the plan is asked for exactly once afterwards, with a real decision.
     expect(body).toContain('await planSaved([switched])')
   })

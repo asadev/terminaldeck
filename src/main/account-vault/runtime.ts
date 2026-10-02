@@ -36,9 +36,10 @@
 import { delimiter } from 'node:path'
 import type { ProviderId } from '../../shared/types'
 import type { CodexAuthKeeper } from './codex-auth'
+import { isLoginSlot } from './keychain-requests'
 import { VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './keychain-shim'
 import type { TicketBook } from './server'
-import type { AccountVault, VaultSummary } from './store'
+import type { AccountVault, VaultSummary, VaultWrite } from './store'
 
 export interface AccountVaultRuntime {
   vault: AccountVault
@@ -74,15 +75,23 @@ export function currentAccountVault(): AccountVaultRuntime | null {
 /**
  * Where an account's login lives.
  *
- *  - `app`       the vault holds it (or will, the moment the agent writes one).
- *  - `adopting`  a Claude account made before this release: its login is still
- *                in the keychain item the agent made for it, and the first time
- *                the agent reads it, it is kept here instead. See
- *                `server.ts` — `VaultServerDeps.adopting`.
- *  - `agent`     the agent keeps it, as before. Every account when no vault is
- *                installed, and always the machine's own install.
+ *  - `app`         the vault holds it (or will, the moment the agent writes one).
+ *  - `adopting`    a Claude account made before this release: its login is still
+ *                  in the keychain item the agent made for it, and the first time
+ *                  the agent reads it, it is kept here instead. See
+ *                  `server.ts` — `VaultServerDeps.adopting`.
+ *  - `unavailable` the app keeps this login and cannot reach it right now — no
+ *                  vault in this process (the headless host has no
+ *                  `safeStorage`), or the vault would not unlock. **Not**
+ *                  `agent`: falling back would have the agent read the keychain
+ *                  item its directory hash names, which for an account the app
+ *                  keeps is a stale login or none, and the session would run as
+ *                  something nobody chose. Sessions on it are refused with
+ *                  {@link UNAVAILABLE_SENTENCE} instead.
+ *  - `agent`       the agent keeps it, as before. Every account the app has never
+ *                  kept, and always the machine's own install.
  */
-export type KeptBy = 'app' | 'adopting' | 'agent'
+export type KeptBy = 'app' | 'adopting' | 'unavailable' | 'agent'
 
 /** As much of an account as the rule reads. `profiles.ts`'s `Profile` fits. */
 export interface VaultSubject {
@@ -90,12 +99,35 @@ export interface VaultSubject {
   provider: ProviderId
   system: boolean
   configDir: string
-  /** `'app'` once the vault holds — or has held — this account's login. */
+  /** `'app'` when the account was born in the vault — it never read the keychain. */
   credentials?: 'app'
+  /**
+   * The vault slots of an account made before the vault that have moved in, one
+   * by one. A slot listed here is the vault's to answer, held or empty.
+   */
+  keptSlots?: readonly string[]
 }
 
 /** The agents this app can hand a kept login to. */
 export const KEPT_PROVIDERS: readonly ProviderId[] = ['claude', 'codex']
+
+/** Why a session on an `unavailable` account is refused — one sentence, everywhere. */
+export const UNAVAILABLE_SENTENCE =
+  'This app keeps this account’s login, and its store is not open in this process, so nothing ' +
+  'was started. Open the desktop app on this Mac, or sign the account in again there.'
+
+/** Has the app ever kept anything for this account? Then it is the app's, vault or no vault. */
+function promised(account: VaultSubject): boolean {
+  return account.credentials === 'app' || (account.keptSlots?.length ?? 0) > 0
+}
+
+/** Can this process answer this agent's logins at all? */
+function usable(account: VaultSubject, runtime: AccountVaultRuntime | null): boolean {
+  if (runtime === null || !runtime.vault.available() || runtime.vault.state() === 'locked') return false
+  if (account.provider === 'claude') return runtime.shimDir !== null
+  if (account.provider === 'codex') return runtime.codex !== null
+  return false
+}
 
 /**
  * The rule. `managed` is whether the account's folder is one this app made —
@@ -107,14 +139,32 @@ export function keptBy(
   managed: boolean,
   runtime: AccountVaultRuntime | null = current,
 ): KeptBy {
-  if (runtime === null || account.system || !managed) return 'agent'
-  if (!runtime.vault.available()) return 'agent'
-  if (account.provider === 'claude') {
-    if (runtime.shimDir === null) return 'agent'
-    return account.credentials === 'app' ? 'app' : 'adopting'
-  }
-  if (account.provider === 'codex') return runtime.codex === null ? 'agent' : 'app'
-  return 'agent'
+  if (account.system || !managed) return 'agent'
+  if (!KEPT_PROVIDERS.includes(account.provider)) return 'agent'
+  if (!usable(account, runtime)) return promised(account) ? 'unavailable' : 'agent'
+  if (account.provider === 'codex') return 'app'
+  if (account.credentials === 'app') return 'app'
+  // Moved in once its login slot has; the API-key slot keeps moving on its own.
+  return (account.keptSlots ?? []).some(isLoginSlot) ? 'app' : 'adopting'
+}
+
+/**
+ * Is this one slot of a pre-vault account still to be moved in?
+ *
+ * Read per slot, independently of {@link keptBy}'s display answer, so an
+ * account whose login has moved still moves its API-key slot when the agent
+ * first asks for it — rather than that slot being stranded in the keychain.
+ */
+export function slotAdopting(
+  account: VaultSubject,
+  managed: boolean,
+  slot: string,
+  runtime: AccountVaultRuntime | null = current,
+): boolean {
+  const kept = keptBy(account, managed, runtime)
+  if (kept !== 'app' && kept !== 'adopting') return false
+  if (account.provider !== 'claude' || account.credentials === 'app') return false
+  return !(account.keptSlots ?? []).includes(slot)
 }
 
 /**
@@ -135,7 +185,8 @@ export function vaultEnv(
   runtime: AccountVaultRuntime | null = current,
 ): Record<string, string> {
   if (runtime === null || provider !== 'claude' || account.provider !== 'claude') return {}
-  if (keptBy(account, managed, runtime) === 'agent') return {}
+  const kept = keptBy(account, managed, runtime)
+  if (kept !== 'app' && kept !== 'adopting') return {}
   return {
     [VAULT_SOCKET_ENV]: runtime.socketPath,
     [VAULT_TICKET_ENV]: runtime.tickets.ticketFor(account.id),
@@ -177,20 +228,44 @@ export function vaultSignedIn(
   runtime: AccountVaultRuntime | null = current,
 ): boolean | null {
   const kept = keptBy(account, managed, runtime)
-  if (kept === 'agent' || runtime === null) return null
+  if ((kept !== 'app' && kept !== 'adopting') || runtime === null) return null
   if (runtime.vault.has(account.id)) return true
-  return kept === 'app' ? false : null
+  if (kept !== 'app') return null
+  /*
+   * Codex is only "signed out" once something has actually been kept for it.
+   * A Codex account whose own `config.toml` stores its login in the keyring
+   * never writes the file this app follows, so an empty vault there says
+   * nothing about whether it is signed in — and "not signed in" would send
+   * somebody to redo a login that is perfectly fine.
+   */
+  if (account.provider === 'codex') return (account.keptSlots ?? []).length > 0 ? false : null
+  return false
 }
 
-/** Delete everything kept for an account, and stop answering for it. */
+/**
+ * Delete everything kept for an account, and stop answering for it.
+ *
+ * The Codex file is only ever taken away for an account the app keeps — or one
+ * whose file it is following — never for an account pointed at a folder the
+ * person chose: that `auth.json` is theirs and is the only copy. Answers the
+ * vault's own result, so a delete that could not be saved is reported rather
+ * than claimed.
+ */
 export function forgetKeptLogin(
-  account: { id: string; configDir: string; provider: ProviderId },
+  account: VaultSubject,
+  managed: boolean,
   runtime: AccountVaultRuntime | null = current,
-): void {
-  if (runtime === null) return
+): VaultWrite {
+  if (runtime === null) return { ok: true, changed: false, message: '' }
   runtime.tickets.revoke(account.id)
-  if (account.provider === 'codex') runtime.codex?.forget(account)
-  runtime.vault.forget(account.id)
+  const kept = keptBy(account, managed, runtime)
+  if (
+    account.provider === 'codex' &&
+    (kept === 'app' || (runtime.codex?.following().includes(account.id) ?? false))
+  ) {
+    runtime.codex?.forget(account)
+  }
+  return runtime.vault.forget(account.id)
 }
 
 /** A new account this app keeps: start following it. Claude needs nothing. */
@@ -199,7 +274,7 @@ export function followNewAccount(
   managed: boolean,
   runtime: AccountVaultRuntime | null = current,
 ): void {
-  if (runtime === null || keptBy(account, managed, runtime) === 'agent') return
+  if (runtime === null || keptBy(account, managed, runtime) !== 'app') return
   if (account.provider === 'codex') runtime.codex?.settle(account)
 }
 
@@ -216,4 +291,15 @@ export function recheckKeptLogin(
   if (runtime === null || account.provider !== 'codex') return
   if (keptBy(account, managed, runtime) !== 'app') return
   runtime.codex?.capture(account)
+}
+
+/**
+ * Clear whatever the vault holds under an id that is about to be reused. See
+ * `createProfile` — a failed delete must not hand its login to the next account
+ * made under the same name.
+ */
+export function clearStaleLogin(accountId: string, runtime: AccountVaultRuntime | null = current): void {
+  if (runtime === null) return
+  runtime.tickets.revoke(accountId)
+  if (runtime.vault.has(accountId)) runtime.vault.forget(accountId)
 }

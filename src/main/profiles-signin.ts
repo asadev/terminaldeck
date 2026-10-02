@@ -72,7 +72,8 @@ import { agentBinaries, loginPath, PROVIDERS } from './providers'
 import { binaryProblem, type AgentBinary } from './agent-binaries'
 import { describeGeminiSignIn, readGeminiSignIn } from './gemini-signin'
 import { launchSpec } from './tool-probe'
-import { findProfile, getState, keptManaged, sessionEnv, type Profile } from './profiles'
+import { findProfile, getState, keptManaged, keptUnavailable, sessionEnv, type Profile } from './profiles'
+import { withoutVaultEnv } from './session-env'
 import { recheckKeptLogin, vaultPath, vaultSignedIn, vaultSummary } from './account-vault/runtime'
 
 const run = promisify(execFile)
@@ -531,6 +532,26 @@ export async function readSignIn(
   const kept = keptSignIn(profile, provider)
   if (kept !== null) return kept
 
+  /*
+   * A login this app keeps and cannot reach from this process: said, never
+   * probed. Running the CLI here would have it read the keychain item its
+   * folder names — a login the app stopped keeping up to date, or none — and
+   * report *that* as this account's state.
+   */
+  const unavailable = keptUnavailable(profile)
+  if (unavailable !== null) {
+    return {
+      profileId: profile.id,
+      provider,
+      state: 'unknown',
+      account: null,
+      plan: null,
+      detail: unavailable,
+      command: '',
+      checkedAt: Date.now(),
+    }
+  }
+
   // The config directory is part of the key, not decoration: deleting a profile
   // and making another with the same name gives the same id, and an answer read
   // against the old directory would be presented as the new one's.
@@ -637,7 +658,7 @@ export async function readSignIn(
   // the probe reads the same login a session on this account would.
   const overrides = sessionEnv(profile, provider)
   const env = {
-    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...withPath(withoutVaultEnv(process.env), vaultPath(PATH, overrides), platform),
     ...overrides,
   }
 
@@ -716,6 +737,11 @@ export async function signOutAccount(
     return { ok: false, message: 'There is no such login on this computer any more.', session: null }
   }
 
+  // The same refusal the probe gives: a logout run here would act on the
+  // keychain item the folder names, not on the login the app keeps.
+  const unavailable = keptUnavailable(profile)
+  if (unavailable !== null) return { ok: false, message: unavailable, session: null }
+
   const provider = profile.provider as ProviderId
   const strategy = ACCOUNT_STRATEGIES[provider]
   const args = strategy?.signOutArgs
@@ -763,7 +789,7 @@ export async function signOutAccount(
   // never used.
   const overrides = sessionEnv(profile, provider)
   const env = {
-    ...withPath(process.env, vaultPath(PATH, overrides), platform),
+    ...withPath(withoutVaultEnv(process.env), vaultPath(PATH, overrides), platform),
     ...overrides,
   }
 

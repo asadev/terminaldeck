@@ -690,4 +690,17 @@ describe('logins the app keeps', () => {
     expect(Object.keys(copies)).toEqual(['x'])
     expect(copies.x?.id).toBe('system')
   })
+
+  /*
+   * Review finding 12. Before: "no address" was read as "not signed in", and a
+   * Codex login — whose status line never names an address — is signed in with
+   * no address. So a second Add of its address was offered as "finish signing
+   * in" to a login that was already finished.
+   */
+  it('reads a signed-in login with no address as finished, not as waiting to sign in', () => {
+    const codex = account('c', 'work@x.com', { provider: 'codex' })
+    const signIn = { c: { state: 'signed-in' as const, account: null } }
+    expect(accountHoldingLogin([codex], signIn, 'codex', 'work@x.com')?.id).toBe('c')
+    expect(accountAwaitingLogin([codex], signIn, 'codex', 'work@x.com')).toBeNull()
+  })
 })

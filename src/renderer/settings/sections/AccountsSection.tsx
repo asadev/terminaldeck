@@ -254,7 +254,25 @@ export function keptLine(account: AccountView): string | null {
   if (account.keptBy === 'adopting') {
     return 'Its login moves into this app the next time it is used, so switching to it will need no sign-in.'
   }
+  if (account.keptBy === 'unavailable') {
+    return 'This app keeps its login and cannot open its saved logins right now, so it cannot be used until it can.'
+  }
   return null
+}
+
+/**
+ * What Remove says it will do, before it does it.
+ *
+ * Two promises, because the two kinds of account keep their login in two places.
+ * Only an account the app keeps is told its login goes with it: one still
+ * moving in has its login in the keychain — the app may hold none of it yet —
+ * and telling it otherwise would be a promise about a deletion that does not
+ * happen.
+ */
+export function removeConfirmText(account: AccountView): string {
+  return account.keptBy === 'app'
+    ? `Remove “${account.name}”? The login this app keeps for it is deleted, so adding it again means signing in again. Its folder stays on disk.`
+    : `Remove “${account.name}” from the list? Its folder stays on disk and its login stays in your keychain — adding it again at the same place signs straight back in.`
 }
 
 /**
@@ -1039,11 +1057,7 @@ export function AccountsView({
                 their login in two different places — and a confirmation that
                 said "its login stays" about a login this app is about to delete
                 would be the one sentence on screen that is a lie. */}
-            <span>
-              {account.keptBy === 'app' || account.keptBy === 'adopting'
-                ? `Remove “${account.name}”? The login this app keeps for it is deleted, so adding it again means signing in again. Its folder stays on disk.`
-                : `Remove “${account.name}” from the list? Its folder stays on disk and its login stays in your keychain — adding it again at the same place signs straight back in.`}
-            </span>
+            <span>{removeConfirmText(account)}</span>
             {/* What deleting this account would actually cost, which is
                 a different answer depending on where its conversations
                 live: a sharing account owns none of them, because its

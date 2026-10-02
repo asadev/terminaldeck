@@ -29,9 +29,16 @@
  *  - `Claude Code[-<variant>]-credentials[-<8 hex>]` — the OAuth login itself.
  *  - `Claude Code[-<8 hex>]` — the legacy API-key slot.
  *
- * The 8-hex suffix is `sha256(configDir)` and is exactly the thing that made a
- * login hostage to a folder's *path*; the vault keys on the account instead, so
- * the suffix is dropped from the slot name. Everything else — the CLI's own
+ * The 8-hex suffix is `sha256(configDir)[:8]`. The vault keys on the account,
+ * so the suffix is not part of the slot name — but it **is** checked, and that
+ * check is what keeps a ticket inside the account it was given for. A session's
+ * ticket is inherited by everything that session runs, including a nested
+ * `claude` pointed at some other `CLAUDE_CONFIG_DIR`; without the check that
+ * process would be answered from — and could overwrite or delete — this
+ * account's login. So a lookup is ours only when its suffix is this account's
+ * own directory hash (`server.ts`); any other suffix, and the bare unsuffixed
+ * name of the machine's own install, goes to the real `security`, exactly as if
+ * the shim were not there. Everything else — the CLI's own
  * machine-wide `Claude Code-device-keys` item, a code-signing identity some
  * build script asks for, anything a person types into the session — is **not
  * ours** and goes to the real `security` untouched.
@@ -41,9 +48,9 @@
 
 /** One thing the agent asked for, in terms the vault can answer. */
 export type KeychainRequest =
-  | { op: 'find'; slot: string; wantsPassword: boolean }
-  | { op: 'add'; slot: string; value: string }
-  | { op: 'delete'; slot: string }
+  | { op: 'find'; slot: string; suffix: string | null; wantsPassword: boolean }
+  | { op: 'add'; slot: string; suffix: string | null; value: string }
+  | { op: 'delete'; slot: string; suffix: string | null }
   | { op: 'locked?' }
 
 /** A whole invocation of the shim, once read. */
@@ -55,22 +62,39 @@ export type ShimCall =
 
 /* ---------------------------------------------------------------- slots -- */
 
-const CREDENTIALS = /^Claude Code((?:-[a-z]+)*)-credentials(?:-[0-9a-f]{8})?$/
-const API_KEY = /^Claude Code(?:-[0-9a-f]{8})?$/
+const CREDENTIALS = /^Claude Code((?:-[a-z]+)*)-credentials(?:-([0-9a-f]{8}))?$/
+const API_KEY = /^Claude Code(?:-([0-9a-f]{8}))?$/
+
+/** A keychain service read into the vault slot it names and the directory hash on it. */
+export interface ServiceSlot {
+  slot: string
+  /** The 8-hex directory hash, or null for the unsuffixed name of the machine's own install. */
+  suffix: string | null
+}
 
 /**
  * The vault slot a keychain service name is kept in, or null when the service
  * is not one of the agent's own logins.
  *
  * The variant (`-staging`, …) is kept, because a staging login and a production
- * one are two different credentials and must not overwrite each other; the
- * directory hash is dropped, because the account is now the key.
+ * one are two different credentials and must not overwrite each other. The
+ * directory hash comes back beside the slot rather than inside it: the account
+ * is the key, and the hash is what proves the asker is that account's own
+ * directory (see the header).
  */
-export function slotForService(service: string): string | null {
+export function slotForService(service: string): ServiceSlot | null {
   const credentials = CREDENTIALS.exec(service)
-  if (credentials) return `keychain:Claude Code${credentials[1] ?? ''}-credentials`
-  if (API_KEY.test(service)) return 'keychain:Claude Code'
+  if (credentials) {
+    return { slot: `keychain:Claude Code${credentials[1] ?? ''}-credentials`, suffix: credentials[2] ?? null }
+  }
+  const apiKey = API_KEY.exec(service)
+  if (apiKey) return { slot: 'keychain:Claude Code', suffix: apiKey[1] ?? null }
   return null
+}
+
+/** True for the slot that holds the login itself, as opposed to the API-key slot. */
+export function isLoginSlot(slot: string): boolean {
+  return /^keychain:Claude Code(?:-[a-z]+)*-credentials$/.test(slot)
 }
 
 /* --------------------------------------------------------------- tokens -- */
@@ -181,16 +205,17 @@ export function readCommand(words: readonly string[]): KeychainRequest | null {
   const { values, bare } = flagValues(rest)
   const service = values.get('-s')
   if (service === undefined) return null
-  const slot = slotForService(service)
-  if (slot === null) return null
+  const named = slotForService(service)
+  if (named === null) return null
+  const { slot, suffix } = named
 
   if (command === 'find-generic-password') {
     // `-w` here is the bare "print only the password" flag. A value recorded
     // for it by `flagValues` is a following flag's word — `-w -s x` — and is not
     // a password, so it is ignored.
-    return { op: 'find', slot, wantsPassword: bare.has('-w') }
+    return { op: 'find', slot, suffix, wantsPassword: bare.has('-w') }
   }
-  if (command === 'delete-generic-password') return { op: 'delete', slot }
+  if (command === 'delete-generic-password') return { op: 'delete', slot, suffix }
 
   // add-generic-password: the value is `-X <hex>` or `-w <password>`. Anything
   // else — `-w` with nothing after it, which `security` treats as "prompt me" —
@@ -198,10 +223,10 @@ export function readCommand(words: readonly string[]): KeychainRequest | null {
   const hex = values.get('-X')
   if (hex !== undefined) {
     const value = decodeHex(hex)
-    return value === null || value === '' ? null : { op: 'add', slot, value }
+    return value === null || value === '' ? null : { op: 'add', slot, suffix, value }
   }
   const password = values.get('-w')
-  if (password !== undefined && password !== '') return { op: 'add', slot, value: password }
+  if (password !== undefined && password !== '') return { op: 'add', slot, suffix, value: password }
   return null
 }
 
@@ -251,3 +276,16 @@ export const NOT_FOUND_TEXT =
 
 /** The exit codes the CLI distinguishes. */
 export const EXIT_NOT_FOUND = 44
+
+/**
+ * The directory hash Claude Code puts on a keychain service for one config
+ * directory: `sha256(dir).hex[:8]`, read off the shipped binary (`jF` in
+ * 2.1.287: `createHash("sha256").update(r).digest("hex").substring(0,8)`, where
+ * `r` is the config directory). Both spellings of the path are offered — as
+ * given and NFC-normalised — because the CLI normalises the variable it reads
+ * in one place and not in another, and a name with an accent in it must not be
+ * the one account that never matches.
+ */
+export function directorySuffixes(configDir: string, hash: (text: string) => string): Set<string> {
+  return new Set([hash(configDir).slice(0, 8), hash(configDir.normalize('NFC')).slice(0, 8)])
+}

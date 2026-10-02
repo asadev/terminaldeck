@@ -13,6 +13,7 @@ import {
   groupAccountsByProvider,
   historyLine,
   runOfAccount,
+  removeConfirmText,
   runsOfAccounts,
   sessionsLine,
   signInRequest,
@@ -1436,13 +1437,11 @@ describe('accounts the app keeps, and adding the tenth', () => {
     expect(html.match(/data-kind="duplicate"/g)?.length).toBe(1)
   })
 
-  it('tells the truth about what Remove deletes for a login the app keeps', () => {
-    const snapshot: AccountsSnapshot = { ...ACCOUNTS, accounts: [kept('a', 'a@x.com')] }
-    // The confirmation is state inside the view; its two sentences are asserted
-    // through the source, since a static render cannot press Remove.
-    void render({ snapshot, signIn: { a: as('a@x.com') } })
-    const source = readFileSync(new URL('./AccountsSection.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('The login this app keeps for it is deleted, so adding it again means signing in again.')
+  it('tells the truth about what Remove deletes — and only an account the app keeps loses its login', () => {
+    expect(removeConfirmText(kept('a', 'a@x.com'))).toContain('The login this app keeps for it is deleted')
+    // Review finding 12: an account still moving in keeps its login in the keychain.
+    expect(removeConfirmText(kept('b', 'b@x.com', { keptBy: 'adopting' }))).toContain('stays in your keychain')
+    expect(removeConfirmText(kept('c', 'c@x.com', { keptBy: 'agent' }))).toContain('stays in your keychain')
   })
 
   it('puts Add accounts at the head of the list, where ten rows cannot push it out of sight', () => {

@@ -74,10 +74,12 @@ import {
 } from './provider-accounts'
 import { claudeConfigDirIn, transcriptDir } from './transcript'
 import {
+  clearStaleLogin,
   currentAccountVault,
   followNewAccount,
   forgetKeptLogin,
   keptBy,
+  UNAVAILABLE_SENTENCE,
   vaultEnv,
   vaultSignedIn,
   vaultSummary,
@@ -123,7 +125,17 @@ export interface Profile {
    * same, and the second one reads the keychain.
    */
   credentials?: 'app'
+  /**
+   * For an account made before the vault: the vault slots that have moved in,
+   * one by one (`keychain:Claude Code-credentials`, `file:auth.json`, …). A slot
+   * listed here is the vault's to answer — held, or settled as empty — and is
+   * never read from the keychain again. See `account-vault/runtime.ts`.
+   */
+  keptSlots?: string[]
 }
+
+/** A vault slot name, as `account-vault/store.ts` accepts them. */
+const SLOT_NAME = /^(keychain|file|env):[A-Za-z0-9 ._-]{1,80}$/
 
 export interface ProfilesState {
   version: number
@@ -568,6 +580,13 @@ function sanitizeProfile(raw: unknown): Profile | null {
     // Only the one value it may have. Anything else on disk is dropped rather
     // than carried, so a hand-edited file cannot invent a storage mode.
     ...(value.credentials === 'app' ? { credentials: 'app' as const } : {}),
+    ...(Array.isArray(value.keptSlots) && value.keptSlots.some((slot) => typeof slot === 'string' && SLOT_NAME.test(slot))
+      ? {
+          keptSlots: [
+            ...new Set(value.keptSlots.filter((slot): slot is string => typeof slot === 'string' && SLOT_NAME.test(slot))),
+          ],
+        }
+      : {}),
   }
 }
 
@@ -900,16 +919,22 @@ export function sessionEnv(profile: Profile, provider: ProviderId): Record<strin
 }
 
 /**
- * `isManagedConfigDir`, asked only when there is a vault to ask it for.
+ * `isManagedConfigDir`, asked only when the answer can matter.
  *
- * Without a vault every account is the agent's to keep and the answer cannot
- * change anything — and the question itself reads the data folder, which a
- * process that has not installed its platform paths (a unit test, a tool
- * script) does not have. Answering `false` there is the same answer the rule
- * would reach, without the read.
+ * Without a vault, an account the app has never kept is the agent's to keep and
+ * the answer cannot change anything — and the question itself reads the data
+ * folder, which a process that has not installed its platform paths (a unit
+ * test, a tool script) does not have. Answering `false` there is the same
+ * answer the rule would reach, without the read.
  */
 export function keptManaged(profile: Profile): boolean {
-  return currentAccountVault() !== null && isManagedConfigDir(profile.configDir)
+  // Also asked, vault or no vault, for an account the app has kept before: that
+  // is the case that has to read `unavailable` rather than quietly `agent`, and
+  // such an account only exists where the data folder is known — it came out
+  // of `profiles.json`.
+  const askable =
+    currentAccountVault() !== null || profile.credentials === 'app' || (profile.keptSlots?.length ?? 0) > 0
+  return askable && isManagedConfigDir(profile.configDir)
 }
 
 /**
@@ -921,19 +946,32 @@ export function profileKeptBy(profile: Profile): KeptBy {
 }
 
 /**
- * Record that this account's login is now kept by the app.
+ * Record that one slot of this account now lives in the app's vault.
  *
- * Called by the vault the first time it keeps something for an account that
- * predates it, and never by anything a window can reach: it changes where a
- * login is read from, and the only honest trigger for that is the login having
- * actually arrived. Idempotent — the vault calls it on every write.
+ * Called by the vault the first time something settles a slot — a login kept,
+ * a "not found", a sign-out — and never by anything a window can reach: it
+ * changes where a login is read from, and the only honest trigger for that is
+ * the agent having actually said so. Idempotent and cheap on repeat — the vault
+ * calls it on every write.
  */
-export function markCredentialsKept(id: string): void {
+export function markSlotKept(id: string, slot: string): void {
+  if (!SLOT_NAME.test(slot)) return
   const state = getState()
   const profile = state.profiles.find((entry) => entry.id === id)
-  if (!profile || profile.credentials === 'app') return
-  profile.credentials = 'app'
+  if (!profile || profile.keptSlots?.includes(slot)) return
+  profile.keptSlots = [...(profile.keptSlots ?? []), slot]
   persist(state)
+}
+
+/**
+ * The sentence for an account whose login the app keeps and cannot reach in
+ * this process, or null when it can be used. Every place that would otherwise
+ * start the agent on it — a session, a status probe, a switch — asks this first,
+ * so the agent never falls back to reading a keychain item the app stopped
+ * keeping up to date.
+ */
+export function keptUnavailable(profile: Profile): string | null {
+  return profileKeptBy(profile) === 'unavailable' ? UNAVAILABLE_SENTENCE : null
 }
 
 /**
@@ -1083,7 +1121,13 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
    * keychain item name, still holding the deleted account's login.
    */
   const managed = keptManaged(profile)
-  if (keptBy({ ...profile, credentials: 'app' }, managed) === 'app') profile.credentials = 'app'
+  if (keptBy({ ...profile, credentials: 'app' }, managed) === 'app') {
+    profile.credentials = 'app'
+    // An id is reused when an account is re-made under a deleted one's name.
+    // Whatever the vault still had for that id — a delete whose save failed —
+    // belongs to the account that was deleted, never to this one.
+    clearStaleLogin(profile.id)
+  }
 
   state.profiles.push(profile)
   persist(state)
@@ -1164,6 +1208,13 @@ export interface DeleteProfileResult {
    * does show it, it will be showing whatever this returns.
    */
   credentialsRetained: boolean
+  /**
+   * Set when the login the app kept for this account could not be deleted from
+   * disk. It is already gone from memory — nothing answers for it — but the
+   * file still holds it until the vault is next written, and a delete that
+   * says it removed a login must not be the one that quietly did not.
+   */
+  warning?: string
 }
 
 export function deleteProfile(
@@ -1201,7 +1252,7 @@ export function deleteProfile(
    * from here on rather than with a login that has been deleted.
    */
   const keptInApp = profileKeptBy(profile) === 'app'
-  forgetKeptLogin(profile)
+  const forgot = forgetKeptLogin(profile, keptManaged(profile))
 
   // Every reference goes with it, so nothing resolves to a profile that is gone.
   if (state.defaultProfileId === id) state.defaultProfileId = null
@@ -1228,7 +1279,10 @@ export function deleteProfile(
     // A login the app kept is gone with the account whatever happened to the
     // files — `forgetKeptLogin` above. Otherwise: nothing was deleted, or the
     // credential is somewhere this did not touch.
-    credentialsRetained: keptInApp ? false : !filesDeleted || isolation.store !== 'config-directory',
+    credentialsRetained: keptInApp
+      ? !forgot.ok
+      : !filesDeleted || isolation.store !== 'config-directory',
+    ...(forgot.ok ? {} : { warning: forgot.message }),
   }
 }
 

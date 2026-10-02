@@ -162,6 +162,9 @@ describe.skipIf(!LIVE)('the real CLI, signed in from the vault', () => {
       vault,
       tickets,
       providerOf: () => 'claude',
+      // The folder each run is given, as `runAs` builds it: the CLI names the
+      // keychain item after its hash, and the vault answers only that name.
+      configDirOf: (id) => join(root, 'cfg', id),
       adopting: () => false,
       markKept: () => undefined,
     })
@@ -169,7 +172,7 @@ describe.skipIf(!LIVE)('the real CLI, signed in from the vault', () => {
     const fake = join(root, 'fake-security')
     writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${fakeLog}'\n[ "$1" = "-i" ] && cat >/dev/null\nexit 44\n`)
     chmodSync(fake, 0o755)
-    shimDir = writeSecurityShim(join(root, 'vault'), socket.path, fake) ?? ''
+    shimDir = writeSecurityShim(root, socket.path, fake) ?? ''
   }, 30_000)
 
   afterAll(async () => {
@@ -249,6 +252,22 @@ describe.skipIf(!LIVE)('the real CLI, signed in from the vault', () => {
     const out = await runAs('nobody')
     expect(seen.filter((auth) => auth.includes('VAULT-'))).toEqual([])
     expect(`${out.stdout}${out.stderr}`.toLowerCase()).toMatch(/log ?in|not logged|auth/)
+  }, 120_000)
+
+  /*
+   * Review finding 6, measured on the real CLI: a nested agent inherits the
+   * session's ticket but runs with a config folder of its own. Its keychain
+   * item is named after *that* folder, so the vault does not answer it.
+   */
+  it('a nested agent with its own config folder is not handed the account’s login, though it holds the ticket', async () => {
+    vault.put('one', 'claude', 'keychain:Claude Code-credentials', claudeLogin('VAULT-ONE'), 'sign-in')
+    const elsewhere = join(root, 'cfg', 'nested-elsewhere')
+    mkdirSync(elsewhere, { recursive: true })
+    seen.length = 0
+    await runAs('one', { CLAUDE_CONFIG_DIR: elsewhere })
+    expect(seen.filter((auth) => auth.includes('VAULT-ONE'))).toEqual([])
+    // And the "real" keychain was asked instead — the fake one, which knows nothing.
+    expect(readFileSync(fakeLog, 'utf8')).toContain('-credentials-')
   }, 120_000)
 
   it('a token refresh the CLI writes back lands in the vault', async () => {

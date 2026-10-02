@@ -58,9 +58,19 @@ export const REAL_SECURITY = '/usr/bin/security'
 export const VAULT_SOCKET_ENV = `${BRAND.id.toUpperCase()}_ACCOUNT_VAULT`
 export const VAULT_TICKET_ENV = `${BRAND.id.toUpperCase()}_ACCOUNT_TICKET`
 
-/** The directory, inside the vault's own folder. */
-export function vaultShimDir(vaultDir: string): string {
-  return join(vaultDir, 'bin')
+/**
+ * The directory, beside the vault's folder rather than inside it — and holding
+ * nothing but the shim.
+ *
+ * Not `<vault>/bin`, and the name is the reason. A confined session's plan
+ * turns every PATH entry into a read root, and an entry called `bin` grants its
+ * *parent* too (`confine/plan.ts`, `toolRoots`: `<prefix>/bin` → `<prefix>`), so
+ * a shim in `<vault>/bin` would have made the whole vault folder — the
+ * encrypted file, the socket — readable to anything that saw the shim on its
+ * PATH. A folder of its own, not called `bin`, grants exactly itself.
+ */
+export function vaultShimDir(baseDir: string): string {
+  return join(baseDir, 'account-vault-shim')
 }
 
 /** A value going inside single quotes in the generated script. */
@@ -90,11 +100,16 @@ TICKET="\${${VAULT_TICKET_ENV}-}"
 [ -n "$TICKET" ] || exec "$REAL" "$@"
 
 # Interactive mode reads its commands from stdin. Read once, so the same
-# commands can be handed on unchanged if they turn out not to be ours.
+# commands can be handed on unchanged if they turn out not to be ours — but only
+# when it really is interactive mode as the agent uses it: \`-i\` and nothing
+# else, with stdin a pipe. \`-i\` is also an ordinary flag of other subcommands
+# (\`security cms -D -i file\`), and a person typing \`security -i\` at a terminal
+# is talking to it; slurping either would hang, or swallow input that was not
+# ours to read.
 INTERACTIVE=0
-for arg in "$@"; do
-  [ "$arg" = "-i" ] && INTERACTIVE=1
-done
+if [ "$#" -eq 1 ] && [ "$1" = "-i" ] && [ ! -t 0 ]; then
+  INTERACTIVE=1
+fi
 INPUT=''
 if [ "$INTERACTIVE" = 1 ]; then
   INPUT=$(cat)
@@ -147,9 +162,20 @@ case "$HEAD" in
     ;;
 esac
 
-# 4. The app did not answer. A login lookup is "not found"; the rest is real.
+# 4. The app did not answer. Anything naming one of the agent's own login items
+# — the login itself, or its API-key slot — fails closed: a lookup is "not
+# found" (the agent then says "not logged in", which is true and recoverable),
+# and a write or a delete fails, because "not found" for a write would tell the
+# agent its new login had nowhere to go when in fact it was refused. The rest
+# is the real command.
 case "$* $INPUT" in
-  *'Claude Code'*'-credentials'*)
+  *'Claude Code'*'-credentials'*|*'Claude Code-'[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+    case "$* $INPUT" in
+      *add-generic-password*|*delete-generic-password*)
+        printf '%s\\n' 'security: the app that keeps this login is not answering, so nothing was changed.' >&2
+        exit 1
+        ;;
+    esac
     printf '%s\\n' 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2
     exit 44
     ;;
@@ -165,12 +191,12 @@ run_real "$@"
  * to would break `security` for every session it is on.
  */
 export function writeSecurityShim(
-  vaultDir: string,
+  baseDir: string,
   socketPath: string,
   realSecurity = REAL_SECURITY,
 ): string | null {
-  const dir = vaultShimDir(vaultDir)
-  removeSecurityShim(vaultDir)
+  const dir = vaultShimDir(baseDir)
+  removeSecurityShim(baseDir)
   if (!existsSync(realSecurity)) return null
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = join(dir, 'security')
@@ -180,6 +206,6 @@ export function writeSecurityShim(
 }
 
 /** Delete it. At shutdown, and before every write. */
-export function removeSecurityShim(vaultDir: string): void {
-  rmSync(vaultShimDir(vaultDir), { recursive: true, force: true })
+export function removeSecurityShim(baseDir: string): void {
+  rmSync(vaultShimDir(baseDir), { recursive: true, force: true })
 }

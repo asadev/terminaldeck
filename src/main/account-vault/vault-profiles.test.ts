@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { IpcMain } from 'electron'
@@ -8,6 +9,7 @@ import {
   createProfile,
   deleteProfile,
   getState,
+  keptUnavailable,
   profileKeptBy,
   registerProfilesIpc,
   resetProfilesCache,
@@ -15,13 +17,15 @@ import {
   systemProfile,
   type Profile,
 } from '../profiles'
-import { keptSignIn } from '../profiles-signin'
+import { keptSignIn, readSignIn } from '../profiles-signin'
+import { probeUsage } from '../usage-probe'
 import { switchRefusal } from '../session-switch'
 import type { SavedSession } from '../session-restore'
 import { claudeLogin, fakeCipher } from './fake-cipher.fixture'
+import type { VaultCipher } from './store'
 import { VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './keychain-shim'
-import { currentAccountVault, vaultPath, vaultSignedIn } from './runtime'
-import { answerShim } from './server'
+import { currentAccountVault, UNAVAILABLE_SENTENCE, vaultPath, vaultSignedIn } from './runtime'
+import { answerShim, type VaultServerDeps } from './server'
 import { wireAccountVault, type AccountVaultHandle } from './wire'
 
 /**
@@ -38,29 +42,48 @@ const SECRET = 'VERY-SECRET-TOKEN-VALUE'
 let root = ''
 let handle: AccountVaultHandle | null = null
 
-async function wire(): Promise<AccountVaultHandle> {
+async function wire(cipher: VaultCipher = fakeCipher()): Promise<AccountVaultHandle> {
+  const wired = await wireRaw(cipher)
+  if (wired === null) throw new Error('the vault did not start')
+  handle = wired
+  return wired
+}
+
+async function wireRaw(cipher: VaultCipher): Promise<AccountVaultHandle | null> {
   const fake = join(root, 'fake-security')
   writeFileSync(fake, '#!/bin/sh\nexit 44\n')
   chmodSync(fake, 0o755)
-  const wired = await wireAccountVault({
+  return wireAccountVault({
     userDataDir: root,
-    cipher: fakeCipher(),
+    cipher,
     platform: 'darwin',
     realSecurity: fake,
     home: root,
     // Watchers are driven by the Codex keeper's own tests; here they would only
     // be a live handle left open at the end of the run.
     watch: () => () => undefined,
+    inUse: () => false,
   })
-  if (wired === null) throw new Error('the vault did not start')
-  handle = wired
-  return wired
 }
 
-function find(ticket: string): Buffer {
+/** A lookup for one account's login, spelled with that account's own directory hash. */
+function find(ticket: string, configDir: string): Buffer {
+  const suffix = createHash('sha256').update(configDir).digest('hex').slice(0, 8)
   return Buffer.from(
-    [ticket, '6', 'find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-1234abcd', ''].join('\0'),
+    [ticket, '6', 'find-generic-password', '-a', 'me', '-w', '-s', `Claude Code-credentials-${suffix}`, ''].join('\0'),
   )
+}
+
+/** Server deps over the real profile list, as `wire.ts` builds them. */
+function depsOf(wired: AccountVaultHandle): VaultServerDeps {
+  return {
+    vault: wired.runtime.vault,
+    tickets: wired.runtime.tickets,
+    providerOf: () => 'claude',
+    configDirOf: (id) => getState().profiles.find((profile) => profile.id === id)?.configDir ?? null,
+    adopting: () => false,
+    markKept: () => undefined,
+  }
 }
 
 beforeEach(() => {
@@ -122,22 +145,16 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
     const { vault } = wired.runtime
     vault.put(one.id, 'claude', SLOT, claudeLogin('ONE'), 'sign-in')
     vault.put(two.id, 'claude', SLOT, claudeLogin('TWO'), 'sign-in')
-    const deps = {
-      vault,
-      tickets: wired.runtime.tickets,
-      providerOf: () => 'claude' as const,
-      adopting: () => false,
-      markKept: () => undefined,
-    }
+    const deps = depsOf(wired)
     const sessionA = sessionEnv(one, 'claude')[VAULT_TICKET_ENV] ?? ''
     const sessionB = sessionEnv(two, 'claude')[VAULT_TICKET_ENV] ?? ''
-    expect(answerShim(find(sessionA), deps)).toMatchObject({ answer: { stdout: claudeLogin('ONE') } })
-    expect(answerShim(find(sessionB), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
+    expect(answerShim(find(sessionA, one.configDir), deps)).toMatchObject({ answer: { stdout: claudeLogin('ONE') } })
+    expect(answerShim(find(sessionB, two.configDir), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
     // Session A is switched to `two`: it is restarted with `two`'s environment.
     const switched = sessionEnv(two, 'claude')[VAULT_TICKET_ENV] ?? ''
-    expect(answerShim(find(switched), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
+    expect(answerShim(find(switched, two.configDir), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
     // B never noticed, and `one` is still signed in for anybody on it.
-    expect(answerShim(find(sessionB), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
+    expect(answerShim(find(sessionB, two.configDir), deps)).toMatchObject({ answer: { stdout: claudeLogin('TWO') } })
     expect(vault.has(one.id)).toBe(true)
   })
 
@@ -163,14 +180,7 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
     expect(result.credentialsRetained).toBe(false)
     expect(wired.runtime.vault.has(gone.id)).toBe(false)
     expect(readFileSync(wired.runtime.vault.path, 'utf8')).not.toContain(SECRET)
-    const deps = {
-      vault: wired.runtime.vault,
-      tickets: wired.runtime.tickets,
-      providerOf: () => 'claude' as const,
-      adopting: () => false,
-      markKept: () => undefined,
-    }
-    expect(answerShim(find(ticket), deps)).toMatchObject({ answer: { code: 44 } })
+    expect(answerShim(find(ticket, gone.configDir), depsOf(wired))).toMatchObject({ answer: { code: 44 } })
   })
 
   it('an account re-made under a deleted one\'s name starts signed out, not as the old login', async () => {
@@ -255,5 +265,161 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
     const listed = answers[0] as { vault: Record<string, { keptBy: string; signedIn: boolean | null }> }
     expect(listed.vault[work.id]).toMatchObject({ keptBy: 'app', signedIn: true })
     expect(listed.vault.system).toMatchObject({ keptBy: 'agent', signedIn: null })
+  })
+
+  /*
+   * Review finding 1. Before: removing a Codex account deleted the `auth.json`
+   * in its folder whether or not the app kept that login — so removing an
+   * account pointed at a folder the person chose deleted their only copy.
+   */
+  it('never takes away the login file of a Codex account in a folder the person chose', async () => {
+    await wire()
+    const chosen = join(root, 'my-codex-home')
+    mkdirSync(chosen)
+    writeFileSync(join(chosen, 'auth.json'), JSON.stringify({ tokens: { access_token: 'MINE' } }))
+    const mine = createProfile('mine@example.com', { provider: 'codex', configDir: chosen })
+    expect(profileKeptBy(mine)).toBe('agent')
+    deleteProfile(mine.id, { deleteFiles: true })
+    expect(readFileSync(join(chosen, 'auth.json'), 'utf8')).toContain('MINE')
+  })
+
+  /*
+   * Review finding 5. Before: with no vault running — the headless host, or a
+   * vault that would not unlock — an account the app keeps fell back to
+   * `agent`, and the agent quietly read a keychain item the app had stopped
+   * keeping up to date.
+   */
+  it('an account the app keeps is unavailable where no vault runs — refused, never a keychain read', async () => {
+    const wired = await wire()
+    const work = createProfile('work@example.com')
+    await wired.dispose()
+    handle = null
+    expect(profileKeptBy(work)).toBe('unavailable')
+    expect(sessionEnv(work, 'claude')).toEqual({ CLAUDE_CONFIG_DIR: work.configDir })
+    expect(keptUnavailable(work)).toBe(UNAVAILABLE_SENTENCE)
+
+    let spawned = false
+    const report = await readSignIn(work, {
+      path: '/usr/bin',
+      exec: async () => {
+        spawned = true
+        return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0, killed: false }
+      },
+    })
+    expect(spawned).toBe(false)
+    expect(report).toMatchObject({ state: 'unknown', detail: UNAVAILABLE_SENTENCE, command: '' })
+
+    let asked = false
+    const usage = await probeUsage(
+      { provider: 'claude', id: work.id, name: work.name, configDir: work.configDir },
+      {
+        path: '/usr/bin',
+        ask: async () => {
+          asked = true
+          return { usage: null, error: null, killed: false }
+        },
+      },
+    )
+    expect(asked).toBe(false)
+    expect(usage.detail).toBe(UNAVAILABLE_SENTENCE)
+
+    const meta = { id: 's1', provider: 'claude', exitCode: null, profileId: 'system' } as unknown as SessionMeta
+    const saved = { cwd: '/tmp', provider: 'claude' } as unknown as SavedSession
+    expect(switchRefusal({ meta, saved, target: work, targetUnavailable: keptUnavailable(work) })).toBe(
+      UNAVAILABLE_SENTENCE,
+    )
+  })
+
+  it('a vault that will not unlock is left exactly as it is, and its accounts read unavailable', async () => {
+    const wired = await wire()
+    const work = createProfile('work@example.com')
+    wired.runtime.vault.put(work.id, 'claude', SLOT, claudeLogin(SECRET), 'sign-in')
+    const file = wired.runtime.vault.path
+    await wired.dispose()
+    handle = null
+    const before = readFileSync(file)
+    const otherBuild = { ...fakeCipher(), decrypt: () => { throw new Error('a different key') } }
+    expect(await wireRaw(otherBuild)).toBeNull()
+    expect(readFileSync(file)).toEqual(before)
+    expect(profileKeptBy(work)).toBe('unavailable')
+    // And with the right key it opens, every login still in it.
+    const again = await wire()
+    expect(again.runtime.vault.read(work.id, SLOT)).toBe(claudeLogin(SECRET))
+  })
+
+  /*
+   * Review finding 7. Before: a Codex account the app keeps read "signed out"
+   * whenever the vault held nothing — including one whose own config keeps its
+   * login in the keyring, which never writes the file this app follows.
+   */
+  it('a Codex account reads "cannot tell" until something has been kept for it', async () => {
+    const wired = await wire()
+    const codex = createProfile('codex@example.com', { provider: 'codex' })
+    expect(vaultSignedIn(codex, true)).toBeNull()
+    writeFileSync(join(codex.configDir, 'auth.json'), JSON.stringify({ tokens: { access_token: 'at' } }))
+    wired.runtime.codex?.capture(codex)
+    expect(vaultSignedIn(codex, true)).toBe(true)
+    rmSync(join(codex.configDir, 'auth.json'))
+    wired.runtime.codex?.capture(codex)
+    expect(vaultSignedIn(codex, true)).toBe(false)
+  })
+
+  /*
+   * Review finding 9. Before: the shim lived in `<vault>/bin`, and a confined
+   * session's plan grants a PATH entry called `bin` *and its parent* — the
+   * whole vault folder.
+   */
+  it('keeps the shim in a folder of its own, outside the vault folder and not called bin', async () => {
+    const wired = await wire()
+    const shim = wired.runtime.shimDir ?? ''
+    expect(shim.startsWith(join(root, 'account-vault') + '/')).toBe(false)
+    expect(shim.endsWith('/bin')).toBe(false)
+    expect(readdirSync(shim)).toEqual(['security'])
+  })
+
+  it('gives a confined session no ticket, so a held device reaches nothing it could not reach before', () => {
+    const source = readFileSync(new URL('../host-core.ts', import.meta.url), 'utf8')
+    expect(source).toContain('...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : sessionEnv(profile, provider)),')
+  })
+
+  /*
+   * The coordinator's extra item. Before: the sign-in and usage probes built
+   * their environment straight from `process.env`, so a probe about one account
+   * carried a ticket this app had itself inherited from a session it was
+   * launched from.
+   */
+  it('never hands a probe a ticket inherited from whatever launched the app', async () => {
+    await wire()
+    process.env[VAULT_TICKET_ENV] = 'f'.repeat(48)
+    process.env[VAULT_SOCKET_ENV] = '/somewhere/else.sock'
+    try {
+      let seen: Record<string, string | undefined> = {}
+      await readSignIn(systemProfile(), {
+        provider: 'claude',
+        path: '/usr/bin',
+        exec: async (_command, _args, options) => {
+          seen = options.env
+          return { stdout: '{"loggedIn":false}', stderr: '', exitCode: 0, killed: false }
+        },
+      })
+      expect(seen[VAULT_TICKET_ENV]).toBeUndefined()
+      expect(seen[VAULT_SOCKET_ENV]).toBeUndefined()
+
+      let usageEnv: NodeJS.ProcessEnv = {}
+      await probeUsage(
+        { provider: 'claude', id: 'system', name: null, configDir: null },
+        {
+          path: '/usr/bin',
+          ask: async (_command, _args, options) => {
+            usageEnv = options.env
+            return { usage: null, error: null, killed: false }
+          },
+        },
+      )
+      expect(usageEnv[VAULT_TICKET_ENV]).toBeUndefined()
+    } finally {
+      delete process.env[VAULT_TICKET_ENV]
+      delete process.env[VAULT_SOCKET_ENV]
+    }
   })
 })

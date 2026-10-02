@@ -38,9 +38,15 @@ or chain it:
   })
 ```
 
-It never throws: no secure store, a socket another copy is serving, or no
-`/usr/bin/security` each turn the vault off with one log line, and accounts
-behave as before.
+It never throws. It opens (decrypts) the vault **before** installing anything,
+so the one decrypt that can raise a keychain prompt never happens inside a
+session's lookup. No secure store, a vault that will not unlock (a denied or
+locked keychain, or a dev and a release build sharing userData), a socket
+another copy is serving, or no `/usr/bin/security` each turn the vault off with
+one log line. The vault file is never moved or rewritten in any of those cases.
+Accounts the app has never kept behave as before; an account the app **has**
+kept reads `unavailable` and is refused (below) — never quietly handed back to
+the keychain.
 
 **Quit.** In `app.on('before-quit', …)`, **after `ptys.killAll()`** (so the
 agents have stopped writing) and anywhere before the handler returns:
@@ -67,14 +73,17 @@ Additive only:
 
 | Where | Change |
 |---|---|
-| `profiles:list` → `ProfilesSnapshot` | new field `vault: Record<accountId, AccountVaultView>` — `{ keptBy: 'app'\|'adopting'\|'agent', signedIn: boolean\|null, updatedAt: number\|null, plan: string\|null }`. **Never a value.** |
-| `Profile` (persisted in `profiles.json`) | optional `credentials?: 'app'` — set when the app keeps the login. Old files read fine; unknown values are dropped. |
+| `profiles:list` → `ProfilesSnapshot` | new field `vault: Record<accountId, AccountVaultView>` — `{ keptBy: 'app'\|'adopting'\|'unavailable'\|'agent', signedIn: boolean\|null, updatedAt: number\|null, plan: string\|null }`. **Never a value.** |
+| `Profile` (persisted in `profiles.json`) | optional `credentials?: 'app'` (born in the vault) and `keptSlots?: string[]` (slots of a pre-vault account that have moved in, one by one). Old files read fine; unknown values are dropped. |
 | `profiles:signin` → `SignInReport` | for an account the app keeps (Claude Code), answered from the vault with `command: ''` and no process spawned. Same shape. |
-| `session:switch-plan` / `session:switch-account` | new refusal sentence when the target is kept by the app and holds no login: *"X is not signed in yet, so this session was left as it is. Sign in to it first, then switch."* |
-| `switchRefusal(input)` / `planSwitch(input)` (`session-switch.ts`) | optional `targetSignedIn?: boolean \| null` on the input object. Existing callers compile unchanged. |
-| `profiles:delete` → `DeleteProfileResult.credentialsRetained` | `false` for an account the app kept (its login is deleted with it). |
+| `session:switch-plan` / `session:switch-account` | two new refusals: the target is kept by the app and holds no login (*"X is not signed in yet, so this session was left as it is. Sign in to it first, then switch."*), and the target is `unavailable` (`UNAVAILABLE_SENTENCE`). |
+| `switchRefusal(input)` / `planSwitch(input)` (`session-switch.ts`) | optional `targetSignedIn?: boolean \| null` and `targetUnavailable?: string \| null` on the input object. Existing callers compile unchanged. |
+| `HostCore.startSession` | **rejects** with `UNAVAILABLE_SENTENCE` for an account the app keeps when this process cannot reach the vault (the headless host shares `profiles.json` and has no `safeStorage`). Checked before any probe or spawn. Every other account is unaffected. |
+| `profiles:signin` / `profiles:signout` / usage probe | for an `unavailable` account: `state: 'unknown'` / `ok: false` with that sentence, and nothing is spawned. |
+| `profiles:delete` → `DeleteProfileResult` | `credentialsRetained` is `false` for an account the app kept (its login is deleted with it) — `true` plus a new `warning` string if that delete could not be saved. |
 | `sessionEnv(profile, provider)` | for a kept Claude account also returns `TERMINALDECK_ACCOUNT_VAULT` + `TERMINALDECK_ACCOUNT_TICKET`. |
-| new exports in `profiles.ts` | `profileKeptBy(profile)`, `markCredentialsKept(id)`, `keptManaged(profile)`, `accountVaultView(profile)`, type `AccountVaultView`. |
+| new exports in `profiles.ts` | `profileKeptBy(profile)`, `markSlotKept(id, slot)`, `keptManaged(profile)`, `keptUnavailable(profile)`, `accountVaultView(profile)`, type `AccountVaultView`. |
+| new export in `session-env.ts` | `withoutVaultEnv(env)` — the sign-in and usage probes build their environment from `process.env` through it, so a ticket this app inherited never reaches a probe. |
 
 **For the MCP lanes** (`mcp-agents`, `mcp-sessions`, `mcp-machines`): a tool built
 on `profiles:list` now gets `vault[accountId].keptBy` / `.signedIn` for free —
@@ -96,8 +105,8 @@ New, all under `src/main/account-vault/`:
 | `store.ts` | `AccountVault` — the encrypted store (`account-vault/account-vault.bin` in userData, `safeStorage` blob, `writeSecretFile`: atomic, fsynced, 0600, dir 0700). Any number of accounts and slots. Refuses to save without a secure store. No Electron import. |
 | `electron-cipher.ts` | `safeStorage` as a `VaultCipher`. The only file here that imports Electron. |
 | `keychain-requests.ts` | Reads the exact `security` commands Claude Code 2.1.287 sends (read off the shipped binary) into vault requests; everything else is "not ours". |
-| `keychain-shim.ts` | The `security` script a kept Claude session finds first on PATH; answers that session's own login from the socket and passes everything else to `/usr/bin/security` untouched. |
-| `server.ts` | The unix socket the shim talks to (`account-vault/vault.sock`, 0600), the per-account `TicketBook`, and the pure `answerShim` / `acceptCapture`. |
+| `keychain-shim.ts` | The `security` script a kept Claude session finds first on PATH (`<userData>/account-vault-shim/security` — a folder of its own, deliberately not inside the vault folder and not called `bin`, because a confined plan grants a `bin` entry's parent). Answers that session's own login from the socket and passes everything else to `/usr/bin/security` untouched. |
+| `server.ts` | The unix socket the shim talks to (`account-vault/vault.sock`, 0600), the per-account `TicketBook`, and the pure `answerShim` / `acceptCapture`. A lookup is answered only when its keychain name carries **this account's own folder hash** (`sha256(configDir)[:8]`, as the CLI names it) — a nested agent with another `CLAUDE_CONFIG_DIR` holding an inherited ticket is passed to the real `security`. |
 | `codex-auth.ts` | `CodexAuthKeeper` — places a kept Codex login at `$CODEX_HOME/auth.json` while the app runs, captures every write Codex makes (sign-in, refresh, logout), removes the file at quit. |
 | `runtime.ts` | Module state + the one rule (`keptBy`), `vaultEnv`, `vaultPath`, `vaultSignedIn`, `forgetKeptLogin`, `followNewAccount`, `recheckKeptLogin`. |
 | `wire.ts` | `wireAccountVault(...)` → `{ runtime, dispose }`. |
@@ -120,14 +129,27 @@ new `.harness/accounts.{html,tsx}`.
   were orphans at base `04e58b3`.)
 - `npm run typecheck`: clean on this branch.
 
-## 5. Headless host
+## 5. Confined (paired-device) sessions — a decision for Asad
+
+A device's held session is denied the keychain by its sandbox, so today its
+agent cannot read the owner's login. The vault could hand it that login over
+the socket. **It does not**: a confined session is started without a ticket and
+behaves exactly as it did before. Whether a paired device should be able to use
+an account the owner granted it is a product call about what a device may reach,
+not a side effect of where logins are stored — so it is left to him. Changing it
+is one line in `host-core.ts` (the `confined ? withoutVaultEnv(…) : …` spread).
+
+## 6. Headless host
 
 Not wired, deliberately: plain Node has no `safeStorage`, so `src/headless/` gets
-no vault and its accounts behave exactly as before (`sessionEnv` adds nothing when
-no runtime is installed). If the headless host ever runs inside Electron, the
-same `wireAccountVault` call works there unchanged.
+no vault. Accounts it has never kept behave exactly as before. An account the
+desktop **has** kept (it shares `profiles.json`) reads `unavailable` there and a
+session on it is refused with a sentence — the agent is never left to read a
+keychain item the app stopped keeping up to date. The desktop's quit-time removal
+of a Codex `auth.json` checks `ps` first and leaves the file if any process
+outside the app is running Codex on that folder.
 
-## 6. What the integrator should check with a real login (I could not)
+## 7. What the integrator should check with a real login (I could not)
 
 Every test here used fake credentials, a scratch config dir, a fake `security`
 and a local stand-in for the API and the OAuth server — the login keychain was

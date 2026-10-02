@@ -71,8 +71,9 @@ import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
-import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
+import { getState as profilesState, keptUnavailable, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
 import { vaultPath } from './account-vault/runtime'
+import { withoutVaultEnv } from './session-env'
 // Which login each session's agent is actually running as — the one place that
 // answers it, so that the control cluster names the same account the chip and
 // the usage bar do. See {@link HostCore.controlAccess}.
@@ -1375,6 +1376,20 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     extraArgs?: readonly string[],
   ): Promise<SessionMeta> {
     /*
+     * An account whose login this app keeps, in a process that cannot reach it
+     * — the headless host, which has no `safeStorage`, or a desktop whose vault
+     * would not unlock. Refused before anything is probed or spawned: the agent
+     * would otherwise read the keychain item its folder names, which the app
+     * stopped keeping up to date, and the session would run as a stale login or
+     * none, silently. Resolved the same way the spawn below resolves it, so the
+     * two cannot disagree about which account this is.
+     * `account-vault/runtime.ts` (`unavailable`) has the rest.
+     */
+    const unavailable = keptUnavailable(
+      resolveProfile(profilesState(), { sessionProfileId: input.profileId ?? undefined, projectPath: input.cwd }),
+    )
+    if (unavailable !== null) throw new Error(unavailable)
+    /*
      * Which side of the WSL boundary this session lives on, decided by its
      * folder and by nothing else.
      *
@@ -1870,7 +1885,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * whoever adds the third caller.
      */
     const profileEnv = {
-      ...sessionEnv(profile, provider),
+      /*
+       * Without the vault's ticket when the session is confined. A device's
+       * held session is denied the keychain by its sandbox, and it has always
+       * meant that its agent could not read the owner's login from there; a
+       * ticket would quietly hand it that login over the socket instead. That
+       * is a change to what a paired device can reach, which is the owner's to
+       * decide, not a side effect of where logins are stored — so it is not
+       * made here. A confined session behaves exactly as it did before.
+       */
+      ...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : sessionEnv(profile, provider)),
       ...(guest?.set ?? {}),
       ...(confined && confine ? confinedHomeEnv(confine.home, platform) : {}),
       /*

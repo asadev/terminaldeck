@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { claudeLogin, fakeCipher } from './fake-cipher.fixture'
-import { AccountVault, NO_SECURE_STORE, VAULT_FILE } from './store'
+import { AccountVault, NO_SECURE_STORE, VAULT_FILE, VAULT_LOCKED } from './store'
 
 /**
  * The vault against `fakeCipher` — see the fixture for why its ciphertext is a
@@ -120,13 +120,80 @@ describe('the vault keeps logins encrypted', () => {
     expect(existsSync(join(dir, VAULT_FILE))).toBe(false)
   })
 
-  it('sets an unreadable vault aside instead of overwriting it', () => {
-    writeFileSync(join(dir, VAULT_FILE), Buffer.from('somebody else entirely').toString('base64'))
+  /*
+   * Review finding 4. Before: a vault that would not *decrypt* — a denied or
+   * locked keychain, or a dev build reading a release build's file — was read
+   * as empty, and the next sign-in renamed it to `.unreadable-*`, losing every
+   * login in it. A file that will not decrypt is somebody's logins behind a key
+   * that is not here right now; only a file that decrypts and will not parse is
+   * damaged, and only that one is set aside.
+   */
+  it('leaves a vault that will not decrypt exactly as it is, refuses writes, and tries again', () => {
+    const original = Buffer.from('a vault from another build of the app').toString('base64')
+    writeFileSync(join(dir, VAULT_FILE), original)
     const vault = new AccountVault({ dir, cipher: fakeCipher(), now: () => 42 })
+    expect(vault.summaries()).toEqual([])
+    const write = vault.put('a', 'claude', 'keychain:Claude Code-credentials', claudeLogin('A'), 'sign-in')
+    expect(write.ok).toBe(false)
+    expect(readFileSync(join(dir, VAULT_FILE), 'utf8')).toBe(original)
+    expect(existsSync(join(dir, `${VAULT_FILE}.unreadable-42`))).toBe(false)
+    expect(write.message).toBe(VAULT_LOCKED)
+    expect(vault.state()).toBe('locked')
+    // Not cached: once the key is back, the same vault opens.
+    let decrypts = 0
+    const counting = fakeCipher()
+    const watched = new AccountVault({
+      dir,
+      cipher: { ...counting, decrypt: (blob) => { decrypts += 1; return counting.decrypt(blob) } },
+    })
+    expect(watched.open()).toBe('locked')
+    expect(watched.open()).toBe('locked')
+    expect(decrypts).toBe(2)
+  })
+
+  it('sets aside a vault that decrypts but will not parse, instead of overwriting it', () => {
+    writeFileSync(join(dir, VAULT_FILE), fakeCipher().encrypt('{ this is not json').toString('base64'))
+    const vault = new AccountVault({ dir, cipher: fakeCipher(), now: () => 42 })
+    expect(vault.open()).toBe('ready')
     expect(vault.summaries()).toEqual([])
     vault.put('a', 'claude', 'keychain:Claude Code-credentials', claudeLogin('A'), 'sign-in')
     expect(existsSync(join(dir, `${VAULT_FILE}.unreadable-42`))).toBe(true)
     expect(new AccountVault({ dir, cipher: fakeCipher() }).has('a')).toBe(true)
+  })
+
+  it('reports an encryption failure as a failed save, not as anything else', () => {
+    const cipher = fakeCipher()
+    const vault = new AccountVault({
+      dir,
+      cipher: { ...cipher, encrypt: () => { throw new Error('keychain said no') } },
+    })
+    const write = vault.put('a', 'claude', 'keychain:Claude Code-credentials', claudeLogin('A'), 'sign-in')
+    expect(write.ok).toBe(false)
+    expect(write.message).toContain('keychain said no')
+  })
+
+  /*
+   * Review finding 8. Before: a delete whose save failed left the login live in
+   * memory while the account was reported deleted.
+   */
+  it('forgets an account in memory even when the disk refuses, and says the save failed', () => {
+    let fail = false
+    const vault = new AccountVault({
+      dir,
+      cipher: fakeCipher(),
+      writeFile: (d, f, c) => {
+        if (fail) throw new Error('disk full')
+        writeFileSync(f, c)
+        void d
+      },
+    })
+    vault.put('gone', 'claude', 'keychain:Claude Code-credentials', claudeLogin('GONE'), 'sign-in')
+    fail = true
+    const result = vault.forget('gone')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('disk full')
+    expect(vault.has('gone')).toBe(false)
+    expect(vault.read('gone', 'keychain:Claude Code-credentials')).toBeNull()
   })
 
   it('refuses slot names it did not choose, so nothing odd reaches a log or a file name', () => {

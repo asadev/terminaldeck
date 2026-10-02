@@ -66,3 +66,23 @@ export function stripInheritedSessionEnv(
   }
   return out
 }
+
+/**
+ * An environment with the account vault's two variables taken out, everything
+ * else exactly as it was.
+ *
+ * For the places that build a child's environment straight from `process.env`
+ * rather than through {@link stripInheritedSessionEnv} — the sign-in probe, the
+ * usage probe. If this app was launched from inside a session on an account it
+ * keeps, both variables are in `process.env`, and a probe about a *different*
+ * account would otherwise carry that account's ticket. The account it is
+ * actually about sets its own again, after this.
+ */
+export function withoutVaultEnv<V extends string | undefined>(env: Record<string, V>): Record<string, V> {
+  const out: Record<string, V> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (VAULT_VARS.has(key)) continue
+    out[key] = value
+  }
+  return out
+}

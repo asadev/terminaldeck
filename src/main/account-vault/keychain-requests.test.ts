@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { decodeHex, readShimCall, slotForService, splitWords } from './keychain-requests'
+import { decodeHex, directorySuffixes, readShimCall, slotForService, splitWords } from './keychain-requests'
 
 /**
  * The commands are the ones in the shipped CLI (`@anthropic-ai/claude-code`
@@ -12,13 +13,25 @@ const USER = 'imatch'
 const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex')
 
 describe('which keychain services are an agent login', () => {
-  it('keeps the variant and drops the directory hash', () => {
-    expect(slotForService('Claude Code-credentials')).toBe('keychain:Claude Code-credentials')
-    expect(slotForService('Claude Code-credentials-70e2e799')).toBe('keychain:Claude Code-credentials')
-    expect(slotForService('Claude Code-staging-oauth-credentials-8e404012')).toBe(
-      'keychain:Claude Code-staging-oauth-credentials',
-    )
-    expect(slotForService('Claude Code-70e2e799')).toBe('keychain:Claude Code')
+  it('keeps the variant in the slot, and hands the directory hash back beside it', () => {
+    expect(slotForService('Claude Code-credentials')).toEqual({ slot: 'keychain:Claude Code-credentials', suffix: null })
+    expect(slotForService('Claude Code-credentials-70e2e799')).toEqual({
+      slot: 'keychain:Claude Code-credentials',
+      suffix: '70e2e799',
+    })
+    expect(slotForService('Claude Code-staging-oauth-credentials-8e404012')).toEqual({
+      slot: 'keychain:Claude Code-staging-oauth-credentials',
+      suffix: '8e404012',
+    })
+    expect(slotForService('Claude Code-70e2e799')).toEqual({ slot: 'keychain:Claude Code', suffix: '70e2e799' })
+  })
+
+  it('names the directory hash the way the shipped CLI does', () => {
+    const sha = (text: string): string => createHash('sha256').update(text).digest('hex')
+    const dir = '/Users/x/Library/Application Support/terminaldeck/profiles/work'
+    expect(directorySuffixes(dir, sha)).toEqual(new Set([sha(dir).slice(0, 8)]))
+    // A decomposed accent and its composed form are one folder to a person.
+    expect(directorySuffixes('/p/Cafe\u0301', sha).has(sha('/p/Caf\u00e9').slice(0, 8))).toBe(true)
   })
 
   it('leaves everything else alone — the device keys, a signing identity, anything a person asks for', () => {
@@ -35,7 +48,7 @@ describe('reading what the CLI sends', () => {
       readShimCall(['find-generic-password', '-a', USER, '-w', '-s', 'Claude Code-credentials-70e2e799'], ''),
     ).toEqual({
       kind: 'ours',
-      requests: [{ op: 'find', slot: 'keychain:Claude Code-credentials', wantsPassword: true }],
+      requests: [{ op: 'find', slot: 'keychain:Claude Code-credentials', suffix: '70e2e799', wantsPassword: true }],
     })
   })
 
@@ -44,7 +57,7 @@ describe('reading what the CLI sends', () => {
     const stdin = `add-generic-password -U -a "${USER}" -s "Claude Code-credentials-70e2e799" -X "${hex(login)}"\n`
     expect(readShimCall(['-i'], stdin)).toEqual({
       kind: 'ours',
-      requests: [{ op: 'add', slot: 'keychain:Claude Code-credentials', value: login }],
+      requests: [{ op: 'add', slot: 'keychain:Claude Code-credentials', suffix: '70e2e799', value: login }],
     })
   })
 
@@ -55,13 +68,16 @@ describe('reading what the CLI sends', () => {
         ['add-generic-password', '-U', '-a', USER, '-s', 'Claude Code-credentials-70e2e799', '-X', hex(login)],
         '',
       ),
-    ).toEqual({ kind: 'ours', requests: [{ op: 'add', slot: 'keychain:Claude Code-credentials', value: login }] })
+    ).toEqual({
+      kind: 'ours',
+      requests: [{ op: 'add', slot: 'keychain:Claude Code-credentials', suffix: '70e2e799', value: login }],
+    })
   })
 
   it('reads the delete and the lock check', () => {
     expect(readShimCall(['delete-generic-password', '-a', USER, '-s', 'Claude Code-credentials-1a2b3c4d'], '')).toEqual({
       kind: 'ours',
-      requests: [{ op: 'delete', slot: 'keychain:Claude Code-credentials' }],
+      requests: [{ op: 'delete', slot: 'keychain:Claude Code-credentials', suffix: '1a2b3c4d' }],
     })
     expect(readShimCall(['show-keychain-info'], '')).toEqual({ kind: 'ours', requests: [{ op: 'locked?' }] })
   })

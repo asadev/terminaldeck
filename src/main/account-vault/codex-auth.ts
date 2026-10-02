@@ -8,7 +8,11 @@
  * one is signed in"*). It never asks a command for it, so there is no lookup
  * this app can answer the way `keychain-shim.ts` answers Claude Code's. The
  * only place Codex will read a login from is that file, in that account's own
- * directory.
+ * directory. That is Codex's default, and it is read off its source rather than
+ * assumed: `codex-rs/config/defaults.toml` ships `cli_auth_credentials_store =
+ * "file"`. A person who has set it to `keyring` in an account's own
+ * `config.toml` simply gets no file here, and that account goes on being kept
+ * by Codex exactly as before — nothing is captured, nothing is removed.
  *
  * So for an account this app keeps:
  *
@@ -36,6 +40,7 @@
  * set before the file is touched.
  */
 
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { writeSecretFile } from '../remote/secret-file'
@@ -97,7 +102,78 @@ export function readAuthFile(path: string): string | null {
   }
 }
 
+/**
+ * Is some process that is not this app — or one of its own sessions, which are
+ * already being stopped — running with this `CODEX_HOME`?
+ *
+ * Read from `ps -A -E` (every process of this user, with its environment) and
+ * decided by {@link codexHomeInUse}. Why it is asked: the file is removed at
+ * quit, and the folder can be in use by something else — the headless host on
+ * the same Mac, or a terminal somebody pointed at it. Removing a login from
+ * under a running Codex is how that session would be signed out mid-task for a
+ * reason nobody could see. When in doubt — `ps` fails — the answer is "in use",
+ * and the file is left for the next launch to settle.
+ */
+export function codexHomeInUseNow(dir: string): boolean {
+  try {
+    const listing = execFileSync('/bin/ps', ['-A', '-ww', '-E', '-o', 'pid=,ppid=,command='], {
+      encoding: 'utf8',
+      timeout: 3000,
+      maxBuffer: 32 * 1024 * 1024,
+    })
+    return codexHomeInUse(listing, dir, process.pid)
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The decision behind {@link codexHomeInUseNow}, on `ps` output, so it can be
+ * tested without a process table.
+ *
+ * A process counts when its environment names this exact `CODEX_HOME` — the
+ * value followed by a space or the end of the line, because the path itself
+ * may contain spaces (`Application Support`) and a prefix match would mistake
+ * `…/work-2` for `…/work`. It does not count when it descends from `ownPid`:
+ * those are this app's own sessions, stopped a moment before this runs.
+ */
+export function codexHomeInUse(listing: string, dir: string, ownPid: number): boolean {
+  const parent = new Map<number, number>()
+  const using: number[] = []
+  const needle = `CODEX_HOME=${dir}`
+  for (const line of listing.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s(.*)$/.exec(line)
+    if (!match) continue
+    const pid = Number(match[1])
+    parent.set(pid, Number(match[2]))
+    const rest = match[3] ?? ''
+    let at = rest.indexOf(needle)
+    while (at !== -1) {
+      const after = rest.charAt(at + needle.length)
+      const before = at === 0 ? ' ' : rest.charAt(at - 1)
+      if (before === ' ' && (after === '' || after === ' ')) {
+        using.push(pid)
+        break
+      }
+      at = rest.indexOf(needle, at + 1)
+    }
+  }
+  const ours = (pid: number): boolean => {
+    for (let at: number | undefined = pid, hops = 0; at !== undefined && at > 1 && hops < 64; hops++) {
+      if (at === ownPid) return true
+      at = parent.get(at)
+    }
+    return false
+  }
+  return using.some((pid) => !ours(pid))
+}
+
 export interface CodexAuthOptions {
+  /**
+   * Is the folder in use by a process outside this app? Asked before the file
+   * is removed at quit; see {@link codexHomeInUseNow}, the default.
+   */
+  inUse?: (dir: string) => boolean
   watch?: DirWatch
   /** How long to wait for a burst of writes to settle. */
   debounceMs?: number
@@ -219,6 +295,13 @@ export class CodexAuthKeeper {
       // Nothing kept, so the file is not ours to take away — it may be a login
       // the vault could not save (no secure store), and removing it would sign
       // the account out for nothing.
+      this.releasing.delete(account.id)
+      return
+    }
+    if ((this.options.inUse ?? codexHomeInUseNow)(account.configDir)) {
+      // Something outside this app is running Codex on this folder right now.
+      // The file stays; the next launch finds it, keeps whatever it holds, and
+      // goes on from there.
       this.releasing.delete(account.id)
       return
     }

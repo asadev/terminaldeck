@@ -371,6 +371,12 @@ export function switchRefusal(input: {
    * the agent, which is every account the agent keeps itself.
    */
   targetSignedIn?: boolean | null
+  /**
+   * The sentence for an account whose login this app keeps and cannot reach in
+   * this process (`keptUnavailable`), or null. A replacement started on it would
+   * read a stale keychain login or none, so the switch never stops anything.
+   */
+  targetUnavailable?: string | null
 }): string | null {
   const { meta, saved, target } = input
 
@@ -430,6 +436,7 @@ export function switchRefusal(input: {
    * in its tab. Where the app keeps the login it knows the answer without
    * asking anybody, and the answer comes first.
    */
+  if (input.targetUnavailable) return input.targetUnavailable
   if (input.targetSignedIn === false) {
     return (
       `${target.name} is not signed in yet, so this session was left as it is. ` +
@@ -462,6 +469,8 @@ export function planSwitch(input: {
   occupied: boolean
   /** See `switchRefusal`. */
   targetSignedIn?: boolean | null
+  /** See `switchRefusal`. */
+  targetUnavailable?: string | null
   /**
    * Do the two accounts read the same conversation history?
    *
@@ -499,7 +508,13 @@ export function planSwitch(input: {
   const to: SwitchAccount | null =
     target === null ? null : { id: target.id, name: target.name, provider: target.provider }
 
-  const refusal = switchRefusal({ meta, saved, target, targetSignedIn: input.targetSignedIn ?? null })
+  const refusal = switchRefusal({
+    meta,
+    saved,
+    target,
+    targetSignedIn: input.targetSignedIn ?? null,
+    targetUnavailable: input.targetUnavailable ?? null,
+  })
   if (refusal !== null) {
     return { sessionId, refusal, from, to, conversation: 'stays', resume: false }
   }

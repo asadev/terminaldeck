@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -22,22 +23,33 @@ const ON_WINDOWS = process.platform === 'win32'
 const SLOT = 'keychain:Claude Code-credentials'
 const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex')
 
+/** Each account's own config directory — the hash on its keychain items comes from it. */
+const CONFIG_DIRS: Record<string, string> = { one: '/cfg/one', two: '/cfg/two' }
+/** `sha256(dir)[:8]`, the suffix the CLI names an account's keychain items with. */
+const suffixOf = (configDir: string): string => createHash('sha256').update(configDir).digest('hex').slice(0, 8)
+/** The login item's service name for one account, as the CLI spells it. */
+const serviceOf = (account: string): string => `Claude Code-credentials-${suffixOf(CONFIG_DIRS[account] ?? '')}`
+
 /** The body the shim sends: ticket, argc, argv, then stdin. */
 function body(ticket: string, argv: string[], stdin = ''): Buffer {
   return Buffer.from([ticket, String(argv.length), ...argv, stdin].join('\0'), 'utf8')
 }
-const find = (ticket: string): Buffer =>
-  body(ticket, ['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799'])
-const add = (ticket: string, value: string): Buffer =>
-  body(ticket, ['-i'], `add-generic-password -U -a "me" -s "Claude Code-credentials-70e2e799" -X "${hex(value)}"\n`)
-const remove = (ticket: string): Buffer =>
-  body(ticket, ['delete-generic-password', '-a', 'me', '-s', 'Claude Code-credentials-70e2e799'])
+/** The account a ticket names, for spelling its own service — `one` for a forged one. */
+const accountOf = (ticket: string): string => tickets.accountFor(ticket) ?? 'one'
+const find = (ticket: string, account = accountOf(ticket)): Buffer =>
+  body(ticket, ['find-generic-password', '-a', 'me', '-w', '-s', serviceOf(account)])
+const add = (ticket: string, value: string, account = accountOf(ticket)): Buffer =>
+  body(ticket, ['-i'], `add-generic-password -U -a "me" -s "${serviceOf(account)}" -X "${hex(value)}"\n`)
+const remove = (ticket: string, account = accountOf(ticket)): Buffer =>
+  body(ticket, ['delete-generic-password', '-a', 'me', '-s', serviceOf(account)])
 
 let dir = ''
 let vault: AccountVault
 let tickets: TicketBook
 let accounts: Map<string, ProviderId>
 let adopting: Set<string>
+/** Slots settled, as `<account>|<slot>`. */
+let settled: Set<string>
 let kept: string[]
 let deps: VaultServerDeps
 
@@ -51,15 +63,17 @@ beforeEach(() => {
     ['two', 'claude'],
   ])
   adopting = new Set()
+  settled = new Set()
   kept = []
   deps = {
     vault,
     tickets,
     providerOf: (id) => accounts.get(id) ?? null,
-    adopting: (id) => adopting.has(id),
-    markKept: (id) => {
+    configDirOf: (id) => CONFIG_DIRS[id] ?? null,
+    adopting: (id, slot) => adopting.has(id) && !settled.has(`${id}|${slot}`),
+    markKept: (id, slot) => {
       kept.push(id)
-      adopting.delete(id)
+      settled.add(`${id}|${slot}`)
     },
   }
 })
@@ -151,7 +165,7 @@ describe('answering a session from the vault', () => {
 
     // The shim ran the real command and reports what it printed.
     const report = Buffer.from(
-      [ticket, '0', '6', 'find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799', `${claudeLogin('OLD-KEYCHAIN')}\n`].join('\0'),
+      [ticket, '0', '6', 'find-generic-password', '-a', 'me', '-w', '-s', serviceOf('one'), `${claudeLogin('OLD-KEYCHAIN')}\n`].join('\0'),
     )
     expect(acceptCapture(report, deps)).toBe(true)
     expect(vault.read('one', SLOT)).toBe(claudeLogin('OLD-KEYCHAIN'))
@@ -160,19 +174,78 @@ describe('answering a session from the vault', () => {
     expect(answerShim(find(ticket), deps)).toMatchObject({ answer: { stdout: claudeLogin('OLD-KEYCHAIN') } })
   })
 
-  it('keeps nothing from a capture that failed, and nothing for an account that is not moving', () => {
+  it('keeps nothing from a capture that failed, and settles a slot the keychain never had', () => {
     adopting.add('one')
     const ticket = tickets.ticketFor('one')
-    const failed = Buffer.from(
-      [ticket, '44', '6', 'find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials', ''].join('\0'),
-    )
-    expect(acceptCapture(failed, deps)).toBe(false)
-    adopting.delete('one')
-    const late = Buffer.from(
-      [ticket, '0', '6', 'find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials', 'x'].join('\0'),
-    )
-    expect(acceptCapture(late, deps)).toBe(false)
+    const report = (code: string, out: string): Buffer =>
+      Buffer.from([ticket, code, '6', 'find-generic-password', '-a', 'me', '-w', '-s', serviceOf('one'), out].join('\0'))
+    // Locked keychain: nothing kept, nothing settled — the next lookup tries again.
+    expect(acceptCapture(report('36', ''), deps)).toBe(false)
+    expect(settled.has(`one|${SLOT}`)).toBe(false)
+    // "Not found" in the real keychain: nothing to move, and the slot is settled.
+    expect(acceptCapture(report('44', ''), deps)).toBe(true)
+    expect(settled.has(`one|${SLOT}`)).toBe(true)
     expect(vault.has('one')).toBe(false)
+    // Settled for good: a late report of a value is not kept.
+    expect(acceptCapture(report('0', 'x'), deps)).toBe(false)
+    expect(vault.has('one')).toBe(false)
+  })
+
+  /*
+   * Review finding 3. Before: a sign-out of a slot still in the keychain was
+   * answered "not found" from the empty vault — the real item survived, the
+   * slot was not settled, and the next lookup captured the login straight back.
+   * After a 401 that loops: the CLI deletes the bad token, gets it back, fails.
+   */
+  it('a sign-out of a login still in the keychain really deletes it, and it stays deleted', () => {
+    adopting.add('one')
+    const ticket = tickets.ticketFor('one')
+    expect(answerShim(remove(ticket), deps)).toEqual({ kind: 'pass' })
+    expect(settled.has(`one|${SLOT}`)).toBe(true)
+    // The next lookup is the vault's — empty — and never a capture.
+    expect(answerShim(find(ticket), deps)).toMatchObject({ kind: 'exit', answer: { code: 44 } })
+  })
+
+  it('moves each slot on its own, so settling the login does not strand the API-key slot', () => {
+    adopting.add('one')
+    const ticket = tickets.ticketFor('one')
+    const apiKey = body(ticket, ['find-generic-password', '-a', 'me', '-w', '-s', `Claude Code-${suffixOf(CONFIG_DIRS.one ?? '')}`])
+    expect(answerShim(find(ticket), deps)).toEqual({ kind: 'capture' })
+    settled.add(`one|${SLOT}`)
+    expect(answerShim(apiKey, deps)).toEqual({ kind: 'capture' })
+  })
+
+  /*
+   * Review finding 11. Before: an interactive-mode lookup was answered
+   * `capture`, which `acceptCapture` can never accept (it is not handed
+   * stdin), so it passed to the keychain for ever without being kept.
+   */
+  it('passes an interactive-mode lookup through rather than promising a capture it cannot keep', () => {
+    adopting.add('one')
+    const ticket = tickets.ticketFor('one')
+    const interactive = body(ticket, ['-i'], `find-generic-password -a "me" -w -s "${serviceOf('one')}"\n`)
+    expect(answerShim(interactive, deps)).toEqual({ kind: 'pass' })
+  })
+
+  /*
+   * Review finding 6. Before: the directory hash was dropped, so a nested
+   * agent with another `CLAUDE_CONFIG_DIR` — inheriting this session's ticket —
+   * was answered from this account's slot and could overwrite or delete it.
+   */
+  it('answers only lookups carrying this account’s own directory hash', () => {
+    vault.put('one', 'claude', SLOT, claudeLogin('ONE'), 'sign-in')
+    const ticket = tickets.ticketFor('one')
+    const elsewhere = `Claude Code-credentials-${suffixOf('/somewhere/else')}`
+    const nestedFind = body(ticket, ['find-generic-password', '-a', 'me', '-w', '-s', elsewhere])
+    const nestedWrite = body(ticket, ['-i'], `add-generic-password -U -a "me" -s "${elsewhere}" -X "${hex('EVIL')}"\n`)
+    const nestedDelete = body(ticket, ['delete-generic-password', '-a', 'me', '-s', elsewhere])
+    const machineOwn = body(ticket, ['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials'])
+    for (const request of [nestedFind, nestedWrite, nestedDelete, machineOwn]) {
+      expect(answerShim(request, deps)).toEqual({ kind: 'pass' })
+    }
+    expect(vault.read('one', SLOT)).toBe(claudeLogin('ONE'))
+    // And this account's own spelling is answered as before.
+    expect(answerShim(find(ticket), deps)).toMatchObject({ answer: { stdout: claudeLogin('ONE') } })
   })
 
   it('speaks three lines a shell can read', () => {
@@ -234,19 +307,19 @@ describe.skipIf(ON_WINDOWS)('the shim, run by a real shell against a real socket
 
   it('answers a lookup from the vault, exactly as `security -w` prints it', async () => {
     vault.put('one', 'claude', SLOT, claudeLogin('ONE'), 'sign-in')
-    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799'], vaultEnv('one'))
+    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', serviceOf('one')], vaultEnv('one'))
     expect(out).toEqual({ code: 0, stdout: `${claudeLogin('ONE')}\n`, stderr: '' })
   })
 
   it('says "not found" with exit 44 for an account with no login', async () => {
-    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799'], vaultEnv('two'))
+    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', serviceOf('two')], vaultEnv('two'))
     expect(out.code).toBe(44)
     expect(out.stderr).toContain('could not be found in the keychain')
   })
 
   it('keeps a `security -i` write without the token ever appearing in an argument', async () => {
     const login = claudeLogin('WRITTEN')
-    const out = await shim(['-i'], vaultEnv('one'), `add-generic-password -U -a "me" -s "Claude Code-credentials-70e2e799" -X "${hex(login)}"\n`)
+    const out = await shim(['-i'], vaultEnv('one'), `add-generic-password -U -a "me" -s "${serviceOf('one')}" -X "${hex(login)}"\n`)
     expect(out.code).toBe(0)
     expect(vault.read('one', SLOT)).toBe(login)
     // The real command was never involved.
@@ -277,18 +350,62 @@ describe.skipIf(ON_WINDOWS)('the shim, run by a real shell against a real socket
 
   it('moves an old account across on its first lookup, through the real command, and keeps it', async () => {
     adopting.add('one')
-    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799'], vaultEnv('one'))
+    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', serviceOf('one')], vaultEnv('one'))
     expect(out.code).toBe(0)
     expect(out.stdout).toBe(`${claudeLogin('FROM-OLD-KEYCHAIN')}\n`)
     expect(vault.read('one', SLOT)).toBe(claudeLogin('FROM-OLD-KEYCHAIN'))
     expect(kept).toContain('one')
   })
 
+  /*
+   * Review finding 2. Before: `-i` anywhere in argv made the shim read stdin to
+   * the end, so `security cms -D -i file` — whose `-i` is an input file — sat
+   * waiting on a stdin that never closes (a terminal, a loop's pipe).
+   */
+  it('does not read stdin for a command whose -i is an ordinary flag', async () => {
+    const env = vaultEnv('one')
+    const exited = await new Promise<boolean>((resolve) => {
+      const child = spawn(join(dir, 'security'), ['cms', '-D', '-i', 'profile.mobileprovision'], {
+        env: withPath(env, '/usr/bin:/bin', 'darwin'),
+        stdio: ['pipe', 'ignore', 'ignore'],
+      })
+      // stdin is left open on purpose: a terminal never sends end-of-file.
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        resolve(false)
+      }, 4000)
+      child.on('exit', () => {
+        clearTimeout(timer)
+        resolve(true)
+      })
+    })
+    expect(exited).toBe(true)
+    expect(readFileSync(fakeLog, 'utf8')).toContain('REAL: cms -D -i profile.mobileprovision')
+  })
+
+  /*
+   * Review finding 10. Before: with the app not answering, only `-credentials`
+   * lookups failed closed — an API-key lookup went to the real keychain — and a
+   * write was answered 44 "not found".
+   */
+  it('fails closed for the API-key slot too, and refuses a write rather than calling it not found', async () => {
+    const env = vaultEnv('one')
+    await socket?.close()
+    socket = null
+    const suffix = suffixOf(CONFIG_DIRS.one ?? '')
+    const apiKey = await shim(['find-generic-password', '-a', 'me', '-w', '-s', `Claude Code-${suffix}`], env)
+    expect(apiKey.code).toBe(44)
+    const write = await shim(['-i'], env, `add-generic-password -U -a "me" -s "${serviceOf('one')}" -X "${hex('x')}"\n`)
+    expect(write.code).toBe(1)
+    expect(write.stderr).toContain('nothing was changed')
+    expect(() => readFileSync(fakeLog, 'utf8')).toThrow()
+  })
+
   it('fails closed for a login when the app is not answering — never the keychain item a hash names', async () => {
     const env = vaultEnv('one')
     await socket?.close()
     socket = null
-    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials-70e2e799'], env)
+    const out = await shim(['find-generic-password', '-a', 'me', '-w', '-s', serviceOf('one')], env)
     expect(out.code).toBe(44)
     expect(() => readFileSync(fakeLog, 'utf8')).toThrow()
   })
