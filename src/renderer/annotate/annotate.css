@@ -1,0 +1,343 @@
+/* ============================================================================
+   Annotate — the frozen picture on the left, the notes on the right.
+
+   One surface for the browser and the Simulators page; see `AnnotateSurface.tsx`.
+   Tokens only. The picture is the content and gets the room; the notes are a
+   glass card beside it, because it floats over a frozen screen in the browser
+   and the same card must read the same on a device.
+
+   Separated with space, not lines: the rows in the list have no rules between
+   them, the card has no outline, and the markers are the only strokes here —
+   because they are the thing being pointed at.
+   ============================================================================ */
+
+.an {
+  container-type: inline-size;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
+  gap: var(--sp-4);
+  min-height: 0;
+  padding: var(--sp-4);
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+/* Narrow: the notes go under the picture rather than squeezing it. */
+@container (max-width: 640px) {
+  .an-panel {
+    max-height: 45%;
+  }
+}
+
+@media (max-width: 720px) {
+  .an {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+}
+
+/*
+  Over: the browser's page. The picture is the page's own rectangle at its own
+  size — the surface *is* that rectangle — so the stage has no padding and the
+  picture no shadow or radius, and the card floats over the right-hand edge.
+*/
+.an[data-layout='over'] {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+.an[data-layout='over'] .an-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.an[data-layout='over'] .an-picture {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.an[data-layout='over'] .an-panel {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  bottom: var(--sp-3);
+  width: min(21rem, calc(100% - 2 * var(--sp-3)));
+  max-height: calc(100% - 2 * var(--sp-3));
+  height: fit-content;
+}
+
+/* The accent, carried on an element so the canvas can read it back. */
+.an-ink {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.an-stage {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.an-picture {
+  position: relative;
+  cursor: crosshair;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  user-select: none;
+}
+
+.an-picture[data-picking] {
+  cursor: progress;
+}
+
+.an-picture img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* What the pointer is over, before it is clicked. Dashed: it is a suggestion. */
+.an-hover {
+  position: absolute;
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+.an-mark {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1.5px var(--material-edge);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.an-mark[data-on] {
+  background: var(--accent-soft);
+}
+
+.an-badge {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* On the picture the number sits on the corner of the outline. */
+.an-mark .an-badge {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  box-shadow: 0 0 0 2px var(--material-edge), var(--shadow-sm);
+}
+
+/* ------------------------------------------------------------- the card -- */
+
+.an-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius-xl);
+  background: var(--material-bg);
+  background-image: var(--material-sheen);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-md);
+}
+
+.an-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.an-title {
+  color: var(--text-primary);
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+}
+
+.an-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.an-done,
+.an-text-button {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.an-done:hover,
+.an-text-button:hover {
+  background: var(--bg-hover);
+}
+
+.an-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.an-confirm span {
+  flex: 1;
+}
+
+.an-notice {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.an-empty {
+  margin: 0;
+  padding: var(--sp-6) var(--sp-2);
+  color: var(--text-muted);
+  text-align: center;
+  line-height: var(--lh-body);
+}
+
+.an-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.an-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.an-row[data-on] {
+  background: var(--fill-quaternary);
+}
+
+.an-row > .an-badge {
+  margin-top: 2px;
+}
+
+.an-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.an-element {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.an-note {
+  width: 100%;
+  min-height: calc(var(--control-h) * 1.6);
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  /* Grows with what is written instead of wearing a resize grip — a grip in
+     the corner of every note is a line drawn for no reason. */
+  field-sizing: content;
+  resize: none;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.an-note::placeholder {
+  color: var(--text-muted);
+}
+
+.an-note:focus {
+  outline: none;
+  background: var(--bg-primary);
+  box-shadow: 0 0 0 2px var(--accent-line);
+}
+
+.an-remove {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.an-remove:hover {
+  background: var(--bg-hover);
+  color: var(--color-critical);
+}
+
+/* The send box sits at the foot of the card whatever the list's length. */
+.an-send {
+  margin-top: auto;
+}
+
+.an-send .bw-send-target {
+  flex-basis: 100%;
+}
+
+.an-send .bw-send-target > .bw-session-picker {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+}

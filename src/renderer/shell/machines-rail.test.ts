@@ -56,6 +56,12 @@ describe('Machines in the rail', () => {
       'files',
       'artifacts',
       'git',
+      // `simulators` is the other, in 0.16.0, and it is a new place rather
+      // than a second door to an old one: nothing in the app showed a phone or
+      // a simulator before. Asad asked for it by name — *"we will do it for
+      // apps as well, for simulators as well"* — and it is one row, not the
+      // three (iOS, Android, phones) the engine could have been split into.
+      'simulators',
       // `store` is the one row added to this rail since, and it is not a
       // counter-example to the requirement above — it *removed* two surfaces
       // rather than adding one. The store was a modal inside the browser and a

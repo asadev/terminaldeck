@@ -304,7 +304,7 @@ describe('icons, and the name on the hover', () => {
     // app's own type — they did not simply disappear.
     const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
     expect(markup).not.toContain('bw-icon-word')
-    for (const word of ['Inspect', 'Record', 'Shot', 'Draw', 'Size', 'Devtools', 'More']) {
+    for (const word of ['Annotate', 'Record', 'Shot', 'Draw', 'Size', 'Devtools', 'More']) {
       expect(markup, `no hover name for ${word}`).toContain(`title="${word}"`)
     }
   })
@@ -429,11 +429,13 @@ describe('the actions that give way to the address bar', () => {
   })
 
   it('keeps the two that say something about the page you are looking at', () => {
-    // Shared/Isolated is the only sign a tab has its own cookies, and Inspect is
-    // what this browser is for. Neither is an overflow item.
+    // Shared/Isolated is the only sign a tab has its own cookies, and Annotate
+    // (once Inspect) is what this browser is for. Neither is an overflow item.
     const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
     expect(markup).toMatch(/aria-label="Session: Shared"(?![^>]*data-fold)/)
-    expect(markup).toMatch(/aria-label="Inspect"(?![^>]*data-fold)/)
+    expect(markup).toMatch(/aria-label="Annotate"(?![^>]*data-fold)/)
+    // And the old word is gone from the bar for good.
+    expect(markup).not.toContain('aria-label="Inspect"')
     expect(markup).toMatch(/aria-label="More"(?![^>]*data-fold)/)
   })
 })

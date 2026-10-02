@@ -164,7 +164,7 @@ describe('the instruction strip', () => {
 
   it('tells you to click while inspecting, and stops once something is captured', () => {
     const inspecting = { ...OFF, inspecting: true }
-    expect(modeHint(inspecting, { hasCapture: false })).toContain('Click any element')
+    expect(modeHint(inspecting, { hasCapture: false })).toContain('Click what you want to change')
     // The popup is the instruction at that point, and the page is about to be
     // replaced by it — so nothing on screen moves when the line goes.
     expect(modeHint(inspecting, { hasCapture: true })).toBe('')

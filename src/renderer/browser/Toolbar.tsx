@@ -662,18 +662,35 @@ export function Toolbar({
 
         Which five: what stays is what tells you something while you look at the
         page — Shared/Isolated, whose accent is the only sign a tab has its own
-        cookies; Inspect, which is what this browser is for; and Chrome's own
+        cookies; Annotate, which is what this browser is for; and Chrome's own
         last pair, the profile and the ⋮.
       */}
       <div className="bw-actions" ref={actionsRef}>
         <IsolationToggle tab={tab} onToggle={onToggleIsolation} />
+        {/*
+          Annotate, which was called Inspect until 0.16.0. Asad: *"we will not
+          call it inspect anymore, we will call it Annotate, just like other AIs
+          like ChatGPT also has, Claude also has."* The mode is the one it always
+          was at its start — the element under the pointer is outlined and a
+          click picks it — and it goes further now: the page freezes, more than
+          one thing can be pointed at, each gets a note, and they all go to a
+          session together. The phone and simulator screens have the same
+          button, with the same name and the same glyph, and open the same
+          surface (`annotate/AnnotateSurface.tsx`).
+
+          The prop and the state underneath are still `onInspect` and
+          `inspecting`, and so is the `browser:inspect` channel: renaming them
+          would touch the preload and every test that drives the mode, for a
+          word nobody reads. The word on the button is the one that mattered.
+        */}
         <IconButton
-          label="Inspect"
+          label="Annotate"
           pressed={tab?.inspecting === true}
           disabled={!has}
           onClick={onInspect}
         >
-          <path d="M5 3l6.5 17 2.4-6.9 7-2.4z" />
+          <path d="M5 5.5h14v10H10l-4.5 3.5v-3.5H5z" />
+          <path d="M9 10.5h6" />
         </IconButton>
         <IconButton
           /* The count stays in the name, because during a recording there is

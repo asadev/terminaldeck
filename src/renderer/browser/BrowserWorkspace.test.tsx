@@ -6,7 +6,7 @@ import { BrowserWorkspace, onStartPage, pageVisible } from './BrowserWorkspace'
 import { newTab, type WorkspaceTab } from './tabs'
 import { composeSend, describeLabelSource, oneLine } from './capture-text'
 import { composeShot, shortenPath } from './ScreenshotPopup'
-import { elide } from './CapturePopup'
+import { elide } from './capture-text'
 import { formatBytes } from './SessionModal'
 import {
   BRIDGE_METHODS,
@@ -152,7 +152,9 @@ describe('the wired panel', () => {
       'Forward',
       'Reload',
       'Home',
-      'Inspect',
+      // Inspect is called Annotate since 0.16.0 — Asad's word, the one other
+      // AI apps use for the same thing.
+      'Annotate',
       'Record',
       'Shot',
       'Size',
@@ -187,7 +189,7 @@ describe('the wired panel', () => {
      * to whatever the OS does with a `title`.
      */
     expect(html).not.toContain('bw-icon-word')
-    for (const word of ['Inspect', 'Record', 'Shot', 'Size', 'Devtools', 'More']) {
+    for (const word of ['Annotate', 'Record', 'Shot', 'Size', 'Devtools', 'More']) {
       expect(html, `no hover name for ${word}`).toContain(`title="${word}"`)
     }
   })

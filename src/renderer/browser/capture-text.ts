@@ -2,8 +2,9 @@
  * What a capture is *worth saying*, as three pure functions.
  *
  * This file used to be the docked panel at the bottom of the browser as well.
- * The panel is gone — an inspected element opens a popup at the element now,
- * see `CapturePopup.tsx` — but the three rules it carried are used by all three
+ * The panel is gone, and so is the popup that replaced it — a clicked element
+ * opens an Annotate round now, see `BrowserAnnotate.tsx` — but the rules it
+ * carried are used by all three
  * senders and are the only part of it that was ever testable without a DOM:
  * where a label came from, how a string is flattened on its way into a PTY, and
  * exactly what the agent receives.
@@ -44,4 +45,22 @@ export function composeSend(context: string, instruction: string): string {
   const lead = oneLine(instruction)
   const tail = oneLine(context)
   return lead ? `${lead} ${tail}` : tail
+}
+
+/**
+ * How much of an element's text a row shows before eliding it.
+ *
+ * The main process already clamps to 150 characters. That is the right size for
+ * the line an agent receives and far too much for a row in a small popup, where
+ * it wraps to four lines and pushes the send box off the bottom. The full text
+ * is on the `title`, and the agent still gets all 150.
+ */
+const TEXT_SHOWN = 90
+
+/** Cut on a word boundary where one is near enough, so it does not end mid-word. */
+export function elide(text: string, max = TEXT_SHOWN): string {
+  if (text.length <= max) return text
+  const cut = text.slice(0, max)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`
 }

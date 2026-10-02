@@ -33,6 +33,10 @@ export const GUEST_ELEMENT_CHANNEL = 'terminaldeck-browser:element'
 export const GUEST_INSPECT_CHANNEL = 'terminaldeck-browser:set-inspect'
 /** Guest → main: the user pressed Escape inside the page. */
 export const GUEST_CANCEL_CHANNEL = 'terminaldeck-browser:inspect-cancelled'
+/** Main → guest: describe the element at this point (Annotate, on a frozen page). */
+export const GUEST_PICK_AT_CHANNEL = 'terminaldeck-browser:pick-at'
+/** Guest → main: the answer to the above, carrying its nonce. */
+export const GUEST_PICKED_CHANNEL = 'terminaldeck-browser:picked'
 
 /**
  * The three channels saved logins need, and why they are here rather than in a
@@ -127,6 +131,8 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
   var CH_ELEMENT = ${JSON.stringify(GUEST_ELEMENT_CHANNEL)}
   var CH_INSPECT = ${JSON.stringify(GUEST_INSPECT_CHANNEL)}
   var CH_CANCEL = ${JSON.stringify(GUEST_CANCEL_CHANNEL)}
+  var CH_PICK_AT = ${JSON.stringify(GUEST_PICK_AT_CHANNEL)}
+  var CH_PICKED = ${JSON.stringify(GUEST_PICKED_CHANNEL)}
   var CH_LOGIN_READY = ${JSON.stringify(GUEST_LOGIN_READY_CHANNEL)}
   var CH_LOGIN_FILL = ${JSON.stringify(GUEST_LOGIN_FILL_CHANNEL)}
   var CH_LOGIN_SUBMIT = ${JSON.stringify(GUEST_LOGIN_SUBMIT_CHANNEL)}
@@ -432,6 +438,46 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
   ipc.on(CH_INSPECT, function (event, enabled) {
     if (enabled === true) enable()
     else disable()
+  })
+
+  /*
+   * Annotate's second and later picks: "what is at this point?"
+   *
+   * The first element of an Annotate round is a click on the live page, exactly
+   * as Inspect always was. After that the page is frozen under a photograph and
+   * the person points at the photograph, so the main process asks here, with
+   * the point in this page's own CSS pixels, and the answer is described by the
+   * same functions a click is — one description of an element, not two that
+   * could disagree about its selector.
+   *
+   * The nonce is echoed so a late answer to an old question is recognisable as
+   * one. Nothing is highlighted and no event is dispatched: the page is not
+   * being shown, and pointing at a photograph must not click the real thing.
+   */
+  ipc.on(CH_PICK_AT, function (event, request) {
+    var x = request && typeof request.x === 'number' ? request.x : -1
+    var y = request && typeof request.y === 'number' ? request.y : -1
+    var nonce = request && typeof request.nonce === 'string' ? request.nonce : ''
+    var el = x >= 0 && y >= 0 ? document.elementFromPoint(x, y) : null
+    if (el && overlay !== null && el === overlay) el = null
+    if (!el || el.nodeType !== 1) {
+      ipc.send(CH_PICKED, { v: 1, nonce: nonce, none: true })
+      return
+    }
+    var rect = el.getBoundingClientRect()
+    ipc.send(CH_PICKED, {
+      v: 1,
+      nonce: nonce,
+      path: pathFrom(el),
+      text: visibleText(el),
+      attributes: attributesOf(el),
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    })
   })
 
   /* ------------------------------------------------------------ logins -- */

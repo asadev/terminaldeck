@@ -1,9 +1,10 @@
 /**
- * Every action a person can take, joined from the four areas. See `./types.ts`.
+ * Every action a person can take, joined from the five areas. See `./types.ts`.
  */
 
 import { agentsCoverage } from './agents'
 import { browserCoverage } from './browser'
+import { devicesCoverage } from './devices'
 import { machinesCoverage } from './machines'
 import { sessionsCoverage } from './sessions'
 import type { CoverageMap } from './types'
@@ -16,4 +17,5 @@ export const COVERAGE_AREAS: Readonly<Record<string, CoverageMap>> = Object.free
   machines: machinesCoverage,
   agents: agentsCoverage,
   browser: browserCoverage,
+  devices: devicesCoverage,
 })
