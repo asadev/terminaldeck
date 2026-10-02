@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ProviderId } from '../../shared/types'
 import { withPath } from '../platform/host'
@@ -19,7 +18,6 @@ import {
 } from './server'
 import { AccountVault } from './store'
 
-const run = promisify(execFile)
 const ON_WINDOWS = process.platform === 'win32'
 const SLOT = 'keychain:Claude Code-credentials'
 const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex')

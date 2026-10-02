@@ -835,6 +835,15 @@ const api: Record<string, unknown> = new Proxy(
       // thing the key decides could never be exercised here.
       defaultProfileId: null,
       projectDefaults: {},
+      // Where each login lives — `AccountVaultView` from `main/profiles.ts`.
+      // The machine's own installs are always the agent's to keep; `work` is an
+      // account this app made, so the app keeps its login, and it has none yet
+      // (it answers signed-out below) — the shape every new account starts in.
+      vault: {
+        system: { keptBy: 'agent', signedIn: null, updatedAt: null, plan: null },
+        'system:codex': { keptBy: 'agent', signedIn: null, updatedAt: null, plan: null },
+        work: { keptBy: 'app', signedIn: false, updatedAt: null, plan: null },
+      },
     }),
     /**
      * Who each account is signed in as — `SignInReport` from
@@ -871,8 +880,10 @@ const api: Record<string, unknown> = new Proxy(
         state: 'signed-out',
         account: null,
         plan: null,
-        detail: 'Not signed in. Open a session with this account to log in.',
-        command: 'claude auth status --json',
+        // A login the app keeps is answered from the vault and nothing is run,
+        // so `command` is empty — what `keptSignIn` in `profiles-signin.ts` sends.
+        detail: 'Not signed in. Sign in to it here, and this app keeps the login.',
+        command: '',
       }
     },
     /*

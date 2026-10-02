@@ -15,10 +15,12 @@ import { onMenuToggle } from '../menu-room'
 import { AddAccountDialog } from './AddAccountDialog'
 import { hasSignOut, signOutNote } from '../../../shared/agent-catalog'
 import { agentCanStart, agentProblem, canHaveMore } from './account-agent'
+import { useOptionalStore } from '../../state/store'
 import {
   accountLabel,
   accountRowLabel,
   accountsBridge,
+  duplicateLogins,
   announceAccountsChanged,
   inheritedInstallNote,
   onAddAccountRequested,
@@ -219,6 +221,13 @@ export function accountNote(
   const where = `Its own folder is ${account.configDir}.`
   const lines = [where, ...(history ? [historyLine(history)] : [])]
   /*
+   * Where the login itself is — the one fact the vault changes. Said only when
+   * it is the app's, because that is the case with a consequence a person
+   * should know before pressing Remove: the login goes with the account.
+   */
+  const kept = keptLine(account)
+  if (kept !== null) lines.push(kept)
+  /*
    * And, on the machine's own install only, why that folder is that folder.
    *
    * The line above prints the directory either way, so a reader who already
@@ -232,6 +241,43 @@ export function accountNote(
   const adopted = inheritedInstallNote(account, inherited)
   if (adopted !== null) lines.push(adopted)
   return lines.join(' ')
+}
+
+/**
+ * Where this account's login is kept, in a sentence, or null when the agent
+ * keeps it as it always has — which needs no sentence.
+ */
+export function keptLine(account: AccountView): string | null {
+  if (account.keptBy === 'app') {
+    return 'This app keeps its login, encrypted, so switching to it needs no sign-in.'
+  }
+  if (account.keptBy === 'adopting') {
+    return 'Its login moves into this app the next time it is used, so switching to it will need no sign-in.'
+  }
+  return null
+}
+
+/**
+ * The open sessions running as one account, as the line under its name says
+ * them — or null when there are none, which needs no line.
+ *
+ * > *"switching shows which account each session is on."*
+ *
+ * The chip inside a session answers it from the session's side; this answers
+ * it from the account's, which is where somebody is standing when they are
+ * deciding which account to switch to and what is already on it.
+ */
+export function sessionsLine(titles: readonly string[] | undefined): string | null {
+  if (!titles || titles.length === 0) return null
+  // A title is whatever the agent printed as its heading, and two tabs in one
+  // folder often share one — so names are said once, cut short, and at most
+  // two of them: a row is one line under a name, not a list of tabs.
+  const names = [...new Set(titles.map((title) => title.trim()).filter((title) => title !== ''))]
+  const cut = (title: string): string => (title.length > 28 ? `${title.slice(0, 27).trimEnd()}…` : title)
+  if (titles.length === 1) return `Running in ${cut(names[0] ?? 'a session')}`
+  const shown = names.slice(0, 2).map(cut).join(', ')
+  const others = names.length > 2 ? ' and others' : ''
+  return `Running in ${titles.length} sessions${shown === '' ? '' : ` — ${shown}${others}`}`
 }
 
 /**
@@ -541,6 +587,14 @@ export interface AccountsViewProps {
    * screen a fact rather than the memory of a button press.
    */
   history?: Readonly<Record<string, AccountHistoryView>>
+  /**
+   * The titles of the open sessions running as each account, by account id.
+   *
+   * Read from the window's session list, where every session carries the
+   * account it was *resolved* to at spawn (`SessionMeta.profileId`) — so a tab
+   * opened on "the default" is listed under the account it actually runs as.
+   */
+  sessionsByAccount?: Readonly<Record<string, readonly string[]>>
   /*
    * `moves`, `onShareHistory` and `onUnshareHistory` were here.
    *
@@ -583,6 +637,7 @@ export function AccountsView({
   onMakeDefault,
   addAccounts,
   history = {},
+  sessionsByAccount = {},
 }: AccountsViewProps) {
   /*
    * `sectionMeta('profiles')` answers with Agents now — the merge table routes
@@ -645,6 +700,8 @@ export function AccountsView({
 
   const accounts = snapshot.accounts
   const runs = runsOfAccounts(accounts, signIn)
+  /** Rows that turned out to be a second copy of another row's login. */
+  const copies = duplicateLogins(accounts, signIn)
 
   /**
    * One account, as a row.
@@ -772,6 +829,12 @@ export function AccountsView({
                 {account.system && accountLabel(state) !== null && (
                   <span className="settings-badge quiet">Your own install</span>
                 )}
+                {/* Where the login is, when it is here. The one row state
+                    that changes what Remove does, so it is on the row rather
+                    than only behind the ⓘ. */}
+                {account.keptBy === 'app' && account.keptSignedIn === true && (
+                  <span className="settings-badge quiet">Kept in this app</span>
+                )}
               </span>
 
               {/* The one line that answers "can this account start a
@@ -788,6 +851,24 @@ export function AccountsView({
                   {accountNote(account, rowHistory, snapshot.inherited)}
                 </HoverNote>
               </span>
+
+              {/* Which open sessions are running as this account. */}
+              {sessionsLine(sessionsByAccount[account.id]) !== null && (
+                <span className="settings-account-sessions">
+                  {sessionsLine(sessionsByAccount[account.id])}
+                </span>
+              )}
+
+              {/* A second copy of a login another row already has — the
+                  browser was still signed in to that one when this was added.
+                  Said here because the session chip folds the two together,
+                  and from there the new account just looks missing. */}
+              {copies[account.id] !== undefined && (
+                <span className="settings-account-blocked" data-kind="duplicate">
+                  Same login as {accountRowLabel(copies[account.id], signIn[copies[account.id].id])} —
+                  remove this one, sign out in your browser, then add it again.
+                </span>
+              )}
 
               {/* Why Sign in is not there. One sentence and a command —
                   never the launcher's own `Error: spawn … ENOENT`, which
@@ -954,10 +1035,14 @@ export function AccountsView({
 
         {confirmRemove === account.id && (
           <div className="settings-confirm">
+            {/* Two different promises, because the two kinds of account keep
+                their login in two different places — and a confirmation that
+                said "its login stays" about a login this app is about to delete
+                would be the one sentence on screen that is a lie. */}
             <span>
-              Remove “{account.name}” from the list? Its folder stays on disk and its login
-              stays in your keychain — adding it again at the same place signs straight back
-              in.
+              {account.keptBy === 'app' || account.keptBy === 'adopting'
+                ? `Remove “${account.name}”? The login this app keeps for it is deleted, so adding it again means signing in again. Its folder stays on disk.`
+                : `Remove “${account.name}” from the list? Its folder stays on disk and its login stays in your keychain — adding it again at the same place signs straight back in.`}
             </span>
             {/* What deleting this account would actually cost, which is
                 a different answer depending on where its conversations
@@ -1013,6 +1098,23 @@ export function AccountsView({
       {error && <Notice tone="error">{error}</Notice>}
 
       {/*
+        One control, and it is the first thing under the heading.
+
+        It was the whole of this pane's *foot*, and at two accounts that was
+        fine. At ten it was below the fold: *"cannot add as many accounts as we
+        want"* — and the one way to add the eleventh was under a list long
+        enough to hide it. It is still the only door (the **Add accounts**
+        disclosure handed down from the pane above — see the `addAccounts` prop
+        for why it is a drop-down and not a button), it has simply moved to where
+        the list starts rather than where it ends, so its place does not depend
+        on how many accounts there already are.
+      */}
+      {addAccounts !== undefined && addAccounts !== null && (
+        <div className="settings-account-foot" data-place="top">{addAccounts}</div>
+      )}
+
+
+      {/*
         The measured reason a sign-in is about to fail, on the screen somebody
         is standing on when it does. It draws nothing when every agent CLI on
         this machine is current — see `AgentCliUpdate` for the loop it closes.
@@ -1056,37 +1158,6 @@ export function AccountsView({
         <p className="settings-prose">No accounts yet.</p>
       )}
 
-      {/*
-        One control, and it is the whole of this pane's foot.
-
-        It used to be a primary button called **Add account**, and it is now the
-        **Add accounts** disclosure handed down from the pane above — see the
-        `addAccounts` prop. The change is not cosmetic and it is not a rename: the
-        button was the second of two doors to one act, standing a row below the
-        **Sign in** on every signed-out account, and he walked into the pair of
-        them twice in one recording before saying so.
-
-          > *"And why do we have see sign in here separately, add account here
-          > separately? … Let's try from here, add of sign in. It's also taking
-          > me same place."*
-
-        So the row's Sign in survives — it is a row's act, on a specific login,
-        and it is the only thing on this pane that can be pressed — and the
-        pane's own act is the drop-down he asked for by name. Both still open
-        the *same* popup, which is the point: one place an account is added,
-        reachable from wherever somebody happened to be looking for it.
-
-        Everything that used to sit under this line — a heading, the agent
-        question, the list, a name field, its own Sign in button, three notices
-        and an ⓘ — is inside that popup, which carries the sign-in steps and
-        nothing else. And "Check again" is not here either: it re-ran a probe
-        that runs when the pane opens, with a line of help under it describing
-        that probe.
-      */}
-      {addAccounts !== undefined && addAccounts !== null && (
-        <div className="settings-account-foot">{addAccounts}</div>
-      )}
-
       <AddAccountDialog
         open={adding}
         provider={addingFor}
@@ -1105,6 +1176,16 @@ export function AccountsView({
                 // sheet went.
                 setAdding(false)
                 onSignInNew(name, provider)
+              }
+            : null
+        }
+        /* An address added before and never signed in is finished on its own
+           row rather than refused — see `accountAwaitingLogin`. */
+        onSignInExisting={
+          onSignIn
+            ? (account) => {
+                setAdding(false)
+                onSignIn(account)
               }
             : null
         }
@@ -1337,6 +1418,21 @@ export function AccountsSection({
   const histories = useAccountHistory(ids)
 
   /*
+   * Which open sessions run as which account. `useOptionalStore` because this
+   * pane is also rendered on its own — in a test, in the harness — where there
+   * is no session list, and an empty map draws nothing.
+   */
+  const store = useOptionalStore()
+  const sessionsByAccount = useMemo(() => {
+    const out: Record<string, string[]> = {}
+    for (const session of store?.sessions ?? []) {
+      if (session.exitCode !== null || !session.profileId) continue
+      ;(out[session.profileId] ??= []).push(session.title)
+    }
+    return out
+  }, [store?.sessions])
+
+  /*
    * `changeHistory` was here — the one write this pane made into
    * `shared-projects`, behind the Share / Stop sharing button on every row.
    * The button is gone (see the header) and so is the call, but nothing under
@@ -1455,6 +1551,7 @@ export function AccountsSection({
         run(bridge?.setDefaultProfile?.(account.id), 'Could not change the default account.')
       }
       history={histories.known}
+      sessionsByAccount={sessionsByAccount}
     />
   )
 }

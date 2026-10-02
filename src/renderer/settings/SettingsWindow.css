@@ -1393,6 +1393,14 @@
   color: var(--color-warning);
 }
 
+/* Which open sessions are running as this account. Secondary text, the same
+   size as the state line above it: it answers the question a person has when
+   choosing which account to switch to, and it is not a warning about anything. */
+.settings-account-sessions {
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
 .settings-account-blocked code {
   font-family: var(--font-mono);
   font-size: var(--t-caption);
@@ -1407,6 +1415,14 @@
   align-items: center;
   gap: var(--sp-3);
   margin-top: var(--sp-3);
+}
+
+/* At the head of the list rather than its foot, so the one way to add an
+   account does not sink below the fold as the list grows. Space below it
+   instead of above, which is the same separation pointing the other way. */
+.settings-account-foot[data-place='top'] {
+  margin-top: 0;
+  margin-bottom: var(--sp-4);
 }
 
 /* ----------------------------------------------------- this machine / servers -- */

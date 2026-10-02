@@ -512,17 +512,9 @@ export async function readSignIn(
     }
   }
 
-  // The config directory is part of the key, not decoration: deleting a profile
-  // and making another with the same name gives the same id, and an answer read
-  // against the old directory would be presented as the new one's.
-  const key = `${provider}:${profile.id}:${profile.configDir}`
-  if (options.refresh !== true) {
-    const cached = cache.get(key)
-    if (cached && Date.now() - cached.checkedAt < SIGNIN_CACHE_MS) return cached
-  }
-
   /*
-   * A login this app keeps, answered from the vault — nothing spawned.
+   * A login this app keeps, answered from the vault — nothing spawned, and
+   * nothing memoised.
    *
    * The probe below is a process per account, three `--version` checks in
    * front of it and a ten-second timeout behind it, all started at once by the
@@ -531,11 +523,21 @@ export async function readSignIn(
    * offered an **Add account** at all. For an account the vault keeps, the
    * vault *is* the store, so "is there a login?" is a lookup and not a
    * question for a CLI. See {@link keptSignIn}.
+   *
+   * Ahead of the memo rather than behind it: the answer costs a map read, and
+   * a memo would go on saying "not signed in" for thirty seconds after the
+   * sign-in that just landed in the vault.
    */
   const kept = keptSignIn(profile, provider)
-  if (kept !== null) {
-    cache.set(key, kept)
-    return kept
+  if (kept !== null) return kept
+
+  // The config directory is part of the key, not decoration: deleting a profile
+  // and making another with the same name gives the same id, and an answer read
+  // against the old directory would be presented as the new one's.
+  const key = `${provider}:${profile.id}:${profile.configDir}`
+  if (options.refresh !== true) {
+    const cached = cache.get(key)
+    if (cached && Date.now() - cached.checkedAt < SIGNIN_CACHE_MS) return cached
   }
 
   /*

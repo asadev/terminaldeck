@@ -159,6 +159,13 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
 
   return {
     runtime,
+    /*
+     * Everything that matters happens before the first `await`, because this is
+     * called from `before-quit`, which does not wait: capture Codex's newest
+     * login and take its file away, stop answering, take the shim off disk.
+     * Closing the socket is the only asynchronous step, and a socket left open
+     * by a process that is exiting is closed by the exit.
+     */
     dispose: async () => {
       // Capture before anything stops: a refresh Codex wrote a moment ago is
       // the copy the next launch needs.
@@ -171,8 +178,8 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
       }
       codex.dispose()
       uninstallAccountVault()
-      await socket.close()
       removeSecurityShim(dir)
+      await socket.close()
     },
   }
 }

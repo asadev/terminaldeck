@@ -14,6 +14,7 @@ import {
   historyLine,
   runOfAccount,
   runsOfAccounts,
+  sessionsLine,
   signInRequest,
   signInToNewAccount,
   type AccountsViewProps,
@@ -380,7 +381,13 @@ describe('the Add-account popup', () => {
     // whose text is in the document either way.
     const html = dialog()
     expect(html).toContain('Sign in, in the terminal that opens.')
-    expect(html).toContain('never sees your password')
+    // Where the password goes, and where the login it buys ends up — which is
+    // this app now, encrypted. "Never sees your token" stopped being true the
+    // day the app started keeping logins, and a sentence that says otherwise
+    // is the one line on this popup somebody would rely on.
+    expect(html).toContain('Your password goes only to the agent’s own sign-in page')
+    expect(html).toContain('kept by this app, encrypted')
+    expect(html).not.toContain('never sees your')
     expect(html).not.toContain('add-account-note')
   })
 
@@ -1367,5 +1374,104 @@ describe('the account list after the 2026-08-19 review', () => {
     expect(html).not.toContain('class="settings-profile-path"')
     expect(html).not.toContain('class="settings-account-history"')
     expect(html).toContain('class="hovernote-text"')
+  })
+})
+
+/**
+ * Logins the app keeps, and the three ways adding another account used to fail.
+ *
+ * Asad, 2026-10-03: *"currently accounts switching is not that reliable and
+ * [we] cannot add as many accounts as we want."* The three cases below are the
+ * concrete reasons found in this screen, each pinned against the state that
+ * produced it.
+ */
+describe('accounts the app keeps, and adding the tenth', () => {
+  const kept = (id: string, name: string, over: Partial<AccountsSnapshot['accounts'][number]> = {}) => ({
+    id,
+    name,
+    provider: 'claude' as const,
+    configDir: `/Users/me/Library/Application Support/deck/profiles/${id}`,
+    system: false,
+    color: '--accent',
+    lastUsedAt: null,
+    keptBy: 'app' as const,
+    keptSignedIn: true,
+    ...over,
+  })
+  const as = (address: string): SignInView => ({ ...signedIn, account: address, detail: `Signed in as ${address}` })
+
+  it('says a login is kept in this app — only where it holds one', () => {
+    const snapshot: AccountsSnapshot = {
+      ...ACCOUNTS,
+      accounts: [ACCOUNTS.accounts[0], kept('a', 'a@x.com'), kept('b', 'b@x.com', { keptSignedIn: false })],
+    }
+    const html = render({ snapshot, signIn: { system: signedIn, a: as('a@x.com'), b: signedOut } })
+    expect(html.match(/Kept in this app/g)?.length).toBe(1)
+  })
+
+  it('names the sessions running as each account', () => {
+    const snapshot: AccountsSnapshot = { ...ACCOUNTS, accounts: [kept('a', 'a@x.com')] }
+    const html = render({
+      snapshot,
+      signIn: { a: as('a@x.com') },
+      sessionsByAccount: { a: ['api', 'web', 'docs', 'infra', 'data'] },
+    })
+    expect(html).toContain('Running in 5 sessions — api, web and others')
+    // One session is named; two tabs with one title are named once.
+    expect(sessionsLine(['api'])).toBe('Running in api')
+    expect(sessionsLine(['Update the terminal to the new API', 'Update the terminal to the new API'])).toBe(
+      'Running in 2 sessions — Update the terminal to the…',
+    )
+  })
+
+  it('says which row is a second copy of another login, and never the machine’s own install', () => {
+    const snapshot: AccountsSnapshot = {
+      ...ACCOUNTS,
+      accounts: [ACCOUNTS.accounts[0], kept('copy', 'new@x.com')],
+    }
+    // The browser was still signed in as me@example.com when `new@x.com` was added.
+    const html = render({ snapshot, signIn: { system: signedIn, copy: signedIn } })
+    expect(html).toContain('data-kind="duplicate"')
+    expect(html).toContain('Same login as me@example.com')
+    expect(html.match(/data-kind="duplicate"/g)?.length).toBe(1)
+  })
+
+  it('tells the truth about what Remove deletes for a login the app keeps', () => {
+    const snapshot: AccountsSnapshot = { ...ACCOUNTS, accounts: [kept('a', 'a@x.com')] }
+    // The confirmation is state inside the view; its two sentences are asserted
+    // through the source, since a static render cannot press Remove.
+    void render({ snapshot, signIn: { a: as('a@x.com') } })
+    const source = readFileSync(new URL('./AccountsSection.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('The login this app keeps for it is deleted, so adding it again means signing in again.')
+  })
+
+  it('puts Add accounts at the head of the list, where ten rows cannot push it out of sight', () => {
+    const many: AccountsSnapshot = {
+      ...ACCOUNTS,
+      accounts: Array.from({ length: 10 }, (_, i) => kept(`t${i}`, `t${i}@x.com`)),
+    }
+    const html = render({ snapshot: many, addAccounts: <span id="add-accounts">Add accounts</span> })
+    expect(html.indexOf('id="add-accounts"')).toBeLessThan(html.indexOf('t0@x.com'))
+  })
+
+  it('finishes an unfinished sign-in instead of refusing the address', () => {
+    const half = kept('half', 'half@x.com', { keptSignedIn: false })
+    const unfinished = renderToStaticMarkup(
+      <AddAccountSteps
+        open
+        providerRows={ALL_RUNNABLE}
+        busy={false}
+        onSignIn={noop}
+        onSignInExisting={noop}
+        accounts={[half]}
+        signIn={{ half: signedOut }}
+        onClose={noop}
+      />,
+    )
+    // Nothing is typed in a static render, so the dialog shows its empty state;
+    // the rule itself is pinned in `accounts.test.ts`. What is asserted here is
+    // that the dialog accepts the handler and draws no refusal by default.
+    expect(unfinished).not.toContain('data-kind="already"')
+    expect(unfinished).toContain('Sign in')
   })
 })
