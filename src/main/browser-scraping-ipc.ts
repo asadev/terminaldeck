@@ -77,7 +77,7 @@ import { onWorkersChanged, setWorkerPace, workerList, workerPace, workerStatus }
 /* -------------------------------------------------------------- the shape -- */
 
 /** What an act answers with. `count` is measured or it is `null`. */
-interface Outcome {
+export interface ScrapeOutcome {
   ok: boolean
   message: string
   count: number | null
@@ -180,6 +180,74 @@ export function setScrapingConfig(userData: string, profileId: string, patch: un
   return scrapingConfig(userData, profileId)
 }
 
+/*
+ * The bodies behind three of the channels below, exported for the copilot's
+ * `browser.scraping` tool (`deck-control/browser-scraping-tools.ts`) so a clear
+ * asked for from another application is the clear the panel's button makes,
+ * counted the same way and said in the same sentence.
+ */
+
+/** Throw away every captured run for one profile. */
+export function clearScrapeCapture(userData: string, id: string): ScrapeOutcome {
+  if (id === '') return { ok: false, message: 'No profile was named.', count: null }
+  const gone = clearCaptureFor(userData, id)
+  return {
+    ok: true,
+    message:
+      gone === 0
+        ? 'There was nothing captured for this profile.'
+        : `${gone} capture ${gone === 1 ? 'run' : 'runs'} thrown away.`,
+    count: gone,
+  }
+}
+
+/** Show one profile's capture folder in Finder, making it first if it is not there. False when it is not one of ours. */
+export function revealScrapeCapture(userData: string, id: string): boolean {
+  if (id === '') return false
+  const folder = resolve(captureFolderFor(userData, id))
+  /*
+   * The same containment check `browser-view:reveal` makes, and for the
+   * same reason: this turns a string from a caller into a path the operating
+   * system opens, and a caller's bug that passed something else through must
+   * not become a "reveal any folder on disk" primitive. `safeSegment` already
+   * flattens a profile id to one path component; this is the second lock on
+   * the same door.
+   */
+  const root = resolve(captureRoot(userData))
+  if (folder !== root && !folder.startsWith(root + sep)) return false
+  /*
+   * Made if it is not there yet, and only here.
+   *
+   * `browser-scrape-paths.ts` is right that nothing should grow empty
+   * folders on its own — but `showItemInFolder` on a path that does not
+   * exist does *nothing at all*, and a Show button that silently does
+   * nothing is the defect this whole panel was rebuilt to remove. A person
+   * pressing Show has asked to see the folder; one empty directory is the
+   * whole cost of answering them.
+   */
+  try {
+    mkdirSync(folder, { recursive: true })
+  } catch {
+    // Then `showItemInFolder` will do nothing, which is the same as before.
+  }
+  shell.showItemInFolder(folder)
+  return true
+}
+
+/** Empty one profile's asset ledgers. The files the ledgers describe are untouched. */
+export function clearScrapeLedgers(userData: string, id: string): ScrapeOutcome {
+  if (id === '') return { ok: false, message: 'No profile was named.', count: null }
+  const gone = clearLedgersFor(userData, id)
+  return {
+    ok: true,
+    message:
+      gone === 0
+        ? 'This profile has no ledger to empty.'
+        : `${gone} ${gone === 1 ? 'ledger' : 'ledgers'} emptied. The files themselves are untouched.`,
+    count: gone,
+  }
+}
+
 /* ------------------------------------------------------------- the pushing -- */
 
 /**
@@ -213,72 +281,19 @@ export function registerBrowserScrapingIpc(ipcMain: IpcMain, deps: ScrapingIpcDe
 
   ipcMain.handle(
     'browser-scraping:capture-clear',
-    (_event: IpcMainInvokeEvent, profileId: unknown): Outcome => {
-      const id = idOf(profileId)
-      if (id === '') return { ok: false, message: 'No profile was named.', count: null }
-      const gone = clearCaptureFor(dir(), id)
-      return {
-        ok: true,
-        message:
-          gone === 0
-            ? 'There was nothing captured for this profile.'
-            : `${gone} capture ${gone === 1 ? 'run' : 'runs'} thrown away.`,
-        count: gone,
-      }
-    },
+    (_event: IpcMainInvokeEvent, profileId: unknown): ScrapeOutcome => clearScrapeCapture(dir(), idOf(profileId)),
   )
 
   ipcMain.handle(
     'browser-scraping:capture-reveal',
     (_event: IpcMainInvokeEvent, profileId: unknown) => {
-      const id = idOf(profileId)
-      if (id === '') return
-      const folder = resolve(captureFolderFor(dir(), id))
-      /*
-       * The same containment check `browser-view:reveal` makes, and for the
-       * same reason: this channel turns a string from a renderer into a path
-       * the operating system opens, and a renderer bug that passed something
-       * else through must not become a "reveal any folder on disk" primitive.
-       * `safeSegment` already flattens a profile id to one path component; this
-       * is the second lock on the same door.
-       */
-      if (folder !== resolve(captureRoot(dir())) && !folder.startsWith(resolve(captureRoot(dir())) + sep)) {
-        return
-      }
-      /*
-       * Made if it is not there yet, and only here.
-       *
-       * `browser-scrape-paths.ts` is right that nothing should grow empty
-       * folders on its own — but `showItemInFolder` on a path that does not
-       * exist does *nothing at all*, and a Show button that silently does
-       * nothing is the defect this whole panel was rebuilt to remove. A person
-       * pressing Show has asked to see the folder; one empty directory is the
-       * whole cost of answering them.
-       */
-      try {
-        mkdirSync(folder, { recursive: true })
-      } catch {
-        // Then `showItemInFolder` will do nothing, which is the same as before.
-      }
-      shell.showItemInFolder(folder)
+      revealScrapeCapture(dir(), idOf(profileId))
     },
   )
 
   ipcMain.handle(
     'browser-scraping:ledger-clear',
-    (_event: IpcMainInvokeEvent, profileId: unknown): Outcome => {
-      const id = idOf(profileId)
-      if (id === '') return { ok: false, message: 'No profile was named.', count: null }
-      const gone = clearLedgersFor(dir(), id)
-      return {
-        ok: true,
-        message:
-          gone === 0
-            ? 'This profile has no ledger to empty.'
-            : `${gone} ${gone === 1 ? 'ledger' : 'ledgers'} emptied. The files themselves are untouched.`,
-        count: gone,
-      }
-    },
+    (_event: IpcMainInvokeEvent, profileId: unknown): ScrapeOutcome => clearScrapeLedgers(dir(), idOf(profileId)),
   )
 
   /*

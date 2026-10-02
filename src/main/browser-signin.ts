@@ -282,6 +282,26 @@ export async function staleAgentCli(
 /* -------------------------------------------------------------- register -- */
 
 /**
+ * Open a sign-in in the machine's own browser, where it works — the body behind
+ * `browser-signin:handover`. Null when there is nothing to hand over.
+ *
+ * Exported for the copilot's `browser.signin` tool, so a sign-in handed over
+ * from another application goes through the same plan and the same scheme
+ * check as the banner's button.
+ */
+export async function handOverSignIn(url: unknown): Promise<Handover | null> {
+  if (typeof url !== 'string') return null
+  const trouble = diagnoseSignIn(url)
+  const plan = handoverFor(url, trouble ? trouble.domains : [])
+  if (!plan) return null
+  // `shell.openExternal` and not `link-open.ts`'s guard, because the scheme
+  // has already been checked above: `handoverFor` returns null for anything
+  // that is not http or https, which is the same gate for a narrower purpose.
+  await shell.openExternal(plan.url)
+  return plan
+}
+
+/**
  * Wire the sign-in helpers. Call once from `registerIpc()`:
  *
  *     import { registerBrowserSignInIpc } from './browser-signin'
@@ -297,17 +317,7 @@ export function registerBrowserSignInIpc(ipcMain: IpcMain): void {
     typeof url === 'string' ? diagnoseSignIn(url) : null,
   )
 
-  ipcMain.handle('browser-signin:handover', async (_event, url: unknown) => {
-    if (typeof url !== 'string') return null
-    const trouble = diagnoseSignIn(url)
-    const plan = handoverFor(url, trouble ? trouble.domains : [])
-    if (!plan) return null
-    // `shell.openExternal` and not `link-open.ts`'s guard, because the scheme
-    // has already been checked above: `handoverFor` returns null for anything
-    // that is not http or https, which is the same gate for a narrower purpose.
-    await shell.openExternal(plan.url)
-    return plan
-  })
+  ipcMain.handle('browser-signin:handover', (_event, url: unknown) => handOverSignIn(url))
 
   ipcMain.handle('browser-signin:agents', () => staleAgentCli())
 }

@@ -80,7 +80,24 @@ const EMPTY: StoreView = { tools: [], folder: '' }
  * - `browser-store:remove`  (invoke, id) → `{ ok, message }`
  */
 export function registerBrowserStoreIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('browser-store:list', () => ({
+  ipcMain.handle('browser-store:list', () => browserStoreList())
+  ipcMain.handle('browser-store:install', async (_event, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : browserStoreInstall(id),
+  )
+  ipcMain.handle('browser-store:remove', (_event, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : browserStoreRemove(id),
+  )
+}
+
+/*
+ * The bodies behind the three channels above, exported for the copilot's
+ * `browser.store` tool (`deck-control/tools-store-tools.ts`). One store, two
+ * doors, the same verification behind both.
+ */
+
+/** Every catalogue row with its state, and the orphans — the body behind `browser-store:list`. */
+export function browserStoreList(): { view: StoreView; orphans: string[] } {
+  return {
     view: store?.view() ?? EMPTY,
     /*
      * Directories with no catalogue row — a tool withdrawn from the app between
@@ -89,11 +106,15 @@ export function registerBrowserStoreIpc(ipcMain: IpcMain): void {
      * delete except by hand.
      */
     orphans: store === null ? [] : orphanIds(root, BROWSER_TOOL_CATALOGUE),
-  }))
-  ipcMain.handle('browser-store:install', async (_event, id: unknown) =>
-    store === null || typeof id !== 'string' ? NO_STORE : store.install(id),
-  )
-  ipcMain.handle('browser-store:remove', (_event, id: unknown) =>
-    store === null || typeof id !== 'string' ? NO_STORE : store.remove(id),
-  )
+  }
+}
+
+/** Download, verify and install one tool — the body behind `browser-store:install`. */
+export async function browserStoreInstall(id: string): Promise<StoreResult> {
+  return store === null ? NO_STORE : store.install(id)
+}
+
+/** Remove one tool — the body behind `browser-store:remove`. */
+export function browserStoreRemove(id: string): StoreResult {
+  return store === null ? NO_STORE : store.remove(id)
 }

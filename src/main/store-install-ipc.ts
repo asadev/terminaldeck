@@ -116,29 +116,50 @@ export function resetCommunityProbe(): void {
  * - `community:remove`  (invoke, id)         → `{ ok, message }`
  */
 export function registerCommunityIpc(ipcMain: IpcMain, deps?: CommunityStoreDeps): void {
-  ipcMain.handle('community:list', async (): Promise<CommunityViewOut> => {
-    const view = store === null ? emptyView() : await store.view()
-    probe ??= machineProbe()
-    /*
-     * The screen is handed flat facts, not the installer's own shape.
-     *
-     * `community-view.ts` says why the translation is here and not in the
-     * renderer: which agent tools are on this machine, which of an item's needs
-     * are not, and the exact folders an install writes into are all questions
-     * only this process can answer, and a screen that answered them itself would
-     * be a second opinion built from less evidence.
-     */
-    return await projectView(view, deps?.userData() ?? '', probe)
-  })
+  ipcMain.handle('community:list', (): Promise<CommunityViewOut> => communityView(deps))
 
-  ipcMain.handle('community:install', async (_event, id: unknown, choice: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    return await store.install(id, readChoice(choice))
-  })
-
-  ipcMain.handle('community:remove', async (_event, id: unknown) =>
-    store === null || typeof id !== 'string' ? NO_STORE : await store.remove(id),
+  ipcMain.handle('community:install', (_event, id: unknown, choice: unknown) =>
+    typeof id !== 'string' ? NO_STORE : communityInstall(id, readChoice(choice)),
   )
+
+  ipcMain.handle('community:remove', (_event, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : communityRemove(id),
+  )
+}
+
+/*
+ * The bodies behind the three channels above, exported for the copilot's
+ * `store.community` tool (`deck-control/community-tools.ts`), so an install
+ * asked for from another application is the install the panel's button makes —
+ * same signature check, same tier, same ledger — and not a second installer.
+ */
+
+/** The whole shelf, fetched now or the kept copy — the body behind `community:list`. */
+export async function communityView(deps?: CommunityStoreDeps): Promise<CommunityViewOut> {
+  const view = store === null ? emptyView() : await store.view()
+  probe ??= machineProbe()
+  /*
+   * The screen is handed flat facts, not the installer's own shape.
+   *
+   * `community-view.ts` says why the translation is here and not in the
+   * renderer: which agent tools are on this machine, which of an item's needs
+   * are not, and the exact folders an install writes into are all questions
+   * only this process can answer, and a screen that answered them itself would
+   * be a second opinion built from less evidence.
+   */
+  return await projectView(view, deps?.userData() ?? '', probe)
+}
+
+/** Install one item — the body behind `community:install`. */
+export async function communityInstall(id: string, choice: InstallChoice): Promise<StoreResult> {
+  if (store === null) return NO_STORE
+  return await store.install(id, choice)
+}
+
+/** Remove one item and everything its install wrote — the body behind `community:remove`. */
+export async function communityRemove(id: string): Promise<StoreResult> {
+  if (store === null) return NO_STORE
+  return await store.remove(id)
 }
 
 /**

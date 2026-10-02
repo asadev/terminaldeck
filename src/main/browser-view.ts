@@ -616,6 +616,204 @@ export function setBrowserViewRecording(tabId: unknown, on: boolean): RecordingS
   return stateOf(entry)
 }
 
+/**
+ * Forget the steps collected on one view — the body behind
+ * `browser-view:record-clear`. Recording carries on if it was on.
+ */
+export function clearBrowserViewRecording(tabId: unknown): RecordingState {
+  const entry = entryFor(tabId)
+  entry.steps = []
+  return stateOf(entry)
+}
+
+/*
+ * The bodies behind the per-view channels below, exported for the one caller
+ * that is not the window: the copilot's page tool, `deck-control/browser-window-tools.ts`.
+ *
+ * Moved out of the handlers rather than copied into the tool, because each of
+ * them carries a decision somebody paid for — the zoom that tells the fitter it
+ * came from a person, Electron's backwards-named `findNext`, the user agent
+ * that must not put Electron's token back — and a second copy of any of them is
+ * the copy that one day forgets it. The handlers are now one line each and
+ * call these.
+ */
+
+/**
+ * Read or set one view's zoom — the body behind `browser-view:zoom`.
+ *
+ * `null` (or nothing) reads without writing. Chromium remembers zoom per origin
+ * inside the partition, so a tab that opens a site the user zoomed last week
+ * opens zoomed — and a caller that assumed 100% would both report the wrong
+ * number and reset their preference the first time it wrote one.
+ */
+export function zoomBrowserView(tabId: unknown, factor: unknown): number {
+  const entry = entryFor(tabId)
+  if (factor !== null && factor !== undefined) {
+    const chosen = clampZoom(factor)
+    entry.wc.setZoomFactor(chosen)
+    /*
+     * A zoom that came from a person, which is the one kind `browser-fit.ts`
+     * must never argue with.
+     *
+     * It fits a page out when the layout is wider than the pane, and the
+     * toolbar chip that appears is *how somebody undoes that* — so a reset to
+     * 100% that was silently re-fitted a moment later would be a control that
+     * visibly does nothing. Telling the fitter here is what makes the chip
+     * mean what it says: their number stands until the tab navigates.
+     */
+    noteManualZoom(String(tabId), chosen)
+  }
+  return entry.wc.getZoomFactor()
+}
+
+/** What a finished search found, for a caller that has no find bar to print it. */
+export interface FindCount {
+  matches: number
+  /** Which match is selected, from 1. */
+  active: number
+}
+
+/**
+ * Search one view's page — the body behind `browser-view:find`.
+ *
+ * An empty query ends the search rather than searching for `''`, which is what
+ * an emptied find field means. The answer is Chromium's own count, waited for:
+ * the window's find bar hears it on {@link FIND_CHANNEL} and needs nothing back,
+ * which is why the channel ignores the promise, and a tool has no bar and needs
+ * exactly that number. Null on an empty query, and on a page that never
+ * answered within the wait — a count nobody measured is not reported as zero.
+ */
+export function findInBrowserView(
+  tabId: unknown,
+  query: unknown,
+  options: unknown,
+): Promise<FindCount | null> {
+  const entry = entryFor(tabId)
+  const text = typeof query === 'string' ? query : ''
+  if (text === '') {
+    // An emptied field is the end of the session, not a search for ''.
+    if (entry.finding) {
+      entry.finding = false
+      entry.wc.stopFindInPage('clearSelection')
+    }
+    return Promise.resolve(null)
+  }
+  const opts = (typeof options === 'object' && options !== null ? options : {}) as {
+    forward?: unknown
+    first?: unknown
+  }
+  entry.finding = true
+  const wc = entry.wc
+  return new Promise<FindCount | null>((settle) => {
+    let requestId = -1
+    const finish = (count: FindCount | null): void => {
+      clearTimeout(timer)
+      wc.off('found-in-page', onFound)
+      settle(count)
+    }
+    const onFound = (
+      _event: unknown,
+      result: { requestId: number; matches: number; activeMatchOrdinal: number; finalUpdate: boolean },
+    ): void => {
+      if (result.requestId !== requestId || !result.finalUpdate) return
+      finish({ matches: result.matches, active: result.activeMatchOrdinal })
+    }
+    const timer = setTimeout(() => finish(null), FIND_WAIT_MS)
+    timer.unref?.()
+    wc.on('found-in-page', onFound)
+    // Electron's `findNext` is named backwards: true begins a NEW session.
+    // The wire says `first`, which is the fact the renderer actually knows —
+    // "the query changed" — and the translation happens in exactly one place.
+    requestId = wc.findInPage(text, {
+      forward: opts.forward !== false,
+      findNext: opts.first === true,
+    })
+  })
+}
+
+/** How long a search is given to report its count. A page that has not answered by then is not asked again. */
+const FIND_WAIT_MS = 2_000
+
+/** End a search on one view — the body behind `browser-view:find-stop`. */
+export function stopFindInBrowserView(tabId: unknown, keepSelection: boolean): void {
+  const entry = entryFor(tabId)
+  entry.finding = false
+  entry.wc.stopFindInPage(keepSelection ? 'keepSelection' : 'clearSelection')
+  // The bar had the keyboard; closing it gives the keys back to the page —
+  // the same hand-back the terminal's `closeFind` does with `term.focus()`.
+  entry.wc.focus()
+}
+
+/**
+ * Open the system print dialog for one view — the body behind
+ * `browser-view:print`.
+ *
+ * The system dialog, not silent printing: choosing a printer is the person's
+ * decision, and the callback is the only way Electron reports that no printer
+ * exists — which deserves a sentence, not a resolved promise.
+ */
+export async function printBrowserView(tabId: unknown): Promise<void> {
+  const entry = entryFor(tabId)
+  await new Promise<void>((resolvePrint, reject) => {
+    entry.wc.print({}, (ok: boolean, reason: string) => {
+      if (ok || reason === 'cancelled' || reason === 'Print job canceled') resolvePrint()
+      else reject(new Error(`The page could not be printed: ${reason || 'no printer answered'}.`))
+    })
+  })
+}
+
+/**
+ * Open or close one view's developer tools, and say which it now is — the
+ * body behind `browser-view:devtools`.
+ *
+ * Detached: the guest view is a native layer positioned by the renderer, and
+ * docked devtools would be laid out inside that rectangle and fight it.
+ */
+export function toggleBrowserViewDevtools(tabId: unknown): boolean {
+  const entry = entryFor(tabId)
+  if (entry.wc.isDevToolsOpened()) {
+    entry.wc.closeDevTools()
+    return false
+  }
+  entry.wc.openDevTools({ mode: 'detach' })
+  return true
+}
+
+/**
+ * Set one view's user agent, or put Chromium's own back — the body behind
+ * `browser-view:user-agent`.
+ *
+ * Empty means "back to Chromium's own", which is what the app was launched
+ * with — not the empty string, which would send no User-Agent at all.
+ * `cleanUserAgent`, not the raw fallback: turning the phone size off used to
+ * put Electron's own token back into the string, and with it back in place
+ * Google routes every sign-in down its restricted path. See
+ * `browser-user-agent.ts` for the measurement.
+ */
+export function setBrowserViewUserAgent(tabId: unknown, ua: unknown): string {
+  const entry = entryFor(tabId)
+  const next =
+    typeof ua === 'string' && ua.trim() !== '' ? ua.trim() : cleanUserAgent(app.userAgentFallback)
+  entry.wc.setUserAgent(next)
+  return next
+}
+
+/**
+ * Show one of this app's own screenshots in Finder — the body behind
+ * `browser-view:reveal`. False when the path is not one of ours.
+ *
+ * Only our own screenshots. This takes a path from a caller, and a caller's
+ * bug that passed something else through must not turn into a "reveal any
+ * file on disk" primitive.
+ */
+export function revealBrowserScreenshot(path: unknown): boolean {
+  if (typeof path !== 'string') return false
+  const full = resolve(path)
+  if (!full.startsWith(screenshotDir() + sep)) return false
+  shell.showItemInFolder(full)
+  return true
+}
+
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 3
 
@@ -752,91 +950,26 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     if (typeof tabId === 'string') release(tabId)
   })
 
-  ipcMain.handle('browser-view:zoom', (_event, tabId: unknown, factor: unknown) => {
-    const entry = entryFor(tabId)
-    // null reads without writing. Chromium remembers zoom per origin inside the
-    // partition, so a tab that opens a site the user zoomed last week opens
-    // zoomed — and a UI that assumed 100% would both show the wrong number and
-    // reset their preference the first time they pressed a button.
-    if (factor !== null && factor !== undefined) {
-      const chosen = clampZoom(factor)
-      entry.wc.setZoomFactor(chosen)
-      /*
-       * A zoom that came from a person, which is the one kind `browser-fit.ts`
-       * must never argue with.
-       *
-       * It fits a page out when the layout is wider than the pane, and the
-       * toolbar chip that appears is *how somebody undoes that* — so a reset to
-       * 100% that was silently re-fitted a moment later would be a control that
-       * visibly does nothing. Telling the fitter here is what makes the chip
-       * mean what it says: their number stands until the tab navigates.
-       */
-      noteManualZoom(String(tabId), chosen)
-    }
-    return entry.wc.getZoomFactor()
-  })
+  ipcMain.handle('browser-view:zoom', (_event, tabId: unknown, factor: unknown) =>
+    zoomBrowserView(tabId, factor),
+  )
 
   ipcMain.handle(
     'browser-view:find',
     (_event, tabId: unknown, query: unknown, options: unknown) => {
-      const entry = entryFor(tabId)
-      const text = typeof query === 'string' ? query : ''
-      if (text === '') {
-        // An emptied field is the end of the session, not a search for ''.
-        if (entry.finding) {
-          entry.finding = false
-          entry.wc.stopFindInPage('clearSelection')
-        }
-        return
-      }
-      const opts = (typeof options === 'object' && options !== null ? options : {}) as {
-        forward?: unknown
-        first?: unknown
-      }
-      entry.finding = true
-      // Electron's `findNext` is named backwards: true begins a NEW session.
-      // The wire says `first`, which is the fact the renderer actually knows —
-      // "the query changed" — and the translation happens in exactly one place.
-      entry.wc.findInPage(text, {
-        forward: opts.forward !== false,
-        findNext: opts.first === true,
-      })
+      findInBrowserView(tabId, query, options)
     },
   )
 
-  ipcMain.handle('browser-view:find-stop', (_event, tabId: unknown, keep: unknown) => {
-    const entry = entryFor(tabId)
-    entry.finding = false
-    entry.wc.stopFindInPage(keep === 'keep' ? 'keepSelection' : 'clearSelection')
-    // The bar had the keyboard; closing it gives the keys back to the page —
-    // the same hand-back the terminal's `closeFind` does with `term.focus()`.
-    entry.wc.focus()
-  })
+  ipcMain.handle('browser-view:find-stop', (_event, tabId: unknown, keep: unknown) =>
+    stopFindInBrowserView(tabId, keep === 'keep'),
+  )
 
-  ipcMain.handle('browser-view:print', async (_event, tabId: unknown) => {
-    const entry = entryFor(tabId)
-    // The system dialog, not silent printing: choosing a printer is the user's
-    // decision, and the callback is the only way Electron reports that no
-    // printer exists — which deserves a sentence, not a resolved promise.
-    await new Promise<void>((resolvePrint, reject) => {
-      entry.wc.print({}, (ok: boolean, reason: string) => {
-        if (ok || reason === 'cancelled' || reason === 'Print job canceled') resolvePrint()
-        else reject(new Error(`The page could not be printed: ${reason || 'no printer answered'}.`))
-      })
-    })
-  })
+  ipcMain.handle('browser-view:print', (_event, tabId: unknown) => printBrowserView(tabId))
 
-  ipcMain.handle('browser-view:devtools', (_event, tabId: unknown) => {
-    const entry = entryFor(tabId)
-    if (entry.wc.isDevToolsOpened()) {
-      entry.wc.closeDevTools()
-      return false
-    }
-    // Detached: the guest view is a native layer positioned by the renderer, and
-    // docked devtools would be laid out inside that rectangle and fight it.
-    entry.wc.openDevTools({ mode: 'detach' })
-    return true
-  })
+  ipcMain.handle('browser-view:devtools', (_event, tabId: unknown) =>
+    toggleBrowserViewDevtools(tabId),
+  )
 
   ipcMain.handle('browser-view:screenshot', async (_event, tabId: unknown) => {
     const shot = await captureBrowserView(tabId)
@@ -920,30 +1053,12 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('browser-view:reveal', (_event, path: unknown) => {
-    if (typeof path !== 'string') return
-    // Only our own screenshots. This channel takes a path from the renderer, and
-    // a renderer bug that passed something else through should not turn into a
-    // "reveal any file on disk" primitive.
-    const full = resolve(path)
-    if (!full.startsWith(screenshotDir() + sep)) return
-    shell.showItemInFolder(full)
+    revealBrowserScreenshot(path)
   })
 
-  ipcMain.handle('browser-view:user-agent', (_event, tabId: unknown, ua: unknown) => {
-    const entry = entryFor(tabId)
-    // Empty means "back to Chromium's own", which is what the app was launched
-    // with — not the empty string, which would send no User-Agent at all.
-    // `cleanUserAgent`, not the raw fallback: turning the phone size off used
-    // to put Electron's own token back into the string, and with it back in
-    // place Google routes every sign-in down its restricted path. See
-    // `browser-user-agent.ts` for the measurement.
-    const next =
-      typeof ua === 'string' && ua.trim() !== ''
-        ? ua.trim()
-        : cleanUserAgent(app.userAgentFallback)
-    entry.wc.setUserAgent(next)
-    return next
-  })
+  ipcMain.handle('browser-view:user-agent', (_event, tabId: unknown, ua: unknown) =>
+    setBrowserViewUserAgent(tabId, ua),
+  )
 
   ipcMain.handle('browser-view:record', (_event, tabId: unknown, options: unknown) => {
     const entry = entryFor(tabId)
@@ -968,11 +1083,9 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     return stateOf(entry)
   })
 
-  ipcMain.handle('browser-view:record-clear', (_event, tabId: unknown) => {
-    const entry = entryFor(tabId)
-    entry.steps = []
-    return stateOf(entry)
-  })
+  ipcMain.handle('browser-view:record-clear', (_event, tabId: unknown) =>
+    clearBrowserViewRecording(tabId),
+  )
 
   /* ---- from the guest page. Hostile until proven otherwise. */
 

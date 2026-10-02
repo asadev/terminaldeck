@@ -275,6 +275,102 @@ const ALL_STORAGES = [
   'cachestorage',
 ] as const
 
+/*
+ * The bodies behind the five channels below, exported for the copilot's
+ * `browser.data` tool (`deck-control/browser-data-tools.ts`).
+ *
+ * Moved rather than copied, because two of them carry a rule somebody paid for:
+ * a clear of one site that silently became a clear of every site, and a
+ * removal that came back after a restart because it was never flushed. The
+ * handlers below are now one line each and call these, so the window and the
+ * tool cannot disagree about what "clear cookies for example.com" does.
+ *
+ * Nothing here returns a cookie's value. {@link CookieSummary} has no field for
+ * one, and that is the same rule for the tool as for the panel.
+ */
+
+/** What a profile's partition holds, in counts. */
+export async function browserSessionInfo(profileId: unknown): Promise<BrowserSessionInfo> {
+  const { ses, partition } = profileSession(profileId)
+  const cookies = await ses.cookies.get({})
+  const storagePath = ses.getStoragePath() ?? ''
+  return {
+    partition,
+    persistent: ses.isPersistent(),
+    storagePath,
+    // A partition directory is created on first use, so "not there yet" is
+    // the honest answer for a fresh install rather than an error.
+    storageExists: storagePath !== '' && existsSync(storagePath),
+    cookieCount: cookies.length,
+    domainCount: new Set(cookies.map((c) => c.domain ?? '')).size,
+    cacheBytes: await ses.getCacheSize(),
+  }
+}
+
+/** Every cookie in a profile, grouped by site, without a single value. */
+export async function browserCookieDomains(profileId: unknown): Promise<CookieDomain[]> {
+  const cookies = await profileSession(profileId).ses.cookies.get({})
+  return groupCookies(cookies.map(summarizeCookie))
+}
+
+/** Remove one site's cookies, or every cookie when no site is named. */
+export async function clearBrowserCookies(
+  domain: unknown,
+  profileId: unknown,
+): Promise<{ removed: number }> {
+  const { ses } = profileSession(profileId)
+  const wanted = typeof domain === 'string' && domain.trim() !== '' ? domain.trim() : null
+  // `cookies.get({ domain })` also matches subdomains, which is what a user
+  // clearing "example.com" means, so the filter is left to Electron.
+  const cookies = await ses.cookies.get(wanted ? { domain: wanted } : {})
+
+  let removed = 0
+  for (const cookie of cookies) {
+    const summary = summarizeCookie(cookie)
+    try {
+      await ses.cookies.remove(cookieRemovalUrl(summary), summary.name)
+      removed++
+    } catch {
+      // A cookie can be gone already, or carry a domain that will not
+      // reconstruct into a URL. Neither is worth failing the whole clear.
+    }
+  }
+  // Removals live in memory until flushed, and this one has to survive a
+  // crash: a "cleared" that comes back after a restart is worse than an error.
+  await ses.cookies.flushStore()
+  return { removed }
+}
+
+/** Remove one site's stored data, or every site's when none is named. */
+export async function clearBrowserStorage(
+  domain: unknown,
+  profileId: unknown,
+): Promise<{ origins: string[] }> {
+  const { ses } = profileSession(profileId)
+  const origins = storageOrigins(domain)
+  // Only a *missing* argument means "everything". Anything else that failed to
+  // become an origin — an empty string, a number, an object the bridge did not
+  // expect — is a caller that meant one site and would otherwise have every
+  // site on the machine signed out on its behalf, silently and irreversibly.
+  if (domain !== undefined && domain !== null && origins.length === 0) {
+    throw new Error('browser-session: that is not a site this can clear')
+  }
+  if (origins.length === 0) {
+    await ses.clearStorageData({ storages: [...ALL_STORAGES] })
+  } else {
+    for (const origin of origins) {
+      await ses.clearStorageData({ origin, storages: [...ALL_STORAGES] })
+    }
+  }
+  await ses.cookies.flushStore()
+  return { origins }
+}
+
+/** Empty a profile's HTTP cache. Logins and site data are untouched. */
+export async function clearBrowserCache(profileId: unknown): Promise<void> {
+  await profileSession(profileId).ses.clearCache()
+}
+
 /**
  * Wire the guest session's controls. Call once from `registerIpc()`:
  *
@@ -297,74 +393,23 @@ const ALL_STORAGES = [
 export function registerBrowserSessionIpc(ipcMain: IpcMain): void {
   registerRecorderPreload()
 
-  ipcMain.handle('browser-session:info', async (_event, profileId: unknown): Promise<BrowserSessionInfo> => {
-    const { ses, partition } = profileSession(profileId)
-    const cookies = await ses.cookies.get({})
-    const storagePath = ses.getStoragePath() ?? ''
-    return {
-      partition,
-      persistent: ses.isPersistent(),
-      storagePath,
-      // A partition directory is created on first use, so "not there yet" is
-      // the honest answer for a fresh install rather than an error.
-      storageExists: storagePath !== '' && existsSync(storagePath),
-      cookieCount: cookies.length,
-      domainCount: new Set(cookies.map((c) => c.domain ?? '')).size,
-      cacheBytes: await ses.getCacheSize(),
-    }
-  })
+  ipcMain.handle('browser-session:info', (_event, profileId: unknown): Promise<BrowserSessionInfo> =>
+    browserSessionInfo(profileId),
+  )
 
-  ipcMain.handle('browser-session:cookies', async (_event, profileId: unknown): Promise<CookieDomain[]> => {
-    const cookies = await profileSession(profileId).ses.cookies.get({})
-    return groupCookies(cookies.map(summarizeCookie))
-  })
+  ipcMain.handle('browser-session:cookies', (_event, profileId: unknown): Promise<CookieDomain[]> =>
+    browserCookieDomains(profileId),
+  )
 
-  ipcMain.handle('browser-session:clear-cookies', async (_event, domain: unknown, profileId: unknown) => {
-    const { ses } = profileSession(profileId)
-    const wanted = typeof domain === 'string' && domain.trim() !== '' ? domain.trim() : null
-    // `cookies.get({ domain })` also matches subdomains, which is what a user
-    // clearing "example.com" means, so the filter is left to Electron.
-    const cookies = await ses.cookies.get(wanted ? { domain: wanted } : {})
+  ipcMain.handle('browser-session:clear-cookies', (_event, domain: unknown, profileId: unknown) =>
+    clearBrowserCookies(domain, profileId),
+  )
 
-    let removed = 0
-    for (const cookie of cookies) {
-      const summary = summarizeCookie(cookie)
-      try {
-        await ses.cookies.remove(cookieRemovalUrl(summary), summary.name)
-        removed++
-      } catch {
-        // A cookie can be gone already, or carry a domain that will not
-        // reconstruct into a URL. Neither is worth failing the whole clear.
-      }
-    }
-    // Removals live in memory until flushed, and this one has to survive a
-    // crash: a "cleared" that comes back after a restart is worse than an error.
-    await ses.cookies.flushStore()
-    return { removed }
-  })
+  ipcMain.handle('browser-session:clear-storage', (_event, domain: unknown, profileId: unknown) =>
+    clearBrowserStorage(domain, profileId),
+  )
 
-  ipcMain.handle('browser-session:clear-storage', async (_event, domain: unknown, profileId: unknown) => {
-    const { ses } = profileSession(profileId)
-    const origins = storageOrigins(domain)
-    // Only a *missing* argument means "everything". Anything else that failed to
-    // become an origin — an empty string, a number, an object the bridge did not
-    // expect — is a caller that meant one site and would otherwise have every
-    // site on the machine signed out on its behalf, silently and irreversibly.
-    if (domain !== undefined && domain !== null && origins.length === 0) {
-      throw new Error('browser-session: that is not a site this can clear')
-    }
-    if (origins.length === 0) {
-      await ses.clearStorageData({ storages: [...ALL_STORAGES] })
-    } else {
-      for (const origin of origins) {
-        await ses.clearStorageData({ origin, storages: [...ALL_STORAGES] })
-      }
-    }
-    await ses.cookies.flushStore()
-    return { origins }
-  })
-
-  ipcMain.handle('browser-session:clear-cache', async (_event, profileId: unknown) => {
-    await profileSession(profileId).ses.clearCache()
-  })
+  ipcMain.handle('browser-session:clear-cache', (_event, profileId: unknown) =>
+    clearBrowserCache(profileId),
+  )
 }

@@ -639,6 +639,50 @@ export function setPendingOffer(entry: SavedLogin | null): void {
   pending = entry
 }
 
+/*
+ * The bodies behind three channels below, exported for the copilot's
+ * `browser.passwords` tool (`deck-control/browser-password-tools.ts`). Every one
+ * of them answers in a shape with no `password` field — the same rule the
+ * channels keep, kept by the same code rather than by a second copy of it.
+ */
+
+/** One profile's saved logins, as site and username only, in the order the manager lists them. */
+export function loginSummariesFor(userData: string, profileId: unknown): SavedLoginSummary[] {
+  const wanted = typeof profileId === 'string' ? profileId : 'default'
+  return allLogins(userData)
+    .filter((item) => item.profileId === wanted)
+    .map(summarizeLogin)
+    .sort((a, b) => a.origin.localeCompare(b.origin) || a.username.localeCompare(b.username))
+}
+
+/**
+ * Show the saved-login file in Finder, rather than print where it is. False
+ * when nothing has been saved yet, so there is no file to show.
+ *
+ * A path in a paragraph is a thing somebody has to select, copy, open a Finder
+ * window for and paste into a Go-to-Folder box. `showItemInFolder` is the same
+ * information with the work already done. It reveals an encrypted blob, which
+ * is the honest thing to reveal: it is what is actually there.
+ */
+export function revealLoginsFile(userData: string): boolean {
+  const path = loginsPath(userData)
+  if (!existsSync(path)) return false
+  shell.showItemInFolder(path)
+  return true
+}
+
+/**
+ * Save, or decline, the login a page just submitted — the body behind
+ * `browser-password:answer`. The slot is emptied either way.
+ */
+export function answerPendingOffer(userData: string, keep: boolean): SaveOutcome {
+  const offer = pending
+  pending = null
+  if (offer === null) return { ok: false, message: 'Nothing to save.' }
+  if (!keep) return { ok: true, message: 'Not saved.' }
+  return saveLogin(userData, offer)
+}
+
 /* -------------------------------------------------------------- register -- */
 
 /**
@@ -679,20 +723,11 @@ export function registerBrowserPasswordIpc(ipcMain: IpcMain, userData: () => str
    * encrypted blob, which is the honest thing to reveal: it is what is actually
    * there.
    */
-  ipcMain.handle('browser-password:show-file', () => {
-    const path = loginsPath(userData())
-    if (!existsSync(path)) return false
-    shell.showItemInFolder(path)
-    return true
-  })
+  ipcMain.handle('browser-password:show-file', () => revealLoginsFile(userData()))
 
-  ipcMain.handle('browser-password:list', (_event, profileId: unknown) => {
-    const wanted = typeof profileId === 'string' ? profileId : 'default'
-    return allLogins(userData())
-      .filter((item) => item.profileId === wanted)
-      .map(summarizeLogin)
-      .sort((a, b) => a.origin.localeCompare(b.origin) || a.username.localeCompare(b.username))
-  })
+  ipcMain.handle('browser-password:list', (_event, profileId: unknown) =>
+    loginSummariesFor(userData(), profileId),
+  )
 
   ipcMain.handle(
     'browser-password:forget',
@@ -732,11 +767,7 @@ export function registerBrowserPasswordIpc(ipcMain: IpcMain, userData: () => str
     return offer === null ? null : summarizeLogin(offer)
   })
 
-  ipcMain.handle('browser-password:answer', (_event, keep: unknown) => {
-    const offer = pending
-    pending = null
-    if (offer === null) return { ok: false, message: 'Nothing to save.' }
-    if (keep !== true) return { ok: true, message: 'Not saved.' }
-    return saveLogin(userData(), offer)
-  })
+  ipcMain.handle('browser-password:answer', (_event, keep: unknown) =>
+    answerPendingOffer(userData(), keep === true),
+  )
 }

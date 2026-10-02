@@ -4,8 +4,17 @@
  * ## The rule, in one sentence
  *
  * **Autofill is a person's action.** A page an agent navigated to is never
- * filled on its own, and there is no call an agent can make that causes a
- * credential to be typed into it.
+ * filled on its own, and no call an agent can make causes a credential to be
+ * typed into it without a person saying yes to that one fill.
+ *
+ * The second half changed in 0.16.0 and is worth stating exactly. Before it
+ * there was no such call at all. Now there is one — `browser.passwords` with
+ * `action: "fill"` — and it is `alter`: each call puts a dialog in front of a
+ * person naming the site and the username, there is no remembered answer, and
+ * it is refused unattended, from a paired device and from an ordinary session.
+ * So the yes is still a person's, given in the confirmation instead of on the
+ * page. Nothing in this file moved: the automatic fill below is withheld on an
+ * agent's page exactly as before.
  *
  * ## Why this is a module and not two lines in `browser-tab.ts`
  *
@@ -73,10 +82,10 @@
  *
  * Nothing here refuses a person anything. When automatic fill is withheld the
  * page's own panel says a saved login exists for this site and offers it on one
- * press — `browser-password:fill`, an `ipcMain` channel reachable only from the
- * app's own renderer, which is the same door `browser-workers-ipc.ts` puts
- * session-lifting behind and for the same stated reason. The person gets their
- * password where they are already looking; the agent gets no path to it.
+ * press — `browser-password:fill`, the same function the `alter` tool above
+ * reaches. The person gets their password where they are already looking; an
+ * agent gets a fill only by asking a person for it, one fill at a time, and it
+ * never gets the password.
  */
 
 /** Everything the decision is made from. All of it read live, none of it stored. */

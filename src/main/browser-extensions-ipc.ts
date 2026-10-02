@@ -415,6 +415,223 @@ async function openExtensionPage(
   return { ok: true, message: '' }
 }
 
+/*
+ * The bodies behind every channel below, at module level and exported.
+ *
+ * They were closures inside `registerBrowserExtensionIpc`, which is where the
+ * window reached them from and the only place anything could. 0.16.0 gives the
+ * copilot the same store — `browser.extensions` in
+ * `deck-control/extension-tools.ts` — and the rule for that is the rule this
+ * whole release follows: the tool calls the function the button calls, never a
+ * second copy of it. Each of these carries an ordering somebody paid for (unload
+ * only after the new files are down; unload before deleting; load at once rather
+ * than at the next launch), and a copy is the one that forgets.
+ */
+
+/** A profile id from anywhere, or the profile switched on when it is not one. */
+function profileOrCurrent(raw: unknown): string {
+  const safe = safeProfileId(raw)
+  return safe !== null ? safe : currentProfileId()
+}
+
+/** Everything the panel's list shows — the body behind `browser-extension:list`. */
+export function extensionListFor(profileId: unknown): {
+  view: ExtensionStoreView
+  orphans: string[]
+  profiles: { id: string; name: string }[]
+  limits: typeof EXTENSION_LIMITS
+} {
+  const id = profileOrCurrent(profileId)
+  return {
+    view: viewFor(id),
+    orphans:
+      store === null || userDataDir === ''
+        ? []
+        : orphanExtensionIds(userDataDir, id, BROWSER_EXTENSION_CATALOGUE),
+    /*
+     * Every profile, so the panel can say which one it is talking about and
+     * switch between them. An extension store that could only ever show the
+     * profile that happens to be switched on would be the same dead end
+     * `profileSession` was written to fix: *"the question 'what is in this
+     * profile?' had no wire to travel down."*
+     */
+    profiles:
+      userDataDir === ''
+        ? []
+        : profileState(userDataDir).profiles.map((profile) => ({
+            id: profile.id,
+            name: profile.name,
+          })),
+    /*
+     * The limits travel with the list rather than being written into the
+     * panel. One copy, in the module that measured them, so the sentence a
+     * person reads and the sentence `browser.extensions` gives an agent cannot
+     * drift apart — and so a limit that stops being true is deleted in one
+     * place rather than in two.
+     */
+    limits: EXTENSION_LIMITS,
+  }
+}
+
+/** Download, verify and load one catalogue extension — the body behind `browser-extension:install`. */
+export async function installExtension(profileId: unknown, id: string): Promise<ExtensionResult> {
+  if (store === null) return NO_STORE
+  const profile = profileOrCurrent(profileId)
+  const result = await store.install(profile, id)
+  if (!result.ok) return result
+  /*
+   * Unloaded *after* the install succeeded, and before the new one is loaded.
+   *
+   * Reinstalling replaces the files under a directory that may still be loaded
+   * from — so anything running at this point is the old extension, and
+   * `loadOne` would hand back its live id and never look at the new bytes. The
+   * order matters the other way too: a failed install leaves the old files
+   * alone, so unloading first would have stopped a working extension on
+   * account of a download that never arrived.
+   */
+  unloadOne(profile, id)
+  /*
+   * Loaded straight away rather than at the next launch. An install that
+   * needed a restart to do anything would be a button whose effect is
+   * invisible, and the person pressing it has no way to tell that from one
+   * that failed.
+   */
+  const extension = store.installed(profile).find((one) => one.entry.id === id)
+  if (extension === undefined) return result
+  const electronId = await loadOne(profile, extension)
+  if (electronId === '') {
+    const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
+    return {
+      ok: false,
+      message: `${extension.entry.name} was saved but the browser would not load it: ${why}. It is switched off.`,
+    }
+  }
+  return result
+}
+
+/** Stop and delete one extension — the body behind `browser-extension:remove`. */
+export function removeExtension(profileId: unknown, id: string): ExtensionResult {
+  if (store === null) return NO_STORE
+  const profile = profileOrCurrent(profileId)
+  // Unloaded first, then deleted. The other order would delete the files out
+  // from under a running program, which is how a browser ends up holding a
+  // half-mapped extension until the next launch.
+  unloadOne(profile, id)
+  loadFailures.get(profile)?.delete(id)
+  return store.remove(profile, id)
+}
+
+/**
+ * Open an extension's own panel or its settings page in a small window — the
+ * body behind `browser-extension:popup` and `browser-extension:options`.
+ */
+export function openExtensionWindow(
+  profileId: unknown,
+  id: string,
+  which: 'popup' | 'options',
+): Promise<ExtensionResult> {
+  return openExtensionPage(profileOrCurrent(profileId), id, which)
+}
+
+/**
+ * Load whatever is on disk under this id into the session, replacing whatever
+ * of it is running.
+ *
+ * The order is the catalogue install's, and for its reason: the old copy is
+ * unloaded only **after** the new files are down, because adding or reloading
+ * the same source is a replace and anything running at that point is the
+ * previous build of it.
+ */
+async function loadFresh(
+  profile: string,
+  id: string,
+  result: ExtensionResult,
+  verb: string,
+): Promise<ExtensionResult> {
+  unloadOne(profile, id)
+  const extension = store?.installed(profile).find((one) => one.entry.id === id)
+  if (extension === undefined) return result
+  const electronId = await loadOne(profile, extension)
+  if (electronId === '') {
+    const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
+    return {
+      ok: false,
+      message: `${extension.entry.name} was ${verb} but the browser would not load it: ${why}. It is switched off.`,
+    }
+  }
+  return result
+}
+
+/**
+ * Add one of your own, from a folder or a packed file a person picks in the
+ * native dialog — the body behind `browser-extension:add-folder` and
+ * `browser-extension:add-crx`.
+ *
+ * The dialog opens here, on this Mac, and the path is whatever the person
+ * pointed at in it. That is true for the copilot's call as much as for the
+ * panel's button: there is no argument anywhere that carries a path in, because
+ * a path arriving from a caller is a string something composed, and this one is
+ * about to be run as a program on every page of a profile.
+ */
+export async function addOwnExtension(
+  profileId: unknown,
+  kind: 'folder' | 'crx',
+): Promise<ExtensionResult> {
+  if (store === null) return NO_STORE
+  const choose = kind === 'folder' ? chooseFolder : chooseCrx
+  let chosen: string | null
+  try {
+    chosen = await choose()
+  } catch (error) {
+    return {
+      ok: false,
+      message: `That could not be chosen: ${error instanceof Error ? error.message : 'the dialog did not open'}.`,
+    }
+  }
+  /*
+   * Cancelling is not an error and must not read as one. `ok: true` with an
+   * empty message: the panel prints nothing, the row does not turn red, and
+   * nobody is told something failed because they changed their mind.
+   */
+  if (chosen === null) return { ok: true, message: '' }
+  const profile = profileOrCurrent(profileId)
+  const result =
+    kind === 'folder' ? store.addFolder(profile, chosen) : store.addFile(profile, chosen)
+  if (!result.ok) return result
+  /* Loaded straight away rather than at the next launch: an Add whose effect
+     is invisible until a restart is indistinguishable from one that failed. */
+  return loadFresh(profile, sideloadId(kind, chosen), result, 'copied in')
+}
+
+/**
+ * Copy one you added in again from where it came from, and restart it — the
+ * body behind `browser-extension:reload`.
+ *
+ * The developer loop. Somebody writing an extension rebuilds it and needs the
+ * copy in the profile replaced — and before this the only route was to find
+ * the same folder in a file dialog again, every single time. No dialog here:
+ * the path is the one already written down at Add, which is the same rule the
+ * pickers keep — a path this app acts on is one a person pointed at, never one
+ * that arrived over IPC.
+ */
+export async function reloadOwnExtension(profileId: unknown, id: string): Promise<ExtensionResult> {
+  if (store === null) return NO_STORE
+  const profile = profileOrCurrent(profileId)
+  const result = store.reload(profile, id)
+  if (!result.ok) return result
+  return loadFresh(profile, id, result, 'copied in again')
+}
+
+/**
+ * Rename one you added — the body behind `browser-extension:rename`. On disk
+ * only: nothing about the running extension changes, so nothing is unloaded
+ * and nothing is restarted.
+ */
+export function renameOwnExtension(profileId: unknown, id: string, name: string): ExtensionResult {
+  if (store === null) return NO_STORE
+  return store.rename(profileOrCurrent(profileId), id, name)
+}
+
 /**
  * Wire the extension store.
  *
@@ -436,102 +653,29 @@ async function openExtensionPage(
  * dead wiring this app's contract test exists to catch."*
  */
 export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
-  const profileOf = (raw: unknown): string => {
-    const safe = safeProfileId(raw)
-    return safe !== null ? safe : currentProfileId()
-  }
+  ipcMain.handle('browser-extension:list', (_event, profileId: unknown) =>
+    extensionListFor(profileId),
+  )
 
-  ipcMain.handle('browser-extension:list', (_event, profileId: unknown) => {
-    const id = profileOf(profileId)
-    return {
-      view: viewFor(id),
-      orphans:
-        store === null || userDataDir === ''
-          ? []
-          : orphanExtensionIds(userDataDir, id, BROWSER_EXTENSION_CATALOGUE),
-      /*
-       * Every profile, so the panel can say which one it is talking about and
-       * switch between them. An extension store that could only ever show the
-       * profile that happens to be switched on would be the same dead end
-       * `profileSession` was written to fix: *"the question 'what is in this
-       * profile?' had no wire to travel down."*
-       */
-      profiles:
-        userDataDir === ''
-          ? []
-          : profileState(userDataDir).profiles.map((profile) => ({
-              id: profile.id,
-              name: profile.name,
-            })),
-      /*
-       * The limits travel with the list rather than being written into the
-       * panel. One copy, in the module that measured them, so the sentence a
-       * person reads and the sentence `browser.extensions` gives an agent cannot
-       * drift apart — and so a limit that stops being true is deleted in one
-       * place rather than in two.
-       */
-      limits: EXTENSION_LIMITS,
-    }
-  })
+  ipcMain.handle('browser-extension:install', async (_event, profileId: unknown, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : installExtension(profileId, id),
+  )
 
-  ipcMain.handle('browser-extension:install', async (_event, profileId: unknown, id: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    const profile = profileOf(profileId)
-    const result = await store.install(profile, id)
-    if (!result.ok) return result
-    /*
-     * Unloaded *after* the install succeeded, and before the new one is loaded.
-     *
-     * Reinstalling replaces the files under a directory that may still be loaded
-     * from — so anything running at this point is the old extension, and
-     * `loadOne` would hand back its live id and never look at the new bytes. The
-     * order matters the other way too: a failed install leaves the old files
-     * alone, so unloading first would have stopped a working extension on
-     * account of a download that never arrived.
-     */
-    unloadOne(profile, id)
-    /*
-     * Loaded straight away rather than at the next launch. An install that
-     * needed a restart to do anything would be a button whose effect is
-     * invisible, and the person pressing it has no way to tell that from one
-     * that failed.
-     */
-    const extension = store.installed(profile).find((one) => one.entry.id === id)
-    if (extension === undefined) return result
-    const electronId = await loadOne(profile, extension)
-    if (electronId === '') {
-      const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
-      return {
-        ok: false,
-        message: `${extension.entry.name} was saved but the browser would not load it: ${why}. It is switched off.`,
-      }
-    }
-    return result
-  })
-
-  ipcMain.handle('browser-extension:remove', (_event, profileId: unknown, id: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    const profile = profileOf(profileId)
-    // Unloaded first, then deleted. The other order would delete the files out
-    // from under a running program, which is how a browser ends up holding a
-    // half-mapped extension until the next launch.
-    unloadOne(profile, id)
-    loadFailures.get(profile)?.delete(id)
-    return store.remove(profile, id)
-  })
+  ipcMain.handle('browser-extension:remove', (_event, profileId: unknown, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : removeExtension(profileId, id),
+  )
 
   ipcMain.handle(
     'browser-extension:enable',
     async (_event, profileId: unknown, id: unknown, on: unknown) => {
       if (store === null || typeof id !== 'string') return NO_STORE
-      return setExtensionEnabled(profileOf(profileId), id, on === true)
+      return setExtensionEnabled(profileOrCurrent(profileId), id, on === true)
     },
   )
 
-  ipcMain.handle('browser-extension:popup', async (_event, profileId: unknown, id: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    return openExtensionPage(profileOf(profileId), id, 'popup')
-  })
+  ipcMain.handle('browser-extension:popup', async (_event, profileId: unknown, id: unknown) =>
+    store === null || typeof id !== 'string' ? NO_STORE : openExtensionWindow(profileId, id, 'popup'),
+  )
 
   /*
    * The settings page, which used to have no door at all.
@@ -542,100 +686,29 @@ export function registerBrowserExtensionIpc(ipcMain: IpcMain): void {
    * the store offered only the popup. That is the dead control this app is
    * written against, arrived at by omission rather than by a broken button.
    */
-  ipcMain.handle('browser-extension:options', async (_event, profileId: unknown, id: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    return openExtensionPage(profileOf(profileId), id, 'options')
-  })
-
-  /**
-   * Load whatever is on disk under this id into the session, replacing whatever
-   * of it is running.
-   *
-   * The order is the catalogue install's, and for its reason: the old copy is
-   * unloaded only **after** the new files are down, because adding or reloading
-   * the same source is a replace and anything running at that point is the
-   * previous build of it.
-   */
-  const loadFresh = async (profile: string, id: string, result: ExtensionResult, verb: string) => {
-    unloadOne(profile, id)
-    const extension = store?.installed(profile).find((one) => one.entry.id === id)
-    if (extension === undefined) return result
-    const electronId = await loadOne(profile, extension)
-    if (electronId === '') {
-      const why = loadFailures.get(profile)?.get(id) ?? 'the browser refused it'
-      return {
-        ok: false,
-        message: `${extension.entry.name} was ${verb} but the browser would not load it: ${why}. It is switched off.`,
-      }
-    }
-    return result
-  }
-
-  const addOwn = async (
-    profileId: unknown,
-    kind: 'folder' | 'crx',
-  ): Promise<ExtensionResult> => {
-    if (store === null) return NO_STORE
-    const choose = kind === 'folder' ? chooseFolder : chooseCrx
-    let chosen: string | null
-    try {
-      chosen = await choose()
-    } catch (error) {
-      return {
-        ok: false,
-        message: `That could not be chosen: ${error instanceof Error ? error.message : 'the dialog did not open'}.`,
-      }
-    }
-    /*
-     * Cancelling is not an error and must not read as one. `ok: true` with an
-     * empty message: the panel prints nothing, the row does not turn red, and
-     * nobody is told something failed because they changed their mind.
-     */
-    if (chosen === null) return { ok: true, message: '' }
-    const profile = profileOf(profileId)
-    const result =
-      kind === 'folder' ? store.addFolder(profile, chosen) : store.addFile(profile, chosen)
-    if (!result.ok) return result
-    /* Loaded straight away rather than at the next launch: an Add whose effect
-       is invisible until a restart is indistinguishable from one that failed. */
-    return loadFresh(profile, sideloadId(kind, chosen), result, 'copied in')
-  }
+  ipcMain.handle('browser-extension:options', async (_event, profileId: unknown, id: unknown) =>
+    store === null || typeof id !== 'string'
+      ? NO_STORE
+      : openExtensionWindow(profileId, id, 'options'),
+  )
 
   ipcMain.handle('browser-extension:add-folder', async (_event, profileId: unknown) =>
-    addOwn(profileId, 'folder'),
+    addOwnExtension(profileId, 'folder'),
   )
   ipcMain.handle('browser-extension:add-crx', async (_event, profileId: unknown) =>
-    addOwn(profileId, 'crx'),
+    addOwnExtension(profileId, 'crx'),
   )
 
-  /*
-   * Copy one you added in again from where it came from, and restart it.
-   *
-   * The developer loop. Somebody writing an extension rebuilds it and needs the
-   * copy in the profile replaced — and before this the only route was to find
-   * the same folder in a file dialog again, every single time. No dialog here:
-   * the path is the one already written down at Add, which is the same rule the
-   * pickers keep — a path this app acts on is one a person pointed at, never one
-   * that arrived over IPC.
-   */
-  ipcMain.handle('browser-extension:reload', async (_event, profileId: unknown, id: unknown) => {
-    if (store === null || typeof id !== 'string') return NO_STORE
-    const profile = profileOf(profileId)
-    const result = store.reload(profile, id)
-    if (!result.ok) return result
-    return loadFresh(profile, id, result, 'copied in again')
-  })
+  ipcMain.handle('browser-extension:reload', async (_event, profileId: unknown, id: unknown) =>
+    typeof id !== 'string' ? NO_STORE : reloadOwnExtension(profileId, id),
+  )
 
-  /*
-   * Rename one you added. On disk only — nothing about the running extension
-   * changes, so nothing is unloaded and nothing is restarted.
-   */
   ipcMain.handle(
     'browser-extension:rename',
-    (_event, profileId: unknown, id: unknown, name: unknown) => {
-      if (store === null || typeof id !== 'string') return NO_STORE
-      return store.rename(profileOf(profileId), id, typeof name === 'string' ? name : '')
-    },
+    (_event, profileId: unknown, id: unknown, name: unknown) =>
+      typeof id !== 'string'
+        ? NO_STORE
+        : renameOwnExtension(profileId, id, typeof name === 'string' ? name : ''),
   )
 }
 

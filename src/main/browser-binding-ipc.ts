@@ -26,6 +26,7 @@ import {
   view,
   windowClosed,
   windowMoved,
+  type BoundWindow,
 } from './browser-binding'
 import { routeOpen, type OpenedReply, type SteerablePage } from './browser-route'
 import { browserTabContents } from './browser-tab'
@@ -442,6 +443,44 @@ export function openForSession(
     knowsSession: (sessionId, machineId) => deps.knowsSession(sessionId, machineId),
     openWindow: (ask) => askForWindow(deps, ask),
   })
+}
+
+/**
+ * Attach one window to one session — the body behind `browser:bind`.
+ *
+ * Exported for the copilot's window tool (`deck-control/browser-window-tools.ts`),
+ * so that an attach asked for from another application is the same attach the
+ * window's own menu makes: the same slot numbering, the same publish, the same
+ * hook line the session's agent is handed. Null when there is nothing to attach
+ * — no window id, no session id — which the channel answered with silence and
+ * the tool answers with a sentence.
+ */
+export function bindWindow(input: {
+  tabId: string
+  sessionId: string
+  machineId: string
+}): BoundWindow | null {
+  if (!input.tabId || !input.sessionId) return null
+  const entry = known.get(input.tabId)
+  return attach({
+    sessionId: input.sessionId,
+    machineId: input.machineId,
+    browserTabId: input.tabId,
+    viewId: entry?.viewId ?? null,
+    url: entry?.url ?? '',
+    title: entry?.title ?? '',
+    hostMachineId: entry?.machineId ?? '',
+    hostMachineName: entry?.machineName ?? '',
+  })
+}
+
+/**
+ * **The** disconnect, for a caller that is not one of this file's three doors —
+ * the body behind `browser:unbind`. See {@link disconnect}: the binding goes and
+ * anything an agent was doing in that window stops, in one call.
+ */
+export function unbindWindow(tabId: string): void {
+  if (tabId) disconnect(tabId)
 }
 
 /* ------------------------------------------------------------------ menu -- */
@@ -1019,25 +1058,15 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
 
   ipcMain.on('browser:bind', (_event, raw: unknown) => {
     const input = (raw ?? {}) as Record<string, unknown>
-    const tabId = str(input.tabId)
-    const sessionId = str(input.sessionId)
-    if (!tabId || !sessionId) return
-    const entry = known.get(tabId)
-    attach({
-      sessionId,
+    bindWindow({
+      tabId: str(input.tabId),
+      sessionId: str(input.sessionId),
       machineId: str(input.machineId),
-      browserTabId: tabId,
-      viewId: entry?.viewId ?? null,
-      url: entry?.url ?? '',
-      title: entry?.title ?? '',
-      hostMachineId: entry?.machineId ?? '',
-      hostMachineName: entry?.machineName ?? '',
     })
   })
 
   ipcMain.on('browser:unbind', (_event, raw: unknown) => {
-    const tabId = str(raw)
-    if (tabId) disconnect(tabId)
+    unbindWindow(str(raw))
   })
 
   ipcMain.on('link:opened', (_event, raw: unknown) => {
