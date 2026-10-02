@@ -233,6 +233,13 @@ export class CoreClient {
         reject(new EngineError(`The simulator did not answer in time (${method}).`, 'TIMEOUT', true))
       }, timeoutMs ?? timeoutFor(method))
       this.pending.set(id, { method, resolve: (value) => resolve(value as T), reject, timer })
+      // A socket the engine has already hung up on is closed here rather than
+      // written to: the write would fail with EPIPE a tick later, after this
+      // promise had been handed to somebody expecting an answer.
+      if (this.socket.destroyed || !this.socket.writable) {
+        this.shutDown('The simulator engine closed the connection.')
+        return
+      }
       this.socket.write(encodeFrame(FRAME.request, body))
     })
   }

@@ -503,8 +503,12 @@ describe('the records fence', () => {
      * fewer — because that is the shape this fence fails in: a path dropped
      * from the list is a path the kernel stops being told about, and nothing on
      * screen changes.
+     *
+     * Six since 0.16.0: the access-key store (`remote/access-keys.json`) joined
+     * for the same reason the grant and trust stores did — a key the copilot
+     * could write is reach it hands itself.
      */
-    expect(copilotState(deps).records.paths).toHaveLength(5)
+    expect(copilotState(deps).records.paths).toHaveLength(6)
   })
 })
 

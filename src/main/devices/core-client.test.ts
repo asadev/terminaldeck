@@ -32,6 +32,9 @@ function fakeEngine(answer: (method: string, params: Record<string, unknown>, so
   let last: Socket | null = null
   const server = createServer((socket) => {
     last = socket
+    // A hang-up from either end mid-write is part of what these tests do; the
+    // fake must not turn it into an uncaught EPIPE that fails some other test.
+    socket.on('error', () => undefined)
     const reader = new FrameReader()
     let authed = false
     socket.on('data', (chunk) => {
@@ -71,6 +74,7 @@ function fakeEngine(answer: (method: string, params: Record<string, unknown>, so
 }
 
 function reply(socket: Socket, id: string, body: Record<string, unknown>): void {
+  if (socket.destroyed) return
   socket.write(encodeFrame(FRAME.response, Buffer.from(JSON.stringify({ id, ...body }))))
 }
 

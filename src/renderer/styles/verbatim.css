@@ -462,6 +462,10 @@
 .cs-store-version,
 .cs-store-github,
 .cs-sheet-paths code,
+/* An AI app's access key, shown once to be copied into another app. Read by
+   eye and typed elsewhere if the clipboard is not to hand, so a key containing
+   `->` or `==` must show those characters, not one glyph standing for two. */
+.ai-secret-value,
 .servers-host-status pre {
   font-variant-ligatures: none;
 }
