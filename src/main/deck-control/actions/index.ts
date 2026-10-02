@@ -1,0 +1,19 @@
+/**
+ * Every action a person can take, joined from the four areas. See `./types.ts`.
+ */
+
+import { agentsCoverage } from './agents'
+import { browserCoverage } from './browser'
+import { machinesCoverage } from './machines'
+import { sessionsCoverage } from './sessions'
+import type { CoverageMap } from './types'
+
+export type { Coverage, CoverageMap } from './types'
+
+/** Kept apart so the test can say which area a channel was listed in twice. */
+export const COVERAGE_AREAS: Readonly<Record<string, CoverageMap>> = Object.freeze({
+  sessions: sessionsCoverage,
+  machines: machinesCoverage,
+  agents: agentsCoverage,
+  browser: browserCoverage,
+})
