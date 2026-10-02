@@ -560,3 +560,40 @@ describe('replayWrites', () => {
     expect(typed).toBe('read @src/main/index.ts')
   })
 })
+
+/*
+ * "Switch at my next message" fired on any Enter — including the one that
+ * approves a permission prompt — and so stopped the agent in the middle of the
+ * very turn it was asking about. It fires only on a real message now.
+ */
+describe('only a real message fires the switch', () => {
+  it('lets an Enter with nothing typed through — a dialog’s highlighted choice, an empty prompt', () => {
+    const register = new PendingSwitches()
+    armed(register)
+    expect(register.observe('s1', '\r').kind).toBe('pass')
+    // Still armed, waiting for the message.
+    expect(register.get('s1')).not.toBeNull()
+  })
+
+  it('lets an answer to a question through while the agent is asking one', () => {
+    const register = new PendingSwitches({ statusOf: () => 'input' })
+    armed(register)
+    register.observe('s1', '2')
+    expect(register.observe('s1', '\r').kind).toBe('pass')
+    expect(register.get('s1')?.composing.line).toBe('')
+  })
+
+  it('fires on the message that comes after, with only that message on the line', () => {
+    let status: 'input' | 'waiting' = 'input'
+    const register = new PendingSwitches({ statusOf: () => status })
+    armed(register)
+    register.observe('s1', '1')
+    register.observe('s1', '\r')
+    status = 'waiting'
+    register.observe('s1', 'now fix the tests')
+    const action = register.observe('s1', '\r')
+    expect(action.kind).toBe('switch')
+    if (action.kind !== 'switch') return
+    expect(action.line).toBe('now fix the tests')
+  })
+})

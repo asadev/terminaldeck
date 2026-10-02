@@ -59,6 +59,19 @@ Everything that matters in `dispose` runs before its first `await`: Codex's
 newest login is captured and its plaintext file removed, the runtime is
 uninstalled, the shim is deleted. Only the socket close is async.
 
+**"Switch at my next message" — one argument.** Where `index.ts` builds the
+register (`const pending = new PendingSwitches()`, in the account-switch block),
+hand it the live status the sidebar already shows:
+
+```ts
+  const pending = new PendingSwitches({ statusOf: (id) => liveStatus.get(id)?.status ?? null })
+```
+
+Without it the deferred switch already ignores an Enter with nothing typed (a
+dialog's highlighted choice); with it, it also ignores "2 + Enter" while the
+agent is asking a question, which is what stops it killing the agent mid-turn
+when a permission prompt is approved.
+
 That is the whole wiring. **No preload change, no new IPC channel, no
 `shared/types.ts` change.**
 
@@ -78,6 +91,14 @@ Additive only:
 | `profiles:signin` → `SignInReport` | for an account the app keeps (Claude Code), answered from the vault with `command: ''` and no process spawned. Same shape. |
 | `session:switch-plan` / `session:switch-account` | two new refusals: the target is kept by the app and holds no login (*"X is not signed in yet, so this session was left as it is. Sign in to it first, then switch."*), and the target is `unavailable` (`UNAVAILABLE_SENTENCE`). |
 | `switchRefusal(input)` / `planSwitch(input)` (`session-switch.ts`) | optional `targetSignedIn?: boolean \| null` and `targetUnavailable?: string \| null` on the input object. Existing callers compile unchanged. |
+| `session:switch-plan` → `SwitchPlan.conversation` | new value `'separate'` (Codex: each account's conversations live in its own folder, so the switch starts fresh and the sheet says so before anything happens). The renderer mirror and sentence are updated. |
+| `session:switch-account` | waits for the replacement to be **ready** (its prompt or a question on its own screen, read through the same classifier the sidebar uses) with a 15-second ceiling, instead of a fixed 1.5 s. Refuses when the replacement comes up at a sign-in screen or exits while waiting; the old session keeps running. A plain-terminal tab is refused with a sentence saying why. |
+| `createSessionSwitch(core, hooks)` | `hooks.readiness?` `{ ceilingMs, pollMs, wait }` — tests only. |
+| `PendingSwitches` (`switch-later.ts`) | optional constructor `{ statusOf(id) }` — see §1. |
+| `argsForSpawn` (`one-conversation.ts`) | optional `conversationId`: a named resume collides only with a tab on that same conversation. `SessionInFolder` gains optional `agentSessionId`. |
+| `SessionMeta.agentSessionId` | now also set for a tab restored with `--continue` (recovered from the transcripts at spawn; `conversation-id.ts`). |
+| ledger `SavedSession.profileId` | the account the tab actually ran as (`rememberedAccount`), no longer `null` for a tab opened on "the default". |
+| `shareProjects` / `adoptSharedHistory` | folders both histories have are merged file by file instead of the account's history being moved aside; history an earlier build set aside (`projects.not-merged-*`) is brought back at boot. |
 | `HostCore.startSession` | **rejects** with `UNAVAILABLE_SENTENCE` for an account the app keeps when this process cannot reach the vault (the headless host shares `profiles.json` and has no `safeStorage`). Checked before any probe or spawn. Every other account is unaffected. |
 | `profiles:signin` / `profiles:signout` / usage probe | for an `unavailable` account: `state: 'unknown'` / `ok: false` with that sentence, and nothing is spawned. |
 | `profiles:delete` → `DeleteProfileResult` | `credentialsRetained` is `false` for an account the app kept (its login is deleted with it) — `true` plus a new `warning` string if that delete could not be saved. |

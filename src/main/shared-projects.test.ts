@@ -110,25 +110,78 @@ describe('sharing', () => {
     expect(readdirSync(join(two.configDir, 'projects', '-tmp-work'))).toEqual(['abc.jsonl'])
   })
 
-  it('moves the account’s own history in, and refuses to merge a folder both already have', async () => {
+  /*
+   * The first switch used to hide history. A folder both histories had was
+   * refused, the account's whole `projects/` was renamed out of sight, and the
+   * conversation on screen — which lived in that folder — was nowhere the agent
+   * looked. Conversations are files named by their own random id, so two
+   * accounts' files never collide; they are merged into the folder side by side.
+   */
+  it('moves the account’s own history in, merging a folder both already have, file by file', async () => {
     const { shareProjects, sharedProjectsRoot } = await subject()
     const work = account('work')
     const mine = join(work.configDir, 'projects')
     mkdirSync(join(mine, '-tmp-only-mine'), { recursive: true })
     mkdirSync(join(mine, '-tmp-both'), { recursive: true })
+    writeFileSync(join(mine, '-tmp-both', 'on-screen.jsonl'), 'the conversation on screen\n')
     mkdirSync(join(sharedProjectsRoot(), '-tmp-both'), { recursive: true })
+    writeFileSync(join(sharedProjectsRoot(), '-tmp-both', 'older.jsonl'), 'an older one\n')
 
     const result = shareProjects(work)
 
-    expect(result.moved).toBe(1)
-    expect(result.kept).toBe(1)
+    expect(result.kept).toBe(0)
+    expect(result.keptAt).toBeNull()
     expect(existsSync(join(sharedProjectsRoot(), '-tmp-only-mine'))).toBe(true)
-    // Nothing was deleted and nothing was interleaved. A transcript line records
-    // nothing about which account wrote it, so merging two histories for one
-    // folder is a decision this module has no basis to make — it says where the
-    // unmerged half went instead.
-    expect(result.keptAt).not.toBeNull()
-    expect(existsSync(join(result.keptAt as string, '-tmp-both'))).toBe(true)
+    // Both conversations are where the agent looks, and neither was touched.
+    expect(readdirSync(join(sharedProjectsRoot(), '-tmp-both')).sort()).toEqual(['older.jsonl', 'on-screen.jsonl'])
+    expect(readFileSync(join(sharedProjectsRoot(), '-tmp-both', 'older.jsonl'), 'utf8')).toBe('an older one\n')
+    // And readable through the account, now that its projects/ is the link.
+    expect(readdirSync(join(work.configDir, 'projects', '-tmp-both')).sort()).toEqual([
+      'older.jsonl',
+      'on-screen.jsonl',
+    ])
+    expect(readdirSync(work.configDir).some((name) => name.startsWith('projects.not-merged-'))).toBe(false)
+  })
+
+  it('sets aside only a file whose name the shared history holds with other contents', async () => {
+    const { shareProjects, sharedProjectsRoot } = await subject()
+    const work = account('work')
+    const mine = join(work.configDir, 'projects', '-tmp-both')
+    mkdirSync(mine, { recursive: true })
+    writeFileSync(join(mine, 'same.jsonl'), 'identical\n')
+    writeFileSync(join(mine, 'clash.jsonl'), 'mine\n')
+    writeFileSync(join(mine, 'fine.jsonl'), 'fine\n')
+    const shared = join(sharedProjectsRoot(), '-tmp-both')
+    mkdirSync(shared, { recursive: true })
+    writeFileSync(join(shared, 'same.jsonl'), 'identical\n')
+    writeFileSync(join(shared, 'clash.jsonl'), 'theirs\n')
+
+    const result = shareProjects(work)
+
+    expect(result.kept).toBe(1)
+    expect(readFileSync(join(shared, 'clash.jsonl'), 'utf8')).toBe('theirs\n')
+    expect(existsSync(join(shared, 'fine.jsonl'))).toBe(true)
+    // The one that could not be merged is kept, never deleted, outside projects/.
+    expect(readFileSync(join(result.keptAt as string, '-tmp-both', 'clash.jsonl'), 'utf8')).toBe('mine\n')
+    expect(readdirSync(join(result.keptAt as string, '-tmp-both'))).toEqual(['clash.jsonl'])
+  })
+
+  it('brings back history an earlier build set aside, the next time the app starts', async () => {
+    const { adoptSharedHistory, shareProjects, sharedProjectsRoot } = await subject()
+    const work = account('work')
+    mkdirSync(work.configDir, { recursive: true })
+    shareProjects(work)
+    // What a build before 0.16.0 left on disk after one switch.
+    const aside = join(work.configDir, 'projects.not-merged-1790000000000', '-tmp-hidden')
+    mkdirSync(aside, { recursive: true })
+    writeFileSync(join(aside, 'lost.jsonl'), 'a conversation nobody could find\n')
+
+    adoptSharedHistory([work])
+
+    expect(readFileSync(join(sharedProjectsRoot(), '-tmp-hidden', 'lost.jsonl'), 'utf8')).toBe(
+      'a conversation nobody could find\n',
+    )
+    expect(readdirSync(work.configDir).some((name) => name.startsWith('projects.not-merged-'))).toBe(false)
   })
 
   it('refuses an account whose directory the person set up themselves', async () => {
@@ -243,7 +296,7 @@ describe('bringing existing accounts onto the shared history', () => {
     expect(readdirSync(seen)).toEqual(['dbebd1aa.jsonl'])
   })
 
-  it('never rewrites the history the user already had', async () => {
+  it('never rewrites the history the user already had, and hides none of the account’s', async () => {
     const { adoptSharedHistory, sharedProjectsRoot } = await subject()
     const old = account('work')
     // The overlap his own machine has: a folder both stores know about. The
@@ -257,12 +310,10 @@ describe('bringing existing accounts onto the shared history', () => {
     adoptSharedHistory([old])
 
     expect(readFileSync(join(sharedProjectsRoot(), '-tmp-both', 'ours.jsonl'), 'utf8')).toBe('mine\n')
-    expect(existsSync(join(sharedProjectsRoot(), '-tmp-both', 'theirs.jsonl'))).toBe(false)
-    // The half that could not be merged is set aside, never deleted.
+    // The account's conversation in the shared folder is merged in beside it.
+    expect(readFileSync(join(sharedProjectsRoot(), '-tmp-both', 'theirs.jsonl'), 'utf8')).toBe('theirs\n')
     expect(existsSync(join(sharedProjectsRoot(), '-tmp-only-theirs'))).toBe(true)
-    const aside = readdirSync(old.configDir).find((entry) => entry.startsWith('projects.not-merged-'))
-    expect(aside).toBeDefined()
-    expect(readdirSync(join(old.configDir, aside as string))).toEqual(['-tmp-both'])
+    expect(readdirSync(old.configDir).some((entry) => entry.startsWith('projects.not-merged-'))).toBe(false)
   })
 
   it('leaves alone every account it has no business restructuring', async () => {
@@ -414,15 +465,13 @@ describe('his three accounts, as they are on disk', () => {
     expect(
       existsSync(join(sharedProjectsRoot(), '-private-var-folders-7j-copilot-probe-copilot', 'theirs.jsonl')),
     ).toBe(true)
-    // The five that collided were not merged and were not deleted: they are
-    // set aside under a name that says what they are. Nothing in a transcript
-    // line records which account wrote it, so interleaving two histories for
-    // one folder is a decision nothing here has a basis to make.
-    const aside = readdirSync(imza.configDir).find((entry) => entry.startsWith('projects.not-merged-'))
-    expect(aside).toBeDefined()
-    expect(readdirSync(join(imza.configDir, aside as string)).sort()).toEqual(
-      HIS_ACCOUNT_FOLDERS.filter((folder) => HIS_OWN_FOLDERS.includes(folder)).sort(),
-    )
+    // The five folders both histories had are merged, file by file: his own
+    // transcript and the account's sit side by side, neither touched, and
+    // nothing is set aside where no agent looks.
+    for (const folder of HIS_ACCOUNT_FOLDERS.filter((name) => HIS_OWN_FOLDERS.includes(name))) {
+      expect(readdirSync(join(sharedProjectsRoot(), folder)).sort(), folder).toEqual(['own.jsonl', 'theirs.jsonl'])
+    }
+    expect(readdirSync(imza.configDir).some((entry) => entry.startsWith('projects.not-merged-'))).toBe(false)
 
     // And the account's projects/ is a link, so deleting the account later
     // takes the link and not his history.

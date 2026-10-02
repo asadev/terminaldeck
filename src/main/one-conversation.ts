@@ -108,6 +108,8 @@ export interface SessionInFolder {
   provider: string
   /** `null` while the process is alive; a number once it has exited. */
   exitCode: number | null
+  /** The conversation it is on, when that is known. See {@link argsForSpawn}. */
+  agentSessionId?: string
 }
 
 /**
@@ -166,8 +168,29 @@ export function argsForSpawn(input: {
   provider: string
   /** The session being replaced, when this spawn is a replacement. */
   replaces?: string | null
+  /**
+   * The conversation this spawn resumes **by id**, when it names one.
+   *
+   * A named resume is not "the folder's newest", so another live session in
+   * the same folder is no threat to it unless that session is on the very same
+   * conversation. Folding the two together is what dropped the conversation on
+   * every account switch made while a second tab of the same agent was open in
+   * the same repo: the switch named the conversation on screen, and this guard
+   * stripped the name because *some* tab was in the folder.
+   */
+  conversationId?: string | null
 }): readonly string[] {
   if (!input.resume || input.resumeArgs.length === 0) return input.args
+  if (typeof input.conversationId === 'string' && input.conversationId !== '') {
+    const sameConversation = input.live.some(
+      (session) =>
+        session.exitCode === null &&
+        session.id !== input.replaces &&
+        session.provider === input.provider &&
+        session.agentSessionId === input.conversationId,
+    )
+    return sameConversation ? input.args : input.resumeArgs
+  }
   if (conversationIsHeld(input.live, input.cwd, input.provider, input.replaces)) return input.args
   return input.resumeArgs
 }

@@ -40,6 +40,7 @@ import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { argsForSpawn } from './one-conversation'
+import { recoverConversationId } from './conversation-id'
 import { PtyManager, type RemovalReason } from './pty-manager'
 // The controls a session's bar is drawn from, imported here so that a *remote*
 // window reaches the same two functions this machine's own window does. See the
@@ -104,7 +105,7 @@ import { forgetWindowOwner, noteWindowOwner } from './window-owner'
 import { sessionExited } from './browser-binding'
 import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
-import { installDeviceHomes, installHomeScopes } from './transcript'
+import { installDeviceHomes, installHomeScopes, projectPathSpellings, transcriptDir } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import {
   createCredentialProxy,
@@ -163,6 +164,18 @@ import {
  * was supposed to be catching; its header says what that cost on a real server.
  */
 export { AgentUnavailableError } from './agent-unavailable'
+
+/**
+ * The account a remembered tab is written down as: the one the session was
+ * resolved to and runs as, falling back to the request only when the session
+ * has no account at all (a shell, an agent whose login this app cannot move).
+ */
+export function rememberedAccount(
+  meta: Pick<SessionMeta, 'profileId'>,
+  input: Pick<CreateSessionInput, 'profileId'>,
+): string | null {
+  return meta.profileId ?? input.profileId ?? null
+}
 // And in scope here, because `startSession` below is the one place that throws
 // it. A re-export alone does not bind the name inside this module.
 import { AgentUnavailableError } from './agent-unavailable'
@@ -2021,6 +2034,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * `one-conversation.ts` carries the argument.
        */
       replaces: typeof input.replaces === 'string' ? input.replaces : null,
+      // The conversation named on the command line, when one is: a named
+      // resume collides only with a tab on that same conversation, not with
+      // every tab in the folder. See `argsForSpawn`.
+      conversationId: named ? (input.resumeConversationId as string) : null,
       // `provider`, the same value handed to `ptys.create` below and therefore
       // the same one `SessionMeta.provider` carries — so the comparison is
       // like for like. The *requested* provider is not: an agent that is not
@@ -2086,8 +2103,36 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * what makes that unreachable rather than merely unintended.
      */
     const declaredId = namesConversation ? randomUUID() : null
+    /*
+     * And the third way: a `--continue` that named nothing — every tab restored
+     * at launch. The CLI attaches it to the folder's newest conversation, and
+     * that is the transcript this reads, before the spawn, with every
+     * conversation another live tab is on taken out (`conversation-id.ts`).
+     * Without it a restored tab had no id, and its account switch carried "the
+     * folder's newest" — which, by then, could be another tab's conversation.
+     */
+    const continuedId =
+      declaredId === null &&
+      !named &&
+      provider === 'claude' &&
+      target === null &&
+      resumeArgs.length > 0 &&
+      chosen === resumeArgs
+        ? await recoverConversationId({
+            dirs: projectPathSpellings(input.cwd).map((spelling) => transcriptDir(spelling, profile.configDir)),
+            startedAt: Date.now(),
+            claimed: new Set(
+              ptys
+                .list()
+                .map((session) => session.agentSessionId)
+                .filter((value): value is string => typeof value === 'string' && value !== ''),
+            ),
+          })
+        : null
     const agentSessionId =
-      declaredId ?? (named && chosen === resumeArgs ? (input.resumeConversationId as string) : null)
+      declaredId ??
+      (named && chosen === resumeArgs ? (input.resumeConversationId as string) : null) ??
+      continuedId
     /**
      * Did the agent actually get a continue flag?
      *
@@ -2318,9 +2363,15 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * relaunch afterwards restored a bare terminal that then reported, quite
      * correctly, that it had no conversation to continue.
      *
-     * `input.profileId`, not the resolved `profile`: a null here means "whatever
-     * this project's default profile is", and that is a question worth asking
-     * again next launch rather than freezing today's answer.
+     * The account it **actually ran as** — `meta.profileId`, the resolved one —
+     * and not the request. This used to write `input.profileId`, and a null
+     * there ("whatever this project's default is") was written down as null, on
+     * the argument that the default was worth asking again next launch. But the
+     * session was not running as "the default"; it was running as one login,
+     * and everything that later asks about the tab — the account switch above
+     * all — re-resolved that null against whatever the default had *become*,
+     * and so reasoned about a different account than the one the agent was
+     * signed in as. See {@link rememberedAccount}.
      *
      * ## A confined session is remembered, carrying the device it belongs to
      *
@@ -2373,7 +2424,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       ledger.note(meta.id, {
         cwd: input.cwd,
         provider: requested,
-        profileId: input.profileId ?? null,
+        profileId: rememberedAccount(meta, input),
         cols: input.cols,
         rows: input.rows,
         lastSeenAt: Date.now(),

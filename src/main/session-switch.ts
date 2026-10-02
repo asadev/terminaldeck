@@ -2,6 +2,7 @@ import type { ProviderId, SessionMeta } from '../shared/types'
 import { AGENT_CATALOG, loginsNote } from '../shared/agent-catalog'
 import { supportsProfiles, type Profile } from './profiles'
 import type { RestoreDecision, SavedSession } from './session-restore'
+import { classify, stripAnsi } from './session-activity'
 
 /**
  * Running the session you already have as a different account.
@@ -157,8 +158,30 @@ export const SESSION_SWITCH_CHANNEL = 'session:switch-account'
  *                 answers for itself, in its own words, in the terminal.
  *  - `none`       this agent has no way to continue anything. Nothing is lost
  *                 that was ever recoverable.
+ *  - `separate`   this agent keeps every account's conversations inside that
+ *                 account's own folder (Codex: `$CODEX_HOME/sessions`), so the
+ *                 account being switched to cannot see this conversation at all
+ *                 — and its own "continue the last one" would quietly attach to
+ *                 some other conversation of its own. So it starts fresh, and
+ *                 the sheet says so before anything happens.
  */
-export type SwitchConversation = 'follows' | 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
+export type SwitchConversation =
+  | 'follows'
+  | 'stays'
+  | 'theirs'
+  | 'taken'
+  | 'unreadable'
+  | 'none'
+  | 'separate'
+
+/**
+ * Agents whose conversations live inside the account's own folder with no
+ * shared history this app can arrange — so a conversation can never follow a
+ * switch, by id or otherwise. Codex can resume a session by id (`codex resume
+ * <id>`), but only from the `CODEX_HOME` that holds it, and another account is
+ * another `CODEX_HOME`.
+ */
+const SEPARATE_HISTORIES: ReadonlySet<ProviderId> = new Set(['codex'])
 
 /** An account, as much of one as the window needs to name it. */
 export interface SwitchAccount {
@@ -297,6 +320,124 @@ export function startFailed(account: string, said: string | null): string {
   )
 }
 
+/* ---------------------------------------------- is the replacement ready? -- */
+
+/**
+ * The longest a switch waits for the replacement to show it is ready.
+ *
+ * A ceiling, not a guess at how long a start takes: the switch moves on the
+ * moment the agent draws its prompt (or a question for the person), which is
+ * usually within a second or two. Fifteen seconds covers a cold start of the
+ * CLI resuming a long conversation; past it a replacement that is still alive
+ * and still drawing is taken as started, exactly as the fixed wait used to take
+ * every replacement — the difference is that it is now the last resort.
+ */
+export const SWITCH_READY_CEILING_MS = 15_000
+
+/** How often the replacement's screen is looked at while waiting. */
+export const SWITCH_READY_POLL_MS = 150
+
+/**
+ * What a signed-out agent draws instead of its prompt.
+ *
+ * The case the old fixed wait could not see: an agent with no login does not
+ * exit, it sits alive at its own sign-in screen, so "still alive after 1.5s"
+ * passed and the working session was stopped with a login prompt left in its
+ * place. These are the CLIs' own words, matched on the visible screen.
+ */
+const SIGNED_OUT = [
+  /not logged in/i,
+  /please run \/login/i,
+  /select login method/i,
+  /invalid api key/i,
+  /oauth (?:session|token) (?:has )?expired/i,
+  /could not be refreshed/i,
+]
+
+export interface ReadinessProbe {
+  /** Wait, injected so a test never actually sleeps. */
+  wait(ms: number): Promise<void>
+  /** Is that session still running? */
+  alive(id: string): boolean
+  /** What it is showing right now, as a person would see it. Null when unknown. */
+  screen(id: string): Promise<string | null>
+  /** What it printed, for quoting a failure in the agent's own words. */
+  scrollback(id: string): string
+}
+
+/**
+ * How a replacement turned out.
+ *
+ *  - `ready`       it drew its prompt, or a question for the person (a trust
+ *                  dialog in a folder this account has not opened before), and
+ *                  is still alive — the moment the old session can go.
+ *  - `started`     alive at the ceiling without a conclusive screen. Taken as
+ *                  started, which is the last resort rather than the rule.
+ *  - `died`        it exited. `said` is its last line.
+ *  - `signed-out`  it is alive at a sign-in screen. Not a switch: the session it
+ *                  would replace is left running.
+ */
+export interface Readiness {
+  outcome: 'ready' | 'started' | 'died' | 'signed-out'
+  said: string | null
+  waitedMs: number
+}
+
+/**
+ * Wait for the replacement to be *ready*, rather than for a fixed time to pass.
+ *
+ * The signal is the one the rest of the app already reads a session's state
+ * from: its visible screen, through the same classifier the sidebar's status
+ * uses (`session-activity.ts`). Ready is seen twice in a row before it counts,
+ * because an agent can draw a frame and exit in the same breath — `--resume`
+ * against a conversation it will not continue does exactly that.
+ */
+export async function awaitReplacement(
+  id: string,
+  probe: ReadinessProbe,
+  options: { ceilingMs?: number; pollMs?: number } = {},
+): Promise<Readiness> {
+  const ceiling = options.ceilingMs ?? SWITCH_READY_CEILING_MS
+  const poll = options.pollMs ?? SWITCH_READY_POLL_MS
+  let waited = 0
+  let readyStreak = 0
+  for (;;) {
+    if (!probe.alive(id)) {
+      return { outcome: 'died', said: lastLine(probe.scrollback(id)), waitedMs: waited }
+    }
+    const screen = await probe.screen(id)
+    /*
+     * No screen to read — a core with no shadow terminal. There is then no
+     * readiness signal to wait for, and waiting out the ceiling would only make
+     * every switch fifteen seconds slow, so the old rule applies: alive after
+     * the grace period counts as started.
+     */
+    if (screen === null && waited >= SWITCH_GRACE_MS) {
+      return { outcome: 'started', said: null, waitedMs: waited }
+    }
+    if (screen !== null) {
+      const visible = stripAnsi(screen)
+      if (SIGNED_OUT.some((pattern) => pattern.test(visible))) {
+        return { outcome: 'signed-out', said: lastLine(visible), waitedMs: waited }
+      }
+      const status = classify(screen, false)
+      readyStreak = status === 'waiting' || status === 'input' ? readyStreak + 1 : 0
+      if (readyStreak >= 2) return { outcome: 'ready', said: null, waitedMs: waited }
+    }
+    if (waited >= ceiling) return { outcome: 'started', said: null, waitedMs: waited }
+    await probe.wait(poll)
+    waited += poll
+  }
+}
+
+/** What to tell somebody whose replacement came up at a sign-in screen. */
+export function startSignedOut(account: string): string {
+  return (
+    `${account} is not signed in, so nothing was switched. This session is still running as it was. ` +
+    `Sign in to ${account} first, then switch.`
+  )
+}
+
 /* ------------------------------------------- carrying the conversation -- */
 
 /**
@@ -404,6 +545,19 @@ export function switchRefusal(input: {
    * about — a plain shell, or an agent whose config directory this app cannot
    * redirect. The agent's own sentence, never a generic one.
    */
+  /*
+   * A plain terminal. If an agent is running in it, somebody typed its name at
+   * a shell prompt, so this app never launched it, never chose its folder or
+   * login, and has no way to restart it as anybody else. Said as that, because
+   * "a shell has no account" reads as the app not having looked, to somebody
+   * who can see Claude running in the tab.
+   */
+  if (meta.provider === 'shell') {
+    return (
+      'This tab is a plain terminal. An agent typed into it was not started by this app, so its ' +
+      'account cannot be switched from here — open a new session on the account you want instead.'
+    )
+  }
   if (!supportsProfiles(meta.provider)) {
     return loginsNote(meta.provider)
   }
@@ -517,6 +671,26 @@ export function planSwitch(input: {
   })
   if (refusal !== null) {
     return { sessionId, refusal, from, to, conversation: 'stays', resume: false }
+  }
+
+  /*
+   * An agent whose conversations live inside each account's own folder: the
+   * account being switched to cannot see this one, and its own "continue"
+   * would attach to some other conversation it happens to have. Fresh, and
+   * said so — before anything is stopped.
+   */
+  if (meta !== null && SEPARATE_HISTORIES.has(meta.provider)) {
+    if (decision !== null && decision.outcome === 'skip') {
+      return {
+        sessionId,
+        refusal: `This session cannot be started again: ${decision.reason}.`,
+        from,
+        to,
+        conversation: 'stays',
+        resume: false,
+      }
+    }
+    return { sessionId, refusal: null, from, to, conversation: 'separate', resume: false }
   }
 
   /*
