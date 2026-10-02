@@ -133,6 +133,7 @@ import { onWebContentsDestroyed } from '../web-contents-teardown'
 import { ActionLog, type ActionRow } from './action-log'
 import { ConsentBroker, WINDOW_SURFACE, type ConsentOutcome, type ConsentRequest } from './consent'
 import { DeckControl, type Budgets } from './control'
+import { deckControlStatus } from './deck-status'
 import { createLiveSurface, type LiveSurfaceDeps } from './live-surface'
 import { SERVER_NAME, startDeckControlServer, stopDeckControlServer, type DeckControlEndpoint } from './server'
 import type { ToolSpec } from './catalogue'
@@ -548,32 +549,13 @@ export async function registerDeckControlIpc(
 
   /* ------------------------------------------------------------ channels -- */
 
-  ipcMain.handle('deck-control:status', () => ({
-    running: true,
-    port: endpoint.port,
-    server: SERVER_NAME,
-    tools: control.tools().map((spec) => ({ id: spec.id, tier: spec.tier, title: spec.title })),
-    /*
-     * What the tool surface costs the copilot in context, every turn.
-     *
-     * Reported rather than kept internal because it is a number that only grows
-     * and nobody would ever go looking for it. A settings pane that can show
-     * "11 tools, about 2,200 tokens on every question" makes the standing charge
-     * visible to the person paying it — and to the next agent about to add a
-     * twelfth. See `MAX_CATALOGUE_TOKENS`.
-     */
-    catalogue: control.cost(),
-    pendingConfirmations: consent.list().length,
-    copilotSessions: control.copilotSessions(),
-    logFile: log.file,
-    // Said out loud rather than left to look quiet. A log that stopped
-    // recording because the disk is full is a very different state from a
-    // copilot that has not been asked to do anything.
-    logging: !log.broken,
-    // Deliberately not the token, and not the config path either. A renderer
-    // has no use for either, and a secret that reaches page code is one
-    // screenshot from leaving.
-  }))
+  /*
+   * Composed in `deck-status.ts`, which `tools.status` calls too, so the pane and
+   * a caller asking over the server read one answer rather than two that drift.
+   */
+  ipcMain.handle('deck-control:status', () =>
+    deckControlStatus({ port: endpoint.port, server: SERVER_NAME, control, consent, log }),
+  )
 
   ipcMain.handle('deck-control:activity', (_event, count?: unknown) => {
     const want = typeof count === 'number' && Number.isFinite(count) ? Math.trunc(count) : 200

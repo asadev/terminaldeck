@@ -293,8 +293,19 @@ export const NOT_WHILE_DRIVING: readonly string[] = [
   'sessions.send',
   'sessions.start',
   'sessions.stop',
+  // The rest of driving a session (`session-more-tools.ts`): a key pressed, a
+  // name changed or a login swapped underneath a tour is the same unattributable
+  // change a message would be.
+  'sessions.keys',
+  'sessions.rename',
+  'sessions.account',
+  'sessions.held',
   'settings.write',
   'tour.play',
+  // The window's own clicks (`ui-tools.ts`). A tour owns the screen while it
+  // plays; a view switched under it is the screen moving twice at once.
+  'ui.do',
+  'copilot.run',
   'routines.',
 ]
 

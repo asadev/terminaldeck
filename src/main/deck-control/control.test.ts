@@ -454,7 +454,12 @@ describe('typing into a session', () => {
     const result = await control.call('sessions_send', { sessionId: started.session.id, text: 'run the tests' })
 
     expect(result.ok).toBe(true)
-    expect(state.typed).toEqual([{ id: started.session.id, data: 'run the tests\r' }])
+    // Two writes, the line and then its Enter: one write ending in `\r` is a
+    // paste to the agent CLIs and never submits. See `session-typing.ts`.
+    expect(state.typed).toEqual([
+      { id: started.session.id, data: 'run the tests' },
+      { id: started.session.id, data: '\r' },
+    ])
     expect(asked).toEqual([])
     expect(rows()[1].tier).toBe('act')
   })
@@ -483,7 +488,10 @@ describe('typing into a session', () => {
     const result = await control.call('sessions_send', { sessionId: 'human-1', text: 'status?' })
 
     expect(result.ok).toBe(true)
-    expect(state.typed).toEqual([{ id: 'human-1', data: 'status?\r' }])
+    expect(state.typed).toEqual([
+      { id: 'human-1', data: 'status?' },
+      { id: 'human-1', data: '\r' },
+    ])
     expect(asked[0].summary).toContain('status?')
     expect(rows()[0].confirmed).toMatchObject({ required: true, granted: true, by: 'window' })
   })
@@ -876,7 +884,9 @@ describe('a caller that was never granted the tier', () => {
       { caller: acting },
     )
     expect(theirs.refusal).toBe('not-granted')
-    expect(state.typed.map((entry) => entry.id)).toEqual([started.session.id])
+    // Two writes into its own session — the line, then its Enter — and none
+    // into the person's.
+    expect(state.typed.map((entry) => entry.id)).toEqual([started.session.id, started.session.id])
   })
 
   it('records which device asked, on every row', async () => {
