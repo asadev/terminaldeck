@@ -148,10 +148,8 @@ export const sessionsCoverage: CoverageMap = {
   // Hoot is a session: a message to it is sessions.send to the id hoot.state names.
   'hoot-panel:say': { tool: 'sessions.send' },
   'hoot-panel:start-hoot': { tool: 'hoot.run' },
-  'hoot-panel:stop-hoot': { tool: 'hoot.run' },
   'hoot-panel:snapshot': { tool: ['sessions.list', 'hoot.state'] },
   'hoot-panel:show-session': { tool: 'ui.do' },
-  'hoot-panel:open-app': { tool: 'ui.do' },
   'hoot-menubar:config': { tool: 'ui.list' },
   'hoot-menubar:configure': { tool: 'ui.do' },
   'hoot-menubar:open': { tool: 'ui.do' },
@@ -160,6 +158,7 @@ export const sessionsCoverage: CoverageMap = {
   'hoot-panel:focus': { skip: 'The island asking for the keyboard after a click on it; plumbing for a person typing, not an action.' },
   'hoot-panel:close': { skip: 'Escape in the island; it is a view of things tools already read and do, so settling it changes nothing.' },
   'hoot-panel:size': { skip: 'The island saying how big its resting pill is, so the invisible catcher sits over it; layout, nothing a person chooses.' },
+  'hoot-panel:resize': { skip: 'The island remembering the size he dragged its panel to; a window size, nothing a tool would choose for him.' },
   'hoot-panel:catch': { skip: 'The invisible catcher over the resting pill saying the pointer arrived, left or pressed; plumbing for hovering, not a choice.' },
   'hoot-panel:menu': { skip: 'A right-click on the island opening the background menu, whose entries are each a tool already.' },
   'session:labels': { skip: 'The main window telling the island the names it already shows for its sessions; plumbing so both say the same thing.' },

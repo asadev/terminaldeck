@@ -7,9 +7,8 @@ vi.mock('electron', () => ({
   screen: {},
 }))
 
-const { createHootMenuBar, MENUBAR_KEY, mergeMessages, readMenuBarEnabled, registerHootMenuBarIpc } = await import(
-  './hoot-menubar'
-)
+const { createHootMenuBar, MENUBAR_KEY, mergeMessages, readIslandSize, readMenuBarEnabled, registerHootMenuBarIpc, SIZE_KEYS } =
+  await import('./hoot-menubar')
 type Deps = Parameters<typeof createHootMenuBar>[0]
 
 describe('the setting', () => {
@@ -156,7 +155,6 @@ function rig(
   const watched: Array<{ cwd: string; agentSessionId: string | null }> = []
   let chat: ((update: { messages: never[]; reset: boolean }) => void) | null = null
   let stops = 0
-  let hootStops = 0
   const place = {
     display: options.display ?? DISPLAY,
     barHeight: options.notch?.height ?? 30,
@@ -192,10 +190,6 @@ function rig(
       hootStatus = 'running'
       return { problem: null }
     },
-    stopHoot: () => {
-      hootStops += 1
-      hootStatus = 'stopped'
-    },
     say: (sessionId, text) => said.push({ sessionId, text }),
     watchChat: (cwd, agentSessionId, onUpdate) => {
       watched.push({ cwd, agentSessionId })
@@ -229,7 +223,6 @@ function rig(
     time,
     watched,
     stops: () => stops,
-    hootStops: () => hootStops,
     chat: (messages: Array<{ id: string; role: 'you' | 'agent'; text: string; at: number }>) =>
       chat?.({ messages: messages as never[], reset: false }),
   }
@@ -243,8 +236,9 @@ describe('where the island is — one window that never moves', () => {
     r.bar.apply()
     expect(r.islands).toHaveLength(1)
     expect(r.islands[0].visible).toBe(true)
-    // 640 wide grown, 10-point shoulders, 44 points of shadow each side; 260 tall and 56 of shadow.
-    expect(r.islands[0].bounds).toEqual({ x: 960 - 374, y: 0, width: 748, height: 316 })
+    // The largest panel a drag can make — 960 by 520 — with its 10-point
+    // shoulders, and 44 points of shadow each side and 56 below.
+    expect(r.islands[0].bounds).toEqual({ x: 960 - 534, y: 0, width: 1068, height: 576 })
     // At rest it lets every click through: the catcher listens on the pill.
     expect(r.islands[0].ignoring.at(-1)).toBe(true)
   })
@@ -475,21 +469,22 @@ describe('growing into the panel and settling back', () => {
     r.time.advance(200)
     r.bar.pointer(42, false)
     expect(r.islands[0].ignoring.at(-1)).toBe(false)
-    r.time.advance(300)
+    r.time.advance(60)
     r.bar.pointer(42, true)
     r.time.advance(1000)
     expect(r.bar.isShowing().expanded).toBe(true)
   })
 
-  it('settles a moment after the pointer has left the shape, and then lets every click through again', () => {
+  it('settles a tenth of a second after the pointer has left the shape, and then lets every click through again', () => {
     const r = rig()
     r.bar.apply()
     r.bar.pointer(42, true)
-    r.time.advance(200)
-    r.bar.pointer(42, false)
-    r.time.advance(300)
+    r.time.advance(120)
     expect(r.bar.isShowing().expanded).toBe(true)
-    r.time.advance(300)
+    r.bar.pointer(42, false)
+    r.time.advance(60)
+    expect(r.bar.isShowing().expanded).toBe(true)
+    r.time.advance(40)
     expect(r.bar.isShowing().expanded).toBe(false)
     expect(r.islands[0].last()?.expanded).toBe(false)
     // At rest again: clicks go through the island, and the catcher waits on the pill.
@@ -547,61 +542,79 @@ describe('growing into the panel and settling back', () => {
     expect(r.shown).toEqual(['s2'])
     expect(r.bar.isShowing().expanded).toBe(false)
   })
+})
 
-  it('opens the app, or Hoot’s settings in it, from the panel', () => {
+describe('his size', () => {
+  it('opens at the default size until he drags a corner, then at the size he let go at', () => {
     const r = rig()
     r.bar.apply()
-    r.bar.focus(42)
-    r.bar.openApp('hoot-settings')
-    r.bar.openApp()
-    expect(r.opened).toEqual(['hoot-settings', undefined])
-    expect(r.bar.isShowing().expanded).toBe(false)
+    expect(r.bar.snapshot().size).toBeNull()
+    r.bar.resize(42, { width: 820, height: 360 })
+    expect(r.store[SIZE_KEYS.width]).toBe(820)
+    expect(r.store[SIZE_KEYS.height]).toBe(360)
+    expect(r.bar.snapshot().size).toEqual({ width: 820, height: 360 })
+    expect((r.islands[0].sent.at(-1)?.args[0] as { size: unknown }).size).toEqual({ width: 820, height: 360 })
+  })
+
+  it('keeps a size inside what the window holds, and takes it from the island’s own page only', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.resize(42, { width: 5000, height: 40 })
+    expect(r.bar.snapshot().size).toEqual({ width: 960, height: 180 })
+    r.bar.resize(77, { width: 700, height: 300 })
+    r.bar.resize(42, { width: Number.NaN, height: 300 })
+    expect(r.bar.snapshot().size).toEqual({ width: 960, height: 180 })
+  })
+
+  it('never moves or resizes the window for it', () => {
+    const r = rig()
+    r.bar.apply()
+    const before = { ...r.islands[0].bounds }
+    r.bar.resize(42, { width: 900, height: 480 })
+    expect(r.islands[0].bounds).toEqual(before)
+  })
+
+  it('reads a remembered size back, and ignores one that is not a size', () => {
+    expect(readIslandSize((key) => (key === SIZE_KEYS.width ? 700 : key === SIZE_KEYS.height ? 300 : undefined))).toEqual({
+      width: 700,
+      height: 300,
+    })
+    expect(readIslandSize((key) => (key === SIZE_KEYS.width ? 'wide' : 300))).toBeNull()
+    expect(readIslandSize(() => undefined)).toBeNull()
   })
 })
 
-describe('the right-click menu — the island is the app’s one presence at the top of the screen', () => {
-  it('offers to open the app, Hoot’s settings, or to hide it', () => {
+describe('the right-click menu — three things, and nothing else', () => {
+  it('opens the app, its settings — where the island is shown or hidden — or quits', () => {
     const r = rig()
-    r.bar.apply()
-    r.bar.menu(42)
-    const items = r.islands[0].menus[0] as Array<{ label?: string; click?: () => void }>
-    expect(items.map((item) => item.label).filter(Boolean)).toEqual([
+    let quits = 0
+    const bar = createHootMenuBar({ ...r.deps, quit: () => (quits += 1) })
+    bar.apply()
+    bar.menu(42)
+    const items = r.islands.at(-1)?.menus[0] as Array<{ label?: string; type?: string; click?: () => void }>
+    expect(items.map((item) => item.label ?? `(${item.type})`)).toEqual([
       'Open Terminal Deck',
-      'Hoot Settings…',
-      'Hide Hoot from the Top of the Screen',
+      'Settings…',
+      '(separator)',
+      'Quit and Stop All Sessions',
     ])
+    items[0].click?.()
     items[1].click?.()
-    expect(r.opened).toEqual(['hoot-settings'])
+    expect(r.opened).toEqual([undefined, 'hoot-settings'])
     items[3].click?.()
-    expect(r.islands[0].destroyed).toBe(true)
+    expect(quits).toBe(1)
   })
 
-  it('carries the app’s background menu when one is given, and says when it comes and goes', () => {
+  it('has no quit to offer when there is none, and says when the island comes and goes', () => {
     const r = rig()
     const shownChanged: number[] = []
-    const bar = createHootMenuBar({
-      ...r.deps,
-      appMenuItems: (extras) => [
-        { label: 'Open Terminal Deck' },
-        ...extras.afterOpen,
-        { label: 'Claude Code — api' },
-        ...extras.beforeQuit,
-        { label: 'Quit and Stop All Sessions' },
-      ],
-      onShownChanged: () => shownChanged.push(1),
-    })
+    const bar = createHootMenuBar({ ...r.deps, onShownChanged: () => shownChanged.push(1) })
     bar.apply()
     expect(shownChanged).toHaveLength(1)
     expect(bar.isShowing().island).toBe(true)
     bar.menu(42)
     const items = r.islands.at(-1)?.menus[0] as Array<{ label?: string }>
-    expect(items.map((item) => item.label)).toEqual([
-      'Open Terminal Deck',
-      'Hoot Settings…',
-      'Claude Code — api',
-      'Hide Hoot from the Top of the Screen',
-      'Quit and Stop All Sessions',
-    ])
+    expect(items.map((item) => item.label)).toEqual(['Open Terminal Deck', 'Settings…'])
     bar.configure({ enabled: false })
     expect(shownChanged).toHaveLength(2)
   })
@@ -615,15 +628,12 @@ describe('talking to Hoot', () => {
     expect(r.said).toEqual([{ sessionId: 'hoot-1', text: 'Which sessions are working?' }])
   })
 
-  it('says in one line when Hoot is not running, starts it on request, and stops it', async () => {
+  it('says in one line when Hoot is not running, and starts it on request', async () => {
     const r = rig({ hoot: 'stopped' })
     r.bar.apply()
     expect(await r.bar.say('hello')).toEqual({ ok: false, message: 'Hoot isn’t running.' })
     expect(await r.bar.startHoot()).toEqual({ ok: true, message: '' })
     expect(r.bar.snapshot().hoot.status).toBe('running')
-    expect(r.bar.stopHoot()).toEqual({ ok: true, message: '' })
-    expect(r.hootStops()).toBe(1)
-    expect(r.bar.snapshot().hoot.status).toBe('stopped')
   })
 
   it('reads the replies off Hoot’s own transcript while grown, and stops when it settles', () => {
@@ -665,12 +675,10 @@ describe('the channels', () => {
       'hoot-menubar:config',
       'hoot-menubar:configure',
       'hoot-menubar:open',
-      'hoot-panel:open-app',
       'hoot-panel:say',
       'hoot-panel:show-session',
       'hoot-panel:snapshot',
       'hoot-panel:start-hoot',
-      'hoot-panel:stop-hoot',
     ])
     expect([...listeners.keys()].sort()).toEqual([
       'hoot-panel:catch',
@@ -679,6 +687,7 @@ describe('the channels', () => {
       'hoot-panel:held',
       'hoot-panel:menu',
       'hoot-panel:pointer',
+      'hoot-panel:resize',
       'hoot-panel:size',
       'session:labels',
     ])

@@ -2,10 +2,18 @@
   Hoot's island — the page in the window `main/hoot-menubar.ts` hangs from the
   top centre of the screen.
 
-  The window is fixed and transparent; the island is one shape clipped out of
-  it — `clip-path: path(…)`, the outline from `shared/hoot-island.ts`, redrawn
-  each frame by `HootPanel.tsx`. The shape and its shadow are the only things
-  that change while it moves; nothing is laid out again.
+  The window is fixed and transparent; the island is one surface clipped out of
+  it — `clip-path: path(…)`, the outline from `shared/hoot-island.ts`. It moves
+  by CSS transitions on that outline, on the shadow's transform and on the
+  words' opacity (set inline by `HootPanel.tsx` from `TIMING`), so nothing is
+  laid out again while it moves. The grown panel's contents are laid out once,
+  at the grown size, and the outline reveals them.
+
+  ## One piece
+
+  Grown, the panel is one surface from the top edge of the screen down: the
+  top row — the "Hoot" tab and the session chips — sits on the same ground as
+  the conversation under it, with no band, line or change of shade between.
 
   ## The app's own colours
 
@@ -43,7 +51,6 @@ html.hoot-panel-page {
 .hoot-island {
   --island-ground: var(--bg-primary);
   --island-owl: #f7882f;
-  --island-lift: 0;
 
   position: fixed;
   inset: 0;
@@ -64,23 +71,36 @@ html.hoot-panel-page {
   visibility: hidden;
 }
 
-/* The shadow follows the clipped outline exactly, and deepens as it grows. */
-.hoot-island-shadow {
-  position: absolute;
-  inset: 0;
-  /* 12px is a standard deviation here, not a radius: `SHADOW` leaves three of them of room. */
-  filter: drop-shadow(0 0 0.6px var(--border-strong))
-    drop-shadow(
-      0 calc(8px * var(--island-lift)) calc(12px * var(--island-lift)) rgba(0, 0, 0, calc(0.26 * var(--island-lift)))
-    );
+/* A corner in his hand: the shape follows the pointer, with nothing easing behind it. */
+.hoot-island[data-dragging] * {
+  transition: none !important;
 }
 
+/* ------------------------------------------------------------ the surface -- */
+
+/* The grown panel's shape, blurred under it; scaled down to the pill and faded out at rest. */
+.hoot-island-shadow {
+  position: absolute;
+  top: 0;
+  box-shadow: var(--shadow-md);
+  transform-origin: 50% 0;
+  will-change: transform, opacity;
+}
+
+.hoot-island-edge,
 .hoot-island-ground {
   position: absolute;
   inset: 0;
+  will-change: clip-path;
+}
+
+.hoot-island-edge {
+  background: var(--border-strong);
+}
+
+.hoot-island-ground {
   overflow: hidden;
   background: var(--island-ground);
-  clip-path: path('M 0 0 Z');
   pointer-events: auto;
 }
 
@@ -89,47 +109,37 @@ html.hoot-panel-page {
 .hoot-island-rest {
   position: absolute;
   top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  left: 0;
+  right: 0;
+  will-change: opacity;
 }
 
-/* Centred in the pill, with the pill's own padding: 8 before the owl, 12 after the words. */
+/* Centred, with the pill's own padding: 8 before the owl, 12 after the words. */
 .hoot-island-pill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding-right: 4px;
+  transform: translateX(-50%);
   white-space: nowrap;
 }
 
 /*
-  Beside a notch: the owl at the outer edge of the left ear, the words at the
-  outer edge of the right one — balanced around the camera, however long the
-  words are.
+  Beside a notch: the owl, and the first of the counts, at the outer edge of the
+  left ear; the rest of the words at the outer edge of the right one.
 */
 .hoot-island-ear {
   position: absolute;
   top: 0;
   bottom: 0;
-  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   white-space: nowrap;
-  overflow: hidden;
-}
-
-.hoot-island-ear[data-side='left'] {
-  left: 0;
-  justify-content: flex-start;
-  padding-left: 10px;
-}
-
-.hoot-island-ear[data-side='right'] {
-  right: 0;
-  justify-content: flex-end;
-  padding-right: 12px;
+  will-change: transform;
 }
 
 .hoot-island-label {
@@ -161,30 +171,33 @@ html.hoot-panel-page {
 .hoot-island-full {
   position: absolute;
   top: 0;
-  left: 50%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  padding: 0 14px 14px;
-  transform: translateX(-50%);
-  visibility: hidden;
-  opacity: 0;
+  padding: 0 16px 14px;
+  will-change: opacity;
 }
 
+/* The top row: on the same ground as everything under it. */
 .hoot-island-head {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
+  min-width: 0;
 }
 
-.hoot-island-half {
-  display: inline-flex;
+.hoot-island-side {
+  display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  overflow: hidden;
+}
+
+.hoot-island-side[data-side='right'] {
+  justify-content: flex-end;
 }
 
 .hoot-island-tab {
@@ -200,193 +213,68 @@ html.hoot-panel-page {
   font-weight: var(--w-semibold);
 }
 
-.hoot-island-line {
-  display: inline-flex;
+/*
+  The open sessions: small chips in a row that scrolls sideways when there are
+  many, its far end fading out rather than cutting a chip in half.
+*/
+.hoot-island-chips {
+  display: flex;
   flex: 0 1 auto;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* Only the mask's opacity counts; its colour does nothing. */
+  mask-image: linear-gradient(to right, black calc(100% - 22px), transparent);
+}
+
+.hoot-island-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.hoot-island-chip {
+  display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 5px;
-  min-width: 0;
-  color: var(--text-secondary);
-  font-size: var(--t-caption);
-  white-space: nowrap;
-}
-
-/* Cut with an ellipsis, never mid-letter, where the notch begins. */
-.hoot-island-line-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.hoot-island-line[data-attention] {
-  color: var(--text-primary);
-}
-
-.hoot-island-sections {
-  display: grid;
-  /* The actions take the width their words need; the other two share the rest. */
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) max-content;
-  padding-top: 6px;
-}
-
-.hoot-island-section {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 0 12px;
-}
-
-.hoot-island-section:first-child {
-  padding-left: 4px;
-}
-
-.hoot-island-section:last-child {
-  padding-right: 4px;
-}
-
-.hoot-island-section + .hoot-island-section {
-  border-left: 1px solid var(--fill-tertiary);
-}
-
-.hoot-island-kicker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 6px;
-  color: var(--text-muted);
-  font-size: var(--t-caption);
-  font-weight: var(--w-medium);
-}
-
-.hoot-island-log {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 76px;
-  overflow-y: auto;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.hoot-island-msg {
-  margin: 0;
-  font-size: var(--t-subhead);
-  line-height: 1.4;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.hoot-island-msg[data-role='you'] {
-  align-self: flex-end;
-  max-width: 85%;
-  padding: 1px 8px;
-  border-radius: var(--radius-md);
-  background: var(--fill-tertiary);
-  color: var(--text-secondary);
-}
-
-.hoot-island-quiet {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--t-subhead);
-  line-height: 1.4;
-}
-
-.hoot-island-input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 28px;
-  margin-top: 8px;
-  padding: 0 10px;
+  max-width: 160px;
+  height: 20px;
+  padding: 0 8px 0 7px;
   border: none;
-  border-radius: var(--radius-md);
-  background: var(--fill-secondary);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--t-subhead);
-  outline: none;
-}
-
-.hoot-island-input::placeholder {
-  color: var(--text-muted);
-}
-
-.hoot-island-input:focus-visible {
-  box-shadow: 0 0 0 1.5px var(--island-owl);
-}
-
-.hoot-island-off {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-/* Neutral, not the app's blue: on the island the owl is the only colour. */
-.hoot-island .hoot-island-start {
-  height: 26px;
-  padding: 0 12px;
-  border-radius: var(--radius-md);
-  background: var(--text-primary);
-  color: var(--island-ground);
-  font-size: var(--t-footnote);
-}
-
-.hoot-island-problem {
-  margin: 6px 0 0;
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
   color: var(--text-secondary);
-  font-size: var(--t-caption);
-}
-
-.hoot-island-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.hoot-island-session {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  height: 24px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-primary);
   font: inherit;
-  font-size: var(--t-subhead);
-  text-align: left;
+  font-size: var(--t-caption);
   cursor: pointer;
 }
 
-.hoot-island-session:hover {
+.hoot-island-chip:hover {
   background: var(--fill-tertiary);
+  color: var(--text-primary);
 }
 
-.hoot-island-session-name {
+.hoot-island-chip-name {
   min-width: 0;
   overflow: hidden;
-  font-weight: var(--w-medium);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.hoot-island-session-what {
-  flex-shrink: 0;
-  margin-left: auto;
-  color: var(--text-secondary);
-  font-size: var(--t-caption);
+.hoot-island-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .hoot-island-status {
   flex-shrink: 0;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
 }
@@ -399,29 +287,148 @@ html.hoot-panel-page {
   background: var(--text-primary);
 }
 
-.hoot-island-action {
-  box-sizing: border-box;
+/* The conversation: the panel's middle, centred and wide. */
+.hoot-island-chat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.hoot-island-log {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
-  height: 26px;
-  margin-bottom: 6px;
-  padding: 0 10px;
-  border: none;
+  max-width: 680px;
+  min-height: 0;
+  margin: 0 auto;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.hoot-island-msg {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hoot-island-msg[data-role='you'] {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 3px 10px;
   border-radius: var(--radius-md);
   background: var(--fill-tertiary);
+  color: var(--text-secondary);
+}
+
+.hoot-island-quiet {
+  margin: auto 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.hoot-island-off {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.hoot-island-off .hoot-island-quiet {
+  margin: 0;
+}
+
+/* Neutral, not the app's blue: on the island the owl is the only colour. */
+.hoot-island .hoot-island-start {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  background: var(--text-primary);
+  color: var(--island-ground);
+  font-size: var(--t-footnote);
+}
+
+.hoot-island-problem {
+  margin: 6px auto 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+/* "Ask Hoot…" along the bottom, across the width. */
+.hoot-island-ask {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 680px;
+  margin: 10px auto 0;
+}
+
+.hoot-island-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-secondary);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--t-footnote);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
+  font-size: var(--t-callout);
+  outline: none;
 }
 
-.hoot-island-action:hover {
-  background: var(--fill-secondary);
+.hoot-island-input::placeholder {
+  color: var(--text-muted);
 }
 
-.hoot-island-action[data-confirm] {
-  color: var(--color-critical);
+.hoot-island-input:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--island-owl);
+}
+
+/*
+  The grips: the bottom corners, inside the curve. Two short strokes each, faint
+  until the panel is under the pointer. Both corners, because it is centred:
+  either one widens it on both sides.
+*/
+.hoot-island-grip {
+  position: absolute;
+  bottom: 6px;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) linear;
+  touch-action: none;
+}
+
+.hoot-island-full:hover .hoot-island-grip {
+  opacity: 0.55;
+}
+
+.hoot-island-grip:hover {
+  opacity: 1 !important;
+}
+
+.hoot-island-grip[data-side='right'] {
+  right: 6px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 4px 4px / 10px 10px no-repeat,
+    linear-gradient(135deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 8px 8px / 6px 6px no-repeat;
+}
+
+.hoot-island-grip[data-side='left'] {
+  left: 6px;
+  cursor: nesw-resize;
+  background:
+    linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 4px / 10px 10px no-repeat,
+    linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 8px / 6px 6px no-repeat;
 }

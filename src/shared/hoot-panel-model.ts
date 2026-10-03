@@ -45,6 +45,8 @@ export interface HootPanelSnapshot {
   expanded: boolean
   /** The display: its menu bar's height, its width, and its notch if it has one. */
   geometry: { barHeight: number; displayWidth: number; notch: IslandNotch | null }
+  /** The size he last dragged the grown panel to, or null for the default. */
+  size: { width: number; height: number } | null
 }
 
 const STATUSES: readonly SessionStatus[] = ['idle', 'working', 'waiting', 'input', 'completed', 'exited']
@@ -58,6 +60,7 @@ export const EMPTY_SNAPSHOT: HootPanelSnapshot = {
   label: { text: BRAND.assistant, attention: false },
   expanded: false,
   geometry: { barHeight: 24, displayWidth: 1440, notch: null },
+  size: null,
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,7 +112,15 @@ export function readSnapshot(raw: unknown): HootPanelSnapshot {
       displayWidth: positive(geometry.displayWidth, EMPTY_SNAPSHOT.geometry.displayWidth),
       notch: readNotch(geometry.notch),
     },
+    size: readSize(raw.size),
   }
+}
+
+function readSize(raw: unknown): { width: number; height: number } | null {
+  if (!isRecord(raw)) return null
+  const width = positive(raw.width, 0)
+  const height = positive(raw.height, 0)
+  return width === 0 || height === 0 ? null : { width, height }
 }
 
 /** The sessions waiting on the person, in the order the main window lists them. */
@@ -185,9 +196,14 @@ export class MomentTracker {
 /** How long the pill says a moment before it settles to its short line. */
 export const MOMENT_MS = 4000
 
-/** How long the pointer rests on the pill before it grows, and is off the shape before it settles. */
-export const OPEN_DELAY_MS = 160
-export const CLOSE_DELAY_MS = 500
+/**
+ * How long the pointer rests on the pill before it grows, and is off the shape
+ * before it settles — short both ways: *"quick expand and quick collapse"*.
+ * Long enough that a pointer crossing the menu bar does not set it off, and
+ * that the pointer slipping off an edge for an instant does not shut it.
+ */
+export const OPEN_DELAY_MS = 120
+export const CLOSE_DELAY_MS = 100
 
 /**
  * What the island's resting pill says: the moment while it lasts — "Session 2

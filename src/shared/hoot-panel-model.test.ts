@@ -130,5 +130,8 @@ describe('the snapshot off the wire', () => {
     expect(bare.appearance).toBe('dark')
     expect(bare.geometry.barHeight).toBe(24)
     expect(bare.geometry.notch).toBeNull()
+    expect(bare.size).toBeNull()
+    expect(readSnapshot({ size: { width: 700, height: 300 } }).size).toEqual({ width: 700, height: 300 })
+    expect(readSnapshot({ size: { width: 'wide', height: 300 } }).size).toBeNull()
   })
 })

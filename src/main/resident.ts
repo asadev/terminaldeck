@@ -190,14 +190,14 @@ export interface ResidentDeps {
   /** End everything and exit for real. */
   quitAll(): void
   /**
-   * Whether Hoot's owl is in the menu bar right now.
+   * Whether Hoot's island is at the top of the screen right now.
    *
-   * When it is, the owl *is* the app's menu bar icon: its right-click menu
-   * carries everything this tray offers ({@link residentMenuItems}), and this
-   * class draws no icon of its own — one app, one icon in the menu bar. When the
-   * owl is off, this class draws its own, so an app in the background with its
-   * window closed is never without one. Absent means "no owl", which is every
-   * caller before the owl existed and the headless host.
+   * When it is, the island *is* the app's presence there: its right-click menu
+   * opens the app, its settings, or quits it, and this class draws no icon of
+   * its own — one app, one presence in the menu bar. When the island is off,
+   * this class draws its own, so an app in the background with its window
+   * closed is never without one. Absent means "no island", which is every
+   * caller before the island existed and the headless host.
    */
   represented?(): boolean
 }
@@ -216,17 +216,10 @@ function residentMenu(deps: ResidentDeps): Menu {
 }
 
 /**
- * The background menu's items, for whichever icon is showing them.
- *
- * Exported because there is one menu bar icon, and whose it is depends on a
- * setting: this class's own tray, or — while Hoot is in the menu bar — the owl,
- * whose right-click menu (`hoot-menubar.ts`) lists these after its own. One list,
- * so the two can never offer different ways out.
+ * The background menu's items. Exported so a test can read them without a tray.
  */
 export function residentMenuItems(
   deps: Pick<ResidentDeps, 'sessions' | 'open' | 'stop' | 'quitAll'>,
-  /** Another icon's own entries: after "Open", and just above the quit. */
-  extras: { afterOpen?: MenuItemConstructorOptions[]; beforeQuit?: MenuItemConstructorOptions[] } = {},
 ): MenuItemConstructorOptions[] {
   const live = deps.sessions().filter((meta) => meta.exitCode === null)
   const items: MenuItemConstructorOptions[] = [
@@ -239,7 +232,6 @@ export function residentMenuItems(
     },
     { type: 'separator' },
     { label: `Open ${BRAND.name}`, click: () => deps.open() },
-    ...(extras.afterOpen ?? []),
   ]
 
   if (live.length > 0) {
@@ -261,7 +253,6 @@ export function residentMenuItems(
     }
   }
 
-  if (extras.beforeQuit && extras.beforeQuit.length > 0) items.push({ type: 'separator' }, ...extras.beforeQuit)
   items.push(
     { type: 'separator' },
     { label: 'Quit and Stop All Sessions', click: () => deps.quitAll() },
@@ -287,7 +278,7 @@ export class ResidentPresence {
 
   constructor(private readonly deps: ResidentDeps) {}
 
-  /** True when an icon in the menu bar stands for the app — its own, or Hoot's owl. */
+  /** True when something in the menu bar stands for the app — its own icon, or Hoot's island. */
   get visible(): boolean {
     return this.wanted && (this.represented() || this.tray !== null)
   }

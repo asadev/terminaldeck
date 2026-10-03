@@ -83,22 +83,21 @@ describe('one menu bar icon for the app', () => {
   })
 })
 
-describe('the background menu, wherever it is shown', () => {
-  it('lists the sessions, open and quit, with another icon’s entries in their places', () => {
-    const items = residentMenuItems(
-      { sessions: () => [meta('a', '/work/api')], open: () => undefined, stop: () => undefined, quitAll: () => undefined },
-      { afterOpen: [{ label: 'Hoot Settings…' }], beforeQuit: [{ label: 'Hide Hoot from the Menu Bar' }] },
-    )
+describe('the background menu', () => {
+  it('lists the sessions, open and quit', () => {
+    const items = residentMenuItems({
+      sessions: () => [meta('a', '/work/api')],
+      open: () => undefined,
+      stop: () => undefined,
+      quitAll: () => undefined,
+    })
     const labels = items.map((item: MenuItemConstructorOptions) => item.label ?? `(${item.type})`)
     expect(labels).toEqual([
       'Terminal Deck — 1 session running',
       '(separator)',
       'Open Terminal Deck',
-      'Hoot Settings…',
       '(separator)',
       'Claude Code — api',
-      '(separator)',
-      'Hide Hoot from the Menu Bar',
       '(separator)',
       'Quit and Stop All Sessions',
     ])

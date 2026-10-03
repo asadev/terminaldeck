@@ -9,7 +9,15 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron'
 import { BRAND } from '../shared/brand'
-import { islandCentre, islandWindow, placeIsland, type IslandNotch, type Rect } from '../shared/hoot-island'
+import {
+  clampExpanded,
+  islandCentre,
+  islandWindow,
+  placeIsland,
+  type IslandGeometry,
+  type IslandNotch,
+  type Rect,
+} from '../shared/hoot-island'
 import {
   CLOSE_DELAY_MS,
   MOMENT_MS,
@@ -72,9 +80,21 @@ import type { CopilotChatMessage } from './remote/protocol'
  * The pointer resting on the pill for a short intent delay, or a click on it —
  * which also hands it the keyboard, pinned open, the way a click means "I want
  * to type". It settles back a moment after the pointer has left the shape, on a
- * click elsewhere, or on Escape — never while its box has text or the keyboard.
- * A session that finishes or starts waiting widens the pill for a few seconds to
- * say so ("Session 2 needs you"), then it settles back to its short line.
+ * click elsewhere, or on Escape — never while its box has text or the keyboard,
+ * or while he is dragging one of its corners. A session that finishes or starts
+ * waiting widens the pill for a few seconds to say so ("Session 2 needs you"),
+ * then it settles back to its counts.
+ *
+ * ## His size
+ *
+ * The grown panel is his to resize by its bottom corners. The page says the
+ * size he let go at (`hoot-panel:resize`); it is kept in two settings
+ * ({@link SIZE_KEYS}) and the panel opens at it from then on. The window was
+ * made for the largest size a drag can reach, so a drag never moves it either.
+ *
+ * Showing or hiding the island is a setting — Settings → Hoot — and nothing on
+ * the island itself; its right-click menu is the three things a background app
+ * needs: open the app, its settings, quit.
  *
  * ## Talking to Hoot is the phone's machinery, aimed at the Hoot that runs
  *
@@ -104,6 +124,18 @@ export function readMenuBarEnabled(read: (key: string) => unknown): boolean {
   return read(MENUBAR_KEY) !== false
 }
 
+/** The grown panel's size, as he last left it. Two numbers, because a stored setting is one value. */
+export const SIZE_KEYS = { width: 'copilot.islandWidth', height: 'copilot.islandHeight' } as const
+
+/** The remembered size, or null when there is none (or it is not a size). */
+export function readIslandSize(read: (key: string) => unknown): { width: number; height: number } | null {
+  const width = read(SIZE_KEYS.width)
+  const height = read(SIZE_KEYS.height)
+  if (typeof width !== 'number' || typeof height !== 'number') return null
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return { width, height }
+}
+
 /* ----------------------------------------------------------------- snapshot -- */
 
 export interface HootMenuBarSnapshot {
@@ -113,12 +145,14 @@ export interface HootMenuBarSnapshot {
   hoot: { status: 'running' | 'starting' | 'stopped'; problem: string | null }
   sessions: Array<{ id: string; label: string; status: string }>
   messages: CopilotChatMessage[]
-  /** What the resting pill says: the moment while it lasts, else the short line. */
+  /** What the resting pill says: the moment while it lasts, else the counts. */
   label: { text: string; attention: boolean }
   /** Grown into the panel, or resting as the pill. */
   expanded: boolean
   /** The display it is drawn on: the menu bar's height, its width, and its notch. */
   geometry: { barHeight: number; displayWidth: number; notch: IslandNotch | null }
+  /** The size he last dragged the grown panel to, held to what this display allows; null for the default. */
+  size: { width: number; height: number } | null
 }
 
 /** How many messages the island keeps. It is a glance, not the conversation. */
@@ -186,8 +220,6 @@ export interface HootMenuBarDeps {
   hoot(): HootMenuBarSnapshot['hoot'] & { sessionId: string | null; cwd: string; agentSessionId: string | null }
   /** `ensureCopilot`. Starts *the* Hoot, never a second one. */
   startHoot(): Promise<{ problem: string | null }>
-  /** `stopCopilot`. */
-  stopHoot(): void
   /** `typeAndSubmit` into a session. */
   say(sessionId: string, text: string): void
   /** `watchRunChat`, aimed at the desk Hoot's transcript. Returns the unsubscribe. */
@@ -203,16 +235,12 @@ export interface HootMenuBarDeps {
   /** Bring the main window forward, on a page when one is named. */
   openApp(page?: 'hoot-settings'): void
   /**
-   * The app's background menu — the sessions running, open, quit — with the
-   * island's own entries placed inside it (`residentMenuItems` in
-   * `resident.ts`). While the island is up it is the app's one presence at the
-   * top of the screen, so its right-click menu is the menu the background tray
-   * had, and that tray does not appear as well. Absent: the island's own entries.
+   * End the app and every session in it — the background menu's own quit
+   * (`quitAll` in `resident.ts`). While the island is up it is the app's one
+   * presence at the top of the screen, so its right-click menu has to be a way
+   * out too. Absent: no quit in the menu.
    */
-  appMenuItems?(extras: {
-    afterOpen: MenuItemConstructorOptions[]
-    beforeQuit: MenuItemConstructorOptions[]
-  }): MenuItemConstructorOptions[]
+  quit?(): void
   /** The island appeared or went, so whoever keeps the app visible can count icons again. */
   onShownChanged?(): void
   /** The app's theme right now (the preference, resolved against the system's). */
@@ -244,9 +272,7 @@ export interface HootMenuBar {
   snapshot(): HootMenuBarSnapshot
   say(text: string): Promise<{ ok: boolean; message: string }>
   startHoot(): Promise<{ ok: boolean; message: string }>
-  stopHoot(): { ok: boolean; message: string }
   showSession(id: string): { ok: boolean }
-  openApp(page?: 'hoot-settings'): { ok: boolean }
   /** The page: the pointer is over the shape, or not. */
   pointer(contentsId: number, inside: boolean): void
   /** The page: the box has text or the keyboard, so it must stay. */
@@ -257,6 +283,8 @@ export interface HootMenuBar {
   close(contentsId: number): void
   /** The page: the size of the resting pill, shoulders included — where the catcher goes. */
   size(contentsId: number, box: { width: number; height: number }): void
+  /** The page: he let go of a corner, and the grown panel is this size now. */
+  resize(contentsId: number, size: { width: number; height: number }): void
   /** The catcher: the pointer arrived on the resting pill, left it, or pressed it. */
   catch(contentsId: number, kind: 'enter' | 'leave' | 'press'): void
   /** A right-click on the island. */
@@ -347,9 +375,14 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     return pillLabel(moment, readSnapshot({ sessions: sessionsView() }).sessions, BRAND.assistant)
   }
 
+  function geometryOf(where: IslandPlace): IslandGeometry {
+    return { barHeight: where.barHeight, displayWidth: where.display.width, notch: where.notch }
+  }
+
   function snapshot(): HootMenuBarSnapshot {
     const state = hoot()
     const where = deps.place()
+    const kept = readIslandSize(deps.read)
     return {
       assistant: BRAND.assistant,
       appearance: deps.appearance(),
@@ -358,7 +391,8 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       messages,
       label: label(),
       expanded,
-      geometry: { barHeight: where.barHeight, displayWidth: where.display.width, notch: where.notch },
+      geometry: geometryOf(where),
+      size: kept === null ? null : clampExpanded(geometryOf(where), kept),
     }
   }
 
@@ -374,8 +408,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     const target = live()
     if (target === null) return
     const where = deps.place()
-    const geometry = { barHeight: where.barHeight, displayWidth: where.display.width, notch: where.notch }
-    const bounds = placeIsland(where.display, islandCentre(where.display, where.notch), islandWindow(geometry))
+    const bounds = placeIsland(where.display, islandCentre(where.display, where.notch), islandWindow(geometryOf(where)))
     const same =
       placed !== null &&
       placed.x === bounds.x &&
@@ -524,17 +557,15 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     }, MOMENT_MS)
   }
 
+  /** Open the app, its settings (where the island is shown or hidden), quit. Nothing else. */
   function contextMenu(): MenuItemConstructorOptions[] {
-    const settings: MenuItemConstructorOptions = {
-      label: `${BRAND.assistant} Settings…`,
-      click: () => deps.openApp('hoot-settings'),
-    }
-    const hide: MenuItemConstructorOptions = {
-      label: `Hide ${BRAND.assistant} from the Top of the Screen`,
-      click: () => configure({ enabled: false }),
-    }
-    if (deps.appMenuItems) return deps.appMenuItems({ afterOpen: [settings], beforeQuit: [hide] })
-    return [{ label: `Open ${BRAND.name}`, click: () => deps.openApp() }, settings, { type: 'separator' }, hide]
+    const items: MenuItemConstructorOptions[] = [
+      { label: `Open ${BRAND.name}`, click: () => deps.openApp() },
+      { label: 'Settings…', click: () => deps.openApp('hoot-settings') },
+    ]
+    const quit = deps.quit
+    if (quit) items.push({ type: 'separator' }, { label: 'Quit and Stop All Sessions', click: () => quit() })
+    return items
   }
 
   function addIsland(): void {
@@ -686,26 +717,10 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
         return { ok: false, message: error instanceof Error ? error.message : `${BRAND.assistant} could not start.` }
       }
     },
-    stopHoot: () => {
-      try {
-        deps.stopHoot()
-        hootCache = null
-        follow()
-        push()
-        return { ok: true, message: '' }
-      } catch (error) {
-        return { ok: false, message: error instanceof Error ? error.message : `${BRAND.assistant} could not be stopped.` }
-      }
-    },
     showSession: (id) => {
       if (!theirs().some((session) => session.id === id)) return { ok: false }
       collapse(true)
       deps.showSession(id)
-      return { ok: true }
-    },
-    openApp: (page) => {
-      collapse(true)
-      deps.openApp(page)
       return { ok: true }
     },
     pointer: (contentsId, inside) => {
@@ -734,6 +749,13 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       if (box.width === pill.width && box.height === pill.height) return
       pill = box
       placeCatcher()
+    },
+    resize: (contentsId, next) => {
+      if (!ours(contentsId)) return
+      if (!Number.isFinite(next.width) || !Number.isFinite(next.height)) return
+      const held = clampExpanded(geometryOf(deps.place()), next)
+      deps.write({ [SIZE_KEYS.width]: held.width, [SIZE_KEYS.height]: held.height })
+      push()
     },
     catch: (contentsId, kind) => {
       if (!theCatcher(contentsId) || live() === null) return
@@ -774,14 +796,13 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
  * - `hoot-panel:snapshot`     (invoke)        → {@link HootMenuBarSnapshot}; also pushed on every change
  * - `hoot-panel:say`          (invoke, text)  → `{ ok, message }`
  * - `hoot-panel:start-hoot`   (invoke)        → `{ ok, message }`
- * - `hoot-panel:stop-hoot`    (invoke)        → `{ ok, message }`
  * - `hoot-panel:show-session` (invoke, id)    → `{ ok }`
- * - `hoot-panel:open-app`     (invoke, page?) → `{ ok }` — the main window, or Hoot's settings in it
  * - `hoot-menubar:config`     (invoke)        → `{ enabled }`
  * - `hoot-menubar:configure`  (invoke, patch) → `{ enabled }`
  * - `hoot-menubar:open`       (invoke)        → `{ ok, message }` — grown and pinned, as a click on it
  * - `hoot-panel:pointer` / `hoot-panel:held` / `hoot-panel:focus` / `hoot-panel:close` / `hoot-panel:menu` (send)
  * - `hoot-panel:size`         (send, box)     — the resting pill's size, for the catcher
+ * - `hoot-panel:resize`       (send, size)    — the grown panel's size, where he let go of a corner
  * - `hoot-panel:catch`        (send, kind)    — the catcher: 'enter' | 'leave' | 'press'
  * - `session:labels`          (send, labels)  — the main window's names for its sessions
  */
@@ -790,9 +811,7 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
     'hoot-panel:snapshot',
     'hoot-panel:say',
     'hoot-panel:start-hoot',
-    'hoot-panel:stop-hoot',
     'hoot-panel:show-session',
-    'hoot-panel:open-app',
     'hoot-menubar:config',
     'hoot-menubar:configure',
     'hoot-menubar:open',
@@ -806,6 +825,7 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
     'hoot-panel:size',
     'hoot-panel:menu',
     'hoot-panel:catch',
+    'hoot-panel:resize',
     'session:labels',
   ]
   for (const channel of sends) ipcMain.removeAllListeners(channel)
@@ -813,12 +833,8 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
   ipcMain.handle('hoot-panel:snapshot', () => bar.snapshot())
   ipcMain.handle('hoot-panel:say', (_event: IpcMainInvokeEvent, text: unknown) => bar.say(typeof text === 'string' ? text : ''))
   ipcMain.handle('hoot-panel:start-hoot', () => bar.startHoot())
-  ipcMain.handle('hoot-panel:stop-hoot', () => bar.stopHoot())
   ipcMain.handle('hoot-panel:show-session', (_event: IpcMainInvokeEvent, id: unknown) =>
     typeof id === 'string' ? bar.showSession(id) : { ok: false },
-  )
-  ipcMain.handle('hoot-panel:open-app', (_event: IpcMainInvokeEvent, page: unknown) =>
-    bar.openApp(page === 'hoot-settings' ? 'hoot-settings' : undefined),
   )
   ipcMain.handle('hoot-menubar:config', () => bar.config())
   ipcMain.handle('hoot-menubar:open', () => bar.openPanel())
@@ -836,6 +852,11 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
     if (typeof width === 'number' && typeof height === 'number') bar.size(event.sender.id, { width, height })
   })
   ipcMain.on('hoot-panel:menu', (event: IpcMainEvent) => bar.menu(event.sender.id))
+  ipcMain.on('hoot-panel:resize', (event: IpcMainEvent, raw: unknown) => {
+    if (typeof raw !== 'object' || raw === null) return
+    const { width, height } = raw as { width?: unknown; height?: unknown }
+    if (typeof width === 'number' && typeof height === 'number') bar.resize(event.sender.id, { width, height })
+  })
   ipcMain.on('hoot-panel:catch', (event: IpcMainEvent, kind: unknown) => {
     if (kind === 'enter' || kind === 'leave' || kind === 'press') bar.catch(event.sender.id, kind)
   })

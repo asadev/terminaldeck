@@ -27,7 +27,6 @@ import {
   QUIT_BUTTONS,
   ResidentPresence,
   needsTrayToBeVisible,
-  residentMenuItems,
   type ResidentDeps,
   plannedQuit,
   quitAnswer,
@@ -155,7 +154,7 @@ import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
 import { wireAccountVault, type AccountVaultHandle } from './account-vault/wire'
 import { electronCipher } from './account-vault/electron-cipher'
-import { copilotState, ensureCopilot, registerCopilotIpc, stopCopilot, type CopilotRuntimeDeps } from './copilot-session'
+import { copilotState, ensureCopilot, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
 import { wireHootMenuBar, type HootMenuBar } from './hoot-menubar'
 import { uiDoCall } from './deck-control/ui-tools'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
@@ -1395,8 +1394,7 @@ function showMainWindow(command?: string): void {
  * Hoot's island at the top of the screen, on the real Hoot.
  *
  * Every dependency is a function the rest of the app already has: the desk
- * Hoot's state, its start and its stop (`copilotState`, `ensureCopilot`,
- * `stopCopilot`), the phone's
+ * Hoot's state and its start (`copilotState`, `ensureCopilot`), the phone's
  * two-write submit (`typeAndSubmit`) and transcript reader (`watchRunChat`),
  * and the window's own "bring this to the front" (`ui.do`).
  */
@@ -1427,9 +1425,6 @@ function wireMenuBar(): HootMenuBar | null {
       const state = await ensureCopilot(deps)
       return { problem: state.status === 'running' || state.status === 'starting' ? null : state.problem }
     },
-    stopHoot: () => {
-      stopCopilot(deps)
-    },
     // The island wears the app's theme, resolved the way the window's own chrome is.
     appearance: () => appearance(),
     say: (sessionId, text) => typeAndSubmit((data) => ptys.write(sessionId, data), text),
@@ -1448,11 +1443,10 @@ function wireMenuBar(): HootMenuBar | null {
       if (page === undefined || window === null || window.isDestroyed()) return
       void window.webContents.executeJavaScript(uiDoCall({ kind: 'settings', target: 'copilot' })).catch(() => undefined)
     },
-    // The island is the app's one presence at the top of the screen: its
-    // right-click menu is the background menu (sessions, open, quit) with
-    // Hoot's own entries in it, and the background tray steps aside while the
-    // island is there — see `presence`.
-    appMenuItems: (extras) => residentMenuItems(residentDeps, extras),
+    // The island is the app's one presence at the top of the screen, so its
+    // right-click menu quits the way the background menu does, and the
+    // background tray steps aside while the island is there — see `presence`.
+    quit: () => residentDeps.quitAll(),
     onShownChanged: () => presence.refresh(),
     log: (message, detail) => logger.info('menubar', message, detail),
   })

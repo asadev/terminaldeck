@@ -81,15 +81,24 @@ export const REST = {
   maxHeight: 44,
 } as const
 
-/** The grown panel. About a third of the screen across and short, the way his reference reads. */
+/**
+ * The grown panel. About a third of the screen across and short by default,
+ * the way his reference reads — and his to resize, by the grips at its bottom
+ * corners, between the smallest that still holds a conversation and the
+ * largest the window was made for. The size he leaves it at is the size it
+ * opens at.
+ */
 export const EXPANDED = {
   share: 1 / 3,
-  /** About two fifths of a 14-inch MacBook — room for three columns that each say something. */
-  minWidth: 620,
-  maxWidth: 720,
-  /** Under the menu-bar-high header row. */
-  minBody: 92,
-  maxHeight: 260,
+  /** The default width: a third of the screen, between these. */
+  defaultMinWidth: 620,
+  defaultMaxWidth: 720,
+  defaultHeight: 260,
+  /** What a drag may make it. */
+  minWidth: 420,
+  maxWidth: 960,
+  minHeight: 180,
+  maxHeight: 520,
   radius: 22,
   shoulder: 10,
   /** Kept clear of the screen's edges on a narrow display. */
@@ -103,7 +112,7 @@ export const EXPANDED = {
  */
 export const SHADOW = { side: 44, bottom: 56 } as const
 
-/** The grown panel is always this much wider than any resting pill, so growing is always growing. */
+/** The widest resting pill stays this far inside the widest panel the window holds. */
 const GROWS_BY = 48
 
 const clamp = (value: number, low: number, high: number): number => Math.min(high, Math.max(low, value))
@@ -113,11 +122,40 @@ export function barRow(geometry: IslandGeometry): number {
   return Math.round(clamp(geometry.notch?.height ?? geometry.barHeight, REST.minHeight, REST.maxHeight))
 }
 
-/** How wide the grown panel is on this display. Depends on the display alone, so the window can be fixed. */
-export function expandedWidth(geometry: IslandGeometry): number {
+/** The sizes the grown panel may take on this display — what a drag is held between. */
+export function expandedLimits(geometry: IslandGeometry): {
+  minWidth: number
+  maxWidth: number
+  minHeight: number
+  maxHeight: number
+} {
   const room = Math.max(320, geometry.displayWidth - EXPANDED.edge * 2 - EXPANDED.shoulder * 2)
-  const wanted = clamp(Math.round(geometry.displayWidth * EXPANDED.share), EXPANDED.minWidth, EXPANDED.maxWidth)
-  return Math.round(Math.min(room, wanted))
+  const maxWidth = Math.round(Math.min(room, EXPANDED.maxWidth))
+  return {
+    minWidth: Math.min(EXPANDED.minWidth, maxWidth),
+    maxWidth,
+    minHeight: Math.max(EXPANDED.minHeight, barRow(geometry) + 120),
+    maxHeight: EXPANDED.maxHeight,
+  }
+}
+
+/** The grown panel's size by default on this display: a third of it across, and short. */
+export function defaultExpanded(geometry: IslandGeometry): { width: number; height: number } {
+  const limits = expandedLimits(geometry)
+  const third = clamp(Math.round(geometry.displayWidth * EXPANDED.share), EXPANDED.defaultMinWidth, EXPANDED.defaultMaxWidth)
+  return { width: Math.min(limits.maxWidth, third), height: EXPANDED.defaultHeight }
+}
+
+/** A size held inside the limits — a drag past them, or a remembered size from a bigger screen. */
+export function clampExpanded(
+  geometry: IslandGeometry,
+  size: { width: number; height: number },
+): { width: number; height: number } {
+  const limits = expandedLimits(geometry)
+  return {
+    width: Math.round(clamp(size.width, limits.minWidth, limits.maxWidth)),
+    height: Math.round(clamp(size.height, limits.minHeight, limits.maxHeight)),
+  }
 }
 
 /**
@@ -129,7 +167,7 @@ export function expandedWidth(geometry: IslandGeometry): number {
  * ear — with the first of the counts beside it, `leftWidth`, so the two ears
  * carry about the same and neither is a long empty stretch — and the rest of
  * the words in the right one; nothing is drawn where the housing would hide
- * it. Never as wide as the grown panel, so hover always grows it.
+ * it. Never wider than the window the island lives in.
  */
 export function restShape(
   geometry: IslandGeometry,
@@ -138,7 +176,7 @@ export function restShape(
   const height = barRow(geometry)
   const dot = label.attention ? REST.dot + REST.dotGap : 0
   const text = Math.max(0, Math.ceil(label.textWidth))
-  const cap = expandedWidth(geometry) - GROWS_BY
+  const cap = expandedLimits(geometry).maxWidth - GROWS_BY
   if (geometry.notch !== null) {
     const beside = Math.max(0, Math.ceil(label.leftWidth ?? 0))
     const left = REST.owl + (beside > 0 ? REST.gap + beside : 0) + REST.earPad * 2
@@ -160,22 +198,23 @@ export function restShape(
   }
 }
 
-/** The grown panel, for content this tall (under the top row). */
-export function expandedShape(geometry: IslandGeometry, bodyHeight: number): IslandShape {
-  const row = barRow(geometry)
-  const height = clamp(row + Math.max(EXPANDED.minBody, Math.ceil(bodyHeight)), row + EXPANDED.minBody, EXPANDED.maxHeight)
-  return { width: expandedWidth(geometry), height: Math.round(height), radius: EXPANDED.radius, shoulder: EXPANDED.shoulder }
+/** The grown panel: at the size he left it, or by default. */
+export function expandedShape(geometry: IslandGeometry, size: { width: number; height: number } | null): IslandShape {
+  const { width, height } = size ? clampExpanded(geometry, size) : defaultExpanded(geometry)
+  return { width, height, radius: EXPANDED.radius, shoulder: EXPANDED.shoulder }
 }
 
 /**
- * The island's window: big enough for the grown panel, its shoulders and its
- * shadow, whatever the shape is doing. Fixed for a display — it changes only
- * when the display does, never while the shape moves.
+ * The island's window: big enough for the largest panel a drag can make, its
+ * shoulders and its shadow, whatever the shape is doing. Fixed for a display —
+ * it changes only when the display does, never while the shape moves or is
+ * dragged.
  */
 export function islandWindow(geometry: IslandGeometry): { width: number; height: number } {
+  const limits = expandedLimits(geometry)
   return {
-    width: expandedWidth(geometry) + EXPANDED.shoulder * 2 + SHADOW.side * 2,
-    height: EXPANDED.maxHeight + SHADOW.bottom,
+    width: limits.maxWidth + EXPANDED.shoulder * 2 + SHADOW.side * 2,
+    height: limits.maxHeight + SHADOW.bottom,
   }
 }
 
@@ -234,50 +273,42 @@ export function islandPath(shape: IslandShape, centre: number): string {
   ].join(' ')
 }
 
-/** Whether a point (window coordinates) is on the shape: its body or its shoulders. */
-export function onShape(shape: IslandShape, centre: number, point: { x: number; y: number }): boolean {
-  const half = shape.width / 2 + shape.shoulder
-  return point.y >= 0 && point.y <= shape.height && Math.abs(point.x - centre) <= half
-}
-
 /* ------------------------------------------------------------------- motion -- */
 
 /**
- * The timings, slow and smooth on purpose — *"it should be very smoothly
- * coming out and smoothly slowly going inside"*.
+ * The timings, in milliseconds: when each part starts and stops moving.
  *
- * Growing takes 380 ms; the panel's words fade in only once the shape is most
- * of the way there, so text never squeezes. Settling takes 450 ms: the words
- * fade out first, then the shape shrinks, then the pill's own words come back.
- * A change of the pill's words at rest — a moment, a count — reshapes it in
- * 320 ms.
+ * Asad, 2026-10-04, second round: *"quick expand and quick collapse but
+ * smoothly"*. Growing takes 220 ms; the panel's words fade in only once the
+ * shape is most of the way there, so text is never seen being cut. Settling
+ * takes 240: the words fade first, the shape eases in, the pill's own words
+ * come back as it lands. A change of the pill's words — a moment, a count —
+ * reshapes it in 220.
+ *
+ * They are CSS transitions — the outline (`clip-path`), the shadow
+ * (`transform`, `opacity`) and the words (`opacity`) — so the browser runs them
+ * on its own clock, with nothing laid out again and nothing in this app's
+ * JavaScript on the way. A busy Mac slows a page's scripts long before it
+ * slows that.
  */
 export const TIMING = {
-  open: { shape: [0, 380], full: [200, 380], rest: [0, 90] },
-  close: { shape: [140, 450], full: [0, 140], rest: [360, 450] },
-  reshape: { shape: [0, 320], rest: [0, 180] },
+  open: { shape: [0, 220], full: [120, 220], rest: [0, 60] },
+  close: { shape: [40, 240], full: [0, 70], rest: [180, 240] },
+  reshape: { shape: [0, 220], rest: [0, 140] },
 } as const
 
-/** Ease out: quick to start, gentle to land, never past the target. */
-export function easeOut(t: number): number {
-  const x = clamp(t, 0, 1)
-  return 1 - (1 - x) ** 3
-}
+/** Growing: fast away, gentle landing, never past the target. */
+export const EASE_OPEN = 'cubic-bezier(0.22, 1, 0.36, 1)'
+/** Settling: as gentle away as it lands, never past the target. */
+export const EASE_CLOSE = 'cubic-bezier(0.45, 0, 0.2, 1)'
 
-/** Ease in and out: for settling, which starts as gently as it ends. */
-export function easeInOut(t: number): number {
-  const x = clamp(t, 0, 1)
-  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2
-}
-
-/** How far into a span [from, to] (ms) the time `at` is, 0 to 1. */
-export function within(at: number, span: readonly [number, number]): number {
+/** One CSS transition for a property over a span [from, to]. */
+export function transition(property: string, span: readonly [number, number], easing: string): string {
   const [from, to] = span
-  if (to <= from) return at >= to ? 1 : 0
-  return clamp((at - from) / (to - from), 0, 1)
+  return `${property} ${Math.max(0, to - from)}ms ${easing} ${from}ms`
 }
 
-/** A shape between two others, `t` of the way. */
+/** A shape between two others, `t` of the way — what a transition between two outlines passes through. */
 export function mixShape(from: IslandShape, to: IslandShape, t: number): IslandShape {
   const mix = (a: number, b: number): number => a + (b - a) * t
   return {
@@ -288,8 +319,11 @@ export function mixShape(from: IslandShape, to: IslandShape, t: number): IslandS
   }
 }
 
-/** How far a shape is from resting toward grown, 0 to 1, by height. */
-export function grownness(height: number, rest: number, grown: number): number {
-  if (grown <= rest) return height > rest ? 1 : 0
-  return clamp((height - rest) / (grown - rest), 0, 1)
+/**
+ * The outline one point bigger all round — the hairline drawn behind the shape,
+ * so it keeps its edge on a menu bar of its own colour. The same commands as
+ * the shape's own outline, so the two move together.
+ */
+export function edgeShape(shape: IslandShape): IslandShape {
+  return { width: shape.width + 2, height: shape.height + 1, radius: shape.radius + 1, shoulder: shape.shoulder }
 }

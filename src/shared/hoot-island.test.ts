@@ -1,24 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   barRow,
-  easeInOut,
-  easeOut,
+  clampExpanded,
+  defaultExpanded,
+  EASE_CLOSE,
+  EASE_OPEN,
+  edgeShape,
   EXPANDED,
+  expandedLimits,
   expandedShape,
-  expandedWidth,
-  grownness,
   islandCentre,
   islandPath,
   islandWindow,
   mixShape,
-  onShape,
   placeIsland,
   REST,
   restBox,
   restShape,
   SHADOW,
   TIMING,
-  within,
+  transition,
   type IslandGeometry,
 } from './hoot-island'
 
@@ -59,13 +60,13 @@ describe('the resting pill', () => {
     expect(ear).toBeGreaterThanOrEqual(30 + REST.earPad * 2)
   })
 
-  it('a longer line widens both ears around the notch — but never as wide as the grown panel', () => {
+  it('a longer line widens both ears around the notch — but never wider than the window holds', () => {
     const short = restShape(MACBOOK, { textWidth: 30, attention: false })
     const long = restShape(MACBOOK, { textWidth: 130, attention: true })
     expect(long.width).toBeGreaterThan(short.width)
     expect((long.width - 200) / 2).toBe(130 + REST.dot + REST.dotGap + REST.earPad * 2)
     const huge = restShape(MACBOOK, { textWidth: 600, attention: true })
-    expect(huge.width).toBeLessThan(expandedWidth(MACBOOK))
+    expect(huge.width).toBeLessThan(expandedLimits(MACBOOK).maxWidth)
   })
 
   it('shares the counts between the ears, so the owl’s side is not a long empty stretch', () => {
@@ -83,43 +84,43 @@ describe('the resting pill', () => {
   })
 })
 
-describe('the grown panel', () => {
-  it('about a third of the screen across and short, with round bottom corners', () => {
-    const shape = expandedShape(MINI, 100)
-    expect(shape.width).toBe(640)
-    expect(shape.height).toBe(130)
-    expect(shape.radius).toBe(EXPANDED.radius)
-    expect(shape.shoulder).toBe(EXPANDED.shoulder)
+describe('the grown panel — his to resize', () => {
+  it('opens about a third of the screen across and short, with round bottom corners, until he resizes it', () => {
+    const shape = expandedShape(MINI, null)
+    expect(shape).toEqual({ width: 640, height: EXPANDED.defaultHeight, radius: EXPANDED.radius, shoulder: EXPANDED.shoulder })
+    expect(defaultExpanded(MACBOOK).width).toBe(EXPANDED.defaultMinWidth)
   })
 
-  it('never narrower than its floor, never wider than the screen allows, never taller than its ceiling', () => {
-    expect(expandedShape(MACBOOK, 100).width).toBe(EXPANDED.minWidth)
-    expect(expandedShape({ ...MINI, displayWidth: 3840 }, 100).width).toBe(EXPANDED.maxWidth)
-    expect(expandedShape({ ...MINI, displayWidth: 500 }, 100).width).toBeLessThanOrEqual(500 - EXPANDED.edge * 2)
-    expect(expandedShape(MINI, 4000).height).toBe(EXPANDED.maxHeight)
-    expect(expandedShape(MINI, 0).height).toBe(30 + EXPANDED.minBody)
+  it('opens at the size he left it at', () => {
+    expect(expandedShape(MINI, { width: 820, height: 360 })).toMatchObject({ width: 820, height: 360 })
+  })
+
+  it('is held between a size that still holds a conversation and the largest the window was made for', () => {
+    const limits = expandedLimits(MINI)
+    expect(clampExpanded(MINI, { width: 100, height: 40 })).toEqual({ width: limits.minWidth, height: limits.minHeight })
+    expect(clampExpanded(MINI, { width: 5000, height: 5000 })).toEqual({ width: EXPANDED.maxWidth, height: EXPANDED.maxHeight })
+    // A remembered size from a bigger screen fits a smaller one.
+    expect(clampExpanded({ ...MINI, displayWidth: 800 }, { width: 960, height: 300 }).width).toBeLessThanOrEqual(800 - EXPANDED.edge * 2)
   })
 })
 
 describe('the one window', () => {
-  it('holds the grown panel, its shoulders and its shadow — whatever the shape is doing', () => {
+  it('holds the largest panel a drag can make, its shoulders and its shadow — whatever the shape is doing', () => {
     const box = islandWindow(MINI)
-    const tallest = expandedShape(MINI, 4000)
-    expect(box.width).toBe(tallest.width + tallest.shoulder * 2 + SHADOW.side * 2)
-    expect(box.height).toBe(tallest.height + SHADOW.bottom)
-    expect(box.width).toBeGreaterThan(restBox(restShape(MINI, { textWidth: 900, attention: true })).width)
+    const largest = expandedShape(MINI, { width: 99999, height: 99999 })
+    expect(box.width).toBe(largest.width + largest.shoulder * 2 + SHADOW.side * 2)
+    expect(box.height).toBe(largest.height + SHADOW.bottom)
   })
 
-  it('depends on the display alone — not on the words, the counts or whether it is grown', () => {
+  it('depends on the display alone — not on the words, the counts, his size or whether it is grown', () => {
     expect(islandWindow(MINI)).toEqual(islandWindow({ ...MINI }))
-    expect(islandWindow(MACBOOK).width).toBe(EXPANDED.minWidth + EXPANDED.shoulder * 2 + SHADOW.side * 2)
+    expect(islandWindow(MINI).width).toBe(EXPANDED.maxWidth + EXPANDED.shoulder * 2 + SHADOW.side * 2)
   })
 
   it('is centred on the notch, or the middle of the display, with its top on the top edge', () => {
     const mini = { x: 0, y: 0, width: 1920, height: 1080 }
     expect(islandCentre(mini, null)).toBe(960)
-    const box = islandWindow(MINI)
-    const frame = placeIsland(mini, 960, box)
+    const frame = placeIsland(mini, 960, islandWindow(MINI))
     expect(frame.y).toBe(0)
     expect(frame.x + frame.width / 2).toBe(960)
     const side = { x: -1512, y: -200, width: 1512, height: 982 }
@@ -132,6 +133,10 @@ describe('the one window', () => {
     expect(placeIsland(mini, 10, { width: 200, height: 30 }).x).toBe(0)
     expect(placeIsland(mini, 1910, { width: 200, height: 30 }).x).toBe(1720)
     expect(placeIsland(mini, 960, { width: 4000, height: 30 }).width).toBe(1920)
+  })
+
+  it('knows the box the resting pill covers, for the catcher', () => {
+    expect(restBox({ width: 100, height: 30, radius: 12, shoulder: 6 })).toEqual({ width: 112, height: 30 })
   })
 })
 
@@ -149,10 +154,18 @@ describe('the outline', () => {
 
   it('is symmetric about its centre, so the centre never wanders while the shape moves', () => {
     for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-      const shape = mixShape(restShape(MINI, { textWidth: 30, attention: false }), expandedShape(MINI, 100), t)
+      const shape = mixShape(restShape(MINI, { textWidth: 30, attention: false }), expandedShape(MINI, null), t)
       const xs = [...islandPath(shape, 500).matchAll(/(-?[\d.]+) (-?[\d.]+)(?= [ALZ]| Z|$)/g)].map((m) => Number(m[1]))
       expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(500, 1)
     }
+  })
+
+  it('is the same commands whatever its size, so the browser can move one outline into another', () => {
+    const shape = (s: string): string => s.replace(/-?[\d.]+/g, '#')
+    const a = islandPath(restShape(MINI, { textWidth: 30, attention: false }), 500)
+    const b = islandPath(expandedShape(MINI, null), 500)
+    expect(shape(a)).toBe(shape(b))
+    expect(shape(islandPath(edgeShape(expandedShape(MINI, null)), 500))).toBe(shape(b))
   })
 
   it('keeps its corners inside a shape too small for them', () => {
@@ -161,49 +174,40 @@ describe('the outline', () => {
     expect(path).toContain('A 4 4')
   })
 
-  it('knows a point on it from a point beside it — the shoulders count, the margin does not', () => {
-    const shape = { width: 100, height: 30, radius: 12, shoulder: 6 }
-    expect(onShape(shape, 400, { x: 400, y: 10 })).toBe(true)
-    expect(onShape(shape, 400, { x: 455, y: 2 })).toBe(true)
-    expect(onShape(shape, 400, { x: 470, y: 10 })).toBe(false)
-    expect(onShape(shape, 400, { x: 400, y: 40 })).toBe(false)
-  })
 })
 
 describe('the morph', () => {
-  it('grows in 380 ms and settles in 450, slow and smooth', () => {
-    expect(TIMING.open.shape).toEqual([0, 380])
-    expect(TIMING.close.shape[1]).toBe(450)
+  it('grows in 220 ms and settles in 240 — quick both ways', () => {
+    expect(TIMING.open.shape).toEqual([0, 220])
+    expect(TIMING.close.shape[1]).toBe(240)
   })
 
   it('fades the panel’s words in only once the shape is most of the way grown', () => {
-    expect(easeOut(within(TIMING.open.full[0], TIMING.open.shape))).toBeGreaterThan(0.85)
+    expect(TIMING.open.full[0]).toBeGreaterThanOrEqual(TIMING.open.shape[1] / 2)
+    expect(TIMING.open.full[1]).toBe(TIMING.open.shape[1])
   })
 
-  it('fades the words out before the shape starts to shrink', () => {
-    expect(TIMING.close.full[1]).toBeLessThanOrEqual(TIMING.close.shape[0])
+  it('fades the words out before the shape has gone far, and the pill’s back as it lands', () => {
+    expect(TIMING.close.full[1]).toBeLessThanOrEqual(TIMING.close.shape[0] + 40)
+    expect(TIMING.close.rest[1]).toBe(TIMING.close.shape[1])
   })
 
   it('eases without ever passing its target, so nothing overshoots and jerks back', () => {
-    const samples = Array.from({ length: 101 }, (_, i) => i / 100)
-    for (const ease of [easeOut, easeInOut]) {
-      const values = samples.map(ease)
-      expect(Math.max(...values)).toBeLessThanOrEqual(1)
-      expect(Math.min(...values)).toBeGreaterThanOrEqual(0)
-      for (let i = 1; i < values.length; i += 1) expect(values[i]).toBeGreaterThanOrEqual(values[i - 1])
+    for (const ease of [EASE_OPEN, EASE_CLOSE]) {
+      const [x1, y1, x2, y2] = ease.match(/[\d.]+/g)?.map(Number) ?? []
+      for (const v of [x1, y1, x2, y2]) expect(v).toBeGreaterThanOrEqual(0)
+      for (const v of [y1, y2]) expect(v).toBeLessThanOrEqual(1)
     }
-    expect(easeOut(1)).toBe(1)
-    expect(easeInOut(0.5)).toBeCloseTo(0.5, 5)
   })
 
-  it('mixes two shapes, and knows how far along a shape is', () => {
+  it('writes each part’s timing as a CSS transition', () => {
+    expect(transition('clip-path', [40, 240], EASE_CLOSE)).toBe(`clip-path 200ms ${EASE_CLOSE} 40ms`)
+  })
+
+  it('mixes two shapes, the way a transition between their outlines passes through them', () => {
     const a = { width: 100, height: 30, radius: 12, shoulder: 6 }
     const b = { width: 600, height: 130, radius: 22, shoulder: 10 }
     expect(mixShape(a, b, 0.5)).toEqual({ width: 350, height: 80, radius: 17, shoulder: 8 })
-    expect(grownness(30, 30, 130)).toBe(0)
-    expect(grownness(80, 30, 130)).toBe(0.5)
-    expect(grownness(140, 30, 130)).toBe(1)
-    expect(within(50, [0, 100])).toBe(0.5)
-    expect(within(500, [0, 100])).toBe(1)
+    expect(edgeShape(a)).toEqual({ width: 102, height: 31, radius: 13, shoulder: 6 })
   })
 })

@@ -342,9 +342,7 @@ const api = {
   },
   hootPanelSay: (text: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:say', text),
   hootPanelStartHoot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:start-hoot'),
-  hootPanelStopHoot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:stop-hoot'),
   hootPanelShowSession: (id: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:show-session', id),
-  hootPanelOpenApp: (page?: 'hoot-settings'): Promise<unknown> => ipcRenderer.invoke('hoot-panel:open-app', page),
   hootPanelPointer: (inside: boolean): void => {
     ipcRenderer.send('hoot-panel:pointer', inside)
   },
@@ -360,6 +358,10 @@ const api = {
   // The resting pill's size, so the catcher can sit exactly over it.
   hootPanelSize: (box: { width: number; height: number }): void => {
     ipcRenderer.send('hoot-panel:size', box)
+  },
+  // The grown panel's size where he let go of a corner, to be remembered.
+  hootPanelResize: (size: { width: number; height: number }): void => {
+    ipcRenderer.send('hoot-panel:resize', size)
   },
   hootPanelMenu: (): void => {
     ipcRenderer.send('hoot-panel:menu')
