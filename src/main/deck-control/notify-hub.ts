@@ -14,7 +14,7 @@
  * or exited. `notify-detect.ts` decides which key; this file keeps the
  * notification until that key has it, and refuses to show it to any other.
  *
- * ## One queue, three ways out
+ * ## One queue, four ways out
  *
  *  - **Long-poll** (`notifications.wait`). A parked waiter for the key is handed
  *    the notification the moment it is queued; a waiter that arrives later finds
@@ -24,17 +24,21 @@
  *    message in the running Claude Code session.
  *  - **Webhook**, when the owner set one for the key in Settings. Posted as JSON,
  *    signed (`notify-webhook.ts`); a 2xx answer is delivery.
+ *  - **MCP Events** (`mcp-events.ts`), when the app itself subscribed — ChatGPT,
+ *    on protocol 2026-07-28. Offered from here once queued; a push that lands
+ *    comes back as {@link NotificationHub.deliveredBy}.
  *  - **`notifications.list`**, which shows everything not yet acknowledged,
  *    whatever happened to it — the reconnect path.
  *
- * ## The push this does not do, and why
+ * ## Which apps can really be pushed to
  *
- * A server-to-client MCP notification on the HTTP connection itself. Measured
- * against the clients on 2026-10-03: none of ChatGPT, claude.ai, Cursor, Codex
- * or Gemini CLI hands a server notification to its model, and Claude Code does
- * only through "channels", which are documented for stdio servers. This server
- * is stateless Streamable HTTP, which cannot push at all. So the honest push is
- * the stdio bridge for Claude Code, and long-poll and webhooks for everyone.
+ * Checked against each client's documentation and source on 2026-10-03:
+ * ChatGPT acts on MCP Events (a subscription and a signed webhook, not a
+ * message on the MCP connection); Claude Code acts on "channels", which are
+ * stdio-only, hence the bridge. claude.ai, Codex CLI, Gemini CLI and Cursor
+ * hand no server-initiated message to their model at all — they get the
+ * long-poll. A plain server-to-client notification on the HTTP connection is
+ * not sent: this server is stateless, and no client would show it to a model.
  *
  * Whichever delivers first wins and the rest stop trying. Every notification
  * stays fetchable by `list` until its key **acknowledges it by id**; acking is
@@ -115,7 +119,8 @@ export interface NotificationEvent {
 }
 
 export type DeliveryState = 'pending' | 'delivered' | 'undelivered'
-export type DeliveryVia = 'wait' | 'webhook' | 'list'
+/** How a notification reached its app. `event`: an MCP Events push (`mcp-events.ts`). */
+export type DeliveryVia = 'wait' | 'webhook' | 'list' | 'event'
 
 interface Stored {
   event: NotificationEvent
@@ -356,6 +361,22 @@ export class NotificationHub {
     } catch (error) {
       return { ok: false, message: `Could not reach the address: ${error instanceof Error ? error.message : String(error)}` }
     }
+  }
+
+  /**
+   * An MCP Events subscriber took this notification: it is delivered.
+   *
+   * The same rule as every other way out — whichever delivers first wins and
+   * the rest stop — so an app that subscribed and also parks a
+   * `notifications_wait` is not handed the same news twice. Still listed until
+   * acknowledged, like everything else.
+   */
+  deliveredBy(keyId: string, id: string, via: DeliveryVia): boolean {
+    const item = this.items.find((entry) => entry.keyId === keyId && entry.event.id === id)
+    if (!item || item.state === 'delivered') return false
+    this.delivered(item, via)
+    this.arm()
+    return true
   }
 
   /** How the key's last notification went, for Settings. Null when it never had one. */

@@ -147,6 +147,7 @@ import { relayMcp } from '../remote/relay-mcp'
 import { AccessKeys } from './access-keys'
 import { AI_APPS_CHANGED_CHANNEL, registerAiAppsIpc } from './ai-apps-ipc'
 import { AccessKeyDoor } from './key-door'
+import { McpEvents } from './mcp-events'
 import { NotificationHub, REAL_CLOCK } from './notify-hub'
 import { NotifyDetector } from './notify-detect'
 import { writeChannelBridge } from './notify-channel'
@@ -387,6 +388,7 @@ export interface DeckControlHandle {
     noteStatus(sessionId: string, status: SessionStatus): void
     noteExit(sessionId: string, exitCode: number): void
     hub: NotificationHub
+    events: McpEvents
   }
   stop(): Promise<void>
 }
@@ -539,7 +541,10 @@ export async function registerDeckControlIpc(
    */
   const keys = new AccessKeys({ dir: deps.keysDir ?? accessKeysDir() })
   let controlRef: DeckControl | null = null
-  const door = new AccessKeyDoor({ keys, control: () => controlRef, consent: () => consent })
+  // `mcpEvents` is built just below, beside the queue it is fed from; the door
+  // reads it per request.
+  let mcpEvents: McpEvents | null = null
+  const door = new AccessKeyDoor({ keys, control: () => controlRef, consent: () => consent, events: () => mcpEvents })
 
   /*
    * Notifications for AI apps: one queue (`notify-hub.ts`), fed by one detector
@@ -552,7 +557,26 @@ export async function registerDeckControlIpc(
     settings: (keyId) => keys.notifySettings(keyId),
     onChange: () => deps.broadcast(AI_APPS_CHANGED_CHANNEL),
   })
-  const unwatchNotifyKeys = keys.onChange(() => notifyHub.reconcile())
+  /*
+   * MCP Events: the true push, to an app that subscribes (ChatGPT, on protocol
+   * 2026-07-28). Fed from the same queue: an event goes out only for the key
+   * `notify-detect.ts` chose and only once the queue has taken it, and a push
+   * that lands marks it delivered there. Same folder, its own 0600 file.
+   */
+  mcpEvents = new McpEvents({
+    dir: deps.keysDir ?? accessKeysDir(),
+    access: {
+      mode: (keyId) => keys.notifySettings(keyId)?.mode ?? null,
+      internet: () => keys.internet(),
+    },
+    onDelivered: (keyId, eventId) => notifyHub.deliveredBy(keyId, eventId, 'event'),
+    onChange: () => deps.broadcast(AI_APPS_CHANGED_CHANNEL),
+  })
+  const liveEvents = mcpEvents
+  const unwatchNotifyKeys = keys.onChange(() => {
+    notifyHub.reconcile()
+    liveEvents.reconcile()
+  })
   /*
    * The Claude Code channel bridge, rewritten on every launch so an old copy is
    * never what runs. A failure costs Claude Code its push, not the app its
@@ -568,7 +592,11 @@ export async function registerDeckControlIpc(
   const notifyDetector = new NotifyDetector({
     surface,
     starterOf: (sessionId) => controlRef?.starterOf(sessionId) ?? null,
-    enqueue: (keyId, event) => notifyHub.enqueue(keyId, event),
+    enqueue: (keyId, event) => {
+      if (!notifyHub.enqueue(keyId, event)) return false
+      liveEvents.offer(keyId, event)
+      return true
+    },
     clock: REAL_CLOCK,
   })
 
@@ -687,6 +715,8 @@ export async function registerDeckControlIpc(
     notify: {
       lastDelivery: (keyId) => notifyHub.lastDelivery(keyId),
       test: (keyId) => notifyHub.testWebhook(keyId),
+      subscriptions: () => liveEvents.subscriptions(),
+      stopSubscription: (keyId, id) => liveEvents.stopSubscription(keyId, id),
     },
     channelBridge: () => channelBridge,
     broadcast: deps.broadcast,
@@ -806,6 +836,7 @@ export async function registerDeckControlIpc(
       noteStatus: (sessionId, status) => notifyDetector.noteStatus(sessionId, status),
       noteExit: (sessionId, exitCode) => notifyDetector.noteExit(sessionId, exitCode),
       hub: notifyHub,
+      events: liveEvents,
     },
     stop: async () => {
       // The door first: nothing new comes in from an AI app while the rest is
@@ -815,6 +846,7 @@ export async function registerDeckControlIpc(
       // Then the notifications: no more detection, waiters answered, queue saved.
       notifyDetector.stop()
       unwatchNotifyKeys()
+      liveEvents.stop()
       notifyHub.stop()
       unwatchAiApps()
       try {

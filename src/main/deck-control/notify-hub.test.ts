@@ -217,6 +217,21 @@ describe('acknowledging', () => {
     // But list still shows it until acknowledged — the catch-up after a lost answer.
     expect(hub.list('A')).toHaveLength(1)
   })
+
+  it('counts an MCP Events push as delivery, for that key only, and does not hand it to a wait again', async () => {
+    const { hub, clock } = rig()
+    const n = event()
+    hub.enqueue('A', n)
+    expect(hub.deliveredBy('B', n.id, 'event')).toBe(false)
+    expect(hub.deliveredBy('A', n.id, 'event')).toBe(true)
+    expect(hub.deliveredBy('A', n.id, 'event')).toBe(false)
+    expect(hub.list('A')).toMatchObject([{ id: n.id, delivery: 'delivered', via: 'event' }])
+    expect(hub.lastDelivery('A')).toMatchObject({ state: 'delivered', via: 'event' })
+    const waiting = hub.wait('A', 1)
+    await clock.advance(1)
+    expect(await waiting).toHaveLength(0)
+    expect(hub.armed()).toBe(false)
+  })
 })
 
 describe('the retry schedule, on a fake clock', () => {

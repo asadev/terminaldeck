@@ -138,6 +138,8 @@ export interface TokenGrant {
    * the HTTP request, which the SDK already turns into an abort.
    */
   signal?: AbortSignal
+  /** MCP Events for this caller, when it is an access key — see {@link GrantEvents}. */
+  events?: GrantEvents
 }
 
 /**
@@ -226,6 +228,17 @@ export type KeyVia = 'this-mac' | 'internet'
  * the store on top is what makes a level change land on the very next *tool
  * call* inside a request that was already in flight.
  */
+/**
+ * MCP Events for one key, bound to it: the three methods `server.ts` offers an
+ * app on the 2026-07-28 era. Present only on an access key's grant, and only
+ * when the app's notifications are running — see `mcp-events.ts`.
+ */
+export interface GrantEvents {
+  list(): Record<string, unknown>
+  subscribe(params: unknown): Promise<unknown>
+  unsubscribe(params: unknown): Record<string, unknown>
+}
+
 export interface KeyedGrant extends TokenGrant {
   /**
    * The app said who it is, in an MCP `initialize`.

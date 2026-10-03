@@ -38,13 +38,14 @@
  * code prints, does not let anybody probe for keys.
  */
 
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { RelayMcpHead } from '../../shared/relay-wire'
 import { MCP_NOT_FOUND, type RelayMcpAnswer, type RelayMcpAnswerer } from '../remote/relay-mcp'
 import { cleanAppLabel, tiersFor, type AccessKeys, type AccessVia } from './access-keys'
 import { bearerOf, type KeyDoor, type KeyedGrant, type KeyVia } from './callers'
 import { keySurface, type ConsentBroker } from './consent'
 import type { DeckControl } from './control'
+import type { McpEvents } from './mcp-events'
+import { serveMcp, withStandardHeaders } from './mcp-serve'
 import { clientNameOf, createMcpServer } from './server'
 import { NO_TIERS, type Caller } from './surface'
 
@@ -54,6 +55,8 @@ export interface AccessKeyDoorOptions {
   control(): DeckControl | null
   /** For withdrawing a revoked key's waiting confirmations. */
   consent?(): ConsentBroker | null
+  /** MCP Events, when they are running: an app on the 2026 era may subscribe. */
+  events?(): McpEvents | null
 }
 
 interface InFlight {
@@ -148,6 +151,7 @@ export class AccessKeyDoor implements KeyDoor, RelayMcpAnswerer {
     const id = found.id
     const name = found.name
     let done = false
+    const events = this.options.events?.() ?? null
     return {
       // An AI app is a caller somebody could be asked about: the owner, on his
       // Mac or his phone. Whether he *is* asked is the key's own setting,
@@ -155,6 +159,17 @@ export class AccessKeyDoor implements KeyDoor, RelayMcpAnswerer {
       attended: true,
       caller: () => keyCaller(keys, id, name),
       signal: entry.abort.signal,
+      // Bound to this key and this road: a subscription made through the
+      // internet stops delivering when internet reach is switched off.
+      ...(events === null
+        ? {}
+        : {
+            events: {
+              list: () => events.list(),
+              subscribe: (params: unknown) => events.subscribe(id, via, params),
+              unsubscribe: (params: unknown) => events.unsubscribe(id, params),
+            },
+          }),
       noteClient: (client) => {
         if (client !== null) keys.noteUsed(id, VIA[via], client)
       },
@@ -210,10 +225,9 @@ export class AccessKeyDoor implements KeyDoor, RelayMcpAnswerer {
   /**
    * One request that came through the relay, answered.
    *
-   * The same `createMcpServer` the loopback endpoint builds per request, over
-   * the SDK's web-standard transport instead of its Node one — the Node one is
-   * a wrapper around this, so the MCP behaviour (initialize, notifications
-   * answered 202, protocol-version checks) is the SDK's own on both roads.
+   * The same `createMcpServer` and the same `serveMcp` the loopback endpoint
+   * uses, so the MCP behaviour — both protocol eras, notifications answered
+   * 202, protocol-version checks — is the SDK's own on both roads.
    *
    * Two headers are set rather than passed through. `Content-Type` is JSON
    * because the body has already parsed as JSON. `Accept` names both types the
@@ -243,33 +257,29 @@ export class AccessKeyDoor implements KeyDoor, RelayMcpAnswerer {
       if (head.protocolVersion !== null) headers.set('mcp-protocol-version', head.protocolVersion)
       const request = new Request('http://relay.invalid/mcp', {
         method: 'POST',
-        headers,
+        // The 2026 revision's `Mcp-Method` / `Mcp-Name`, which the relay does
+        // not carry, put back from the body; see `mcp-serve.ts`.
+        headers: withStandardHeaders(headers, parsed),
         body: new Uint8Array(body),
+        ...(grant.signal ? { signal: grant.signal } : {}),
       })
 
-      const mcp = createMcpServer(control, grant)
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      })
       /*
-       * The app hanging up — the relay's cancel — closes the transport, which
-       * makes the SDK abort the in-flight handler's signal, which `control.ts`
-       * turns into `caller-gone`. The grant's own signal fires for the same
-       * event, and for a revoke, and for internet reach going off.
+       * The app hanging up — the relay's cancel — aborts the grant's signal,
+       * and so does a revoke and internet reach going off. `serveMcp` closes the
+       * exchange on it, which makes the SDK abort the in-flight handler's
+       * signal, which `control.ts` turns into `caller-gone`.
        */
-      const close = (): void => {
-        void transport.close().catch(() => undefined)
-      }
-      grant.signal?.addEventListener('abort', close, { once: true })
-      try {
-        await mcp.connect(transport)
-        const response = await transport.handleRequest(request, { parsedBody: parsed })
-        const bytes = Buffer.from(await response.arrayBuffer())
-        return { status: response.status, contentType: response.headers.get('content-type'), body: bytes }
-      } finally {
-        grant.signal?.removeEventListener('abort', close)
-        await mcp.close().catch(() => undefined)
+      const answered = await serveMcp({
+        request,
+        parsed,
+        ...(grant.signal ? { signal: grant.signal } : {}),
+        server: (era) => createMcpServer(control, grant, { era }),
+      })
+      return {
+        status: answered.status,
+        contentType: answered.headers.get('content-type'),
+        body: Buffer.from(answered.body),
       }
     } catch (error) {
       console.error('[access-keys] a relayed request failed:', error instanceof Error ? error.message : String(error))

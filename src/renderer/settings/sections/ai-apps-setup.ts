@@ -35,9 +35,22 @@ export type NotifyMode = 'off' | 'wait' | 'webhook'
 export interface LastDeliveryRow {
   state: 'pending' | 'delivered' | 'undelivered' | 'failed'
   at: number
-  via: 'wait' | 'webhook' | 'list' | null
+  via: 'wait' | 'webhook' | 'list' | 'event' | null
   error: string | null
   outstanding: number
+}
+
+/** Mirrors `SubscriptionView` in `src/main/deck-control/mcp-events.ts`: one app's push subscription. */
+export interface SubscriptionRow {
+  id: string
+  keyId: string
+  /** `session.turn_finished`, `session.needs_input` or `session.exited`. */
+  event: string
+  /** Where the pushes go, host only. */
+  host: string
+  sessionId: string | null
+  refreshBefore: number
+  lastDelivery: { at: number; ok: boolean; error: string | null } | null
 }
 
 /** Mirrors `AccessKeyView` in `src/main/deck-control/access-keys.ts`. */
@@ -72,6 +85,8 @@ export interface AiAppsState {
   delivery: Record<string, LastDeliveryRow>
   /** The Claude Code channel bridge on disk, or null. */
   channelBridge: string | null
+  /** Push subscriptions an app made (MCP Events — ChatGPT), by key id. */
+  subscriptions: Record<string, SubscriptionRow[]>
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -130,10 +145,38 @@ function toDelivery(raw: unknown): Record<string, LastDeliveryRow> {
     out[id] = {
       state: r.state as LastDeliveryRow['state'],
       at: r.at,
-      via: r.via === 'wait' || r.via === 'webhook' || r.via === 'list' ? r.via : null,
+      via: r.via === 'wait' || r.via === 'webhook' || r.via === 'list' || r.via === 'event' ? r.via : null,
       error: text(r.error),
       outstanding: typeof r.outstanding === 'number' ? r.outstanding : 0,
     }
+  }
+  return out
+}
+
+function toSubscriptions(raw: unknown): Record<string, SubscriptionRow[]> {
+  const out: Record<string, SubscriptionRow[]> = {}
+  for (const [keyId, value] of Object.entries(record(raw) ?? {})) {
+    if (!Array.isArray(value)) continue
+    const rows: SubscriptionRow[] = []
+    for (const item of value) {
+      const r = record(item)
+      const id = text(r?.id)
+      const event = text(r?.event)
+      const host = text(r?.host)
+      if (!r || id === null || event === null || host === null || typeof r.refreshBefore !== 'number') continue
+      const last = record(r.lastDelivery)
+      rows.push({
+        id,
+        keyId,
+        event,
+        host,
+        sessionId: text(r.sessionId),
+        refreshBefore: r.refreshBefore,
+        lastDelivery:
+          last && typeof last.at === 'number' ? { at: last.at, ok: last.ok === true, error: text(last.error) } : null,
+      })
+    }
+    if (rows.length > 0) out[keyId] = rows
   }
   return out
 }
@@ -163,6 +206,7 @@ export function toAiAppsState(raw: unknown): AiAppsState | null {
     problem: text(r.problem),
     delivery: toDelivery(r.delivery),
     channelBridge: text(r.channelBridge),
+    subscriptions: toSubscriptions(r.subscriptions),
   }
 }
 
@@ -222,7 +266,7 @@ export function deliveryLine(last: LastDeliveryRow | undefined, now: number = Da
     last.outstanding === 1 ? '1 the app has not marked as handled' : `${last.outstanding} the app has not marked as handled`
   switch (last.state) {
     case 'delivered':
-      return `Last notification delivered ${when}${last.via === 'webhook' ? ' by webhook' : ''}${last.outstanding > 0 ? ` · ${waiting}` : ''}`
+      return `Last notification delivered ${when}${last.via === 'webhook' ? ' by webhook' : last.via === 'event' ? ', pushed to the app' : ''}${last.outstanding > 0 ? ` · ${waiting}` : ''}`
     case 'pending':
       return `A notification is waiting to be collected (${when})`
     case 'failed':
@@ -231,6 +275,54 @@ export function deliveryLine(last: LastDeliveryRow | undefined, now: number = Da
       return `Not delivered after four tries (${when}) — kept until the app collects it`
   }
 }
+
+/** What each MCP Events name means, in the words Settings uses. */
+const EVENT_LABELS: Record<string, string> = {
+  'session.turn_finished': 'a turn finishes',
+  'session.needs_input': 'a session needs an answer',
+  'session.exited': 'a session exits',
+}
+
+/**
+ * One push subscription, as a sentence: what, where, and how it last went.
+ *
+ * `Pushes to chatgpt.com when a turn finishes · ends at 14:05 unless the app renews it · last push 2 minutes ago`.
+ */
+export function subscriptionLine(row: SubscriptionRow, now: number = Date.now()): string {
+  const what = EVENT_LABELS[row.event] ?? row.event
+  const which = row.sessionId === null ? '' : ' (one session)'
+  // A lease can run into tomorrow, so the day is named when it is not today.
+  const end = new Date(row.refreshBefore)
+  const time = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const renews =
+    end.toDateString() === new Date(now).toDateString() ? time : `${end.toLocaleDateString([], { weekday: 'short' })} ${time}`
+  const parts = [`Pushes to ${row.host} when ${what}${which}`, `ends at ${renews} unless the app renews it`]
+  if (row.lastDelivery !== null) {
+    parts.push(
+      row.lastDelivery.ok
+        ? `last push ${ago(row.lastDelivery.at, now)}`
+        : `last push failed ${ago(row.lastDelivery.at, now)}${row.lastDelivery.error ? `: ${row.lastDelivery.error}` : ''}`,
+    )
+  }
+  return parts.join(' · ')
+}
+
+/** The one line under a key that has push subscriptions: who is pushed, for what. */
+export function pushSummary(rows: SubscriptionRow[]): string | null {
+  if (rows.length === 0) return null
+  const hosts = [...new Set(rows.map((row) => row.host))].join(', ')
+  const what = [...new Set(rows.map((row) => EVENT_LABELS[row.event] ?? row.event))]
+  return `Pushed to ${hosts} when ${what.join(', or when ')}`
+}
+
+/**
+ * ChatGPT's push, in one line. MCP Events: ChatGPT subscribes, this computer
+ * posts. Said as "where it offers it" because OpenAI documents events for Work
+ * chats and signed-in plugins, and a No-authentication connector may not be
+ * given the choice — then the long wait still works.
+ */
+export const CHATGPT_PUSH_SENTENCE =
+  'To be told without asking, say in a ChatGPT Work chat: “watch my sessions and tell me when one finishes”. Where ChatGPT offers it, it subscribes and this computer tells it the moment it happens; otherwise ask it to call notifications_wait.'
 
 /** The sentence every agent setup ends with, so an agent waits instead of watching. */
 export const IDLE_SENTENCE =
@@ -392,6 +484,7 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
       snippet: link,
       missing,
       needsInternet: true,
+      after: CHATGPT_PUSH_SENTENCE,
     }
   }
 
