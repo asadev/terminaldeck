@@ -224,7 +224,10 @@ jobs:
     # here either; the runner is about being the right platform, not toolchain.
     runs-on: windows-latest
     timeout-minutes: 45
-    if: inputs.platforms != 'macos'
+    # `vars.RELEASE_PLATFORMS == 'macos'` is a Mac-only release: the owner's
+    # call when the other platforms have not been tested for this version. A
+    # tag then skips this job instead of shipping a Windows build nobody ran.
+    if: inputs.platforms != 'macos' && vars.RELEASE_PLATFORMS != 'macos'
 
     steps:
       - uses: actions/checkout@v5
@@ -286,7 +289,15 @@ jobs:
     # A dispatched run builds and stops. Publishing is a tag's job and only a
     # tag's job — otherwise "let me just check the installer size" and "ship it
     # to everyone" are the same button.
-    if: github.ref_type == 'tag'
+    #
+    # A Mac-only release (`vars.RELEASE_PLATFORMS == 'macos'`) publishes with
+    # the Windows job skipped — and only then: a Windows job that ran and
+    # failed still stops everything, as it always has.
+    if: >-
+      github.ref_type == 'tag' && !cancelled() &&
+      needs.macos.result == 'success' &&
+      (needs.windows.result == 'success' ||
+       (needs.windows.result == 'skipped' && vars.RELEASE_PLATFORMS == 'macos'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -298,6 +309,31 @@ jobs:
         with:
           path: release
           merge-multiple: true
+
+      # A Mac-only release carries every other platform's files over from the
+      # release before it, unchanged.
+      #
+      # Not optional. The updater on Windows reads `latest.yml` from whichever
+      # release is newest and downloads the installer from that same release —
+      # so a newest release with no `latest.yml` is an "update failed" on every
+      # Windows install, and one with a `latest.yml` but no installer is a
+      # download that 404s. Carrying the previous version's files over means a
+      # Windows copy asks, is told it is already on the newest version, and
+      # stays exactly where it is. The server package and the phone download
+      # come along for the same reason: the newest release page should still
+      # offer every platform, at the version that platform is really on.
+      - name: Carry the other platforms over (Mac-only release)
+        if: vars.RELEASE_PLATFORMS == 'macos'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          echo "carrying the other platforms over from $previous"
+          echo "$previous" > release/carried-from.txt
+          gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir release \
+            --pattern '*.exe' --pattern '*.exe.blockmap' --pattern 'latest.yml' \
+            --pattern '*.tgz' --pattern 'install.sh' --pattern '*.apk'
+          ls -l release
 
       # The server half, which was on npm and nowhere on this page.
       #
@@ -317,6 +353,7 @@ jobs:
           node-version: '22'
 
       - name: Build the server package
+        if: vars.RELEASE_PLATFORMS != 'macos'
         run: |
           npm ci
           npm run dist:headless
@@ -326,6 +363,7 @@ jobs:
       # serves this same file; having it here as well is what makes a release
       # self-contained — the script, the tarball, and a checksum for both.
       - name: The installer, beside it
+        if: vars.RELEASE_PLATFORMS != 'macos'
         run: cp scripts/install-headless.sh release/install.sh
 
       - name: Checksums
@@ -405,6 +443,10 @@ jobs:
           # bare `&` in the replacement half to the MATCHED text, so the mac note's
           # "Privacy & Security" came out as "Privacy {{MACNOTE}} Security" in the
           # published v0.10.0 notes. python replaces literally on every bash.
+          if [ -f release/carried-from.txt ]; then
+            notes="$(printf '%s\n\n%s' "**This release is for the Mac.** Windows, the phone download and the server package are unchanged from $(cat release/carried-from.txt); their files are carried over so their updaters stay where they are." "$notes")"
+          fi
+
           notes="$(MACNOTE="$macnote" APP="$app" NOTES="$notes" python3 -c 'import os,sys; sys.stdout.write(os.environ["NOTES"].replace("{{MACNOTE}}", os.environ["MACNOTE"]).replace("{{APP}}", os.environ["APP"]))')"
 
           gh release create "${GITHUB_REF_NAME}" \
@@ -420,3 +462,10 @@ jobs:
             release/SHA256SUMS.txt \
             release/*.tgz \
             release/install.sh
+
+          # The phone download, when a Mac-only release carried one over. The
+          # Android build is uploaded by its own pipeline otherwise, so a release
+          # without one is normal and is not an error here.
+          if ls release/*.apk >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/*.apk
+          fi
