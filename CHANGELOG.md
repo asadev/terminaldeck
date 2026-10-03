@@ -10,6 +10,33 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-10-03
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Let any AI app drive this Mac — Settings → Connect an AI app.** Make a key for each app (Look only, Work, or Full control), paste its link into Claude, ChatGPT, Claude Code, Codex, Gemini CLI, Cursor or VS Code, and that app can do what you do by hand: start sessions, type into them, wait for the answer and read it, press the keys a permission question wants, run the browser, the simulators, your machines and servers, accounts, settings and the Store. From the internet it goes through the relay; on this Mac it uses a fixed local address. Big changes ask you first on the Mac or on your phone (switch that off per key), every action is logged under the key's name, and revoking a key stops it on the very next call. The relay can read this traffic — it is not sealed end to end like the phone's connection, and the page says so.
+- **Annotate replaces Inspect.** Click parts of a web page, write a note on each, and send them to a session in one message with a marked picture.
+- **Simulators.** A new page shows iOS Simulators, Android emulators and phones live: click to tap, drag to swipe, type, Home/Back/rotate/screenshot, and the same Annotate. Agents in your sessions can drive them too, so they can check their own fix.
+- **Accounts are kept inside the app.** Each Claude Code and Codex login is stored encrypted by the app, any number of them, so switching needs no new sign-in and a moved folder no longer signs everything out.
+- **Install from the Store inside the app** — things other people published, installed and removed cleanly.
+
+### Fixed
+
+- **Switching accounts is reliable.** It no longer kills a working session to land on a sign-in screen, waits for the new session to be ready instead of guessing, keeps the right conversation when another tab is open in the same folder or after a restart, never hides history, and a switch set for "your next message" no longer fires when you answer a permission question. The Add account button no longer disappears or sinks out of sight.
+- **Long messages sent by a tool were never sent** — the message and its Enter arrived as one paste. They now arrive as a message, then Enter.
+- **A private browser tab no longer tells websites it is Electron**, which is what made Google refuse to sign in there.
+- **The "start your dev server" panel in the browser appears again.**
+
+### Removed
+
+- **Talking to a session by voice** (the voice strip). The microphone that types what you say stays.
+
+### Security
+
+- **The Store's development signing key no longer ships**, so a catalogue signed with it is not believed by a released build.
+
 ## [0.15.0] — 2026-08-28
 
 ### Fixed
@@ -2234,7 +2261,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.16.0
 [0.15.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.15.0
 [0.14.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.14.0
 [0.13.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.13.0

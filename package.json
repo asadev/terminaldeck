@@ -1,7 +1,7 @@
 {
   "name": "terminaldeck",
-  "version": "0.15.0",
-  "description": "Run your coding agents on one deck \u2014 Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
+  "version": "0.16.0",
+  "description": "Run your coding agents on one deck — Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
     "name": "Asad Iqbal",
