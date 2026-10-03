@@ -83,6 +83,8 @@ export interface SwitchPlanView {
   to: { id: string; name: string; provider: ProviderId } | null
   conversation: string
   resume: boolean
+  /** `in-place`: only the login changes, the session keeps running. `restart`: the agent is started again. */
+  mode?: 'in-place' | 'restart'
 }
 
 export interface SessionMoreDeps {
@@ -639,10 +641,12 @@ export function sessionMoreTools(deps: SessionMoreDeps): ToolSpec[] {
       description:
         'Which account (login) a session is running as, and switching it. "show" names the account and the ' +
         'plan limits the agent last printed. "plan" says what a switch to `account` would do — including whether ' +
-        'the conversation follows — before anything happens; read it first. "switch" does it now: a NEW session ' +
-        'is started as that account, proven alive, and only then is the old one stopped, so the answer carries ' +
-        'the new session id. "later" arms the switch for the next message sent; "cancel" disarms it; "armed" ' +
-        'lists what is armed. Switching is confirmed, because it restarts the agent. Never returns a credential.',
+        'the conversation follows — before anything happens; read it first. "switch" does it now. For a Claude ' +
+        'Code session it is made in place (plan mode "in-place"): the same session, process and conversation ' +
+        'carry on and only the login changes, from its next request. Otherwise (mode "restart") a NEW session is ' +
+        'started as that account, proven alive, and only then is the old one stopped, so the answer carries the ' +
+        'new session id. "later" arms a restart for the next message sent (an in-place switch is simply made ' +
+        'now); "cancel" disarms it; "armed" lists what is armed. Switching is confirmed. Never returns a credential.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -670,7 +674,7 @@ export function sessionMoreTools(deps: SessionMoreDeps): ToolSpec[] {
         const to = optStr(args, 'account') ?? '?'
         switch (action) {
           case 'switch':
-            return `Restart session ${id} as ${to}`
+            return `Switch session ${id} to ${to}`
           case 'later':
             return `Switch session ${id} to ${to} at its next message`
           case 'cancel':
@@ -720,6 +724,13 @@ export function sessionMoreTools(deps: SessionMoreDeps): ToolSpec[] {
          * otherwise the next `sessions.send` to the new id would suddenly need a
          * confirmation for work that was ordinary a second ago.
          */
+        if (meta.id === session.id) {
+          // Switched in place: nothing was replaced, the session is the one it was.
+          return {
+            value: { switchedInPlace: true, session: viewOf(context, meta) },
+            summary: { action, sessionId: meta.id, inPlace: true },
+          }
+        }
         if (context.startedByCopilot(session.id)) context.noteStarted(meta.id)
         return {
           value: { replaced: session.id, session: viewOf(context, meta) },

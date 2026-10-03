@@ -646,37 +646,48 @@ const api: Record<string, unknown> = new Proxy(
     /*
      * Running the session you have as a different account.
      *
-     * The plan is the interesting half out here, because it is what the sheet
-     * is made of: a real main process reads the target account's transcript
-     * store to decide, and there is no store and no disk here. `stays` is the
-     * answer this can give honestly — the other account has no conversation in
-     * this folder — and it is also the answer that exercises the sentence a
-     * person is most likely to read.
-     *
-     * The switch itself resolves with a session that does not exist, which is
-     * the one respect in which this cannot be honest and is the same bargain
-     * `retryHeldSession` above strikes. What it *does* get right is the shape:
-     * a `SessionMeta` with a new id, which is what the window's replace-in-place
-     * path is built around and what a stub answering with the old id would hide.
+     * Since 0.16.1 a Claude Code session is switched **in place**: the plan says
+     * `mode: 'in-place'` and the switch answers the *same* session, signed in as
+     * the other account — which is what the real main process does for every
+     * Claude Code session it started with a seat. The window then switches
+     * without opening the sheet and says "Switched to …" under the chip.
+     * `?switch=restart` in the URL brings back the restart shape (a Codex
+     * session, or one started before seats), so the sheet can still be looked at.
      */
-    planSessionSwitch: async (sessionId: string, profileId: string) => ({
-      sessionId,
-      refusal: null,
-      from: { id: 'system', name: 'Default', provider: 'claude' },
-      to: { id: profileId, name: profileId, provider: 'claude' },
-      conversation: 'stays',
-      resume: false,
-    }),
-    switchSessionAccount: async (sessionId: string, profileId: string) => ({
-      id: `${sessionId}-as-${profileId}`,
-      cwd: '/Users/apple/Projects/terminaldeck',
-      title: 'terminaldeck',
-      provider: 'claude',
-      exitCode: null,
-      createdAt: Date.now(),
-      profileId,
-      profileName: profileId,
-    }),
+    planSessionSwitch: async (sessionId: string, profileId: string) => {
+      const restart = new URLSearchParams(location.search).get('switch') === 'restart'
+      const row = sessions.find((session) => session.id === sessionId)
+      return {
+        sessionId,
+        refusal: null,
+        from: { id: row?.profileId ?? 'system', name: row?.profileName ?? 'Default', provider: 'claude' },
+        to: { id: profileId, name: profileId === 'work' ? 'Work' : profileId === 'system' ? 'Default' : profileId, provider: 'claude' },
+        conversation: restart ? 'stays' : 'same',
+        resume: false,
+        mode: restart ? 'restart' : 'in-place',
+      }
+    },
+    switchSessionAccount: async (sessionId: string, profileId: string) => {
+      const restart = new URLSearchParams(location.search).get('switch') === 'restart'
+      const row = sessions.find((session) => session.id === sessionId)
+      const name = profileId === 'work' ? 'Work' : profileId === 'system' ? 'Default' : profileId
+      if (!restart && row) {
+        // The same session: only the account it is signed in as changes.
+        row.profileId = profileId
+        row.profileName = name
+        return { ...row }
+      }
+      return {
+        id: `${sessionId}-as-${profileId}`,
+        cwd: '/Users/apple/Projects/terminaldeck',
+        title: 'terminaldeck',
+        provider: 'claude',
+        exitCode: null,
+        createdAt: Date.now(),
+        profileId,
+        profileName: name,
+      }
+    },
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
     /*
      * Links. `onOpenLinkTab` is an `on*`, so it returns an unsubscribe like
@@ -928,7 +939,10 @@ const api: Record<string, unknown> = new Proxy(
       vault: {
         system: { keptBy: 'agent', signedIn: null, updatedAt: null, plan: null },
         'system:codex': { keptBy: 'agent', signedIn: null, updatedAt: null, plan: null },
-        work: { keptBy: 'app', signedIn: false, updatedAt: null, plan: null },
+        work:
+          new URLSearchParams(location.search).get('work') === 'signed-in'
+            ? { keptBy: 'app', signedIn: true, updatedAt: launchedAt, plan: 'max' }
+            : { keptBy: 'app', signedIn: false, updatedAt: null, plan: null },
       },
     }),
     /**
@@ -960,6 +974,17 @@ const api: Record<string, unknown> = new Proxy(
           plan: 'ChatGPT',
           detail: 'Logged in using ChatGPT',
           command: 'codex login status',
+        }
+      }
+      // `?work=signed-in`: the second Claude account has a login, so a session
+      // can be switched to it — the state the in-place switch is looked at in.
+      if (id === 'work' && new URLSearchParams(location.search).get('work') === 'signed-in') {
+        return {
+          state: 'signed-in',
+          account: 'work@example.com',
+          plan: 'max',
+          detail: 'Signed in as work@example.com · max',
+          command: 'claude auth status --json',
         }
       }
       return {

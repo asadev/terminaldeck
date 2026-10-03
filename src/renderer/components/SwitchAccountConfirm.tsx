@@ -217,7 +217,11 @@ export function SwitchAccountConfirm({
               {names.from} → {names.to}
               {tag !== null && <span className="switch-confirm-tag">{tag}</span>}
               <HoverNote label="What switching does">
-                {tag === null ? SWITCH_KEEPS : `${switchConversationNote(plan, names)} ${SWITCH_KEEPS}`}
+                {/* A carried conversation has no tag (nothing is left behind) but
+                    does need its sentence: it says the agent restarts, and why. */}
+                {tag === null && plan.conversation !== 'carried'
+                  ? SWITCH_KEEPS
+                  : `${switchConversationNote(plan, names)} ${SWITCH_KEEPS}`}
               </HoverNote>
             </p>
           </>

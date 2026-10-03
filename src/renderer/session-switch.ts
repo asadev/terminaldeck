@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { SessionMeta } from '@shared/types'
 import { profileLoginLabel, type SignInView } from './accounts'
 import { isProviderId } from './preferences'
@@ -44,6 +44,8 @@ import { isProviderId } from './preferences'
 
 /** Mirror of `SwitchConversation` in `main/session-switch.ts`. */
 export type SwitchConversation =
+  | 'same'
+  | 'carried'
   | 'follows'
   | 'stays'
   | 'theirs'
@@ -53,6 +55,8 @@ export type SwitchConversation =
   | 'separate'
 
 const CONVERSATIONS: readonly SwitchConversation[] = [
+  'same',
+  'carried',
   'follows',
   'stays',
   'theirs',
@@ -77,6 +81,13 @@ export interface SwitchPlanView {
   to: SwitchAccountView | null
   conversation: SwitchConversation
   resume: boolean
+  /**
+   * `in-place`: only the login changes — the session, its terminal and its
+   * conversation carry on untouched, so there is nothing to confirm. `restart`:
+   * the agent is stopped and started again, which the sheet describes first.
+   * Mirror of `SwitchMode`.
+   */
+  mode: 'in-place' | 'restart'
 }
 
 function account(raw: unknown): SwitchAccountView | null {
@@ -126,6 +137,8 @@ export function readSwitchPlan(raw: unknown): SwitchPlanView | null {
     // Only ever true when main said true. A missing field is "no", which is the
     // reading that cannot promise a continue that is not going to happen.
     resume: row.resume === true,
+    // Only ever in place when main said so; anything else is described first.
+    mode: row.mode === 'in-place' ? 'in-place' : 'restart',
   }
 }
 
@@ -201,6 +214,13 @@ export function switchConversationNote(
 ): string {
   const stays = `This conversation stays with ${names.from}.`
   switch (plan.conversation) {
+    case 'same':
+      return `Nothing restarts. This conversation carries on in the same terminal — only the account changes to ${names.to}.`
+    case 'carried':
+      return (
+        `This agent reads its login only when it starts, so it is restarted as ${names.to} — and this ` +
+        `conversation comes with it: it is copied into ${names.to}'s history and continued there.`
+      )
     case 'follows':
       /*
        * The one outcome where the opening clause would be a lie, so it is not
@@ -275,6 +295,8 @@ export function switchConversationNote(
  */
 export function switchConversationTag(plan: Pick<SwitchPlanView, 'conversation'>): string | null {
   switch (plan.conversation) {
+    case 'same':
+    case 'carried':
     case 'follows':
       return null
     case 'theirs':
@@ -297,6 +319,18 @@ export function switchConversationTag(plan: Pick<SwitchPlanView, 'conversation'>
  */
 export const SWITCH_KEEPS =
   'Same tab, same folder, same place on the bar. The agent running in it is stopped and started again as the other account, so anything it has not written to disk goes with it.'
+
+/**
+ * Whether a switch is made the moment the account is picked, with no sheet.
+ *
+ * Only one made in place — nothing is stopped, so there is nothing to read
+ * before agreeing — and only when nothing refused it. Everything else is
+ * described first, because a restart nobody expected is the fault this whole
+ * file was written against.
+ */
+export function switchesWithoutAsking(plan: Pick<SwitchPlanView, 'mode' | 'refusal'>): boolean {
+  return plan.mode === 'in-place' && plan.refusal === null
+}
 
 /* ----------------------------------------------------------------- bridge -- */
 
@@ -340,6 +374,13 @@ export interface SwitchRequest {
   profileId: string
 }
 
+/** A switch made in place: the session's updated row and who it is signed in as now. */
+export interface SwitchDone {
+  sessionId: string
+  meta: SessionMeta
+  to: SwitchAccountView | null
+}
+
 export interface SwitchController {
   /** The switch being asked about, or null when the sheet is shut. */
   asking: SwitchRequest | null
@@ -349,6 +390,17 @@ export interface SwitchController {
   busy: boolean
   /** What went wrong, from the main process, in its own words. */
   problem: string | null
+  /**
+   * The last switch made in place, or null.
+   *
+   * A switch that restarts nothing has nothing to confirm, so `ask` makes it
+   * straight away and never opens the sheet: this is how the window hears it
+   * happened — the session's updated row (same id, new account) and the name
+   * to say "Switched to …" with. Cleared by `ask` and by `dismissDone`.
+   */
+  done: SwitchDone | null
+  /** Forget `done` once the window has shown it. */
+  dismissDone(): void
   ask(request: SwitchRequest): void
   cancel(): void
   /** Do it. Resolves with the replacement session, or null if it did not happen. */
@@ -404,31 +456,78 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
   const [plan, setPlan] = useState<SwitchPlanView | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const [done, setDone] = useState<SwitchDone | null>(null)
+  /*
+   * Which question is current. Every `ask` and every `cancel` moves it on, and
+   * an answer for a question that is no longer current is dropped: two rapid
+   * picks would otherwise leave the second sheet describing the first account,
+   * or switch a session somebody has since cancelled the switch of.
+   */
+  const generation = useRef(0)
 
   const ask = useCallback(
     (request: SwitchRequest) => {
-      setAsking(request)
-      setPlan(null)
+      const mine = ++generation.current
+      const current = (): boolean => generation.current === mine
+      setDone(null)
       setProblem(null)
       if (!deck) {
         // A build whose bridge predates this feature. Said out loud rather than
         // left as a sheet that spins: a control that cannot answer has to say so.
+        setAsking(request)
+        setPlan(null)
         setProblem('Switching accounts is not wired into this build.')
         return
       }
+      /*
+       * The plan first, with the sheet still shut.
+       *
+       * Asad: *"Session should not be touched. Only account should be
+       * changing."* For a session that can be switched in place nothing is
+       * stopped, so there is nothing to read before agreeing to it — the click
+       * on the account *is* the switch, and the sheet never opens. Only a switch
+       * that restarts the agent, or one that is refused or fails, puts the sheet
+       * in front of him, because only then is there something to say first.
+       */
+      setAsking(null)
+      setPlan(null)
       setBusy(true)
       void deck.planSessionSwitch(request.sessionId, request.profileId).then(
         (raw) => {
-          setBusy(false)
+          if (!current()) return
           const read = readSwitchPlan(raw)
-          if (read === null) setProblem('This build could not work out what switching would do.')
-          // Answers for a question that has since been cancelled or replaced are
-          // dropped. Two rapid picks would otherwise leave the second sheet
-          // describing the first account.
-          else setPlan((current) => (current === null ? read : current))
+          if (read === null) {
+            setBusy(false)
+            setAsking(request)
+            setProblem('This build could not work out what switching would do.')
+            return
+          }
+          if (!switchesWithoutAsking(read)) {
+            setBusy(false)
+            setAsking(request)
+            setPlan(read)
+            return
+          }
+          void deck.switchSessionAccount(request.sessionId, request.profileId).then(
+            (meta) => {
+              setBusy(false)
+              setDone({ sessionId: request.sessionId, meta, to: read.to })
+            },
+            (error: unknown) => {
+              // It did not happen, and the session is exactly as it was: the
+              // sheet comes up with the reason, over the plan it was making.
+              setBusy(false)
+              if (!current()) return
+              setAsking(request)
+              setPlan(read)
+              setProblem(switchProblem(error))
+            },
+          )
         },
         (error: unknown) => {
+          if (!current()) return
           setBusy(false)
+          setAsking(request)
           setProblem(switchProblem(error))
         },
       )
@@ -436,7 +535,10 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
     [deck],
   )
 
+  const dismissDone = useCallback(() => setDone(null), [])
+
   const cancel = useCallback(() => {
+    generation.current++
     setAsking(null)
     setPlan(null)
     setProblem(null)
@@ -503,6 +605,8 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
     plan,
     busy,
     problem,
+    done,
+    dismissDone,
     ask,
     cancel,
     confirm,

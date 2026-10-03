@@ -214,6 +214,19 @@ export interface SessionMeta {
   profileId?: string
   /** The account's name, so a list can show it without a second lookup. */
   profileName?: string
+  /**
+   * The account whose **folder** the agent runs in, when that is not
+   * `profileId`'s own — only ever for a session switched to another account in
+   * place.
+   *
+   * A switch made in place changes the login and nothing else, so the process
+   * keeps the config directory it was started with: its conversation history,
+   * its settings, its transcript. Everything that reads a session's *files*
+   * reads this account's folder; everything about *who it is signed in as* —
+   * the chip, the usage figures — reads `profileId`. Absent when the two are the
+   * same account, which is every session that has not been switched.
+   */
+  homeProfileId?: string
   /** Who wanted this session. Absent means the person did. See {@link SessionOrigin}. */
   origin?: SessionOrigin
   /**
@@ -301,6 +314,13 @@ export interface CreateSessionInput {
   replaces?: string
   /** Which agent profile (isolated login) to run as. Null uses the default. */
   profileId?: string | null
+  /**
+   * The account whose folder to run in, when that differs from `profileId` —
+   * a session restored after being switched in place comes back in its own
+   * folder (where its conversation is) on the login it was switched to. See
+   * `SessionMeta.homeProfileId`. Ignored wherever the two cannot be split.
+   */
+  homeProfileId?: string | null
   /**
    * Who is asking. Absent means the person at the keyboard.
    *

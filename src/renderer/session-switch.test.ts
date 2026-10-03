@@ -6,6 +6,7 @@ import {
   switchConversationTag,
   switchNames,
   switchProblem,
+  switchesWithoutAsking,
   SWITCH_KEEPS,
   type SwitchPlanView,
 } from './session-switch'
@@ -31,6 +32,7 @@ describe('reading the plan off the bridge', () => {
       to: { id: 'home', name: 'Home', provider: 'claude' },
       conversation: 'stays',
       resume: false,
+      mode: 'restart',
     })
   })
 
@@ -250,5 +252,36 @@ describe('the state the sheet draws instead of the sentence', () => {
       expect(switchConversationTag({ conversation: kind })).toBe('new conversation')
     }
     expect(switchConversationTag({ conversation: 'unreadable' })).toBe('conversation unknown')
+  })
+})
+
+/**
+ * Switching in place. Asad, on 0.16.0: *"Session should not be changed.
+ * Session should not be touched. Only account should be changing."*
+ */
+describe('a switch made in place', () => {
+  it('is read off the plan only when the main process said so', () => {
+    expect(readSwitchPlan(payload({ mode: 'in-place', conversation: 'same' }))).toMatchObject({
+      mode: 'in-place',
+      conversation: 'same',
+    })
+    // Missing or anything else: described first, never made without asking.
+    expect(readSwitchPlan(payload())?.mode).toBe('restart')
+    expect(readSwitchPlan(payload({ mode: 'sideways' }))?.mode).toBe('restart')
+  })
+
+  it('is made the moment the account is picked — no sheet — and only when nothing refused it', () => {
+    expect(switchesWithoutAsking({ mode: 'in-place', refusal: null })).toBe(true)
+    expect(switchesWithoutAsking({ mode: 'in-place', refusal: 'Work is not signed in yet.' })).toBe(false)
+    expect(switchesWithoutAsking({ mode: 'restart', refusal: null })).toBe(false)
+  })
+
+  it('says nothing restarts, and draws no "new conversation" tag', () => {
+    const plan = readSwitchPlan(payload({ mode: 'in-place', conversation: 'same' }))
+    if (plan === null) throw new Error('unread')
+    expect(switchConversationNote(plan, names)).toBe(
+      'Nothing restarts. This conversation carries on in the same terminal — only the account changes to home@example.com.',
+    )
+    expect(switchConversationTag(plan)).toBeNull()
   })
 })

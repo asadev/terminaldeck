@@ -34,6 +34,7 @@ const plan = (over: Partial<SwitchPlanView> = {}): SwitchPlanView => ({
   to: { id: 'home', name: 'Home', provider: 'claude' },
   conversation: 'stays',
   resume: false,
+  mode: 'restart',
   ...over,
 })
 

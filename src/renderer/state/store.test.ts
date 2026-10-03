@@ -174,3 +174,36 @@ describe('one session standing in for another', () => {
     expect(withReplacedSession(before, 's1', meta())).toBe(before)
   })
 })
+
+/**
+ * A session switched to another account in place: the same process, the same
+ * id. Not a replacement — nothing about the row resets, only the account it
+ * shows changes.
+ */
+describe('a session switched in place', () => {
+  it('changes only the account the row shows — status, clock and name stay', () => {
+    const before = [
+      session({ title: 'Relay handshake', namedByUser: true, status: 'working', statusSince: 5, profileId: 'home', profileName: 'Home' }),
+      session({ id: 's2' }),
+    ]
+    const next = withReplacedSession(before, 's1', { ...session({ title: 'terminaldeck' }), profileId: 'work', profileName: 'Work', homeProfileId: 'home' })
+    expect(next.map((one) => one.id)).toEqual(['s1', 's2'])
+    expect(next[0]).toMatchObject({
+      title: 'Relay handshake',
+      namedByUser: true,
+      status: 'working',
+      statusSince: 5,
+      profileId: 'work',
+      profileName: 'Work',
+      homeProfileId: 'home',
+    })
+    expect(next[1]).toBe(before[1])
+  })
+
+  it('switched back to the account it was started as, it no longer names a separate folder', () => {
+    const before = [session({ profileId: 'work', profileName: 'Work', homeProfileId: 'home' })]
+    const next = withReplacedSession(before, 's1', { ...session(), profileId: 'home', profileName: 'Home' })
+    expect(next[0].profileId).toBe('home')
+    expect(next[0].homeProfileId).toBeUndefined()
+  })
+})

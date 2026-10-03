@@ -383,7 +383,11 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
 
   it('gives a confined session no ticket, so a held device reaches nothing it could not reach before', () => {
     const source = readFileSync(new URL('../host-core.ts', import.meta.url), 'utf8')
-    expect(source).toContain('...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : sessionEnv(profile, provider)),')
+    expect(source).toContain(
+      '...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : { ...sessionEnv(profile, provider), ...seat }),',
+    )
+    // And no seat for one either: a seat is only minted for an unconfined session.
+    expect(source).toContain("const seated = provider === 'claude' && !confined && target === null && !appComposed")
   })
 
   /*

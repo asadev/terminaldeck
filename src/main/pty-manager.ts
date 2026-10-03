@@ -39,6 +39,8 @@ export interface SpawnSpec {
    * agent whose config directory this app cannot redirect.
    */
   profile?: { id: string; name: string }
+  /** The account whose folder the agent runs in, when not `profile`'s own. See `SessionMeta.homeProfileId`. */
+  homeProfileId?: string
   /**
    * The conversation id the caller put on the command line, when it put one
    * there.
@@ -302,6 +304,7 @@ export class PtyManager {
       ...(spawnSpec.profile
         ? { profileId: spawnSpec.profile.id, profileName: spawnSpec.profile.name }
         : {}),
+      ...(spawnSpec.homeProfileId ? { homeProfileId: spawnSpec.homeProfileId } : {}),
       // Same spread, same reason: an absent id means the transcript has to be
       // inferred, and that has to be distinguishable from an id that is present.
       ...(spawnSpec.agentSessionId ? { agentSessionId: spawnSpec.agentSessionId } : {}),
@@ -397,6 +400,24 @@ export class PtyManager {
     const given = title.trim()
     session.meta.title = given === '' ? basename(session.meta.cwd) || session.meta.cwd : given
     return true
+  }
+
+  /**
+   * The session is now signed in as another account — switched in place.
+   *
+   * Nothing about the process changes; this is the record catching up with the
+   * login its seat now hands out. `home` is the account whose folder it keeps
+   * running in, recorded only when it is not the new account's own. Answers
+   * the updated meta, or null when there is no such session.
+   */
+  setAccount(id: string, account: { id: string; name: string }, home: string | null): SessionMeta | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    session.meta.profileId = account.id
+    session.meta.profileName = account.name
+    if (home !== null && home !== account.id) session.meta.homeProfileId = home
+    else delete session.meta.homeProfileId
+    return { ...session.meta }
   }
 
   write(id: string, data: string): void {
