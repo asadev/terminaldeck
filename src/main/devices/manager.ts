@@ -25,6 +25,11 @@ import { DeviceSession, type DeviceDetails, type Foreground, type Orientation, t
  * clock the same way, so a model driving a device it never put on screen keeps
  * it until it stops.
  *
+ * A window that is minimised or hidden *pauses* instead of leaving: it stays a
+ * watcher, so the engine stays open and the idle clock does not start, but it
+ * is sent nothing, and when every watcher is paused the engine is told to stop
+ * sending pictures at all. Coming back is a keyframe, not a restart.
+ *
  * ## What it never does
  *
  * Boot, shut down or touch a device nobody asked about. Listing is read-only;
@@ -67,6 +72,8 @@ export interface ManagerOptions {
  */
 class ScreenPump {
   private stopped = false
+  /** The window is hidden: nothing is sent until it shows again. */
+  paused = false
 
   constructor(
     private readonly viewer: Viewer,
@@ -74,7 +81,7 @@ class ScreenPump {
   ) {}
 
   push(packet: Buffer): void {
-    if (this.stopped || this.viewer.isDestroyed()) return
+    if (this.stopped || this.paused || this.viewer.isDestroyed()) return
     this.viewer.send('devices:frame', this.deviceId, packet)
   }
 
@@ -87,6 +94,9 @@ interface Watch {
   pump: ScreenPump
   off(): void
 }
+
+/** Watching, not watching, or watching from a hidden window that wants nothing sent for now. */
+export type WatchMode = boolean | 'paused'
 
 export class DeviceManager {
   private engineAnswer: Engine | NoEngine | null = null
@@ -182,7 +192,7 @@ export class DeviceManager {
    * holds, and whether pictures flow is decided from who is watching after
    * each step rather than from what the step was.
    */
-  async watch(viewer: Viewer, id: string, on: boolean): Promise<void> {
+  async watch(viewer: Viewer, id: string, on: WatchMode): Promise<void> {
     const step = (): Promise<void> => this.applyWatch(viewer, id, on)
     const next = (this.watchChains.get(id) ?? Promise.resolve()).then(step, step)
     this.watchChains.set(
@@ -192,11 +202,12 @@ export class DeviceManager {
     await next
   }
 
-  private async applyWatch(viewer: Viewer, id: string, on: boolean): Promise<void> {
+  private async applyWatch(viewer: Viewer, id: string, on: WatchMode): Promise<void> {
     const viewers = this.watches.get(id) ?? new Map<number, Watch>()
     this.watches.set(id, viewers)
     const existing = viewers.get(viewer.id)
-    if (!on) {
+    const allPaused = (): boolean => [...viewers.values()].every((watch) => watch.pump.paused)
+    if (on === false) {
       existing?.off()
       existing?.pump.stop()
       viewers.delete(viewer.id)
@@ -205,6 +216,9 @@ export class DeviceManager {
         const session = this.sessions.get(id)
         if (session?.isOpen) await session.setPreview(false).catch(() => undefined)
         this.touchIdle(id)
+      } else if (allPaused()) {
+        const session = this.sessions.get(id)
+        if (session?.isOpen) await session.setPreview(false).catch(() => undefined)
       }
       return
     }
@@ -217,6 +231,12 @@ export class DeviceManager {
       viewers.set(viewer.id, watch)
     }
     this.watches.set(id, viewers)
+    if (on === 'paused') {
+      watch.pump.paused = true
+      if (allPaused()) await session.setPreview(false)
+      return
+    }
+    watch.pump.paused = false
     // The decoder configuration first, so a window joining mid-stream can
     // decode the keyframe `setPreview` is about to ask for. Watching again —
     // which a window does when its decoder fell behind — lands here too, and

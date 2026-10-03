@@ -17,7 +17,7 @@ import { readRound } from './round'
  * - `devices:boot`       (id)                  → `{ ok, id }` | `{ ok: false, message }`
  * - `devices:shutdown`   (id)                  → `{ ok }` | `{ ok: false, message }`
  * - `devices:open`       (id)                  → the device's details
- * - `devices:watch`      (id, on)              → live pictures to this window on or off
+ * - `devices:watch`      (id, on)              → live pictures to this window on, off, or 'paused' (window hidden)
  * - `devices:tap`        (id, x, y, holdMs?)
  * - `devices:touch`      (id, phase, x, y)     — one phase of a drag
  * - `devices:swipe`      (id, from, to, ms?)
@@ -152,7 +152,7 @@ export function registerDevicesIpc(ipcMain: IpcMain): DeviceManager {
   })
   ipcMain.handle('devices:watch', async (event, id: unknown, on: unknown) => {
     windows.add(event.sender)
-    await manager.watch(remember(event), deviceId(id), on === true)
+    await manager.watch(remember(event), deviceId(id), on === true ? true : on === 'paused' ? 'paused' : false)
   })
   ipcMain.handle('devices:tap', async (_event, id: unknown, x: unknown, y: unknown, holdMs: unknown) => {
     await manager.tap(deviceId(id), unit(x), unit(y), typeof holdMs === 'number' ? Math.min(holdMs, 5_000) : undefined)

@@ -1909,7 +1909,7 @@ const api = {
   deviceBoot: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:boot', id),
   deviceShutDown: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:shutdown', id),
   deviceOpen: (id: string): Promise<unknown> => ipcRenderer.invoke('devices:open', id),
-  deviceWatch: (id: string, on: boolean): Promise<void> => ipcRenderer.invoke('devices:watch', id, on),
+  deviceWatch: (id: string, on: boolean | 'paused'): Promise<void> => ipcRenderer.invoke('devices:watch', id, on),
   deviceTap: (id: string, x: number, y: number, holdMs?: number): Promise<void> =>
     ipcRenderer.invoke('devices:tap', id, x, y, holdMs),
   deviceTouch: (id: string, phase: string, x: number, y: number): Promise<void> =>

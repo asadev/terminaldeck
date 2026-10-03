@@ -296,6 +296,25 @@
   pointer-events: none;
 }
 
+/* The hidden diagnostics readout (Option-click the device's name). */
+.dv-diag {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  white-space: pre;
+  pointer-events: none;
+}
+
 .dv-page[data-annotating] .an {
   flex: 1;
 }

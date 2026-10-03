@@ -76,7 +76,7 @@ export interface DevicesBridge {
   deviceBoot(id: string): Promise<Outcome>
   deviceShutDown(id: string): Promise<Outcome>
   deviceOpen(id: string): Promise<DeviceDetails>
-  deviceWatch(id: string, on: boolean): Promise<void>
+  deviceWatch(id: string, on: boolean | 'paused'): Promise<void>
   deviceTap(id: string, x: number, y: number, holdMs?: number): Promise<void>
   deviceTouch(id: string, phase: 'down' | 'move' | 'up', x: number, y: number): Promise<void>
   deviceSwipe(id: string, from: { x: number; y: number }, to: { x: number; y: number }, ms?: number): Promise<void>

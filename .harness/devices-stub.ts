@@ -229,10 +229,10 @@ export const devicesStub: Record<string, unknown> = {
     return { ok: true }
   },
   deviceOpen: async (id: string) => details(id),
-  deviceWatch: async (id: string, on: boolean) => {
-    if (on) watching.add(id)
+  deviceWatch: async (id: string, on: boolean | 'paused') => {
+    if (on === true) watching.add(id)
     else watching.delete(id)
-    if (on) void push(id)
+    if (on === true) void push(id)
   },
   deviceTap: async (id: string, _x: number, y: number) => {
     tapped = Math.floor((y - ROW_TOP) / ROW_H)
