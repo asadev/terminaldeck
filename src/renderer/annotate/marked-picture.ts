@@ -7,7 +7,7 @@ import type { NormRect } from '../../shared/device-tree'
  *
  * ## Why the markers are burnt in
  *
- * The message names each note by its number — `#2 button "Pay" …` — and the
+ * The message names each marker by its number — `#2 button "Pay" …` — and the
  * agent opens the picture to see which one that is. Markers drawn only on the
  * page, as HTML over an image, would be visible to the person and absent from
  * the file. So the file is drawn from scratch, here, from the same rectangles

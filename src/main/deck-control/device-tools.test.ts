@@ -1158,11 +1158,11 @@ function round(id: string, kind: 'device' | 'browser', at = 1_790_000_000_000): 
         n: 1,
         rect: { x: 0.1, y: 0.8, width: 0.8, height: 0.08 },
         element: { role: 'button', name: 'Pay', identifier: 'pay-button' },
-        note: 'This should be green',
       },
-      // A marker nobody wrote a note on is left out, as it is from the message.
-      { id: 'a2', n: 2, rect: { x: 0, y: 0, width: 0.1, height: 0.1 }, element: null, note: '  ' },
+      // A marker on blank space is still a marker the note can point at.
+      { id: 'a2', n: 2, rect: { x: 0, y: 0, width: 0.1, height: 0.1 }, element: null },
     ],
+    note: 'Make #1 green and put #2 on the left.',
     picture: { path: `/Users/someone/Pictures/App/${id}-annotated.png`, width: 1206, height: 2622 },
   }
 }
@@ -1177,7 +1177,7 @@ describe('devices.annotations', () => {
     )
   })
 
-  it('hands back the newest round, notes and elements, without the unwritten markers', async () => {
+  it('hands back the newest round: its one note, then every numbered marker and what it is on', async () => {
     const deps = fakeDeps()
     deps.stored = [round('newest', 'device'), round('older', 'browser')]
     const result = await control(deps, dir).call('devices_annotations', {})
@@ -1189,15 +1189,18 @@ describe('devices.annotations', () => {
       where: { kind: 'device', deviceId: IOS, app: 'com.example.Shop' },
       picture: { path: '/Users/someone/Pictures/App/newest-annotated.png' },
       sentTo: null,
-      annotations: [
+      note: 'Make #1 green and put #2 on the left.',
+      markers: [
         {
           n: 1,
-          note: 'This should be green',
           element: { role: 'button', name: 'Pay', identifier: 'pay-button' },
           described: 'button "Pay" (id pay-button)',
         },
+        { n: 2, element: null, described: 'blank space' },
       ],
     })
+    // One note for the round, never one per marker.
+    for (const marker of value.rounds[0].markers as Record<string, unknown>[]) expect(marker.note).toBeUndefined()
   })
 
   it('narrows by kind, and says what the other kind holds when the narrowing leaves nothing', async () => {

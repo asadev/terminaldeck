@@ -22,7 +22,7 @@ describe('the marked picture', () => {
     expect(top.badge.cy - top.badge.r).toBeGreaterThan(0)
   })
 
-  it('draws an outline and a numbered disc per note, halo first', () => {
+  it('draws an outline and a numbered disc per marker, halo first', () => {
     const calls: string[] = []
     const ctx = {
       strokeStyle: '',
@@ -38,11 +38,11 @@ describe('the marked picture', () => {
       fill: () => calls.push(`fill:${String(ctx.fillStyle)}`),
       fillText: (text: string) => calls.push(`text:${text}`),
     } as unknown as PictureContext & { strokeStyle: string; fillStyle: string }
-    const notes: Annotation[] = [
-      { id: 'a', n: 1, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, element: null, note: 'x' },
-      { id: 'b', n: 2, rect: { x: 0.5, y: 0.5, width: 0.2, height: 0.1 }, element: null, note: 'y' },
+    const markers: Annotation[] = [
+      { id: 'a', n: 1, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, element: null },
+      { id: 'b', n: 2, rect: { x: 0.5, y: 0.5, width: 0.2, height: 0.1 }, element: null },
     ]
-    paintMarkers(ctx, notes, 1000, 2000, { accent: 'blue', onAccent: 'white' })
+    paintMarkers(ctx, markers, 1000, 2000, { accent: 'blue', onAccent: 'white' })
     expect(calls.filter((c) => c.startsWith('text:'))).toEqual(['text:1', 'text:2'])
     const strokes = calls.filter((c) => c.startsWith('stroke:'))
     expect(strokes[0]).toMatch(/rgba/)

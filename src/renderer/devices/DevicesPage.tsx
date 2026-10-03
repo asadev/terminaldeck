@@ -29,7 +29,7 @@ import './devices.css'
  * pick a device (starting it if it is off), see its screen, drive it with the
  * mouse and the keyboard, press its buttons, turn it, photograph it — and
  * Annotate it, which freezes the picture, lets him point at elements and write
- * a note on each, and sends all of it to a session in one message.
+ * one note about them, and sends all of it to a session in one message.
  *
  * ## A page, not a window
  *
@@ -386,7 +386,7 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
             hover={hoverAt}
             agent={agent}
             noun="screen"
-            notice={tree ? '' : 'This screen did not describe its elements, so notes are placed by position.'}
+            notice={tree ? '' : 'This screen did not describe its elements, so markers are placed by position.'}
             save={async (png, round) => await bridge.annotateSave(png, round).catch(() => null)}
             onSent={(roundId, sentTo) => {
               void bridge.annotateSent(roundId, sentTo).catch(() => undefined)

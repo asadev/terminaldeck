@@ -1509,6 +1509,19 @@
   background: var(--bg-primary);
 }
 
+/* The growing box — Annotate's one note, which can cover several markers. Grows
+   with what is written up to a few lines rather than scrolling sideways, and
+   wears no resize grip: a grip in the corner is a line drawn for no reason. */
+.bw-instruction-multi {
+  height: auto;
+  min-height: var(--control-h);
+  max-height: calc(var(--control-h) * 4);
+  padding: var(--sp-1) var(--sp-3);
+  line-height: var(--lh-body);
+  field-sizing: content;
+  resize: none;
+}
+
 /* The one filled control in the panel, and the only place the accent appears
    as a background: handing the capture to the agent is what this panel is for. */
 .bw-primary {

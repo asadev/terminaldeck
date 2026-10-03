@@ -151,7 +151,8 @@ describe('pictures and rounds', () => {
     createdAt: 0,
     where: { kind: 'device', place: 'iOS Simulator', name: 'iPhone 17 Pro' },
     frame: { width: 1, height: 1 },
-    annotations: [{ id: 'a', n: 1, rect: { x: 0, y: 0, width: 1, height: 1 }, element: null, note: 'Hi' }],
+    annotations: [{ id: 'a', n: 1, rect: { x: 0, y: 0, width: 1, height: 1 }, element: null }],
+    note: 'Hi',
   }
 
   it('writes a screenshot into the pictures folder under the device’s name', async () => {

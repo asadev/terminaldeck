@@ -28,6 +28,7 @@ export function readRound(raw: unknown): AnnotationRound {
     createdAt: num(r.createdAt) || Date.now(),
     where,
     frame: { width: Math.max(0, Math.round(num(frame.width))), height: Math.max(0, Math.round(num(frame.height))) },
+    note: text(r.note, 4_000),
     annotations: list.map((entry, index) => {
       const a = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>
       const rect = (typeof a.rect === 'object' && a.rect !== null ? a.rect : {}) as Record<string, unknown>
@@ -38,7 +39,6 @@ export function readRound(raw: unknown): AnnotationRound {
         id: text(a.id, 80) || `a-${index}`,
         n: index + 1,
         rect: { x: clamp(rect.x), y: clamp(rect.y), width: clamp(rect.width), height: clamp(rect.height) },
-        note: text(a.note, 2_000),
         element: el
           ? {
               ...(text(el.role, 60) ? { role: text(el.role, 60) } : {}),

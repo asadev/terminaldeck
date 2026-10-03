@@ -3352,7 +3352,7 @@ export function BrowserWorkspace({
 
         It replaced the capture popup, which sent one element with one line;
         this is the same first click, frozen, with room for as many more as he
-        wants to point at and a note on each. See `BrowserAnnotate.tsx` and
+        wants to point at, and one note about them all. See `BrowserAnnotate.tsx` and
         `annotate/AnnotateSurface.tsx` — the Simulators page opens the same
         surface. Remounted per capture, for the reason the popup was: a new
         round must not inherit the last one's notes or its Sent.
