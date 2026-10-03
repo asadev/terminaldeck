@@ -87,7 +87,7 @@ Additive only:
 | Where | Change |
 |---|---|
 | `profiles:list` → `ProfilesSnapshot` | new field `vault: Record<accountId, AccountVaultView>` — `{ keptBy: 'app'\|'adopting'\|'unavailable'\|'agent', signedIn: boolean\|null, updatedAt: number\|null, plan: string\|null }`. **Never a value.** |
-| `Profile` (persisted in `profiles.json`) | optional `credentials?: 'app'` (born in the vault) and `keptSlots?: string[]` (slots of a pre-vault account that have moved in, one by one). Old files read fine; unknown values are dropped. |
+| `Profile` (persisted in `profiles.json`) | optional `loginStore?: 'app'` (born in the vault) and `keptSlots?: string[]` (slots of a pre-vault account that have moved in, one by one). Old files read fine; unknown values are dropped. |
 | `profiles:signin` → `SignInReport` | for an account the app keeps (Claude Code), answered from the vault with `command: ''` and no process spawned. Same shape. |
 | `session:switch-plan` / `session:switch-account` | two new refusals: the target is kept by the app and holds no login (*"X is not signed in yet, so this session was left as it is. Sign in to it first, then switch."*), and the target is `unavailable` (`UNAVAILABLE_SENTENCE`). |
 | `switchRefusal(input)` / `planSwitch(input)` (`session-switch.ts`) | optional `targetSignedIn?: boolean \| null` and `targetUnavailable?: string \| null` on the input object. Existing callers compile unchanged. |

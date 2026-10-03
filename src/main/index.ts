@@ -149,6 +149,8 @@ import {
 } from './switch-later'
 import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects'
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
+import { wireAccountVault, type AccountVaultHandle } from './account-vault/wire'
+import { electronCipher } from './account-vault/electron-cipher'
 import { copilotState, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
@@ -2338,7 +2340,22 @@ function forgetHeld(key: unknown): HeldSession[] {
  * carries the whole argument, including why the typed line has to be carried
  * across and what happens when this app cannot be sure it read it correctly.
  */
-const pending = new PendingSwitches()
+const pending = new PendingSwitches({
+  /*
+   * The status the sidebar already shows, read at the Enter: while the agent
+   * is asking a question the Enter answers it, and switching there would stop
+   * the agent mid-turn. `switch-later.ts` — `PendingSwitchesOptions`.
+   */
+  statusOf: (id) => liveStatus.get(id)?.status ?? null,
+})
+
+/**
+ * The account vault: the logins this app keeps for the accounts it made,
+ * encrypted with `safeStorage`. Null until boot opens it, and null for good when
+ * it cannot be opened (no secure store, a vault that will not unlock) — every
+ * account it has never kept then behaves as before. `account-vault/` has it all.
+ */
+let accountVault: AccountVaultHandle | null = null
 
 /**
  * Arm one. The plan is computed now, and shown now, for the reason the
@@ -4627,10 +4644,24 @@ if (startedAsWslBridge(process.argv)) {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.setName(BRAND.name)
   applySecurityPolicy()
   registerIpc()
+  /*
+   * The account vault, before anything below can start a session: the restore
+   * in `createWindow`, a routine, a paired device, the copilot, an outside AI
+   * over MCP. A session started as an account this app keeps before the vault
+   * is up would have no ticket to read its login with. Awaited because it binds
+   * a socket and opens (decrypts) the vault — the one step that can raise a
+   * keychain prompt, which must happen here and never inside a session's
+   * lookup. It never throws; anything that stops it leaves accounts as they were.
+   */
+  accountVault = await wireAccountVault({
+    userDataDir: app.getPath('userData'),
+    cipher: electronCipher,
+    log: (message, detail) => logger.info('accounts', message, detail),
+  })
   /*
    * Read the installed distributions at launch, not when a settings pane asks.
    *
@@ -5396,6 +5427,12 @@ app.on('before-quit', (event) => {
    */
   copilotRuns?.stopAll()
   ptys.killAll()
+  // After the agents are stopped, so nothing is still writing a login: the
+  // vault keeps Codex's newest login and takes its plaintext file away, stops
+  // answering, and removes the shim. Everything that matters in it runs before
+  // its first `await`, which is all `before-quit` waits for.
+  void accountVault?.dispose()
+  accountVault = null
   // Before `stopAllGitWatches`, because the engine holds git watches of its own
   // and releasing them is how the reference counts stay honest — and it writes
   // its run counters out, which is what stops a relaunch handing every routine

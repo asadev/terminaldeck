@@ -11,6 +11,8 @@ import {
   getState,
   keptUnavailable,
   profileKeptBy,
+  profilesSnapshot,
+  profileStatus,
   registerProfilesIpc,
   resetProfilesCache,
   sessionEnv,
@@ -19,6 +21,8 @@ import {
 } from '../profiles'
 import { keptSignIn, readSignIn } from '../profiles-signin'
 import { probeUsage } from '../usage-probe'
+import { accountTools } from '../deck-control/account-tools'
+import type { ToolContext } from '../deck-control/catalogue'
 import { switchRefusal } from '../session-switch'
 import type { SavedSession } from '../session-restore'
 import { claudeLogin, fakeCipher } from './fake-cipher.fixture'
@@ -106,16 +110,16 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
   it('a new account is kept by the app from its first moment', async () => {
     await wire()
     const work = createProfile('work@example.com')
-    expect(work.credentials).toBe('app')
+    expect(work.loginStore).toBe('app')
     expect(profileKeptBy(work)).toBe('app')
     // Persisted, so a restart does not quietly read the keychain for it.
     resetProfilesCache()
-    expect(getState().profiles[0]?.credentials).toBe('app')
+    expect(getState().profiles[0]?.loginStore).toBe('app')
   })
 
   it('without a vault nothing changes: no field, no ticket, the agent keeps the login', () => {
     const work = createProfile('work@example.com')
-    expect(work.credentials).toBeUndefined()
+    expect(work.loginStore).toBeUndefined()
     expect(profileKeptBy(work)).toBe('agent')
     expect(sessionEnv(work, 'claude')).toEqual({ CLAUDE_CONFIG_DIR: work.configDir })
   })
@@ -161,7 +165,7 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
   it('an account made before the vault moves across instead of signing out', async () => {
     // Made while no vault existed — the shape every account on disk today has.
     const old = createProfile('old@example.com')
-    expect(old.credentials).toBeUndefined()
+    expect(old.loginStore).toBeUndefined()
     await wire()
     expect(profileKeptBy(old)).toBe('adopting')
     expect(sessionEnv(old, 'claude')[VAULT_TICKET_ENV]).toBeDefined()
@@ -190,7 +194,7 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
     deleteProfile(first.id, { deleteFiles: true })
     const again = createProfile('same@example.com')
     expect(again.id).toBe(first.id)
-    expect(again.credentials).toBe('app')
+    expect(again.loginStore).toBe('app')
     expect(vaultSignedIn(again, true)).toBe(false)
   })
 
@@ -421,5 +425,54 @@ describe.skipIf(ON_WINDOWS)('accounts the app keeps the login of', () => {
       delete process.env[VAULT_TICKET_ENV]
       delete process.env[VAULT_SOCKET_ENV]
     }
+  })
+})
+
+/*
+ * The outside door: the MCP account tools an AI in another app is handed. They
+ * wrap the same profile functions the window uses, through one deps block in
+ * `agents-area-live.ts`, and their results pass through `withoutSecrets` — so
+ * what is pinned here is that a kept account reads correctly through them and
+ * that nothing in their answers is a login.
+ */
+describe.skipIf(ON_WINDOWS)('the MCP account tools, over a vault', () => {
+  it('show a kept account as kept and signed in, and never carry its login', async () => {
+    const wired = await wire()
+    const work = createProfile('work@example.com')
+    wired.runtime.vault.put(work.id, 'claude', SLOT, claudeLogin(SECRET), 'sign-in')
+    const tools = accountTools({
+      list: (agent) => profilesSnapshot(agent === 'claude' ? 'claude' : null),
+      agents: () => [],
+      resolve: () => null,
+      find: (id) => {
+        const found = getState().profiles.find((profile) => profile.id === id)
+        return found ? { id: found.id, name: found.name, provider: found.provider } : null
+      },
+      status: (id) => profileStatus(getState().profiles.find((profile) => profile.id === id) as Profile),
+      signIn: (id) => readSignIn(getState().profiles.find((profile) => profile.id === id) as Profile),
+      history: () => ({ state: null, share: '', unshare: '', remove: '' }),
+      create: () => null,
+      rename: () => null,
+      remove: () => null,
+      setDefault: () => null,
+      setProjectDefault: () => null,
+      signOut: async () => ({ ok: true, message: '' }),
+      share: () => null,
+      unshare: () => null,
+    })
+    const run = (id: string, args: Record<string, unknown>) =>
+      tools.find((tool) => tool.id === id)?.run(args, {} as ToolContext)
+
+    const listed = await run('accounts.list', {})
+    const checked = await run('accounts.status', { accountId: work.id })
+    const text = JSON.stringify([listed, checked])
+    expect(text).not.toContain(SECRET)
+    expect(text).not.toContain('sk-ant')
+    expect(text).not.toContain(VAULT_TICKET_ENV)
+    expect(text).not.toContain('[withheld]')
+    const snapshot = (listed?.value as { accounts: { vault: Record<string, { keptBy: string; signedIn: boolean }> } })
+      .accounts
+    expect(snapshot.vault[work.id]).toMatchObject({ keptBy: 'app', signedIn: true })
+    expect((checked?.value as { signIn: { state: string } }).signIn.state).toBe('signed-in')
   })
 })

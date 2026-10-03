@@ -100,7 +100,7 @@ export interface VaultSubject {
   system: boolean
   configDir: string
   /** `'app'` when the account was born in the vault — it never read the keychain. */
-  credentials?: 'app'
+  loginStore?: 'app'
   /**
    * The vault slots of an account made before the vault that have moved in, one
    * by one. A slot listed here is the vault's to answer, held or empty.
@@ -118,7 +118,7 @@ export const UNAVAILABLE_SENTENCE =
 
 /** Has the app ever kept anything for this account? Then it is the app's, vault or no vault. */
 function promised(account: VaultSubject): boolean {
-  return account.credentials === 'app' || (account.keptSlots?.length ?? 0) > 0
+  return account.loginStore === 'app' || (account.keptSlots?.length ?? 0) > 0
 }
 
 /** Can this process answer this agent's logins at all? */
@@ -143,7 +143,7 @@ export function keptBy(
   if (!KEPT_PROVIDERS.includes(account.provider)) return 'agent'
   if (!usable(account, runtime)) return promised(account) ? 'unavailable' : 'agent'
   if (account.provider === 'codex') return 'app'
-  if (account.credentials === 'app') return 'app'
+  if (account.loginStore === 'app') return 'app'
   // Moved in once its login slot has; the API-key slot keeps moving on its own.
   return (account.keptSlots ?? []).some(isLoginSlot) ? 'app' : 'adopting'
 }
@@ -163,7 +163,7 @@ export function slotAdopting(
 ): boolean {
   const kept = keptBy(account, managed, runtime)
   if (kept !== 'app' && kept !== 'adopting') return false
-  if (account.provider !== 'claude' || account.credentials === 'app') return false
+  if (account.provider !== 'claude' || account.loginStore === 'app') return false
   return !(account.keptSlots ?? []).includes(slot)
 }
 

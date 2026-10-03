@@ -124,7 +124,7 @@ export interface Profile {
    * holds nothing. Without it, "signed out" and "never moved" would look the
    * same, and the second one reads the keychain.
    */
-  credentials?: 'app'
+  loginStore?: 'app'
   /**
    * For an account made before the vault: the vault slots that have moved in,
    * one by one (`keychain:Claude Code-credentials`, `file:auth.json`, …). A slot
@@ -579,7 +579,7 @@ function sanitizeProfile(raw: unknown): Profile | null {
     lastUsedAt: typeof value.lastUsedAt === 'number' ? value.lastUsedAt : null,
     // Only the one value it may have. Anything else on disk is dropped rather
     // than carried, so a hand-edited file cannot invent a storage mode.
-    ...(value.credentials === 'app' ? { credentials: 'app' as const } : {}),
+    ...(value.loginStore === 'app' ? { loginStore: 'app' as const } : {}),
     ...(Array.isArray(value.keptSlots) && value.keptSlots.some((slot) => typeof slot === 'string' && SLOT_NAME.test(slot))
       ? {
           keptSlots: [
@@ -933,7 +933,7 @@ export function keptManaged(profile: Profile): boolean {
   // such an account only exists where the data folder is known — it came out
   // of `profiles.json`.
   const askable =
-    currentAccountVault() !== null || profile.credentials === 'app' || (profile.keptSlots?.length ?? 0) > 0
+    currentAccountVault() !== null || profile.loginStore === 'app' || (profile.keptSlots?.length ?? 0) > 0
   return askable && isManagedConfigDir(profile.configDir)
 }
 
@@ -1121,8 +1121,8 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
    * keychain item name, still holding the deleted account's login.
    */
   const managed = keptManaged(profile)
-  if (keptBy({ ...profile, credentials: 'app' }, managed) === 'app') {
-    profile.credentials = 'app'
+  if (keptBy({ ...profile, loginStore: 'app' }, managed) === 'app') {
+    profile.loginStore = 'app'
     // An id is reused when an account is re-made under a deleted one's name.
     // Whatever the vault still had for that id — a delete whose save failed —
     // belongs to the account that was deleted, never to this one.
@@ -1500,7 +1500,7 @@ export function accountVaultView(profile: Profile): AccountVaultView {
  *   agent it is about to start could actually run as, and offering it the rest
  *   is offering a choice `sessionEnv` will decline.
  */
-function snapshot(provider: ProviderId | null = null): ProfilesSnapshot {
+export function profilesSnapshot(provider: ProviderId | null = null): ProfilesSnapshot {
   const state = getState()
   const profiles = provider === null ? listProfiles(state) : listProfilesForProvider(provider, state)
   return {
@@ -1594,7 +1594,7 @@ export function accountProvidersView(): AccountProvidersView {
  */
 export function registerProfilesIpc(ipcMain: IpcMain): void {
   ipcMain.handle('profiles:list', (_e: IpcMainInvokeEvent, provider: unknown) =>
-    snapshot(optionalProvider(provider)),
+    profilesSnapshot(optionalProvider(provider)),
   )
 
   /**
@@ -1639,14 +1639,14 @@ export function registerProfilesIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('profiles:set-default', (_e: IpcMainInvokeEvent, id: unknown) => {
     setGlobalDefault(optionalId(id))
-    return snapshot()
+    return profilesSnapshot()
   })
 
   ipcMain.handle(
     'profiles:set-project-default',
     (_e: IpcMainInvokeEvent, projectPath: unknown, id: unknown) => {
       setProjectDefault(requireString(projectPath, 'projectPath'), optionalId(id))
-      return snapshot()
+      return profilesSnapshot()
     },
   )
 

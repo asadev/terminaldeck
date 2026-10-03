@@ -44,7 +44,7 @@ describe('a kept account in a process that cannot reach the vault', () => {
     // What `profiles.json` says once the desktop has kept this account's login.
     const record = getState().profiles.find((profile) => profile.id === kept.id)
     if (!record) throw new Error('the account was not made')
-    record.credentials = 'app'
+    record.loginStore = 'app'
 
     const before = core.ptys.list().length
     await expect(
@@ -55,7 +55,7 @@ describe('a kept account in a process that cannot reach the vault', () => {
 
   it('leaves every other account exactly as it was', async () => {
     const plain = createProfile('plain@example.com')
-    expect(plain.credentials).toBeUndefined()
+    expect(plain.loginStore).toBeUndefined()
     // A shell needs no agent installed, so this runs on any machine: the point is
     // only that an account the app never kept is not refused.
     const meta = await core.startSession({ cwd: dir, cols: 80, rows: 24, provider: 'shell', profileId: plain.id })

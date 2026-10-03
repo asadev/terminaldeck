@@ -56,7 +56,6 @@ import {
   mcpStoreView,
   mcpToolFile,
 } from '../mcp-client'
-import { thisMachineName } from '../platform/host'
 import { userDataDir } from '../platform/paths'
 import {
   accountProvidersView,
@@ -64,9 +63,7 @@ import {
   deleteProfile,
   findProfile,
   getState,
-  inheritedSystemInstalls,
-  listProfiles,
-  listProfilesForProvider,
+  profilesSnapshot,
   profileStatus,
   renameProfile,
   resolveProfile,
@@ -144,21 +141,12 @@ export function liveAgentsAreaTools(wiring: AgentsAreaWiring): ToolSpec[] {
 
     accounts: {
       /*
-       * `profiles:list`'s snapshot, assembled from the same exported pieces its
-       * private `snapshot()` uses. If the accounts rebuild exports a snapshot of
-       * its own, point this at it and delete the five lines.
+       * `profiles:list`'s own snapshot, now exported — including `vault`, which
+       * says for each account whether this app keeps its login and whether it
+       * holds one. Slot names and times only; never a value.
        */
-      list: (agent) => {
-        const state = getState()
-        const provider = agent !== null && supportsAccounts(agent as ProviderId) ? (agent as ProviderId) : null
-        return {
-          profiles: provider === null ? listProfiles(state) : listProfilesForProvider(provider, state),
-          defaultProfileId: state.defaultProfileId,
-          projectDefaults: { ...state.projectDefaults },
-          inherited: inheritedSystemInstalls(),
-          machine: thisMachineName(),
-        }
-      },
+      list: (agent) =>
+        profilesSnapshot(agent !== null && supportsAccounts(agent as ProviderId) ? (agent as ProviderId) : null),
       agents: () => accountProvidersView(),
       resolve: ({ projectPath, provider }) =>
         resolveProfile(getState(), {
