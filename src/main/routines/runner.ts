@@ -84,6 +84,7 @@ import { currentPlatform, isWindows, withPath, type Env, type Platform } from '.
 import { userDataDir } from '../platform/paths'
 import { loginPath, providersFor, withLaunchArgs } from '../providers'
 import type { RoutineRunner, RoutineRunOutcome, RoutineRunRequest } from './engine'
+import { BRAND } from '../../shared/brand'
 
 /* ------------------------------------------------------------------ tuning -- */
 
@@ -284,7 +285,7 @@ export function runPrompt(request: RoutineRunRequest): string {
 function causeSentence(cause: RoutineRunRequest['cause']): string {
   switch (cause.kind) {
     case 'manual':
-      return `${cause.by === 'copilot' ? 'the copilot' : 'the person'} asked for it by name`
+      return `${cause.by === 'copilot' ? BRAND.assistant : 'the person'} asked for it by name`
     case 'session-finished':
       return `session ${cause.sessionId} finished with exit code ${cause.exitCode}`
     case 'session-failed':

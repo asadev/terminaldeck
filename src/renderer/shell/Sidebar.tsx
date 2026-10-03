@@ -29,6 +29,7 @@ import {
   type WorkspaceTab,
 } from './workspace-tabs'
 import { GroupHead } from './GroupHead'
+import { BRAND } from '../../shared/brand'
 
 /**
  * One reachable machine, as the rail lists it.
@@ -1883,7 +1884,7 @@ export function Sidebar({
         */}
         {copilotTabs.length > 0 && (
           <section className="sb-group">
-            <h2 className="sb-group-label">Copilot sessions</h2>
+            <h2 className="sb-group-label">Started by {BRAND.assistant}</h2>
             {/* The folder per row, because this run spans folders — see
                 `rowsFor`. `tabQualifiers` then adds the folder name to any two
                 rows the numbering alone cannot separate. */}

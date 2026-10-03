@@ -39,6 +39,7 @@ import { blockShotDir } from './browser-scrape-paths'
 import { normalizeUrl, shortLabel } from './browser-url'
 import { PageCast, type CastFrame, type CastOptions, type CastSeam, type SecretScan } from './browser-watch'
 import type { BrowserInputFrame } from './remote/protocol'
+import { BRAND } from '../shared/brand'
 
 /**
  * The engine: one page, driven properly.
@@ -2542,7 +2543,7 @@ export class BrowserDrive {
         this.move(slot, 'claimed')
         await this.attach(page, slot)
       }
-      slot.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
+      slot.prompt = sanitizeHandoverPrompt(prompt) || `${BRAND.assistant} needs you to do something on this page.`
       /*
        * Before the baton moves, never after.
        *

@@ -1153,19 +1153,23 @@ describe('tabLabel', () => {
      * name: `shared/copilot-identity.ts` says why the two are different things.
      */
     const unnamed: WorkspaceTab = { id: 'cp', kind: 'session', label: '', isCopilot: true, closable: true }
-    expect(tabLabel(unnamed, [unnamed])).toBe('Copilot')
+    expect(tabLabel(unnamed, [unnamed])).toBe('Hoot')
   })
 })
 
 describe('tabIcon', () => {
-  it('gives the copilot its own mark and everything else its kind\u2019s', () => {
-    // One of a kind, in a row of `>_` glyphs. Drawn with the same compass the
-    // pinned row wears, from the same constant, so the row and the pill are
-    // recognisably one thing rather than two features with one name.
+  it('gives each kind its own line glyph', () => {
     const plain = session('a')
     const page: WorkspaceTab = { id: 'p', kind: 'browser', label: 'x', closable: true }
-    expect(tabIcon({ ...plain, isCopilot: true })).not.toBe(tabIcon(plain))
     expect(tabIcon(plain)).not.toBe(tabIcon(page))
+  })
+
+  it('draws Hoot’s tab with the owl rather than any glyph', () => {
+    // One of a kind, in a row of `>_` glyphs. It wears the same owl the pinned
+    // row wears, from the same component, so the row and the pill are
+    // recognisably one thing rather than two features with one name.
+    const strip = readFileSync(join(__dirname, 'WorkspaceTabStrip.tsx'), 'utf8')
+    expect(strip).toMatch(/tab\.isCopilot \? \(\s*<HootMark size=\{15\}/)
   })
 })
 

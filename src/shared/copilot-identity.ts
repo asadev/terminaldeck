@@ -34,20 +34,20 @@
  *    and a paragraph saying "you are called Nova" would be two copies of one
  *    fact, and the one that drifts is always the one nobody reread.
  *
- * ## The product's name and the copilot's name are opposites
+ * ## Two names, and which one wins
  *
- * `CLAUDE.md` in this repo: *"The name lives in one place. `src/shared/brand.ts`.
- * Never hardcode 'Terminal Deck' anywhere else."* That rule is about the
- * **product**, and it exists because the product's name is a constant that must
- * be spelled once.
+ * The assistant has a name of its own now: **Hoot**, Asad's choice on
+ * 2026-10-03, kept as `BRAND.assistant` in `src/shared/brand.ts` beside the
+ * product's name. Until then this module's default was "Copilot", which was
+ * meant as a description rather than a name, and is Microsoft's trademark.
  *
- * A copilot's name is the opposite of a constant in every respect. It is user
- * data: typed by a person, stored in their app-data directory, different on
- * every machine, and absent until they say otherwise. It must never be derived
- * from `BRAND`, and `BRAND` must never be derived from it.
- * {@link DEFAULT_COPILOT_NAME} is the only name this module knows, it is a
- * *description* rather than a name, and `copilot-identity.test.ts` pins the
- * separation.
+ * A name somebody types in the setup flow is still user data: stored in their
+ * app-data directory, different on every machine, and it wins wherever it is
+ * known. {@link DEFAULT_COPILOT_NAME} is what every surface prints when nobody
+ * has typed one, and it is read from `BRAND.assistant` so that a rename is one
+ * line. What must still never happen is the assistant's name reaching for the
+ * *product's* name (`BRAND.name`): "Terminal Deck" is not what anybody calls
+ * the owl, and `copilot-identity.test.ts` pins that separation.
  *
  * ## What "skipped" is written as, and why it is written at all
  *
@@ -67,14 +67,15 @@
  * a hidden `setupDone: true` boolean would not be.
  */
 
+import { BRAND } from './brand'
+
 /**
- * What this app calls a copilot nobody has named.
- *
- * A description rather than a name, deliberately — see the header. It is what
- * the sidebar row, the tab pill and Settings print until somebody says
- * otherwise, and it is the fallback for every reader of {@link copilotName}.
+ * What this app calls the assistant when nobody has given it a name of their
+ * own: `BRAND.assistant`, which is Hoot. It is what the sidebar row, the tab
+ * pill and Settings print until somebody says otherwise, and it is the
+ * fallback for every reader of {@link copilotName}.
  */
-export const DEFAULT_COPILOT_NAME = 'Copilot'
+export const DEFAULT_COPILOT_NAME: string = BRAND.assistant
 
 /**
  * The heading the block lives under.
@@ -236,6 +237,50 @@ export function copilotName(identity: CopilotIdentity | null | undefined): strin
 /* -------------------------------------------------------------- composing -- */
 
 /**
+ * What the block says when nobody has typed a name.
+ *
+ * Not a line starting with `Your name is `: that stem is how
+ * {@link readCopilotIdentity} recognises a name *somebody gave it*, and reading
+ * this default back as their answer would turn "nobody named it" into a name
+ * they chose. It still says plainly what to answer to, and still forbids
+ * inventing another one, which is what this branch was written to prevent.
+ */
+function unnamedLines(): string[] {
+  return [
+    `They have not given you a name of their own, so you go by the one this app`,
+    `gives you: **${DEFAULT_COPILOT_NAME}**. Do not pick a different name for yourself; if`,
+    `they give you one, it replaces this paragraph.`,
+  ]
+}
+
+/**
+ * The paragraph builds before 2026-10-03 wrote for an unnamed assistant,
+ * byte for byte. It told the model it was called "the Copilot".
+ */
+const UNNAMED_BEFORE_HOOT = [
+  `They have not named you yet, and until they do you should not pick a name`,
+  `for yourself. If they ask what you are called, say exactly that. In the`,
+  `meantime this app calls you the Copilot, which is a description`,
+  `rather than a name.`,
+].join('\n')
+
+/**
+ * The person's instructions with an out-of-date *app-written* paragraph about
+ * the name brought up to date, for handing to the model.
+ *
+ * Only that exact paragraph, and only at the moment the layer is composed: the
+ * file on disk is the person's and this app does not rewrite it behind their
+ * back. Without this, every install whose setup flow ran before the rename
+ * would tell the model "you are the Copilot" while its page says Hoot. A
+ * paragraph anybody has edited, by even a character, is theirs and left alone.
+ */
+export function withCurrentDefaultName(instructions: string): string {
+  return instructions.includes(UNNAMED_BEFORE_HOOT)
+    ? instructions.replace(UNNAMED_BEFORE_HOOT, unnamedLines().join('\n'))
+    : instructions
+}
+
+/**
  * The block, as it is written into the person's half of the layer.
  *
  * Written for the model first and the person second, which is the same order
@@ -265,12 +310,7 @@ export function copilotIdentityBlock(raw: CopilotIdentity): string {
   const lines: string[] = [IDENTITY_HEADING, '']
 
   if (identity.name === null) {
-    lines.push(
-      `They have not named you yet, and until they do you should not pick a name`,
-      `for yourself. If they ask what you are called, say exactly that. In the`,
-      `meantime this app calls you the ${DEFAULT_COPILOT_NAME}, which is a description`,
-      `rather than a name.`,
-    )
+    lines.push(...unnamedLines())
   } else {
     lines.push(
       `${NAME_STEM}**${identity.name}**. This app reads it from this line — change the`,

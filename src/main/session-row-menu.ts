@@ -37,6 +37,7 @@
 
 import { Menu, type IpcMain, type MenuItemConstructorOptions } from 'electron'
 import { bindMenuItems, type BindingIpcDeps } from './browser-binding-ipc'
+import { BRAND } from '../shared/brand'
 
 /** What the person chose, or null when they dismissed the menu. */
 export type SessionRowChoice = 'promote' | 'close' | 'copilot'
@@ -128,7 +129,7 @@ export function showSessionRowMenu(
 
     if (request.copilotTurn) {
       items.push({
-        label: 'Started by the copilot — open that turn',
+        label: `Started by ${BRAND.assistant} — open that turn`,
         click: () => finish('copilot'),
       })
     }

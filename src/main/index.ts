@@ -3981,7 +3981,7 @@ function registerIpc(): void {
       if (!mainWindow) return null
       const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ['openDirectory'],
-        title: 'Choose the copilot’s folder',
+        title: `Choose ${BRAND.assistant}’s folder`,
         buttonLabel: 'Use this folder',
         defaultPath,
       })

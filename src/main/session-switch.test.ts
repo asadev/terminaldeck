@@ -121,7 +121,7 @@ describe('what cannot be switched', () => {
   it('refuses a session the app started for itself or for a device', () => {
     const why = switchRefusal({ meta: meta(), saved: null, target: profile() })
     expect(why).toContain('Only a session you opened here')
-    expect(why).toContain('copilot')
+    expect(why).toContain('Hoot')
   })
 
   it('refuses a plain terminal by saying why — an agent typed into it was not started by this app', () => {

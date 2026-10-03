@@ -322,7 +322,7 @@ describe('what the copilot on a server gives a device, and what it withholds', (
    * arrive as the same absence.
    */
   it('says an owner device gets the copilot, and a guest does not', () => {
-    expect(SERVER_COPILOT).toContain('copilot')
+    expect(SERVER_COPILOT).toContain('Hoot')
     // The two facts that flipped and the one that did not: your own device gets
     // it, driven from here; a guest still never does.
     expect(SERVER_COPILOT).toMatch(/your own/)

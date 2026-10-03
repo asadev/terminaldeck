@@ -613,7 +613,7 @@ describe('telling a broken routine from a quiet one', () => {
     engine.reload()
     const view = engine.get('sweep')
     expect(view?.state).toBe('unarmed')
-    expect(view?.reason).toContain('copilot is not running')
+    expect(view?.reason).toContain('Hoot is not running')
   })
 
   it('says the folder is not one this app watches', async () => {

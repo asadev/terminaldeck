@@ -3,6 +3,7 @@ import { Modal } from './Modal'
 import { PANELS, type PanelId } from '../shell/panels'
 import { detectMac, formatBinding, groupedKeymap, KEYMAP, searchKeymap } from '../keymap'
 import './HelpPanel.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * In-app help.
@@ -366,12 +367,12 @@ export const HELP_TOPICS: HelpTopic[] = [
   {
     id: 'panel-copilot',
     section: 'panels',
-    title: 'Copilot',
-    keywords: ['copilot', 'assistant', 'agent', 'routines'],
+    title: BRAND.assistant,
+    keywords: ['hoot', 'owl', 'copilot', 'assistant', 'agent', 'routines'],
     blocks: [
       {
         kind: 'text',
-        text: 'An assistant for this deck, pinned at the top of the sidebar. It is a real session — it opens as a window like any other, with a pill in the tab strip, its own account, and the same model, effort, fast-mode and connector controls in the bar. It runs in a folder of its own, with its own memory, as one of the accounts you have already signed in. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session. Anything it does that changes your settings or touches a session you started asks you first.',
+        text: `${BRAND.assistant} is your assistant for this deck: the owl pinned at the top of the sidebar. It is a real session — it opens as a window like any other, with a pill in the tab strip, its own account, and the same model, effort, fast-mode and connector controls in the bar. It runs in a folder of its own, with its own memory, as one of the accounts you have already signed in. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session. Anything it does that changes your settings or touches a session you started asks you first.`,
       },
     ],
   },

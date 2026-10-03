@@ -5,6 +5,7 @@ import { actionOf, escalateBy, notASession, optBool, optInt, optStr, str } from 
 import { mayDrive } from './browser-tools'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { Refused, type Tier } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * `browser.windows` and `browser.page` — every browser window this app has open,
@@ -418,7 +419,7 @@ export function windowTools(deps: WindowToolDeps): ToolSpec[] {
     description:
       'Every browser window open in this app, attached to a session or not, by the W number its menus ' +
       'print. "list" (the default) gives each window’s title, address, profile, which session it is ' +
-      'attached to and as which slot, and which machine serves its page; plus what the copilot is driving ' +
+      `attached to and as which slot, and which machine serves its page; plus what ${BRAND.assistant} is driving ` +
       'and the tunnels to other machines’ ports. "open" opens a new window (url optional). "close" ' +
       'closes one. "attach" gives a session’s agent that window to read and drive — it asks the person ' +
       'first; "detach" takes it away. "reach" points a window at a port on another machine (machineId, ' +

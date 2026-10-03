@@ -39,7 +39,7 @@ import { describe, expect, it } from 'vitest'
  * This one is the general form: collect every name the renderer *defines*,
  * collect every name it *reads*, and subtract.
  *
- * The five names in ALLOWLIST below are read from CSS and written from
+ * The names in ALLOWLIST below are read from CSS and written from
  * JavaScript, which is legitimate — a value only the running layout knows
  * cannot be a token. But an allowlist is an excuse, and an unchecked excuse
  * outlives its reason: delete the module that publishes `--sheet-room` and the
@@ -123,6 +123,8 @@ function references(): Reference[] {
  * enough to stay that way.
  */
 const ALLOWLIST = new Map<string, string>([
+  ['--blink', 'the length of one owl’s blink cycle, picked per HootMark instance so no two owls blink together'],
+  ['--blink-at', 'where in that cycle one owl starts, picked per HootMark instance for the same reason'],
   ['--depth', 'a tree row’s nesting level, counted while the tree is walked'],
   ['--menu-room', 'the height left under an open settings menu, measured on open'],
   ['--sc-room', 'the width the session-control cluster is allowed, measured on resize'],

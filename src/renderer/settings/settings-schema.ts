@@ -31,6 +31,7 @@
 import { CUSTOM_SCHEME_PREFIX, FOLLOW_APP_SCHEME_ID } from '../../shared/terminal-theme'
 import type { Preferences } from '@shared/types'
 import type { UiPlatform } from '../platform'
+import { BRAND } from '../../shared/brand'
 
 /* ------------------------------------------------------------- sections -- */
 
@@ -465,7 +466,7 @@ export const SECTIONS = [
    */
   {
     id: 'copilot',
-    label: 'Copilot',
+    label: BRAND.assistant,
     blurb: 'Its files, its memory, what it did, and what it can reach.',
   },
   /*

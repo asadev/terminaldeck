@@ -48,6 +48,7 @@ import {
 } from './strip-arrangement'
 import { useWindowMachines } from './window-machine'
 import './WorkspaceTabStrip.css'
+import { HootMark } from '../copilot/HootMark'
 
 /**
  * The tab strip along the top — the window's own top band, shaped the way a
@@ -978,24 +979,27 @@ export function WorkspaceTabStrip({
           title={tooltip}
           onClick={() => onSelect(tab.id)}
         >
-          <svg
-            className="strip-tab-icon"
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            {/* Its kind's mark, except for the copilot — the only
-                window in here there is exactly one of, which keeps the
-                compass it wears in the rail so the row and the pill are
-                recognisably one thing. See `tabIcon`. */}
-            <path d={tabIcon(tab)} />
-          </svg>
+          {/* Its kind's mark, except for Hoot — the only window in here
+              there is exactly one of, which wears the same owl it wears in
+              the rail so the row and the pill are recognisably one thing. */}
+          {tab.isCopilot ? (
+            <HootMark size={15} className="strip-tab-icon" />
+          ) : (
+            <svg
+              className="strip-tab-icon"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d={tabIcon(tab)} />
+            </svg>
+          )}
           {/*
             Which computer the page is on is **not** here any more, and
             that is the E11 fix rather than a removal.

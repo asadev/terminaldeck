@@ -358,7 +358,7 @@ describe('the device kind on `pair`', () => {
   it('says what both words mean, because there is no screen to show it', () => {
     const text = renderKindQuestion()
     expect(text).toContain('It’s you at another keyboard')
-    expect(text).toContain('The copilot is never shared')
+    expect(text).toContain('Hoot is never shared')
     // The part a screen conveys by having no control for it.
     expect(text).toContain('Nothing changes it afterwards')
   })
@@ -377,7 +377,7 @@ describe('what `pair` prints once the host has answered', () => {
     expect(text).toContain(`${BRAND.id} folders add`)
     expect(text).not.toContain('sees whatever projects')
     // The copilot is never shared, and the guest line says so.
-    expect(text).toContain('never offered the copilot')
+    expect(text).toContain('never offered Hoot')
   })
 
   it('tells one of your own what it does get, including the copilot', () => {
@@ -385,7 +385,7 @@ describe('what `pair` prints once the host has answered', () => {
     expect(text).toContain('sees whatever projects this host has open')
     // The reversal: an owner's device gets the copilot on a headless host,
     // driven from the app. It used to be told the opposite.
-    expect(text).toContain('gets the copilot too')
+    expect(text).toContain('gets Hoot too')
     expect(text).toContain('driven from')
     expect(text).not.toContain('has no copilot')
   })

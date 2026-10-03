@@ -342,7 +342,7 @@ describe('the sentences, which are written here and never in the renderer', () =
       'SSH shell this app holds open',
     )
     expect(said).toContain('keep running')
-    expect(said, 'a headless host has no copilot and he will look for it').toContain('no Copilot')
+    expect(said, 'a headless host has no Hoot and he will look for it').toContain('Hoot is not on it')
   })
 
   it('never claims a host is running when it would not say', () => {

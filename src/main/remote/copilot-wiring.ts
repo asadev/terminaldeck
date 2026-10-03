@@ -52,6 +52,7 @@ import { ChatReader, newestChatTranscript } from '../chat-transcript'
 import { transcriptDirs } from '../transcript'
 import { MAX_COPILOT_LOG_ROWS, type CopilotActionRow, type CopilotChatMessage, type CopilotSessionRow } from './protocol'
 import type { CopilotChatUpdate } from './copilot-runs'
+import { BRAND } from '../../shared/brand'
 
 /* ------------------------------------------------------------ translations */
 
@@ -317,7 +318,7 @@ export async function startCopilotRun(
     platform,
   })
   if (layer.composed === null) {
-    throw new Error(`the copilot run’s instructions could not be prepared: ${layer.error}`)
+    throw new Error(`the instructions for this run of ${BRAND.assistant} could not be prepared: ${layer.error}`)
   }
   const meta = await deps.startSession(
     {
@@ -369,7 +370,7 @@ export async function startCopilotRun(
    */
   if (meta.provider !== 'claude') {
     deps.stop(meta.id)
-    throw new Error('the copilot run started as a plain shell rather than an agent')
+    throw new Error(`this run of ${BRAND.assistant} started as a plain shell rather than an agent`)
   }
   deps.announce(meta)
   return meta.id

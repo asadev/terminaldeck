@@ -72,6 +72,7 @@ import {
   type CopilotFileTarget,
 } from './remote/protocol'
 import type { CopilotFiles, CopilotFileText, CopilotFileWrite } from './remote/copilot-files'
+import { BRAND } from '../shared/brand'
 
 /**
  * How the action log names an edit that arrived over the wire.
@@ -279,7 +280,7 @@ function readOne(paths: CopilotPaths, target: CopilotFileTarget): CopilotFileTex
       text: '',
       error:
         `That file is ${Math.round(bytes / 1024)} KB, and the most that can be sent to a device is ` +
-        `${Math.round(MAX_COPILOT_FILE_BYTES / 1024)} KB. Open it on the computer running the copilot.`,
+        `${Math.round(MAX_COPILOT_FILE_BYTES / 1024)} KB. Open it on the computer running ${BRAND.assistant}.`,
     }
   }
   return { text: read.text, error: null }
@@ -343,7 +344,7 @@ function writeOne(paths: CopilotPaths, target: CopilotFileTarget, body: string):
     return {
       ok: false,
       error:
-        'That file is written by the app every time the copilot starts, so there is nothing to save. ' +
+        `That file is written by the app every time ${BRAND.assistant} starts, so there is nothing to save. ` +
         'Edit its instructions instead — this one is composed from them.',
     }
   }
@@ -363,7 +364,7 @@ function writeOne(paths: CopilotPaths, target: CopilotFileTarget, body: string):
       ok: false,
       error:
         `That file is ${Math.round(existing / 1024)} KB — larger than a device can be sent — so it cannot be ` +
-        'saved from here. Edit it on the computer running the copilot.',
+        `saved from here. Edit it on the computer running ${BRAND.assistant}.`,
     }
   }
 

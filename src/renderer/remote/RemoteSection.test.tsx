@@ -1304,7 +1304,7 @@ describe('turning it on', () => {
       // colleague and it is the one that used to be missing.
       'One of your own gets everything',
       'A guest gets the folders you choose and nothing else',
-      'never the copilot',
+      'never Hoot',
       'sealed end to end',
       'an approval you give here',
     ]) {
@@ -1366,12 +1366,12 @@ describe('the copilot follows the kind', () => {
 
   it('says on the row that one of your own devices reaches it', () => {
     const markup = render(everything)
-    expect(markup).toContain('Your device — full access, the copilot included.')
+    expect(markup).toContain('Your device — full access, Hoot included.')
   })
 
   it('says on the row that a guest never does', () => {
     const markup = render(everything)
-    expect(markup).toContain('Guest — only the folders you chose. Never the copilot.')
+    expect(markup).toContain('Guest — only the folders you chose. Never Hoot.')
   })
 
   it('offers no second act for it: no code, no connect, no tier, no disconnect', () => {

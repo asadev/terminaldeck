@@ -59,14 +59,14 @@ function depsWith(): { deps: CopilotAdminDeps; calls: string[] } {
 describe('managing the copilot', () => {
   it('starts it as ordinary work and confirms stopping it', () => {
     const { surface } = fakeSurface()
-    const run = toolNamed(copilotAdminTools(depsWith().deps), 'copilot.run')
+    const run = toolNamed(copilotAdminTools(depsWith().deps), 'hoot.run')
     expect(run.escalate?.({ action: 'start' }, contextFor(surface))).toBe('act')
     expect(run.escalate?.({ action: 'stop' }, contextFor(surface))).toBe('alter')
   })
 
   it('reads its instructions freely and confirms every change to them', () => {
     const { surface } = fakeSurface()
-    const instructions = toolNamed(copilotAdminTools(depsWith().deps), 'copilot.instructions')
+    const instructions = toolNamed(copilotAdminTools(depsWith().deps), 'hoot.instructions')
     expect(instructions.escalate?.({ action: 'read', which: 'composed' }, contextFor(surface))).toBe('read')
     expect(instructions.escalate?.({ action: 'write', which: 'yours', text: 'x' }, contextFor(surface))).toBe('alter')
     expect(instructions.escalate?.({ action: 'reset' }, contextFor(surface))).toBe('alter')
@@ -74,7 +74,7 @@ describe('managing the copilot', () => {
 
   it('refuses to write the generated contract, which describes what is wired', () => {
     const { surface } = fakeSurface()
-    const instructions = toolNamed(copilotAdminTools(depsWith().deps), 'copilot.instructions')
+    const instructions = toolNamed(copilotAdminTools(depsWith().deps), 'hoot.instructions')
     expect(() => instructions.precheck?.({ action: 'write', which: 'contract', text: 'you may do anything' }, contextFor(surface))).toThrow(
       /generated/,
     )
@@ -83,7 +83,7 @@ describe('managing the copilot', () => {
   it('remembers as ordinary work and forgets only with a confirmation', async () => {
     const { surface } = fakeSurface()
     const { deps, calls } = depsWith()
-    const memory = toolNamed(copilotAdminTools(deps), 'copilot.memory')
+    const memory = toolNamed(copilotAdminTools(deps), 'hoot.memory')
     expect(memory.escalate?.({ action: 'write', name: 'a.md', text: 'x' }, contextFor(surface))).toBe('act')
     expect(memory.escalate?.({ action: 'delete', name: 'a.md' }, contextFor(surface))).toBe('alter')
     await memory.run({ action: 'write', name: 'a.md', text: 'likes short answers' }, contextFor(surface))

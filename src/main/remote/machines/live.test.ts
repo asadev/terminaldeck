@@ -1465,7 +1465,7 @@ describe('reaching the other machine’s copilot', () => {
 
     /* ------------------------------------------------- watching, and state -- */
 
-    expect(link.copilotAttach()).toEqual({ ok: true, message: 'Watching that machine’s copilot.' })
+    expect(link.copilotAttach()).toEqual({ ok: true, message: 'Watching Hoot on that machine.' })
     await waitFor(() => reports.length > 0, 'the copilot state to arrive')
     // `desk` and `run` are two different things and the frame keeps them apart:
     // the copilot at that machine's own keyboard is stopped, and this desktop

@@ -75,6 +75,7 @@ import {
   type Tier,
   type TranscriptMessage,
 } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -493,6 +494,20 @@ export interface ToolSpec {
   id: string
   /** Name on the wire: the dotted id with underscores. See the header. */
   wire: string
+  /**
+   * Old names this tool still answers to, in both spellings, and is never
+   * listed under.
+   *
+   * For a tool that was renamed in a release, so that an AI app or a routine
+   * configured with yesterday's name keeps working for one more release
+   * instead of failing with "no such tool". `DeckControl` routes a call by any
+   * of these to this tool, with this tool's own tier, budget and confirmation;
+   * `tools/list`, the index and `tools.describe`'s listing show only `id` and
+   * `wire`, so nothing new learns the old name. First used when the assistant
+   * was renamed from "Copilot" to Hoot (`copilot.state` → `hoot.state`), and
+   * meant to be deleted a release later.
+   */
+  aliases?: readonly string[]
   tier: Tier
   title: string
   description: string
@@ -1144,7 +1159,7 @@ function checkSettingsPatch(args: Record<string, unknown>): {
     if (blocked.length > 0) {
       throw new Refused(
         'not-permitted',
-        `these settings cannot be changed through the copilot: ${blocked.join(', ')}. ` +
+        `these settings cannot be changed through ${BRAND.assistant}: ${blocked.join(', ')}. ` +
           'Ask the person to change them in Settings if they want them changed.',
       )
     }
@@ -1952,8 +1967,8 @@ export function buildCatalogue(): ToolSpec[] {
         'the current settings is saved BEFORE the person is asked, so anything they confirm is a change that ' +
         'will actually land and can be put back; the result names the file the copy went to, and it is worth ' +
         'telling them. An unknown key or a value outside its allowed range is refused without asking anyone. ' +
-        'Some keys are refused outright and no confirmation will be offered for them: anything under remote., ' +
-        'copilot., security. or confine., plus browser.persistSession and advanced.debugMode. Those decide who ' +
+        'Some keys are refused outright and no confirmation will be offered for them: anything under `remote.`, ' +
+        '`copilot.`, `security.` or `confine.`, plus browser.persistSession and advanced.debugMode. Those decide who ' +
         'can reach this machine and what gets recorded, and they are not an assistant\'s to change. Call ' +
         'settings.read for the current list.',
       index:

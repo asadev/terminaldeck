@@ -44,9 +44,30 @@
  * costs more than it buys. The export says what the thing is.
  */
 
+import { BRAND } from '../../shared/brand'
+
 interface Props {
   /** The folder the session on screen is running in. */
   path: string
+  /**
+   * True when the session on screen is Hoot. See {@link shownFolderName}.
+   */
+  assistant?: boolean
+}
+
+/**
+ * What the chip prints: the folder's own name, except for Hoot's default home.
+ *
+ * That folder is `<userData>/copilot` and keeps that name on disk, because
+ * existing installs already live in it and moving a working folder to change
+ * a word is not worth the risk. Printed as-is it would put the assistant's old
+ * name under its new one on every visit, so it reads as "Hoot’s folder"
+ * instead; the hover still gives the real path. A folder somebody pointed Hoot
+ * at is theirs and keeps its own name.
+ */
+export function shownFolderName(path: string, assistant = false): string {
+  const own = folderLabel(path)
+  return assistant && own === 'copilot' ? `${BRAND.assistant}’s folder` : own
 }
 
 /** Last segment of a path — what a person calls the folder. */
@@ -55,7 +76,7 @@ export function folderLabel(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-export function FolderTitle({ path }: Props) {
+export function FolderTitle({ path, assistant = false }: Props) {
   return (
     <span
       className="folder-title"
@@ -68,7 +89,7 @@ export function FolderTitle({ path }: Props) {
        */
       title={`${path}\nA session keeps this folder for its whole life. Start another to work somewhere else.`}
     >
-      {folderLabel(path)}
+      {shownFolderName(path, assistant)}
     </span>
   )
 }

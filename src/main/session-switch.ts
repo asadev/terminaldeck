@@ -3,6 +3,7 @@ import { AGENT_CATALOG, loginsNote } from '../shared/agent-catalog'
 import { supportsProfiles, type Profile } from './profiles'
 import type { RestoreDecision, SavedSession } from './session-restore'
 import { classify, stripAnsi } from './session-activity'
+import { BRAND } from '../shared/brand'
 
 /**
  * Running the session you already have as a different account.
@@ -576,7 +577,7 @@ export function switchRefusal(input: {
   if (saved === null) {
     return (
       'Only a session you opened here can be switched. This one was started for a paired ' +
-      'device or by the copilot, and those keep the account they were given.'
+      `device or by ${BRAND.assistant}, and those keep the account they were given.`
     )
   }
   /*

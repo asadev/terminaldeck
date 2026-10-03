@@ -360,9 +360,9 @@ export function defaultCopilotHome(userData: string): string {
  * else — and the tool contract underneath keeps holding either way.
  */
 export function copilotInstructions(): string {
-  return `# ${BRAND.name} Copilot
+  return `# ${BRAND.name} assistant
 
-You are a **developer's copilot**. The person you work for is shipping code, and
+You are a **developer's assistant**. The person you work for is shipping code, and
 usually shipping it through several coding agents at once — three, five, eight
 sessions running across their projects inside ${BRAND.name}. You are the one agent
 that can see all of them. Your job is the part of agent-assisted development
@@ -931,13 +931,13 @@ export function copilotStartupFiles(paths: CopilotPaths, list = listMemoryFiles)
   const files: StartupFile[] = [
     describe(
       paths.layer.composed,
-      'The copilot layer — handed to it on the command line, never written into the folder',
+      `${BRAND.assistant}’s layer — handed to it on the command line, never written into the folder`,
       'app',
     ),
     describe(
       folderInstructions(paths),
       paths.ownFolder
-        ? 'The folder’s own instructions. This app never writes one here — an empty row means nothing in this folder claims to be the copilot'
+        ? `The folder’s own instructions. This app never writes one here — an empty row means nothing in this folder claims to be ${BRAND.assistant}`
         : 'The folder’s own instructions — yours, read the ordinary way, never written by this app',
       'folder',
     ),
@@ -973,12 +973,12 @@ export function copilotLayerFiles(paths: CopilotPaths): StartupFile[] {
     ),
     describe(
       paths.layer.contract,
-      'The app’s — the tool contract and the permission rules. Generated from the live tool catalogue every time the copilot starts.',
+      `The app’s — the tool contract and the permission rules. Generated from the live tool catalogue every time ${BRAND.assistant} starts.`,
       'app',
     ),
     describe(
       paths.layer.composed,
-      'The two of them composed — byte for byte what the running copilot was handed.',
+      `The two of them composed — byte for byte what ${BRAND.assistant} was handed when it last started.`,
       'app',
     ),
   ]
@@ -1251,7 +1251,7 @@ export function writeCopilotInstructions(
       saved: false,
       backup: null,
       error:
-        'Instructions cannot be empty — a copilot with no instructions still has its tools and its boundary, and nothing telling it what it is for.',
+        `Instructions cannot be empty — ${BRAND.assistant} with no instructions still has its tools and its boundary, and nothing telling it what it is for.`,
     }
   }
   if (Buffer.byteLength(text, 'utf8') > MAX_INSTRUCTIONS_BYTES) {

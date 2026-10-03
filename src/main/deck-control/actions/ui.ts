@@ -104,7 +104,7 @@ export const UI_GESTURES: CoverageMap = {
   'the ✕ on a session row or tab': { tool: 'sessions.stop' },
   'row menu: Show at the top / Fold back': { tool: 'ui.do' },
   'row menu: Connect browser': { tool: 'browser.open' },
-  'row menu: open the copilot turn that started it': {
+  'row menu: open the assistant turn that started it': {
     skip: 'It opens the Activity row a session came from; that record is fenced from the assistants it describes (confine/records.ts).',
   },
   'the account chip on a session': { tool: 'sessions.account' },

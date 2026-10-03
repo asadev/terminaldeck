@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button } from '../../settings/controls'
 import { howLong } from './words'
 import type { Fact, GrantState, Server, ServerState, ServersBridge } from './types'
+import { BRAND } from '../../../shared/brand'
 
 /**
  * Everything sharp about a server, behind one more click.
@@ -172,7 +173,7 @@ export function ServerCopilotGrant({
   const granted = grant !== null && grant.expiresAt > now
   return (
     <>
-      <h4 className="settings-group-title">Let the copilot use this server</h4>
+      <h4 className="settings-group-title">Let {BRAND.assistant} use this server</h4>
       {/*
         Two paragraphs rather than one, and *"the buttons on the cards above"*
         rather than what it said.
@@ -195,7 +196,7 @@ export function ServerCopilotGrant({
         sign-in, not forgetting it.
       </p>
       <p className="settings-prose">
-        Without it the copilot can still look, and has to ask you before it changes anything.
+        Without it {BRAND.assistant} can still look, and has to ask you before it changes anything.
       </p>
       <div className="servers-card-actions">
         {granted && grant !== null ? (

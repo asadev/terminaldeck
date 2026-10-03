@@ -92,6 +92,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
+import { withCurrentDefaultName } from '../shared/copilot-identity'
 import type { Platform } from './platform/host'
 import { recordsFenceKind, recordsFencePaths, recordsFenceUnavailable } from './confine/records'
 
@@ -227,6 +228,10 @@ export function copilotContract(input: ContractInput): string {
   const enforced = recordsFenceKind(platform) !== 'none'
 
   return `# ${BRAND.name} — what you are, and what you may do
+
+In this app you are called **${BRAND.assistant}**: that is the name on your page, your
+row in the sidebar and your Settings section. If the person's own instructions
+below give you another name, theirs wins.
 
 This section was written by ${BRAND.name} and handed to you when your session
 started. It is **not** a file in your working directory, and nothing like it has
@@ -431,7 +436,7 @@ export const YOURS_HEADING = `---
 # Your instructions
 
 Everything above was written by ${BRAND.name}. Everything below was written by
-the person you work for, in Settings → Copilot, and where the two disagree about
+the person you work for, in Settings → ${BRAND.assistant}, and where the two disagree about
 who you are or how to answer, **theirs wins**. The app's half is about tools,
 confirmations and records; it is not an opinion about your manner.
 `
@@ -447,7 +452,11 @@ confirmations and records; it is not an opinion about your manner.
  * before the reader knows what it can do, is an opinion about nothing.
  */
 export function composeCopilotLayer(contract: string, yours: string): string {
-  const own = yours.trim()
+  // The one exception to "the person's half is handed over as written": an
+  // untouched paragraph this app itself wrote before the assistant was called
+  // Hoot, which would otherwise tell it it is "the Copilot". See
+  // `withCurrentDefaultName`; the file on disk is not changed.
+  const own = withCurrentDefaultName(yours).trim()
   if (own === '') return contract
   return `${contract}\n${YOURS_HEADING}\n${own}\n`
 }
@@ -559,7 +568,7 @@ export function readLayerFile(path: string): LayerReadResult {
       path,
       error:
         (error as NodeJS.ErrnoException).code === 'ENOENT'
-          ? 'Nothing has been written yet — these files are composed when the copilot starts.'
+          ? `Nothing has been written yet — these files are composed when ${BRAND.assistant} starts.`
           : error instanceof Error
             ? error.message
             : String(error),

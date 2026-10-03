@@ -58,6 +58,7 @@ import {
 } from './tour'
 import type { TourStage } from './tour-stage'
 import { Refused, type SessionView } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * Every live session, in the order `attention.ts` puts them.
@@ -324,7 +325,7 @@ export function tourTool(stage: TourStage): ToolSpec {
             droppedDetail: summary.reasons,
             note:
               'Interactive mode is off, so nothing was driven on their screen — but everything you sent was ' +
-              'checked and recorded, and it is in the copilot’s own window as the answer. Say what you found, ' +
+              `checked and recorded, and it is in ${BRAND.assistant}’s own window as the answer. Say what you found, ` +
               'session by session, in your reply. Do not apologise for not driving and do not ask for it: they ' +
               'chose this.',
           },

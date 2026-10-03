@@ -1,5 +1,5 @@
 import type { ProviderId, SessionStatus } from '@shared/types'
-import { COPILOT_ICON, COPILOT_NAME } from '../copilot/identity'
+import { COPILOT_NAME } from '../copilot/identity'
 import { distinguishingIdLength, folderName, isMachineAndPath, shortSessionId } from '../session-title'
 
 /**
@@ -501,17 +501,17 @@ export const KIND_ICON: Record<TabKind, string> = {
 }
 
 /**
- * The glyph a tab wears — its kind's, except for the one tab that has its own.
+ * The line glyph a tab wears: its kind's.
  *
- * The copilot keeps the compass it wears in the rail. It is a session and gets
- * everything a session gets, but it is also the only one of its kind in the
- * window, and a pill drawn with the same `>_` as the four beside it would be
- * asking the reader to find it by name. The mark is the same one the pinned row
- * uses, from the same constant, so the row and the pill are recognisably the
- * same thing — which is the whole reason `identity.ts` exists.
+ * Hoot's tab is the exception and is not drawn from here at all. It is a
+ * session and gets everything a session gets, but it is also the only one of
+ * its kind in the window, so its pill wears the owl from `HootMark`, the same
+ * picture as its pinned row, rather than the `>_` the four beside it wear. The
+ * strip asks `tab.isCopilot` before it asks this; the session glyph returned
+ * for it here is only what a caller that never learned that would draw.
  */
 export function tabIcon(tab: WorkspaceTab): string {
-  return tab.isCopilot ? COPILOT_ICON : KIND_ICON[tab.kind]
+  return KIND_ICON[tab.kind]
 }
 
 /**

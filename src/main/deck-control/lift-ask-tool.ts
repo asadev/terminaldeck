@@ -40,6 +40,7 @@ import { slotName, windowsOf } from '../browser-binding'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { withEmptiness } from './empty-result'
 import { Refused, actsAsOwner } from './surface'
+import { BRAND } from '../../shared/brand'
 
 const SCHEMA: JsonSchema = {
   type: 'object',
@@ -112,7 +113,7 @@ export function askerName(context: ToolContext): string {
   }
   // By the name he gave its key, so the inbox row says which app is asking.
   if (caller.kind === 'key') return `“${caller.keyName ?? 'An AI app'}”, an AI app you gave a key to`
-  return 'The copilot'
+  return BRAND.assistant
 }
 
 function str(args: Record<string, unknown>, key: string): string {

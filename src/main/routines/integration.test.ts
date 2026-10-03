@@ -164,7 +164,7 @@ describe('routines, end to end', () => {
     routines.engine.start()
     const view = routines.engine.get('on-edit')
     expect(view?.state).toBe('unarmed')
-    expect(view?.reason).toContain('copilot is not running')
+    expect(view?.reason).toContain('Hoot is not running')
   })
 
   it('picks up a routine created through the API without a restart', async () => {

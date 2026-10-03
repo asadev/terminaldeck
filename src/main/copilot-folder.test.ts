@@ -298,7 +298,7 @@ describe('the channels', () => {
     expect(result.report.home).toBe(workspace)
     expect(state.logged[0]?.action).toBe('folder.chosen')
     expect(state.logged[0]?.detail).toMatch(/Nothing of this app’s is written there/)
-    expect(state.logged[0]?.detail).toMatch(/next time the copilot starts/)
+    expect(state.logged[0]?.detail).toMatch(/next time Hoot starts/)
   })
 
   it('leaves the setting alone when a picked folder is refused', async () => {

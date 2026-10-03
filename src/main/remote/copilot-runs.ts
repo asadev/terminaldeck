@@ -102,6 +102,7 @@ import {
 } from './protocol'
 import { deviceSurface, isKeySurface, type ConsentOutcome, type ConsentRequest } from '../deck-control/consent'
 import type { Caller } from '../deck-control/surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * How long a run outlives the socket that started it.
@@ -394,7 +395,7 @@ export class CopilotRuns implements CopilotRemote {
     return {
       ok: false,
       code: 'unauthorized',
-      message: 'This device does not have the copilot.',
+      message: `This device does not have ${BRAND.assistant}.`,
     }
   }
 
@@ -436,7 +437,7 @@ export class CopilotRuns implements CopilotRemote {
      * status would offer to start something that is already running, or refuse
      * to because something unrelated is.
      */
-    const unavailable = endpoint === null ? 'The copilot’s tools are not running on this machine.' : desk.reason
+    const unavailable = endpoint === null ? `${BRAND.assistant}’s tools are not running on this machine.` : desk.reason
     return {
       desk: desk.status,
       run: run === null ? null : run.sessionId,
@@ -586,7 +587,7 @@ export class CopilotRuns implements CopilotRemote {
       return {
         ok: false,
         code: 'unavailable',
-        message: 'The copilot’s tools are not running on this machine, so there is nothing to start.',
+        message: `${BRAND.assistant}’s tools are not running on this machine, so there is nothing to start.`,
       }
     }
     const desk = this.deps.desk()
@@ -598,7 +599,7 @@ export class CopilotRuns implements CopilotRemote {
         // written by the code that measured the problem — a missing CLI, a
         // folder that could not be created — and a second sentence written here
         // would be a guess about a machine this function did not inspect.
-        message: desk.reason ?? 'The copilot cannot start on this machine just now.',
+        message: desk.reason ?? `${BRAND.assistant} cannot start on this machine just now.`,
       }
     }
 
@@ -627,7 +628,7 @@ export class CopilotRuns implements CopilotRemote {
         // file, and its message names a path inside this person's home
         // directory; `protocol.ts`'s rule that a reason never quotes the value
         // it refused applies more sharply to a sentence drawn on a phone.
-        message: 'The copilot’s tools could not be handed to this device securely.',
+        message: `${BRAND.assistant}’s tools could not be handed to this device securely.`,
       }
     }
 
@@ -668,7 +669,7 @@ export class CopilotRuns implements CopilotRemote {
       abort.abort()
       removeQuietly(configPath)
       console.error('[remote] a copilot run could not be started:', error)
-      return { ok: false, code: 'unavailable', message: 'The copilot could not be started just now.' }
+      return { ok: false, code: 'unavailable', message: `${BRAND.assistant} could not be started just now.` }
     }
 
     const run: Run = {
@@ -743,7 +744,7 @@ export class CopilotRuns implements CopilotRemote {
       this.deps.say(run.sessionId, text)
     } catch (error) {
       console.error('[remote] could not pass a message to a copilot run:', error)
-      return { ok: false, code: 'unavailable', message: 'The copilot did not take that message.' }
+      return { ok: false, code: 'unavailable', message: `${BRAND.assistant} did not take that message.` }
     }
     return { ok: true }
   }
@@ -760,7 +761,7 @@ export class CopilotRuns implements CopilotRemote {
       this.deps.interrupt(run.sessionId)
     } catch (error) {
       console.error('[remote] could not interrupt a copilot run:', error)
-      return { ok: false, code: 'unavailable', message: 'The copilot did not take the interrupt.' }
+      return { ok: false, code: 'unavailable', message: `${BRAND.assistant} did not take the interrupt.` }
     }
     return { ok: true }
   }

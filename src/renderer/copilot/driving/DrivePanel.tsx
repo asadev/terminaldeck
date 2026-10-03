@@ -4,6 +4,8 @@ import { PANEL_ATTR, degradeSentence, type TourCommand, type TourView } from './
 import { droppedSentence, reasonLabel, type TourStop } from './tour'
 import { isScanning, scanProgress, statusSentence } from '../../../shared/scan'
 import './drive-panel.css'
+import { BRAND } from '../../../shared/brand'
+import { HootMark } from '../HootMark'
 
 /**
  * The side panel — which, while driving, **is** the copilot.
@@ -143,7 +145,7 @@ export function DrivePanel({
     <aside
       className="drive-panel"
       {...{ [PANEL_ATTR]: 'panel' }}
-      aria-label={name === undefined ? 'Copilot' : name}
+      aria-label={name ?? BRAND.assistant}
       /*
        * Focusable, and focused by the host the frame a scan starts.
        *
@@ -157,15 +159,20 @@ export function DrivePanel({
     >
       <header className="dp-head">
         <div className="dp-head-line">
-          <p className="dp-kicker">{name === undefined ? 'Copilot' : name}</p>
+          {/* Who is giving the tour: the owl and its name, the way the rail
+              shows them, so the panel reads as Hoot talking. */}
+          <p className="dp-kicker">
+            <HootMark size={24} />
+            <span>{name ?? BRAND.assistant}</span>
+          </p>
           {onFold === null ? null : (
             <button
               type="button"
               className="dp-fold"
               {...{ [DRIVE_CONTROL_ATTR]: 'fold' }}
               onClick={onFold}
-              title="Open the copilot’s own window"
-              aria-label="Open the copilot’s own window"
+              title={`Open ${BRAND.assistant}’s own window`}
+              aria-label={`Open ${BRAND.assistant}’s own window`}
             >
               {/* The same round dot that sits beside its name in the rail, doing
                   the same job from the other side: there it folds the copilot
@@ -324,7 +331,7 @@ function DriveComposer({ onSay }: { onSay: (text: string) => void }) {
         className="dp-say-input"
         value={text}
         placeholder="Ask while it works…"
-        aria-label="Say something to the copilot"
+        aria-label={`Say something to ${BRAND.assistant}`}
         onChange={(event) => setText(event.target.value)}
         /*
          * The keys the scan owns are dispatched at the window in the capture

@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand'
 /**
  * The renderer's half of the copilot driving a page.
  *
@@ -192,5 +193,5 @@ export function resetDriveClaimsForTests(): void {
 export function driveChipText(status: DriveStatus): string {
   if (status.state === 'human') return 'Your turn'
   if (status.state !== 'agent') return ''
-  return status.step === '' ? 'Copilot is driving' : `Copilot is ${status.step}`
+  return status.step === '' ? `${BRAND.assistant} is driving` : `${BRAND.assistant} is ${status.step}`
 }

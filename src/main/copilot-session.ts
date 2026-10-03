@@ -199,6 +199,7 @@ import { readSignIn } from './profiles-signin'
 import { detectProviders, PROVIDERS } from './providers'
 import type { HomeScope } from './transcript'
 import { getState as profilesState, resolveProfile, type Profile } from './profiles'
+import { BRAND } from '../shared/brand'
 
 /* ------------------------------------------------------------------ model -- */
 
@@ -757,7 +758,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
 
   const scaffolded = scaffoldCopilotHome(paths)
   if (scaffolded.error !== null) {
-    return refuse(deps, `The copilot's folder could not be created: ${scaffolded.error}`)
+    return refuse(deps, `${BRAND.assistant}'s folder could not be created: ${scaffolded.error}`)
   }
   if (scaffolded.created.length > 0) {
     appendCopilotAction(paths, {
@@ -783,7 +784,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
   if (!available.claude) {
     return refuse(
       deps,
-      `The copilot runs on ${PROVIDERS.claude.label}, which is not installed on this machine.`,
+      `${BRAND.assistant} runs on ${PROVIDERS.claude.label}, which is not installed on this machine.`,
     )
   }
 
@@ -884,7 +885,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
      * that say what to confirm before using them. A refusal a person can read is
      * better than that.
      */
-    return refuse(deps, `The copilot's instructions could not be prepared: ${layer.error}`)
+    return refuse(deps, `${BRAND.assistant}'s instructions could not be prepared: ${layer.error}`)
   }
 
   let meta: SessionMeta
@@ -942,7 +943,7 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
    */
   if (meta.provider !== 'claude') {
     deps.stop(meta.id)
-    return refuse(deps, `The copilot started as a ${meta.provider} session rather than an agent.`)
+    return refuse(deps, `${BRAND.assistant} started as a ${meta.provider} session rather than an agent.`)
   }
 
   live = {

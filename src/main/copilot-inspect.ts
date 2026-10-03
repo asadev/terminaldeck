@@ -61,6 +61,7 @@ import {
 import { copilotFolderReport } from './copilot-folder'
 import { userDataDir } from './platform/paths'
 import { routinesDirFor } from './routines/store'
+import { BRAND } from '../shared/brand'
 
 /* ----------------------------------------------------------------- memory -- */
 
@@ -762,7 +763,7 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
     if (result.error === null && result.created.length > 0) {
       appendCopilotAction(paths, {
         action: 'home.created',
-        detail: `created ${result.created.length} of the copilot's files, from Settings`,
+        detail: `created ${result.created.length} of ${BRAND.assistant}'s files, from Settings`,
       })
     }
     return result

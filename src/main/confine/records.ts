@@ -135,6 +135,7 @@ import { promisify } from 'node:util'
 import { currentPlatform, type Platform } from '../platform/host'
 import { within, type PathResolver } from './plan'
 import { SANDBOX_EXEC, seatbeltCommand, seatbeltString } from './seatbelt'
+import { BRAND } from '../../shared/brand'
 
 const run = promisify(execFile)
 
@@ -337,12 +338,12 @@ export function recordsFenceKind(platform: Platform = currentPlatform()): Record
 /** Why there is no fence on this platform. One sentence, per platform. */
 export function recordsFenceUnavailable(platform: Platform): string {
   if (platform === 'win32') {
-    return 'On Windows this app has no way to refuse one process a folder every other process may use, so the copilot could edit the routines and the action log the way any program you run could. What it did is still recorded; the record is not held against it.'
+    return `On Windows this app has no way to refuse one process a folder every other process may use, so ${BRAND.assistant} could edit the routines and the action log the way any program you run could. What it did is still recorded; the record is not held against it.`
   }
   if (platform === 'linux') {
-    return 'On Linux the only boundary this app has measured works by replacing the whole filesystem view, which is a jail rather than a fence, so the copilot could edit the routines and the action log the way any program you run could. What it did is still recorded; the record is not held against it.'
+    return `On Linux the only boundary this app has measured works by replacing the whole filesystem view, which is a jail rather than a fence, so ${BRAND.assistant} could edit the routines and the action log the way any program you run could. What it did is still recorded; the record is not held against it.`
   }
-  return 'No way to hold this app’s own records against the copilot has been measured on this platform.'
+  return `No way to hold this app’s own records against ${BRAND.assistant} has been measured on this platform.`
 }
 
 /**
@@ -366,7 +367,7 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; Everything is allowed. This is not a jail: the process inside it is an',
     '; ordinary session with the person’s own account, their keychain, their',
     '; home directory and their repositories. See `confine/records.ts` for why',
-    '; that is the right shape for a copilot and what it replaced.',
+    `; that is the right shape for ${BRAND.assistant} and what it replaced.`,
     '(allow default)',
     '',
     '; The routine database. A file dropped in here is a routine that really',
@@ -374,7 +375,7 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; its own next trigger — an automation loop with no human in it. Creating a',
     '; routine is an alter-tier act somebody confirms.',
     ';',
-    '; Reading is deliberately still allowed: the copilot can read every project',
+    `; Reading is deliberately still allowed: ${BRAND.assistant} can read every project`,
     '; these files name, and `routines.list` hands it the same contents through',
     '; the front door, so refusing the folder would be theatre.',
     `(deny file-write* (subpath ${seatbeltString(paths.routines)}))`,
@@ -389,11 +390,11 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; record of what something did is worth nothing if that same thing can',
     '; compose it, and checking which of your actions were recorded is the first',
     '; move anybody makes before shaping behaviour around a record. Nothing the',
-    '; copilot does needs this file — every call it makes is written here for',
+    `; ${BRAND.assistant} does needs this file — every call it makes is written here for`,
     '; it, and `log.note` is how it adds a line of its own.',
     `(deny file-read* file-write* (subpath ${seatbeltString(paths.log)}))`,
     '',
-    '; The copilot connections, and what each may do. Writable, it is the store',
+    `; The connections to ${BRAND.assistant}, and what each may do. Writable, it is the store`,
     '; that holds a permission *about this process*, editable by this process —',
     '; the audit-log argument one level up. A connection cannot be minted by',
     '; editing it, because a record with no credential is dropped on read and',
@@ -402,7 +403,7 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; a device somebody connected read-only into one that answers',
     '; confirmations, which is quite enough.',
     ';',
-    '; Reading stays allowed, like the routines and unlike the log. The copilot',
+    `; Reading stays allowed, like the routines and unlike the log. ${BRAND.assistant}`,
     '; can already be told which devices hold what — a refusal that only stops it',
     '; *looking* would be theatre, and the thing worth stopping is the edit.',
     `(deny file-write* (literal ${seatbeltString(paths.remoteCopilot)}))`,
@@ -593,7 +594,7 @@ export async function buildRecordsFence(input: {
   if (!proof.held) {
     return {
       fence: null,
-      reason: `This app’s own routines and action log could not be held against the copilot on this machine: ${proof.detail}`,
+      reason: `This app’s own routines and action log could not be held against ${BRAND.assistant} on this machine: ${proof.detail}`,
     }
   }
 

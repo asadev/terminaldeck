@@ -145,7 +145,7 @@ describe('how little each screen says', () => {
   })
 
   it('opens on an empty box, with no invented default', () => {
-    expect(html).toContain('Set up your copilot')
+    expect(html).toContain('Set up Hoot')
     expect(html).toContain('value=""')
   })
 

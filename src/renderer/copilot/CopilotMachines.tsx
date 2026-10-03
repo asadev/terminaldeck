@@ -1,5 +1,6 @@
 import type { CopilotMachine } from './useCopilotMachines'
 import './copilot.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The switch at the top of the copilot page: which machine's copilot is this.
@@ -56,7 +57,7 @@ interface Props {
 export function CopilotMachines({ machines, chosen, onChoose }: Props) {
   if (machines.length < 2) return null
   return (
-    <div className="cp-machines" role="radiogroup" aria-label="Which machine's copilot">
+    <div className="cp-machines" role="radiogroup" aria-label={`Which machine’s ${BRAND.assistant}`}>
       {machines.map((machine) => (
         <button
           key={machine.id || 'here'}
@@ -66,7 +67,7 @@ export function CopilotMachines({ machines, chosen, onChoose }: Props) {
           aria-checked={machine.id === chosen}
           data-chosen={machine.id === chosen || undefined}
           data-reach={machine.reach}
-          title={`${machine.name} — its copilot`}
+          title={`${BRAND.assistant} on ${machine.name}`}
           onClick={() => onChoose(machine.id)}
         >
           {machine.name}

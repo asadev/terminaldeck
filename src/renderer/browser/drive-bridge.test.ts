@@ -136,12 +136,12 @@ describe('what the strip says', () => {
     // a WebContentsView, so a driven click simply happens. This sentence is the
     // only feedback it has.
     expect(driveChipText({ ...IDLE_DRIVE, state: 'agent', step: 'clicking “Sign in”' })).toBe(
-      'Copilot is clicking “Sign in”',
+      'Hoot is clicking “Sign in”',
     )
   })
 
   it('falls back to a plain statement between steps', () => {
-    expect(driveChipText({ ...IDLE_DRIVE, state: 'agent', step: '' })).toBe('Copilot is driving')
+    expect(driveChipText({ ...IDLE_DRIVE, state: 'agent', step: '' })).toBe('Hoot is driving')
   })
 
   it('says whose turn it is, and not what the agent was doing', () => {

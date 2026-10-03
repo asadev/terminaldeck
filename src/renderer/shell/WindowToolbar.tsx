@@ -43,6 +43,12 @@ interface Props {
   /** A quiet second line: what the view is for, when there is nothing better. */
   subtitle?: string | null
   /**
+   * A picture before the heading, for the one window whose subject is a
+   * character: Hoot's own window puts the owl here (`HootMark`). Every other
+   * heading is words alone, so it is absent everywhere else.
+   */
+  mark?: ReactNode
+  /**
    * Rendered instead of the subtitle when the heading has something the user
    * can act on — the folder a session is running in, which is a control rather
    * than a caption.
@@ -186,6 +192,7 @@ export function WindowToolbar({
   sessionId = null,
   onRenameSession,
   subtitle,
+  mark,
   meta,
   headingFocused = true,
   sidebarHidden,
@@ -263,7 +270,9 @@ export function WindowToolbar({
              * spelling the same idea three ways is how one of them drifts.
              */
             data-focused={headingFocused}
+            data-marked={mark === undefined ? undefined : 'true'}
           >
+            {mark !== undefined && <span className="toolbar-mark">{mark}</span>}
             {/* The heading is a control now, for a session: double-clicking it
                 renames the session. `SessionTitle` renders the plain `<h1>` this
                 was whenever there is no session behind it or nowhere to write a

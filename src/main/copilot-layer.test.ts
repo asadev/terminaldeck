@@ -335,7 +335,7 @@ describe('writing it', () => {
      */
     const layer = copilotLayerPaths(userData)
     expect(readComposedLayer(layer).text).toBeNull()
-    expect(readComposedLayer(layer).error).toMatch(/composed when the copilot starts/)
+    expect(readComposedLayer(layer).error).toMatch(/composed when Hoot starts/)
 
     writeCopilotLayer(layer, input())
     writeFileSync(layer.yours, '# changed since\n')
