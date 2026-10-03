@@ -126,6 +126,9 @@ let addedAgents: Array<Record<string, unknown>> = []
 /** Subscribers to `session:created`. See `onSessionCreated` below. */
 const sessionCreatedListeners = new Set<(meta: unknown) => void>()
 
+/** Hoot in the menu bar, as `hoot-menubar:config` answers it. On by default. */
+let hootMenuBar: { enabled: boolean } = { enabled: true }
+
 /*
  * Sessions in windows of their own — `main/popout-windows.ts`, modelled.
  *
@@ -661,6 +664,18 @@ const api: Record<string, unknown> = new Proxy(
       return addedAgents.length !== before
     },
     listSessions: async () => sessions,
+    /*
+     * Hoot in the menu bar — `main/hoot-menubar.ts`: the one setting and the
+     * write that answers with it. The panel page itself is
+     * `.harness/hoot-panel.html`, which sets its own snapshot; here only what
+     * Settings → Hoot and the palette row read and write.
+     */
+    hootMenuBarConfig: async () => hootMenuBar,
+    hootMenuBarConfigure: async (patch: { enabled?: boolean }) => {
+      hootMenuBar = { enabled: typeof patch.enabled === 'boolean' ? patch.enabled : hootMenuBar.enabled }
+      return hootMenuBar
+    },
+    reportSessionLabels: () => {},
     sessionWindows: async () => ({
       ...sessionWindowsView(),
       self: popoutSelfId ? (sessionWindowRows.find((row) => row.sessionId === popoutSelfId)?.windowId ?? null) : null,

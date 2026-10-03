@@ -144,5 +144,20 @@ export const sessionsCoverage: CoverageMap = {
   'popout:rekey': { skip: 'A session window following its own session through an account switch; sessions.account makes the switch and the window follows by itself.' },
   'popout:labels': { skip: 'The main window telling the session windows the names it already shows; plumbing so both say the same thing, nothing a person chooses.' },
   'popout:show-main': { tool: 'ui.do' },
+  // Hoot in the menu bar — `main/hoot-menubar.ts`. Talking to Hoot from it is talking to Hoot.
+  // Hoot is a session: a message to it is sessions.send to the id hoot.state names.
+  'hoot-panel:say': { tool: 'sessions.send' },
+  'hoot-panel:start-hoot': { tool: 'hoot.run' },
+  'hoot-panel:snapshot': { tool: ['sessions.list', 'hoot.state'] },
+  'hoot-panel:show-session': { tool: 'ui.do' },
+  'hoot-menubar:config': { tool: 'ui.list' },
+  'hoot-menubar:configure': { tool: 'ui.do' },
+  'hoot-menubar:open': { tool: 'ui.do' },
+  'hoot-panel:pointer': { skip: 'The menu bar panel telling the main process the pointer is over it, so it stays open; plumbing, not a choice.' },
+  'hoot-panel:held': { skip: 'The menu bar panel saying its box has text or the keyboard, so it stays open; plumbing, not a choice.' },
+  'hoot-panel:focus': { skip: 'The menu bar panel asking for the keyboard after a click in its box; plumbing for a person typing, not an action.' },
+  'hoot-panel:close': { skip: 'Escape in the menu bar panel; the panel is a view of things tools already read and do, so closing it changes nothing.' },
+  'hoot-panel:size': { skip: 'The menu bar panel telling its window how tall its content is; layout, nothing a person chooses.' },
+  'session:labels': { skip: 'The main window telling the menu bar the names it already shows for its sessions; plumbing so both say the same thing.' },
   'window:dimmed': { skip: 'The window reporting that a sheet has dimmed it; plumbing so the native chrome dims with it, nothing a person chooses.' },
 }

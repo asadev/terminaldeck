@@ -1644,6 +1644,23 @@ function Workspace() {
     for (const tab of tabs) if (sessionWindows.popped.has(tab.id)) labels[tab.id] = labelOf(tab)
     sessionWindows.label(labels)
   })
+  /*
+   * And every session's name, for Hoot's menu bar item — so the menu bar says
+   * "Session 2 needs you" about the row the rail calls Session 2, rather than
+   * numbering sessions a second way. Sent only when it changed.
+   */
+  const reportedLabels = useRef('')
+  useEffect(() => {
+    const report = (globalThis as { deck?: { reportSessionLabels?(labels: Record<string, string>): void } }).deck
+      ?.reportSessionLabels
+    if (!report) return
+    const labels: Record<string, string> = {}
+    for (const tab of tabs) if (tab.kind === 'session' && tab.isCopilot !== true) labels[tab.id] = labelOf(tab)
+    const key = JSON.stringify(labels)
+    if (key === reportedLabels.current) return
+    reportedLabels.current = key
+    report(labels)
+  })
   /** The rail's and the strip's half of the moves: which tabs can, and the moves themselves. */
   const windowMoves = sessionWindows.available
     ? {
@@ -4249,6 +4266,42 @@ function Workspace() {
         title: copilotSetup.name,
         group: 'View',
         run: () => openCopilot(),
+      },
+      /*
+       * The menu bar panel, opened from the keyboard — the way to it for
+       * anybody who cannot hover a menu bar item, and the one a tool takes.
+       */
+      {
+        id: 'hoot.ask',
+        title: `Ask ${copilotSetup.name} from the menu bar`,
+        group: 'View',
+        keywords: 'menu bar owl panel ask question',
+        run: async () => {
+          const deck = (globalThis as { deck?: { hootMenuBarOpen?(): Promise<unknown> } }).deck
+          await deck?.hootMenuBarOpen?.().catch(() => null)
+        },
+      },
+      /*
+       * Hoot in the menu bar, on or off — the same switch as Settings → Hoot →
+       * In the menu bar, through the same channel, so a palette press and the
+       * switch cannot disagree about whether the owl is there.
+       */
+      {
+        id: 'view.menubar',
+        title: `Show or hide ${copilotSetup.name} in the menu bar`,
+        group: 'View',
+        keywords: 'menu bar status item tray owl top right',
+        run: async () => {
+          const deck = (globalThis as {
+            deck?: {
+              hootMenuBarConfig?(): Promise<unknown>
+              hootMenuBarConfigure?(patch: { enabled?: boolean }): Promise<unknown>
+            }
+          }).deck
+          const raw = await deck?.hootMenuBarConfig?.().catch(() => null)
+          const enabled = typeof raw === 'object' && raw !== null && (raw as { enabled?: unknown }).enabled !== false
+          await deck?.hootMenuBarConfigure?.({ enabled: !enabled }).catch(() => null)
+        },
       },
       {
         id: 'view.dashboard',

@@ -33,6 +33,9 @@ export const UI_COMMANDS: CoverageMap = {
   // Opening views and panes — the bridge, exactly as the palette runs them.
   'view.browser': { tool: 'ui.do' },
   'view.copilot': { tool: 'ui.do' },
+  // Hoot in the menu bar on or off — Settings → Hoot → In the menu bar, as a palette row.
+  'view.menubar': { tool: 'ui.do' },
+  'hoot.ask': { tool: 'ui.do' },
   'view.dashboard': { tool: 'ui.do' },
   'view.overview': { tool: 'ui.do' },
   'view.files': { tool: 'ui.do' },

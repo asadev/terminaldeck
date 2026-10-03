@@ -6,6 +6,7 @@ import './styles/app.css'
 import { App } from './App'
 import { DriveHost } from './copilot/driving/DriveHost'
 import { PopoutWindow } from './popout/PopoutWindow'
+import { HootPanel } from './hoot-panel/HootPanel'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
@@ -46,9 +47,18 @@ for (const kind of ['dragover', 'drop'] as const) {
  * and every one of those is the main window's job.
  */
 const popout = new URLSearchParams(location.search).get('popout')
+/*
+ * The panel under Hoot's owl in the menu bar loads it with `?hootpanel=1`
+ * (`main/hoot-menubar.ts`), and gets that panel and nothing of the application.
+ */
+const hootPanel = new URLSearchParams(location.search).get('hootpanel') === '1'
 
 createRoot(container).render(
-  popout ? (
+  hootPanel ? (
+    <StrictMode>
+      <HootPanel />
+    </StrictMode>
+  ) : popout ? (
     <StrictMode>
       <PopoutWindow sessionId={popout} />
     </StrictMode>

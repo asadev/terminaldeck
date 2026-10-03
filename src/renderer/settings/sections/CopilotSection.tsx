@@ -480,6 +480,8 @@ export function CopilotSection({ setUpCopilot }: { setUpCopilot?(): void } = {})
         onProblem={setProblem}
       />
 
+      <MenuBarGroup onProblem={setProblem} />
+
       <ActionsGroup actions={actions} loading={loading} onReveal={reveal} />
 
       <ReachGroup state={state} />
@@ -2009,6 +2011,82 @@ function ShowingGroup({
                 onChange(!next)
                 onProblem(errorText(cause, 'That setting could not be saved.'))
               })
+            }}
+          />
+        }
+      />
+    </Block>
+  )
+}
+
+/** Hoot in the menu bar, through its own channels — `main/hoot-menubar.ts`. */
+interface MenuBarBridge {
+  hootMenuBarConfig?(): Promise<unknown>
+  hootMenuBarConfigure?(patch: { enabled?: boolean }): Promise<unknown>
+}
+
+function readMenuBar(raw: unknown): boolean | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  return (raw as Record<string, unknown>).enabled !== false
+}
+
+/**
+ * Hoot's owl in the macOS menu bar, on or off.
+ *
+ * Written through `hoot-menubar:configure` rather than the settings file
+ * directly, because the owl is a menu bar item the main process owns: the
+ * write and the owl appearing or going have to be one step, or the switch
+ * would say "off" over an owl still sitting beside the clock. The switch moves
+ * as it is pressed and goes back, with a sentence, if the write did not take —
+ * `ShowingGroup`'s contract above.
+ */
+function MenuBarGroup({ onProblem }: { onProblem(message: string | null): void }) {
+  const [deck] = useState<MenuBarBridge>(() => (globalThis as { deck?: MenuBarBridge }).deck ?? {})
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let live = true
+    void deck
+      .hootMenuBarConfig?.()
+      .then((raw) => {
+        if (live) setEnabled(readMenuBar(raw))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [deck])
+
+  if (deck.hootMenuBarConfigure === undefined) return null
+
+  return (
+    <Block
+      title="In the menu bar"
+      says={`${BRAND.assistant} beside the clock, over every app. Hover the owl to talk.`}
+      more={
+        'Hover the owl, or click it, and a panel drops down with the latest messages, a box to ask, and ' +
+        'the sessions waiting on you. When a session needs you, the menu bar says so for a moment and then ' +
+        'shows how many are waiting. It takes the keyboard only when you click into the box.'
+      }
+    >
+      <Row
+        label={`Show ${BRAND.assistant} in the menu bar`}
+        help="Off takes the owl out of the menu bar until you turn it back on."
+        control={
+          <Switch
+            checked={enabled ?? true}
+            disabled={enabled === null}
+            onChange={(next) => {
+              const before = enabled
+              setEnabled(next)
+              onProblem(null)
+              void deck
+                .hootMenuBarConfigure?.({ enabled: next })
+                .then((raw) => setEnabled(readMenuBar(raw) ?? before))
+                .catch((cause: unknown) => {
+                  setEnabled(before)
+                  onProblem(errorText(cause, 'That setting could not be saved.'))
+                })
             }}
           />
         }
