@@ -63,6 +63,10 @@ function readLast(): string {
   }
 }
 
+/** How often the list is asked again while it is on screen: now and then, or soon while a row is changing. */
+const RELIST_MS = 10_000
+const RELIST_SOON_MS = 2_000
+
 /** The hidden diagnostics readout over the live screen: on or off, remembered per window. */
 const DIAGNOSTICS_KEY = 'simulators.diagnostics'
 
@@ -121,7 +125,10 @@ function rectOf(node: DeviceNode): NormRect | null {
 export function subLine(entry: DeviceEntry): string {
   const kind = entry.runtime && entry.platform === 'ios' ? 'Simulator' : kindWords(entry)
   const state = entry.available || entry.canBoot ? '' : stateLine(entry)
-  return [kind, entry.runtime, state].filter(Boolean).join(' · ')
+  // Shown from the simulator's own record because the engine was slow: still
+  // here, still usable, and being checked again.
+  const checking = entry.checking ? 'checking…' : ''
+  return [kind, entry.runtime, state, checking].filter(Boolean).join(' · ')
 }
 
 interface IconButtonProps {
@@ -215,8 +222,7 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
   )
 
   // The list on arrival and whenever the window comes back to the front — a
-  // simulator started from Xcode in the meantime should simply be there. No
-  // timer: nothing is polled.
+  // simulator started from Xcode in the meantime should simply be there.
   useEffect(() => {
     void refresh().then((next) => {
       const last = readLast()
@@ -226,6 +232,50 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [refresh, open])
+
+  // And on a light schedule while the list is on screen and the window can be
+  // seen. Focus alone was not enough: under heavy load the engine left every
+  // iOS Simulator out of its answer, and the page showed none until he clicked
+  // back into the window. Nothing tells this page when a simulator is started
+  // from Xcode either. So it asks again every few seconds while a row is
+  // starting, stopping or being checked, now and then otherwise, never while
+  // the window is hidden, and never with a device open — the list is not on
+  // screen then. The main process never runs two engine listings at once
+  // (`inventory.ts`), so a slow one is not stacked up.
+  const changing =
+    Object.keys(busy).length > 0 || (list?.devices.some((d) => d.checking === true || d.state === 'booting') ?? false)
+  useEffect(() => {
+    if (device) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let stopped = false
+    const visible = (): boolean => document.visibilityState !== 'hidden'
+    const schedule = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = null
+      if (stopped || !visible()) return
+      timer = setTimeout(
+        () => {
+          timer = null
+          void refresh().finally(schedule)
+        },
+        changing ? RELIST_SOON_MS : RELIST_MS,
+      )
+    }
+    const onVisibility = (): void => {
+      if (visible()) void refresh().finally(schedule)
+      else if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    schedule()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [device, refresh, changing])
 
   useEffect(() => {
     if (!bridge) return

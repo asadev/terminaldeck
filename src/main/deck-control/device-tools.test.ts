@@ -466,6 +466,16 @@ describe('devices.list', () => {
     })
   })
 
+  it('says when a row comes from the simulator’s own record because the engine was slow', async () => {
+    const deps = fakeDeps()
+    deps.devices = [entry({ checking: true }), entry({ id: 'ios:BBBB-2222', name: 'iPhone Air' })]
+    const result = await control(deps, dir).call('devices_list', {})
+    const rows = (result.value as { devices: Record<string, unknown>[] }).devices
+    expect(rows[0]).toMatchObject({ checking: true, usable: true })
+    expect(String(rows[0]?.checkingNote)).toContain('can still be opened')
+    expect(rows[1]).not.toHaveProperty('checking')
+  })
+
   it('says what to install when there is nothing to list', async () => {
     const deps = fakeDeps()
     deps.devices = []

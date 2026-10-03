@@ -889,6 +889,14 @@ function deviceRow(entry: DeviceEntry): Record<string, unknown> {
     text: entry.text,
     canRotate: entry.canRotate,
     ...(entry.note === '' ? {} : { note: entry.note }),
+    ...(entry.checking
+      ? {
+          checking: true,
+          checkingNote:
+            'The device engine was slow to answer, so this row comes from the simulator’s own record and is being ' +
+            'checked again. It can still be opened.',
+        }
+      : {}),
   }
 }
 

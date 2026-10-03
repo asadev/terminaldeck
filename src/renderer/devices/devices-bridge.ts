@@ -30,6 +30,8 @@ export interface DeviceEntry {
   text: string
   canRotate: boolean
   note: string
+  /** Not confirmed by the engine this time — it was slow — so shown from the simulator's own record, being checked again. */
+  checking?: boolean
 }
 
 export interface DeviceList {

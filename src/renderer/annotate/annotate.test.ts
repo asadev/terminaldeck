@@ -108,6 +108,10 @@ describe('the device page’s words', () => {
     )
   })
 
+  it('says a row shown from the simulator’s own record is being checked', () => {
+    expect(subLine({ ...base, checking: true })).toBe('Simulator · iOS 27.0 · checking…')
+  })
+
   it('says what an unauthorised phone is waiting for', () => {
     const phone = { ...base, platform: 'android' as const, kind: 'physical' as const, state: 'unauthorized' as const, available: false, canBoot: false, runtime: '', note: 'Unlock the phone.' }
     expect(subLine(phone)).toBe('Android phone · Unlock the phone.')

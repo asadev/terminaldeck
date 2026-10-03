@@ -4,7 +4,7 @@ import type { AnnotateWhere, AnnotationRound } from '../../shared/annotate'
 import type { DeviceTree } from '../../shared/device-tree'
 import { decodePngDataUrl } from '../marked-image'
 import { locateEngine, type Engine, type NoEngine } from './engine'
-import { bootDevice, listDevices, shutDownDevice, type DeviceEntry } from './inventory'
+import { bootDevice, DeviceInventory, engineSources, shutDownDevice, type DeviceEntry, type InventorySources } from './inventory'
 import { DeviceSession, type DeviceDetails, type Foreground, type Orientation, type TreeAnswer } from './session'
 
 /**
@@ -56,6 +56,8 @@ export interface ManagerOptions {
   /** Tests only: the engine answer, and the session each device gets, without a real engine. */
   engine?: Engine | NoEngine
   makeSession?(engine: Engine, id: string): DeviceSession
+  /** Tests only: where the device list comes from, instead of the engine and the disk. */
+  inventory?: InventorySources
 }
 
 /**
@@ -105,8 +107,15 @@ export class DeviceManager {
   private readonly idle = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly rounds: AnnotationRound[] = []
   private readonly roundListeners = new Set<(round: AnnotationRound) => void>()
+  private inventoryOf: DeviceInventory | null = null
 
   constructor(private readonly options: ManagerOptions) {}
+
+  /** The device list's sources and memory, made once the engine is known. */
+  private inventory(engine: Engine): DeviceInventory {
+    this.inventoryOf ??= new DeviceInventory(this.options.inventory ?? engineSources(engine))
+    return this.inventoryOf
+  }
 
   /** The engine, located once. The answer cannot change while the app runs. */
   engine(): Engine | NoEngine {
@@ -126,18 +135,22 @@ export class DeviceManager {
   async list(): Promise<{ available: boolean; reason: string; devices: DeviceEntry[] }> {
     const engine = this.engine()
     if (!engine.ok) return { available: false, reason: engine.reason, devices: [] }
-    return { available: true, reason: '', devices: await listDevices(engine) }
+    return { available: true, reason: '', devices: await this.inventory(engine).list() }
   }
 
   async boot(id: string): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
-    this.requireEngine()
-    return await bootDevice(id)
+    const engine = this.requireEngine()
+    const outcome = await bootDevice(id)
+    this.inventory(engine).forgetPending()
+    return outcome
   }
 
   async shutDown(id: string): Promise<{ ok: true } | { ok: false; message: string }> {
-    this.requireEngine()
+    const engine = this.requireEngine()
     await this.closeSession(id)
-    return await shutDownDevice(id)
+    const outcome = await shutDownDevice(id)
+    this.inventory(engine).forgetPending()
+    return outcome
   }
 
   /** The open session for a device, opening it if it is not. */

@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Engine } from './engine'
@@ -15,6 +16,22 @@ import type { Engine } from './engine'
  * but are not running, which the engine cannot see because it only asks adb.
  * Those come from the Android SDK's own `emulator -list-avds`, so a stranger
  * with Android Studio and nothing else sees the same list Android Studio shows.
+ *
+ * ## When the engine is slow
+ *
+ * Under heavy load — another session's Xcode builds holding a ten-core Mac at
+ * a load average near 1,000 — the engine's `devices` answer came back three
+ * times in a row with the Android emulator and **no iOS Simulators at all**,
+ * and the page, which only asked again on focus, showed none until he clicked
+ * back into the window. So the list has a second source: CoreSimulator's own
+ * record of every simulator, one `device.plist` per device under
+ * `~/Library/Developer/CoreSimulator/Devices`, which carries the name, the
+ * runtime and the state and is only ever *read* here. A slow engine answer is
+ * waited for {@link ENGINE_WAIT_MS} and no longer; when it is late, fails, or
+ * leaves out every iOS device, the simulators come from that record instead —
+ * each on top of the engine's last word about it where there is one — and say
+ * `checking`, rather than vanishing. A late answer is not thrown away: the
+ * next listing uses it instead of starting the engine a second time.
  *
  * ## Starting and stopping
  *
@@ -51,6 +68,12 @@ export interface DeviceEntry {
   canRotate: boolean
   /** A sentence for a row that cannot be used, e.g. an unauthorised phone. */
   note: string
+  /**
+   * The engine did not confirm this row this time — it was slow, or left the
+   * device out — so it comes from the simulator's own record on disk or from
+   * the last list, and is being checked again.
+   */
+  checking?: boolean
 }
 
 /** `com.apple.CoreSimulator.SimRuntime.iOS-27-0` → `iOS 27.0`. */
@@ -192,53 +215,265 @@ async function avdNameOf(serial: string): Promise<string> {
   return out.ok ? (out.stdout.split('\n')[0] ?? '').trim() : ''
 }
 
-export async function listDevices(engine: Engine): Promise<DeviceEntry[]> {
-  const out = await run(engine.core, ['devices'], 20_000, engine.env)
-  let rows: unknown = []
+/* ------------------------------------------------ the record on disk -- */
+
+/** One simulator as CoreSimulator records it in its `device.plist`. */
+export interface DiskSimulator {
+  udid: string
+  name: string
+  /** `com.apple.CoreSimulator.SimRuntime.iOS-27-0`. */
+  runtime: string
+  state: DeviceState
+}
+
+/** Where CoreSimulator keeps one folder per simulator. */
+export function simulatorsFolder(): string {
+  return join(homedir(), 'Library', 'Developer', 'CoreSimulator', 'Devices')
+}
+
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+
+/**
+ * A `device.plist`, read for the five keys this needs.
+ *
+ * Xcode writes them as XML: a flat dictionary of strings, an integer state, a
+ * date and two booleans. Read with a pattern per key rather than a plist
+ * library, because that is all there is; anything unexpected — a binary plist,
+ * a missing UDID, a deleted device — is no simulator rather than a wrong one.
+ * The state is CoreSimulator's own: 1 shut down, 2 booting, 3 booted.
+ */
+export function readDevicePlist(xml: string): DiskSimulator | null {
+  if (!xml.trimStart().startsWith('<?xml') && !xml.trimStart().startsWith('<plist')) return null
+  const text = (key: string): string => {
+    const match = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)
+    return match ? match[1].replace(/&(amp|lt|gt|quot|apos);/g, (_all, name: string) => XML_ENTITIES[name] ?? '') : ''
+  }
+  const deleted = new RegExp('<key>isDeleted</key>\\s*<true\\s*/>').test(xml)
+  const udid = text('UDID')
+  if (deleted || !/^[0-9A-Fa-f-]{36}$/.test(udid)) return null
+  const stateMatch = /<key>state<\/key>\s*<integer>(-?\d+)<\/integer>/.exec(xml)
+  const code = stateMatch ? Number(stateMatch[1]) : NaN
+  const state: DeviceState = code === 3 ? 'ready' : code === 2 ? 'booting' : code === 1 ? 'shutdown' : 'unknown'
+  return { udid: udid.toUpperCase(), name: text('name') || udid, runtime: text('runtime'), state }
+}
+
+/** Every simulator in the record on disk. Read-only, and quiet: an unreadable folder or file is skipped. */
+export async function readDiskSimulators(folder: string = simulatorsFolder()): Promise<DiskSimulator[]> {
+  let names: string[]
   try {
-    rows = out.ok ? JSON.parse(out.stdout) : []
+    names = await readdir(folder)
   } catch {
-    rows = []
+    return []
   }
-  const devices = (Array.isArray(rows) ? rows : []).map(readEngineDevice).filter((d): d is DeviceEntry => d !== null)
-
-  // Emulators that exist but are not running, which adb — and therefore the
-  // engine — has never heard of.
-  const running = new Set<string>()
-  for (const device of devices) {
-    if (device.platform !== 'android' || device.kind !== 'emulator') continue
-    const serial = device.id.replace(/^android:/, '')
-    const avd = await avdNameOf(serial)
-    if (avd !== '') {
-      running.add(avd)
-      if (device.name === serial) device.name = avd.replace(/_/g, ' ')
-    }
-  }
-  for (const avd of await listAvds()) {
-    if (running.has(avd)) continue
-    devices.push({
-      id: `avd:${avd}`,
-      platform: 'android',
-      kind: 'emulator',
-      state: 'shutdown',
-      available: false,
-      name: avd.replace(/_/g, ' '),
-      runtime: '',
-      canBoot: true,
-      canShutDown: false,
-      buttons: [],
-      keys: [],
-      text: 'none',
-      canRotate: false,
-      note: '',
-    })
-  }
-
-  // Running first, then by platform and name, so what can be used is on top.
-  const rank = (d: DeviceEntry): number => (d.available ? 0 : d.state === 'booting' ? 1 : 2)
-  return devices.sort(
-    (a, b) => rank(a) - rank(b) || a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name),
+  const found = await Promise.all(
+    names
+      .filter((name) => /^[0-9A-Fa-f-]{36}$/.test(name))
+      .map(async (name) => {
+        try {
+          return readDevicePlist(await readFile(join(folder, name, 'device.plist'), 'utf8'))
+        } catch {
+          return null
+        }
+      }),
   )
+  return found.filter((sim): sim is DiskSimulator => sim !== null)
+}
+
+/**
+ * What the engine says every iOS Simulator can do — buttons, keys, text,
+ * rotation — read off its answer on this Mac on 2026-10-03, for a simulator
+ * known only from disk. Opening the device asks the engine for its real
+ * details anyway; this only has to be right enough for a row.
+ */
+const IOS_SIMULATOR_INPUT = {
+  buttons: ['home', 'lock', 'volume-up', 'volume-down', 'action'],
+  keys: ['delete', 'return', 'enter', 'tab', 'escape', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'select-all'],
+  text: 'unicode',
+  canRotate: true,
+}
+
+/** A simulator's row from the record on disk, over the engine's last row for it when there is one. */
+export function diskEntry(sim: DiskSimulator, lastFromEngine?: DeviceEntry): DeviceEntry {
+  const state = sim.state
+  return {
+    ...IOS_SIMULATOR_INPUT,
+    ...(lastFromEngine ? { buttons: lastFromEngine.buttons, keys: lastFromEngine.keys, text: lastFromEngine.text, canRotate: lastFromEngine.canRotate } : {}),
+    id: `ios:${sim.udid}`,
+    platform: 'ios',
+    kind: 'simulator',
+    state,
+    available: state === 'ready',
+    name: sim.name,
+    runtime: plainRuntime(sim.runtime) || lastFromEngine?.runtime || '',
+    canBoot: state === 'shutdown',
+    canShutDown: state === 'ready' || state === 'booting',
+    note: '',
+    checking: true,
+  }
+}
+
+/* ----------------------------------------------------------- the list -- */
+
+/** How long a listing waits for the engine before answering from the record on disk. */
+export const ENGINE_WAIT_MS = 5_000
+
+/** A late engine answer older than this is stale, and the engine is asked again. */
+const LATE_ANSWER_KEEP_MS = 15_000
+
+/** Where a listing's facts come from. The real ones are {@link engineSources}; tests pass fakes. */
+export interface InventorySources {
+  /** The engine's `devices` rows, or null when it failed or timed out. */
+  engineDevices(): Promise<unknown[] | null>
+  diskSimulators(): Promise<DiskSimulator[]>
+  /** Android emulators that exist on disk, by AVD name. */
+  avds(): Promise<string[]>
+  /** Which AVD a running emulator is. Empty when it cannot say. */
+  avdNameOf(serial: string): Promise<string>
+}
+
+export function engineSources(engine: Engine): InventorySources {
+  return {
+    engineDevices: async () => {
+      const out = await run(engine.core, ['devices'], 20_000, engine.env)
+      if (!out.ok) return null
+      try {
+        const rows: unknown = JSON.parse(out.stdout)
+        return Array.isArray(rows) ? rows : null
+      } catch {
+        return null
+      }
+    },
+    diskSimulators: () => readDiskSimulators(),
+    avds: listAvds,
+    avdNameOf,
+  }
+}
+
+interface EngineCall {
+  promise: Promise<unknown[] | null>
+  settledAt: number | null
+}
+
+/**
+ * The device list, from the engine and from the simulators' own record, merged
+ * so that no device disappears because one source was slow. One per process
+ * (the manager holds it); it remembers the engine's last word about each
+ * device and any answer still on its way.
+ */
+export class DeviceInventory {
+  private call: EngineCall | null = null
+  private readonly lastIos = new Map<string, DeviceEntry>()
+  private lastAndroid: DeviceEntry[] = []
+  /** AVD names of the emulators in {@link lastAndroid}, so an off-list AVD is not listed twice. */
+  private lastRunningAvds = new Set<string>()
+
+  constructor(
+    private readonly sources: InventorySources,
+    private readonly waitMs: number = ENGINE_WAIT_MS,
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  /** A device was started or stopped: an answer from before that is no use. */
+  forgetPending(): void {
+    if (this.call?.settledAt !== null) this.call = null
+  }
+
+  /** The engine's answer: the one still on its way if there is one, else a new ask. Null if it is not back in time. */
+  private async engineRows(): Promise<{ rows: unknown[] | null; late: boolean }> {
+    if (this.call && this.call.settledAt !== null && this.now() - this.call.settledAt > LATE_ANSWER_KEEP_MS) this.call = null
+    if (!this.call) {
+      const call: EngineCall = { promise: Promise.resolve(null), settledAt: null }
+      call.promise = this.sources
+        .engineDevices()
+        .catch(() => null)
+        .then((rows) => {
+          call.settledAt = this.now()
+          return rows
+        })
+      this.call = call
+    }
+    const call = this.call
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), this.waitMs)
+    })
+    const outcome = await Promise.race([call.promise, late])
+    if (timer) clearTimeout(timer)
+    if (outcome === 'late') return { rows: null, late: true }
+    if (this.call === call) this.call = null
+    return { rows: outcome, late: false }
+  }
+
+  async list(): Promise<DeviceEntry[]> {
+    const [engine, disk] = await Promise.all([this.engineRows(), this.sources.diskSimulators().catch(() => [])])
+    const fromEngine = (engine.rows ?? []).map(readEngineDevice).filter((d): d is DeviceEntry => d !== null)
+    const engineIos = fromEngine.filter((d) => d.platform === 'ios')
+    const engineAndroid = fromEngine.filter((d) => d.platform === 'android')
+    const answered = engine.rows !== null
+
+    // iOS: the engine's word when it gave one; otherwise the record on disk,
+    // over the engine's last word about each device, marked as being checked.
+    let ios: DeviceEntry[]
+    if (answered && engineIos.length > 0) {
+      ios = engineIos
+      for (const entry of engineIos) this.lastIos.set(entry.id, entry)
+    } else {
+      ios = disk.map((sim) => diskEntry(sim, this.lastIos.get(`ios:${sim.udid}`)))
+    }
+
+    // Android: the engine is the only source for what is running. When it did
+    // not answer, what was running a moment ago is still shown, being checked.
+    let android: DeviceEntry[]
+    const running = new Set<string>()
+    if (answered) {
+      android = engineAndroid
+      for (const device of android) {
+        if (device.kind !== 'emulator') continue
+        const serial = device.id.replace(/^android:/, '')
+        const avd = await this.sources.avdNameOf(serial)
+        if (avd !== '') {
+          running.add(avd)
+          if (device.name === serial) device.name = avd.replace(/_/g, ' ')
+        }
+      }
+      // A copy: the rows for emulators that are off are added to `android` below.
+      this.lastAndroid = [...android]
+      this.lastRunningAvds = new Set(running)
+    } else {
+      android = this.lastAndroid.map((entry) => ({ ...entry, checking: true }))
+      for (const avd of this.lastRunningAvds) running.add(avd)
+    }
+
+    // Emulators that exist but are not running, which adb — and therefore the
+    // engine — has never heard of. Without an answer from the engine, "not
+    // running" is a guess, and the row says it is being checked.
+    for (const avd of await this.sources.avds()) {
+      if (running.has(avd)) continue
+      android.push({
+        ...(answered ? {} : { checking: true }),
+        id: `avd:${avd}`,
+        platform: 'android',
+        kind: 'emulator',
+        state: 'shutdown',
+        available: false,
+        name: avd.replace(/_/g, ' '),
+        runtime: '',
+        canBoot: true,
+        canShutDown: false,
+        buttons: [],
+        keys: [],
+        text: 'none',
+        canRotate: false,
+        note: '',
+      })
+    }
+
+    // Running first, then by platform and name, so what can be used is on top.
+    const rank = (d: DeviceEntry): number => (d.available ? 0 : d.state === 'booting' ? 1 : 2)
+    return [...ios, ...android].sort(
+      (a, b) => rank(a) - rank(b) || a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name),
+    )
+  }
 }
 
 /** Wait for a condition, checking every `everyMs`, for at most `budgetMs`. */
