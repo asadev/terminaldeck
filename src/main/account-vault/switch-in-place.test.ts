@@ -76,7 +76,7 @@ function world(over: Partial<InPlaceDeps> = {}): {
   seat: Seat
 } {
   const order: string[] = []
-  const seat: Seat = { launch: 'a', launchDir: dir, serving: 'a', lastServed: 'a', sessionId: 's1' }
+  const seat: Seat = { launch: 'a', launchDir: dir, storeDir: dir, serving: 'a', lastServed: 'a', sessionId: 's1' }
   let clock = 1_000_000
   const deps: InPlaceDeps = {
     seat: (sessionId) => (sessionId === 's1' ? seat : null),

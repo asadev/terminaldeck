@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { SessionMeta } from '../shared/types'
@@ -23,6 +24,9 @@ import type { SessionMeta } from '../shared/types'
 const darwin = process.platform === 'darwin'
 const root = mkdtempSync('/tmp/tdhc-')
 const fakeBin = join(root, 'bin')
+/** A scratch stand-in for the Mac's own `~/.claude`. */
+const systemDir = join(root, 'own-claude')
+const inheritedConfigDir = process.env.CLAUDE_CONFIG_DIR
 
 vi.mock('./providers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./providers')>()
@@ -59,9 +63,12 @@ beforeAll(async () => {
       '#!/bin/sh',
       'echo "PID=$$"',
       'while IFS= read -r line; do',
+      // The name Claude Code asks under (`jF` in 2.1.287): the credential
+      // folder's hash when one is set, else the config folder's, else none.
       '  svc="Claude Code-credentials"',
-      '  if [ -n "$CLAUDE_CONFIG_DIR" ]; then',
-      '    h=$(printf "%s" "$CLAUDE_CONFIG_DIR" | shasum -a 256 | cut -c1-8)',
+      '  dir="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$CLAUDE_CONFIG_DIR}"',
+      '  if [ -n "$dir" ]; then',
+      '    h=$(printf "%s" "$dir" | shasum -a 256 | cut -c1-8)',
       '    svc="$svc-$h"',
       '  fi',
       '  out=$(security find-generic-password -a me -w -s "$svc" 2>/dev/null)',
@@ -72,8 +79,27 @@ beforeAll(async () => {
     ].join('\n'),
   )
   chmodSync(join(fakeBin, 'claude'), 0o755)
+  /*
+   * The "real" keychain holds one item: the Mac's own login, under the name a
+   * plain `claude` with this folder would use. The app process here inherited
+   * `CLAUDE_CONFIG_DIR` (a scratch "~/.claude"), so that name carries its hash.
+   */
+  mkdirSync(systemDir, { recursive: true })
+  process.env.CLAUDE_CONFIG_DIR = systemDir
+  const systemService = `Claude Code-credentials-${createHash('sha256').update(systemDir).digest('hex').slice(0, 8)}`
+  const systemLogin = Buffer.from(claudeLogin('MAC-OWN'), 'utf8').toString('base64')
   const fakeSecurity = join(root, 'fake-security')
-  writeFileSync(fakeSecurity, '#!/bin/sh\n[ "$1" = "-i" ] && cat >/dev/null\nexit 44\n')
+  writeFileSync(
+    fakeSecurity,
+    [
+      '#!/bin/sh',
+      '[ "$1" = "-i" ] && { cat >/dev/null; exit 0; }',
+      'svc=""; prev=""; for a in "$@"; do [ "$prev" = "-s" ] && svc="$a"; prev="$a"; done',
+      `[ "$1" = find-generic-password ] && [ "$svc" = '${systemService}' ] && { printf '%s' '${systemLogin}' | base64 -D; echo; exit 0; }`,
+      'exit 44',
+      '',
+    ].join('\n'),
+  )
   chmodSync(fakeSecurity, 0o755)
 
   installPaths(nodePaths({ platform: 'linux', env: { XDG_DATA_HOME: root }, home: root, appRoot: root }))
@@ -97,6 +123,8 @@ afterAll(async () => {
   await core?.ptys.drain()
   await core?.credentials.stop()
   await handle?.dispose()
+  if (inheritedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = inheritedConfigDir
   resetPaths()
   resetProfilesCache()
   rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
@@ -157,6 +185,36 @@ describe.skipIf(!darwin)('switching a running Claude Code session in place', () 
     expect((await ask(meta.id)).token).toBe('sk-ant-oat01-HOME')
     expect(core.ptys.pidOf(meta.id)).toBe(pidBefore)
     expect(core.ledger.get(meta.id)?.homeProfileId).toBeUndefined()
+  }, 30_000)
+
+  it('a session on the Mac’s own login switches in place too — and nothing is written into its folder', async () => {
+    if (handle === null) throw new Error('no vault')
+    const { systemProfileId } = await import('./profiles')
+    const work = createProfile('premium@example.com')
+    handle.runtime.vault.put(work.id, 'claude', SLOT, claudeLogin('PREMIUM'), 'sign-in')
+
+    const cwd = mkdtempSync(join(root, 'crm-'))
+    const meta = await core.startSession({ cwd, cols: 100, rows: 30, provider: 'claude', profileId: systemProfileId('claude') })
+    const pid = core.ptys.pidOf(meta.id)
+    expect((await ask(meta.id)).token).toBe('sk-ant-oat01-MAC-OWN')
+    const before = readdirSync(systemDir).sort()
+
+    const verbs = createSessionSwitch(core)
+    const switched = await verbs.perform(meta.id, work.id)
+    expect(switched).toMatchObject({ id: meta.id, profileId: work.id })
+    // Its folder — the one a plain `claude` uses — is exactly as it was the
+    // moment the switch landed: nothing created there to make the CLI look.
+    expect(readdirSync(systemDir).sort()).toEqual(before)
+    expect(existsSync(join(systemDir, '.credentials.json'))).toBe(false)
+
+    expect((await ask(meta.id)).token).toBe('sk-ant-oat01-PREMIUM')
+    expect(core.ptys.pidOf(meta.id)).toBe(pid)
+    expect(readdirSync(systemDir).sort()).toEqual(before)
+    // The nudge went into the app's own credential folder, and was taken back
+    // once the session had read its new login.
+    const store = join(root, 'account-vault', 'store', systemProfileId('claude').replace(/[^A-Za-z0-9._-]/g, '_'))
+    expect(existsSync(store)).toBe(true)
+    expect(existsSync(join(store, '.credentials.json'))).toBe(false)
   }, 30_000)
 
   it('a session whose process has ended loses its seat, and is switched by a restart instead', async () => {

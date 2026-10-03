@@ -56,6 +56,11 @@ export interface ChromeSession {
   provider: ProviderId
   /** Set once the process is gone. */
   exited: boolean
+  /**
+   * Switched to another account in place since it started — the process still
+   * runs in the folder of the account it started on. See `SessionMeta.homeProfileId`.
+   */
+  switchedInPlace?: boolean
 }
 
 export interface AgentPresence {

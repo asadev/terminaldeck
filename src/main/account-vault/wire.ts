@@ -228,7 +228,10 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
     },
   })
 
-  const runtime: AccountVaultRuntime = { vault, tickets, socketPath, shimDir, codex, keychain }
+  // One credential folder per account, for sessions on a login the agent keeps
+  // — see `seatLaunch`. Beside the vault, never inside a folder of the person's.
+  const storeBase = join(dir, 'store')
+  const runtime: AccountVaultRuntime = { vault, tickets, socketPath, shimDir, codex, keychain, storeBase }
   installAccountVault(runtime)
 
   // Every Codex account's file and kept copy into agreement — the move for an

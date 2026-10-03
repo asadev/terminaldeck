@@ -101,6 +101,14 @@ export interface Seat {
    * directory", read through `configDirOf` when asked.
    */
   launchDir: string | null | undefined
+  /**
+   * The folder the process keeps its credential files in — its plaintext
+   * fallback store, the file whose time makes it read its login again, its
+   * refresh lock (`yb()` in Claude Code 2.1.287) — when that folder is this
+   * app's own. Null when it is not (the folder is shared with the person's own
+   * terminal `claude`), in which case nothing is ever written there.
+   */
+  storeDir: string | null
   /** The account whose login it is handed now. Null once that account is deleted. */
   serving: string | null
   /** The account whose login the most recent lookup was answered with. */
@@ -138,14 +146,21 @@ export class TicketBook {
   ticketFor(accountId: string): string {
     const held = this.byAccount.get(accountId)
     if (held !== undefined && this.seats.has(held)) return held
-    const ticket = this.mint({ launch: accountId, launchDir: undefined, serving: accountId, lastServed: accountId, sessionId: null })
+    const ticket = this.mint({
+      launch: accountId,
+      launchDir: undefined,
+      storeDir: null,
+      serving: accountId,
+      lastServed: accountId,
+      sessionId: null,
+    })
     this.byAccount.set(accountId, ticket)
     return ticket
   }
 
-  /** A seat for one launch: started as `launch`, in `launchDir`, served as `serving`. */
-  seat(launch: string, launchDir: string | null, serving: string = launch): string {
-    return this.mint({ launch, launchDir, serving, lastServed: serving, sessionId: null })
+  /** A seat for one launch: started as `launch`, naming its keychain items after `launchDir`, served as `serving`. */
+  seat(launch: string, launchDir: string | null, serving: string = launch, storeDir: string | null = null): string {
+    return this.mint({ launch, launchDir, storeDir, serving, lastServed: serving, sessionId: null })
   }
 
   /** Tie a seat to the session it was minted for. A per-account ticket is never tied. */
@@ -386,6 +401,29 @@ function ownSuffixes(seat: Seat, deps: VaultServerDeps): ReadonlySet<string | nu
 }
 
 /**
+ * The folder whose hash is on a seat's own keychain names (`null`: no hash),
+ * or `undefined` when it cannot be known.
+ */
+function seatNaming(seat: Seat, deps: VaultServerDeps): string | null | undefined {
+  if (seat.launchDir !== undefined) return seat.launchDir
+  return deps.configDirOf(seat.launch) ?? undefined
+}
+
+/** The folder whose hash is on an account's own keychain items, or `undefined` when unknown. */
+function accountNaming(account: string, source: LoginSource | null, deps: VaultServerDeps): string | null | undefined {
+  if (source === null) return undefined
+  if (source.kind === 'keychain') return source.dir
+  return deps.configDirOf(account) ?? undefined
+}
+
+/** Two namings the CLI would hash the same — both absent, or the same folder. */
+function sameNaming(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (a === undefined || b === undefined) return false
+  if (a === null || b === null) return a === b
+  return a.normalize('NFC') === b.normalize('NFC')
+}
+
+/**
  * Does this request carry the seat's own directory hash?
  *
  * `locked?` names no service and is always the seat's to answer. Anything else
@@ -487,8 +525,20 @@ export function answerShim(body: Buffer, deps: VaultServerDeps): WireAnswer {
    */
   const accountOf = (request: KeychainRequest): string =>
     request.op === 'find' ? serving : (seat.lastServed ?? serving)
+  /*
+   * The real command, untouched, can only answer for an account whose own
+   * keychain item is the name the process asks under — the account it was
+   * started as, kept by the agent, *and* started without its credential folder
+   * moved (a session on the Mac's own login is started with that folder in this
+   * app's data, see `seatLaunch`, so its names carry that folder's hash and are
+   * rewritten to the real item instead).
+   */
+  const ownNames = (account: string): boolean => {
+    const source = sourceFor(account, deps)
+    return sameNaming(seatNaming(seat, deps), accountNaming(account, source, deps))
+  }
   const launchKeychain = (account: string): boolean =>
-    account === seat.launch && sourceFor(account, deps)?.kind === 'keychain'
+    account === seat.launch && sourceFor(account, deps)?.kind === 'keychain' && ownNames(account)
 
   /*
    * The agent's own login, on the seat it was started on: the real command,
@@ -525,6 +575,7 @@ export function answerShim(body: Buffer, deps: VaultServerDeps): WireAnswer {
     only.op !== 'locked?' &&
     only.op !== 'add' &&
     accountOf(only) === seat.launch &&
+    ownNames(seat.launch) &&
     deps.adopting(seat.launch, only.slot) &&
     deps.vault.read(seat.launch, only.slot) === null
   ) {
@@ -572,7 +623,7 @@ export function answerShim(body: Buffer, deps: VaultServerDeps): WireAnswer {
     // move `capture` makes for a session started on it.
     if (
       request.op !== 'add' &&
-      account !== seat.launch &&
+      !(account === seat.launch && ownNames(account)) &&
       deps.adopting(account, request.slot) &&
       deps.vault.read(account, request.slot) === null
     ) {
@@ -675,6 +726,7 @@ export function acceptCapture(body: Buffer, deps: VaultServerDeps): boolean {
   // Only on the seat started as the account: the real command read the item
   // named after the launch directory, which is that account's and nobody else's.
   if (seat === null || seat.serving === null || seat.serving !== seat.launch) return false
+  if (!sameNaming(seatNaming(seat, deps), deps.configDirOf(seat.launch) ?? undefined)) return false
   const accountId = seat.launch
   const provider = deps.providerOf(accountId)
   if (provider === null) return false

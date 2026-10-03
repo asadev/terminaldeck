@@ -330,3 +330,49 @@
   color: var(--text-primary);
   pointer-events: none;
 }
+
+/* Under way: the same line, in quieter ink, from the click until it lands. */
+.account-switch-note[data-state='working'] {
+  color: var(--text-secondary);
+}
+
+/* Landed: a tick in the accent, then the account's name. */
+.account-switch-note[data-state='done'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-switch-note-mark {
+  flex: none;
+  color: var(--accent);
+}
+
+/*
+ * The account name, lit once where the change happened — the chip is what he
+ * was looking at when nothing seemed to change.
+ */
+.account-chip.is-just-switched .account-chip-name {
+  border-radius: 4px;
+  animation: account-chip-landed 1.6s ease-out;
+}
+
+@keyframes account-chip-landed {
+  0% {
+    color: var(--accent);
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  60% {
+    color: var(--accent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-chip.is-just-switched .account-chip-name {
+    animation: none;
+    color: var(--accent);
+  }
+}

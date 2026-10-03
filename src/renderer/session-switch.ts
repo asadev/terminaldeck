@@ -374,6 +374,13 @@ export interface SwitchRequest {
   profileId: string
 }
 
+/** A switch under way without the sheet: which session, to which account. */
+export interface SwitchWorking {
+  sessionId: string
+  profileId: string
+  to: SwitchAccountView | null
+}
+
 /** A switch made in place: the session's updated row and who it is signed in as now. */
 export interface SwitchDone {
   sessionId: string
@@ -401,6 +408,13 @@ export interface SwitchController {
   done: SwitchDone | null
   /** Forget `done` once the window has shown it. */
   dismissDone(): void
+  /**
+   * A switch under way with no sheet open — the plan being read, or a switch
+   * made in place being made — so the window can say "Switching to …" the
+   * moment the account is picked. Asad, on 0.16.1: he saw nothing happen on
+   * the first click. `to` is filled in once the plan has named the account.
+   */
+  working: SwitchWorking | null
   ask(request: SwitchRequest): void
   cancel(): void
   /** Do it. Resolves with the replacement session, or null if it did not happen. */
@@ -457,6 +471,7 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [done, setDone] = useState<SwitchDone | null>(null)
+  const [working, setWorking] = useState<SwitchWorking | null>(null)
   /*
    * Which question is current. Every `ask` and every `cancel` moves it on, and
    * an answer for a question that is no longer current is dropped: two rapid
@@ -492,31 +507,37 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
       setAsking(null)
       setPlan(null)
       setBusy(true)
+      setWorking({ sessionId: request.sessionId, profileId: request.profileId, to: null })
       void deck.planSessionSwitch(request.sessionId, request.profileId).then(
         (raw) => {
           if (!current()) return
           const read = readSwitchPlan(raw)
           if (read === null) {
             setBusy(false)
+            setWorking(null)
             setAsking(request)
             setProblem('This build could not work out what switching would do.')
             return
           }
           if (!switchesWithoutAsking(read)) {
             setBusy(false)
+            setWorking(null)
             setAsking(request)
             setPlan(read)
             return
           }
+          setWorking({ sessionId: request.sessionId, profileId: request.profileId, to: read.to })
           void deck.switchSessionAccount(request.sessionId, request.profileId).then(
             (meta) => {
               setBusy(false)
+              setWorking((now) => (now?.sessionId === request.sessionId ? null : now))
               setDone({ sessionId: request.sessionId, meta, to: read.to })
             },
             (error: unknown) => {
               // It did not happen, and the session is exactly as it was: the
               // sheet comes up with the reason, over the plan it was making.
               setBusy(false)
+              setWorking((now) => (now?.sessionId === request.sessionId ? null : now))
               if (!current()) return
               setAsking(request)
               setPlan(read)
@@ -527,6 +548,7 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
         (error: unknown) => {
           if (!current()) return
           setBusy(false)
+          setWorking(null)
           setAsking(request)
           setProblem(switchProblem(error))
         },
@@ -539,6 +561,7 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
 
   const cancel = useCallback(() => {
     generation.current++
+    setWorking(null)
     setAsking(null)
     setPlan(null)
     setProblem(null)
@@ -607,6 +630,7 @@ export function useSwitchAccount(injected?: SwitchBridge | null): SwitchControll
     problem,
     done,
     dismissDone,
+    working,
     ask,
     cancel,
     confirm,

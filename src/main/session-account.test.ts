@@ -595,3 +595,56 @@ describe('the Windows ladder, fed by the agent’s own hooks', () => {
     }
   })
 })
+
+/**
+ * The owner on 0.16.1, after switching a session in place: the header chip and
+ * the menu tick stayed on the old account, while picking the new one again
+ * said "This session is already running as that account". The session's
+ * record had changed; this module's answer — cached for the life of the
+ * process, keyed on a pid that a switch made in place keeps — had not.
+ */
+describe('a session switched in place', () => {
+  const USER_DATA = join(tmpdir(), `terminaldeck-session-account-switch-${process.pid}`)
+
+  beforeEach(() => {
+    resetPaths()
+    installPaths({ userData: () => USER_DATA, home: () => USER_DATA, downloads: () => USER_DATA, appRoot: () => USER_DATA })
+    rmSync(USER_DATA, { recursive: true, force: true })
+    mkdirSync(USER_DATA, { recursive: true })
+    resetProfilesCache()
+    configureSessionAccounts(null)
+    dropSessionAccount()
+  })
+
+  afterAll(() => {
+    resetPaths()
+    configureSessionAccounts(null)
+    rmSync(USER_DATA, { recursive: true, force: true })
+  })
+
+  it('names the account it was switched to — same id, same pid — not the one it started on', async () => {
+    const { createProfile } = await import('./profiles')
+    const work = createProfile('work@example.com')
+    const session: SessionMeta = {
+      id: 'switched-in-place',
+      title: 'ClaudeCRM',
+      cwd: '/Users/apple/ClaudeCRM',
+      provider: 'claude',
+      exitCode: null,
+      createdAt: 1,
+      profileId: systemProfileId('claude'),
+      profileName: 'app.imatch.ae',
+    }
+    configureSessionAccounts({ pidOf: () => 4242, describeSession: () => session, platform: 'darwin' })
+
+    const before = await sessionAccount(session.id)
+    expect(before).toMatchObject({ kind: 'known', profileId: systemProfileId('claude'), source: 'spawn' })
+
+    // What `PtyManager.setAccount` does to the record when the switch lands.
+    session.profileId = work.id
+    session.profileName = work.name
+
+    expect(await sessionAccount(session.id)).toMatchObject({ kind: 'known', profileId: work.id, profileName: 'work@example.com' })
+    expect(establishedConfigDir(session.id)).toBe(work.configDir)
+  })
+})

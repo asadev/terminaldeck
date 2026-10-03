@@ -55,7 +55,6 @@ import {
   type Profile,
 } from './profiles'
 import {
-  agentLaunchDir,
   currentAccountVault,
   loginSource,
   retargetSeat,
@@ -210,14 +209,9 @@ function liveInPlace(): InPlaceDeps {
     ...(currentAccountVault()?.keychain ? { keychain: currentAccountVault()?.keychain } : {}),
     user: keychainUser(process.env, () => userInfo().username),
     retarget: (sessionId, accountId) => retargetSeat(sessionId, accountId),
-    launchDir: (seat) => {
-      // The folder the process keeps `.credentials.json` and its refresh lock
-      // in: the one it was started with. For the machine's own install that is
-      // the agent's default folder, which is what the system profile records.
-      if (seat.launchDir !== null && seat.launchDir !== undefined) return seat.launchDir
-      const launch = findProfile(profilesState(), seat.launch)
-      return launch === null ? join(homedir(), '.claude') : (agentLaunchDir(launch) ?? launch.configDir)
-    },
+    // The app-owned folder the process keeps its credential files in, and only
+    // that: a folder the person's own terminal uses is never written to.
+    launchDir: (seat) => seat.storeDir,
     sha256,
   }
 }
@@ -586,7 +580,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
     const seat = deps.seat(plan.sessionId)
     const moved = await switchInPlace(plan.sessionId, { id: target.id, name: target.name, configDir: target.configDir }, deps)
     if (!moved.ok) throw new Error(moved.why)
-    if (moved.nudged === 'created') noteCreatedNudge(plan.sessionId, moved.nudgeFile)
+    if (moved.nudged === 'created' && moved.nudgeFile !== null) noteCreatedNudge(plan.sessionId, moved.nudgeFile)
 
     const home = seat?.launch ?? saved.homeProfileId ?? saved.profileId
     const meta = core.ptys.setAccount(plan.sessionId, { id: target.id, name: target.name }, home)

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, it } from 'vitest'
 import { withPath } from '../platform/host'
@@ -133,7 +133,20 @@ describe.skipIf(!LIVE)('measure: when a running Claude Code re-reads its login',
       await turn('two')
       mark(`turn2 -> ${last()}`)
 
-      if (process.env.TD_MEASURE_MODE === 'touch') {
+      if (process.env.TD_MEASURE_MODE === 'config') {
+        // Only the global config's identity changes — no credentials file.
+        const file = join(cfg, '.claude.json')
+        const now = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>) : {}
+        serve('B')
+        writeFileSync(file, JSON.stringify({ ...now, oauthAccount: { accountUuid: 'b', emailAddress: 'b@example.com', organizationUuid: 'ob', organizationName: 'B org' } }))
+        mark('SWITCH to B, then rewrite .claude.json oauthAccount (no credentials file)')
+        await sleep(1500)
+        await turn('three')
+        mark(`turn3 -> ${last()}`)
+        await sleep(3000)
+        await turn('four')
+        mark(`turn4 -> ${last()}`)
+      } else if (process.env.TD_MEASURE_MODE === 'touch') {
         serve('B')
         writeFileSync(join(cfg, '.credentials.json'), '{}\n', { mode: 0o600 })
         mark('SWITCH to B, then write {} to .credentials.json')

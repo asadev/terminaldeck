@@ -1824,15 +1824,21 @@ export function parseSessionAccount(value: unknown): SessionAccountView {
 export function useSessionAccount(
   sessionId: string | null,
   agentRunning: boolean | null,
+  /**
+   * The account the session's own record names right now. A switch made in
+   * place changes it without changing the session id, and the answer has to
+   * be asked again then — with the old one dropped at once, so that for the
+   * moment the new answer is on its way the chip falls back to the record (the
+   * new account) rather than drawing the account the session just left.
+   */
+  recordedAccount: string | null = null,
 ): SessionAccountView | undefined {
   const bridge = useMemo(() => accountsBridge(), [])
   const [answer, setAnswer] = useState<SessionAccountView | undefined>(undefined)
 
   useEffect(() => {
-    if (sessionId === null) {
-      setAnswer(undefined)
-      return
-    }
+    setAnswer(undefined)
+    if (sessionId === null) return
     const ask = bridge?.sessionAccount
     if (!ask) {
       // A build whose preload predates the channel. Said plainly rather than
@@ -1865,7 +1871,7 @@ export function useSessionAccount(
     return () => {
       live = false
     }
-  }, [bridge, sessionId, agentRunning])
+  }, [bridge, sessionId, agentRunning, recordedAccount])
 
   return answer
 }

@@ -247,3 +247,56 @@ describe('a seat switched onto a login the agent keeps', () => {
     expect(answerShim(find(ticket, DIRS.a ?? null), deps)).toMatchObject({ kind: 'exit', answer: { code: EXIT_NOT_FOUND } })
   })
 })
+
+/**
+ * A session on a login the agent keeps, started with its credential folder in
+ * this app's data (`seatLaunch`) so that nothing is ever written into the
+ * folder the person's own terminal uses. Its keychain names then carry that
+ * folder's hash; the seat answers them from the real item, under the real name.
+ */
+describe('a seat whose credential folder is the app’s own', () => {
+  const STORE = '/app/data/account-vault/store/system'
+
+  it('reads the machine’s own login from its real item — the names it asks under are rewritten, never passed', async () => {
+    const ticket = tickets.seat('system', STORE, 'system', STORE)
+    tickets.bind(ticket, 's1')
+    const answer = answerShim(find(ticket, STORE), deps)
+    expect(answer.kind).toBe('steps')
+    if (answer.kind !== 'steps') return
+    await runSteps(answer, deps, 'me')
+    expect(ran).toEqual([{ argv: ['find-generic-password', '-a', 'me', '-w', '-s', 'Claude Code-credentials'], stdin: null }])
+  })
+
+  it('its sign-in or refresh is written to the real item, over stdin', async () => {
+    const ticket = tickets.seat('system', STORE, 'system', STORE)
+    tickets.bind(ticket, 's1')
+    const read = answerShim(find(ticket, STORE), deps)
+    if (read.kind !== 'steps') throw new Error('expected steps')
+    await runSteps(read, deps, 'me')
+    const write = answerShim(add(ticket, STORE, claudeLogin('SYS-NEW')), deps)
+    if (write.kind !== 'steps') throw new Error('expected steps')
+    await runSteps(write, deps, 'me')
+    expect(ran.at(-1)?.stdin).toContain('-s "Claude Code-credentials" -X')
+  })
+
+  it('switched to an account the app keeps, it is answered from the vault like any seat', () => {
+    const ticket = tickets.seat('system', STORE, 'system', STORE)
+    tickets.bind(ticket, 's1')
+    tickets.retarget('s1', 'b')
+    expect(answerShim(find(ticket, STORE), deps)).toMatchObject({ kind: 'exit', answer: { stdout: claudeLogin('B') } })
+  })
+
+  it('an account made before the vault, started this way, is moved in from its own item — not "captured" under the wrong name', async () => {
+    adopting.add('c')
+    const own = '/app/data/account-vault/store/c'
+    const ticket = tickets.seat('c', own, 'c', own)
+    tickets.bind(ticket, 's1')
+    keychainAnswer = () => ({ code: 0, stdout: `${claudeLogin('C')}\n`, stderr: '' })
+    const answer = answerShim(find(ticket, own), deps)
+    expect(answer.kind).toBe('steps')
+    if (answer.kind !== 'steps') return
+    expect(await runSteps(answer, deps, 'me')).toMatchObject({ code: 0, stdout: claudeLogin('C') })
+    expect(ran[0]?.argv.at(-1)).toBe(serviceIn(DIRS.c ?? null))
+    expect(vault.read('c', SLOT)).toBe(claudeLogin('C'))
+  })
+})

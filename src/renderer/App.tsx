@@ -226,6 +226,7 @@ function chromeSession(
         id: found.id,
         provider: found.provider,
         exited: found.exitCode !== null,
+        ...(found.homeProfileId !== undefined ? { switchedInPlace: true } : {}),
       }
     : null
 }
@@ -2022,14 +2023,16 @@ function Workspace() {
    * says "Switched to …" under the chip for a moment. Asad: *"Only account
    * should be changing."*
    */
-  const [accountSwitchNote, setAccountSwitchNote] = useState<{ text: string; at: number } | null>(null)
+  const [accountSwitchNote, setAccountSwitchNote] = useState<{ text: string; at: number; sessionId: string } | null>(
+    null,
+  )
   useEffect(() => {
     const done = switcher.done
     if (done === null) return
     adoptSwitched(done.sessionId, done.meta)
     const name =
       done.to === null ? (done.meta.profileName ?? 'the other account') : switchNames({ from: null, to: done.to }, knownSignIns).to
-    setAccountSwitchNote({ text: `Switched to ${name}`, at: Date.now() })
+    setAccountSwitchNote({ text: `Switched to ${name}`, at: Date.now(), sessionId: done.sessionId })
     switcher.dismissDone()
   }, [adoptSwitched, knownSignIns, switcher])
   useEffect(() => {
@@ -2037,6 +2040,21 @@ function Workspace() {
     const timer = setTimeout(() => setAccountSwitchNote(null), 4000)
     return () => clearTimeout(timer)
   }, [accountSwitchNote])
+  /*
+   * And the moment before it. Asad, on 0.16.1: *"it is showing still the
+   * older account"* — and on the first click he saw nothing happen at all.
+   * The switch can take a second or two (moving a login in from the keychain,
+   * waiting out a refresh), so the line under the chip says what is happening
+   * from the click on, and then that it happened.
+   */
+  const switchingNote =
+    switcher.working !== null && switcher.asking === null
+      ? `Switching to ${
+          switcher.working.to === null
+            ? 'the other account'
+            : switchNames({ from: null, to: switcher.working.to }, knownSignIns).to
+        }…`
+      : null
 
   /**
    * A switch that was armed for his next message has happened.
@@ -6448,6 +6466,14 @@ function Workspace() {
                             pendingAccount={
                               focusedSession ? (armedSwitches[focusedSession.id] ?? null) : null
                             }
+                            /* Lights the account name for a moment when a switch
+                               made in place has just landed on this session. */
+                            justSwitched={
+                              accountSwitchNote !== null &&
+                              focusedSession !== null &&
+                              focusedSession !== undefined &&
+                              accountSwitchNote.sessionId === focusedSession.id
+                            }
                             projectPath={headingFolder}
                             /*
                              * The agent a session started from this chip would run — the
@@ -6493,10 +6519,34 @@ function Workspace() {
                           />
                           {/* "Switched to …", after a switch made in place. It
                               clears itself; see `accountSwitchNote`. */}
-                          {accountSwitchNote === null ? null : (
+                          {switchingNote === null && accountSwitchNote === null ? null : (
                             <span className="machine-switch-host">
-                              <span className="account-switch-note" role="status">
-                                {accountSwitchNote.text}
+                              <span
+                                className="account-switch-note"
+                                role="status"
+                                data-state={switchingNote !== null ? 'working' : 'done'}
+                              >
+                                {switchingNote !== null ? (
+                                  switchingNote
+                                ) : (
+                                  <>
+                                    <svg
+                                      className="account-switch-note-mark"
+                                      width="12"
+                                      height="12"
+                                      viewBox="0 0 20 20"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2.2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      aria-hidden="true"
+                                    >
+                                      <path d="M4.5 10.5 8 14l7.5-8" />
+                                    </svg>
+                                    {accountSwitchNote?.text}
+                                  </>
+                                )}
                               </span>
                             </span>
                           )}

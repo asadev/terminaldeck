@@ -670,7 +670,7 @@ export function sessionAccount(sessionId: string): Promise<SessionAccountAnswer>
 
   const pid = wiring.pidOf(sessionId)
   const cached = answers.get(sessionId)
-  if (cached && cached.pid === pid && cached.expiresAt > Date.now()) {
+  if (cached && cached.pid === pid && cached.expiresAt > Date.now() && stillSpawnedAs(cached.answer, sessionId, wiring)) {
     return Promise.resolve(cached.answer)
   }
   const running = inFlight.get(sessionId)
@@ -738,10 +738,32 @@ async function establish(
  * probe is kicked off so the *next* push has the answer. That is the whole of
  * why the miss is not an error: it is a not-yet, and it resolves itself.
  */
+/**
+ * Is a cached answer still what the session's own record says?
+ *
+ * A spawn answer used to be kept for the life of the process — keyed on its
+ * pid, because a new process was the only way its account could change. A
+ * switch made in place changes the account and keeps the pid, so the cached
+ * answer went on naming the account the session had been switched *away*
+ * from: the owner's chip and tick stayed on the old account while the switch
+ * sheet, reading the record, said the session was already on the new one.
+ * A spawn answer now stands only while the record still names that account.
+ */
+function stillSpawnedAs(answer: SessionAccountAnswer, sessionId: string, wiring: SessionAccountDeps): boolean {
+  if (answer.kind !== 'known' || answer.source !== 'spawn') return true
+  const session = wiring.describeSession(sessionId)
+  return session !== null && session.profileId === answer.profileId
+}
+
 export function establishedAccount(sessionId: string): KnownSessionAccount | null {
   const pid = deps?.pidOf(sessionId) ?? null
   const cached = answers.get(sessionId)
-  if (cached && cached.pid === pid && cached.expiresAt > Date.now()) {
+  if (
+    cached &&
+    cached.pid === pid &&
+    cached.expiresAt > Date.now() &&
+    (deps === null || stillSpawnedAs(cached.answer, sessionId, deps))
+  ) {
     return cached.answer.kind === 'known' ? cached.answer : null
   }
   void sessionAccount(sessionId).catch(() => undefined)
