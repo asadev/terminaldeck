@@ -439,6 +439,11 @@ function keyInstructions(caller: Caller): string {
     'answered, look at git changes and alerts. Start with sessions_list and projects_list. Many tools are held ' +
     'back to keep this list short — tools_describe lists them by area and gives any one’s arguments, and tools_run calls ' +
     `it. The owner made the key you are using for this app: ${level}.${ask}${folders} ` +
+    // The one sentence about hearing back, here and in every setup snippet:
+    // an agent told nothing loops on sessions_wait per session, which costs it
+    // turns and this Mac reads.
+    'When you are idle, call notifications_wait instead of polling sessions_wait in a loop: it returns as soon ' +
+    'as any session you started or sent to finishes a turn, needs input or exits. ' +
     'Every call is written to an activity log the owner reads, under this app’s name.'
   )
 }

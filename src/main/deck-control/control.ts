@@ -479,6 +479,15 @@ export class DeckControl {
   }
 
   /** Sessions this run's copilot started. Exposed for the status channel. */
+  /**
+   * Who started a session this run: `copilot`, `key:<id>`, or null for one no
+   * caller here started. Read by `notify-detect.ts` to decide whose a
+   * notification is — the same record that decides `act` or `alter`.
+   */
+  starterOf(sessionId: string): string | null {
+    return this.started.get(sessionId) ?? null
+  }
+
   copilotSessions(): string[] {
     return [...this.started].filter(([, starter]) => starter === 'copilot').map(([id]) => id)
   }
@@ -488,9 +497,13 @@ export class DeckControl {
     caller: Caller,
     attended: boolean,
     granted: ReadonlySet<string> | undefined,
+    signal?: AbortSignal,
   ): ToolContext {
     return {
       surface: this.options.surface,
+      // The caller hanging up, for a tool that waits on its own clock — see
+      // `ToolContext.signal`.
+      ...(signal === undefined ? {} : { signal }),
       /*
        * Passed down, not kept private, and only one tool reads it: `tour.play`.
        *
@@ -725,7 +738,7 @@ export class DeckControl {
       })
     }
 
-    const context = this.context(id, caller, attended, options.granted)
+    const context = this.context(id, caller, attended, options.granted, signal)
 
     /*
      * The tool's own redaction, then the key-name pass, in that order.

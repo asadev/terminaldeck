@@ -124,3 +124,64 @@ describe('the internet address', () => {
     expect(internetBase('not a url', 'HOST')).toBeNull()
   })
 })
+
+describe('the notification channels', () => {
+  it('refuse any window but the app’s own', async () => {
+    const { call } = rig()
+    for (const channel of ['ai-apps:notify', 'ai-apps:notify-secret']) {
+      expect(() => call(channel, OTHER, 'x', {}), channel).toThrow(/only the app’s own window/)
+    }
+    // The test is async, so its refusal arrives as a rejected promise.
+    await expect(Promise.resolve().then(() => call('ai-apps:notify-test', OTHER, 'x'))).rejects.toThrow(/only the app’s own window/)
+  })
+
+  it('hand the webhook secret back once, on the answer that minted it, and never in the state', () => {
+    const { call } = rig()
+    const made = call('ai-apps:create', OWN, { name: 'A', level: 'work' }) as { id: string }
+    const set = call('ai-apps:notify', OWN, made.id, { mode: 'webhook', url: 'https://hooks.example.com/x' }) as {
+      ok: boolean
+      secret: string
+      state: { keys: Array<{ notify: unknown }> }
+    }
+    expect(set.ok).toBe(true)
+    expect(set.secret).toMatch(/^whsec_/)
+    expect(JSON.stringify(set.state)).not.toContain(set.secret)
+    expect(set.state.keys[0].notify).toEqual({ mode: 'webhook', url: 'https://hooks.example.com/x', hasSecret: true })
+    const again = call('ai-apps:notify', OWN, made.id, { mode: 'webhook' }) as { secret: string | null }
+    expect(again.secret).toBeNull()
+    const rotated = call('ai-apps:notify-secret', OWN, made.id) as { secret: string }
+    expect(rotated.secret).not.toBe(set.secret)
+  })
+
+  it('refuse an address the Mac may not post to, in a sentence', () => {
+    const { call } = rig()
+    const made = call('ai-apps:create', OWN, { name: 'A', level: 'work' }) as { id: string }
+    const refused = call('ai-apps:notify', OWN, made.id, { mode: 'webhook', url: 'http://hooks.example.com/x' }) as {
+      ok: boolean
+      message: string
+    }
+    expect(refused).toMatchObject({ ok: false })
+    expect(refused.message).toMatch(/https/)
+  })
+
+  it('report each key’s last delivery and the channel bridge, and run the test through the queue', async () => {
+    const tested: string[] = []
+    const { call } = rig({
+      notify: {
+        lastDelivery: () => ({ state: 'delivered', at: 5, via: 'webhook', error: null, outstanding: 0 }),
+        test: async (keyId) => {
+          tested.push(keyId)
+          return { ok: true, message: 'Delivered: the address answered 204.' }
+        },
+      },
+      channelBridge: () => '/data/notify-channel.mjs',
+    })
+    const made = call('ai-apps:create', OWN, { name: 'A', level: 'work' }) as { id: string }
+    const state = call('ai-apps:state', OWN) as { delivery: Record<string, unknown>; channelBridge: string }
+    expect(state.delivery[made.id]).toMatchObject({ state: 'delivered', via: 'webhook' })
+    expect(state.channelBridge).toBe('/data/notify-channel.mjs')
+    const result = (await call('ai-apps:notify-test', OWN, made.id)) as { ok: boolean; message: string }
+    expect(result).toMatchObject({ ok: true, message: 'Delivered: the address answered 204.' })
+    expect(tested).toEqual([made.id])
+  })
+})

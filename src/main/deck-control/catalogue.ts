@@ -457,6 +457,14 @@ export interface ToolContext {
    */
   granted?: ReadonlySet<string>
   /**
+   * Aborted when the caller hangs up, or its key is revoked.
+   *
+   * Handed down for the one kind of tool that waits on its own clock rather
+   * than on a person: a long-poll (`notifications.wait`) must stop holding a
+   * notification for a caller that is no longer there to receive it.
+   */
+  signal?: AbortSignal
+  /**
    * Did **this caller** start that session, this run? Drives the tier escalation.
    *
    * The name is from when the copilot was the only caller that started
@@ -506,6 +514,28 @@ export interface ToolSpec {
    * is for and when to reach for it, not what its arguments are called.
    */
   index?: string
+  /**
+   * Who this tool exists for, when it is not everybody.
+   *
+   * `keys`: only AI apps on an access key. Listed to them — in full, unless it
+   * also carries an `index` — and to nobody else, not even as an index line;
+   * the copilot's listing and its budget never see it. The tool still refuses
+   * any other caller itself, because "not listed" is the weaker half of "may
+   * not use". The notification tools are the first: an inbox that belongs to a
+   * key has no meaning for the copilot.
+   */
+  audience?: 'keys'
+  /**
+   * For an AI app on an access key only: hold this tool behind `tools.describe`
+   * with this line, though it is listed in full to the copilot.
+   *
+   * What a turn reaches for first is not the same for both. `app.where` reads
+   * the window the person is looking at — the copilot's first move on "this",
+   * and nothing an app on the far side of the internet would start with — and
+   * a key caller's listing has to make room for the tools that are *its* first
+   * reach under the same twenty-tool ceiling.
+   */
+  keyIndex?: string
   inputSchema: JsonSchema
   /**
    * Raise the tier for these particular arguments.

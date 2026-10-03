@@ -214,7 +214,7 @@ function capScreen(screen: string): { text: string; partial: boolean } {
     : { text, partial: false }
 }
 
-interface Answer {
+export interface Answer {
   at: number
   text: string
   truncated: boolean
@@ -230,10 +230,22 @@ interface Answer {
  * answer instead.
  */
 async function latestAnswer(context: ToolContext, session: SessionView): Promise<Answer | null> {
-  const match = await transcriptFor(context.surface, session)
+  return latestAnswerOn(context.surface, session)
+}
+
+/**
+ * The same read, given only the surface — for `notify-detect.ts`, which builds
+ * a "turn finished" notification outside any tool call and must say exactly
+ * what `sessions.wait` would have said about the same turn.
+ */
+export async function latestAnswerOn(
+  surface: ToolContext['surface'],
+  session: Pick<SessionView, 'id' | 'cwd' | 'createdAt' | 'resumed' | 'provider'>,
+): Promise<Answer | null> {
+  const match = await transcriptFor(surface, session)
   if (match.path === null) return null
-  const bytes = await context.surface.transcriptBytes(match.path)
-  const messages = await context.surface.readTranscriptFrom(match.path, Math.max(0, bytes - 256 * 1024))
+  const bytes = await surface.transcriptBytes(match.path)
+  const messages = await surface.readTranscriptFrom(match.path, Math.max(0, bytes - 256 * 1024))
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message.role !== 'agent') continue

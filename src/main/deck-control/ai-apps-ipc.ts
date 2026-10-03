@@ -36,6 +36,7 @@
  */
 
 import { KeyRefused, type AccessKeys, type AccessKeyView } from './access-keys'
+import type { LastDelivery } from './notify-hub'
 import { MCP_PATH } from './server'
 
 export const AI_APPS_CHANGED_CHANNEL = 'ai-apps:changed'
@@ -70,6 +71,14 @@ export interface AiAppsState {
   folders: string[]
   /** The saved keys could not be read. Said, not hidden. */
   problem: string | null
+  /** How each key's last notification went, by key id. Absent for a key that never had one. */
+  delivery: Record<string, LastDelivery>
+  /**
+   * The Claude Code channel bridge on disk, for the setup line that lets
+   * Claude Code receive notifications as messages in its session. Null when it
+   * could not be written. See `notify-channel.ts`.
+   */
+  channelBridge: string | null
 }
 
 export type AiAppsResult =
@@ -78,6 +87,13 @@ export type AiAppsResult =
 
 export interface AiAppsIpcDeps {
   keys: AccessKeys
+  /** The notification queue's view of each key, and the webhook test. Absent in a build with none. */
+  notify?: {
+    lastDelivery(keyId: string): LastDelivery | null
+    test(keyId: string): Promise<{ ok: boolean; message: string }>
+  }
+  /** Where the Claude Code channel bridge was written. */
+  channelBridge?(): string | null
   /** Is this the app's own window? The same rule the confirmation channels use. */
   isApprover(contents: Electron.WebContents): boolean
   /** The live loopback port, or null. */
@@ -139,6 +155,13 @@ export function aiAppsState(deps: Omit<AiAppsIpcDeps, 'isApprover' | 'broadcast'
     },
     folders: deps.folders(),
     problem: deps.keys.loadProblem(),
+    delivery: Object.fromEntries(
+      deps.keys
+        .list()
+        .map((key) => [key.id, deps.notify?.lastDelivery(key.id) ?? null] as const)
+        .filter((entry): entry is readonly [string, LastDelivery] => entry[1] !== null),
+    ),
+    channelBridge: deps.channelBridge?.() ?? null,
   }
 }
 
@@ -230,6 +253,42 @@ export function registerAiAppsIpc(ipcMain: InvokeRegistrar, deps: AiAppsIpcDeps)
   ipcMain.handle('ai-apps:internet', (event, on: unknown) => {
     guard(event)
     return change(() => void deps.keys.setInternet(on === true))
+  })
+
+  /*
+   * How an app hears about its sessions: off, waiting, or a webhook. Switching
+   * to a webhook the first time mints its signing secret, which comes back in
+   * this answer once — the receiver needs it to check signatures — and never
+   * again; a new one is `ai-apps:notify-secret`.
+   */
+  ipcMain.handle('ai-apps:notify', (event, key: unknown, raw: unknown) => {
+    guard(event)
+    const input = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    try {
+      const made = deps.keys.setNotify(id(key), { mode: input.mode, url: input.url })
+      return { ok: true, secret: made.secret, state: state() }
+    } catch (error) {
+      const message = error instanceof KeyRefused ? error.message : `That did not save: ${error instanceof Error ? error.message : String(error)}`
+      return { ok: false, message, state: state() }
+    }
+  })
+
+  ipcMain.handle('ai-apps:notify-secret', (event, key: unknown) => {
+    guard(event)
+    try {
+      const made = deps.keys.rotateWebhookSecret(id(key))
+      return { ok: true, secret: made.secret, state: state() }
+    } catch (error) {
+      const message = error instanceof KeyRefused ? error.message : `That did not save: ${error instanceof Error ? error.message : String(error)}`
+      return { ok: false, message, state: state() }
+    }
+  })
+
+  ipcMain.handle('ai-apps:notify-test', async (event, key: unknown) => {
+    guard(event)
+    if (!deps.notify) return { ok: false, message: 'Notifications are not running in this build.', state: state() }
+    const result = await deps.notify.test(id(key))
+    return { ok: result.ok, message: result.message, state: state() }
   })
 
   // Pushed, not polled: the page re-reads when a key or the switch changes.

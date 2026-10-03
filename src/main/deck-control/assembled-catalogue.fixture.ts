@@ -45,6 +45,7 @@ import { coverageTool } from './coverage-tool'
 import { extensionTools } from './extension-tools'
 import { filesTools, type FilesToolDeps } from './files-tools'
 import { createMachineArea } from './machine-area'
+import { notifyTools } from './notify-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
 import { sessionMoreTools, type SessionMoreDeps } from './session-more-tools'
 import { storeTools } from './store-tools'
@@ -67,9 +68,10 @@ function inertDeps(keys: readonly string[]): Record<string, object> {
 /** What `deck-control/index.ts` and `src/main/index.ts` hand `DeckControl` as `extraTools`. */
 export function assembledExtraTools(): ToolSpec[] {
   return [
-    // `deck-control/index.ts`'s two.
+    // `deck-control/index.ts`'s own: the tour, the screen, the AI apps' inbox.
     tourTool({} as TourStage),
     whereTool({ window: { read: async () => null }, page: () => null }),
+    ...notifyTools({ hub: () => null }),
     // `src/main/index.ts`, in its order.
     ...browserTools({} as BrowserDrive),
     browserNetworkTool({} as BrowserDrive),

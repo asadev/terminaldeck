@@ -17,9 +17,10 @@
 import { join } from 'node:path'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { AccessKeys, type AccessLevel } from './access-keys'
-import { ActionLog } from './action-log'
+import { ActionLog, type ActionRow } from './action-log'
 import { ConsentBroker, type ConsentRequest } from './consent'
 import { DeckControl, type Budgets } from './control'
+import type { ToolSpec } from './catalogue'
 import { AccessKeyDoor } from './key-door'
 import type { DeckSurface } from './surface'
 
@@ -134,6 +135,9 @@ export interface KeyRigOptions {
   approver?: boolean
   consentTimeoutMs?: number
   budgets?: Partial<Budgets>
+  /** Extra tools beside the built-ins, and a listener on every row — for the notification tests. */
+  extraTools?: readonly ToolSpec[]
+  onRow?(row: ActionRow): void
 }
 
 export function keyRig(dir: string, options: KeyRigOptions = {}): KeyRig {
@@ -152,6 +156,8 @@ export function keyRig(dir: string, options: KeyRigOptions = {}): KeyRig {
     log,
     consent,
     ...(options.budgets === undefined ? {} : { budgets: options.budgets }),
+    ...(options.extraTools === undefined ? {} : { extraTools: options.extraTools }),
+    ...(options.onRow === undefined ? {} : { onRow: options.onRow }),
   })
   const keys = new AccessKeys({ dir: join(dir, 'remote') })
   const door = new AccessKeyDoor({ keys, control: () => control, consent: () => consent })

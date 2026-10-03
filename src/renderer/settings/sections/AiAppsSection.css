@@ -152,3 +152,16 @@
   flex-shrink: 0;
   accent-color: var(--accent);
 }
+
+/* The one line after a setup snippet — what to tell the agent — and the steps
+   of the optional channel setup. Body copy, at the measure the steps use. */
+.ai-after {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+}
+
+.ai-snippet > h6.settings-label {
+  margin: 0;
+}

@@ -942,6 +942,8 @@ const core = createHostCore({
   },
   onExit: (id, exitCode) => {
     liveStatus.delete(id)
+    // The exit is news to the AI app that started this session, if one did.
+    deckControl?.notify.noteExit(id, exitCode)
     dropPlanSession(id)
     // The usage report for a session outlives its screen reading otherwise: the
     // aggregator holds a Codex watcher and a plan subscription of its own, and
@@ -975,6 +977,10 @@ const core = createHostCore({
     // And `session-idle N` is this one: the engine arms a countdown when a
     // session goes quiet and cancels it the moment it says anything.
     routines.engine.noteSessionStatus(id, status)
+    // And an AI app's notification, when the session or the turn is one an app
+    // with an access key started: a finished turn, or a question. One call, no
+    // poll — `deck-control/notify-detect.ts` decides whose it is, if anyone's.
+    deckControl?.notify.noteStatus(id, status)
     send('session:status', id, status)
   },
   /*
