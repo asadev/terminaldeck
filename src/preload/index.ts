@@ -357,11 +357,16 @@ const api = {
   hootPanelClose: (): void => {
     ipcRenderer.send('hoot-panel:close')
   },
+  // The resting pill's size, so the catcher can sit exactly over it.
   hootPanelSize: (box: { width: number; height: number }): void => {
     ipcRenderer.send('hoot-panel:size', box)
   },
   hootPanelMenu: (): void => {
     ipcRenderer.send('hoot-panel:menu')
+  },
+  // The invisible catcher over the resting pill: the pointer arrived, left, or pressed.
+  hootPanelCatch: (kind: 'enter' | 'leave' | 'press'): void => {
+    ipcRenderer.send('hoot-panel:catch', kind)
   },
   hootMenuBarConfig: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:config'),
   hootMenuBarOpen: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:open'),

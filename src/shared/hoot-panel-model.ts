@@ -34,6 +34,8 @@ export interface HootMessageView {
 
 export interface HootPanelSnapshot {
   assistant: string
+  /** The app's theme right now, which the island wears — light or dark, like the rest of the app. */
+  appearance: 'light' | 'dark'
   hoot: { status: 'running' | 'starting' | 'stopped'; problem: string | null }
   sessions: HootSessionView[]
   messages: HootMessageView[]
@@ -49,6 +51,7 @@ const STATUSES: readonly SessionStatus[] = ['idle', 'working', 'waiting', 'input
 
 export const EMPTY_SNAPSHOT: HootPanelSnapshot = {
   assistant: BRAND.assistant,
+  appearance: 'dark',
   hoot: { status: 'stopped', problem: null },
   sessions: [],
   messages: [],
@@ -95,6 +98,7 @@ export function readSnapshot(raw: unknown): HootPanelSnapshot {
   const geometry = isRecord(raw.geometry) ? raw.geometry : {}
   return {
     assistant,
+    appearance: raw.appearance === 'light' ? 'light' : 'dark',
     hoot: { status, problem: typeof hoot.problem === 'string' ? hoot.problem : null },
     sessions,
     messages,
@@ -187,35 +191,32 @@ export const CLOSE_DELAY_MS = 500
 
 /**
  * What the island's resting pill says: the moment while it lasts — "Session 2
- * needs you", "Session 1 finished" — then a compact line about what is going on
- * — "Needs you", "2 working" — and the assistant's name when all is quiet, so
- * the pill always reads as Hoot's rather than as a blank chip.
+ * needs you", "Session 1 finished" — and otherwise the basic state of things at
+ * a glance: how many sessions are open, how many are working, how many are
+ * waiting on the person — "4 open · 2 working · 1 waiting". The assistant's
+ * name when nothing is open, so the pill always reads as Hoot's.
  *
- * The resting line is shorter than the panel's on purpose. The pill sits in the
- * middle of a menu bar shared with every other app on the Mac — and on a
- * MacBook, beside the notch — so it stays small; the full sentence is what it
- * *widens* to say, for a few seconds, and the grown panel names the session for
- * as long as it waits. Anything still too long is cut to {@link MAX_TITLE}
- * characters.
+ * Asad, 2026-10-04: *"even when it is closed it should show little bit more how
+ * many sessions are open how many are working how many maybe… waiting like basic
+ * status"*. A count that is zero is left out rather than said, so the line stays
+ * as short as what is going on. Anything still too long is cut to
+ * {@link MAX_TITLE} characters.
  */
-export const MAX_TITLE = 22
+export const MAX_TITLE = 34
 
 export function pillLabel(
   moment: HootMoment | null,
   sessions: readonly HootSessionView[],
   assistant: string = BRAND.assistant,
 ): { text: string; attention: boolean } {
+  const cut = (text: string): string => (text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text)
+  if (moment !== null) return { text: cut(moment.text), attention: moment.attention }
+  const open = sessions.filter((session) => session.status !== 'exited').length
+  if (open === 0) return { text: assistant, attention: false }
+  const working = sessions.filter((session) => session.status === 'working').length
   const waiting = needsYou(sessions).length
-  const compact =
-    waiting === 1
-      ? { text: 'Needs you', attention: true }
-      : waiting > 1
-        ? { text: `${waiting} need you`, attention: true }
-        : restingLine(sessions)
-  const line = moment ?? compact
-  const text = line === null ? assistant : line.text
-  return {
-    text: text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text,
-    attention: line?.attention ?? false,
-  }
+  const parts = [`${open} open`]
+  if (working > 0) parts.push(`${working} working`)
+  if (waiting > 0) parts.push(`${waiting} waiting`)
+  return { text: cut(parts.join(' · ')), attention: waiting > 0 }
 }

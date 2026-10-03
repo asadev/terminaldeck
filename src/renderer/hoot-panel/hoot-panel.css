@@ -2,20 +2,23 @@
   Hoot's island — the page in the window `main/hoot-menubar.ts` hangs from the
   top centre of the screen.
 
-  One black shape: the body, and a concave "shoulder" at each top corner where
-  it meets the top edge of the screen, the way a MacBook's notch does. The page
-  sets the shape's size, corner radius, shoulders and shadow on every animation
-  frame (`HootPanel.tsx`); this sheet says what each part is.
+  The window is fixed and transparent; the island is one shape clipped out of
+  it — `clip-path: path(…)`, the outline from `shared/hoot-island.ts`, redrawn
+  each frame by `HootPanel.tsx`. The shape and its shadow are the only things
+  that change while it moves; nothing is laid out again.
 
-  ## Why two colours here are fixed and not tokens
+  ## The app's own colours
 
-  The token rule ("never raw hex") is about the app's chrome, which follows its
-  theme. The island is not chrome: it is drawn over every app, on light, dark
-  and wallpaper-tinted menu bars alike, and it imitates the notch — which is
-  black whatever the screen shows. So its ground is black on every theme, and
-  the one colour on it is Hoot's own orange, the owl's body in `HootMark.tsx`.
-  Both are named once below. The words take the dark theme's ink (the page sets
-  `data-theme="dark"`), because they are always on black.
+  The island wears the app's theme, live: the page sets `data-theme` from what
+  the main process says the theme is. Its ground is `--bg-primary`, which in
+  the dark theme is the terminal's own colour, and in the light theme the
+  app's white surface — Asad, 2026-10-04: *"the color of this should be same as
+  the terminal dark color mode… when it is white, overall it should be also
+  white accordingly"*. A hairline in `--border-strong` keeps its edge on a
+  menu bar of the same colour.
+
+  The one fixed colour is Hoot's orange — the owl's body in `HootMark.tsx`,
+  fixed brand art rather than chrome — named once below.
 */
 
 html.hoot-panel-page,
@@ -28,67 +31,57 @@ html.hoot-panel-page #root {
 }
 
 /*
-  The page itself stays out of the dark theme's colour scheme: a document whose
-  scheme is dark gets an opaque dark canvas wherever it is embedded with a
-  different one, and everything around the shape must be see-through. The
-  island takes the dark scheme instead, for its box and its scroll bar.
+  The page itself stays out of the theme's colour scheme: a document whose
+  scheme differs from the one it is shown in can get an opaque canvas, and
+  everything around the shape must be see-through. The island takes the
+  scheme instead, for its box and its scroll bar.
 */
 html.hoot-panel-page {
   color-scheme: normal;
 }
 
 .hoot-island {
-  --island-ground: #000;
+  --island-ground: var(--bg-primary);
   --island-owl: #f7882f;
+  --island-lift: 0;
 
   position: fixed;
   inset: 0;
   pointer-events: none;
-  color-scheme: dark;
+  color-scheme: light;
   font-family: var(--font-ui);
   color: var(--text-primary);
   -webkit-user-select: none;
   user-select: none;
 }
 
-.hoot-island-shape {
+[data-theme='dark'] .hoot-island {
+  color-scheme: dark;
+}
+
+/* Nothing shows until the pill's words are measured: the first frame is the right shape. */
+.hoot-island:not([data-ready]) {
+  visibility: hidden;
+}
+
+/* The shadow follows the clipped outline exactly, and deepens as it grows. */
+.hoot-island-shadow {
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: auto;
-  will-change: width, height, filter;
+  inset: 0;
+  /* 12px is a standard deviation here, not a radius: `SHADOW` leaves three of them of room. */
+  filter: drop-shadow(0 0 0.6px var(--border-strong))
+    drop-shadow(
+      0 calc(8px * var(--island-lift)) calc(12px * var(--island-lift)) rgba(0, 0, 0, calc(0.26 * var(--island-lift)))
+    );
 }
 
-/* The top corners curve out into the menu bar: black outside a quarter circle. */
-.hoot-island-shoulder {
+.hoot-island-ground {
   position: absolute;
-  top: 0;
-}
-
-.hoot-island-shoulder[data-side='left'] {
-  left: 0;
-  background: radial-gradient(
-    circle farthest-side at 0% 100%,
-    transparent calc(100% - 0.75px),
-    var(--island-ground) 100%
-  );
-}
-
-.hoot-island-shoulder[data-side='right'] {
-  right: 0;
-  background: radial-gradient(
-    circle farthest-side at 100% 100%,
-    transparent calc(100% - 0.75px),
-    var(--island-ground) 100%
-  );
-}
-
-.hoot-island-body {
-  position: absolute;
-  top: 0;
+  inset: 0;
   overflow: hidden;
   background: var(--island-ground);
+  clip-path: path('M 0 0 Z');
+  pointer-events: auto;
 }
 
 /* ---------------------------------------------------------------- at rest -- */
@@ -96,17 +89,17 @@ html.hoot-panel-page {
 .hoot-island-rest {
   position: absolute;
   top: 0;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
+/* Centred in the pill, with the pill's own padding: 8 before the owl, 12 after the words. */
 .hoot-island-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding-left: 8px;
+  padding-right: 4px;
   white-space: nowrap;
 }
 
@@ -226,24 +219,6 @@ html.hoot-panel-page {
 }
 
 .hoot-island-line[data-attention] {
-  color: var(--text-primary);
-}
-
-.hoot-island-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.hoot-island-icon:hover {
-  background: var(--fill-tertiary);
   color: var(--text-primary);
 }
 

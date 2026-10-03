@@ -1430,6 +1430,8 @@ function wireMenuBar(): HootMenuBar | null {
     stopHoot: () => {
       stopCopilot(deps)
     },
+    // The island wears the app's theme, resolved the way the window's own chrome is.
+    appearance: () => appearance(),
     say: (sessionId, text) => typeAndSubmit((data) => ptys.write(sessionId, data), text),
     watchChat: (cwd, agentSessionId, onUpdate) => watchRunChat(cwd, onUpdate, agentSessionId),
     sessions: () =>

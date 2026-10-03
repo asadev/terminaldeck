@@ -1,6 +1,7 @@
 import {
   BrowserWindow,
   Menu,
+  nativeTheme,
   screen,
   type IpcMain,
   type IpcMainEvent,
@@ -8,7 +9,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron'
 import { BRAND } from '../shared/brand'
-import { islandCentre, placeIsland, type IslandNotch, type Rect } from '../shared/hoot-island'
+import { islandCentre, islandWindow, placeIsland, type IslandNotch, type Rect } from '../shared/hoot-island'
 import {
   CLOSE_DELAY_MS,
   MOMENT_MS,
@@ -36,23 +37,35 @@ import type { CopilotChatMessage } from './remote/protocol'
  * MacBook's notch: a wide, short black panel whose top corners curve out into
  * the menu bar.
  *
- * ## One window, one shape
+ * ## One window that never moves, one shape inside it
  *
  * The island is a single frameless, transparent window whose top edge is the
- * top edge of the screen. The page inside it (`renderer/hoot-panel/`) draws the
- * shape — the small pill at rest, the panel when grown — and animates between
- * the two as one piece; the shape itself is `shared/hoot-island.ts`. The page
- * asks for the window size each state needs (`hoot-panel:size`) and this module
- * centres the window on the display's middle, or on the notch where there is
- * one, at y = 0. Nothing about it is a status item any more: the menu bar's
- * right-hand side is left to everybody else's icons.
+ * top edge of the screen, centred on the display's middle — or on the notch
+ * where there is one — and as big as the grown panel and its shadow. It is
+ * placed once, and again only when a display changes; never while anything
+ * animates. His second recording caught the first version resizing the window
+ * for each state, and for one frame the pill was drawn 315 points left of
+ * centre, because the page and the window server cannot be made to change on
+ * the same frame. Now the page (`renderer/hoot-panel/`) draws the shape — the
+ * small pill at rest, the panel when grown — and morphs it inside the window
+ * that stays put; the shape itself is `shared/hoot-island.ts`.
  *
  * The window is an NSPanel with the non-activating mask (`type: 'panel'`), one
  * level above the menu bar and below other apps' open menus, on every Space and
- * over full-screen apps, so hovering it never brings this app forward. While
- * grown, the transparent margin around the shape (the room its shadow needs)
- * lets clicks through to whatever is under it; the page says when the pointer is
- * over the shape itself.
+ * over full-screen apps, so hovering it never brings this app forward. It lets
+ * every click through (`setIgnoreMouseEvents`) except while the pointer is on
+ * the shape itself, which the page works out from where the shape is drawn.
+ *
+ * ## The catcher, because macOS stops telling a window about a pointer it ignores
+ *
+ * A window that lets clicks through hears about the pointer only while this app
+ * is the one in front — `forward` in Electron is `acceptsMouseMovedEvents`, and
+ * macOS sends those to the active app. The island is hovered while somebody is
+ * working in another app, which is exactly when that is not true. So a second,
+ * invisible window sits over the resting pill and nothing else: the pointer
+ * arriving on it is what wakes the island (`hoot-panel:catch`). It is sized to
+ * the pill, moves only when the pill's words change width, and draws nothing,
+ * so moving it can never show.
  *
  * ## When it grows
  *
@@ -95,6 +108,8 @@ export function readMenuBarEnabled(read: (key: string) => unknown): boolean {
 
 export interface HootMenuBarSnapshot {
   assistant: string
+  /** The app's theme, which the island wears: light or dark, like every other surface of the app. */
+  appearance: 'light' | 'dark'
   hoot: { status: 'running' | 'starting' | 'stopped'; problem: string | null }
   sessions: Array<{ id: string; label: string; status: string }>
   messages: CopilotChatMessage[]
@@ -143,6 +158,17 @@ export interface IslandHandle {
   on(event: 'blur' | 'focus' | 'closed', listener: () => void): void
 }
 
+/** The invisible window over the resting pill. */
+export interface CatcherHandle {
+  readonly webContents: { readonly id: number }
+  isDestroyed(): boolean
+  setBounds(bounds: Rect): void
+  showInactive(): void
+  /** True: it lets the pointer through (the island is awake and listening itself). */
+  setIgnoreMouseEvents(ignore: boolean): void
+  destroy(): void
+}
+
 /** Where the island is drawn. */
 export interface IslandPlace {
   display: Rect
@@ -152,6 +178,7 @@ export interface IslandPlace {
 
 export interface HootMenuBarDeps {
   makeIsland(): IslandHandle
+  makeCatcher(): CatcherHandle
   /** The display the island lives on — the one with the menu bar — and its notch. */
   place(): IslandPlace
   read(key: string): unknown
@@ -188,6 +215,8 @@ export interface HootMenuBarDeps {
   }): MenuItemConstructorOptions[]
   /** The island appeared or went, so whoever keeps the app visible can count icons again. */
   onShownChanged?(): void
+  /** The app's theme right now (the preference, resolved against the system's). */
+  appearance(): 'light' | 'dark'
   /** False where there is no menu bar to live in: the island is a Mac thing. */
   supported?: boolean
   /** Timers. Injected so a test can run them by hand. */
@@ -210,6 +239,8 @@ export interface HootMenuBar {
   setLabels(labels: Readonly<Record<string, string>>): void
   /** A display was added, removed or changed — or its notch was read: place it again. */
   displaysChanged(): void
+  /** The app's theme changed: the island changes with it. */
+  themeChanged(): void
   snapshot(): HootMenuBarSnapshot
   say(text: string): Promise<{ ok: boolean; message: string }>
   startHoot(): Promise<{ ok: boolean; message: string }>
@@ -224,8 +255,10 @@ export interface HootMenuBar {
   focus(contentsId: number): void
   /** Escape, from the page. */
   close(contentsId: number): void
-  /** The page: the window size the shape needs right now. */
+  /** The page: the size of the resting pill, shoulders included — where the catcher goes. */
   size(contentsId: number, box: { width: number; height: number }): void
+  /** The catcher: the pointer arrived on the resting pill, left it, or pressed it. */
+  catch(contentsId: number, kind: 'enter' | 'leave' | 'press'): void
   /** A right-click on the island. */
   menu(contentsId: number): void
   config(): { enabled: boolean }
@@ -248,14 +281,15 @@ const CHANGES_HOOT = new Set(['session:created', 'session:exit', 'session:remove
 /** A burst of status pushes gathered into one update. */
 const SETTLE_MS = 60
 
-/** The tallest window the page may ask for. The grown panel is short; this is a ceiling, not a size. */
-const MAX_BOX_HEIGHT = 360
+/** The catcher's size before the page has said how big the pill is: about a short pill. */
+const FIRST_PILL = { width: 96, height: 24 }
 
 export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   let island: IslandHandle | null = null
+  let catcher: CatcherHandle | null = null
   let shown = false
-  let loggedShown = false
-  let box: { width: number; height: number } | null = null
+  let placed: Rect | null = null
+  let pill: { width: number; height: number } = FIRST_PILL
   let labels: Record<string, string> = {}
   let messages: CopilotChatMessage[] = []
   let hootCache: ReturnType<HootMenuBarDeps['hoot']> | null = null
@@ -266,9 +300,16 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   // Grown or resting, and why.
   let expanded = false
   let pinned = false
+  /** The pointer is on the shape (the page's hit test, or the catcher). */
   let over = false
   let holding = false
   let keyed = false
+  /**
+   * Settled on purpose — Escape, a click elsewhere, a session opened — with the
+   * pointer possibly still on the pill. It does not grow again until the
+   * pointer has left and come back.
+   */
+  let quiet = false
 
   const timers = {
     open: null as { cancel(): void } | null,
@@ -282,6 +323,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   }
   const now = (): number => (deps.now ? deps.now() : Date.now())
   const live = (): IslandHandle | null => (island !== null && !island.isDestroyed() ? island : null)
+  const liveCatcher = (): CatcherHandle | null => (catcher !== null && !catcher.isDestroyed() ? catcher : null)
 
   const hoot = (): ReturnType<HootMenuBarDeps['hoot']> => {
     if (hootCache === null) hootCache = deps.hoot()
@@ -310,6 +352,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     const where = deps.place()
     return {
       assistant: BRAND.assistant,
+      appearance: deps.appearance(),
       hoot: { status: state.status, problem: state.problem },
       sessions: sessionsView(),
       messages,
@@ -325,34 +368,54 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     target.webContents.send('hoot-panel:snapshot', snapshot())
   }
 
-  /* -- placing the window -- */
+  /* -- the window, which does not move while anything animates -- */
 
-  function placeWindow(): void {
+  function placeWindow(reason: string): void {
     const target = live()
-    if (target === null || box === null) return
+    if (target === null) return
     const where = deps.place()
-    const bounds = placeIsland(where.display, islandCentre(where.display, where.notch), {
-      width: box.width,
-      height: Math.min(box.height, MAX_BOX_HEIGHT),
-    })
-    target.setBounds(bounds)
+    const geometry = { barHeight: where.barHeight, displayWidth: where.display.width, notch: where.notch }
+    const bounds = placeIsland(where.display, islandCentre(where.display, where.notch), islandWindow(geometry))
+    const same =
+      placed !== null &&
+      placed.x === bounds.x &&
+      placed.y === bounds.y &&
+      placed.width === bounds.width &&
+      placed.height === bounds.height
+    if (!same) {
+      target.setBounds(bounds)
+      placed = bounds
+      // Every placing is written down, with why. Nothing outside can read the
+      // window back, and "the island's window never moved while it grew" is a
+      // claim this log is what proves.
+      deps.log?.('island: placed', { reason, bounds: target.getBounds(), wanted: bounds, notch: where.notch })
+    }
     if (!shown) {
       shown = true
+      target.setIgnoreMouseEvents(true)
       target.showInactive()
     }
-    if (!loggedShown) {
-      loggedShown = true
-      // Written down, because nothing outside can read the window back: the log
-      // is how "it is at the top of the screen" is told from "macOS moved it
-      // under the menu bar", which is what the window's own bounds say.
-      deps.log?.('island: shown', {
-        bounds: target.getBounds(),
-        wanted: bounds,
-        display: where.display,
-        barHeight: where.barHeight,
-        notch: where.notch,
-      })
-    }
+    placeCatcher()
+  }
+
+  function placeCatcher(): void {
+    const target = liveCatcher()
+    if (target === null) return
+    const where = deps.place()
+    target.setBounds(placeIsland(where.display, islandCentre(where.display, where.notch), pill))
+    target.showInactive()
+  }
+
+  /** At rest: clicks go through the island, and the catcher waits on the pill. */
+  function listenAtRest(): void {
+    live()?.setIgnoreMouseEvents(true)
+    liveCatcher()?.setIgnoreMouseEvents(false)
+  }
+
+  /** The pointer is on the shape: the island takes it, and the catcher stands aside. */
+  function listenOnShape(): void {
+    live()?.setIgnoreMouseEvents(false)
+    liveCatcher()?.setIgnoreMouseEvents(true)
   }
 
   /* -- growing and settling -- */
@@ -383,29 +446,29 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     if (target === null) return
     cancel('open')
     cancel('close')
+    quiet = false
+    listenOnShape()
     if (!expanded) {
       expanded = true
       hootCache = null
-      target.setIgnoreMouseEvents(false)
       follow()
       push()
     }
     if (withKeyboard) target.focus()
   }
 
-  function collapse(): void {
+  /** Settle. `onPurpose`: a close somebody asked for, so it waits for the pointer to leave before growing again. */
+  function collapse(onPurpose: boolean): void {
     cancel('open')
     cancel('close')
     const was = expanded
     expanded = false
     pinned = false
     holding = false
-    const target = live()
-    if (target !== null) {
-      // At rest the window is the pill and nothing else, so it takes every click.
-      target.setIgnoreMouseEvents(false)
-      if (keyed) target.blur()
-    }
+    if (onPurpose && over) quiet = true
+    over = false
+    listenAtRest()
+    if (keyed) live()?.blur()
     follow()
     if (was) push()
   }
@@ -416,8 +479,37 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     if (!expanded) return
     timers.close = deps.schedule(() => {
       timers.close = null
-      if (!over && !holding && !pinned) collapse()
+      if (!over && !holding && !pinned) collapse(false)
     }, CLOSE_DELAY_MS)
+  }
+
+  /** The pointer arrived on the resting pill: grow after a short intent delay, unless it is just passing. */
+  function arrive(): void {
+    over = true
+    cancel('close')
+    listenOnShape()
+    if (expanded || quiet || timers.open !== null) return
+    timers.open = deps.schedule(() => {
+      timers.open = null
+      if (over && !quiet) expand(false)
+    }, OPEN_DELAY_MS)
+  }
+
+  function depart(): void {
+    over = false
+    quiet = false
+    cancel('open')
+    if (expanded) {
+      // Off the shape but still inside the window — the shadow's margin. With
+      // the keyboard, this app is in front and the page keeps hearing the
+      // pointer, so the margin lets clicks through at once; without it, the
+      // margin keeps listening until the island settles, so coming straight
+      // back onto the panel is still seen.
+      if (keyed) live()?.setIgnoreMouseEvents(true)
+      closeSoon()
+      return
+    }
+    listenAtRest()
   }
 
   function noticeSessions(): void {
@@ -449,17 +541,19 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     const made = deps.makeIsland()
     island = made
     shown = false
-    loggedShown = false
-    box = null
+    placed = null
+    pill = FIRST_PILL
     expanded = false
     keyed = false
+    over = false
+    quiet = false
     made.on('focus', () => {
       keyed = true
     })
     // A click anywhere else, once it has the keyboard, is a click outside.
     made.on('blur', () => {
       keyed = false
-      if (expanded && !holding) collapse()
+      if (expanded && !holding) collapse(true)
     })
     made.on('closed', () => {
       if (island === made) {
@@ -468,20 +562,26 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
         deps.onShownChanged?.()
       }
     })
+    catcher = deps.makeCatcher()
     tracker = new MomentTracker()
     tracker.next(readSnapshot({ sessions: sessionsView() }).sessions, now())
+    placeWindow('shown')
+    listenAtRest()
     deps.onShownChanged?.()
   }
 
   function removeIsland(): void {
-    collapse()
+    collapse(false)
     for (const name of Object.keys(timers) as Array<keyof typeof timers>) cancel(name)
     watching?.stop()
     watching = null
     const had = island !== null
     const target = live()
+    const gate = liveCatcher()
     island = null
+    catcher = null
     target?.destroy()
+    gate?.destroy()
     moment = null
     if (had) deps.onShownChanged?.()
   }
@@ -506,6 +606,8 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     if (PASSED_THROUGH.has(channel)) {
       const target = live()
       if (target !== null && !target.webContents.isDestroyed()) target.webContents.send(channel, ...args)
+      // A preference may be the theme: the island wears it, so it hears it at once.
+      push()
       return
     }
     if (CHANGES_HOOT.has(channel)) {
@@ -524,6 +626,11 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
 
   function ours(contentsId: number): boolean {
     const target = live()
+    return target !== null && target.webContents.id === contentsId
+  }
+
+  function theCatcher(contentsId: number): boolean {
+    const target = liveCatcher()
     return target !== null && target.webContents.id === contentsId
   }
 
@@ -548,9 +655,10 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       push()
     },
     displaysChanged: () => {
-      placeWindow()
+      placeWindow('display changed')
       push()
     },
+    themeChanged: () => push(),
     snapshot,
     say: async (text) => {
       const message = typeof text === 'string' ? text.trim() : ''
@@ -591,37 +699,19 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     },
     showSession: (id) => {
       if (!theirs().some((session) => session.id === id)) return { ok: false }
-      collapse()
+      collapse(true)
       deps.showSession(id)
       return { ok: true }
     },
     openApp: (page) => {
-      collapse()
+      collapse(true)
       deps.openApp(page)
       return { ok: true }
     },
     pointer: (contentsId, inside) => {
-      const target = live()
-      if (!ours(contentsId) || target === null) return
-      over = inside
-      if (inside) {
-        target.setIgnoreMouseEvents(false)
-        cancel('close')
-        if (!expanded && timers.open === null) {
-          timers.open = deps.schedule(() => {
-            timers.open = null
-            if (over) expand(false)
-          }, OPEN_DELAY_MS)
-        }
-        return
-      }
-      cancel('open')
-      if (expanded) {
-        // Off the shape but inside the window — the shadow's margin. Clicks
-        // there belong to whatever is underneath.
-        target.setIgnoreMouseEvents(true)
-        closeSoon()
-      }
+      if (!ours(contentsId)) return
+      if (inside) arrive()
+      else depart()
     },
     held: (contentsId, value) => {
       if (!ours(contentsId)) return
@@ -629,23 +719,39 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       if (!value) closeSoon()
     },
     focus: (contentsId) => {
-      const target = live()
-      if (!ours(contentsId) || target === null) return
+      if (!ours(contentsId)) return
       if (!expanded) pinned = true
+      over = true
       expand(true)
     },
     close: (contentsId) => {
-      if (ours(contentsId)) collapse()
+      if (ours(contentsId)) collapse(true)
     },
     size: (contentsId, next) => {
       if (!ours(contentsId)) return
       if (!Number.isFinite(next.width) || !Number.isFinite(next.height) || next.width < 1 || next.height < 1) return
-      box = { width: Math.ceil(next.width), height: Math.ceil(next.height) }
-      placeWindow()
+      const box = { width: Math.min(Math.ceil(next.width), 800), height: Math.min(Math.ceil(next.height), 60) }
+      if (box.width === pill.width && box.height === pill.height) return
+      pill = box
+      placeCatcher()
+    },
+    catch: (contentsId, kind) => {
+      if (!theCatcher(contentsId) || live() === null) return
+      if (kind === 'enter') {
+        if (!quiet) arrive()
+      } else if (kind === 'leave') {
+        if (!expanded) depart()
+        quiet = false
+      } else {
+        quiet = false
+        pinned = true
+        over = true
+        expand(true)
+      }
     },
     menu: (contentsId) => {
       const target = live()
-      if (!ours(contentsId) || target === null) return
+      if (!(ours(contentsId) || theCatcher(contentsId)) || target === null) return
       target.popUpMenu(contextMenu())
     },
     config: () => ({ enabled: readMenuBarEnabled(deps.read) }),
@@ -674,7 +780,9 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
  * - `hoot-menubar:config`     (invoke)        → `{ enabled }`
  * - `hoot-menubar:configure`  (invoke, patch) → `{ enabled }`
  * - `hoot-menubar:open`       (invoke)        → `{ ok, message }` — grown and pinned, as a click on it
- * - `hoot-panel:pointer` / `hoot-panel:held` / `hoot-panel:focus` / `hoot-panel:close` / `hoot-panel:size` / `hoot-panel:menu` (send)
+ * - `hoot-panel:pointer` / `hoot-panel:held` / `hoot-panel:focus` / `hoot-panel:close` / `hoot-panel:menu` (send)
+ * - `hoot-panel:size`         (send, box)     — the resting pill's size, for the catcher
+ * - `hoot-panel:catch`        (send, kind)    — the catcher: 'enter' | 'leave' | 'press'
  * - `session:labels`          (send, labels)  — the main window's names for its sessions
  */
 export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void {
@@ -697,6 +805,7 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
     'hoot-panel:close',
     'hoot-panel:size',
     'hoot-panel:menu',
+    'hoot-panel:catch',
     'session:labels',
   ]
   for (const channel of sends) ipcMain.removeAllListeners(channel)
@@ -727,6 +836,9 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
     if (typeof width === 'number' && typeof height === 'number') bar.size(event.sender.id, { width, height })
   })
   ipcMain.on('hoot-panel:menu', (event: IpcMainEvent) => bar.menu(event.sender.id))
+  ipcMain.on('hoot-panel:catch', (event: IpcMainEvent, kind: unknown) => {
+    if (kind === 'enter' || kind === 'leave' || kind === 'press') bar.catch(event.sender.id, kind)
+  })
   ipcMain.on('session:labels', (_event: IpcMainEvent, labels: unknown) => {
     if (typeof labels === 'object' && labels !== null && !Array.isArray(labels)) {
       bar.setLabels(labels as Record<string, string>)
@@ -737,7 +849,7 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
 /* ----------------------------------------------------------------- electron -- */
 
 export interface WireHootMenuBarOptions
-  extends Omit<HootMenuBarDeps, 'makeIsland' | 'place' | 'schedule' | 'supported'> {
+  extends Omit<HootMenuBarDeps, 'makeIsland' | 'makeCatcher' | 'place' | 'schedule' | 'supported'> {
   ipcMain: IpcMain
   preload: string
   rendererUrl?: string
@@ -760,6 +872,25 @@ function islandDisplay(): Electron.Display {
   }
   return screen.getPrimaryDisplay()
 }
+
+/**
+ * The catcher's page: nothing to see, and three things to say.
+ *
+ * Painted at the faintest alpha there is (1 in 255) rather than not at all,
+ * because macOS may pass the pointer straight through pixels that are wholly
+ * transparent — and then the catcher would catch nothing. One step of alpha
+ * over the island's own colour is invisible.
+ */
+export const CATCHER_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:rgba(0,0,0,0.004);cursor:default}
+</style></head><body><script>
+var d=window.deck||{};var inside=false;
+function say(k){if(d.hootPanelCatch)d.hootPanelCatch(k)}
+document.addEventListener('mousemove',function(){if(!inside){inside=true;say('enter')}});
+document.documentElement.addEventListener('mouseleave',function(){if(inside){inside=false;say('leave')}});
+document.addEventListener('mousedown',function(e){if(e.button===0)say('press')});
+document.addEventListener('contextmenu',function(e){e.preventDefault();if(d.hootPanelMenu)d.hootPanelMenu()});
+</script></body></html>`
 
 /** The menu bar's height when the work area does not say (a menu bar set to hide itself). */
 const FALLBACK_BAR = 24
@@ -786,11 +917,10 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
     place,
     makeIsland: () => {
       const where = place()
+      const box = islandWindow({ barHeight: where.barHeight, displayWidth: where.display.width, notch: where.notch })
+      const frame = placeIsland(where.display, islandCentre(where.display, where.notch), box)
       const window = new BrowserWindow({
-        x: Math.round(islandCentre(where.display, where.notch) - 60),
-        y: where.display.y,
-        width: 120,
-        height: Math.max(22, where.barHeight),
+        ...frame,
         // An NSPanel with the non-activating mask: over everything, on every
         // Space and over full-screen apps, and hovering or clicking it does not
         // bring this app forward.
@@ -849,7 +979,8 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
         destroy: () => window.destroy(),
         setIgnoreMouseEvents: (ignore) => {
           // `forward` keeps the pointer's moves coming while clicks go through,
-          // so the page still sees it come back onto the shape.
+          // whenever this app is the one in front — so the page still sees it
+          // come back onto the shape. When it is not, the catcher covers it.
           if (ignore) window.setIgnoreMouseEvents(true, { forward: true })
           else window.setIgnoreMouseEvents(false)
         },
@@ -857,6 +988,50 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
         on: (event, listener) => {
           window.on(event as 'blur', listener)
         },
+      }
+    },
+    makeCatcher: () => {
+      const window = new BrowserWindow({
+        width: 96,
+        height: 24,
+        type: 'panel',
+        frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        hasShadow: false,
+        roundedCorners: false,
+        enableLargerThanScreen: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        focusable: false,
+        acceptFirstMouse: true,
+        show: false,
+        webPreferences: {
+          preload: options.preload,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+        },
+      })
+      // One above the island, so the pointer meets it first.
+      window.setAlwaysOnTop(true, 'main-menu', 4)
+      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+      window.setHiddenInMissionControl(true)
+      window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(CATCHER_PAGE)}`)
+      return {
+        webContents: window.webContents,
+        isDestroyed: () => window.isDestroyed(),
+        setBounds: (bounds) => window.setBounds(bounds),
+        showInactive: () => {
+          if (!window.isVisible()) window.showInactive()
+        },
+        setIgnoreMouseEvents: (ignore) => window.setIgnoreMouseEvents(ignore),
+        destroy: () => window.destroy(),
       }
     },
     schedule: (run, ms) => {
@@ -878,6 +1053,9 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
     screen.on('display-added', reread)
     screen.on('display-removed', reread)
     screen.on('display-metrics-changed', reread)
+    // The system going light or dark, or the app's own theme setting moving
+    // `nativeTheme` with it (`syncNativeAppearance` in `index.ts`).
+    nativeTheme.on('updated', () => bar.themeChanged())
   }
   bar.apply()
   return bar

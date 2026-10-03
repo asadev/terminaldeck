@@ -29,25 +29,27 @@ describe('the line in the panel’s header', () => {
   })
 })
 
-describe('what the pill in the menu bar says', () => {
-  it('is the assistant’s name when nothing is going on', () => {
-    expect(pillLabel(null, [s('a', 'Session 1', 'idle')])).toEqual({ text: 'Hoot', attention: false })
+describe('what the resting pill says', () => {
+  it('is the assistant’s name when nothing is open', () => {
+    expect(pillLabel(null, [])).toEqual({ text: 'Hoot', attention: false })
+    expect(pillLabel(null, [s('a', 'Session 1', 'exited')])).toEqual({ text: 'Hoot', attention: false })
   })
 
-  it('says how many are working, and who needs him, with attention only for the second', () => {
+  it('gives the basic state at a glance: open, working, waiting — leaving out what is zero', () => {
+    expect(pillLabel(null, [s('a', 'Session 1', 'idle')])).toEqual({ text: '1 open', attention: false })
     expect(pillLabel(null, [s('a', 'Session 1', 'working'), s('b', 'Session 2', 'working')])).toEqual({
-      text: '2 working',
+      text: '2 open · 2 working',
       attention: false,
     })
-    // Compact at rest — the full sentence is what a moment grows to say.
-    expect(pillLabel(null, [s('a', 'Session 1', 'working'), s('b', 'Session 2', 'input')])).toEqual({
-      text: 'Needs you',
-      attention: true,
-    })
-    expect(pillLabel(null, [s('a', 'Session 1', 'input'), s('b', 'Session 2', 'input')])).toEqual({
-      text: '2 need you',
-      attention: true,
-    })
+    expect(
+      pillLabel(null, [
+        s('a', 'Session 1', 'working'),
+        s('b', 'Session 2', 'input'),
+        s('c', 'Session 3', 'working'),
+        s('d', 'Session 4', 'idle'),
+        s('e', 'Session 5', 'exited'),
+      ]),
+    ).toEqual({ text: '4 open · 2 working · 1 waiting', attention: true })
   })
 
   it('says the moment while it lasts, cut short so it never crowds the menu bar', () => {
@@ -55,8 +57,11 @@ describe('what the pill in the menu bar says', () => {
       text: 'Session 2 finished',
       attention: false,
     })
-    const long = pillLabel({ sessionId: 'a', text: 'Fix the parser in the reader needs you', attention: true }, [])
-    expect(long.text.length).toBeLessThanOrEqual(22)
+    const long = pillLabel(
+      { sessionId: 'a', text: 'Fix the parser in the reader and the writer needs you', attention: true },
+      [],
+    )
+    expect(long.text.length).toBeLessThanOrEqual(34)
     expect(long.text.endsWith('…')).toBe(true)
   })
 })
@@ -110,16 +115,19 @@ describe('the snapshot off the wire', () => {
 
   it('reads the island’s state — its words, grown or not, and the display’s notch — and defaults what is missing', () => {
     const view = readSnapshot({
+      appearance: 'light',
       label: { text: 'Needs you', attention: true },
       expanded: true,
       geometry: { barHeight: 32, displayWidth: 1512, notch: { left: 656, width: 200, height: 32 } },
     })
     expect(view.label).toEqual({ text: 'Needs you', attention: true })
+    expect(view.appearance).toBe('light')
     expect(view.expanded).toBe(true)
     expect(view.geometry).toEqual({ barHeight: 32, displayWidth: 1512, notch: { left: 656, width: 200, height: 32 } })
     const bare = readSnapshot({ assistant: 'Hoot', geometry: { barHeight: -3, notch: { width: 0, height: 32 } } })
     expect(bare.label).toEqual({ text: 'Hoot', attention: false })
     expect(bare.expanded).toBe(false)
+    expect(bare.appearance).toBe('dark')
     expect(bare.geometry.barHeight).toBe(24)
     expect(bare.geometry.notch).toBeNull()
   })

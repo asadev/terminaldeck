@@ -87,6 +87,28 @@ class FakeIsland {
   }
 }
 
+class FakeCatcher {
+  readonly webContents = { id: 77 }
+  destroyed = false
+  visible = false
+  bounds = { x: 0, y: 0, width: 0, height: 0 }
+  /** Every setIgnoreMouseEvents, in order. */
+  ignoring: boolean[] = []
+  isDestroyed = (): boolean => this.destroyed
+  setBounds = (bounds: FakeCatcher['bounds']): void => {
+    this.bounds = bounds
+  }
+  showInactive = (): void => {
+    this.visible = true
+  }
+  setIgnoreMouseEvents = (ignore: boolean): void => {
+    this.ignoring.push(ignore)
+  }
+  destroy = (): void => {
+    this.destroyed = true
+  }
+}
+
 /** Timers run by hand: `advance(ms)` fires everything due within that much time. */
 function clock() {
   let now = 0
@@ -122,6 +144,9 @@ function rig(
   } = {},
 ) {
   const islands: FakeIsland[] = []
+  const catchers: FakeCatcher[] = []
+  const logs: Array<{ message: string; detail?: Record<string, unknown> }> = []
+  let theme: 'light' | 'dark' = 'dark'
   const said: Array<{ sessionId: string; text: string }> = []
   const shown: string[] = []
   const opened: Array<string | undefined> = []
@@ -148,6 +173,13 @@ function rig(
       islands.push(island)
       return island
     },
+    makeCatcher: () => {
+      const catcher = new FakeCatcher()
+      catchers.push(catcher)
+      return catcher
+    },
+    appearance: () => theme,
+    log: (message, detail) => logs.push({ message, detail }),
     place: () => place,
     supported: options.supported,
     read: (key) => store[key],
@@ -183,6 +215,11 @@ function rig(
     bar,
     deps,
     islands,
+    catchers,
+    logs,
+    setTheme: (next: 'light' | 'dark') => {
+      theme = next
+    },
     place,
     said,
     shown,
@@ -200,46 +237,54 @@ function rig(
 
 /* ------------------------------------------------------------ the island -- */
 
-describe('where the island is', () => {
-  it('appears once the page says what size its pill is: centred, its top on the top edge of the screen', () => {
+describe('where the island is — one window that never moves', () => {
+  it('is placed once: centred, its top on the top edge of the screen, as big as the grown panel and its shadow', () => {
     const r = rig()
     r.bar.apply()
     expect(r.islands).toHaveLength(1)
-    expect(r.islands[0].visible).toBe(false)
-    r.bar.size(42, { width: 86, height: 30 })
     expect(r.islands[0].visible).toBe(true)
-    expect(r.islands[0].bounds).toEqual({ x: 917, y: 0, width: 86, height: 30 })
+    // 640 wide grown, 10-point shoulders, 44 points of shadow each side; 260 tall and 56 of shadow.
+    expect(r.islands[0].bounds).toEqual({ x: 960 - 374, y: 0, width: 748, height: 316 })
+    // At rest it lets every click through: the catcher listens on the pill.
+    expect(r.islands[0].ignoring.at(-1)).toBe(true)
+  })
+
+  it('never moves or resizes while it grows, settles, widens for a moment or changes its count', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.setLabels({ s1: 'Session 1', s2: 'Session 2' })
+    const before = { ...r.islands[0].bounds }
+    r.bar.pointer(42, true)
+    r.time.advance(200)
+    r.bar.pointer(42, false)
+    r.time.advance(600)
+    r.bar.focus(42)
+    r.bar.close(42)
+    r.sessions[2].status = 'input'
+    r.bar.forward('session:status', ['s2', 'input'])
+    r.time.advance(5000)
+    r.bar.size(42, { width: 220, height: 30 })
+    expect(r.islands[0].bounds).toEqual(before)
+    expect(r.logs.filter((l) => l.message === 'island: placed')).toHaveLength(1)
   })
 
   it('centres on the notch on a MacBook, and on a display that is not the first one', () => {
     const r = rig({ display: { x: -1512, y: 0, width: 1512, height: 982 }, notch: { left: 656, width: 200, height: 32 } })
     r.bar.apply()
-    r.bar.size(42, { width: 300, height: 32 })
     const b = r.islands[0].bounds
     expect(b.y).toBe(0)
     expect(b.x + b.width / 2).toBe(-1512 + 656 + 100)
     expect(r.bar.snapshot().geometry).toEqual({ barHeight: 32, displayWidth: 1512, notch: { left: 656, width: 200, height: 32 } })
   })
 
-  it('is placed again when a display changes, and tells the page the new shape of things', () => {
+  it('is placed again only when a display changes, and tells the page the new shape of things', () => {
     const r = rig()
     r.bar.apply()
-    r.bar.size(42, { width: 86, height: 30 })
     r.place.display = { x: 0, y: 0, width: 2560, height: 1440 }
     r.bar.displaysChanged()
-    expect(r.islands[0].bounds.x).toBe(1280 - 43)
+    expect(r.islands[0].bounds.x + r.islands[0].bounds.width / 2).toBe(1280)
     expect((r.islands[0].sent.at(-1)?.args[0] as { geometry: { displayWidth: number } }).geometry.displayWidth).toBe(2560)
-  })
-
-  it('takes no size the page cannot mean, and listens to its own page only', () => {
-    const r = rig()
-    r.bar.apply()
-    r.bar.size(42, { width: Number.NaN, height: 30 })
-    r.bar.size(7, { width: 86, height: 30 })
-    expect(r.islands[0].visible).toBe(false)
-    r.bar.size(42, { width: 5000, height: 5000 })
-    expect(r.islands[0].bounds.width).toBe(1920)
-    expect(r.islands[0].bounds.height).toBeLessThanOrEqual(360)
+    expect(r.logs.filter((l) => l.message === 'island: placed').map((l) => l.detail?.reason)).toEqual(['shown', 'display changed'])
   })
 
   it('is not there when the setting is off, and goes and comes back with it', () => {
@@ -250,6 +295,7 @@ describe('where the island is', () => {
     expect(r.islands).toHaveLength(1)
     r.bar.configure({ enabled: false })
     expect(r.islands[0].destroyed).toBe(true)
+    expect(r.catchers[0].destroyed).toBe(true)
     expect(r.store[MENUBAR_KEY]).toBe(false)
     expect(r.bar.isShowing().island).toBe(false)
   })
@@ -261,17 +307,105 @@ describe('where the island is', () => {
   })
 })
 
-describe('what the resting pill says', () => {
-  it('the name when all is quiet, and how many are working otherwise', () => {
+describe('the catcher over the resting pill', () => {
+  it('sits exactly over the pill the page says it is drawing, centred at the top', () => {
     const r = rig()
-    r.sessions[1].status = 'idle'
     r.bar.apply()
-    expect(r.bar.snapshot().label).toEqual({ text: 'Hoot', attention: false })
-    r.sessions[1].status = 'working'
-    expect(r.bar.snapshot().label).toEqual({ text: '1 working', attention: false })
+    r.bar.size(42, { width: 110, height: 30 })
+    expect(r.catchers[0].bounds).toEqual({ x: 905, y: 0, width: 110, height: 30 })
+    expect(r.catchers[0].visible).toBe(true)
+    expect(r.catchers[0].ignoring.at(-1)).toBe(false)
+    // Only the island's own page says how big the pill is.
+    r.bar.size(77, { width: 400, height: 30 })
+    expect(r.catchers[0].bounds.width).toBe(110)
   })
 
-  it('widens to the whole sentence for a moment, then settles to a compact "Needs you" with the dot', () => {
+  it('wakes the island when the pointer arrives on it, and grows it after the intent delay', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'enter')
+    // The island takes the pointer from here, and the catcher stands aside.
+    expect(r.islands[0].ignoring.at(-1)).toBe(false)
+    expect(r.catchers[0].ignoring.at(-1)).toBe(true)
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(true)
+    expect(r.islands[0].focused).toBe(0)
+  })
+
+  it('lets a pointer that is only passing go — the island’s page sees it leave', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'enter')
+    r.bar.pointer(42, false)
+    r.time.advance(400)
+    expect(r.bar.isShowing().expanded).toBe(false)
+    expect(r.islands[0].ignoring.at(-1)).toBe(true)
+    expect(r.catchers[0].ignoring.at(-1)).toBe(false)
+  })
+
+  it('grows pinned, with the keyboard, on a press', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'press')
+    expect(r.bar.isShowing().expanded).toBe(true)
+    expect(r.islands[0].focused).toBe(1)
+  })
+
+  it('after Escape with the pointer still on the pill, waits for it to leave before growing again', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'enter')
+    r.time.advance(200)
+    r.bar.close(42)
+    r.bar.catch(77, 'enter')
+    r.time.advance(400)
+    expect(r.bar.isShowing().expanded).toBe(false)
+    r.bar.catch(77, 'leave')
+    r.bar.catch(77, 'enter')
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(true)
+  })
+
+  it('opens the background menu on a right-click, like the island does', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.menu(77)
+    expect(r.islands[0].menus).toHaveLength(1)
+  })
+})
+
+describe('the theme', () => {
+  it('wears the app’s theme, and tells the page the moment it changes', () => {
+    const r = rig()
+    r.bar.apply()
+    expect(r.bar.snapshot().appearance).toBe('dark')
+    r.setTheme('light')
+    r.bar.themeChanged()
+    expect((r.islands[0].sent.at(-1)?.args[0] as { appearance: string }).appearance).toBe('light')
+  })
+
+  it('hears a change of the app’s own theme setting, too', () => {
+    const r = rig()
+    r.bar.apply()
+    r.setTheme('light')
+    r.bar.forward('prefs:changed', [{ theme: 'light' }])
+    expect((r.islands[0].sent.at(-1)?.args[0] as { appearance: string }).appearance).toBe('light')
+  })
+})
+
+describe('what the resting pill says', () => {
+  it('the state of things at a glance: sessions open, working, waiting — Hoot’s own left out', () => {
+    const r = rig()
+    r.bar.apply()
+    expect(r.bar.snapshot().label).toEqual({ text: '2 open · 1 working', attention: false })
+    r.sessions[2].status = 'input'
+    expect(r.bar.snapshot().label).toEqual({ text: '2 open · 1 working · 1 waiting', attention: true })
+    r.sessions[1].status = 'exited'
+    r.sessions[2].status = 'exited'
+    expect(r.bar.snapshot().label).toEqual({ text: 'Hoot', attention: false })
+  })
+
+  it('widens to the whole sentence for a moment, then settles back to the counts with the dot', () => {
     const r = rig()
     r.bar.apply()
     r.bar.setLabels({ s1: 'Session 1', s2: 'Session 2' })
@@ -280,7 +414,7 @@ describe('what the resting pill says', () => {
     r.time.advance(100)
     expect(r.islands[0].last()?.label).toEqual({ text: 'Session 2 needs you', attention: true })
     r.time.advance(4000)
-    expect(r.islands[0].last()?.label).toEqual({ text: 'Needs you', attention: true })
+    expect(r.islands[0].last()?.label).toEqual({ text: '2 open · 1 working · 1 waiting', attention: true })
   })
 
   it('says a session finished for a moment, then goes back to what it said', () => {
@@ -292,7 +426,7 @@ describe('what the resting pill says', () => {
     r.time.advance(100)
     expect(r.islands[0].last()?.label.text).toBe('Session 1 finished')
     r.time.advance(4000)
-    expect(r.islands[0].last()?.label.text).toBe('Hoot')
+    expect(r.islands[0].last()?.label.text).toBe('2 open')
   })
 
   it('never grows or takes the keyboard for a moment', () => {
@@ -323,11 +457,10 @@ describe('growing into the panel and settling back', () => {
     expect(r.islands[0].focused).toBe(0)
   })
 
-  it('lets clicks through the margin around the grown shape, and takes them again on the shape', () => {
+  it('with the keyboard, lets clicks through the margin around the grown shape at once', () => {
     const r = rig()
     r.bar.apply()
-    r.bar.pointer(42, true)
-    r.time.advance(200)
+    r.bar.focus(42)
     r.bar.pointer(42, false)
     expect(r.islands[0].ignoring.at(-1)).toBe(true)
     r.bar.pointer(42, true)
@@ -335,7 +468,20 @@ describe('growing into the panel and settling back', () => {
     expect(r.bar.isShowing().expanded).toBe(true)
   })
 
-  it('settles a moment after the pointer has left the shape, and then takes every click again', () => {
+  it('without it, keeps hearing the pointer in the margin until it settles, so coming straight back is seen', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.pointer(42, true)
+    r.time.advance(200)
+    r.bar.pointer(42, false)
+    expect(r.islands[0].ignoring.at(-1)).toBe(false)
+    r.time.advance(300)
+    r.bar.pointer(42, true)
+    r.time.advance(1000)
+    expect(r.bar.isShowing().expanded).toBe(true)
+  })
+
+  it('settles a moment after the pointer has left the shape, and then lets every click through again', () => {
     const r = rig()
     r.bar.apply()
     r.bar.pointer(42, true)
@@ -346,7 +492,9 @@ describe('growing into the panel and settling back', () => {
     r.time.advance(300)
     expect(r.bar.isShowing().expanded).toBe(false)
     expect(r.islands[0].last()?.expanded).toBe(false)
-    expect(r.islands[0].ignoring.at(-1)).toBe(false)
+    // At rest again: clicks go through the island, and the catcher waits on the pill.
+    expect(r.islands[0].ignoring.at(-1)).toBe(true)
+    expect(r.catchers[0].ignoring.at(-1)).toBe(false)
   })
 
   it('stays grown while the box has text or the keyboard', () => {
@@ -525,6 +673,7 @@ describe('the channels', () => {
       'hoot-panel:stop-hoot',
     ])
     expect([...listeners.keys()].sort()).toEqual([
+      'hoot-panel:catch',
       'hoot-panel:close',
       'hoot-panel:focus',
       'hoot-panel:held',
@@ -536,7 +685,12 @@ describe('the channels', () => {
     await handlers.get('hoot-panel:say')?.({}, 'hi Hoot')
     expect(r.said.at(-1)).toEqual({ sessionId: 'hoot-1', text: 'hi Hoot' })
     listeners.get('hoot-panel:size')?.({ sender: { id: 42 } }, { width: 90, height: 30 })
-    expect(r.islands[0].bounds).toEqual({ x: 915, y: 0, width: 90, height: 30 })
+    expect(r.catchers[0].bounds).toEqual({ x: 915, y: 0, width: 90, height: 30 })
+    listeners.get('hoot-panel:catch')?.({ sender: { id: 77 } }, 'nonsense')
+    expect(r.islands[0].ignoring.at(-1)).toBe(true)
+    listeners.get('hoot-panel:catch')?.({ sender: { id: 77 } }, 'press')
+    expect(r.bar.isShowing().expanded).toBe(true)
+    listeners.get('hoot-panel:close')?.({ sender: { id: 42 } })
     listeners.get('hoot-panel:focus')?.({ sender: { id: 42 } })
     listeners.get('hoot-panel:close')?.({ sender: { id: 7 } })
     expect(r.bar.isShowing().expanded).toBe(true)

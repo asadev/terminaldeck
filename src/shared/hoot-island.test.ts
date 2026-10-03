@@ -1,22 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   barRow,
+  easeInOut,
+  easeOut,
   EXPANDED,
   expandedShape,
+  expandedWidth,
   grownness,
   islandCentre,
+  islandPath,
+  islandWindow,
+  mixShape,
+  onShape,
   placeIsland,
   REST,
+  restBox,
   restShape,
   SHADOW,
-  SPRING_CLOSE,
-  SPRING_OPEN,
-  springSettled,
-  springStep,
-  unionBox,
-  windowBox,
+  TIMING,
+  within,
   type IslandGeometry,
-  type Spring,
 } from './hoot-island'
 
 /** His Mac mini: a 1920-wide display, a 30-point menu bar, no notch. */
@@ -41,21 +44,36 @@ describe('the resting pill', () => {
     expect(restShape(MINI, { textWidth: 900, attention: false }).width).toBe(REST.maxWidth)
   })
 
+  it('has room for the counts line at a glance', () => {
+    // "4 open · 2 working · 1 waiting" is about 175 points in the pill's type.
+    const shape = restShape(MINI, { textWidth: 175, attention: true })
+    expect(shape.width).toBe(REST.padLeft + REST.owl + REST.gap + REST.dot + REST.dotGap + 175 + REST.padRight)
+  })
+
   it('with a notch: wraps it, the same ear each side, so nothing hides behind the camera', () => {
     const shape = restShape(MACBOOK, { textWidth: 30, attention: false })
     expect(shape.height).toBe(32)
     const ear = (shape.width - 200) / 2
     expect(Number.isInteger(ear)).toBe(true)
-    // The left ear carries the owl, the right one the words; each fits its own.
     expect(ear).toBeGreaterThanOrEqual(REST.owl + REST.earPad * 2)
     expect(ear).toBeGreaterThanOrEqual(30 + REST.earPad * 2)
   })
 
-  it('a longer line widens both ears around the notch', () => {
+  it('a longer line widens both ears around the notch — but never as wide as the grown panel', () => {
     const short = restShape(MACBOOK, { textWidth: 30, attention: false })
     const long = restShape(MACBOOK, { textWidth: 130, attention: true })
     expect(long.width).toBeGreaterThan(short.width)
     expect((long.width - 200) / 2).toBe(130 + REST.dot + REST.dotGap + REST.earPad * 2)
+    const huge = restShape(MACBOOK, { textWidth: 600, attention: true })
+    expect(huge.width).toBeLessThan(expandedWidth(MACBOOK))
+  })
+
+  it('shares the counts between the ears, so the owl’s side is not a long empty stretch', () => {
+    // "4 open" by the owl (about 45 points), "2 working · 1 waiting" (about 125) on the right.
+    const shared = restShape(MACBOOK, { textWidth: 125, attention: true, leftWidth: 45 })
+    const alone = restShape(MACBOOK, { textWidth: 175, attention: true })
+    expect(shared.width).toBeLessThan(alone.width)
+    expect((shared.width - 200) / 2).toBe(Math.max(REST.owl + REST.gap + 45, REST.dot + REST.dotGap + 125) + REST.earPad * 2)
   })
 
   it('takes its row height from the notch where there is one, and keeps it sane', () => {
@@ -81,34 +99,29 @@ describe('the grown panel', () => {
     expect(expandedShape(MINI, 4000).height).toBe(EXPANDED.maxHeight)
     expect(expandedShape(MINI, 0).height).toBe(30 + EXPANDED.minBody)
   })
-
-  it('is always wider than the pill it grows out of', () => {
-    const wide = restShape(MACBOOK, { textWidth: 200, attention: true })
-    expect(expandedShape(MACBOOK, 100, wide).width).toBeGreaterThan(wide.width)
-  })
 })
 
-describe('the window around the shape', () => {
-  it('at rest holds the pill and its shoulders and nothing else', () => {
-    const shape = restShape(MINI, { textWidth: 30, attention: false })
-    expect(windowBox(shape, false)).toEqual({ width: shape.width + shape.shoulder * 2, height: shape.height })
+describe('the one window', () => {
+  it('holds the grown panel, its shoulders and its shadow — whatever the shape is doing', () => {
+    const box = islandWindow(MINI)
+    const tallest = expandedShape(MINI, 4000)
+    expect(box.width).toBe(tallest.width + tallest.shoulder * 2 + SHADOW.side * 2)
+    expect(box.height).toBe(tallest.height + SHADOW.bottom)
+    expect(box.width).toBeGreaterThan(restBox(restShape(MINI, { textWidth: 900, attention: true })).width)
   })
 
-  it('grown, leaves room for the shadow beside and below — never above, the top is the screen edge', () => {
-    const shape = expandedShape(MINI, 100)
-    const box = windowBox(shape, true)
-    expect(box.width).toBe(shape.width + shape.shoulder * 2 + SHADOW.side * 2)
-    expect(box.height).toBe(shape.height + SHADOW.bottom)
-  })
-
-  it('while moving, holds both ends of the move', () => {
-    expect(unionBox({ width: 90, height: 30 }, { width: 700, height: 170 })).toEqual({ width: 700, height: 170 })
+  it('depends on the display alone — not on the words, the counts or whether it is grown', () => {
+    expect(islandWindow(MINI)).toEqual(islandWindow({ ...MINI }))
+    expect(islandWindow(MACBOOK).width).toBe(EXPANDED.minWidth + EXPANDED.shoulder * 2 + SHADOW.side * 2)
   })
 
   it('is centred on the notch, or the middle of the display, with its top on the top edge', () => {
     const mini = { x: 0, y: 0, width: 1920, height: 1080 }
     expect(islandCentre(mini, null)).toBe(960)
-    expect(placeIsland(mini, 960, { width: 86, height: 30 })).toEqual({ x: 917, y: 0, width: 86, height: 30 })
+    const box = islandWindow(MINI)
+    const frame = placeIsland(mini, 960, box)
+    expect(frame.y).toBe(0)
+    expect(frame.x + frame.width / 2).toBe(960)
     const side = { x: -1512, y: -200, width: 1512, height: 982 }
     expect(islandCentre(side, MACBOOK.notch)).toBe(-1512 + 756)
     expect(placeIsland(side, -756, { width: 300, height: 32 }).y).toBe(-200)
@@ -122,44 +135,75 @@ describe('the window around the shape', () => {
   })
 })
 
-describe('the morph', () => {
-  const run = (from: number, to: number, config = SPRING_OPEN, frames = 120): number[] => {
-    let spring: Spring = { value: from, velocity: 0 }
-    const seen: number[] = []
-    for (let i = 0; i < frames; i += 1) {
-      spring = springStep(spring, to, 1 / 60, config)
-      seen.push(spring.value)
+describe('the outline', () => {
+  it('is one closed path, centred, hanging from the top edge, with outward shoulders and round bottom corners', () => {
+    const shape = { width: 100, height: 30, radius: 12, shoulder: 6 }
+    const path = islandPath(shape, 400)
+    expect(path.startsWith('M 344 0')).toBe(true)
+    expect(path).toContain('A 6 6 0 0 1 350 6')
+    expect(path).toContain('A 12 12 0 0 0 362 30')
+    expect(path).toContain('A 6 6 0 0 1 456 0')
+    expect(path.endsWith('Z')).toBe(true)
+    expect(path.match(/M /g)).toHaveLength(1)
+  })
+
+  it('is symmetric about its centre, so the centre never wanders while the shape moves', () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const shape = mixShape(restShape(MINI, { textWidth: 30, attention: false }), expandedShape(MINI, 100), t)
+      const xs = [...islandPath(shape, 500).matchAll(/(-?[\d.]+) (-?[\d.]+)(?= [ALZ]| Z|$)/g)].map((m) => Number(m[1]))
+      expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(500, 1)
     }
-    return seen
-  }
-
-  it('grows quickly, with a little give at the end, and comes to rest on the target', () => {
-    const seen = run(30, 130)
-    const peak = Math.max(...seen)
-    expect(peak).toBeGreaterThan(130)
-    expect(peak).toBeLessThan(140)
-    expect(seen.at(-1)).toBeCloseTo(130, 1)
-    // Most of the way there inside a quarter of a second.
-    expect(seen[14]).toBeGreaterThan(110)
   })
 
-  it('settles back without dipping under its resting size', () => {
-    const seen = run(130, 30, SPRING_CLOSE)
-    expect(Math.min(...seen)).toBeGreaterThan(29)
-    expect(seen.at(-1)).toBeCloseTo(30, 1)
+  it('keeps its corners inside a shape too small for them', () => {
+    const path = islandPath({ width: 10, height: 4, radius: 22, shoulder: 10 }, 50)
+    expect(path).not.toContain('NaN')
+    expect(path).toContain('A 4 4')
   })
 
-  it('a long, missed frame is taken in small steps, not one wild one', () => {
-    const one = springStep({ value: 30, velocity: 0 }, 130, 0.5, SPRING_OPEN)
-    expect(Number.isFinite(one.value)).toBe(true)
-    expect(Math.abs(one.value - 130)).toBeLessThan(100)
+  it('knows a point on it from a point beside it — the shoulders count, the margin does not', () => {
+    const shape = { width: 100, height: 30, radius: 12, shoulder: 6 }
+    expect(onShape(shape, 400, { x: 400, y: 10 })).toBe(true)
+    expect(onShape(shape, 400, { x: 455, y: 2 })).toBe(true)
+    expect(onShape(shape, 400, { x: 470, y: 10 })).toBe(false)
+    expect(onShape(shape, 400, { x: 400, y: 40 })).toBe(false)
+  })
+})
+
+describe('the morph', () => {
+  it('grows in 380 ms and settles in 450, slow and smooth', () => {
+    expect(TIMING.open.shape).toEqual([0, 380])
+    expect(TIMING.close.shape[1]).toBe(450)
   })
 
-  it('knows when to stop, and how far along a shape is', () => {
-    expect(springSettled({ value: 129.8, velocity: 1 }, 130)).toBe(true)
-    expect(springSettled({ value: 125, velocity: 0 }, 130)).toBe(false)
+  it('fades the panel’s words in only once the shape is most of the way grown', () => {
+    expect(easeOut(within(TIMING.open.full[0], TIMING.open.shape))).toBeGreaterThan(0.85)
+  })
+
+  it('fades the words out before the shape starts to shrink', () => {
+    expect(TIMING.close.full[1]).toBeLessThanOrEqual(TIMING.close.shape[0])
+  })
+
+  it('eases without ever passing its target, so nothing overshoots and jerks back', () => {
+    const samples = Array.from({ length: 101 }, (_, i) => i / 100)
+    for (const ease of [easeOut, easeInOut]) {
+      const values = samples.map(ease)
+      expect(Math.max(...values)).toBeLessThanOrEqual(1)
+      expect(Math.min(...values)).toBeGreaterThanOrEqual(0)
+      for (let i = 1; i < values.length; i += 1) expect(values[i]).toBeGreaterThanOrEqual(values[i - 1])
+    }
+    expect(easeOut(1)).toBe(1)
+    expect(easeInOut(0.5)).toBeCloseTo(0.5, 5)
+  })
+
+  it('mixes two shapes, and knows how far along a shape is', () => {
+    const a = { width: 100, height: 30, radius: 12, shoulder: 6 }
+    const b = { width: 600, height: 130, radius: 22, shoulder: 10 }
+    expect(mixShape(a, b, 0.5)).toEqual({ width: 350, height: 80, radius: 17, shoulder: 8 })
     expect(grownness(30, 30, 130)).toBe(0)
     expect(grownness(80, 30, 130)).toBe(0.5)
     expect(grownness(140, 30, 130)).toBe(1)
+    expect(within(50, [0, 100])).toBe(0.5)
+    expect(within(500, [0, 100])).toBe(1)
   })
 })

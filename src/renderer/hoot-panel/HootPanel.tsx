@@ -4,17 +4,18 @@ import { BRAND } from '../../shared/brand'
 import { EMPTY_SNAPSHOT, needsYou, readSnapshot, restingLine, type HootPanelSnapshot } from '../../shared/hoot-panel-model'
 import {
   barRow,
+  easeInOut,
+  easeOut,
   expandedShape,
   grownness,
+  islandPath,
+  mixShape,
+  onShape,
+  restBox,
   restShape,
-  SPRING_CLOSE,
-  SPRING_OPEN,
-  springSettled,
-  springStep,
-  unionBox,
-  windowBox,
+  TIMING,
+  within,
   type IslandShape,
-  type Spring,
 } from '../../shared/hoot-island'
 import './hoot-panel.css'
 
@@ -22,35 +23,47 @@ import './hoot-panel.css'
  * Hoot's island: the page inside the window `main/hoot-menubar.ts` hangs from
  * the top centre of the screen.
  *
- * One black shape, drawn here, that is a small pill at rest — around the notch
- * on a MacBook that has one — and grows into a wide, short panel when the
- * pointer rests on it, then settles back. Both are the same element animated by
- * a spring, never two surfaces, so there is no seam, gap or second material:
- * the pill *becomes* the panel. The numbers are `shared/hoot-island.ts`.
+ * One shape, drawn here, that is a small pill at rest — around the notch on a
+ * MacBook that has one — and grows into a wide, short panel when the pointer
+ * rests on it, then settles back. Its outline is a single path
+ * (`islandPath`), so the pill *becomes* the panel: no seam, no gap, no second
+ * surface. The numbers are `shared/hoot-island.ts`.
  *
- * The grown panel reads left to right: Hoot — its latest words and a box to
- * ask; the sessions that need you or are working, a press away; and Hoot's own
- * state with the quick actions. White and grey on black, the orange owl the one
- * colour, the way a notch app looks.
+ * At rest it says the state of things at a glance — "4 open · 2 working · 1
+ * waiting" — and the grown panel reads left to right: Hoot, its latest words
+ * and a box to ask; the sessions that need you or are working, a press away;
+ * Hoot's own state and the quick actions. It wears the app's theme, light or
+ * dark, with the app's own surface colours.
+ *
+ * ## The window never changes; the shape does
+ *
+ * The window is fixed — as big as the grown panel and its shadow, centred at
+ * the top of the screen — and nothing here asks it to move or resize. The first
+ * version did, and his recording caught the pill drawn 315 points off centre
+ * for a frame while the window server caught up. Now every frame is the same
+ * window with a different outline clipped out of it, centred on the window's
+ * middle, which never moves.
  *
  * ## What it tells the main process, and why
  *
- * The main process decides when it grows and settles, and places the window;
- * only the page knows four things it needs for that: whether the pointer is over
- * the shape (`hoot-panel:pointer`), whether the box is holding it open with text
- * or the keyboard (`hoot-panel:held`), the window size the shape needs this
- * instant (`hoot-panel:size`), and a press on it (`hoot-panel:focus`). A
- * right-click asks for the background menu (`hoot-panel:menu`); Escape settles
- * it (`hoot-panel:close`). The keyboard is asked for only on a press, so a grown
- * island never takes a keystroke meant for another app.
+ * The window lets clicks through except on the shape, and only the page knows
+ * where the shape is drawn this instant: it hit-tests the pointer against the
+ * outline and says when the pointer arrives on it or leaves it
+ * (`hoot-panel:pointer`). It also says whether the box is holding it open
+ * (`hoot-panel:held`), how big the resting pill is so the invisible catcher can
+ * sit over it (`hoot-panel:size`), a press on the pill (`hoot-panel:focus`), a
+ * right-click (`hoot-panel:menu`), and Escape (`hoot-panel:close`). The keyboard
+ * is asked for only on a press, so a grown island never takes a keystroke meant
+ * for another app.
  *
  * ## The morph
  *
- * Width, height, the bottom corners' radius and the shoulders each follow a
- * spring on animation frames — quick with a little give when it grows, quick
- * without overshoot when it settles. Before growing it asks for the bigger
- * window and waits until it has it, so the shape is never clipped; after
- * settling it gives the room back. Under reduced motion it simply changes.
+ * Growing takes 380 ms on a gentle ease-out, and the panel's words fade in only
+ * once the shape is most of the way there, so text never squeezes; settling
+ * takes 450 ms — the words fade first, then the shape eases in, then the pill's
+ * words return (`TIMING`). A change of the pill's words reshapes it in 320 ms.
+ * Each frame only redraws the outline and a few opacities. Under reduced
+ * motion it simply changes.
  */
 
 interface PanelBridge {
@@ -87,23 +100,59 @@ const reducedMotion = (): boolean => {
   }
 }
 
-/** 0 below `from`, 1 above `to`, a smooth ramp between. */
-function ramp(value: number, from: number, to: number): number {
-  const t = Math.min(1, Math.max(0, (value - from) / (to - from)))
-  return t * t * (3 - 2 * t)
+/** One morph in flight: where it started, where it is going, and how. */
+interface Morph {
+  kind: 'open' | 'close' | 'reshape'
+  from: IslandShape
+  to: IslandShape
+  /** The panel's words and the pill's words, as they were when it started. */
+  fullFrom: number
+  restFrom: number
+  /** A reshape that changed the pill's words fades the new ones in. */
+  newWords: boolean
+  started: number | null
 }
 
-interface Motion {
-  w: Spring
-  h: Spring
-  r: Spring
-  s: Spring
-  frame: number | null
-  last: number
-  started: boolean
+/** Where everything is drawn right now. */
+interface Drawn {
+  shape: IslandShape
+  full: number
+  rest: number
 }
 
-const still = (value: number): Spring => ({ value, velocity: 0 })
+/** A morph's state `at` ms in, and whether it is over. */
+function morphAt(m: Morph, at: number): Drawn & { done: boolean } {
+  if (m.kind === 'open') {
+    const [, end] = TIMING.open.shape
+    return {
+      shape: mixShape(m.from, m.to, easeOut(within(at, TIMING.open.shape))),
+      full: m.fullFrom + (1 - m.fullFrom) * within(at, TIMING.open.full),
+      rest: m.restFrom * (1 - within(at, TIMING.open.rest)),
+      done: at >= end,
+    }
+  }
+  if (m.kind === 'close') {
+    // The words fade first — for as long as they have left to fade — then the
+    // shape eases in, then the pill's own words come back.
+    const fade = TIMING.close.full[1] * m.fullFrom
+    const shrink = TIMING.close.shape[1] - TIMING.close.shape[0]
+    const end = fade + shrink
+    const restSpan = TIMING.close.rest[1] - TIMING.close.rest[0]
+    return {
+      shape: mixShape(m.from, m.to, easeInOut(within(at, [fade, end]))),
+      full: m.fullFrom * (1 - within(at, [0, Math.max(1, fade)])),
+      rest: m.restFrom + (1 - m.restFrom) * within(at, [end - restSpan, end]),
+      done: at >= end,
+    }
+  }
+  const [, end] = TIMING.reshape.shape
+  return {
+    shape: mixShape(m.from, m.to, easeInOut(within(at, TIMING.reshape.shape))),
+    full: m.fullFrom,
+    rest: m.newWords ? within(at, TIMING.reshape.rest) : m.restFrom,
+    done: at >= Math.max(end, m.newWords ? TIMING.reshape.rest[1] : 0),
+  }
+}
 
 /** The status words beside a session, in the grown panel's list. */
 function what(status: string): string {
@@ -112,6 +161,9 @@ function what(status: string): string {
   if (status === 'completed') return 'finished'
   return 'idle'
 }
+
+/** How long without a move before the next one counts as the pointer arriving afresh. */
+const FRESH_MS = 120
 
 export function HootPanel() {
   const [deck] = useState(bridge)
@@ -122,30 +174,36 @@ export function HootPanel() {
   const [problem, setProblem] = useState<string | null>(null)
   const [confirmStop, setConfirmStop] = useState(false)
   // The first real snapshot, and the pill's words measured for the words it now
-  // says: nothing is drawn or sized before both, so the first frame anybody
-  // sees is the right shape, not a default growing into it.
+  // says: nothing is drawn before both, so the first frame anybody sees is the
+  // right shape, not a default growing into it.
   const [ready, setReady] = useState(false)
-  const [measure, setMeasure] = useState<{ text: string; width: number } | null>(null)
+  const [measure, setMeasure] = useState<{ text: string; width: number; left: number } | null>(null)
   const [fullHeight, setFullHeight] = useState(140)
 
-  const shapeEl = useRef<HTMLDivElement>(null)
-  const bodyEl = useRef<HTMLDivElement>(null)
-  const leftShoulder = useRef<HTMLSpanElement>(null)
-  const rightShoulder = useRef<HTMLSpanElement>(null)
+  const shadowEl = useRef<HTMLDivElement>(null)
+  const groundEl = useRef<HTMLDivElement>(null)
   const restEl = useRef<HTMLDivElement>(null)
   const fullEl = useRef<HTMLDivElement>(null)
   const measureEl = useRef<HTMLSpanElement>(null)
+  const measureLeftEl = useRef<HTMLSpanElement>(null)
   const log = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
-  const motion = useRef<Motion | null>(null)
+  const drawn = useRef<Drawn | null>(null)
+  const morph = useRef<Morph | null>(null)
+  const frame = useRef<number | null>(null)
+  const lastWords = useRef<string | null>(null)
+  const pointerAt = useRef<{ inside: boolean; at: number } | null>(null)
 
   useEffect(() => {
-    const root = document.documentElement
-    root.classList.add('hoot-panel-page')
-    // The island is black on every screen, so its words always take the dark theme's ink.
-    root.dataset.theme = 'dark'
-    return () => root.classList.remove('hoot-panel-page')
+    document.documentElement.classList.add('hoot-panel-page')
+    return () => document.documentElement.classList.remove('hoot-panel-page')
   }, [])
+
+  // The app's theme, as the main process says it is right now — sent with every
+  // snapshot, and again whenever it changes.
+  useEffect(() => {
+    document.documentElement.dataset.theme = snap.appearance
+  }, [snap.appearance])
 
   useEffect(() => {
     let live = true
@@ -197,11 +255,28 @@ export function HootPanel() {
     if (box) box.scrollTop = box.scrollHeight
   }, [snap.messages, snap.expanded])
 
+  /*
+   * Beside a notch the counts are shared between the two ears — "4 open" by the
+   * owl, "2 working · 1 waiting" on the other side — so neither ear is a long
+   * empty stretch. A moment, with no counts in it, keeps to the right.
+   */
+  const notch = snap.geometry.notch
+  const parts = snap.label.text.split(' · ')
+  const leftWords = notch !== null && parts.length > 1 ? parts[0] : ''
+  const rightWords = leftWords === '' ? snap.label.text : parts.slice(1).join(' · ')
+
   // How wide the pill's words are, measured in the pill's own type.
   useLayoutEffect(() => {
     const el = measureEl.current
-    if (el) setMeasure({ text: snap.label.text, width: Math.ceil(el.getBoundingClientRect().width) })
-  }, [snap.label.text])
+    const beside = measureLeftEl.current
+    if (el) {
+      setMeasure({
+        text: snap.label.text,
+        width: Math.ceil(el.getBoundingClientRect().width),
+        left: leftWords !== '' && beside ? Math.ceil(beside.getBoundingClientRect().width) : 0,
+      })
+    }
+  }, [snap.label.text, leftWords, rightWords])
 
   // How tall the grown panel's content is, laid out at its grown width.
   useLayoutEffect(() => {
@@ -217,142 +292,143 @@ export function HootPanel() {
   const geometry = snap.geometry
   const row = barRow(geometry)
   const measured = ready && measure !== null && measure.text === snap.label.text
-  const rest = restShape(geometry, { textWidth: measure?.width ?? 0, attention: snap.label.attention })
-  const grown = expandedShape(geometry, fullHeight - row, rest)
+  const rest = restShape(geometry, {
+    textWidth: measure?.width ?? 0,
+    attention: snap.label.attention,
+    leftWidth: measure?.left ?? 0,
+  })
+  const grown = expandedShape(geometry, fullHeight - row)
   const target: IslandShape = snap.expanded ? grown : rest
-  const notch = geometry.notch
 
-  /** Draw one state of the shape. */
+  /** The middle of the window, which is the middle of the island, always. */
+  const centre = (): number => window.innerWidth / 2
+
+  /** Draw one state: the outline, its shadow, and the two sets of words. */
   const paint = useCallback(
-    (w: number, h: number, r: number, s: number): void => {
-      const shape = shapeEl.current
-      const body = bodyEl.current
-      if (!shape || !body) return
-      const radius = Math.max(0, Math.min(r, h / 2, w / 2))
-      const shoulder = Math.max(0, s)
-      shape.style.width = `${w + shoulder * 2}px`
-      shape.style.height = `${h}px`
-      body.style.left = `${shoulder}px`
-      body.style.width = `${w}px`
-      body.style.height = `${h}px`
-      body.style.borderRadius = `0 0 ${radius}px ${radius}px`
-      for (const el of [leftShoulder.current, rightShoulder.current]) {
-        if (!el) continue
-        el.style.width = `${shoulder}px`
-        el.style.height = `${shoulder}px`
+    (state: Drawn): void => {
+      drawn.current = state
+      const ground = groundEl.current
+      const shadow = shadowEl.current
+      if (!ground || !shadow) return
+      const c = centre()
+      ground.style.clipPath = `path('${islandPath(state.shape, c)}')`
+      const p = grownness(state.shape.height, rest.height, grown.height)
+      shadow.style.setProperty('--island-lift', p.toFixed(3))
+      const restRow = restEl.current
+      if (restRow) {
+        restRow.style.opacity = state.rest.toFixed(3)
+        restRow.style.width = `${Math.round(state.shape.width)}px`
+        restRow.style.left = `${Math.round(c - state.shape.width / 2)}px`
       }
-      const p = grownness(h, rest.height, grown.height)
-      shape.style.filter = p > 0.01 ? `drop-shadow(0 10px 22px rgba(0, 0, 0, ${(0.5 * p).toFixed(3)}))` : 'none'
-      if (restEl.current) restEl.current.style.opacity = String(1 - ramp(p, 0, 0.35))
-      if (fullEl.current) {
-        const shownFull = ramp(p, 0.45, 1)
-        fullEl.current.style.opacity = String(shownFull)
-        fullEl.current.style.visibility = shownFull > 0.01 ? 'visible' : 'hidden'
+      const full = fullEl.current
+      if (full) {
+        full.style.opacity = state.full.toFixed(3)
+        full.style.visibility = state.full > 0.01 ? 'visible' : 'hidden'
       }
     },
     [rest.height, grown.height],
   )
 
+  // Tell the main process how big the resting pill is, so the catcher fits it.
+  useEffect(() => {
+    if (measured) deck.hootPanelSize?.(restBox(rest))
+  }, [deck, measured, rest.width, rest.height, rest.shoulder])
+
   /*
-   * Move the shape to the target: ask for room, wait for it, spring there, give
-   * the room back. The first draw jumps — there is nothing to grow from.
+   * Start a morph to the target whenever it changes, from wherever the shape is
+   * this instant — a hover that leaves halfway through growing settles back from
+   * halfway, not from the end.
    */
   useLayoutEffect(() => {
-    // The words are measured in a layout effect of their own, which re-renders
-    // before anything is painted; until then there is nothing true to draw.
     if (!measured) return
-    const finalBox = windowBox(target, snap.expanded)
-    const m = motion.current
-    if (m === null) {
-      motion.current = {
-        w: still(target.width),
-        h: still(target.height),
-        r: still(target.radius),
-        s: still(target.shoulder),
-        frame: null,
-        last: 0,
-        started: true,
-      }
-      paint(target.width, target.height, target.radius, target.shoulder)
-      deck.hootPanelSize?.(finalBox)
+    const words = snap.label.text
+    const wordsChanged = lastWords.current !== null && lastWords.current !== words
+    lastWords.current = words
+    const now = drawn.current
+    const final: Drawn = { shape: target, full: snap.expanded ? 1 : 0, rest: snap.expanded ? 0 : 1 }
+    if (now === null || reducedMotion()) {
+      if (frame.current !== null) cancelAnimationFrame(frame.current)
+      frame.current = null
+      morph.current = null
+      paint(final)
       return
     }
-    if (m.frame !== null) cancelAnimationFrame(m.frame)
-    m.frame = null
-    const fromShadow = m.h.value > rest.height + 1
-    const current: IslandShape = { width: m.w.value, height: m.h.value, radius: m.r.value, shoulder: m.s.value }
-    const room = unionBox(windowBox(current, fromShadow || snap.expanded), windowBox(target, fromShadow || snap.expanded))
-    deck.hootPanelSize?.(room)
-    const config = target.height >= m.h.value ? SPRING_OPEN : SPRING_CLOSE
-
-    const finish = (): void => {
-      m.w = still(target.width)
-      m.h = still(target.height)
-      m.r = still(target.radius)
-      m.s = still(target.shoulder)
-      m.frame = null
-      paint(target.width, target.height, target.radius, target.shoulder)
-      deck.hootPanelSize?.(finalBox)
+    const same =
+      Math.abs(now.shape.width - target.width) < 0.5 &&
+      Math.abs(now.shape.height - target.height) < 0.5 &&
+      Math.abs(now.full - final.full) < 0.01 &&
+      Math.abs(now.rest - final.rest) < 0.01 &&
+      !wordsChanged
+    if (same) return
+    const wasGrowing = now.full > 0.5 || now.shape.height > rest.height + 1
+    const kind: Morph['kind'] = snap.expanded ? (wasGrowing && now.full >= 0.99 ? 'reshape' : 'open') : wasGrowing ? 'close' : 'reshape'
+    morph.current = {
+      kind,
+      from: now.shape,
+      to: target,
+      fullFrom: now.full,
+      restFrom: kind === 'reshape' && !snap.expanded && wordsChanged ? 0 : now.rest,
+      newWords: kind === 'reshape' && !snap.expanded && wordsChanged,
+      started: null,
     }
-
     const step = (time: number): void => {
-      const seconds = m.last === 0 ? 1 / 60 : (time - m.last) / 1000
-      m.last = time
-      m.w = springStep(m.w, target.width, seconds, config)
-      m.h = springStep(m.h, target.height, seconds, config)
-      m.r = springStep(m.r, target.radius, seconds, config)
-      m.s = springStep(m.s, target.shoulder, seconds, config)
-      if (
-        springSettled(m.w, target.width) &&
-        springSettled(m.h, target.height) &&
-        springSettled(m.r, target.radius) &&
-        springSettled(m.s, target.shoulder)
-      ) {
-        finish()
+      const m = morph.current
+      if (m === null) return
+      if (m.started === null) m.started = time
+      const state = morphAt(m, time - m.started)
+      paint(state)
+      if (state.done) {
+        morph.current = null
+        frame.current = null
         return
       }
-      paint(m.w.value, m.h.value, m.r.value, m.s.value)
-      m.frame = requestAnimationFrame(step)
+      frame.current = requestAnimationFrame(step)
     }
-
-    const begin = (): void => {
-      if (reducedMotion()) {
-        finish()
-        return
-      }
-      m.last = 0
-      m.frame = requestAnimationFrame(step)
-    }
-
-    // Wait for the window to have room — it is resized by the main process a
-    // moment after the ask — or give up waiting after a few frames.
-    const fits = (): boolean => window.innerWidth >= room.width - 1 && window.innerHeight >= room.height - 1
-    if (fits()) {
-      begin()
-      return
-    }
-    let done = false
-    const go = (): void => {
-      if (done) return
-      done = true
-      window.removeEventListener('resize', check)
-      window.clearTimeout(timer)
-      begin()
-    }
-    const check = (): void => {
-      if (fits()) go()
-    }
-    window.addEventListener('resize', check)
-    const timer = window.setTimeout(go, 80)
-    return () => {
-      done = true
-      window.removeEventListener('resize', check)
-      window.clearTimeout(timer)
-      if (m.frame !== null) cancelAnimationFrame(m.frame)
-      m.frame = null
-    }
+    if (frame.current !== null) cancelAnimationFrame(frame.current)
+    frame.current = requestAnimationFrame(step)
     // The target's numbers are what matter, not the object's identity.
-  }, [target.width, target.height, target.radius, target.shoulder, snap.expanded, paint, deck, measured])
+  }, [target.width, target.height, target.radius, target.shoulder, snap.expanded, snap.label.text, measured, paint])
+
+  useEffect(
+    () => () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current)
+    },
+    [],
+  )
+
+  /*
+   * Where the pointer is, against the outline as drawn right now. Said when it
+   * changes, and on the first move after a pause — the window may have only just
+   * started hearing the pointer, so "still outside" has to be said once too.
+   */
+  useEffect(() => {
+    const tell = (inside: boolean): void => {
+      const now = performance.now()
+      const last = pointerAt.current
+      if (last !== null && last.inside === inside && now - last.at < FRESH_MS) {
+        last.at = now
+        return
+      }
+      const changed = last === null || last.inside !== inside || now - last.at >= FRESH_MS
+      pointerAt.current = { inside, at: now }
+      if (changed) deck.hootPanelPointer?.(inside)
+    }
+    const onMove = (event: MouseEvent): void => {
+      const state = drawn.current
+      if (state === null) return
+      tell(onShape(state.shape, centre(), { x: event.clientX, y: event.clientY }))
+    }
+    const onLeave = (): void => {
+      pointerAt.current = null
+      deck.hootPanelPointer?.(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    document.documentElement.addEventListener('mouseleave', onLeave)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      document.documentElement.removeEventListener('mouseleave', onLeave)
+    }
+  }, [deck])
 
   const name = snap.assistant
 
@@ -406,44 +482,41 @@ export function HootPanel() {
   const line = restingLine(snap.sessions)
   const waiting = needsYou(snap.sessions)
   const working = snap.sessions.filter((session) => session.status === 'working')
+  const open = snap.sessions.filter((session) => session.status !== 'exited').length
   const listed = [...waiting, ...working].slice(0, 3)
   const ears: CSSProperties | undefined = notch ? { width: `calc(50% - ${notch.width / 2}px)` } : undefined
-  // Beside a notch, the header's two halves stay out from under the camera.
+  // Beside a notch, the header's left half stays out from under the camera.
   const half: CSSProperties | undefined = notch ? { maxWidth: `calc(50% - ${notch.width / 2 + 12}px)` } : undefined
 
   const pillWords = (
     <>
       {snap.label.attention ? <span className="hoot-island-dot" aria-hidden="true" /> : null}
-      <span className="hoot-island-label">{snap.label.text}</span>
+      <span className="hoot-island-label">{rightWords}</span>
     </>
   )
 
   return (
-    <div className="hoot-island">
-      <div
-        ref={shapeEl}
-        className="hoot-island-shape"
-        data-expanded={snap.expanded || undefined}
-        onPointerEnter={() => deck.hootPanelPointer?.(true)}
-        onPointerLeave={() => deck.hootPanelPointer?.(false)}
-        onMouseDown={() => {
-          // A press on the resting pill grows it, pinned, with the keyboard.
-          if (!snap.expanded) deck.hootPanelFocus?.()
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault()
-          deck.hootPanelMenu?.()
-        }}
-      >
-        <span ref={leftShoulder} className="hoot-island-shoulder" data-side="left" aria-hidden="true" />
-        <span ref={rightShoulder} className="hoot-island-shoulder" data-side="right" aria-hidden="true" />
-        <div ref={bodyEl} className="hoot-island-body">
-          {/* At rest: the owl and the short line — either side of the notch, where there is one. */}
+    <div className="hoot-island" data-ready={measured || undefined}>
+      <div ref={shadowEl} className="hoot-island-shadow">
+        <div
+          ref={groundEl}
+          className="hoot-island-ground"
+          onMouseDown={() => {
+            // A press on the resting pill grows it, pinned, with the keyboard.
+            if (!snap.expanded) deck.hootPanelFocus?.()
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            deck.hootPanelMenu?.()
+          }}
+        >
+          {/* At rest: the owl and the state of things — either side of the notch, where there is one. */}
           <div ref={restEl} className="hoot-island-rest" style={{ height: row }} aria-label={`${name}: ${snap.label.text}`}>
             {notch ? (
               <>
                 <span className="hoot-island-ear" data-side="left" style={ears}>
                   <HootMark size={18} />
+                  {leftWords !== '' ? <span className="hoot-island-label">{leftWords}</span> : null}
                 </span>
                 <span className="hoot-island-ear" data-side="right" style={ears}>
                   {pillWords}
@@ -472,25 +545,6 @@ export function HootPanel() {
                   </span>
                 ) : null}
               </span>
-              <span className="hoot-island-half" data-side="right" style={half}>
-                <button
-                  type="button"
-                  className="hoot-island-icon"
-                  aria-label={`${name} Settings`}
-                  title={`${name} Settings`}
-                  onClick={() => void deck.hootPanelOpenApp?.('hoot-settings')}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-                    <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
-                    <path
-                      d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M3.5 12.5l1.3-1.3M11.2 4.8l1.3-1.3"
-                      stroke="currentColor"
-                      strokeWidth="1.4"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </button>
-              </span>
             </header>
 
             <div className="hoot-island-sections">
@@ -499,7 +553,10 @@ export function HootPanel() {
                   <>
                     <div className="hoot-island-log" ref={log}>
                       {snap.messages.length === 0 ? (
-                        <p className="hoot-island-quiet">Ask {name} anything about your sessions.</p>
+                        <p className="hoot-island-quiet">
+                          {name} is running, keeping an eye on {open === 1 ? '1 session' : `${open} sessions`}. Ask it
+                          anything about them.
+                        </p>
                       ) : (
                         snap.messages.slice(-6).map((message) => (
                           <p key={message.id} className="hoot-island-msg" data-role={message.role}>
@@ -523,16 +580,15 @@ export function HootPanel() {
                       onKeyDown={onKey}
                     />
                   </>
+                ) : status === 'starting' ? (
+                  <p className="hoot-island-quiet">{name} is starting…</p>
                 ) : (
+                  // Offered only when Hoot is truly not running — never over a Hoot that is.
                   <div className="hoot-island-off">
-                    <p className="hoot-island-quiet">
-                      {status === 'starting' ? `${name} is starting…` : snap.hoot.problem ?? `${name} isn’t running.`}
-                    </p>
-                    {status === 'stopped' ? (
-                      <button type="button" className="btn-primary hoot-island-start" onClick={startHoot}>
-                        Start {name}
-                      </button>
-                    ) : null}
+                    <p className="hoot-island-quiet">{snap.hoot.problem ?? `${name} isn’t running.`}</p>
+                    <button type="button" className="btn-primary hoot-island-start" onClick={startHoot}>
+                      Start {name}
+                    </button>
                   </div>
                 )}
                 {problem ? (
@@ -545,7 +601,7 @@ export function HootPanel() {
               <section className="hoot-island-section" data-part="sessions" aria-label="Sessions">
                 <p className="hoot-island-kicker">{waiting.length > 0 ? 'Waiting on you' : 'Sessions'}</p>
                 {listed.length === 0 ? (
-                  <p className="hoot-island-quiet">Nothing needs you.</p>
+                  <p className="hoot-island-quiet">{open === 0 ? 'No sessions open.' : 'Nothing needs you.'}</p>
                 ) : (
                   <ul className="hoot-island-list">
                     {listed.map((session) => (
@@ -565,7 +621,7 @@ export function HootPanel() {
                 )}
               </section>
 
-              <section className="hoot-island-section" data-part="actions" aria-label="Quick actions">
+              <section className="hoot-island-section" data-part="actions" aria-label={`${name} and quick actions`}>
                 <p className="hoot-island-kicker">
                   <span className="hoot-island-status" data-status={running ? 'working' : 'idle'} aria-hidden="true" />
                   {running ? `${name} is on` : status === 'starting' ? 'Starting…' : `${name} is off`}
@@ -585,7 +641,10 @@ export function HootPanel() {
       </div>
       {/* The pill's words, laid out off-screen in the pill's own type, to be measured. */}
       <span ref={measureEl} className="hoot-island-label hoot-island-measure" aria-hidden="true">
-        {snap.label.text}
+        {rightWords}
+      </span>
+      <span ref={measureLeftEl} className="hoot-island-label hoot-island-measure" aria-hidden="true">
+        {leftWords}
       </span>
     </div>
   )
