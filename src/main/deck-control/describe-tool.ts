@@ -231,8 +231,8 @@ export const TOOL_AREAS: readonly ToolArea[] = [
     id: 'app',
     covers:
       'this app itself: version, logs, diagnostics, updates, settings, notifications, the in-app copilot, clicks in ' +
-      'its window, opening links, and what this tool server covers',
-    prefixes: ['app', 'settings', 'updates', 'notifications', 'copilot', 'ui', 'links', 'tools'],
+      'its window, sessions in windows of their own and the monitors, opening links, and what this tool server covers',
+    prefixes: ['app', 'settings', 'updates', 'notifications', 'copilot', 'ui', 'windows', 'links', 'tools'],
   },
 ]
 

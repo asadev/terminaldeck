@@ -10,6 +10,7 @@ import { advertisedCatalogue, describeIndex, withDescribe } from './describe-too
 import { filesTools, type FilesToolDeps } from './files-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
 import { sessionMoreTools, type SessionMoreDeps } from './session-more-tools'
+import { sessionWindowTools } from './session-window-tools'
 import { uiTools } from './ui-tools'
 
 /**
@@ -34,7 +35,14 @@ function laneTools(): ToolSpec[] {
 
 /** Every tool a table entry may name: the built-ins, this lane's, and the browser verbs it points at. */
 function known(): Set<string> {
-  const all = withDescribe([...buildCatalogue(), ...laneTools(), ...browserTools({} as BrowserDrive)])
+  // The session-window tools are `index.ts`'s own (`session-window-tools.ts`),
+  // and the sessions table points the `popout:` channels at them.
+  const windows = sessionWindowTools({
+    view: () => ({ windows: [], displays: [] }),
+    open: (sessionId) => ({ ok: false, message: '', sessionId }),
+    dock: (sessionId) => ({ ok: false, message: '', sessionId }),
+  })
+  const all = withDescribe([...buildCatalogue(), ...laneTools(), ...browserTools({} as BrowserDrive), ...windows])
   return new Set(all.map((spec) => spec.id))
 }
 

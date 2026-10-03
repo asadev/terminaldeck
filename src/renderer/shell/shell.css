@@ -1439,6 +1439,15 @@
   opacity: 0.55;
 }
 
+/* The title with a mark in front of it — a session's own window puts its
+   status dot here, where the main window has it on the strip's tab. */
+.toolbar-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
 .toolbar-title {
   margin: 0;
   font-size: var(--t-title3);

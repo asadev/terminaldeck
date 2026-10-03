@@ -41,6 +41,14 @@ import { panelSpec } from './panels'
 import { UsageBar, type UsageFit } from './UsageBar'
 import { rowDetail, useConnectors } from './use-connectors'
 import { useSessionControls } from './useSessionControls'
+/*
+ * The chip's own shape — `.cc-chip` — lives with the chat composer, where it
+ * was first drawn, and this cluster reads it. It used to arrive only because
+ * the main window happens to mount a composer somewhere; a session's own
+ * window mounts none, and there every chip fell apart into a label stacked
+ * over its value. Imported where it is used.
+ */
+import '../components/ChatComposer.css'
 import '../chat/controls/AgentControls.css'
 import './SessionControls.css'
 

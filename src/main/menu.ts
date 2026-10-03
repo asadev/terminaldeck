@@ -214,6 +214,17 @@ export function menuTemplate(
       // `keymap.ts` and `App.tsx`, and renaming it to change a word on a menu is
       // how a menu item stops firing.
       { label: 'Delete Session', accelerator: 'CmdOrCtrl+W', click: send('session.close') },
+      separator,
+      /*
+       * A session's own window, and back. Here rather than in a spelled-out
+       * Window menu so every platform keeps its default one — the macOS one is
+       * what lists the open windows and owns ⌘`, and these are ordinary
+       * windows, so both keep working for them. The commands go to whichever
+       * window is in front: `popout-windows.ts` `routeMenu` decides, so from a
+       * session's own window "back" means that session.
+       */
+      { label: 'Move Session to New Window', click: send('session.popOut') },
+      { label: 'Move Session Back to Main Window', click: send('session.dock') },
       // Where a Windows user looks for them. On macOS these stay in the app
       // menu, so repeating them here would be a second door to one room.
       ...(mac ? [] : [separator, settings, shortcuts, separator, quit]),
@@ -273,6 +284,7 @@ export function menuTemplate(
     ],
   }
 
+
   return [
     ...(mac ? [appMenu] : []),
     file,
@@ -321,8 +333,17 @@ function sameCommands(a: HiddenCommands, b: HiddenCommands): boolean {
 export function buildMenu(
   getWindow: () => BrowserWindow | null,
   platform: Platform = currentPlatform(),
+  /*
+   * A chance to handle a command before it goes to the main window — true when
+   * it was handled. It exists for a session in its own window: ⌘W there closes
+   * that window rather than deleting the session behind the main window's bar,
+   * and every other command is sent on to the main window, which owns it.
+   * `popout-windows.ts` `routeMenu` is the one caller.
+   */
+  route?: (command: string) => boolean,
 ): void {
   const send: Send = (command: string) => () => {
+    if (route?.(command) === true) return
     const window = getWindow()
     if (window && !window.isDestroyed()) window.webContents.send('menu:command', command)
   }

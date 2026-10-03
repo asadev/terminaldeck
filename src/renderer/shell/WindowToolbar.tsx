@@ -97,6 +97,15 @@ interface Props {
   onEdgeEnter(): void
   /** Right-aligned: the mode switch, and nothing else. */
   children?: ReactNode
+  /**
+   * A mark drawn in front of the title, on its line.
+   *
+   * Only a session's own window passes one — its status dot. In the main window
+   * the dot is on the session's tab in the strip, right above this bar; a
+   * session's own window has no strip, so the dot comes down to the name it
+   * belongs to rather than going missing.
+   */
+  titleMark?: ReactNode
 }
 
 /** Points the way the content's left edge moves — see `Sidebar.tsx`. */
@@ -194,6 +203,7 @@ export function WindowToolbar({
   onRevealSidebar,
   onEdgeEnter,
   children,
+  titleMark,
 }: Props) {
   /*
    * The window buttons' geometry, published for the stylesheet.
@@ -268,7 +278,14 @@ export function WindowToolbar({
                 renames the session. `SessionTitle` renders the plain `<h1>` this
                 was whenever there is no session behind it or nowhere to write a
                 name to — see the note there. */}
-            <SessionTitle title={title} sessionId={sessionId} onRename={onRenameSession} />
+            {titleMark ? (
+              <div className="toolbar-title-row">
+                {titleMark}
+                <SessionTitle title={title} sessionId={sessionId} onRename={onRenameSession} />
+              </div>
+            ) : (
+              <SessionTitle title={title} sessionId={sessionId} onRename={onRenameSession} />
+            )}
             {meta ?? (subtitle && <p className="toolbar-subtitle">{subtitle}</p>)}
           </div>
         )}

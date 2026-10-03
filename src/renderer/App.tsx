@@ -3,6 +3,8 @@ import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
 import type { ProviderId, SessionMeta, SessionStatus } from '@shared/types'
 import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
+import { useSessionWindows } from './popout/session-windows'
+import { PoppedOutCard, POPPED_ICON } from './popout/PoppedOutCard'
 import { MachineSessionPane } from './machines/MachineLinks'
 import { hereName } from './machines/types'
 import { useMachines } from './machines/useMachines'
@@ -1571,6 +1573,99 @@ function Workspace() {
     ? sessions.find((session) => session.id === focusedId) ?? null
     : null
 
+  /*
+   * Sessions in windows of their own — `popout/session-windows.ts`.
+   *
+   * A session that is out is not drawn here: its terminal is in its own window,
+   * and two terminals on one pty would both type into it and both resize it. So
+   * every place below that mounts a `TerminalView` asks `popped` first and draws
+   * `PoppedOutCard` instead — "open in its own window", with a press that brings
+   * that window forward.
+   *
+   * "Move back" from a session's own window brings this window forward with the
+   * session in front (`select`); closing the window with its red button puts the
+   * session back without taking the person anywhere.
+   */
+  const selectTabRef = useRef<((id: string) => void) | null>(null)
+  const sessionWindows = useSessionWindows({
+    onEvent: (event) => {
+      if (event.kind === 'docked' && event.select) selectTabRef.current?.(event.sessionId)
+    },
+  })
+  /**
+   * The session the "Move to new window" controls act on, or null where there is
+   * none they can move.
+   *
+   * The focused session — the one the app acts on — and only one running on
+   * this computer: the copilot keeps its own page here, and a session on another
+   * machine or a server is held by this window's link to it, which a second
+   * window does not have. Null while a remote session fills the frame, for the
+   * reason ⌘W checks the same thing: `focusedSession` would then be a local
+   * session nobody is looking at.
+   */
+  const popOutTarget =
+    sessionWindows.available &&
+    focusedSession !== null &&
+    !sessionWindows.popped.has(focusedSession.id) &&
+    (splitting || (openMachineSession === null && openServerSession === null))
+      ? focusedSession.id
+      : null
+  const dockTarget =
+    focusedSession !== null && sessionWindows.popped.has(focusedSession.id) ? focusedSession.id : null
+  const [popOutProblem, setPopOutProblem] = useState<string | null>(null)
+  useEffect(() => {
+    if (popOutProblem === null) return
+    const timer = setTimeout(() => setPopOutProblem(null), 4000)
+    return () => clearTimeout(timer)
+  }, [popOutProblem])
+  const popOutSession = useCallback(
+    (id: string, at?: { x: number; y: number } | null) => {
+      void sessionWindows.popOut(id, at).then((problem) => setPopOutProblem(problem))
+    },
+    [sessionWindows.popOut],
+  )
+  /**
+   * The card drawn where a session's terminal was, while that session is out.
+   *
+   * The display is named only when there is more than one: on a single screen
+   * "it is in another window" is the whole answer, and a monitor's model name
+   * would be a fact nobody asked for.
+   */
+  /*
+   * The names this window shows for the sessions that are out, handed to the
+   * main process so each session's own window says the same thing — in its
+   * bar, and as its window title, which is what the Window menu and ⌘` list.
+   * `label` sends only when something changed.
+   */
+  useEffect(() => {
+    if (!sessionWindows.available || sessionWindows.popped.size === 0) return
+    const labels: Record<string, string> = {}
+    for (const tab of tabs) if (sessionWindows.popped.has(tab.id)) labels[tab.id] = labelOf(tab)
+    sessionWindows.label(labels)
+  })
+  /** The rail's and the strip's half of the moves: which tabs can, and the moves themselves. */
+  const windowMoves = sessionWindows.available
+    ? {
+        popped: sessionWindows.popped,
+        canMove: (tabId: string) => sessions.some((session) => session.id === tabId),
+        popOut: (tabId: string) => popOutSession(tabId),
+        dock: sessionWindows.dock,
+        show: sessionWindows.focus,
+      }
+    : undefined
+  const poppedCard = (id: string, visible: boolean) => {
+    const row = sessionWindows.rowFor(id)
+    return (
+      <PoppedOutCard
+        key={`popped:${id}`}
+        visible={visible}
+        where={sessionWindows.view.displays.length > 1 ? (row?.displayLabel ?? '') : ''}
+        onShow={() => sessionWindows.focus(id)}
+        onDock={() => sessionWindows.dock(id)}
+      />
+    )
+  }
+
   /**
    * Whether the thing in front of you is the copilot itself.
    *
@@ -2617,6 +2712,7 @@ function Workspace() {
     },
     [windowSessions, setActiveSession, showTab, clearPanel],
   )
+  selectTabRef.current = selectTab
 
   /**
    * A row in the rail, pressed — which opens that window *beside* the one you
@@ -4029,6 +4125,33 @@ function Workspace() {
         run: () => openNewSessionDialog(),
       },
       /*
+       * A session's own window, and back. Offered only when there is a session
+       * in front that the move applies to — the same rule `session.resume` beside
+       * it keeps: a row that runs and does nothing is not offered.
+       */
+      ...(popOutTarget !== null
+        ? [
+            {
+              id: 'session.popOut',
+              title: 'Move session to new window',
+              group: 'Session',
+              keywords: 'pop out separate window monitor display screen detach',
+              run: () => popOutSession(popOutTarget),
+            },
+          ]
+        : []),
+      ...(dockTarget !== null
+        ? [
+            {
+              id: 'session.dock',
+              title: 'Move session back to main window',
+              group: 'Session',
+              keywords: 'dock return pop in window',
+              run: () => sessionWindows.dock(dockTarget),
+            },
+          ]
+        : []),
+      /*
        * Continue-last-session, offered only to an agent that has one.
        *
        * *"'Continue last conversation' is agent-specific"* — and it is worse
@@ -4310,6 +4433,12 @@ function Workspace() {
     // Session details is in this list or it is not, depending on whether the
     // copilot is on screen — so the list has to be rebuilt when that changes.
     copilotInFront,
+    // And so are the two window moves, depending on what is in front and
+    // whether it is already out.
+    popOutTarget,
+    dockTarget,
+    popOutSession,
+    sessionWindows.dock,
   ])
 
   /**
@@ -4367,6 +4496,16 @@ function Workspace() {
           } else if (activeTab) {
             closeTab(activeTab.id)
           }
+          return true
+        // The File menu sends these whatever is in front; with nothing that can
+        // move, they do nothing rather than move something nobody is looking at.
+        // Handled here as well as by the palette rows, which exist only while
+        // there is something for them to act on.
+        case 'session.popOut':
+          if (popOutTarget !== null) popOutSession(popOutTarget)
+          return true
+        case 'session.dock':
+          if (dockTarget !== null) sessionWindows.dock(dockTarget)
           return true
         // ⌘⇧T, and the application menu's "New Session…". One destination with
         // two chords is fine; two destinations would not be. See the palette
@@ -4446,6 +4585,10 @@ function Workspace() {
       // The application menu's Session Inspector is withdrawn over the copilot,
       // the same as the palette's row — see the `app.inspector` case.
       copilotInFront,
+      popOutTarget,
+      dockTarget,
+      popOutSession,
+      sessionWindows.dock,
     ],
   )
 
@@ -4907,7 +5050,7 @@ function Workspace() {
           // active folder on the default agent — the exact behaviour he was
           // objecting to, surviving in the two places nobody had looked.
           onNewSession={() => openNewSessionDialog()}
-          renderCell={({ session }) => (
+          renderCell={({ session }) => sessionWindows.popped.has(session.id) ? poppedCard(session.id, true) : (
             <TerminalView
               sessionId={session.id}
               visible
@@ -5120,6 +5263,8 @@ function Workspace() {
                      * element is what tells it where to be.
                      */
                     <div className="pane-remote-slot" {...{ [SLOT_ATTR]: elsewhere.tab.id }} />
+                  ) : session && sessionWindows.popped.has(session.id) ? (
+                    poppedCard(session.id, true)
                   ) : session ? (
                     <TerminalView
                       // Keyed on the pane as well as the session, so the same
@@ -5250,6 +5395,8 @@ function Workspace() {
       <>
         {sessions.map((session) => {
           const active = session.id === activeTab.id
+          // Out in its own window: the card, not a second terminal on its pty.
+          if (sessionWindows.popped.has(session.id)) return poppedCard(session.id, active)
           return (
             <Fragment key={session.id}>
               <TerminalView
@@ -5985,6 +6132,8 @@ function Workspace() {
           width={sidebar.width}
           projects={projects}
           tabs={tabs}
+          /* Sessions in windows of their own: the row menu's moves and the mark. */
+          windowMoves={windowMoves}
           /*
             Which row is highlighted — including a remote one.
 
@@ -6239,6 +6388,9 @@ function Workspace() {
                the opposite direction. */
             covered={showingPanel}
             onSelect={selectTab}
+            /* A session tab dragged past the window's edge gets a window of its
+               own, where it was let go; and a tab that is out wears the mark. */
+            windowMoves={windowMoves}
             /* The ✕ on a session tab. It takes the tab off the bar and ends
                nothing, so the only thing this window has to do about it is stop
                showing a tab that is no longer up there — which is all
@@ -6681,7 +6833,10 @@ function Workspace() {
               deleted. See the comment where it stood, below, for the four seams
               either of them needs.
             */}
-            {barControls ? (
+            {/* Not over a session that is out: its controls are on its own window's
+                bar, and one session's model and effort chips in two places is
+                two controls for one setting. */}
+            {barControls && !sessionWindows.popped.has(barControls.sessionId) ? (
               <SessionControls
                 sessionId={barControls.sessionId}
                 cwd={barControls.cwd}
@@ -6747,6 +6902,45 @@ function Workspace() {
                 splitOffer={!features.on('split')}
               />
             ) : null}
+            {/*
+              Move this session into a window of its own — for a second monitor,
+              in his words. One glyph, after the mode switch: it is about the
+              window the session is in, as the mode switch is about how the
+              window draws it. Absent where there is nothing it can move (the
+              copilot, a remote session, a page in front); a session that is
+              already out shows the card in its pane instead, which holds the
+              way back.
+            */}
+            {popOutTarget !== null && !showingPanel && !swarm ? (
+              <button
+                type="button"
+                className="toolbar-btn"
+                onClick={() => popOutSession(popOutTarget)}
+                aria-label="Move to new window"
+                title="Move to new window"
+              >
+                <svg
+                  width="17"
+                  height="17"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d={POPPED_ICON} />
+                </svg>
+              </button>
+            ) : null}
+            {popOutProblem === null ? null : (
+              <span className="machine-switch-host">
+                <span className="machine-switch-problem" role="status">
+                  {popOutProblem}
+                </span>
+              </span>
+            )}
             {/*
               Restart — the one control here a session's bar does not have, and
               the only thing about this window that is *more* rather than the

@@ -125,6 +125,47 @@ const announceHeld = (): void => {
 let addedAgents: Array<Record<string, unknown>> = []
 /** Subscribers to `session:created`. See `onSessionCreated` below. */
 const sessionCreatedListeners = new Set<(meta: unknown) => void>()
+
+/*
+ * Sessions in windows of their own — `main/popout-windows.ts`, modelled.
+ *
+ * The list, the two moves that change it and the push every window hears,
+ * shaped the way the main process answers. `?popped=s1,s2` launches with those
+ * sessions already out (the main window then draws its card where their
+ * terminals were); `?popout=<id>` is what a session's own window is loaded
+ * with, and makes this page that window — `self` answers its window id, as the
+ * real `popout:list` does for the window that asks.
+ */
+const SESSION_WINDOW_DISPLAYS = [
+  { id: 1, label: 'Built-in Retina Display', primary: true, width: 1512, height: 982 },
+  { id: 7, label: 'DELL U2723QE', primary: false, width: 2560, height: 1440 },
+]
+const harnessParams = new URLSearchParams(location.search)
+const popoutSelfId = harnessParams.get('popout')
+let sessionWindowCounter = 900
+const sessionWindowRow = (sessionId: string): Record<string, unknown> => ({
+  sessionId,
+  windowId: (sessionWindowCounter += 1),
+  label: '',
+  status: 'working',
+  displayId: 7,
+  displayLabel: 'DELL U2723QE',
+  bounds: { x: 2000, y: 120, width: 960, height: 640 },
+  fullScreen: false,
+  minimized: false,
+  focused: false,
+})
+let sessionWindowRows: Array<Record<string, unknown>> = [
+  ...(harnessParams.get('popped') ?? '').split(',').filter((id) => id !== ''),
+  ...(popoutSelfId ? [popoutSelfId] : []),
+]
+  .filter((id, index, all) => all.indexOf(id) === index)
+  .map(sessionWindowRow)
+const sessionWindowListeners = new Set<(view: unknown, event: unknown) => void>()
+const sessionWindowsView = () => ({ windows: sessionWindowRows, displays: SESSION_WINDOW_DISPLAYS })
+const announceSessionWindows = (event: unknown): void => {
+  for (const listener of [...sessionWindowListeners]) listener(sessionWindowsView(), event)
+}
 /**
  * Subscribers to the copilot's confirmation push.
  *
@@ -595,6 +636,46 @@ const api: Record<string, unknown> = new Proxy(
       return addedAgents.length !== before
     },
     listSessions: async () => sessions,
+    sessionWindows: async () => ({
+      ...sessionWindowsView(),
+      self: popoutSelfId ? (sessionWindowRows.find((row) => row.sessionId === popoutSelfId)?.windowId ?? null) : null,
+    }),
+    onSessionWindows: (cb: (view: unknown, event: unknown) => void) => {
+      sessionWindowListeners.add(cb)
+      return () => sessionWindowListeners.delete(cb)
+    },
+    popOutSession: async (sessionId: string) => {
+      if (sessionId === 'copilot-1') return { ok: false, message: 'The copilot stays in the main window.', sessionId }
+      if (!sessionWindowRows.some((row) => row.sessionId === sessionId)) {
+        sessionWindowRows = [...sessionWindowRows, sessionWindowRow(sessionId)]
+        announceSessionWindows({ kind: 'opened', sessionId })
+      }
+      return { ok: true, message: 'It is in its own window now, on DELL U2723QE.', sessionId, display: 'DELL U2723QE' }
+    },
+    dockSession: async (sessionId: string) => {
+      const before = sessionWindowRows.length
+      sessionWindowRows = sessionWindowRows.filter((row) => row.sessionId !== sessionId)
+      if (sessionWindowRows.length === before) return { ok: false, message: 'That session is not in a window of its own.', sessionId }
+      announceSessionWindows({ kind: 'docked', sessionId, select: true })
+      return { ok: true, message: 'It is back in the main window.', sessionId }
+    },
+    focusSessionWindow: async (sessionId: string) =>
+      sessionWindowRows.some((row) => row.sessionId === sessionId)
+        ? { ok: true, message: 'Its window is in front.', sessionId }
+        : { ok: false, message: 'That session is not in a window of its own.', sessionId },
+    labelSessionWindows: (labels: Record<string, string>) => {
+      let changed = false
+      sessionWindowRows = sessionWindowRows.map((row) => {
+        const label = labels[row.sessionId as string]
+        if (typeof label !== 'string' || label === row.label) return row
+        changed = true
+        return { ...row, label }
+      })
+      if (changed) announceSessionWindows(null)
+    },
+    followSessionSwitch: async (_previousId: string, nextId: string) => ({ ok: true, message: 'The window follows the new session.', sessionId: nextId }),
+    // There is no second window out here to bring forward.
+    showMainWindow: () => {},
     getScrollback: async () => '',
     // A fresh id per call. A fixed one meant the second "New session" produced
     // a duplicate React key and the sidebar could never show more than one row.

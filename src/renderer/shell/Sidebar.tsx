@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import { ALERTS_GLYPH } from '../components/AlertsPanel'
 import { StatusDot } from '../components/StatusDot'
+import '../popout/popout.css'
 import type { Project } from '../state/store'
 import { useSessionRename } from '../state/session-rename'
 import { folderName, MAX_TITLE_LENGTH, sameFolder } from '../session-title'
@@ -292,6 +293,21 @@ interface Props {
    * a page, and the link did not have to.
    */
   onOpenCopilot?(focus?: string | null): void
+  /**
+   * Sessions in windows of their own, and the moves between windows.
+   *
+   * The row's ⋯ offers **Move to New Window** for a session that can have one
+   * and **Show Its Window** / **Move Back to Main Window** for one that is out,
+   * and a row that is out wears a small mark saying so. Absent in a build — or
+   * a harness — that cannot move sessions, and then the menu offers neither.
+   */
+  windowMoves?: {
+    popped: ReadonlySet<string>
+    canMove(tabId: string): boolean
+    popOut(tabId: string): void
+    dock(tabId: string): void
+    show(tabId: string): void
+  }
   onSelectTab(id: string): void
   onCloseTab(id: string): void
   onSelectPanel(id: PanelId): void
@@ -508,6 +524,9 @@ const HELD = 'M12 3.6a8.4 8.4 0 1 0 0 16.8 8.4 8.4 0 0 0 0-16.8M8.2 12h7.6'
  * fine as the point of a question mark inside a ring, invisible as the whole
  * content of a button.
  */
+/** A window with an arrow out of its corner: this session is in a window of its own. */
+const POPPED_MARK =
+  'M15 4h5v5M20 4l-7 7M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14'
 const MORE =
   'M6 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2M12 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2M18 11.4a0.6 0.6 0 1 0 0 1.2 0.6 0.6 0 1 0 0-1.2'
 const GEAR =
@@ -561,6 +580,7 @@ export function Sidebar({
   update,
   copilot = null,
   onOpenCopilot,
+  windowMoves,
   onSelectTab,
   onCloseTab,
   onSelectPanel,
@@ -1464,6 +1484,16 @@ export function Sidebar({
               must never be the first to give. `StatusDot` above keeps its own
               slot — a binding is not a run state and does not get a dot.
             */}
+            {/*
+              Out in a window of its own. A mark rather than a word, the size of
+              the bind chips beside it; the pane says the rest when the row is
+              pressed — "Open in its own window", and the button to it.
+            */}
+            {windowMoves?.popped.has(tab.id) ? (
+              <span className="popped-mark" title="Open in its own window" aria-label="Open in its own window" role="img">
+                <Glyph path={POPPED_MARK} size={12} />
+              </span>
+            ) : null}
             {tab.kind === 'session' ? (
               <SessionBindChips {...bindKey(tab)} sessionName={label} />
             ) : (
@@ -1529,12 +1559,21 @@ export function Sidebar({
                   // A page cannot have pages attached to it, so its menu has no
                   // Connect browser — absent rather than drawn and inert.
                   browser: tab.kind !== 'session',
+                  // Which window it is in, when it can move between them.
+                  window: windowMoves?.popped.has(tab.id)
+                    ? 'own'
+                    : windowMoves?.canMove(tab.id)
+                      ? 'main'
+                      : undefined,
                 })
                 .then((choice) => {
                   setRowMenu((open) => (open === tab.id ? null : open))
                   if (choice === 'promote') togglePromoted(tab.id)
                   else if (choice === 'close') onCloseTab(tab.id)
                   else if (choice === 'copilot' && turn !== null) onOpenCopilot?.(turn)
+                  else if (choice === 'popout') windowMoves?.popOut(tab.id)
+                  else if (choice === 'dock') windowMoves?.dock(tab.id)
+                  else if (choice === 'show-window') windowMoves?.show(tab.id)
                 })
                 .catch(() => {
                   // A menu that could not be popped leaves the row exactly as it
