@@ -155,7 +155,7 @@ import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
 import { wireAccountVault, type AccountVaultHandle } from './account-vault/wire'
 import { electronCipher } from './account-vault/electron-cipher'
-import { copilotState, ensureCopilot, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
+import { copilotState, ensureCopilot, registerCopilotIpc, stopCopilot, type CopilotRuntimeDeps } from './copilot-session'
 import { wireHootMenuBar, type HootMenuBar } from './hoot-menubar'
 import { uiDoCall } from './deck-control/ui-tools'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
@@ -695,7 +695,7 @@ let deckControl: DeckControlHandle | null = null
 let copilotRuntimeDeps: CopilotRuntimeDeps | null = null
 /** Sessions in windows of their own — `popout-windows.ts`. Built in `registerIpc`. */
 let popouts: PopoutRegistry | null = null
-/** Hoot in the macOS menu bar — `hoot-menubar.ts`. Built after the first window. */
+/** Hoot's island at the top of the screen — `hoot-menubar.ts`. Built after the first window. */
 let hootMenuBar: HootMenuBar | null = null
 let copilotInspectDeps: CopilotInspectDeps | null = null
 
@@ -1392,10 +1392,11 @@ function showMainWindow(command?: string): void {
 }
 
 /**
- * Hoot in the menu bar, on the real tray and the real Hoot.
+ * Hoot's island at the top of the screen, on the real Hoot.
  *
  * Every dependency is a function the rest of the app already has: the desk
- * Hoot's state and its start (`copilotState`, `ensureCopilot`), the phone's
+ * Hoot's state, its start and its stop (`copilotState`, `ensureCopilot`,
+ * `stopCopilot`), the phone's
  * two-write submit (`typeAndSubmit`) and transcript reader (`watchRunChat`),
  * and the window's own "bring this to the front" (`ui.do`).
  */
@@ -1426,6 +1427,9 @@ function wireMenuBar(): HootMenuBar | null {
       const state = await ensureCopilot(deps)
       return { problem: state.status === 'running' || state.status === 'starting' ? null : state.problem }
     },
+    stopHoot: () => {
+      stopCopilot(deps)
+    },
     say: (sessionId, text) => typeAndSubmit((data) => ptys.write(sessionId, data), text),
     watchChat: (cwd, agentSessionId, onUpdate) => watchRunChat(cwd, onUpdate, agentSessionId),
     sessions: () =>
@@ -1442,9 +1446,10 @@ function wireMenuBar(): HootMenuBar | null {
       if (page === undefined || window === null || window.isDestroyed()) return
       void window.webContents.executeJavaScript(uiDoCall({ kind: 'settings', target: 'copilot' })).catch(() => undefined)
     },
-    // The owl is the app's one menu bar icon: its right-click menu is the
-    // background menu (sessions, open, quit) with Hoot's own entries in it, and
-    // the background tray steps aside while the owl is there — see `presence`.
+    // The island is the app's one presence at the top of the screen: its
+    // right-click menu is the background menu (sessions, open, quit) with
+    // Hoot's own entries in it, and the background tray steps aside while the
+    // island is there — see `presence`.
     appMenuItems: (extras) => residentMenuItems(residentDeps, extras),
     onShownChanged: () => presence.refresh(),
     log: (message, detail) => logger.info('menubar', message, detail),
@@ -1865,7 +1870,7 @@ async function hydrateRenderer(): Promise<void> {
   // a restart, or when the window comes back from the background. A no-op for a
   // window that is already open, so a reload of the main window changes nothing.
   popouts?.restore(popoutSessions())
-  // Hoot in the menu bar, if the setting says so. A no-op once it is there.
+  // Hoot's island, if the setting says so. A no-op once it is there.
   hootMenuBar?.apply()
   // On every hydration, not only the first: a renderer reload throws away the
   // window's copy of this list exactly as it throws away its tabs, and the rows
@@ -5425,9 +5430,10 @@ const residentDeps: ResidentDeps = {
 }
 const presence = new ResidentPresence({
   ...residentDeps,
-  // Hoot's owl, when it is in the menu bar, is the app's icon there; the
-  // background tray draws its own only when the owl is off. Never zero, never two.
-  represented: () => hootMenuBar?.isShowing().tray === true,
+  // Hoot's island, when it is at the top of the screen, is the app's presence
+  // there; the background tray draws its own icon only when the island is off.
+  // Never zero, never two.
+  represented: () => hootMenuBar?.isShowing().island === true,
 })
 
 /** Every session that still has a process. Exited tabs keep their row and are not this. */

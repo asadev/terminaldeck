@@ -107,4 +107,20 @@ describe('the snapshot off the wire', () => {
     expect(view.messages.map((m) => m.id)).toEqual(['m1'])
     expect(readSnapshot(null).hoot.status).toBe('stopped')
   })
+
+  it('reads the island’s state — its words, grown or not, and the display’s notch — and defaults what is missing', () => {
+    const view = readSnapshot({
+      label: { text: 'Needs you', attention: true },
+      expanded: true,
+      geometry: { barHeight: 32, displayWidth: 1512, notch: { left: 656, width: 200, height: 32 } },
+    })
+    expect(view.label).toEqual({ text: 'Needs you', attention: true })
+    expect(view.expanded).toBe(true)
+    expect(view.geometry).toEqual({ barHeight: 32, displayWidth: 1512, notch: { left: 656, width: 200, height: 32 } })
+    const bare = readSnapshot({ assistant: 'Hoot', geometry: { barHeight: -3, notch: { width: 0, height: 32 } } })
+    expect(bare.label).toEqual({ text: 'Hoot', attention: false })
+    expect(bare.expanded).toBe(false)
+    expect(bare.geometry.barHeight).toBe(24)
+    expect(bare.geometry.notch).toBeNull()
+  })
 })

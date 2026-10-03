@@ -1,19 +1,21 @@
 import type { SessionStatus } from './types'
 import { BRAND } from './brand'
+import type { IslandNotch } from './hoot-island'
 import { decide, NOTIFY_COOLDOWN_MS } from './notify-rule'
 
 /**
- * What Hoot's menu bar item says, worked out from what the app already knows.
+ * What Hoot's island says, worked out from what the app already knows.
  *
- * Shared by both halves: the main process sets the menu bar title from it (the
- * badge, and the moment "Session 2 needs you"), and the dropdown panel draws
- * its header and its list from it. One function each, so the menu bar and the
- * panel under it cannot word the same fact two ways.
+ * Shared by both halves: the main process works out the resting pill's words
+ * (the short line, and the moment "Session 2 needs you"), and the page draws
+ * the pill and the grown panel's lists from the same functions. One function
+ * each, so the pill and the panel it grows into cannot word the same fact two
+ * ways.
  *
  * Pure, so every sentence is pinned by a test without a window. The moment uses
  * the app's own rule for what is worth interrupting somebody for —
  * `decide()` in `notify-rule.ts`, the one the desktop banners go through — so a
- * banner and the menu bar can never disagree about whether "Session 2
+ * banner and the island can never disagree about whether "Session 2
  * finished" was news, and a status that flickers is swallowed by the same
  * cooldown.
  */
@@ -32,25 +34,42 @@ export interface HootMessageView {
 
 export interface HootPanelSnapshot {
   assistant: string
-  /** Light or dark, as the panel's glass is drawn. Null until the main process says. */
-  appearance: 'light' | 'dark' | null
   hoot: { status: 'running' | 'starting' | 'stopped'; problem: string | null }
   sessions: HootSessionView[]
   messages: HootMessageView[]
+  /** What the resting pill says. */
+  label: { text: string; attention: boolean }
+  /** Grown into the panel, or resting as the pill. */
+  expanded: boolean
+  /** The display: its menu bar's height, its width, and its notch if it has one. */
+  geometry: { barHeight: number; displayWidth: number; notch: IslandNotch | null }
 }
 
 const STATUSES: readonly SessionStatus[] = ['idle', 'working', 'waiting', 'input', 'completed', 'exited']
 
 export const EMPTY_SNAPSHOT: HootPanelSnapshot = {
   assistant: BRAND.assistant,
-  appearance: null,
   hoot: { status: 'stopped', problem: null },
   sessions: [],
   messages: [],
+  label: { text: BRAND.assistant, attention: false },
+  expanded: false,
+  geometry: { barHeight: 24, displayWidth: 1440, notch: null },
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+const positive = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+
+function readNotch(raw: unknown): IslandNotch | null {
+  if (!isRecord(raw)) return null
+  const width = positive(raw.width, 0)
+  const height = positive(raw.height, 0)
+  if (width === 0 || height === 0) return null
+  return { left: typeof raw.left === 'number' && Number.isFinite(raw.left) ? raw.left : 0, width, height }
 }
 
 /** The snapshot off the wire. A field this build does not know is dropped, not guessed at. */
@@ -71,12 +90,21 @@ export function readSnapshot(raw: unknown): HootPanelSnapshot {
     if (entry.text.trim() === '') continue
     messages.push({ id: entry.id, role: entry.role, text: entry.text })
   }
+  const assistant = typeof raw.assistant === 'string' && raw.assistant !== '' ? raw.assistant : BRAND.assistant
+  const label = isRecord(raw.label) && typeof raw.label.text === 'string' && raw.label.text !== '' ? raw.label : null
+  const geometry = isRecord(raw.geometry) ? raw.geometry : {}
   return {
-    assistant: typeof raw.assistant === 'string' && raw.assistant !== '' ? raw.assistant : BRAND.assistant,
-    appearance: raw.appearance === 'dark' || raw.appearance === 'light' ? raw.appearance : null,
+    assistant,
     hoot: { status, problem: typeof hoot.problem === 'string' ? hoot.problem : null },
     sessions,
     messages,
+    label: label === null ? { text: assistant, attention: false } : { text: String(label.text), attention: label.attention === true },
+    expanded: raw.expanded === true,
+    geometry: {
+      barHeight: positive(geometry.barHeight, EMPTY_SNAPSHOT.geometry.barHeight),
+      displayWidth: positive(geometry.displayWidth, EMPTY_SNAPSHOT.geometry.displayWidth),
+      notch: readNotch(geometry.notch),
+    },
   }
 }
 
@@ -86,7 +114,8 @@ export function needsYou(sessions: readonly HootSessionView[]): HootSessionView[
 }
 
 /**
- * The one line the resting pill carries, or nothing.
+ * The one line about what is going on, or nothing — the grown panel's header
+ * says it in full, and the pill's short line is cut from it.
  *
  * Nothing when all is quiet — the owl alone says Hoot is there. A session
  * waiting on the person beats any number working, because it is the one thing
@@ -101,7 +130,7 @@ export function restingLine(sessions: readonly HootSessionView[]): { text: strin
   return null
 }
 
-/** A moment: one line the menu bar says for a few seconds, then settles to the badge. */
+/** A moment: one line the pill says for a few seconds, widened, before it settles to its short line. */
 export interface HootMoment {
   sessionId: string
   text: string
@@ -129,10 +158,9 @@ export class MomentTracker {
         status: session.status,
         previous,
         enabled: true,
-        // The menu bar is on every screen and over every app; whether the main
-        // window is showing this session is not a question it can answer, and
-        // a word in the menu bar is small enough that saying it twice costs
-        // nothing.
+        // The island is over every app; whether the main window is showing
+        // this session is not a question it can answer, and a word in the pill
+        // is small enough that saying it twice costs nothing.
         watching: false,
         lastFiredAt: this.fired.get(key) ?? null,
         now,
@@ -150,24 +178,25 @@ export class MomentTracker {
   }
 }
 
-/** How long the menu bar says a moment before it settles to the badge. */
+/** How long the pill says a moment before it settles to its short line. */
 export const MOMENT_MS = 4000
 
-/** How long the pointer rests on the menu bar icon before the panel opens, and is away before it closes. */
+/** How long the pointer rests on the pill before it grows, and is off the shape before it settles. */
 export const OPEN_DELAY_MS = 160
 export const CLOSE_DELAY_MS = 500
 
 /**
- * What the pill in the menu bar says: the moment while it lasts — "Session 2
+ * What the island's resting pill says: the moment while it lasts — "Session 2
  * needs you", "Session 1 finished" — then a compact line about what is going on
  * — "Needs you", "2 working" — and the assistant's name when all is quiet, so
  * the pill always reads as Hoot's rather than as a blank chip.
  *
- * The resting line is shorter than the panel's on purpose. The pill sits in a
- * menu bar shared with every other app on the Mac and has to stay about the
- * width of the clock; the full sentence is what it *grows* to say, for a few
- * seconds, and the panel under it names the session for as long as it waits.
- * Anything still too long is cut to {@link MAX_TITLE} characters.
+ * The resting line is shorter than the panel's on purpose. The pill sits in the
+ * middle of a menu bar shared with every other app on the Mac — and on a
+ * MacBook, beside the notch — so it stays small; the full sentence is what it
+ * *widens* to say, for a few seconds, and the grown panel names the session for
+ * as long as it waits. Anything still too long is cut to {@link MAX_TITLE}
+ * characters.
  */
 export const MAX_TITLE = 22
 

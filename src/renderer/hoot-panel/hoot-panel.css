@@ -1,178 +1,452 @@
 /*
-  The panel under Hoot's owl in the menu bar.
+  Hoot's island — the page in the window `main/hoot-menubar.ts` hangs from the
+  top centre of the screen.
 
-  The window is the system's popover glass (`vibrancy: 'popover'` in
-  `main/hoot-menubar.ts`), with its own rounded corners and shadow, so the page
-  paints no ground: everything here sits on that glass. Type, spacing and
-  colour are the app's tokens; it follows the app's theme, which the glass
-  follows too (the main process sets `nativeTheme` from the same preference).
+  One black shape: the body, and a concave "shoulder" at each top corner where
+  it meets the top edge of the screen, the way a MacBook's notch does. The page
+  sets the shape's size, corner radius, shoulders and shadow on every animation
+  frame (`HootPanel.tsx`); this sheet says what each part is.
 
-  It arrives with a short drop and fade on the app's own curve; under reduced
-  motion the duration tokens are near zero, so it simply appears.
+  ## Why two colours here are fixed and not tokens
+
+  The token rule ("never raw hex") is about the app's chrome, which follows its
+  theme. The island is not chrome: it is drawn over every app, on light, dark
+  and wallpaper-tinted menu bars alike, and it imitates the notch — which is
+  black whatever the screen shows. So its ground is black on every theme, and
+  the one colour on it is Hoot's own orange, the owl's body in `HootMark.tsx`.
+  Both are named once below. The words take the dark theme's ink (the page sets
+  `data-theme="dark"`), because they are always on black.
 */
 
 html.hoot-panel-page,
 html.hoot-panel-page body,
 html.hoot-panel-page #root {
-  height: auto;
+  height: 100%;
+  margin: 0;
   background: transparent;
   overflow: hidden;
 }
 
-.hoot-panel {
-  box-sizing: border-box;
-  width: 100%;
-  padding: var(--sp-3);
+/*
+  The page itself stays out of the dark theme's colour scheme: a document whose
+  scheme is dark gets an opaque dark canvas wherever it is embedded with a
+  different one, and everything around the shape must be see-through. The
+  island takes the dark scheme instead, for its box and its scroll bar.
+*/
+html.hoot-panel-page {
+  color-scheme: normal;
+}
+
+.hoot-island {
+  --island-ground: #000;
+  --island-owl: #f7882f;
+
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color-scheme: dark;
   font-family: var(--font-ui);
-  font-size: var(--t-subhead);
   color: var(--text-primary);
   -webkit-user-select: none;
   user-select: none;
 }
 
-.hoot-panel-in {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  animation: hoot-panel-in var(--dur) var(--ease-emphasis);
+.hoot-island-shape {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  will-change: width, height, filter;
 }
 
-@keyframes hoot-panel-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+/* The top corners curve out into the menu bar: black outside a quarter circle. */
+.hoot-island-shoulder {
+  position: absolute;
+  top: 0;
 }
 
-.hoot-panel-head {
+.hoot-island-shoulder[data-side='left'] {
+  left: 0;
+  background: radial-gradient(
+    circle farthest-side at 0% 100%,
+    transparent calc(100% - 0.75px),
+    var(--island-ground) 100%
+  );
+}
+
+.hoot-island-shoulder[data-side='right'] {
+  right: 0;
+  background: radial-gradient(
+    circle farthest-side at 100% 100%,
+    transparent calc(100% - 0.75px),
+    var(--island-ground) 100%
+  );
+}
+
+.hoot-island-body {
+  position: absolute;
+  top: 0;
+  overflow: hidden;
+  background: var(--island-ground);
+}
+
+/* ---------------------------------------------------------------- at rest -- */
+
+.hoot-island-rest {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--control-h);
 }
 
-.hoot-panel-name {
-  font-size: var(--t-body);
+.hoot-island-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  white-space: nowrap;
+}
+
+/*
+  Beside a notch: the owl at the outer edge of the left ear, the words at the
+  outer edge of the right one — balanced around the camera, however long the
+  words are.
+*/
+.hoot-island-ear {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.hoot-island-ear[data-side='left'] {
+  left: 0;
+  justify-content: flex-start;
+  padding-left: 10px;
+}
+
+.hoot-island-ear[data-side='right'] {
+  right: 0;
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+
+.hoot-island-label {
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.hoot-island-measure {
+  position: absolute;
+  top: -100px;
+  left: -1000px;
+  visibility: hidden;
+}
+
+.hoot-island-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--island-owl);
+}
+
+/* ----------------------------------------------------------------- grown -- */
+
+.hoot-island-full {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 0 14px 14px;
+  transform: translateX(-50%);
+  visibility: hidden;
+  opacity: 0;
+}
+
+.hoot-island-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.hoot-island-half {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hoot-island-tab {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 10px 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  font-size: var(--t-footnote);
   font-weight: var(--w-semibold);
 }
 
-.hoot-panel-line {
+.hoot-island-line {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
-  gap: var(--sp-15);
-  margin-left: auto;
+  gap: 5px;
+  min-width: 0;
   color: var(--text-secondary);
   font-size: var(--t-caption);
   white-space: nowrap;
 }
 
-.hoot-panel-line[data-attention] {
+/* Cut with an ellipsis, never mid-letter, where the notch begins. */
+.hoot-island-line-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hoot-island-line[data-attention] {
   color: var(--text-primary);
 }
 
-.hoot-panel-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.hoot-panel-waiting {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
+.hoot-island-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  list-style: none;
-}
-
-.hoot-panel-session {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  padding: var(--sp-15) var(--sp-2);
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 50%;
   background: none;
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
-.hoot-panel-session:hover {
+.hoot-island-icon:hover {
   background: var(--fill-tertiary);
+  color: var(--text-primary);
 }
 
-.hoot-panel-session-name {
+.hoot-island-sections {
+  display: grid;
+  /* The actions take the width their words need; the other two share the rest. */
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) max-content;
+  padding-top: 6px;
+}
+
+.hoot-island-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.hoot-island-section:first-child {
+  padding-left: 4px;
+}
+
+.hoot-island-section:last-child {
+  padding-right: 4px;
+}
+
+.hoot-island-section + .hoot-island-section {
+  border-left: 1px solid var(--fill-tertiary);
+}
+
+.hoot-island-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
   font-weight: var(--w-medium);
 }
 
-.hoot-panel-session-what {
-  color: var(--text-secondary);
-}
-
-.hoot-panel-log {
+.hoot-island-log {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-15);
-  max-height: 240px;
+  gap: 4px;
+  max-height: 76px;
   overflow-y: auto;
   -webkit-user-select: text;
   user-select: text;
 }
 
-.hoot-panel-msg {
+.hoot-island-msg {
   margin: 0;
-  line-height: var(--lh-body);
+  font-size: var(--t-subhead);
+  line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.hoot-panel-msg[data-role='you'] {
+.hoot-island-msg[data-role='you'] {
   align-self: flex-end;
   max-width: 85%;
-  padding: var(--sp-1) var(--sp-2);
+  padding: 1px 8px;
   border-radius: var(--radius-md);
   background: var(--fill-tertiary);
   color: var(--text-secondary);
 }
 
-.hoot-panel-quiet {
+.hoot-island-quiet {
   margin: 0;
   color: var(--text-secondary);
+  font-size: var(--t-subhead);
+  line-height: 1.4;
 }
 
-.hoot-panel-input {
-  height: var(--control-h-lg);
-  padding: 0 var(--sp-3);
+.hoot-island-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  margin-top: 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-subhead);
+  outline: none;
+}
+
+.hoot-island-input::placeholder {
+  color: var(--text-muted);
+}
+
+.hoot-island-input:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--island-owl);
+}
+
+.hoot-island-off {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* Neutral, not the app's blue: on the island the owl is the only colour. */
+.hoot-island .hoot-island-start {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  background: var(--text-primary);
+  color: var(--island-ground);
+  font-size: var(--t-footnote);
+}
+
+.hoot-island-problem {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+.hoot-island-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hoot-island-session {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-subhead);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hoot-island-session:hover {
+  background: var(--fill-tertiary);
+}
+
+.hoot-island-session-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hoot-island-session-what {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+.hoot-island-status {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.hoot-island-status[data-status='input'] {
+  background: var(--island-owl);
+}
+
+.hoot-island-status[data-status='working'] {
+  background: var(--text-primary);
+}
+
+.hoot-island-action {
+  box-sizing: border-box;
+  width: 100%;
+  height: 26px;
+  margin-bottom: 6px;
+  padding: 0 10px;
   border: none;
   border-radius: var(--radius-md);
   background: var(--fill-tertiary);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--t-body);
-  outline: none;
+  font-size: var(--t-footnote);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
 
-.hoot-panel-input:focus-visible {
-  box-shadow: 0 0 0 2px var(--accent);
+.hoot-island-action:hover {
+  background: var(--fill-secondary);
 }
 
-.hoot-panel-off {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-}
-
-.hoot-panel-problem {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--t-caption);
+.hoot-island-action[data-confirm] {
+  color: var(--color-critical);
 }

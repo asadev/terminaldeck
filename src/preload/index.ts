@@ -328,25 +328,23 @@ const api = {
     ipcRenderer.send('session:labels', labels)
   },
 
-  /* ----------------------------------------------------- hoot's menu bar -- */
+  /* --------------------------------------------------------- hoot's island -- */
   //
-  // Hoot's owl in the macOS menu bar and the panel under it —
-  // `main/hoot-menubar.ts`. The panel talks to the Hoot that is running,
-  // through the phone's say-and-read machinery; it never starts a second one.
+  // Hoot's island at the top centre of the screen — `main/hoot-menubar.ts` owns
+  // the window, `renderer/hoot-panel/` is the page. It talks to the Hoot that is
+  // running, through the phone's say-and-read machinery; it never starts a
+  // second one.
   hootPanelSnapshot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:snapshot'),
   onHootPanelSnapshot: (cb: (snapshot: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, snapshot: unknown) => cb(snapshot)
     ipcRenderer.on('hoot-panel:snapshot', handler)
     return () => ipcRenderer.off('hoot-panel:snapshot', handler)
   },
-  onHootPanelShown: (cb: () => void): (() => void) => {
-    const handler = () => cb()
-    ipcRenderer.on('hoot-panel:shown', handler)
-    return () => ipcRenderer.off('hoot-panel:shown', handler)
-  },
   hootPanelSay: (text: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:say', text),
   hootPanelStartHoot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:start-hoot'),
+  hootPanelStopHoot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:stop-hoot'),
   hootPanelShowSession: (id: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:show-session', id),
+  hootPanelOpenApp: (page?: 'hoot-settings'): Promise<unknown> => ipcRenderer.invoke('hoot-panel:open-app', page),
   hootPanelPointer: (inside: boolean): void => {
     ipcRenderer.send('hoot-panel:pointer', inside)
   },
@@ -359,8 +357,11 @@ const api = {
   hootPanelClose: (): void => {
     ipcRenderer.send('hoot-panel:close')
   },
-  hootPanelSize: (height: number): void => {
-    ipcRenderer.send('hoot-panel:size', height)
+  hootPanelSize: (box: { width: number; height: number }): void => {
+    ipcRenderer.send('hoot-panel:size', box)
+  },
+  hootPanelMenu: (): void => {
+    ipcRenderer.send('hoot-panel:menu')
   },
   hootMenuBarConfig: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:config'),
   hootMenuBarOpen: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:open'),

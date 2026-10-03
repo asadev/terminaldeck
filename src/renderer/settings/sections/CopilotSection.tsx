@@ -2019,7 +2019,7 @@ function ShowingGroup({
   )
 }
 
-/** Hoot in the menu bar, through its own channels — `main/hoot-menubar.ts`. */
+/** Hoot's island at the top of the screen, through its own channels — `main/hoot-menubar.ts`. */
 interface MenuBarBridge {
   hootMenuBarConfig?(): Promise<unknown>
   hootMenuBarConfigure?(patch: { enabled?: boolean }): Promise<unknown>
@@ -2031,12 +2031,12 @@ function readMenuBar(raw: unknown): boolean | null {
 }
 
 /**
- * Hoot's owl in the macOS menu bar, on or off.
+ * Hoot's island at the top centre of the screen, on or off.
  *
  * Written through `hoot-menubar:configure` rather than the settings file
- * directly, because the owl is a menu bar item the main process owns: the
- * write and the owl appearing or going have to be one step, or the switch
- * would say "off" over an owl still sitting beside the clock. The switch moves
+ * directly, because the island is a window the main process owns: the write
+ * and the island appearing or going have to be one step, or the switch would
+ * say "off" over an island still sitting in the menu bar. The switch moves
  * as it is pressed and goes back, with a sentence, if the write did not take —
  * `ShowingGroup`'s contract above.
  */
@@ -2061,17 +2061,17 @@ function MenuBarGroup({ onProblem }: { onProblem(message: string | null): void }
 
   return (
     <Block
-      title="In the menu bar"
-      says={`${BRAND.assistant} beside the clock, over every app. Hover the owl to talk.`}
+      title="At the top of the screen"
+      says={`${BRAND.assistant} in the middle of the menu bar, over every app. Hover it to talk.`}
       more={
-        'Hover the owl, or click it, and a panel drops down with the latest messages, a box to ask, and ' +
-        'the sessions waiting on you. When a session needs you, the menu bar says so for a moment and then ' +
-        'shows how many are waiting. It takes the keyboard only when you click into the box.'
+        'Hover it, or click it, and it grows into a panel with the latest messages, a box to ask, and ' +
+        'the sessions waiting on you. On a MacBook it sits around the notch, never behind it. When a ' +
+        'session needs you it says so for a moment. It takes the keyboard only when you click it.'
       }
     >
       <Row
-        label={`Show ${BRAND.assistant} in the menu bar`}
-        help="Off takes the owl out of the menu bar until you turn it back on."
+        label={`Show ${BRAND.assistant} at the top of the screen`}
+        help="Off takes it away until you turn it back on."
         control={
           <Switch
             checked={enabled ?? true}

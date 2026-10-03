@@ -4268,29 +4268,29 @@ function Workspace() {
         run: () => openCopilot(),
       },
       /*
-       * The menu bar panel, opened from the keyboard — the way to it for
-       * anybody who cannot hover a menu bar item, and the one a tool takes.
+       * The island at the top of the screen, grown from the keyboard — the way
+       * to it for anybody who cannot hover, and the one a tool takes.
        */
       {
         id: 'hoot.ask',
-        title: `Ask ${copilotSetup.name} from the menu bar`,
+        title: `Ask ${copilotSetup.name} at the top of the screen`,
         group: 'View',
-        keywords: 'menu bar owl panel ask question',
+        keywords: 'island notch menu bar owl panel ask question',
         run: async () => {
           const deck = (globalThis as { deck?: { hootMenuBarOpen?(): Promise<unknown> } }).deck
           await deck?.hootMenuBarOpen?.().catch(() => null)
         },
       },
       /*
-       * Hoot in the menu bar, on or off — the same switch as Settings → Hoot →
-       * In the menu bar, through the same channel, so a palette press and the
-       * switch cannot disagree about whether the owl is there.
+       * Hoot's island, on or off — the same switch as Settings → Hoot → At the
+       * top of the screen, through the same channel, so a palette press and the
+       * switch cannot disagree about whether the island is there.
        */
       {
         id: 'view.menubar',
-        title: `Show or hide ${copilotSetup.name} in the menu bar`,
+        title: `Show or hide ${copilotSetup.name} at the top of the screen`,
         group: 'View',
-        keywords: 'menu bar status item tray owl top right',
+        keywords: 'island notch menu bar owl top centre center',
         run: async () => {
           const deck = (globalThis as {
             deck?: {

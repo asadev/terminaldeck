@@ -48,8 +48,8 @@ for (const kind of ['dragover', 'drop'] as const) {
  */
 const popout = new URLSearchParams(location.search).get('popout')
 /*
- * The panel under Hoot's owl in the menu bar loads it with `?hootpanel=1`
- * (`main/hoot-menubar.ts`), and gets that panel and nothing of the application.
+ * Hoot's island at the top of the screen loads it with `?hootpanel=1`
+ * (`main/hoot-menubar.ts`), and gets the island and nothing of the application.
  */
 const hootPanel = new URLSearchParams(location.search).get('hootpanel') === '1'
 
