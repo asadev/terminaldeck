@@ -1648,7 +1648,8 @@ function Workspace() {
     ? {
         popped: sessionWindows.popped,
         canMove: (tabId: string) => sessions.some((session) => session.id === tabId),
-        popOut: (tabId: string) => popOutSession(tabId),
+        // `at` is where a torn-off tab was let go, so the window opens there.
+        popOut: (tabId: string, at?: { x: number; y: number } | null) => popOutSession(tabId, at),
         dock: sessionWindows.dock,
         show: sessionWindows.focus,
       }

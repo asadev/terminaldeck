@@ -95,7 +95,10 @@ describe('the main window never mounts a second terminal for a session that is o
     expect(app).toContain(') : session && sessionWindows.popped.has(session.id) ? (')
   })
 
-  it('hands both bars the moves', () => {
+  it('hands both bars the moves, and a torn-off tab’s drop point through to the window', () => {
     expect(app.match(/windowMoves=\{windowMoves\}/g)).toHaveLength(2)
+    // Found by tearing a tab off in a real window: the point was dropped here
+    // and the window opened beside the main one instead of where it was let go.
+    expect(app).toContain('popOut: (tabId: string, at?: { x: number; y: number } | null) => popOutSession(tabId, at)')
   })
 })
