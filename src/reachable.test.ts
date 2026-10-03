@@ -172,6 +172,10 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'unreachable on purpose: it is the `safeStorage` stand-in and the made-up logins the ' +
     'account vault is tested with. A cipher whose ciphertext is not the plaintext and a login ' +
     'nobody could sign in with — the app itself always uses `electron-cipher.ts`.',
+  'src/main/account-vault/cli-rig.fixture.ts':
+    'unreachable on purpose: it is the local stand-in for the Anthropic API and the OAuth host ' +
+    'that the real Claude Code CLI is run against in the account tests (`switch-in-place.cli.test.ts`, ' +
+    '`measure-reread.cli.test.ts`), so nothing those tests do can leave the machine.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

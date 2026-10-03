@@ -36,9 +36,9 @@
 import { delimiter } from 'node:path'
 import type { ProviderId } from '../../shared/types'
 import type { CodexAuthKeeper } from './codex-auth'
-import { isLoginSlot } from './keychain-requests'
-import { VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './keychain-shim'
-import type { TicketBook } from './server'
+import { isLoginSlot, type ShimAnswer } from './keychain-requests'
+import { VAULT_HOME_ENV, VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './keychain-shim'
+import type { LoginSource, Seat, TicketBook } from './server'
 import type { AccountVault, VaultSummary, VaultWrite } from './store'
 
 export interface AccountVaultRuntime {
@@ -52,6 +52,13 @@ export interface AccountVaultRuntime {
   shimDir: string | null
   /** Null when Codex logins are not kept (no watcher could be started). */
   codex: CodexAuthKeeper | null
+  /**
+   * The real `security`, for a lookup made on a seat's behalf — moving an
+   * account in before a session is switched to it, or checking a login the
+   * agent keeps exists before switching a session onto it. Absent where
+   * nothing may be run (tests, and any build with no shim).
+   */
+  keychain?: (argv: readonly string[], stdin: string | null) => Promise<ShimAnswer>
 }
 
 let current: AccountVaultRuntime | null = null
@@ -191,6 +198,100 @@ export function vaultEnv(
     [VAULT_SOCKET_ENV]: runtime.socketPath,
     [VAULT_TICKET_ENV]: runtime.tickets.ticketFor(account.id),
   }
+}
+
+/* ----------------------------------------------------------------- seats -- */
+
+/**
+ * The config directory a Claude Code process started as this account names its
+ * keychain items after: the account's own folder, or — for the machine's own
+ * install — whatever `CLAUDE_CONFIG_DIR` the app itself inherited, and `null`
+ * when it inherited none (the CLI's names then carry no hash at all).
+ */
+export function agentLaunchDir(account: VaultSubject, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!account.system) return account.configDir
+  const inherited = env.CLAUDE_CONFIG_DIR?.trim()
+  return inherited !== undefined && inherited !== '' ? inherited : null
+}
+
+/**
+ * Where a session switched to this account would be handed its login from, or
+ * null when no session can be served it in place.
+ *
+ *  - A login the app keeps, or is moving in: the vault.
+ *  - A login the agent keeps — the machine's own, or a folder the person chose:
+ *    the keychain item the agent named after that folder, read and written
+ *    there by the real `security` and never copied into the app.
+ *  - A kept login out of reach in this process, or any agent but Claude Code:
+ *    nothing — the switch then has to restart, or is refused.
+ */
+export function loginSource(
+  account: VaultSubject,
+  managed: boolean,
+  runtime: AccountVaultRuntime | null = current,
+): LoginSource | null {
+  if (account.provider !== 'claude') return null
+  const kept = keptBy(account, managed, runtime)
+  if (kept === 'app' || kept === 'adopting') return { kind: 'vault' }
+  if (kept === 'unavailable') return null
+  return { kind: 'keychain', dir: agentLaunchDir(account) }
+}
+
+/**
+ * The environment that gives one Claude Code session a seat at the vault: the
+ * socket, a ticket minted for this launch alone, and — for a session started on
+ * a login the agent keeps — the flag that lets the shim fall back to the real
+ * command if the app ever stops answering.
+ *
+ * Every Claude Code session this app starts gets one, whoever keeps its login,
+ * because that is what lets it be switched in place later. Started on a login
+ * the agent keeps, it is answered by the real `security` exactly as before
+ * until somebody switches it. Empty when the shim is not running, or when the
+ * account's kept login cannot be reached (such a session is refused anyway).
+ *
+ * `serving` is the account it is handed the login of — different from `home`
+ * only for a session restored after being switched in place, which comes back
+ * in its own folder and on the login it was switched to.
+ */
+export function seatEnv(
+  home: VaultSubject,
+  homeManaged: boolean,
+  provider: ProviderId,
+  serving: string = home.id,
+  runtime: AccountVaultRuntime | null = current,
+): Record<string, string> {
+  if (runtime === null || runtime.shimDir === null) return {}
+  if (provider !== 'claude' || home.provider !== 'claude') return {}
+  const source = loginSource(home, homeManaged, runtime)
+  if (source === null) return {}
+  const launchDir = source.kind === 'keychain' ? source.dir : home.configDir
+  return {
+    [VAULT_SOCKET_ENV]: runtime.socketPath,
+    [VAULT_TICKET_ENV]: runtime.tickets.seat(home.id, launchDir, serving),
+    ...(source.kind === 'keychain' ? { [VAULT_HOME_ENV]: 'agent' } : {}),
+  }
+}
+
+/** Tie the seat in a session's environment to the session, now that it has an id. */
+export function bindSeat(env: Record<string, string>, sessionId: string, runtime: AccountVaultRuntime | null = current): void {
+  const ticket = env[VAULT_TICKET_ENV]
+  if (runtime === null || ticket === undefined) return
+  runtime.tickets.bind(ticket, sessionId)
+}
+
+/** The seat a running session holds, or null — a session with none can only be switched by a restart. */
+export function sessionSeat(sessionId: string, runtime: AccountVaultRuntime | null = current): Readonly<Seat> | null {
+  return runtime?.tickets.sessionSeat(sessionId) ?? null
+}
+
+/** Hand a running session another account's login from its next lookup on. */
+export function retargetSeat(sessionId: string, accountId: string, runtime: AccountVaultRuntime | null = current): boolean {
+  return runtime?.tickets.retarget(sessionId, accountId) ?? false
+}
+
+/** The session's process has ended. */
+export function releaseSeat(sessionId: string, runtime: AccountVaultRuntime | null = current): void {
+  runtime?.tickets.release(sessionId)
 }
 
 /**

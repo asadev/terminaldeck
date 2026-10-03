@@ -1127,7 +1127,18 @@ const { ptys, wsl, sessions: remoteSessions, ledger, startSession, restoreSpawn,
  * become a tab in this window, or the session runs with only the far pane
  * knowing it exists.
  */
-const sessionSwitch = createSessionSwitch(core, { onSessionOpened: (meta) => announceSession(meta) })
+const sessionSwitch = createSessionSwitch(core, {
+  onSessionOpened: (meta) => announceSession(meta),
+  /*
+   * Switched in place: the same row, signed in as somebody else. The window
+   * that asked has the answer already; a phone and a paired machine each hold
+   * their own copy of the list and are told, as they are for a rename.
+   */
+  onAccountChanged: () => {
+    remoteLayer?.server.sessionsChanged()
+    machinesIpc?.announceSessions()
+  },
+})
 
 /**
  * How many routine runs this whole app may start in an hour, across every
@@ -2373,6 +2384,18 @@ async function armSwitchLater(
   const { plan } = await sessionSwitch.subject(sessionId, profileId)
   if (plan.refusal !== null || plan.to === null) {
     throw new Error(plan.refusal ?? 'This session cannot be switched.')
+  }
+  /*
+   * Nothing to wait for. "After my next message" exists so a restart lands in
+   * the gap between turns; a switch made in place restarts nothing, so it is
+   * made now — the running turn carries on, and its next request is already
+   * the other account's. Told to the window as a switch that has happened.
+   */
+  if (plan.mode === 'in-place') {
+    const meta = await sessionSwitch.perform(plan.sessionId, plan.to.id)
+    const note = switchedNote(plan.to.name, false, '')
+    send(SESSION_SWITCHED_CHANNEL, plan.sessionId, meta, note)
+    return { sessionId: meta.id, profileId: plan.to.id, note }
   }
   const armed = pending.arm({
     sessionId: plan.sessionId,

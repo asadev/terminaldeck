@@ -92,6 +92,35 @@ export function slotForService(service: string): ServiceSlot | null {
   return null
 }
 
+/**
+ * The keychain service an agent would ask for this slot under, from this
+ * config directory — the inverse of {@link slotForService}.
+ *
+ * `null` is the machine's own install, whose names carry no hash. The CLI
+ * hashes the directory in NFC (`jF` in 2.1.287), so this does too.
+ */
+export function serviceFor(slot: string, dir: string | null, hash: (text: string) => string): string {
+  const base = slot.replace(/^keychain:/, '')
+  return dir === null ? base : `${base}-${hash(dir.normalize('NFC')).slice(0, 8)}`
+}
+
+/**
+ * The keychain account name the CLI files its items under — `Xk()` in 2.1.287,
+ * reproduced so a lookup this app makes on an agent's behalf names the same
+ * item the agent would have.
+ */
+export function keychainUser(env: NodeJS.ProcessEnv = process.env, fallback: () => string = () => ''): string {
+  let name = env.USER ?? ''
+  if (name === '') {
+    try {
+      name = fallback()
+    } catch {
+      name = ''
+    }
+  }
+  return /^[a-zA-Z0-9._-]+$/.test(name) ? name : 'claude-code-user'
+}
+
 /** True for the slot that holds the login itself, as opposed to the API-key slot. */
 export function isLoginSlot(slot: string): boolean {
   return /^keychain:Claude Code(?:-[a-z]+)*-credentials$/.test(slot)

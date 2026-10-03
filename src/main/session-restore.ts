@@ -138,6 +138,13 @@ export interface SavedSession {
   provider: ProviderId
   /** The isolated login this ran as, or null for the default. */
   profileId: string | null
+  /**
+   * The account whose folder it ran in, when that was not `profileId`'s own —
+   * a session switched to another account in place keeps its folder, and so
+   * its conversation. Absent for every other session. See
+   * `SessionMeta.homeProfileId`.
+   */
+  homeProfileId?: string
   cols: number
   rows: number
   /**
@@ -747,6 +754,11 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
           rows: decision.session.rows,
           provider: decision.session.provider,
           profileId: decision.session.profileId,
+          // In the folder it ran in, when that was not its login's own — where
+          // the conversation `resume` is about to continue actually lives.
+          ...(decision.session.homeProfileId !== undefined
+            ? { homeProfileId: decision.session.homeProfileId }
+            : {}),
           resume: decision.outcome === 'resume',
           /*
            * And come back as the *same tab*, not as another one like it.

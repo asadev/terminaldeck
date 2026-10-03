@@ -72,8 +72,17 @@ import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
-import { getState as profilesState, keptUnavailable, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
-import { vaultPath } from './account-vault/runtime'
+import {
+  findProfile,
+  getState as profilesState,
+  keptManaged,
+  keptUnavailable,
+  resolveProfile,
+  sessionEnv,
+  supportsProfiles,
+  type Profile,
+} from './profiles'
+import { bindSeat, loginSource, releaseSeat, seatEnv, vaultPath } from './account-vault/runtime'
 import { withoutVaultEnv } from './session-env'
 // Which login each session's agent is actually running as — the one place that
 // answers it, so that the control cluster names the same account the chip and
@@ -164,6 +173,25 @@ import {
  * was supposed to be catching; its header says what that cost on a real server.
  */
 export { AgentUnavailableError } from './agent-unavailable'
+
+/**
+ * The account whose folder a session should run in when that is not its
+ * login's own, or null.
+ *
+ * Only a session restored after being switched in place asks for one, and it
+ * is honoured only when it still makes sense: the account exists, is a Claude
+ * Code login like the one being served, and that login can actually be served
+ * through a seat. Otherwise the session runs as its login, in the login's own
+ * folder — the shape every session had before switching in place.
+ */
+export function splitHome(homeId: string | null | undefined, login: Profile): Profile | null {
+  if (typeof homeId !== 'string' || homeId === '' || homeId === login.id) return null
+  const home = findProfile(profilesState(), homeId)
+  if (home === null || home.provider !== 'claude' || login.provider !== 'claude') return null
+  if (loginSource(login, keptManaged(login)) === null) return null
+  if (loginSource(home, keptManaged(home)) === null) return null
+  return home
+}
 
 /**
  * The account a remembered tab is written down as: the one the session was
@@ -1756,7 +1784,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // Resolve the profile the session should run as and hand the PTY its
     // config-dir override. Without this the picker records a choice that never
     // reaches the process, and two "separate" logins quietly share one.
-    const profile = resolveProfile(profilesState(), {
+    const login = resolveProfile(profilesState(), {
       sessionProfileId: input.profileId ?? undefined,
       projectPath: input.cwd,
     })
@@ -1812,6 +1840,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * not remembered.
      */
     const appComposed = fence !== undefined || (extraArgs !== undefined && extraArgs.length > 0)
+
+    /*
+     * Which account's folder the agent runs in, and whether it gets a seat.
+     *
+     * Every Claude Code session this app starts in a window or for the routine
+     * engine — not one held inside a device's folder, not one inside WSL, not
+     * one the app composes itself (the copilot runs under a fence of its own) —
+     * is given a seat at the vault (`account-vault/server.ts`): a ticket minted
+     * for this launch, which an account switch can retarget in place without
+     * touching the process. Started on a login the agent keeps, the seat passes
+     * every lookup to the real `security`, exactly as before.
+     *
+     * `profile` is the folder: the login's own, except for a session restored
+     * after being switched in place, which comes back in the folder it was
+     * started in — where its conversation is — and on the login it was switched
+     * to. That split only exists where a seat can serve it; anywhere else the
+     * session simply runs as its login, in the login's own folder.
+     */
+    const seated = provider === 'claude' && !confined && target === null && !appComposed
+    const home = seated ? splitHome(input.homeProfileId, login) : null
+    const profile = home ?? login
+    const seat = seated ? seatEnv(profile, keptManaged(profile), provider, login.id) : {}
 
     /*
      * The name of the *tab* this session is (null when it is not one), and the
@@ -1907,7 +1957,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * decide, not a side effect of where logins are stored — so it is not
        * made here. A confined session behaves exactly as it did before.
        */
-      ...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : sessionEnv(profile, provider)),
+      ...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : { ...sessionEnv(profile, provider), ...seat }),
       ...(guest?.set ?? {}),
       ...(confined && confine ? confinedHomeEnv(confine.home, platform) : {}),
       /*
@@ -2003,15 +2053,22 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * original id, which is what "the same conversation, under the other
      * login" has to mean.
      */
+    /*
+     * And for Codex, `resume <thread id>`: an account switch that carried the
+     * conversation into the other account's folder (`codex-carry.ts`) names it,
+     * where `resume --last` would pick whatever that account did last here.
+     */
     const named =
-      provider === 'claude' &&
+      (provider === 'claude' || provider === 'codex') &&
       input.resume === true &&
       typeof input.resumeConversationId === 'string' &&
       input.resumeConversationId !== ''
     const resumeArgs = named
       ? withLaunchArgs(
           spec,
-          ['--resume', input.resumeConversationId as string],
+          provider === 'codex'
+            ? ['resume', input.resumeConversationId as string]
+            : ['--resume', input.resumeConversationId as string],
           platform,
           process.env,
           target,
@@ -2304,8 +2361,11 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * isolation that this app did not make happen.
        */
       ...(supportsProfiles(provider)
-        ? { profile: { id: profile.id, name: profile.name } }
+        ? { profile: { id: login.id, name: login.name } }
         : {}),
+      // The folder's account, when the session runs in one that is not its
+      // login's own — a session restored after a switch made in place.
+      ...(home !== null ? { homeProfileId: home.id } : {}),
       // Set only for a WSL launch, where the session's own folder is a Linux
       // path that node-pty would resolve into a Windows directory that does not
       // exist.
@@ -2326,6 +2386,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * the second one is the one that gets forgotten on the path nobody exercises.
      */
     sessionTools?.started(meta.id)
+
+    // The seat minted for this launch belongs to this session from now on, so
+    // an account switch can find it by the session's id.
+    bindSeat(profileEnv, meta.id)
 
     /*
      * Or, when there was none, the sentence this session may explain itself
@@ -2425,6 +2489,9 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         cwd: input.cwd,
         provider: requested,
         profileId: rememberedAccount(meta, input),
+        // And the folder it runs in, when that is not the login's own — so a
+        // session switched in place comes back where its conversation is.
+        ...(meta.homeProfileId !== undefined ? { homeProfileId: meta.homeProfileId } : {}),
         cols: input.cols,
         rows: input.rows,
         lastSeenAt: Date.now(),
@@ -2922,6 +2989,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * twice; `sessionExited` is idempotent through its `ended` guard.
        */
       sessionExited(id)
+      // Its seat at the vault goes with it: nothing will ask on that ticket again.
+      releaseSeat(id)
       sessions.noteExit(id, exitCode)
       // The key that let this session ask a phone for a GitHub login stops
       // working the moment the session does. A key that outlived its session

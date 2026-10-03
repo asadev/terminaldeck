@@ -34,6 +34,7 @@ const plan: SwitchPlan = {
   to: { id: 'b', name: 'Work', provider: 'claude' },
   conversation: 'theirs',
   resume: true,
+  mode: 'restart',
 }
 
 const armed = (register: PendingSwitches, sessionId = 's1'): void => {

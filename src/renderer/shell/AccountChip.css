@@ -298,3 +298,35 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/*
+ * "Switched to …" — the one thing a switch made in place says.
+ *
+ * Asad: *"Only account should be changing."* So nothing else moves: no sheet,
+ * no new tab, no restart. This line, under the chip, is the whole of the
+ * feedback, and it clears itself. Drawn like the machine switch's answer beside
+ * it (`.machine-switch-problem`), in ordinary ink because it is news, not a
+ * warning.
+ */
+.account-switch-note {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(360px, calc(100vw - var(--sp-6)));
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+  pointer-events: none;
+}

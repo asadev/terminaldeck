@@ -40,7 +40,7 @@
  */
 
 import { blankContextReading, readContextWindow } from '../context-window'
-import { accountFor, readUsage, refreshUsage, type UsageOptions } from '../usage-ipc'
+import { accountFor, readUsage, refreshUsage, transcriptStoreFor, type UsageOptions } from '../usage-ipc'
 import type { RemoteUsageAccess } from './server'
 
 /**
@@ -99,7 +99,7 @@ export function createUsageServe(options: UsageOptions): RemoteUsageAccess {
        * Claude-store agents take a scope; Codex takes `codexHome` and reads
        * nothing from it.
        */
-      const store = session.provider === 'codex' ? null : accountFor('claude', session).configDir
+      const store = session.provider === 'codex' ? null : transcriptStoreFor(session)
       const codexHome = session.provider === 'codex' ? accountFor('codex', session).configDir : null
       const reading = await readContextWindow({
         provider: session.provider,

@@ -57,6 +57,15 @@ export const REAL_SECURITY = '/usr/bin/security'
 /** The variables a vault session carries. Named after the brand, as the session id is. */
 export const VAULT_SOCKET_ENV = `${BRAND.id.toUpperCase()}_ACCOUNT_VAULT`
 export const VAULT_TICKET_ENV = `${BRAND.id.toUpperCase()}_ACCOUNT_TICKET`
+/**
+ * Set to `agent` on a session started on a login the agent keeps itself — the
+ * machine's own, or a folder the person chose — which carries a seat only so it
+ * can be switched in place later. If the app stops answering, such a session
+ * falls back to the real command, which is exactly how it ran before the app
+ * kept anything: failing closed there would sign out a login the app never
+ * held. A session started on a login the app keeps still fails closed.
+ */
+export const VAULT_HOME_ENV = `${BRAND.id.toUpperCase()}_ACCOUNT_HOME`
 
 /**
  * The directory, beside the vault's folder rather than inside it — and holding
@@ -162,7 +171,11 @@ case "$HEAD" in
     ;;
 esac
 
-# 4. The app did not answer. Anything naming one of the agent's own login items
+# 4. The app did not answer. A session started on a login the agent keeps
+# itself goes to the real command, as it would have without the app.
+[ "\${${VAULT_HOME_ENV}-}" = agent ] && run_real "$@"
+
+# Otherwise, anything naming one of the agent's own login items
 # — the login itself, or its API-key slot — fails closed: a lookup is "not
 # found" (the agent then says "not logged in", which is true and recoverable),
 # and a write or a delete fails, because "not found" for a write would tell the

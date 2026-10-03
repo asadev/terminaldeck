@@ -38,14 +38,33 @@
  * they lived in the desktop shell.
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import type { ProviderId, SessionMeta } from '../shared/types'
 import { logger } from './app-log'
 import type { HostCore } from './host-core'
-import { findProfile, getState as profilesState, keptManaged, keptUnavailable, resolveProfile } from './profiles'
-import { vaultSignedIn } from './account-vault/runtime'
+import {
+  findProfile,
+  getState as profilesState,
+  keptManaged,
+  keptUnavailable,
+  markSlotKept,
+  resolveProfile,
+  type Profile,
+} from './profiles'
+import {
+  agentLaunchDir,
+  currentAccountVault,
+  loginSource,
+  retargetSeat,
+  sessionSeat,
+  slotAdopting,
+  vaultSignedIn,
+} from './account-vault/runtime'
+import { keychainUser } from './account-vault/keychain-requests'
+import { noteCreatedNudge, switchInPlace, type InPlaceDeps } from './account-vault/switch-in-place'
 import {
   conversationOnDisk,
   conversationScope,
@@ -58,6 +77,7 @@ import {
 import {
   awaitReplacement,
   conversationToCarry,
+  planInPlace,
   planSwitch,
   startFailed,
   startSignedOut,
@@ -66,6 +86,7 @@ import {
 } from './session-switch'
 import { recoverConversationId } from './conversation-id'
 import { canJoinSharedHistory, joinSharedHistory } from './shared-projects'
+import { carryCodexThread, findCodexThread, type CodexThread } from './codex-carry'
 // `transcriptDir` and `projectPathSpellings`: where a named conversation is
 // filed under one account's store, in both spellings of a folder reached
 // through a symlink. Read by the switch, to check that the conversation it is
@@ -89,6 +110,8 @@ export interface SwitchSubject {
   resume: boolean
   /** The conversation to name on the replacement, or null for the folder's newest. */
   conversationId: string | null
+  /** A Codex conversation to put under the other account before it resumes. See `codex-carry.ts`. */
+  codexThread?: CodexThread | null
 }
 
 /** The verb shape the wire and both shells share. See `HostCoreOptions.switchAccount`. */
@@ -124,6 +147,79 @@ export interface SessionSwitchHooks {
    * and drive the clock.
    */
   readiness?: { ceilingMs?: number; pollMs?: number; wait?(ms: number): Promise<void> }
+  /**
+   * A session was switched to another account in place: same id, same process,
+   * a different login. The shell tells whoever shows session lists — a device
+   * holds its own copy of the row and does not re-read on its own.
+   */
+  onAccountChanged?(meta: SessionMeta): void
+  /** Replace parts of the in-place machinery. Tests only; production passes nothing. */
+  inPlace?: Partial<InPlaceDeps>
+}
+
+/**
+ * The account whose folder a remembered session ran in: its login's own, or —
+ * for one switched in place — the account it was started as, where its
+ * conversation still is.
+ */
+export function savedFolder(session: Pick<SavedSession, 'profileId' | 'homeProfileId' | 'cwd'>): Profile {
+  return (
+    savedHome(session) ??
+    resolveProfile(profilesState(), { sessionProfileId: session.profileId ?? undefined, projectPath: session.cwd })
+  )
+}
+
+/** The account a remembered session was started as, when it was switched in place since; else null. */
+function savedHome(session: Pick<SavedSession, 'homeProfileId'>): Profile | null {
+  if (typeof session.homeProfileId !== 'string' || session.homeProfileId === '') return null
+  return findProfile(profilesState(), session.homeProfileId)
+}
+
+/** `sha256` as hex — the hash Claude Code names its keychain items with. */
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+/**
+ * The in-place machinery as production runs it: the vault runtime's seats, its
+ * real `security`, and the profile store's idea of where each login lives.
+ */
+function liveInPlace(): InPlaceDeps {
+  return {
+    seat: (sessionId) => sessionSeat(sessionId),
+    source: (accountId) => {
+      const profile = findProfile(profilesState(), accountId)
+      return profile === null ? null : loginSource(profile, keptManaged(profile))
+    },
+    adopting: (accountId, slot) => {
+      const profile = findProfile(profilesState(), accountId)
+      return profile !== null && slotAdopting(profile, keptManaged(profile), slot)
+    },
+    held: (accountId) => currentAccountVault()?.vault.has(accountId) ?? false,
+    keep: (accountId, slot, value) => {
+      const runtime = currentAccountVault()
+      const profile = findProfile(profilesState(), accountId)
+      if (runtime === null || profile === null) return false
+      if (value !== null) {
+        const written = runtime.vault.put(accountId, profile.provider, slot, value, 'adopted')
+        if (!written.ok) return false
+      }
+      markSlotKept(accountId, slot)
+      return true
+    },
+    ...(currentAccountVault()?.keychain ? { keychain: currentAccountVault()?.keychain } : {}),
+    user: keychainUser(process.env, () => userInfo().username),
+    retarget: (sessionId, accountId) => retargetSeat(sessionId, accountId),
+    launchDir: (seat) => {
+      // The folder the process keeps `.credentials.json` and its refresh lock
+      // in: the one it was started with. For the machine's own install that is
+      // the agent's default folder, which is what the system profile records.
+      if (seat.launchDir !== null && seat.launchDir !== undefined) return seat.launchDir
+      const launch = findProfile(profilesState(), seat.launch)
+      return launch === null ? join(homedir(), '.claude') : (agentLaunchDir(launch) ?? launch.configDir)
+    },
+    sha256,
+  }
 }
 
 /**
@@ -157,10 +253,15 @@ export function savedPlanner(
        * different login than the one coming back.
        */
       configDir: (session) =>
-        resolveProfile(profilesState(), {
-          sessionProfileId: session.profileId ?? undefined,
-          projectPath: session.cwd,
-        }).configDir,
+        // The folder it ran in: its own account's, or — switched in place since
+        // — the one it was started as, where its conversation still is.
+        (
+          savedHome(session) ??
+          resolveProfile(profilesState(), {
+            sessionProfileId: session.profileId ?? undefined,
+            projectPath: session.cwd,
+          })
+        ).configDir,
       conversation: conversationOnDisk,
     })
 }
@@ -179,13 +280,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
   const subject = async (
     sessionId: unknown,
     profileId: unknown,
-  ): Promise<{
-    plan: SwitchPlan
-    saved: SavedSession | null
-    resume: boolean
-    /** The conversation to name on the replacement, or null for the folder's newest. */
-    conversationId: string | null
-  }> => {
+  ): Promise<SwitchSubject> => {
     const id = typeof sessionId === 'string' ? sessionId : ''
     const wanted = typeof profileId === 'string' ? profileId : ''
     const meta = core.ptys.list().find((session) => session.id === id) ?? null
@@ -204,6 +299,29 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      * answer a question that has already been answered — and, on a WSL machine,
      * doing it across a filesystem boundary.
      */
+    /*
+     * In place, wherever it can be: a Claude Code session holding a seat, being
+     * switched to an account whose login a seat can hand it. Nothing below —
+     * the conversation, the transcript store, the folder's other tabs — is a
+     * question then, because nothing is restarted.
+     */
+    const seat = sessionSeat(id)
+    if (
+      seat !== null &&
+      meta !== null &&
+      meta.provider === 'claude' &&
+      target !== null &&
+      target.provider === 'claude' &&
+      loginSource(target, keptManaged(target)) !== null
+    ) {
+      return {
+        plan: planInPlace({ sessionId: id, meta, saved, target, targetSignedIn, targetUnavailable }),
+        saved,
+        resume: false,
+        conversationId: null,
+      }
+    }
+
     const refused = switchRefusal({ meta, saved, target, targetSignedIn, targetUnavailable })
     if (refused !== null || saved === null || target === null) {
       /*
@@ -260,10 +378,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      * directory somebody pointed at themselves — is left alone and the sheet
      * goes on saying what really happens to it.
      */
-    const source = resolveProfile(profilesState(), {
-      sessionProfileId: saved.profileId ?? undefined,
-      projectPath: saved.cwd,
-    })
+    const source = savedFolder(saved)
     if (canJoinSharedHistory(source) && canJoinSharedHistory(target)) {
       try {
         joinSharedHistory(source)
@@ -367,13 +482,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
           .filter((entry) => entry.id !== id)
           .some(
             (entry) =>
-              conversationScope(
-                entry.saved,
-                resolveProfile(profilesState(), {
-                  sessionProfileId: entry.saved.profileId ?? undefined,
-                  projectPath: entry.saved.cwd,
-                }).configDir,
-              ) === mine,
+              conversationScope(entry.saved, savedFolder(entry.saved).configDir) === mine,
           )
 
     /*
@@ -392,6 +501,18 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
     const sharedStore =
       configDir !== null && conversationStore(configDir) === conversationStore(source.configDir)
 
+    /*
+     * Codex cannot be handed another login while it runs (`codex-carry.ts`
+     * says why), so it is restarted — and its conversation is carried: the one
+     * this session has been writing is found in its account's folder, to be
+     * put where the other account's Codex resumes it by id. None found (nothing
+     * said yet, or more than one candidate) is a fresh start, said so first.
+     */
+    const codexThread =
+      meta !== null && meta.provider === 'codex' && target.provider === 'codex'
+        ? findCodexThread({ home: source.configDir, cwd: saved.cwd, startedAt: meta.createdAt })
+        : null
+
     const plan = planSwitch({
       sessionId: id,
       meta,
@@ -402,6 +523,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
       sharedStore,
       targetSignedIn,
       targetUnavailable,
+      carried: codexThread !== null,
     })
 
     /*
@@ -414,6 +536,9 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
         ? null
         : conversationToCarry({ plan, agentSessionId: named, readableInTarget })
 
+    if (codexThread !== null && plan.conversation === 'carried') {
+      return { plan, saved, resume: true, conversationId: codexThread.id, codexThread }
+    }
     return { plan, saved, resume: plan.resume, conversationId: carried }
   }
 
@@ -447,76 +572,152 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
    * `AgentUnavailableError`'s own message is what the window prints, unchanged,
    * because it is already written for the person who is reading it.
    */
+  /*
+   * The switch made in place: the seat is retargeted, the agent is nudged to
+   * read its login again, and the record catches up. The process is never
+   * signalled, the terminal never written to — the id that comes back is the
+   * id that went in.
+   */
+  const performInPlace = async (plan: SwitchPlan, saved: SavedSession): Promise<SessionMeta> => {
+    const to = plan.to
+    const target = to === null ? null : findProfile(profilesState(), to.id)
+    if (to === null || target === null) throw new Error('That account is not on this machine any more.')
+    const deps: InPlaceDeps = { ...liveInPlace(), ...hooks.inPlace }
+    const seat = deps.seat(plan.sessionId)
+    const moved = await switchInPlace(plan.sessionId, { id: target.id, name: target.name, configDir: target.configDir }, deps)
+    if (!moved.ok) throw new Error(moved.why)
+    if (moved.nudged === 'created') noteCreatedNudge(plan.sessionId, moved.nudgeFile)
+
+    const home = seat?.launch ?? saved.homeProfileId ?? saved.profileId
+    const meta = core.ptys.setAccount(plan.sessionId, { id: target.id, name: target.name }, home)
+    if (meta === null) throw new Error('That session is not running any more, so there is nothing to switch.')
+    // Remembered as it now is: signed in as the new account, in the folder it
+    // was started in — so a restart brings it back on the same conversation.
+    const { homeProfileId: _was, ...rest } = saved
+    core.ledger.note(plan.sessionId, {
+      ...rest,
+      profileId: target.id,
+      ...(meta.homeProfileId !== undefined ? { homeProfileId: meta.homeProfileId } : {}),
+    })
+    logger.info('session', 'switched account in place', {
+      folder: saved.cwd,
+      agent: saved.provider,
+      from: plan.from?.id ?? null,
+      to: target.id,
+      nudged: moved.nudged,
+      waitedForRefreshMs: moved.waitedForRefreshMs,
+    })
+    hooks.onAccountChanged?.(meta)
+    return meta
+  }
+
   const perform = async (sessionId: unknown, profileId: unknown): Promise<SessionMeta> => {
-    const { plan, saved, conversationId } = await subject(sessionId, profileId)
+    const { plan, saved, conversationId: named, codexThread } = await subject(sessionId, profileId)
     if (plan.refusal !== null || saved === null || plan.to === null) {
       throw new Error(plan.refusal ?? 'This session cannot be switched.')
     }
 
-    const meta = await core.startSession({
-      cwd: saved.cwd,
-      cols: saved.cols,
-      rows: saved.rows,
-      provider: saved.provider,
-      profileId: plan.to.id,
-      resume: plan.resume,
-      /*
-       * The two facts that make the sheet's promise come true, and neither of
-       * them existed while this feature was reported broken twice.
-       *
-       * `replaces` exempts the outgoing session from the one-conversation
-       * guard. The order below is start-then-stop, so at this instant there is
-       * a live session of the same provider in the same folder, and
-       * `one-conversation.ts` — which cannot otherwise tell a replacement from
-       * a second tab — dropped `--continue` on every switch ever made. That is
-       * the whole of *"it's not keeping the conversation history"*.
-       *
-       * `resumeConversationId` then makes the resume mean the conversation on
-       * screen rather than the folder's newest. Null whenever that could not be
-       * established, which falls back to exactly the behaviour above it.
-       */
-      replaces: plan.sessionId,
-      ...(conversationId === null ? {} : { resumeConversationId: conversationId }),
-    })
+    if (plan.mode === 'in-place') return performInPlace(plan, saved)
 
     /*
-     * A spawn that succeeded is not yet a session that started.
-     *
-     * `startSession` resolves the moment the pty exists, and the agent can still
-     * refuse a second later — `--continue` against a transcript the CLI declines
-     * to continue is a real, reproduced case. Stopping the old session before
-     * knowing would leave a dead tab where a working agent was, which is the one
-     * outcome this feature must not produce.
-     *
-     * So the switch waits for the replacement to be *ready* — its prompt, or a
-     * question for the person, on its own screen — rather than for a fixed 1.5
-     * seconds to pass. The fixed wait got two cases wrong: an agent that died at
-     * 1.6 seconds took the tab with it, and an agent with no login, which sits
-     * alive at its sign-in screen, passed as started. `awaitReplacement` carries
-     * the signal and its ceiling.
-     *
-     * The replacement is cleaned up rather than left as a corpse: it never
-     * became anybody's tab — this handler is the only thing that knows it exists
-     * — so leaving it in the ledger would put a phantom session in `openSessions`
-     * for the next launch to restore.
+     * A Codex conversation is put under the other account first. If it cannot
+     * be, the replacement starts fresh rather than resuming something that is
+     * not there.
      */
-    const started = await awaitReplacement(
-      meta.id,
-      {
-        wait: hooks.readiness?.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-        alive: (sid) => core.ptys.list().some((session) => session.id === sid),
-        // `screen` is the visible viewport through the session's own shadow
-        // terminal; a core without one (a test double) answers "unknown", and
-        // the wait then rests on the process being alive, as it always did.
-        screen: (sid) =>
-          typeof core.ptys.screen === 'function' ? core.ptys.screen(sid) : Promise.resolve(null),
-        scrollback: (sid) => core.ptys.scrollback(sid),
-      },
-      {
-        ...(hooks.readiness?.ceilingMs === undefined ? {} : { ceilingMs: hooks.readiness.ceilingMs }),
-        ...(hooks.readiness?.pollMs === undefined ? {} : { pollMs: hooks.readiness.pollMs }),
-      },
-    )
+    const target = findProfile(profilesState(), plan.to.id)
+    const carriedTo =
+      codexThread !== null && codexThread !== undefined && target !== null
+        ? carryCodexThread(codexThread, target.configDir)
+        : null
+    const conversationId = codexThread !== null && codexThread !== undefined ? (carriedTo === null ? null : named) : named
+    const resume = codexThread !== null && codexThread !== undefined ? carriedTo !== null : plan.resume
+    const to = plan.to
+
+    const launch = async (wantResume: boolean, wantId: string | null) => {
+      const meta = await core.startSession({
+        cwd: saved.cwd,
+        cols: saved.cols,
+        rows: saved.rows,
+        provider: saved.provider,
+        profileId: to.id,
+        resume: wantResume,
+        /*
+         * The two facts that make the sheet's promise come true, and neither of
+         * them existed while this feature was reported broken twice.
+         *
+         * `replaces` exempts the outgoing session from the one-conversation
+         * guard. The order below is start-then-stop, so at this instant there is
+         * a live session of the same provider in the same folder, and
+         * `one-conversation.ts` — which cannot otherwise tell a replacement from
+         * a second tab — dropped `--continue` on every switch ever made. That is
+         * the whole of *"it's not keeping the conversation history"*.
+         *
+         * `resumeConversationId` then makes the resume mean the conversation on
+         * screen rather than the folder's newest. Null whenever that could not be
+         * established, which falls back to exactly the behaviour above it.
+         */
+        replaces: plan.sessionId,
+        ...(wantId === null ? {} : { resumeConversationId: wantId }),
+      })
+
+      /*
+       * A spawn that succeeded is not yet a session that started.
+       *
+       * `startSession` resolves the moment the pty exists, and the agent can still
+       * refuse a second later — `--continue` against a transcript the CLI declines
+       * to continue is a real, reproduced case. Stopping the old session before
+       * knowing would leave a dead tab where a working agent was, which is the one
+       * outcome this feature must not produce.
+       *
+       * So the switch waits for the replacement to be *ready* — its prompt, or a
+       * question for the person, on its own screen — rather than for a fixed 1.5
+       * seconds to pass. The fixed wait got two cases wrong: an agent that died at
+       * 1.6 seconds took the tab with it, and an agent with no login, which sits
+       * alive at its sign-in screen, passed as started. `awaitReplacement` carries
+       * the signal and its ceiling.
+       *
+       * The replacement is cleaned up rather than left as a corpse: it never
+       * became anybody's tab — this handler is the only thing that knows it exists
+       * — so leaving it in the ledger would put a phantom session in `openSessions`
+       * for the next launch to restore.
+       */
+      const started = await awaitReplacement(
+        meta.id,
+        {
+          wait: hooks.readiness?.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+          alive: (sid) => core.ptys.list().some((session) => session.id === sid),
+          // `screen` is the visible viewport through the session's own shadow
+          // terminal; a core without one (a test double) answers "unknown", and
+          // the wait then rests on the process being alive, as it always did.
+          screen: (sid) =>
+            typeof core.ptys.screen === 'function' ? core.ptys.screen(sid) : Promise.resolve(null),
+          scrollback: (sid) => core.ptys.scrollback(sid),
+        },
+        {
+          ...(hooks.readiness?.ceilingMs === undefined ? {} : { ceilingMs: hooks.readiness.ceilingMs }),
+          ...(hooks.readiness?.pollMs === undefined ? {} : { pollMs: hooks.readiness.pollMs }),
+        },
+      )
+      return { meta, started }
+    }
+
+    let { meta, started } = await launch(resume, conversationId)
+    /*
+     * A Codex resume that did not take — the one path here not measured
+     * against a running Codex (`codex-carry.ts`). Rather than leave Codex
+     * impossible to switch, the replacement is started once more, fresh, which
+     * is what every Codex switch did before conversations were carried.
+     */
+    if (started.outcome === 'died' && codexThread !== null && codexThread !== undefined && resume) {
+      core.ledger.forget(meta.id)
+      core.ptys.kill(meta.id)
+      logger.warn('session', 'the carried Codex conversation did not resume; starting fresh instead', {
+        folder: saved.cwd,
+        to: plan.to.id,
+        said: started.said,
+      })
+      ;({ meta, started } = await launch(false, null))
+    }
     if (started.outcome === 'died' || started.outcome === 'signed-out') {
       core.ledger.forget(meta.id)
       core.ptys.kill(meta.id)

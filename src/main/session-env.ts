@@ -19,7 +19,7 @@
  * change it.
  */
 
-import { VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './account-vault/keychain-shim'
+import { VAULT_HOME_ENV, VAULT_SOCKET_ENV, VAULT_TICKET_ENV } from './account-vault/keychain-shim'
 
 /**
  * Kept even though it matches the strip pattern: it is how a profile points the
@@ -45,7 +45,7 @@ const STRIP = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_AGENT_SDK_VERSION|CL
  * another run's), but a session should never carry a ticket it was not given.
  * Each spawn that is entitled to one sets it again explicitly, after this.
  */
-const VAULT_VARS = new Set([VAULT_SOCKET_ENV, VAULT_TICKET_ENV])
+const VAULT_VARS = new Set([VAULT_SOCKET_ENV, VAULT_TICKET_ENV, VAULT_HOME_ENV])
 
 export function stripInheritedSessionEnv(
   env: Record<string, string | undefined>,

@@ -139,6 +139,23 @@ export function withReplacedSession(
 ): Session[] {
   const at = sessions.findIndex((session) => session.id === oldId)
   if (at < 0) return sessions
+  /*
+   * Switched in place: the same session, signed in as another account. Not a
+   * new process, so nothing about it is reset — status, clock and name stay —
+   * and only the account it shows is brought up to date.
+   */
+  if (meta.id === oldId) {
+    return sessions.map((session, index) => {
+      if (index !== at) return session
+      const { profileId: _id, profileName: _name, homeProfileId: _home, ...rest } = session
+      return {
+        ...rest,
+        ...(meta.profileId !== undefined ? { profileId: meta.profileId } : {}),
+        ...(meta.profileName !== undefined ? { profileName: meta.profileName } : {}),
+        ...(meta.homeProfileId !== undefined ? { homeProfileId: meta.homeProfileId } : {}),
+      }
+    })
+  }
   if (sessions.some((session) => session.id === meta.id)) return sessions
 
   const previous = sessions[at]

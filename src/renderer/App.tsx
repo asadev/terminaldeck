@@ -2013,6 +2013,32 @@ function Workspace() {
   )
 
   /**
+   * A switch made in place has happened: the same session, signed in as the
+   * other account.
+   *
+   * Nothing was stopped and no sheet was opened — the click on the account was
+   * the switch — so the window does exactly two things: brings the row up to
+   * date (same id, so `adoptSwitched` changes only the account it shows), and
+   * says "Switched to …" under the chip for a moment. Asad: *"Only account
+   * should be changing."*
+   */
+  const [accountSwitchNote, setAccountSwitchNote] = useState<{ text: string; at: number } | null>(null)
+  useEffect(() => {
+    const done = switcher.done
+    if (done === null) return
+    adoptSwitched(done.sessionId, done.meta)
+    const name =
+      done.to === null ? (done.meta.profileName ?? 'the other account') : switchNames({ from: null, to: done.to }, knownSignIns).to
+    setAccountSwitchNote({ text: `Switched to ${name}`, at: Date.now() })
+    switcher.dismissDone()
+  }, [adoptSwitched, knownSignIns, switcher])
+  useEffect(() => {
+    if (accountSwitchNote === null) return
+    const timer = setTimeout(() => setAccountSwitchNote(null), 4000)
+    return () => clearTimeout(timer)
+  }, [accountSwitchNote])
+
+  /**
    * A switch that was armed for his next message has happened.
    *
    * Subscribed for the whole life of the window rather than while a sheet is
@@ -6465,6 +6491,15 @@ function Workspace() {
                             }
                             onManage={() => openSettings('profiles')}
                           />
+                          {/* "Switched to …", after a switch made in place. It
+                              clears itself; see `accountSwitchNote`. */}
+                          {accountSwitchNote === null ? null : (
+                            <span className="machine-switch-host">
+                              <span className="account-switch-note" role="status">
+                                {accountSwitchNote.text}
+                              </span>
+                            </span>
+                          )}
                         </>
                       )}
                     </div>

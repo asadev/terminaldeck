@@ -19,6 +19,7 @@
  * only once everything under it is up.
  */
 
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, posix } from 'node:path'
@@ -26,13 +27,16 @@ import { BRAND } from '../../shared/brand'
 import { currentPlatform, type Platform } from '../platform/host'
 import { findProfile, getState, keptManaged, markSlotKept, profileKeptBy } from '../profiles'
 import { CODEX_AUTH_SLOT, CodexAuthKeeper, type DirWatch } from './codex-auth'
+import type { ShimAnswer } from './keychain-requests'
 import { REAL_SECURITY, removeSecurityShim, writeSecurityShim } from './keychain-shim'
 import {
   installAccountVault,
+  loginSource,
   slotAdopting,
   uninstallAccountVault,
   type AccountVaultRuntime,
 } from './runtime'
+import { settleNudge } from './switch-in-place'
 import { startVaultSocket, TicketBook, type VaultServerDeps, type VaultSocket } from './server'
 import { AccountVault, type VaultCipher } from './store'
 
@@ -88,6 +92,48 @@ function keptCodexAccounts(): Array<{ id: string; configDir: string }> {
     .map((profile) => ({ id: profile.id, configDir: profile.configDir }))
 }
 
+/**
+ * Run the real `security` once, with this stdin, and hand back what it said.
+ *
+ * Only for the lookups a seat needs made under a name its agent did not ask
+ * for — the login of the account it was switched to. Never a shell: the
+ * arguments go to the binary as they are, and a value travels on stdin.
+ */
+export function runSecurity(
+  realSecurity: string,
+  argv: readonly string[],
+  stdin: string | null,
+  timeoutMs = 5_000,
+): Promise<ShimAnswer> {
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (answer: ShimAnswer): void => {
+      if (settled) return
+      settled = true
+      resolve(answer)
+    }
+    const child = spawn(realSecurity, [...argv], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const timer = setTimeout(() => {
+      child.kill()
+      finish({ code: 1, stdout: '', stderr: 'security: the keychain did not answer in time.' })
+    }, timeoutMs)
+    timer.unref()
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    child.on('error', (cause) => {
+      clearTimeout(timer)
+      finish({ code: 1, stdout: '', stderr: `security: ${cause.message}` })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      finish({ code: code ?? 1, stdout, stderr: stderr.trim() })
+    })
+    child.stdin.end(stdin ?? '')
+  })
+}
+
 export async function wireAccountVault(options: WireAccountVaultOptions): Promise<AccountVaultHandle | null> {
   const log = options.log ?? (() => undefined)
   const platform = options.platform ?? currentPlatform()
@@ -125,6 +171,9 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
   }
 
   const tickets = new TicketBook()
+  const realSecurity = options.realSecurity ?? REAL_SECURITY
+  const keychain = (argv: readonly string[], stdin: string | null): Promise<ShimAnswer> =>
+    runSecurity(realSecurity, argv, stdin)
   const deps: VaultServerDeps = {
     vault,
     tickets,
@@ -135,6 +184,18 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
       return profile !== null && slotAdopting(profile, keptManaged(profile), slot)
     },
     markKept: (id, slot) => markSlotKept(id, slot),
+    sourceOf: (id) => {
+      const profile = findProfile(getState(), id)
+      return profile === null ? null : loginSource(profile, keptManaged(profile))
+    },
+    runReal: keychain,
+    onServed: (event) => {
+      // A session switched in place has read its new login: take back the
+      // file that made it look.
+      if (event.sessionId !== null && tickets.sessionSeat(event.sessionId)?.serving === event.accountId) {
+        settleNudge(event.sessionId)
+      }
+    },
     onCapture: (event) => {
       log('account vault: kept a login', { account: event.accountId, slot: event.slot, kind: event.kind })
       options.onChanged?.(event.accountId)
@@ -152,7 +213,7 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
   }
 
   // In the data folder beside the vault, not inside it — see `vaultShimDir`.
-  const shimDir = writeSecurityShim(options.userDataDir, socketPath, options.realSecurity ?? REAL_SECURITY)
+  const shimDir = writeSecurityShim(options.userDataDir, socketPath, realSecurity)
   if (shimDir === null) log('account vault: no system security command, so Claude Code logins stay with the agent')
 
   const codex = new CodexAuthKeeper(vault, {
@@ -167,7 +228,7 @@ export async function wireAccountVault(options: WireAccountVaultOptions): Promis
     },
   })
 
-  const runtime: AccountVaultRuntime = { vault, tickets, socketPath, shimDir, codex }
+  const runtime: AccountVaultRuntime = { vault, tickets, socketPath, shimDir, codex, keychain }
   installAccountVault(runtime)
 
   // Every Codex account's file and kept copy into agreement — the move for an

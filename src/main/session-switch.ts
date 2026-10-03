@@ -7,6 +7,24 @@ import { classify, stripAnsi } from './session-activity'
 /**
  * Running the session you already have as a different account.
  *
+ * ## Since 0.16.1: in place, for Claude Code
+ *
+ * Asad, on 0.16.0: *"Session should not be changed. Session should not be
+ * touched. Only account should be changing."* For every Claude Code session
+ * this app starts, it now is: the login is handed out by the vault per session
+ * (a *seat*), the switch retargets the seat and nudges the CLI to read its
+ * login again, and the next request goes out as the other account — same
+ * process, same terminal, same conversation (`account-vault/switch-in-place.ts`
+ * has the measurements). Such a plan is `mode: 'in-place'`, and nothing below
+ * this paragraph applies to it.
+ *
+ * Everything below is the **restart**, which is still the answer where in place
+ * is impossible: Codex, which reads its login once at start and ignores another
+ * account's file by design (`codex-carry.ts` — its conversation is now carried
+ * across), and any session started before seats existed. The argument that a
+ * running agent cannot change its environment still holds; what changed is
+ * that Claude Code's login stopped being part of its environment.
+ *
  * ## The complaint
  *
  * Asad, 2026-08-17:
@@ -164,8 +182,16 @@ export const SESSION_SWITCH_CHANNEL = 'session:switch-account'
  *                 — and its own "continue the last one" would quietly attach to
  *                 some other conversation of its own. So it starts fresh, and
  *                 the sheet says so before anything happens.
+ *  - `same`       nothing restarts: the session is switched in place, so the
+ *                 process, the terminal and the conversation are the ones on
+ *                 screen, and only the login it is handed changes.
+ *  - `carried`    an agent that reads its login once (Codex) is restarted, and
+ *                 the conversation on screen is copied into the other account's
+ *                 own history and continued there by id (`codex-carry.ts`).
  */
 export type SwitchConversation =
+  | 'same'
+  | 'carried'
   | 'follows'
   | 'stays'
   | 'theirs'
@@ -210,7 +236,20 @@ export interface SwitchPlan {
   conversation: SwitchConversation
   /** Whether the replacement process is handed the agent's continue flag. */
   resume: boolean
+  /**
+   * How the switch happens.
+   *
+   *  - `in-place`  the session keeps running and only its login changes — the
+   *                answer for every Claude Code session this app started with a
+   *                seat at the vault. Nothing to confirm: nothing is stopped.
+   *  - `restart`   the agent is stopped and started again as the other account
+   *                — the only way for an agent that reads its login once
+   *                (Codex), and for a session started before seats existed.
+   */
+  mode: SwitchMode
 }
+
+export type SwitchMode = 'in-place' | 'restart'
 
 /* ---------------------------------------------- did the replacement live? -- */
 
@@ -652,6 +691,13 @@ export function planSwitch(input: {
    * is exactly false and is the sentence they would be deciding on.
    */
   sharedStore: boolean
+  /**
+   * For an agent that keeps each account's conversations apart (Codex): the
+   * conversation on screen has been found on disk and will be put where the
+   * other account can continue it (`codex-carry.ts`). Without it, such a
+   * switch starts fresh.
+   */
+  carried?: boolean
 }): SwitchPlan {
   const { sessionId, meta, saved, target, decision, occupied, sharedStore } = input
 
@@ -670,7 +716,7 @@ export function planSwitch(input: {
     targetUnavailable: input.targetUnavailable ?? null,
   })
   if (refusal !== null) {
-    return { sessionId, refusal, from, to, conversation: 'stays', resume: false }
+    return { sessionId, refusal, from, to, conversation: 'stays', resume: false, mode: 'restart' }
   }
 
   /*
@@ -688,9 +734,14 @@ export function planSwitch(input: {
         to,
         conversation: 'stays',
         resume: false,
+        mode: 'restart',
       }
     }
-    return { sessionId, refusal: null, from, to, conversation: 'separate', resume: false }
+    // Found on disk and carried across: it follows, by id.
+    if (input.carried === true) {
+      return { sessionId, refusal: null, from, to, conversation: 'carried', resume: true, mode: 'restart' }
+    }
+    return { sessionId, refusal: null, from, to, conversation: 'separate', resume: false, mode: 'restart' }
   }
 
   /*
@@ -709,6 +760,7 @@ export function planSwitch(input: {
       to,
       conversation: 'stays',
       resume: false,
+      mode: 'restart',
     }
   }
 
@@ -736,6 +788,7 @@ export function planSwitch(input: {
       to,
       conversation: decision.conversation === undefined ? 'none' : 'stays',
       resume: false,
+      mode: 'restart',
     }
   }
 
@@ -747,7 +800,7 @@ export function planSwitch(input: {
    * terminals write to one file.
    */
   if (occupied) {
-    return { sessionId, refusal: null, from, to, conversation: 'taken', resume: false }
+    return { sessionId, refusal: null, from, to, conversation: 'taken', resume: false, mode: 'restart' }
   }
 
   return {
@@ -768,5 +821,46 @@ export function planSwitch(input: {
     conversation:
       decision.conversation === 'unknown' ? 'unreadable' : sharedStore ? 'follows' : 'theirs',
     resume: true,
+    mode: 'restart',
+  }
+}
+
+/**
+ * The plan for a session that can be switched in place: the same refusals a
+ * restart would meet — a session that has ended, an account of another agent,
+ * one that is not signed in, the account it is already on — and otherwise
+ * nothing at all to warn about, because nothing is stopped. The conversation on
+ * screen is the conversation that carries on.
+ */
+export function planInPlace(input: {
+  sessionId: string
+  meta: SessionMeta | null
+  saved: SavedSession | null
+  target: Profile | null
+  targetSignedIn?: boolean | null
+  targetUnavailable?: string | null
+}): SwitchPlan {
+  const { sessionId, meta, saved, target } = input
+  const from: SwitchAccount | null =
+    meta?.profileId !== undefined && meta.profileName !== undefined
+      ? { id: meta.profileId, name: meta.profileName, provider: meta.provider }
+      : null
+  const to: SwitchAccount | null =
+    target === null ? null : { id: target.id, name: target.name, provider: target.provider }
+  const refusal = switchRefusal({
+    meta,
+    saved,
+    target,
+    targetSignedIn: input.targetSignedIn ?? null,
+    targetUnavailable: input.targetUnavailable ?? null,
+  })
+  return {
+    sessionId,
+    refusal,
+    from,
+    to,
+    conversation: refusal === null ? 'same' : 'stays',
+    resume: false,
+    mode: refusal === null ? 'in-place' : 'restart',
   }
 }

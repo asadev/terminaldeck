@@ -72,6 +72,23 @@ import {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * The Claude store a session's own transcript is in.
+ *
+ * Its account's folder — except for a session switched to another account in
+ * place, which kept running in the folder it was started in: its conversation
+ * is still being written there, whatever login it is now handed. Who it is
+ * signed in as (the usage figures) is `accountFor`'s question; where its
+ * conversation is written is this one's.
+ */
+export function transcriptStoreFor(session: SessionMeta): string | null {
+  if (typeof session.homeProfileId === 'string' && session.homeProfileId !== '') {
+    const home = findProfile(getState(), session.homeProfileId)
+    if (home && home.provider === 'claude') return home.configDir
+  }
+  return accountFor('claude', session).configDir
+}
+
+/**
  * The account a reading from `provider` belongs to, given the session it was
  * read in.
  *
@@ -999,8 +1016,7 @@ export async function readSessionContext(
    * Only for the agents whose transcripts live in a Claude store. Codex
    * takes `codexHome` below and reads nothing from `scope`.
    */
-  const store =
-    session.provider === 'codex' ? null : accountFor('claude', session).configDir
+  const store = session.provider === 'codex' ? null : transcriptStoreFor(session)
   return await readContextWindow({
     provider: contextProvider(session),
     cwd: session.cwd,
