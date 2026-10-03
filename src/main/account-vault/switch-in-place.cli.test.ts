@@ -134,7 +134,7 @@ describe.skipIf(!LIVE)('the real CLI, switched to another account in place', () 
       const switchedAt = Date.now()
       const moved = await switchInPlace('session-1', { id: 'B', name: 'B', configDir: cfgB }, deps)
       expect(moved).toMatchObject({ ok: true, nudged: 'created' })
-      if (moved.ok && moved.nudged === 'created') noteCreatedNudge('session-1', moved.nudgeFile)
+      if (moved.ok && moved.nudged === 'created' && moved.nudgeFile !== null) noteCreatedNudge('session-1', moved.nudgeFile)
       const before = rig.seen.length
       await turn('two')
       const tookMs = Date.now() - switchedAt

@@ -33,7 +33,8 @@
  * module rather than a command, so there is nothing a session could be handed.
  */
 
-import { delimiter } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import type { ProviderId } from '../../shared/types'
 import type { CodexAuthKeeper } from './codex-auth'
 import { isLoginSlot, type ShimAnswer } from './keychain-requests'
@@ -59,6 +60,13 @@ export interface AccountVaultRuntime {
    * nothing may be run (tests, and any build with no shim).
    */
   keychain?: (argv: readonly string[], stdin: string | null) => Promise<ShimAnswer>
+  /**
+   * Where a session started on a login the agent keeps is given its own
+   * credential folder (`seatLaunch`) — inside this app's data, so nothing is
+   * ever written into a folder the person's own terminal uses. Absent: such
+   * sessions keep the agent's folder, and are never nudged.
+   */
+  storeBase?: string
 }
 
 let current: AccountVaultRuntime | null = null
@@ -237,6 +245,53 @@ export function loginSource(
   return { kind: 'keychain', dir: agentLaunchDir(account) }
 }
 
+/** What a seated session is started with, beside its ticket. */
+export interface SeatLaunch {
+  /** Variables for the session's environment. */
+  env: Record<string, string>
+  /** The folder whose hash is on the keychain names the process will ask for; `null` for none. */
+  launchDir: string | null
+  /** The app-owned folder holding its credential files, or null when there is none to use. */
+  storeDir: string | null
+}
+
+/** A folder name for an account id that is safe on every file system. */
+function storeName(accountId: string): string {
+  return accountId.replace(/[^A-Za-z0-9._-]/g, '_')
+}
+
+/**
+ * Where a seated Claude Code session keeps its credential files.
+ *
+ * Claude Code keeps three things beside its login (`yb()` in 2.1.287): the
+ * plaintext fallback store `.credentials.json`, its refresh lock, and its
+ * storage-write lock. The first is also the switch's trigger — a running CLI
+ * reads its login again on the next request after that file changes time
+ * (`switch-in-place.ts`). For an account this app made, that folder is the
+ * account's own folder in the app's data. For a login the agent keeps — the
+ * Mac's own (`~/.claude`) or a folder the person chose — it is a folder his own
+ * terminal `claude` uses, and the app must never write there.
+ *
+ * So such a session is started with `CLAUDE_SECURESTORAGE_CONFIG_DIR` pointed
+ * at a folder of this app's own, one per account. That moves exactly those
+ * three files and nothing else — the session's history, settings and its
+ * `~/.claude.json` are where they always were — and it changes the names the
+ * CLI asks the keychain for (they carry that folder's hash), which the seat
+ * rewrites back to the real item. Measured: `switch-system-session.cli.test.ts`.
+ *
+ * The cost, stated: such a session's refresh lock is no longer the one the
+ * person's own terminal takes, so the two could refresh the same login at the
+ * same moment. Claude Code's save is a compare-and-swap against a fresh read
+ * (`WQn`), and a refresh that loses re-reads before giving up, so the race ends
+ * with both on the newest login — the same race any two folders already have.
+ */
+export function seatLaunch(home: VaultSubject, source: LoginSource, storeBase: string | null): SeatLaunch {
+  if (source.kind === 'vault') return { env: {}, launchDir: home.configDir, storeDir: home.configDir }
+  if (storeBase === null) return { env: {}, launchDir: source.dir, storeDir: null }
+  const dir = join(storeBase, storeName(home.id))
+  return { env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: dir }, launchDir: dir, storeDir: dir }
+}
+
 /**
  * The environment that gives one Claude Code session a seat at the vault: the
  * socket, a ticket minted for this launch alone, and — for a session started on
@@ -264,11 +319,24 @@ export function seatEnv(
   if (provider !== 'claude' || home.provider !== 'claude') return {}
   const source = loginSource(home, homeManaged, runtime)
   if (source === null) return {}
-  const launchDir = source.kind === 'keychain' ? source.dir : home.configDir
+  const launch = seatLaunch(home, source, runtime.storeBase ?? null)
+  if (launch.storeDir !== null && source.kind === 'keychain') {
+    try {
+      mkdirSync(launch.storeDir, { recursive: true, mode: 0o700 })
+    } catch {
+      // The CLI makes it too; a folder that cannot be made here is one the
+      // switch simply does not nudge through.
+    }
+  }
   return {
+    ...launch.env,
     [VAULT_SOCKET_ENV]: runtime.socketPath,
-    [VAULT_TICKET_ENV]: runtime.tickets.seat(home.id, launchDir, serving),
-    ...(source.kind === 'keychain' ? { [VAULT_HOME_ENV]: 'agent' } : {}),
+    [VAULT_TICKET_ENV]: runtime.tickets.seat(home.id, launch.launchDir, serving, launch.storeDir),
+    // Only where the session still asks under the agent's own names: then the
+    // real command answers it if this app ever stops answering, as it did
+    // before the app kept anything. Under this app's own folder's names the
+    // real command would find nothing, so it fails closed like any kept login.
+    ...(source.kind === 'keychain' && launch.storeDir === null ? { [VAULT_HOME_ENV]: 'agent' } : {}),
   }
 }
 

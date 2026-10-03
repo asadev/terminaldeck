@@ -41,7 +41,13 @@
  * next request — whenever the person or the agent makes it — goes out as the
  * new account. Nothing is stopped and nothing is typed into the terminal.
  *
- * ## The file, and why touching it is safe
+ * ## The file, and where it is
+ *
+ * Only ever in a folder this app owns (`Seat.storeDir`): an account's own
+ * folder in the app's data, or — for a session on a login the agent keeps, the
+ * Mac's own above all — the credential folder `seatLaunch` gives it there.
+ * 0.16.1 created it in `~/.claude` for a session on the Mac's own login, a
+ * folder the person's terminal `claude` uses; nothing is written there now.
  *
  * `.credentials.json` is the agent's plaintext fallback store, read only when
  * the keychain has nothing — and the keychain is what the seat answers. When it
@@ -108,15 +114,20 @@ export interface InPlaceDeps {
   /** The keychain account name the CLI files its items under. */
   user: string
   retarget(sessionId: string, accountId: string): boolean
-  /** The config directory the session's process keeps its files in. */
-  launchDir(seat: Readonly<Seat>): string
+  /**
+   * The app-owned folder the session's process keeps its credential files in
+   * (`Seat.storeDir`), or null when there is none — then nothing is written
+   * anywhere and the switch lands at the CLI's next read of its login, within
+   * the 30 seconds it caches one for.
+   */
+  launchDir(seat: Readonly<Seat>): string | null
   sha256(text: string): string
   now?(): number
   wait?(ms: number): Promise<void>
 }
 
 export type InPlaceResult =
-  | { ok: true; nudged: 'touched' | 'created' | 'none'; nudgeFile: string; waitedForRefreshMs: number }
+  | { ok: true; nudged: 'touched' | 'created' | 'none'; nudgeFile: string | null; waitedForRefreshMs: number }
   | { ok: false; why: string }
 
 /** Is a refresh holding the lock in this folder right now? */
@@ -226,12 +237,13 @@ export async function switchInPlace(
   const now = deps.now ?? (() => Date.now())
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const started = now()
-  while (refreshInProgress(dir, now()) && now() - started < REFRESH_WAIT_MS) await wait(REFRESH_POLL_MS)
+  while (dir !== null && refreshInProgress(dir, now()) && now() - started < REFRESH_WAIT_MS) await wait(REFRESH_POLL_MS)
   const waitedForRefreshMs = now() - started
 
   if (!deps.retarget(sessionId, account.id)) {
     return { ok: false, why: 'This session ended before it could be switched.' }
   }
+  if (dir === null) return { ok: true, nudged: 'none', nudgeFile: null, waitedForRefreshMs }
   return { ok: true, nudged: nudge(dir), nudgeFile: join(dir, NUDGE_FILE), waitedForRefreshMs }
 }
 

@@ -672,10 +672,20 @@ const api: Record<string, unknown> = new Proxy(
       const row = sessions.find((session) => session.id === sessionId)
       const name = profileId === 'work' ? 'Work' : profileId === 'system' ? 'Default' : profileId
       if (!restart && row) {
-        // The same session: only the account it is signed in as changes.
+        // A real switch made in place can take a second or two (a login moved
+        // in from the keychain, a refresh waited out), so the stub takes a
+        // moment too — long enough for "Switching to …" to be looked at.
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        // The same session: only the account it is signed in as changes, and
+        // it remembers the account whose folder it still runs in.
+        const home = (row as { homeProfileId?: string }).homeProfileId ?? row.profileId
         row.profileId = profileId
         row.profileName = name
-        return { ...row }
+        const switched: Record<string, unknown> = { ...row }
+        if (home !== profileId) switched.homeProfileId = home
+        else delete switched.homeProfileId
+        Object.assign(row, { homeProfileId: switched.homeProfileId })
+        return switched
       }
       return {
         id: `${sessionId}-as-${profileId}`,

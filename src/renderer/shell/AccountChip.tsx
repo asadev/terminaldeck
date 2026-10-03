@@ -249,6 +249,11 @@ interface Props {
    * had already happened is the one thing this feature is not allowed to do.
    */
   pendingAccount?: string | null
+  /**
+   * True for a moment after a switch made in place has landed on this session:
+   * the account name is lit once, so the change is seen where it happened.
+   */
+  justSwitched?: boolean
   /** The folder a session started from this menu will run in. */
   projectPath: string | null
   /**
@@ -520,6 +525,7 @@ function agentLabel(provider: ProviderId | null | undefined): string | undefined
 export function AccountChip({
   current,
   pendingAccount = null,
+  justSwitched = false,
   projectPath,
   provider,
   session = null,
@@ -537,7 +543,7 @@ export function AccountChip({
    * This is the fix. See `established` below for what it replaced and why the
    * thing it replaced was a claim the app could not support.
    */
-  const established = useSessionAccount(session?.id ?? null, agent.running)
+  const established = useSessionAccount(session?.id ?? null, agent.running, current?.id ?? null)
   /** Whether the previous render drew the Run button. See `revealing`. */
   const wasRun = useRef(false)
   const [editing, setEditing] = useState<Editing | null>(null)
@@ -1004,7 +1010,9 @@ export function AccountChip({
 
   return (
     <div
-      className={revealing ? 'account-chip is-revealing' : 'account-chip'}
+      className={['account-chip', revealing ? 'is-revealing' : '', justSwitched ? 'is-just-switched' : '']
+        .filter((name) => name !== '')
+        .join(' ')}
       ref={menu.hostRef}
     >
       <button
@@ -1056,6 +1064,17 @@ export function AccountChip({
                     : 'A new session here would use this account.',
                 chosenName === null ? null : `Account: ${chosenName}.`,
                 identity.detail,
+                /*
+                 * Said where he will look when he doubts it. Claude Code's own
+                 * /status names the account from its settings file, which this
+                 * session shares with every other session on the account it
+                 * started on — and, for the Mac's own login, with his terminal —
+                 * so it is left alone, and keeps naming that account until the
+                 * session restarts. Measured: `measure-identity.cli.test.ts`.
+                 */
+                session?.switchedInPlace === true
+                  ? 'Switched here without a restart: its requests go out as this account. Claude Code’s own /status keeps naming the account this session started on until it restarts.'
+                  : null,
                 /*
                  * And nothing about `blocked` here, deliberately. When this
                  * chip is naming a session's own account, the notice is about a
