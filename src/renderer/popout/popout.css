@@ -1,0 +1,88 @@
+/*
+  A session in a window of its own, and the card the main window draws where
+  that session's terminal was.
+
+  The window is the main window's session column and nothing else: the same
+  toolbar (glass, hairline, drag region — all from shell.css), then the
+  terminal filling the rest. No rail and no strip, so the toolbar is the top
+  band and carries the traffic lights.
+*/
+
+.popout {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+/*
+  The traffic lights sit over the toolbar's left end (`TRAFFIC_LIGHT_POSITION`
+  in main/title-bar.ts), so the heading starts clear of them — the same 82
+  points the rail's gutter leaves in the main window, without the reveal button
+  that window adds beside them.
+*/
+.popout > .toolbar {
+  padding-left: calc(var(--sp-16) + var(--sp-4) + var(--sp-05));
+}
+
+.popout-body {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.popout-dock {
+  -webkit-app-region: no-drag;
+}
+
+/* ------------------------------------------------- the main window's card -- */
+
+/*
+  Where the terminal was, while the session is in its own window.
+
+  Laid over the pane exactly as a terminal host is (absolute, inset 0), so the
+  pane keeps its shape and the blank state centres in it.
+*/
+.popped-pane {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: var(--bg-primary);
+}
+
+.popped-pane[data-visible='false'] {
+  display: none;
+}
+
+.popped-pane .page-blank-extra {
+  margin-top: var(--sp-2);
+}
+
+/* "Move back here": a quiet text button under the one primary action. */
+.popped-back {
+  border: none;
+  background: none;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.popped-back:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* The mark on a strip tab or a rail row for a session that is out. */
+.popped-mark {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  opacity: 0.85;
+}

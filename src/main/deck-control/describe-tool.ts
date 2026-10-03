@@ -232,8 +232,8 @@ export const TOOL_AREAS: readonly ToolArea[] = [
     id: 'app',
     covers:
       `this app itself: version, logs, diagnostics, updates, settings, notifications, ${BRAND.assistant}, clicks in ` +
-      'its window, opening links, and what this tool server covers',
-    prefixes: ['app', 'settings', 'updates', 'notifications', 'hoot', 'ui', 'links', 'tools'],
+      'its window, sessions in windows of their own and the monitors, opening links, and what this tool server covers',
+    prefixes: ['app', 'settings', 'updates', 'notifications', 'hoot', 'ui', 'windows', 'links', 'tools'],
   },
 ]
 

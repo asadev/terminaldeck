@@ -70,6 +70,9 @@ export const UI_COMMANDS: CoverageMap = {
   'session.newDialog': { tool: 'sessions.start' },
   'session.resume': { tool: 'sessions.start' },
   'session.close': { tool: 'sessions.stop' },
+  // A session's own window, and back — the palette rows and the File menu.
+  'session.popOut': { tool: 'windows.pop_out' },
+  'session.dock': { tool: 'windows.dock' },
   'project.open': { tool: ['projects.browse', 'projects.add'] },
   'palette.quickOpen': { tool: 'files.find' },
   'app.quickOpen': { tool: 'files.find' },
@@ -114,6 +117,9 @@ export const UI_GESTURES: CoverageMap = {
   'click a file in the Files view': { tool: 'files.read' },
   'type into a terminal': { tool: ['sessions.send', 'sessions.keys'] },
   'read a terminal': { tool: 'sessions.screen' },
+  'drag a session tab off the window (its own window)': { tool: 'windows.pop_out' },
+  'row menu: Move to New Window / Show Its Window / Move Back': { tool: ['windows.pop_out', 'windows.dock'] },
+  'the session window’s close button (back to the main window)': { tool: 'windows.dock' },
   'drag a tab or a split divider': {
     skip: 'Arranging the window by dragging is geometry with no effect beyond the pixels; the split and swarm commands are ui.do.',
   },

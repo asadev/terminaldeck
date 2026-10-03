@@ -99,6 +99,8 @@ import { machineArea } from './deck-control/machine-area'
 import { liveAgentsAreaTools } from './deck-control/agents-area-live'
 import { browserAreaTools, extensionManageDeps } from './deck-control/browser-area-tools'
 import { sessionsLaneTools } from './deck-control/sessions-lane'
+import { sessionWindowTools } from './deck-control/session-window-tools'
+import { wirePopouts, type PopoutRegistry, type PopoutView } from './popout-windows'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -424,6 +426,13 @@ function send(channel: string, ...args: unknown[]): boolean {
    * whether or not a window is open to draw it. See `deck-control/channel-tap.ts`.
    */
   machineArea.tap.pushed(channel, args)
+  /*
+   * And every session in a window of its own, before asking whether the main
+   * window is there: a session's own window keeps printing while the main
+   * window is minimised or closed. `popout-windows.ts` decides which pushes
+   * each window gets.
+   */
+  if (!quitting) popouts?.forward(channel, args)
   if (quitting || !rendererAlive) return false
   const window = mainWindow
   if (!window || window.isDestroyed()) return false
@@ -678,6 +687,8 @@ let deckControl: DeckControlHandle | null = null
  * and files through one object rather than two that agree today.
  */
 let copilotRuntimeDeps: CopilotRuntimeDeps | null = null
+/** Sessions in windows of their own — `popout-windows.ts`. Built in `registerIpc`. */
+let popouts: PopoutRegistry | null = null
 let copilotInspectDeps: CopilotInspectDeps | null = null
 
 /**
@@ -1004,6 +1015,8 @@ const core = createHostCore({
    */
   onSessionRemoved: (id, reason) => {
     if (reason === 'replaced') return
+    // A session's own window goes with the session, and so does where it was.
+    popouts?.sessionEnded(id)
     // The other end of the same push: a row this Mac dropped has to leave the
     // phone's list too, not sit there until it reconnects.
     remoteLayer?.server.sessionsChanged()
@@ -1329,6 +1342,47 @@ function syncTitleBarOverlay(): void {
  * renderer resolves `data-theme` from, so the app's own chrome and the OS's
  * cannot disagree.
  */
+/**
+ * The live sessions a window of their own could hold, for `popout-windows.ts`.
+ *
+ * Every pty this process owns; the registry asks `refusal` about the copilot.
+ */
+function popoutSessions(): Array<{ id: string; tabKey?: string; title: string; meta: unknown }> {
+  return ptys.list().map((meta) => ({
+    id: meta.id,
+    ...(meta.tabKey !== undefined ? { tabKey: meta.tabKey } : {}),
+    title: meta.title,
+    meta,
+  }))
+}
+
+/**
+ * Bring the main window forward — making it, if it was closed — and run a
+ * command there when one is given.
+ *
+ * How a session's own window reaches what lives in the main window: ⌘T, the
+ * palette, the connectors page, "Manage accounts…". A command sent to a window
+ * that is still loading is held until it has loaded, and a beat longer, because
+ * the window subscribes to `menu:command` from an effect after its first render.
+ */
+function showMainWindow(command?: string): void {
+  if (mainWindow === null || mainWindow.isDestroyed()) createWindow()
+  const window = mainWindow
+  if (window === null || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+  if (command === undefined) return
+  const deliver = (): void => {
+    if (!window.isDestroyed()) window.webContents.send('menu:command', command)
+  }
+  if (window.webContents.isLoading()) {
+    window.webContents.once('did-finish-load', () => setTimeout(deliver, 400))
+  } else {
+    deliver()
+  }
+}
+
 function syncNativeAppearance(): void {
   nativeTheme.themeSource = store().getPreferences().theme
 }
@@ -1739,6 +1793,10 @@ async function hydrateRenderer(): Promise<void> {
   }
 
   for (const meta of ptys.list()) send(SESSION_CREATED_CHANNEL, meta)
+  // The sessions that were in windows of their own, back where they were — after
+  // a restart, or when the window comes back from the background. A no-op for a
+  // window that is already open, so a reload of the main window changes nothing.
+  popouts?.restore(popoutSessions())
   // On every hydration, not only the first: a renderer reload throws away the
   // window's copy of this list exactly as it throws away its tabs, and the rows
   // it draws are the only place a person is told a session did not come back.
@@ -4171,6 +4229,34 @@ function registerIpc(): void {
    */
   registerSessionRowMenuIpc(ipcMain, bindingDeps)
   /*
+   * Sessions in windows of their own. Built here, with the other channels, so
+   * the registry exists before the first window can ask for it; it opens no
+   * window until a session is moved out or a remembered one is restored.
+   */
+  popouts = wirePopouts({
+    ipcMain,
+    userData: app.getPath('userData'),
+    preload: join(__dirname, '../preload/index.js'),
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererFile: join(__dirname, '../renderer/index.html'),
+    chrome: () => titleBarChrome(process.platform, appearance()),
+    mainBounds: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null),
+    showMain: showMainWindow,
+    sessions: popoutSessions,
+    refusal: (id) =>
+      copilotRuntimeDeps !== null && copilotState(copilotRuntimeDeps).sessionId === id
+        ? 'The copilot stays in the main window.'
+        : null,
+    statusOf: (id) => liveStatus.get(id)?.status ?? null,
+    announce: (view: PopoutView, event) => {
+      send('popout:state', view, event)
+    },
+    announceReplaced: (previousId, meta) => {
+      send(SESSION_SWITCHED_CHANNEL, previousId, meta, '')
+    },
+    log: (message, detail) => logger.info('popout', message, detail),
+  })
+  /*
    * The copilot's hands on the browser.
    *
    * Registered here, beside the browser itself and before `deck-control`,
@@ -4955,6 +5041,27 @@ app.whenReady().then(async () => {
      * consequence sentence and every way-back decorative.
      */
     extraTools: [
+      /*
+       * A session in a window of its own, and back — the rail's ⋯ menu, the
+       * palette and the File menu, as tools. Closures over `popouts` rather
+       * than the registry itself, so a wiring order that changed underneath
+       * answers "nothing is out" instead of taking the catalogue down.
+       */
+      ...sessionWindowTools({
+        view: () => popouts?.view() ?? { windows: [], displays: [] },
+        open: (sessionId, options) =>
+          popouts?.open(sessionId, { displayId: options.displayId }) ?? {
+            ok: false,
+            message: 'This build cannot give a session its own window.',
+            sessionId,
+          },
+        dock: (sessionId) =>
+          popouts?.dock(sessionId, { select: true }) ?? {
+            ok: false,
+            message: 'That session is not in a window of its own.',
+            sessionId,
+          },
+      }),
       ...browserDriveTools(),
       ...browserWorkerTools(),
       /*
@@ -5180,10 +5287,16 @@ app.whenReady().then(async () => {
    */
   routines.engine.start()
   createWindow()
-  buildMenu(() => mainWindow)
+  buildMenu(() => mainWindow, undefined, (command) => popouts?.routeMenu(command) ?? false)
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    /*
+     * The main window, not "any window". A session in a window of its own keeps
+     * the app's window count above zero after the main window is closed, and
+     * the Dock icon then has to bring the main window back rather than do
+     * nothing.
+     */
+    if (mainWindow === null || mainWindow.isDestroyed()) createWindow()
   })
 })
 
@@ -5299,6 +5412,9 @@ function goBackground(): void {
    */
   servers?.stop()
   serverReach?.stop()
+  // Closed without being put back: the person did not ask for these sessions to
+  // move, so the windows come back where they were with the main window.
+  popouts?.suspend()
   for (const window of BrowserWindow.getAllWindows()) window.close()
 }
 
@@ -5423,6 +5539,9 @@ app.on('before-quit', (event) => {
     stopping = true
   }
   leaveBackground()
+  // Quitting closes the session windows and remembers them; it does not put
+  // their sessions back. They open where they were on the next launch.
+  popouts?.suspend()
 
   // Before `quitting`, deliberately. Every session is still live at this
   // instant, which makes this the most accurate the remembered list ever gets —

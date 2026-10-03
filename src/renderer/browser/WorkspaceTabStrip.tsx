@@ -47,8 +47,10 @@ import {
   writeArrangement,
 } from './strip-arrangement'
 import { useWindowMachines } from './window-machine'
+import { tearOffPoint } from '../popout/session-windows'
 import './WorkspaceTabStrip.css'
 import { HootMark } from '../copilot/HootMark'
+import '../popout/popout.css'
 
 /**
  * The tab strip along the top — the window's own top band, shaped the way a
@@ -270,7 +272,25 @@ export interface WorkspaceTabStripProps {
   onEdgeEnter?: () => void
   /** Injectable for tests. Defaults to `defaultStorage()` — session storage. */
   storage?: Storage | null
+  /**
+   * Sessions in windows of their own.
+   *
+   * A session tab dragged off the bar and let go **outside the window** gets a
+   * window of its own, opened where it was let go — the way a browser tab torn
+   * off its window lands where it was dropped. Let go anywhere inside the
+   * window, it folds back into the rail exactly as before. A tab that is out
+   * wears a small mark. Absent: neither happens.
+   */
+  windowMoves?: {
+    popped: ReadonlySet<string>
+    canMove(tabId: string): boolean
+    popOut(tabId: string, at?: { x: number; y: number } | null): void
+  }
 }
+
+/** A window with an arrow out of its corner: this session is in a window of its own. */
+const POPPED_MARK =
+  'M15 4h5v5M20 4l-7 7M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14'
 
 /** Points the way the content's left edge moves — the same glyph the rail uses. */
 const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
@@ -311,6 +331,7 @@ export function WorkspaceTabStrip({
   onRevealSidebar,
   onEdgeEnter,
   storage,
+  windowMoves,
 }: WorkspaceTabStripProps) {
   const store = storage === undefined ? defaultStorage() : storage
 
@@ -677,11 +698,25 @@ export function WorkspaceTabStrip({
     onSelect(id)
   }
 
-  const onDragEnd = (): void => {
+  const onDragEnd = (event?: { clientX: number; clientY: number; screenX: number; screenY: number }): void => {
     const id = dragging.current
     dragging.current = null
     setDraggingId(null)
     setDropAt(null)
+    /*
+     * Let go outside the window: a window of its own, where it landed.
+     *
+     * Asked before the fold-back below, because the two are the same gesture
+     * read by where it ended — inside the window it means "off the bar", past
+     * the window's edge it means "out of this window". `tearOffPoint` decides
+     * which, and refuses a drag end that did not say where it was.
+     */
+    const at = event ? tearOffPoint(event, { width: window.innerWidth, height: window.innerHeight }) : null
+    if (id && at && !droppedHere.current && windowMoves?.canMove(id) && !windowMoves.popped.has(id)) {
+      droppedHere.current = false
+      windowMoves.popOut(id, at)
+      return
+    }
     // Dropped outside the strip: fold it back into the side panel, where it has
     // been listed the whole time. Nothing else has to accept the drop for this
     // to work, which is why demotion does not wait on `Sidebar.tsx`.
@@ -1022,6 +1057,12 @@ export function WorkspaceTabStrip({
           {tab.kind === 'session' && tab.status && <StatusDot status={tab.status} />}
           <span className="strip-tab-label">{label}</span>
           {qualifier && <span className="strip-tab-qualifier">{qualifier}</span>}
+          {/* Out in a window of its own — the same mark the rail's row wears. */}
+          {windowMoves?.popped.has(tab.id) ? (
+            <span className="popped-mark" title="Open in its own window" aria-label="Open in its own window" role="img">
+              <Glyph path={POPPED_MARK} size={12} />
+            </span>
+          ) : null}
           {/*
             Which browser windows this session has, or which session this
             browser window belongs to — the same relation, seen from

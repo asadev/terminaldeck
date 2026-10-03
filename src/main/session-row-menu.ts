@@ -40,7 +40,7 @@ import { bindMenuItems, type BindingIpcDeps } from './browser-binding-ipc'
 import { BRAND } from '../shared/brand'
 
 /** What the person chose, or null when they dismissed the menu. */
-export type SessionRowChoice = 'promote' | 'close' | 'copilot'
+export type SessionRowChoice = 'promote' | 'close' | 'copilot' | 'popout' | 'dock' | 'show-window'
 
 export interface SessionRowMenuRequest {
   /** The session, or the browser tab id for a page row. */
@@ -89,6 +89,15 @@ export interface SessionRowMenuRequest {
    * the dead control this pass exists to remove.
    */
   browser?: boolean
+  /**
+   * Which window the session is in, when it can move between them.
+   *
+   * `main` offers **Move to New Window**; `own` — it is already in a window of
+   * its own — offers **Show Its Window** and **Move Back to Main Window**.
+   * Absent for anything that cannot have a window of its own: a page, a
+   * session on another machine, the copilot. `popout-windows.ts` has why.
+   */
+  window?: 'main' | 'own'
 }
 
 /**
@@ -126,6 +135,13 @@ export function showSessionRowMenu(
         click: () => finish('promote'),
       },
     ]
+
+    if (request.window === 'main') {
+      items.push({ label: 'Move to New Window', click: () => finish('popout') })
+    } else if (request.window === 'own') {
+      items.push({ label: 'Show Its Window', click: () => finish('show-window') })
+      items.push({ label: 'Move Back to Main Window', click: () => finish('dock') })
+    }
 
     if (request.copilotTurn) {
       items.push({
@@ -223,6 +239,7 @@ export function registerSessionRowMenuIpc(ipcMain: IpcMain, deps: BindingIpcDeps
       close: input.close === true,
       copilotTurn: input.copilotTurn === true,
       browser: input.browser === true,
+      window: input.window === 'main' || input.window === 'own' ? input.window : undefined,
     })
   })
 }

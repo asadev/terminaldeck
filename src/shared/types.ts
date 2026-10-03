@@ -619,6 +619,8 @@ export interface DeckApi {
     close?: boolean
     copilotTurn?: boolean
     browser?: boolean
+    /** Which window the session is in, when it can move between them (`popout-windows.ts`). */
+    window?: 'main' | 'own'
   }): Promise<string | null>
 
   // Feature modules. These cross the bridge as `unknown` and each consumer

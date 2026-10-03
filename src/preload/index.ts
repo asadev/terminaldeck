@@ -294,6 +294,32 @@ const api = {
     return () => ipcRenderer.off('session:created', handler)
   },
 
+  /* ------------------------------------------------- session windows -- */
+  //
+  // A session in a window of its own — `main/popout-windows.ts`. The same live
+  // session: the window attaches with `getScrollback` and `onSessionData`
+  // exactly as the main window's terminal does, so nothing here starts one.
+  popOutSession: (
+    sessionId: string,
+    options?: { at?: { x: number; y: number }; displayId?: number },
+  ): Promise<unknown> => ipcRenderer.invoke('popout:open', sessionId, options ?? {}),
+  dockSession: (sessionId: string): Promise<unknown> => ipcRenderer.invoke('popout:dock', sessionId),
+  focusSessionWindow: (sessionId: string): Promise<unknown> => ipcRenderer.invoke('popout:focus', sessionId),
+  sessionWindows: (): Promise<unknown> => ipcRenderer.invoke('popout:list'),
+  followSessionSwitch: (previousId: string, nextId: string): Promise<unknown> =>
+    ipcRenderer.invoke('popout:rekey', previousId, nextId),
+  labelSessionWindows: (labels: Record<string, string>): void => {
+    ipcRenderer.send('popout:labels', labels)
+  },
+  showMainWindow: (command?: string): void => {
+    ipcRenderer.send('popout:show-main', command)
+  },
+  onSessionWindows: (cb: (view: unknown, event: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, view: unknown, event: unknown) => cb(view, event)
+    ipcRenderer.on('popout:state', handler)
+    return () => ipcRenderer.off('popout:state', handler)
+  },
+
   /* ----------------------------------------------------------- usage -- */
   // Still spelled `cost:*` on both sides, and carrying no cost. Two methods
   // were removed here with the pricing — `getModelPricing`, which asked the
@@ -1994,6 +2020,7 @@ const api = {
     close?: boolean
     copilotTurn?: boolean
     browser?: boolean
+    window?: 'main' | 'own'
   }): Promise<string | null> => ipcRenderer.invoke('session:row-menu', request),
 
   /* ------------------------------------------------- browser driving -- */

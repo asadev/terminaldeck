@@ -48,6 +48,7 @@ import { createMachineArea } from './machine-area'
 import { notifyTools } from './notify-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
 import { sessionMoreTools, type SessionMoreDeps } from './session-more-tools'
+import { sessionWindowTools } from './session-window-tools'
 import { storeTools } from './store-tools'
 import { toolsStoreTools } from './tools-store-tools'
 import { tourTool } from './tour-tool'
@@ -73,6 +74,11 @@ export function assembledExtraTools(): ToolSpec[] {
     whereTool({ window: { read: async () => null }, page: () => null }),
     ...notifyTools({ hub: () => null }),
     // `src/main/index.ts`, in its order.
+    ...sessionWindowTools({
+      view: () => ({ windows: [], displays: [] }),
+      open: (sessionId) => ({ ok: false, message: '', sessionId }),
+      dock: (sessionId) => ({ ok: false, message: '', sessionId }),
+    }),
     ...browserTools({} as BrowserDrive),
     browserNetworkTool({} as BrowserDrive),
     ...workerTools({} as never),

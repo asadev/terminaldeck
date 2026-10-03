@@ -125,7 +125,7 @@ export const sessionsCoverage: CoverageMap = {
   'session:list': { tool: 'sessions.list' },
   'session:rename': { tool: 'sessions.rename' },
   'session:resize': { skip: 'The window telling a session the size of the box it is drawn in; a session started by a tool is sized when someone opens it.' },
-  'session:row-menu': { skip: 'Pops the native ⋯ menu on a sidebar row; its items are sessions.stop, ui.do (show at the top) and browser.open (connect a browser).' },
+  'session:row-menu': { skip: 'Pops the native ⋯ menu on a sidebar row; its items are sessions.stop, ui.do (show at the top), windows.pop_out / windows.dock and browser.open (connect a browser).' },
   'session:scrollback': { tool: ['sessions.screen', 'sessions.transcript'] },
   'session:switch-account': { tool: 'sessions.account' },
   'session:switch-armed': { tool: 'sessions.account' },
@@ -135,5 +135,14 @@ export const sessionsCoverage: CoverageMap = {
   'session:write': { tool: ['sessions.send', 'sessions.keys'] },
   'sessions:held': { tool: 'sessions.held' },
   'transfer:stage': { tool: 'files.upload' },
+  // A session in a window of its own, and back — `main/popout-windows.ts`.
+  'popout:open': { tool: 'windows.pop_out' },
+  'popout:dock': { tool: 'windows.dock' },
+  // Bringing a session's own window to the front is what pop_out does for a session that is already out.
+  'popout:focus': { tool: 'windows.pop_out' },
+  'popout:list': { tool: 'windows.list' },
+  'popout:rekey': { skip: 'A session window following its own session through an account switch; sessions.account makes the switch and the window follows by itself.' },
+  'popout:labels': { skip: 'The main window telling the session windows the names it already shows; plumbing so both say the same thing, nothing a person chooses.' },
+  'popout:show-main': { tool: 'ui.do' },
   'window:dimmed': { skip: 'The window reporting that a sheet has dimmed it; plumbing so the native chrome dims with it, nothing a person chooses.' },
 }

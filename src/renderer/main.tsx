@@ -5,6 +5,7 @@ import './styles/tokens.css'
 import './styles/app.css'
 import { App } from './App'
 import { DriveHost } from './copilot/driving/DriveHost'
+import { PopoutWindow } from './popout/PopoutWindow'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
@@ -37,7 +38,21 @@ for (const kind of ['dragover', 'drop'] as const) {
   })
 }
 
+/*
+ * A session in a window of its own loads this same page with `?popout=<id>`
+ * (`main/popout-windows.ts`), and gets that session and nothing else. Decided
+ * before anything mounts: the whole application would otherwise boot in a
+ * second window — restore announcements, notifications, the copilot overlay —
+ * and every one of those is the main window's job.
+ */
+const popout = new URLSearchParams(location.search).get('popout')
+
 createRoot(container).render(
+  popout ? (
+    <StrictMode>
+      <PopoutWindow sessionId={popout} />
+    </StrictMode>
+  ) : (
   <StrictMode>
     <App />
     {/*
@@ -64,5 +79,6 @@ createRoot(container).render(
       It renders nothing until a tour arrives on `deck-control:tour`.
     */}
     <DriveHost />
-  </StrictMode>,
+  </StrictMode>
+  ),
 )
