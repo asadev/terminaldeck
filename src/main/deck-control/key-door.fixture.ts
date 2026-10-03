@@ -22,6 +22,7 @@ import { ConsentBroker, type ConsentRequest } from './consent'
 import { DeckControl, type Budgets } from './control'
 import type { ToolSpec } from './catalogue'
 import { AccessKeyDoor } from './key-door'
+import type { McpEvents } from './mcp-events'
 import type { DeckSurface } from './surface'
 
 export const FIXTURE_SESSION: SessionMeta = {
@@ -138,6 +139,8 @@ export interface KeyRigOptions {
   /** Extra tools beside the built-ins, and a listener on every row — for the notification tests. */
   extraTools?: readonly ToolSpec[]
   onRow?(row: ActionRow): void
+  /** MCP Events behind the door — for the push tests. Read per request, like the real one. */
+  events?(): McpEvents | null
 }
 
 export function keyRig(dir: string, options: KeyRigOptions = {}): KeyRig {
@@ -160,7 +163,12 @@ export function keyRig(dir: string, options: KeyRigOptions = {}): KeyRig {
     ...(options.onRow === undefined ? {} : { onRow: options.onRow }),
   })
   const keys = new AccessKeys({ dir: join(dir, 'remote') })
-  const door = new AccessKeyDoor({ keys, control: () => control, consent: () => consent })
+  const door = new AccessKeyDoor({
+    keys,
+    control: () => control,
+    consent: () => consent,
+    ...(options.events === undefined ? {} : { events: options.events }),
+  })
   return {
     app,
     log,

@@ -468,8 +468,33 @@ function aiAppsState(): Record<string, unknown> {
     // minutes ago with one not yet acknowledged; the other has had none.
     delivery: aiAppsEmpty
       ? {}
-      : { 'k-chatgpt': { state: 'delivered', at: launchedAt - 180_000, via: 'webhook', error: null, outstanding: 1 } },
+      : { 'k-chatgpt': { state: 'delivered', at: launchedAt - 120_000, via: 'event', error: null, outstanding: 1 } },
     channelBridge: '/Users/apple/Library/Application Support/terminaldeck/notify-channel.mjs',
+    // ChatGPT subscribed to two kinds of news through MCP Events.
+    subscriptions: aiAppsEmpty
+      ? {}
+      : {
+          'k-chatgpt': [
+            {
+              id: 'sub_finished',
+              keyId: 'k-chatgpt',
+              event: 'session.turn_finished',
+              host: 'callbacks.chatgpt.com',
+              sessionId: null,
+              refreshBefore: launchedAt + 20 * 3600_000,
+              lastDelivery: { at: launchedAt - 120_000, ok: true, error: null },
+            },
+            {
+              id: 'sub_input',
+              keyId: 'k-chatgpt',
+              event: 'session.needs_input',
+              host: 'callbacks.chatgpt.com',
+              sessionId: null,
+              refreshBefore: launchedAt + 20 * 3600_000,
+              lastDelivery: null,
+            },
+          ],
+        },
   }
 }
 function aiAppsChange(edit: () => string | null): Record<string, unknown> {
@@ -2236,6 +2261,7 @@ const api: Record<string, unknown> = new Proxy(
       return { ok: true, secret: `whsec_${'bmV3LXNpZ25pbmctc2VjcmV0LWZvci1oYXJuZXNz'}=`, state: aiAppsState() }
     },
     aiAppsNotifyTest: async () => ({ ok: true, message: 'Delivered: the address answered 200.', state: aiAppsState() }),
+    aiAppsEventsStop: async () => ({ ok: true, state: aiAppsState() }),
     onAiAppsChanged: (callback: () => void) => {
       aiAppsListeners.add(callback)
       return () => aiAppsListeners.delete(callback)

@@ -46,6 +46,9 @@ export const agentsCoverage: CoverageMap = {
   'ai-apps:create': {
     skip: 'Making an access key hands back a secret and mints a new way into this computer, so only the owner does it, in Settings.',
   },
+  'ai-apps:events-stop': {
+    skip: 'Ending an outside AI app’s push subscription is the owner’s button in Settings; an app ends its own with events/unsubscribe.',
+  },
   'ai-apps:folders': { skip: KEYS_ARE_THE_OWNERS },
   'ai-apps:internet': {
     skip: 'Opening this computer to AI apps on the internet is the owner’s switch in Settings, never something a tool turns on.',

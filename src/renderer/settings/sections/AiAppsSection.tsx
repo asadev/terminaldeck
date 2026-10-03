@@ -7,6 +7,8 @@ import {
   LEVELS,
   NOTIFY_CHOICES,
   deliveryLine,
+  pushSummary,
+  subscriptionLine,
   levelCopy,
   setupFor,
   toAiAppsResult,
@@ -20,6 +22,7 @@ import {
   type LastDeliveryRow,
   type NotifyMode,
   type SetupWhere,
+  type SubscriptionRow,
 } from './ai-apps-setup'
 import './AiAppsSection.css'
 
@@ -76,6 +79,8 @@ export interface AiAppsBridge {
   aiAppsNotifySecret(id: string): Promise<unknown>
   /** Post one signed test notification to the webhook and say what the address answered. */
   aiAppsNotifyTest(id: string): Promise<unknown>
+  /** End one push subscription an app made. */
+  aiAppsEventsStop(id: string, subscription: string): Promise<unknown>
   onAiAppsChanged(callback: () => void): () => void
 }
 
@@ -91,6 +96,7 @@ const BRIDGE_METHODS: ReadonlyArray<keyof AiAppsBridge> = [
   'aiAppsNotify',
   'aiAppsNotifySecret',
   'aiAppsNotifyTest',
+  'aiAppsEventsStop',
   'onAiAppsChanged',
 ]
 
@@ -230,6 +236,7 @@ export function AiAppsSection({ bridge: injected }: { bridge?: Partial<AiAppsBri
                   row={key}
                   folders={state.folders}
                   delivery={state.delivery[key.id]}
+                  subscriptions={state.subscriptions[key.id] ?? []}
                   busy={busy}
                   bridge={bridge}
                   run={run}
@@ -355,6 +362,7 @@ function KeyRow({
   row,
   folders,
   delivery,
+  subscriptions,
   busy,
   bridge,
   run,
@@ -362,6 +370,7 @@ function KeyRow({
   row: AccessKeyRow
   folders: string[]
   delivery: LastDeliveryRow | undefined
+  subscriptions: SubscriptionRow[]
   busy: boolean
   bridge: Partial<AiAppsBridge>
   run: Run
@@ -385,6 +394,7 @@ function KeyRow({
           {row.level === 'full' && (row.askFirst ? ' · Asks before big changes' : ' · Big changes without asking')}
         </span>
         {deliveryLine(delivery) !== null && <span className="settings-tool-note">{deliveryLine(delivery)}</span>}
+        {pushSummary(subscriptions) !== null && <span className="settings-tool-note">{pushSummary(subscriptions)}</span>}
       </div>
       <div className="settings-profile-actions">
         <Button onClick={() => setOpen((was) => !was)} disabled={busy}>
@@ -445,6 +455,22 @@ function KeyRow({
           />
 
           <NotifyBlock row={row} busy={busy} bridge={bridge} run={run} />
+
+          {subscriptions.length > 0 && (
+            <div className="ai-field">
+              <span className="settings-label">Pushes this app asked for</span>
+              <ul className="ai-pushes">
+                {subscriptions.map((sub) => (
+                  <li key={sub.id} className="ai-field-row">
+                    <span className="settings-help">{subscriptionLine(sub)}</span>
+                    <Button disabled={busy} onClick={() => void run(() => bridge.aiAppsEventsStop?.(row.id, sub.id))}>
+                      Stop
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {revoking ? (
             <div className="settings-confirm" role="group" aria-label={`Revoke ${row.name}`}>

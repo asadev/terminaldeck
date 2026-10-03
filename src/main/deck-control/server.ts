@@ -57,8 +57,8 @@
  * authenticates nothing.
  *
  * AI apps on the *internet* never reach this listener at all. They come through
- * the relay and are answered by the door over the SDK's web-standard transport
- * — the same handler, a different road. `relay-mcp.ts` is the switchboard.
+ * the relay and are answered by the door through the same `serveMcp` — the
+ * same handler, a different road. `relay-mcp.ts` is the switchboard.
  *
  * ## Why a new Server per request
  *
@@ -66,8 +66,15 @@
  * documented stateless pattern, and the alternative — one long-lived transport
  * holding a session id — buys resumable streams this server has no use for
  * while adding a way for a reconnecting client to be told its session no longer
- * exists. Constructing a `Server` is registering two handlers; it costs
+ * exists. Constructing a `Server` is registering a few handlers; it costs
  * nothing next to the work the tools then do.
+ *
+ * ## Two protocol eras
+ *
+ * The SDK is v2 (`@modelcontextprotocol/server`), which serves the 2025-era
+ * protocol every client here speaks and the 2026-07-28 revision ChatGPT needs
+ * for MCP Events, at the same address, from the same factory. `mcp-serve.ts`
+ * routes between them; `mcp-events.ts` is the push.
  *
  * ## Timeouts, and the one that has to be shorter than the other
  *
@@ -88,9 +95,7 @@
 import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { ProtocolError, Server, type ServerCapabilities, type StandardSchemaV1, type Tool } from '@modelcontextprotocol/server'
 import { BRAND } from '../../shared/brand'
 import { claimOwnPort, releaseOwnPort } from '../own-ports'
 import { CallerTable, bearerOf, type KeyDoor, type KeyedGrant, type TokenGrant } from './callers'
@@ -98,6 +103,8 @@ import { advertiseTool } from './catalogue'
 import { OUTSIDE_APP_CONSENT_TIMEOUT_MS } from './consent'
 import { advertisedCatalogue, visibleTo } from './describe-tool'
 import type { DeckControl } from './control'
+import { EventsError } from './mcp-events'
+import { serveMcp, type McpEra } from './mcp-serve'
 import { RUN_ID } from './run-tool'
 import { LOCAL_CALLER, type Caller } from './surface'
 
@@ -473,11 +480,39 @@ function runHints(listed: Record<string, unknown>, caller: Caller): Record<strin
   }
 }
 
-export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_ATTENDED): Server {
-  const server = new Server(
-    { name: SERVER_NAME, version: '1.0.0' },
-    { capabilities: { tools: {} }, instructions: instructionsFor(grant) },
-  )
+/**
+ * Accepts any params: the events methods check their own, in `mcp-events.ts`,
+ * where the refusals are worded for the app that sent them.
+ */
+const ANY_PARAMS: StandardSchemaV1<unknown, unknown> = {
+  '~standard': { version: 1, vendor: 'deck-control', validate: (value: unknown) => ({ value }) },
+}
+
+export interface CreateMcpServerOptions {
+  /**
+   * Which protocol era this exchange is in. MCP Events are offered only on the
+   * 2026-07-28 era, which is the only one that has them: a 2025-era client is
+   * never shown a capability it has no use for and might not parse.
+   */
+  era?: McpEra
+  /** The caller hanging up, for a road whose transport does not report it. */
+  hangup?: AbortSignal
+}
+
+export function createMcpServer(
+  control: DeckControl,
+  grant: TokenGrant = LOCAL_ATTENDED,
+  options: CreateMcpServerOptions = {},
+): Server {
+  /*
+   * MCP Events, for an app on a key, on the era that has them. `events` is the
+   * draft extension's capability key; the SDK's type does not know it, and the
+   * SDK passes it through to `server/discover` unchanged, which is where
+   * ChatGPT looks for it (`mcp-events.ts`).
+   */
+  const events = options.era === 'modern' ? (grant.events ?? null) : null
+  const capabilities = (events === null ? { tools: {} } : { tools: {}, events: {} }) as ServerCapabilities
+  const server = new Server({ name: SERVER_NAME, version: '1.0.0' }, { capabilities, instructions: instructionsFor(grant) })
 
   /*
    * The shape comes from `catalogue.ts` rather than being written out here.
@@ -513,7 +548,7 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
    * `catalogue-cost.test.ts` measures the output of this same pair, because
    * this is the payload the budget is about.
    */
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  server.setRequestHandler('tools/list', async () => {
     /*
      * A key caller is also shown `tools.run`, because the clients that hold
      * keys — claude.ai, ChatGPT — can call nothing they were not listed, and
@@ -523,13 +558,13 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
     const caller = grant.caller()
     const run = caller.kind === 'key'
     return {
-      tools: advertisedCatalogue(control.tools().filter(allowed), { run }).map((spec) =>
-        spec.id === RUN_ID ? runHints(advertiseTool(spec), caller) : advertiseTool(spec),
+      tools: advertisedCatalogue(control.tools().filter(allowed), { run }).map(
+        (spec) => (spec.id === RUN_ID ? runHints(advertiseTool(spec), caller) : advertiseTool(spec)) as Tool,
       ),
     }
   })
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler('tools/call', async (request, ctx) => {
     /*
      * The allow-list, before the dispatcher and before the name is resolved
      * against anything.
@@ -579,7 +614,7 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
        * confirmation left on screen cannot be approved into a change nobody is
        * waiting to hear about.
        */
-      signal: anySignal(extra.signal, grant.signal),
+      signal: anySignal(anySignal(ctx.mcpReq.signal, grant.signal), options.hangup),
       attended: grant.attended,
       caller: grant.caller(),
       /*
@@ -594,6 +629,30 @@ export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_
     })
     return toolResult(result.value, result.ok ? null : (result.error ?? 'the call failed'))
   })
+
+  if (events !== null) {
+    /*
+     * The three MCP Events methods, for this key alone: `mcp-events.ts` keeps
+     * the subscriptions, checks the callback, and posts. A refusal there is a
+     * JSON-RPC error with the draft's own code, so ChatGPT can tell "no such
+     * event" from "the owner switched notifications off".
+     */
+    const refusals = async <T>(work: () => T | Promise<T>): Promise<T> => {
+      try {
+        return await work()
+      } catch (error) {
+        if (error instanceof EventsError) throw new ProtocolError(error.code, error.message, error.data)
+        throw error
+      }
+    }
+    server.setRequestHandler('events/list', { params: ANY_PARAMS }, () => refusals(() => events.list()))
+    server.setRequestHandler('events/subscribe', { params: ANY_PARAMS }, (params) =>
+      refusals(() => events.subscribe(params) as Promise<Record<string, unknown>>),
+    )
+    server.setRequestHandler('events/unsubscribe', { params: ANY_PARAMS }, (params) =>
+      refusals(() => events.unsubscribe(params)),
+    )
+  }
 
   return server
 }
@@ -658,14 +717,24 @@ export function clientNameOf(parsed: unknown): string | null {
   for (const message of messages) {
     if (typeof message !== 'object' || message === null) continue
     const record = message as Record<string, unknown>
-    if (record.method !== 'initialize') continue
     const params = record.params as Record<string, unknown> | undefined
-    const info = params?.clientInfo as Record<string, unknown> | undefined
+    /*
+     * The 2026-07-28 revision has no `initialize`: a client SHOULD name itself
+     * on every request instead, in the `_meta` envelope. Read either.
+     */
+    const meta = params?._meta as Record<string, unknown> | undefined
+    const info = (record.method === 'initialize' ? params?.clientInfo : meta?.[CLIENT_INFO_KEY]) as
+      | Record<string, unknown>
+      | undefined
+    if (record.method !== 'initialize' && info === undefined) continue
     if (typeof info?.name !== 'string') return null
     return typeof info.version === 'string' ? `${info.name} ${info.version}` : info.name
   }
   return null
 }
+
+/** Where a 2026-era request carries the client's name. */
+const CLIENT_INFO_KEY = 'io.modelcontextprotocol/clientInfo'
 
 async function handle(
   req: IncomingMessage,
@@ -753,45 +822,61 @@ async function answer(
   // Which app this is, when it says — once, at `initialize`.
   if (keyed !== null) keyed.noteClient(clientNameOf(parsed))
 
-  const mcp = createMcpServer(control, grant)
-  const transport = new StreamableHTTPServerTransport({
-    // Stateless: no session id, nothing to resume, nothing to expire.
-    sessionIdGenerator: undefined,
-    // Plain JSON rather than an SSE stream. There is one request and one
-    // answer; a stream would be an event source with a single event in it.
-    enableJsonResponse: true,
-  })
-
   /*
    * The caller hanging up has to reach the tool call.
    *
-   * Closing the transport makes the SDK's `Protocol` abort every in-flight
-   * request handler's signal, which is the signal `control.ts` hands to the
-   * consent broker. Without this line an alter-tier call whose client had
+   * `serveMcp` closes the exchange's transport when this fires, which aborts
+   * every in-flight handler's signal, which `control.ts` turns into a
+   * `caller-gone` refusal. Without it an alter-tier call whose client had
    * already given up would keep a dialog on screen, and approving it would
    * change something nobody was still waiting to hear about.
    */
-  let closed = false
+  const hangup = new AbortController()
   const onClose = (): void => {
-    if (closed) return
-    closed = true
-    void transport.close().catch(() => undefined)
+    if (!res.writableFinished) hangup.abort()
   }
   res.once('close', onClose)
 
   try {
-    await mcp.connect(transport)
-    await transport.handleRequest(req, res, parsed)
+    const request = new Request(`http://${HOST}${MCP_PATH}`, {
+      method: 'POST',
+      headers: forwardedHeaders(req),
+      body,
+      signal: hangup.signal,
+    })
+    const answered = await serveMcp({
+      request,
+      parsed,
+      signal: hangup.signal,
+      server: (era) => createMcpServer(control, grant, { era, hangup: hangup.signal }),
+    })
+    if (res.writableEnded || res.destroyed) return
+    const headers: Record<string, string> = {}
+    answered.headers.forEach((value, name) => {
+      headers[name] = value
+    })
+    res.writeHead(answered.status, headers)
+    res.end(Buffer.from(answered.body))
   } catch (error) {
     console.error('[deck-control] request failed:', error)
     if (!res.headersSent) deny(res, 500)
     else if (!res.writableEnded) res.end()
   } finally {
     res.off('close', onClose)
-    // `mcp.close()` closes the transport with it. Both are per-request and
-    // holding either past the answer would leak one object per call.
-    await mcp.close().catch(() => undefined)
   }
+}
+
+/** Headers that describe this one hop, or the body that is handed over separately. */
+const NOT_FORWARDED = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive', 'upgrade'])
+
+/** The request's own headers, as a web `Headers`, for the MCP transport to judge. */
+function forwardedHeaders(req: IncomingMessage): Headers {
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined || NOT_FORWARDED.has(name)) continue
+    headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+  }
+  return headers
 }
 
 /**

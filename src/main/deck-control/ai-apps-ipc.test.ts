@@ -128,7 +128,7 @@ describe('the internet address', () => {
 describe('the notification channels', () => {
   it('refuse any window but the app’s own', async () => {
     const { call } = rig()
-    for (const channel of ['ai-apps:notify', 'ai-apps:notify-secret']) {
+    for (const channel of ['ai-apps:notify', 'ai-apps:notify-secret', 'ai-apps:events-stop']) {
       expect(() => call(channel, OTHER, 'x', {}), channel).toThrow(/only the app’s own window/)
     }
     // The test is async, so its refusal arrives as a rejected promise.
@@ -183,5 +183,48 @@ describe('the notification channels', () => {
     const result = (await call('ai-apps:notify-test', OWN, made.id)) as { ok: boolean; message: string }
     expect(result).toMatchObject({ ok: true, message: 'Delivered: the address answered 204.' })
     expect(tested).toEqual([made.id])
+  })
+
+  it('show each key’s push subscriptions, never a secret, and let the owner stop one', () => {
+    const stopped: Array<[string, string]> = []
+    const live = new Set<string>()
+    let keyId = ''
+    const { call } = rig({
+      notify: {
+        lastDelivery: () => null,
+        test: async () => ({ ok: true, message: '' }),
+        subscriptions: () =>
+          [...live].map((id) => ({
+            id,
+            keyId,
+            event: 'session.turn_finished',
+            host: 'callbacks.chatgpt.com',
+            sessionId: null,
+            refreshBefore: 9_000,
+            lastDelivery: null,
+          })),
+        stopSubscription: (keyId, id) => {
+          stopped.push([keyId, id])
+          return live.delete(id)
+        },
+      },
+    })
+    const made = call('ai-apps:create', OWN, { name: 'ChatGPT', level: 'work' }) as { id: string }
+    keyId = made.id
+    live.add('sub_1')
+    const state = call('ai-apps:state', OWN) as { subscriptions: Record<string, Array<Record<string, unknown>>> }
+    expect(state.subscriptions[made.id]).toEqual([
+      expect.objectContaining({ id: 'sub_1', event: 'session.turn_finished', host: 'callbacks.chatgpt.com' }),
+    ])
+    expect(JSON.stringify(state)).not.toMatch(/whsec_/)
+    const first = call('ai-apps:events-stop', OWN, made.id, 'sub_1') as { ok: boolean; state: { subscriptions: object } }
+    expect(first.ok).toBe(true)
+    expect(first.state.subscriptions).toEqual({})
+    const again = call('ai-apps:events-stop', OWN, made.id, 'sub_1') as { ok: boolean; message: string }
+    expect(again).toMatchObject({ ok: false, message: 'That subscription had already ended.' })
+    expect(stopped).toEqual([
+      [made.id, 'sub_1'],
+      [made.id, 'sub_1'],
+    ])
   })
 })

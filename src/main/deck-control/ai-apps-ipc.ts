@@ -36,6 +36,7 @@
  */
 
 import { KeyRefused, type AccessKeys, type AccessKeyView } from './access-keys'
+import type { SubscriptionView } from './mcp-events'
 import type { LastDelivery } from './notify-hub'
 import { MCP_PATH } from './server'
 
@@ -79,6 +80,12 @@ export interface AiAppsState {
    * could not be written. See `notify-channel.ts`.
    */
   channelBridge: string | null
+  /**
+   * MCP Events subscriptions, by key id: which app asked to be pushed which
+   * news, to which host, until when. What the owner sees, and can stop. See
+   * `mcp-events.ts`.
+   */
+  subscriptions: Record<string, SubscriptionView[]>
 }
 
 export type AiAppsResult =
@@ -91,6 +98,10 @@ export interface AiAppsIpcDeps {
   notify?: {
     lastDelivery(keyId: string): LastDelivery | null
     test(keyId: string): Promise<{ ok: boolean; message: string }>
+    /** Live MCP Events subscriptions. Absent in a build without them. */
+    subscriptions?(): SubscriptionView[]
+    /** The owner's Stop. True when there was one to stop. */
+    stopSubscription?(keyId: string, id: string): boolean
   }
   /** Where the Claude Code channel bridge was written. */
   channelBridge?(): string | null
@@ -162,7 +173,14 @@ export function aiAppsState(deps: Omit<AiAppsIpcDeps, 'isApprover' | 'broadcast'
         .filter((entry): entry is readonly [string, LastDelivery] => entry[1] !== null),
     ),
     channelBridge: deps.channelBridge?.() ?? null,
+    subscriptions: byKey(deps.notify?.subscriptions?.() ?? []),
   }
+}
+
+function byKey(views: SubscriptionView[]): Record<string, SubscriptionView[]> {
+  const out: Record<string, SubscriptionView[]> = {}
+  for (const view of views) (out[view.keyId] ??= []).push(view)
+  return out
 }
 
 /** The narrow slice of `ipcMain` this needs, so a test can pass a fake. */
@@ -289,6 +307,15 @@ export function registerAiAppsIpc(ipcMain: InvokeRegistrar, deps: AiAppsIpcDeps)
     if (!deps.notify) return { ok: false, message: 'Notifications are not running in this build.', state: state() }
     const result = await deps.notify.test(id(key))
     return { ok: result.ok, message: result.message, state: state() }
+  })
+
+  ipcMain.handle('ai-apps:events-stop', (event, key: unknown, subscription: unknown) => {
+    guard(event)
+    if (typeof subscription !== 'string' || subscription === '') throw new Error('Which subscription?')
+    const stopped = deps.notify?.stopSubscription?.(id(key), subscription) ?? false
+    return stopped
+      ? { ok: true, state: state() }
+      : { ok: false, message: 'That subscription had already ended.', state: state() }
   })
 
   // Pushed, not polled: the page re-reads when a key or the switch changes.

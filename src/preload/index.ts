@@ -1657,6 +1657,9 @@ const api = {
     ipcRenderer.invoke('ai-apps:notify', id, input),
   aiAppsNotifySecret: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:notify-secret', id),
   aiAppsNotifyTest: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:notify-test', id),
+  // Ends one MCP Events subscription an app made (ChatGPT's push).
+  aiAppsEventsStop: (id: string, subscription: string): Promise<unknown> =>
+    ipcRenderer.invoke('ai-apps:events-stop', id, subscription),
   onAiAppsChanged: (cb: () => void): (() => void) => {
     const handler = (): void => cb()
     ipcRenderer.on('ai-apps:changed', handler)

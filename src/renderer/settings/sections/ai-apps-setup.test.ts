@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   APPS,
   CHANNEL_SERVER,
+  CHATGPT_PUSH_SENTENCE,
   IDLE_SENTENCE,
   LEVELS,
   SERVER_KEY,
   deliveryLine,
+  pushSummary,
+  subscriptionLine,
   ago,
   secretLink,
   setupFor,
@@ -159,6 +162,51 @@ describe('hearing back from sessions', () => {
     expect(setupFor('claude-web', context()).after).toBeUndefined()
   })
 
+  it('tells ChatGPT’s owner how to ask for the push, and honestly that it may not be offered', () => {
+    const setup = setupFor('chatgpt', context())
+    expect(setup.after).toBe(CHATGPT_PUSH_SENTENCE)
+    expect(CHATGPT_PUSH_SENTENCE).toMatch(/Work chat/)
+    expect(CHATGPT_PUSH_SENTENCE).toMatch(/Where ChatGPT offers it/)
+    expect(CHATGPT_PUSH_SENTENCE).toMatch(/notifications_wait/)
+  })
+
+  it('reads push subscriptions, says what each one pushes where, and sums them up under the key', () => {
+    const now = 1_800_000_000_000
+    const state = toAiAppsState({
+      keys: [],
+      subscriptions: {
+        'k-1': [
+          {
+            id: 'sub_a',
+            event: 'session.turn_finished',
+            host: 'callbacks.chatgpt.com',
+            sessionId: null,
+            refreshBefore: now + 3_600_000,
+            lastDelivery: { at: now - 120_000, ok: true, error: null },
+          },
+          {
+            id: 'sub_b',
+            event: 'session.needs_input',
+            host: 'callbacks.chatgpt.com',
+            sessionId: 'started-2',
+            refreshBefore: now + 3_600_000,
+            lastDelivery: { at: now - 60_000, ok: false, error: 'the callback answered 503' },
+          },
+          { id: 'broken' },
+        ],
+        'k-2': 'not a list',
+      },
+    })
+    const rows = state?.subscriptions['k-1'] ?? []
+    expect(rows.map((row) => row.id)).toEqual(['sub_a', 'sub_b'])
+    expect(state?.subscriptions['k-2']).toBeUndefined()
+    expect(subscriptionLine(rows[0], now)).toMatch(/^Pushes to callbacks\.chatgpt\.com when a turn finishes · ends at .+ unless the app renews it · last push 2 minutes ago$/)
+    expect(subscriptionLine(rows[1], now)).toMatch(/when a session needs an answer \(one session\).*last push failed .*503/)
+    expect(pushSummary(rows)).toBe('Pushed to callbacks.chatgpt.com when a turn finishes, or when a session needs an answer')
+    expect(pushSummary([])).toBeNull()
+    expect(toAiAppsState({ keys: [] })?.subscriptions).toEqual({})
+  })
+
   it('offers Claude Code the channel push on this Mac only, with the bridge, the key and the preview caution', () => {
     const bridge = '/Users/me/Library/Application Support/app/notify-channel.mjs'
     const here = setupFor('claude-code', context({ channelBridge: bridge }))
@@ -193,6 +241,9 @@ describe('hearing back from sessions', () => {
   it('says how the last notification went in plain words', () => {
     const now = 10_000_000
     expect(deliveryLine(undefined)).toBeNull()
+    expect(deliveryLine({ state: 'delivered', at: now - 120_000, via: 'event', error: null, outstanding: 0 }, now)).toMatch(
+      /delivered .*, pushed to the app$/,
+    )
     expect(deliveryLine({ state: 'delivered', at: now - 120_000, via: 'webhook', error: null, outstanding: 0 }, now)).toBe(
       'Last notification delivered 2 minutes ago by webhook',
     )
