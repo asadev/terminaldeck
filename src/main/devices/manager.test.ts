@@ -15,9 +15,11 @@ class FakeSession {
   previews: boolean[] = []
   preview = false
   closed = false
-  frames = new Set<(jpeg: Buffer) => void>()
+  frames = new Set<(packet: Buffer) => void>()
   closes = new Set<(reason: string) => void>()
-  latestFrame: Buffer | null = Buffer.from('last')
+  /** The stream's decoder configuration, tagged 0x10 as the session tags it. */
+  screenConfig: Buffer | null = Buffer.from([0x10, 1, 0x64, 0, 0x33])
+  touches: string[] = []
   info = { id: ID, name: 'iPhone 17 Pro', platform: 'ios' as const, kind: 'simulator', pointWidth: 402, pointHeight: 874, buttons: ['home'], keys: [], text: 'unicode', canRotate: true, rawTouch: true }
   isOpen = true
   async open() {
@@ -31,9 +33,12 @@ class FakeSession {
     this.preview = on
     this.previews.push(on)
   }
-  onFrame(listener: (jpeg: Buffer) => void) {
+  onScreen(listener: (packet: Buffer) => void) {
     this.frames.add(listener)
     return () => this.frames.delete(listener)
+  }
+  async touch(phase: string) {
+    this.touches.push(phase)
   }
   onClose(listener: (reason: string) => void) {
     this.closes.add(listener)
@@ -88,28 +93,41 @@ describe('watching a device', () => {
     expect(session.previews.at(-1)).toBe(true)
   })
 
-  it('sends the newest picture at once, then each new one, to the window watching', async () => {
+  it('gives a window the decoder configuration first, then every packet as it comes', async () => {
     const { manager, session } = make()
     const window = viewer()
     await manager.watch(window, ID, true)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    session.emit(Buffer.from('next'))
-    await new Promise((resolve) => setTimeout(resolve, 60))
-    const pictures = window.sent.filter(([channel]) => channel === 'devices:frame').map(([, args]) => String(args[1]))
-    expect(pictures).toEqual(['last', 'next'])
+    session.emit(Buffer.from([0x11, 1]))
+    session.emit(Buffer.from([0x11, 2]))
+    const packets = window.sent.filter(([channel]) => channel === 'devices:frame').map(([, args]) => [...(args[1] as Buffer)])
+    expect(packets).toEqual([
+      [0x10, 1, 0x64, 0, 0x33],
+      [0x11, 1],
+      [0x11, 2],
+    ])
   })
 
-  it('drops pictures a slow window would fall behind on, keeping the newest', async () => {
+  it('never thins the stream: a burst arrives whole, in order, with no gap imposed', async () => {
+    // Each coded picture is a difference from the one before it; dropping one
+    // would smear every picture until the next keyframe. The window recovers
+    // from falling behind by itself (screen-player.ts).
     const { manager, session } = make()
     const window = viewer()
     await manager.watch(window, ID, true)
-    await new Promise((resolve) => setTimeout(resolve, 50))
     window.sent.length = 0
-    for (let i = 0; i < 10; i++) session.emit(Buffer.from(`f${i}`))
-    await new Promise((resolve) => setTimeout(resolve, 60))
-    const pictures = window.sent.map(([, args]) => String(args[1]))
-    expect(pictures.length).toBeLessThan(10)
-    expect(pictures.at(-1)).toBe('f9')
+    for (let i = 0; i < 60; i++) session.emit(Buffer.from([0x11, i]))
+    expect(window.sent.map(([, args]) => (args[1] as Buffer)[1])).toEqual([...Array(60).keys()])
+  })
+
+  it('writes a touch to the device in the same turn it arrives, without waiting', async () => {
+    // A finger's down, moves and up must reach the engine in order and at once;
+    // an await before the write is where a drag used to lag.
+    const { manager, session } = make()
+    await manager.watch(viewer(), ID, true)
+    void manager.touch(ID, 'down', 0.5, 0.5)
+    void manager.touch(ID, 'move', 0.5, 0.6)
+    void manager.touch(ID, 'up', 0.5, 0.7)
+    expect(session.touches).toEqual(['down', 'move', 'up'])
   })
 
   it('stops the pictures when the last window stops watching, and only then', async () => {

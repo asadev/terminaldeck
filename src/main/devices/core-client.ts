@@ -77,16 +77,28 @@ function timeoutFor(method: string): number {
 export interface CoreClientOptions {
   engine: Engine
   deviceId: string
-  /** The longest edge of the pictures the engine sends, so a Retina phone is not 2600px of JPEG per frame. */
+  /**
+   * Which stream the engine sends. `h264` is the engine's own preferred path —
+   * VideoToolbox on the Mac, a hardware decoder in the window — and the one its
+   * own preview uses. `mjpeg` is a whole JPEG per change, kept for a window
+   * that cannot decode H.264. Measured on an iPhone 17 Pro simulator, 0.16.1:
+   * MJPEG managed 11.8 frames a second while scrolling at 21 Mbit/s of
+   * full-resolution JPEGs; see `session.ts`.
+   */
+  codec?: 'h264' | 'mjpeg'
   maxWidth?: number
   maxHeight?: number
   maxFrameRate?: number
 }
 
+/** One unit of the H.264 stream: the decoder's configuration, or one coded picture. */
+export type VideoPacket = { kind: 'config'; avcC: Buffer } | { kind: 'chunk'; data: Buffer }
+
 export class CoreClient {
   private readonly pending = new Map<string, Pending>()
   private readonly reader = new FrameReader()
   private readonly jpegListeners = new Set<(jpeg: Buffer) => void>()
+  private readonly videoListeners = new Set<(packet: VideoPacket) => void>()
   private readonly closeListeners = new Set<(reason: string) => void>()
   /** Screenshot requests, one at a time, each waiting for the PNG after its response. */
   private pngWaiter: ((png: Buffer) => void) | null = null
@@ -178,7 +190,7 @@ export class CoreClient {
   private async hello(token: string, options: Partial<CoreClientOptions>): Promise<void> {
     await this.request('hello', {
       token,
-      codecs: ['mjpeg'],
+      codecs: [options.codec ?? 'mjpeg'],
       ...(options.maxWidth ? { maxWidth: options.maxWidth } : {}),
       ...(options.maxHeight ? { maxHeight: options.maxHeight } : {}),
       maxFrameRate: options.maxFrameRate ?? 30,
@@ -213,6 +225,14 @@ export class CoreClient {
     }
     if (kind === FRAME.jpeg) {
       for (const listener of this.jpegListeners) listener(payload)
+      return
+    }
+    if (kind === FRAME.h264Config || kind === FRAME.h264Data) {
+      // Passed on as the engine framed it: for a chunk, an 8-byte big-endian
+      // microsecond timestamp, a keyframe flag byte, then the AVCC picture —
+      // which is exactly what the window's decoder is fed.
+      const packet: VideoPacket = kind === FRAME.h264Config ? { kind: 'config', avcC: payload } : { kind: 'chunk', data: payload }
+      for (const listener of this.videoListeners) listener(packet)
       return
     }
     if (kind === FRAME.png) {
@@ -275,6 +295,11 @@ export class CoreClient {
     const next = this.shotChain.then(run, run)
     this.shotChain = next.catch(() => undefined)
     return next
+  }
+
+  onVideo(listener: (packet: VideoPacket) => void): () => void {
+    this.videoListeners.add(listener)
+    return () => this.videoListeners.delete(listener)
   }
 
   onJpeg(listener: (jpeg: Buffer) => void): () => void {

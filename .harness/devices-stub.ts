@@ -172,9 +172,19 @@ function tree(): Record<string, unknown> {
   }
 }
 
+/**
+ * One screen packet, as the main process sends it: the engine's frame kind
+ * byte, then the payload. The stub sends `0x12` — a JPEG — which the player
+ * draws the same way it draws the real stream's PNG stills; the real stream is
+ * H.264 (`0x10`/`0x11`), which a drawn canvas cannot produce here.
+ */
 async function jpeg(): Promise<Uint8Array> {
-  const blob = await new Promise<Blob | null>((resolve) => draw().toBlob(resolve, 'image/jpeg', 0.85))
-  return new Uint8Array(blob ? await blob.arrayBuffer() : new ArrayBuffer(0))
+  const blob = await new Promise<Blob | null>((resolve) => draw().toBlob(resolve, 'image/jpeg', 0.92))
+  const bytes = new Uint8Array(blob ? await blob.arrayBuffer() : new ArrayBuffer(0))
+  const packet = new Uint8Array(bytes.length + 1)
+  packet[0] = 0x12
+  packet.set(bytes, 1)
+  return packet
 }
 
 const frameListeners = new Set<(id: string, bytes: Uint8Array) => void>()

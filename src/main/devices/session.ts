@@ -13,11 +13,24 @@ import { run } from './inventory'
  *
  * ## Pictures
  *
- * The engine sends a JPEG each time the screen changes once a preview is on,
- * bounded to {@link PREVIEW_EDGE} on the long side. That is what the page draws.
+ * The live screen is the engine's **H.264** stream at the device's full
+ * resolution and up to sixty frames a second — the path its own preview uses,
+ * encoded by VideoToolbox here and decoded by the hardware in the window
+ * (`renderer/devices/DeviceScreen.tsx`). It replaced a JPEG per change, bounded
+ * to 1600 pixels, which is what made 0.16.1 feel slow and look soft. Measured
+ * on an iPhone 17 Pro simulator scrolling Settings: the JPEG stream managed
+ * 11.8 frames a second at 21 Mbit/s of 233 KB pictures, and the H.264 stream
+ * 34.4 at 2.7 Mbit/s, full resolution, with the same engine.
+ *
+ * What travels is the engine's own framing, one packet per frame, tagged with
+ * the engine's kind byte: `0x10` the decoder configuration, `0x11` one coded
+ * picture (timestamp, keyframe flag, AVCC data), `0x20` a PNG still. A decoder
+ * has to see every coded picture in order, so nothing on the way drops one; a
+ * window that joins or falls behind is given the configuration again and a
+ * fresh keyframe instead.
+ *
  * A screenshot is a separate request for a full-resolution PNG, exact to the
- * pixel, and is what Annotate freezes on and what a model is given — the live
- * stream is for watching, the PNG is evidence.
+ * pixel, and is what Annotate freezes on and what a model is given.
  *
  * ## Coordinates
  *
@@ -27,8 +40,20 @@ import { run } from './inventory'
  * or which way up it is.
  */
 
-/** Long edge of the live preview, in pixels: sharp on a Retina window, a fraction of a full-resolution frame. */
-export const PREVIEW_EDGE = 1600
+/** The engine's frame kinds, as the first byte of every screen packet the page is sent. */
+export const SCREEN_CONFIG = 0x10
+export const SCREEN_PICTURE = 0x11
+export const SCREEN_STILL = 0x20
+
+/** Frames a second asked of the engine — the most a 120 Hz panel would show of a 60 Hz simulator. */
+export const PREVIEW_FPS = 60
+
+function tagged(kind: number, payload: Buffer): Buffer {
+  const out = Buffer.allocUnsafe(payload.length + 1)
+  out[0] = kind
+  payload.copy(out, 1)
+  return out
+}
 
 export type Orientation = 'portrait' | 'portrait-upside-down' | 'landscape-left' | 'landscape-right'
 
@@ -152,9 +177,10 @@ export class DeviceSession {
   private opening: Promise<DeviceDetails> | null = null
   private details: DeviceDetails | null = null
   private previewing = false
-  private readonly frameListeners = new Set<(jpeg: Buffer) => void>()
+  private readonly screenListeners = new Set<(packet: Buffer) => void>()
   private readonly closeListeners = new Set<(reason: string) => void>()
-  private lastJpeg: Buffer | null = null
+  /** The decoder configuration the stream last carried, for a window that joins mid-stream. */
+  private lastConfig: Buffer | null = null
   private orientation: Orientation = 'portrait'
   /** Whether the fuller iOS tree provider has been tried this session. */
   private xctestTried = false
@@ -172,9 +198,18 @@ export class DeviceSession {
     return this.client !== null && !this.client.isClosed
   }
 
-  /** The newest picture the engine sent, for a caller that arrives between frames. */
-  get latestFrame(): Buffer | null {
-    return this.lastJpeg
+  /**
+   * The stream's decoder configuration, tagged, for a window that arrives
+   * mid-stream: it cannot decode a single picture without it. The picture it
+   * then needs is a keyframe, which {@link setPreview} asks the engine for.
+   */
+  get screenConfig(): Buffer | null {
+    return this.lastConfig
+  }
+
+  /** The open engine, without waiting — input goes out the moment it arrives. */
+  private ready(): CoreClient | null {
+    return this.client !== null && !this.client.isClosed ? this.client : null
   }
 
   /** Start the engine for this device and begin watching its screen. Safe to call twice. */
@@ -197,11 +232,14 @@ export class DeviceSession {
     for (let attempt = 0; attempt < 3; attempt++) {
       let client: CoreClient | null = null
       try {
+        // Full resolution — no maxWidth/maxHeight — because the window sizes
+        // its canvas to its own pixels and scales down once, sharply; a stream
+        // scaled down here first is a picture scaled twice.
         client = await CoreClient.start({
           engine: this.engine,
           deviceId: this.id,
-          maxWidth: PREVIEW_EDGE,
-          maxHeight: PREVIEW_EDGE,
+          codec: 'h264',
+          maxFrameRate: PREVIEW_FPS,
         })
         const started = await client.request<{ device?: Record<string, unknown> }>('capture.start', {})
         this.adopt(client, started.device ?? {})
@@ -234,15 +272,25 @@ export class DeviceSession {
       canRotate: caps.orientation === true,
       rawTouch: input.rawTouch === true,
     }
-    client.onJpeg((jpeg) => this.deliver(jpeg))
+    client.onVideo((packet) => {
+      if (packet.kind === 'config') {
+        this.lastConfig = tagged(SCREEN_CONFIG, packet.avcC)
+        this.deliver(this.lastConfig, false)
+      } else {
+        this.deliver(tagged(SCREEN_PICTURE, packet.data), true)
+      }
+    })
     client.onClose((reason) => {
       this.client = null
       this.previewing = false
+      this.lastConfig = null
       for (const listener of this.closeListeners) listener(reason)
     })
   }
 
   private async engineOrOpen(): Promise<CoreClient> {
+    const now = this.ready()
+    if (now) return now
     await this.open()
     if (!this.client) throw new Error('The device is not open.')
     return this.client
@@ -271,8 +319,7 @@ export class DeviceSession {
    * on its screen changes — so a window opened onto a still home screen showed
    * "Starting the live picture…" until somebody touched it, which reads as
    * broken. When no frame has come a moment after the preview started, the
-   * engine's exact screenshot stands in for the first one. It is a PNG rather
-   * than a JPEG, and the window decodes either.
+   * engine's exact screenshot stands in for the first one, as a PNG still.
    */
   private firstFrameSoon(): void {
     if (this.firstFrameTimer) clearTimeout(this.firstFrameTimer)
@@ -283,7 +330,7 @@ export class DeviceSession {
       void this.screenshot().then(
         (shot) => {
           if (!this.previewing || this.frameCount !== before) return
-          this.deliver(shot.png)
+          this.deliver(tagged(SCREEN_STILL, shot.png), true)
         },
         () => undefined,
       )
@@ -292,15 +339,15 @@ export class DeviceSession {
 
   private frameCount = 0
 
-  private deliver(picture: Buffer): void {
-    this.frameCount += 1
-    this.lastJpeg = picture
-    for (const listener of this.frameListeners) listener(picture)
+  private deliver(packet: Buffer, picture: boolean): void {
+    if (picture) this.frameCount += 1
+    for (const listener of this.screenListeners) listener(packet)
   }
 
-  onFrame(listener: (jpeg: Buffer) => void): () => void {
-    this.frameListeners.add(listener)
-    return () => this.frameListeners.delete(listener)
+  /** Every screen packet, tagged and in order. See the header for the tags. */
+  onScreen(listener: (packet: Buffer) => void): () => void {
+    this.screenListeners.add(listener)
+    return () => this.screenListeners.delete(listener)
   }
 
   onClose(listener: (reason: string) => void): () => void {
@@ -310,36 +357,42 @@ export class DeviceSession {
 
   /* ---------------------------------------------------------------- input -- */
 
+  /*
+   * Input goes out the moment it is asked for. Each verb below takes the open
+   * engine without an await when there is one, so a touch is written to the
+   * socket in the same turn it arrived in — in arrival order, which is what a
+   * finger's down, moves and up depend on — and never waits behind anything.
+   */
   async tap(x: number, y: number, holdMs?: number): Promise<void> {
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     if (holdMs !== undefined && holdMs >= 400) await client.request('input.longPress', { x, y, durationMs: holdMs })
     else await client.request('input.tap', { x, y })
   }
 
   /** One phase of a finger on the glass — what a mouse drag on the page becomes. */
   async touch(phase: 'down' | 'move' | 'up', x: number, y: number): Promise<void> {
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     await client.request('input.touch', { contactId: 0, phase, x, y })
   }
 
   async swipe(from: { x: number; y: number }, to: { x: number; y: number }, durationMs = 300): Promise<void> {
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     await client.request('input.swipe', { from, to, durationMs })
   }
 
   async type(text: string): Promise<void> {
     if (text === '') return
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     await client.request('input.typeText', { text })
   }
 
   async key(key: string, modifiers: string[] = []): Promise<void> {
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     await client.request('input.key', { key, ...(modifiers.length > 0 ? { modifiers } : {}) })
   }
 
   async button(button: string): Promise<void> {
-    const client = await this.engineOrOpen()
+    const client = this.ready() ?? (await this.engineOrOpen())
     await client.request('input.button', { button })
   }
 
