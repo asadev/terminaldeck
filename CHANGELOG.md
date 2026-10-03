@@ -10,6 +10,15 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-10-03
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Changed
+
+- **Switching an account no longer touches the session.** Pick another account on a Claude Code session and only the login changes: the same terminal, the same running agent, the same conversation, and the next message goes out on the new account. A small "Switched to …" note confirms it. Codex cannot change accounts while it runs, so it still restarts — it says so first, and now carries the conversation across.
+- **Annotate has one box.** One "What should change?" note covers every numbered marker, the same in the browser and on simulators. The per-marker boxes and the line under the session picker are gone.
+
 ## [0.16.0] — 2026-10-03
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2261,7 +2270,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.16.1
 [0.16.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.16.0
 [0.15.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.15.0
 [0.14.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.14.0
