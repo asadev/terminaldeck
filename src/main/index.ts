@@ -4245,7 +4245,7 @@ function registerIpc(): void {
     sessions: popoutSessions,
     refusal: (id) =>
       copilotRuntimeDeps !== null && copilotState(copilotRuntimeDeps).sessionId === id
-        ? 'The copilot stays in the main window.'
+        ? `${BRAND.assistant} stays in the main window.`
         : null,
     statusOf: (id) => liveStatus.get(id)?.status ?? null,
     announce: (view: PopoutView, event) => {

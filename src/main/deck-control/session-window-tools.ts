@@ -22,6 +22,7 @@
  * listing shows it — the same scope every session tool keeps.
  */
 
+import { BRAND } from '../../shared/brand'
 import { BadArgument, optStr, requireSession, str, type ToolSpec } from './catalogue'
 import { Refused } from './surface'
 
@@ -118,7 +119,7 @@ export function sessionWindowTools(deps: WindowToolDeps): ToolSpec[] {
         'the same process and the same scrollback, and anything typed there goes to the same agent. Optionally ' +
         'put it on a particular display (monitor), by the id or name windows.list gives, or "main". If the ' +
         'session already has its own window, that window is brought to the front (and moved nowhere). Returns ' +
-        'which display it opened on. The copilot cannot be moved out of the main window.',
+        `which display it opened on. ${BRAND.assistant} cannot be moved out of the main window.`,
       index: 'Move a session into its own window, optionally on a named monitor (same live session, not a copy).',
       inputSchema: {
         type: 'object',

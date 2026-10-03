@@ -124,7 +124,7 @@ function rig(options: { disk?: { file: unknown }; displays?: DisplayInfo[] } = {
     mainBounds: () => ({ x: 60, y: 60, width: 1300, height: 860 }),
     showMain: (command) => shownMain.push(command),
     session: (id) => sessions.get(id) ?? null,
-    refusal: (id) => (id === 'copilot' ? 'The copilot stays in the main window.' : null),
+    refusal: (id) => (id === 'copilot' ? 'Hoot stays in the main window.' : null),
     statusOf: () => 'working',
     readFile: () => disk.file,
     writeFile: (file) => {
@@ -209,7 +209,7 @@ describe('a session in its own window', () => {
 
   it('refuses the copilot and a session that is not running, in a sentence', () => {
     const r = rig()
-    expect(r.registry.open('copilot')).toMatchObject({ ok: false, message: 'The copilot stays in the main window.' })
+    expect(r.registry.open('copilot')).toMatchObject({ ok: false, message: 'Hoot stays in the main window.' })
     expect(r.registry.open('nope').ok).toBe(false)
     expect(r.windows).toHaveLength(0)
   })
