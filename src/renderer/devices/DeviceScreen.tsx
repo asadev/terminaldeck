@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ScreenPlayer } from './screen-player'
 import type { DeviceDetails, DevicesBridge } from './devices-bridge'
 
 /**
@@ -6,12 +7,10 @@ import type { DeviceDetails, DevicesBridge } from './devices-bridge'
  *
  * ## Pictures
  *
- * The main process pushes a JPEG each time the screen changes (newest only —
- * `manager.ts` drops the ones a slow window would fall behind on). Each is
- * decoded off the main thread with `createImageBitmap` and painted onto one
- * canvas, so a sixty-frame animation is sixty paints and no layout. The canvas
- * takes the picture's own size, which changes when the device rotates, and the
- * stylesheet fits it into the stage.
+ * The engine's H.264 stream, decoded in hardware and painted at this display's
+ * density — `screen-player.ts` holds all of it, including the measurements that
+ * made it replace a JPEG per change. This component sizes the canvas to fit the
+ * stage and hands the player that size.
  *
  * ## The mouse is a finger
  *
@@ -22,9 +21,12 @@ import type { DeviceDetails, DevicesBridge } from './devices-bridge'
  * press, and a drag becomes one swipe from where it started to where it ended.
  * The scroll wheel scrolls, as a short swipe in the wheel's direction.
  *
- * Moves are sent at most once per animation frame and strictly in order, one
- * after another: a "move" overtaking its "down" on the way to the engine would
- * be a finger appearing mid-gesture.
+ * Every touch is sent the moment it happens — never queued behind the one
+ * before it waiting for an answer, which is what made a drag lag in 0.16.1.
+ * Order is still kept: messages from this window reach the main process in the
+ * order they were sent, and the main process writes each to the engine in the
+ * turn it arrives (`manager.ts`, `session.ts`). Moves go at most once per
+ * animation frame.
  *
  * ## The keyboard is the device's keyboard
  *
@@ -65,51 +67,31 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
   const firstRef = useRef(onFirstFrame)
   firstRef.current = onFirstFrame
 
+  const playerRef = useRef<ScreenPlayer | null>(null)
+
   // Pictures in, while live.
   useEffect(() => {
     if (!live) return
-    let disposed = false
-    let painting = false
-    let pending: Uint8Array | null = null
-    const paint = async (bytes: Uint8Array): Promise<void> => {
-      painting = true
-      try {
-        // JPEG from the live stream, and once in a while a PNG — the first
-        // picture of a screen that is not moving (see `session.ts`). Named by
-        // its own first byte rather than assumed.
-        const blob = new Blob([bytes as BlobPart], { type: bytes[0] === 0x89 ? 'image/png' : 'image/jpeg' })
-        const bitmap = await createImageBitmap(blob)
-        const canvas = canvasRef.current
-        if (!disposed && canvas) {
-          if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-            canvas.width = bitmap.width
-            canvas.height = bitmap.height
-            setPicture({ width: bitmap.width, height: bitmap.height })
-          }
-          canvas.getContext('2d')?.drawImage(bitmap, 0, 0)
-          firstRef.current?.()
-        }
-        bitmap.close()
-      } catch {
-        // One undecodable frame is skipped; the next one replaces it.
-      } finally {
-        painting = false
-        if (pending && !disposed) {
-          const next = pending
-          pending = null
-          void paint(next)
-        }
-      }
-    }
-    const off = bridge.onDeviceFrame((id, bytes) => {
-      if (id !== device.id) return
-      if (painting) pending = bytes
-      else void paint(bytes)
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const player = new ScreenPlayer(canvas, {
+      // Watching again resends the decoder configuration and asks the engine
+      // for a keyframe — the fresh start a decoder that fell behind needs.
+      needKeyframe: () => void bridge.deviceWatch(device.id, true).catch(() => undefined),
+      onPicture: (size) => {
+        setPicture(size)
+        firstRef.current?.()
+      },
+    })
+    playerRef.current = player
+    const off = bridge.onDeviceFrame((id, packet) => {
+      if (id === device.id) player.push(packet)
     })
     void bridge.deviceWatch(device.id, true).catch(() => undefined)
     return () => {
-      disposed = true
       off()
+      player.dispose()
+      if (playerRef.current === player) playerRef.current = null
       void bridge.deviceWatch(device.id, false).catch(() => undefined)
     }
   }, [bridge, device.id, live])
@@ -132,11 +114,23 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
     return () => observer.disconnect()
   }, [picture])
 
+  // The canvas's own pixels: its shown size times this display's density, so
+  // a Retina panel gets one sharp resample instead of a blurry upscale. Asked
+  // again when the window moves to a display of another density.
+  useLayoutEffect(() => {
+    if (!fit) return
+    const apply = (): void => playerRef.current?.resize(fit, window.devicePixelRatio || 1)
+    apply()
+    const query = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
+    query?.addEventListener?.('change', apply)
+    return () => query?.removeEventListener?.('change', apply)
+  }, [fit])
+
   /* ---------------------------------------------------------------- input -- */
 
-  const chain = useRef<Promise<unknown>>(Promise.resolve())
+  // Sent at once; see the header for why order survives without a queue.
   const send = (step: () => Promise<unknown>): void => {
-    chain.current = chain.current.then(step, step).catch(() => undefined)
+    void step().catch(() => undefined)
   }
   const press = useRef<{ x: number; y: number; at: number; moved: boolean; last: { x: number; y: number } } | null>(null)
   const moveFrame = useRef(0)

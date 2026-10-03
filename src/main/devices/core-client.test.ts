@@ -143,6 +143,23 @@ describe('talking to the device engine', () => {
     expect(seen).toEqual(['frame-1', 'frame-2'])
   })
 
+  it('asks for the H.264 stream when told to, and hands on its configuration and pictures as they came', async () => {
+    fake = await fakeEngine((method, _params, socket, id) => {
+      reply(socket, id, { result: method === 'hello' ? { ...HELLO, codec: 'h264' } : { enabled: true } })
+      if (method === 'capture.preview') {
+        socket.write(encodeFrame(FRAME.h264Config, Buffer.from([1, 0x64, 0, 0x33])))
+        socket.write(encodeFrame(FRAME.h264Data, Buffer.from([0, 0, 0, 0, 0, 0, 0, 7, 1, 0xaa])))
+      }
+    })
+    client = await CoreClient.attach(fake.path, TOKEN, { codec: 'h264', maxFrameRate: 60 })
+    expect(fake.requests[0].params).toMatchObject({ codecs: ['h264'], maxFrameRate: 60 })
+    const seen: string[] = []
+    client.onVideo((packet) => seen.push(packet.kind === 'config' ? `config ${packet.avcC.toString('hex')}` : `chunk ${packet.data.toString('hex')}`))
+    await client.request('capture.preview', { enabled: true })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(seen).toEqual(['config 01640033', 'chunk 000000000000000701aa'])
+  })
+
   it('matches a screenshot to the PNG that follows its answer, one at a time', async () => {
     let shots = 0
     fake = await fakeEngine((method, _params, socket, id) => {

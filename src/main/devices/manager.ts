@@ -54,50 +54,37 @@ export interface ManagerOptions {
 }
 
 /**
- * Pictures to one window, newest only.
+ * The screen stream to one window, every packet, in order.
  *
- * The engine sends a frame per screen change, which during an animation is
- * sixty a second. A window that is slow to paint must get the newest picture,
- * not a queue of stale ones, so each window holds at most one unsent frame and
- * a send happens no more often than {@link FRAME_GAP_MS}.
+ * It used to hold only the newest JPEG and send at most one every 33 ms —
+ * right for whole pictures, and a cap of thirty frames a second that this
+ * file put on the stream itself. An H.264 stream cannot be thinned like that:
+ * each coded picture is a difference from the one before, so dropping one
+ * breaks every picture after it until the next keyframe. So everything is
+ * passed straight on, and a window that falls behind recovers the way a video
+ * player does — it drops what it has not decoded and asks for a keyframe, by
+ * watching again (`DeviceScreen.tsx`).
  */
-const FRAME_GAP_MS = 33
-
-class FramePump {
-  private held: Buffer | null = null
-  private timer: ReturnType<typeof setTimeout> | null = null
-  private lastSent = 0
+class ScreenPump {
+  private stopped = false
 
   constructor(
     private readonly viewer: Viewer,
     private readonly deviceId: string,
   ) {}
 
-  push(jpeg: Buffer): void {
-    this.held = jpeg
-    if (this.timer) return
-    const wait = Math.max(0, this.lastSent + FRAME_GAP_MS - Date.now())
-    this.timer = setTimeout(() => this.flush(), wait)
-  }
-
-  private flush(): void {
-    this.timer = null
-    const frame = this.held
-    this.held = null
-    if (!frame || this.viewer.isDestroyed()) return
-    this.lastSent = Date.now()
-    this.viewer.send('devices:frame', this.deviceId, frame)
+  push(packet: Buffer): void {
+    if (this.stopped || this.viewer.isDestroyed()) return
+    this.viewer.send('devices:frame', this.deviceId, packet)
   }
 
   stop(): void {
-    if (this.timer) clearTimeout(this.timer)
-    this.timer = null
-    this.held = null
+    this.stopped = true
   }
 }
 
 interface Watch {
-  pump: FramePump
+  pump: ScreenPump
   off(): void
 }
 
@@ -222,17 +209,21 @@ export class DeviceManager {
       return
     }
     const session = await this.session(id)
-    if (!viewers.has(viewer.id)) {
-      const pump = new FramePump(viewer, id)
-      const off = session.onFrame((jpeg) => pump.push(jpeg))
-      viewers.set(viewer.id, { pump, off })
+    let watch = viewers.get(viewer.id)
+    if (!watch) {
+      const pump = new ScreenPump(viewer, id)
+      const off = session.onScreen((packet) => pump.push(packet))
+      watch = { pump, off }
+      viewers.set(viewer.id, watch)
     }
     this.watches.set(id, viewers)
+    // The decoder configuration first, so a window joining mid-stream can
+    // decode the keyframe `setPreview` is about to ask for. Watching again —
+    // which a window does when its decoder fell behind — lands here too, and
+    // gets the same fresh start.
+    const config = session.screenConfig
+    if (config) watch.pump.push(config)
     await session.setPreview(true)
-    // The newest frame now, so a window that comes back to a still screen does
-    // not wait for something to change before it shows anything.
-    const latest = session.latestFrame
-    if (latest) viewers.get(viewer.id)?.pump.push(latest)
   }
 
   /** Forget a window entirely — it closed or reloaded. Through the same queue as everything else. */
@@ -267,28 +258,48 @@ export class DeviceManager {
 
   /* ------------------------------------------------------- one call each -- */
 
+  /**
+   * The open session, without waiting, so input is written in the turn it
+   * arrived in — see the note on input in `session.ts`. Falls back to opening
+   * when the device is not open yet, which is the one case that has to wait.
+   */
+  private inputTo(id: string): DeviceSession | Promise<DeviceSession> {
+    const open = this.sessions.get(id)
+    if (open?.isOpen) {
+      this.touchIdle(id)
+      return open
+    }
+    return this.session(id)
+  }
+
   async tap(id: string, x: number, y: number, holdMs?: number): Promise<void> {
-    await (await this.session(id)).tap(x, y, holdMs)
+    const to = this.inputTo(id)
+    await (to instanceof Promise ? (await to).tap(x, y, holdMs) : to.tap(x, y, holdMs))
   }
 
   async touch(id: string, phase: 'down' | 'move' | 'up', x: number, y: number): Promise<void> {
-    await (await this.session(id)).touch(phase, x, y)
+    const to = this.inputTo(id)
+    await (to instanceof Promise ? (await to).touch(phase, x, y) : to.touch(phase, x, y))
   }
 
   async swipe(id: string, from: { x: number; y: number }, to: { x: number; y: number }, durationMs?: number): Promise<void> {
-    await (await this.session(id)).swipe(from, to, durationMs)
+    const at = this.inputTo(id)
+    await (at instanceof Promise ? (await at).swipe(from, to, durationMs) : at.swipe(from, to, durationMs))
   }
 
   async type(id: string, text: string): Promise<void> {
-    await (await this.session(id)).type(text)
+    const to = this.inputTo(id)
+    await (to instanceof Promise ? (await to).type(text) : to.type(text))
   }
 
   async key(id: string, key: string, modifiers?: string[]): Promise<void> {
-    await (await this.session(id)).key(key, modifiers)
+    const to = this.inputTo(id)
+    await (to instanceof Promise ? (await to).key(key, modifiers) : to.key(key, modifiers))
   }
 
   async button(id: string, button: string): Promise<void> {
-    await (await this.session(id)).button(button)
+    const to = this.inputTo(id)
+    await (to instanceof Promise ? (await to).button(button) : to.button(button))
   }
 
   async rotate(id: string, to?: Orientation): Promise<Orientation> {

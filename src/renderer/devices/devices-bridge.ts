@@ -88,7 +88,8 @@ export interface DevicesBridge {
   deviceFreeze(id: string): Promise<FrozenScreen>
   annotateSave(png: string, round: AnnotationRound): Promise<{ path: string; width: number; height: number }>
   annotateSent(roundId: string, sentTo: { sessionId: string; label: string }): Promise<void>
-  onDeviceFrame(listener: (id: string, jpeg: Uint8Array) => void): () => void
+  /** Screen packets, each tagged with the engine's frame kind — see `screen-player.ts`. */
+  onDeviceFrame(listener: (id: string, packet: Uint8Array) => void): () => void
   onDeviceClosed(listener: (id: string, reason: string) => void): () => void
   /** The browser's own reveal: both kinds of picture land in one folder. */
   browserRevealScreenshot?(path: string): Promise<void>
