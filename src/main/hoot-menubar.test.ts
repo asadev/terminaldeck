@@ -212,6 +212,7 @@ function rig(options: { hoot?: 'running' | 'stopped'; store?: Record<string, unk
   const bar = createHootMenuBar(deps)
   return {
     bar,
+    deps,
     trays,
     panels,
     said,
@@ -380,6 +381,35 @@ describe('the panel under the owl', () => {
     expect(r.opened).toEqual(['hoot-settings'])
     items[3].click?.()
     expect(r.trays[0].destroyed).toBe(true)
+  })
+
+  it('carries the app’s background menu when one is given — the owl is the app’s one menu bar icon', () => {
+    const r = rig()
+    const shownChanged: number[] = []
+    const bar = createHootMenuBar({
+      ...r.deps,
+      appMenuItems: (extras) => [
+        { label: 'Open Terminal Deck' },
+        ...extras.afterOpen,
+        { label: 'Claude Code — api' },
+        ...extras.beforeQuit,
+        { label: 'Quit and Stop All Sessions' },
+      ],
+      onShownChanged: () => shownChanged.push(1),
+    })
+    bar.apply()
+    expect(shownChanged).toHaveLength(1)
+    r.trays.at(-1)?.emit('right-click')
+    const items = r.trays.at(-1)?.menus[0] as Array<{ label?: string }>
+    expect(items.map((item) => item.label)).toEqual([
+      'Open Terminal Deck',
+      'Hoot Settings…',
+      'Claude Code — api',
+      'Hide Hoot from the Menu Bar',
+      'Quit and Stop All Sessions',
+    ])
+    bar.configure({ enabled: false })
+    expect(shownChanged).toHaveLength(2)
   })
 
   it('brings a waiting session to the front in the app and closes', () => {

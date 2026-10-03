@@ -200,6 +200,19 @@ export interface HootMenuBarDeps {
   showSession(id: string): void
   /** Bring the main window forward, on a page when one is named. */
   openApp(page?: 'hoot-settings'): void
+  /**
+   * The app's background menu — the sessions running, open, quit — with the
+   * owl's own entries placed inside it (`residentMenuItems` in `resident.ts`).
+   * The owl is the app's one menu bar icon, so its right-click menu is the menu
+   * the old background tray had, and that tray no longer appears beside it.
+   * Absent: the owl's own entries alone.
+   */
+  appMenuItems?(extras: {
+    afterOpen: MenuItemConstructorOptions[]
+    beforeQuit: MenuItemConstructorOptions[]
+  }): MenuItemConstructorOptions[]
+  /** The owl appeared or went, so whoever keeps the app visible can count icons again. */
+  onShownChanged?(): void
   reducedMotion(): boolean
   /** Whether the system draws this app's surfaces dark right now (`nativeTheme.shouldUseDarkColors`). */
   dark(): boolean
@@ -438,12 +451,16 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   }
 
   function contextMenu(): MenuItemConstructorOptions[] {
-    return [
-      { label: `Open ${BRAND.name}`, click: () => deps.openApp() },
-      { label: `${BRAND.assistant} Settings…`, click: () => deps.openApp('hoot-settings') },
-      { type: 'separator' },
-      { label: `Hide ${BRAND.assistant} from the Menu Bar`, click: () => configure({ enabled: false }) },
-    ]
+    const settings: MenuItemConstructorOptions = {
+      label: `${BRAND.assistant} Settings…`,
+      click: () => deps.openApp('hoot-settings'),
+    }
+    const hide: MenuItemConstructorOptions = {
+      label: `Hide ${BRAND.assistant} from the Menu Bar`,
+      click: () => configure({ enabled: false }),
+    }
+    if (deps.appMenuItems) return deps.appMenuItems({ afterOpen: [settings], beforeQuit: [hide] })
+    return [{ label: `Open ${BRAND.name}`, click: () => deps.openApp() }, settings, { type: 'separator' }, hide]
   }
 
   function addTray(): void {
@@ -479,6 +496,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     retitle()
     blink()
     deps.log?.('menu bar: owl shown', { bounds: made.getBounds() })
+    deps.onShownChanged?.()
   }
 
   function removeTray(): void {
@@ -488,10 +506,12 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     watching = null
     if (panel !== null && !panel.isDestroyed()) panel.destroy()
     panel = null
+    const had = tray !== null
     tray?.destroy()
     tray = null
     moment = null
     title = ''
+    if (had) deps.onShownChanged?.()
   }
 
   function apply(): void {

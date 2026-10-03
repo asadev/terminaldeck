@@ -189,6 +189,17 @@ export interface ResidentDeps {
   stop(id: string): void
   /** End everything and exit for real. */
   quitAll(): void
+  /**
+   * Whether Hoot's owl is in the menu bar right now.
+   *
+   * When it is, the owl *is* the app's menu bar icon: its right-click menu
+   * carries everything this tray offers ({@link residentMenuItems}), and this
+   * class draws no icon of its own — one app, one icon in the menu bar. When the
+   * owl is off, this class draws its own, so an app in the background with its
+   * window closed is never without one. Absent means "no owl", which is every
+   * caller before the owl existed and the headless host.
+   */
+  represented?(): boolean
 }
 
 /**
@@ -201,6 +212,22 @@ export interface ResidentDeps {
  * when nobody is watching.
  */
 function residentMenu(deps: ResidentDeps): Menu {
+  return Menu.buildFromTemplate(residentMenuItems(deps))
+}
+
+/**
+ * The background menu's items, for whichever icon is showing them.
+ *
+ * Exported because there is one menu bar icon, and whose it is depends on a
+ * setting: this class's own tray, or — while Hoot is in the menu bar — the owl,
+ * whose right-click menu (`hoot-menubar.ts`) lists these after its own. One list,
+ * so the two can never offer different ways out.
+ */
+export function residentMenuItems(
+  deps: Pick<ResidentDeps, 'sessions' | 'open' | 'stop' | 'quitAll'>,
+  /** Another icon's own entries: after "Open", and just above the quit. */
+  extras: { afterOpen?: MenuItemConstructorOptions[]; beforeQuit?: MenuItemConstructorOptions[] } = {},
+): MenuItemConstructorOptions[] {
   const live = deps.sessions().filter((meta) => meta.exitCode === null)
   const items: MenuItemConstructorOptions[] = [
     {
@@ -212,6 +239,7 @@ function residentMenu(deps: ResidentDeps): Menu {
     },
     { type: 'separator' },
     { label: `Open ${BRAND.name}`, click: () => deps.open() },
+    ...(extras.afterOpen ?? []),
   ]
 
   if (live.length > 0) {
@@ -233,11 +261,12 @@ function residentMenu(deps: ResidentDeps): Menu {
     }
   }
 
+  if (extras.beforeQuit && extras.beforeQuit.length > 0) items.push({ type: 'separator' }, ...extras.beforeQuit)
   items.push(
     { type: 'separator' },
     { label: 'Quit and Stop All Sessions', click: () => deps.quitAll() },
   )
-  return Menu.buildFromTemplate(items)
+  return items
 }
 
 /**
@@ -253,11 +282,18 @@ function residentMenu(deps: ResidentDeps): Menu {
  */
 export class ResidentPresence {
   private tray: Tray | null = null
+  /** Between `show` and `hide`: the app is in the background and must be visible. */
+  private wanted = false
 
   constructor(private readonly deps: ResidentDeps) {}
 
+  /** True when an icon in the menu bar stands for the app — its own, or Hoot's owl. */
   get visible(): boolean {
-    return this.tray !== null
+    return this.wanted && (this.represented() || this.tray !== null)
+  }
+
+  private represented(): boolean {
+    return this.deps.represented?.() === true
   }
 
   /**
@@ -270,6 +306,24 @@ export class ResidentPresence {
    * instead of hiding, which is only possible if it is told.
    */
   show(): void {
+    this.wanted = true
+    this.reconcile()
+  }
+
+  /**
+   * One icon, never zero and never two.
+   *
+   * While Hoot's owl is in the menu bar it is the icon, so this class's own tray
+   * goes. When the owl is turned off with the app in the background, this
+   * class's own tray comes back the same moment — `index.ts` calls `refresh`
+   * when the owl's setting changes — so the app is never left invisible.
+   */
+  private reconcile(): void {
+    if (!this.wanted || this.represented()) {
+      this.tray?.destroy()
+      this.tray = null
+      return
+    }
     if (this.tray === null) {
       try {
         this.tray = new Tray(trayImage())
@@ -283,11 +337,18 @@ export class ResidentPresence {
         return
       }
     }
-    this.refresh()
+    this.redraw()
   }
 
-  /** Redraw the menu, if there is one. Safe to call when the app has a window. */
+  /**
+   * Bring the icon up to date: whose it is, and its menu. Safe to call when the
+   * app has a window — it does nothing until `show`.
+   */
   refresh(): void {
+    this.reconcile()
+  }
+
+  private redraw(): void {
     if (this.tray === null) return
     const live = this.deps.sessions().filter((meta) => meta.exitCode === null).length
     this.tray.setToolTip(
@@ -297,6 +358,7 @@ export class ResidentPresence {
   }
 
   hide(): void {
+    this.wanted = false
     this.tray?.destroy()
     this.tray = null
   }

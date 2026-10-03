@@ -27,6 +27,8 @@ import {
   QUIT_BUTTONS,
   ResidentPresence,
   needsTrayToBeVisible,
+  residentMenuItems,
+  type ResidentDeps,
   plannedQuit,
   quitAnswer,
   quitQuestion,
@@ -1440,6 +1442,11 @@ function wireMenuBar(): HootMenuBar | null {
       if (page === undefined || window === null || window.isDestroyed()) return
       void window.webContents.executeJavaScript(uiDoCall({ kind: 'settings', target: 'copilot' })).catch(() => undefined)
     },
+    // The owl is the app's one menu bar icon: its right-click menu is the
+    // background menu (sessions, open, quit) with Hoot's own entries in it, and
+    // the background tray steps aside while the owl is there — see `presence`.
+    appMenuItems: (extras) => residentMenuItems(residentDeps, extras),
+    onShownChanged: () => presence.refresh(),
     log: (message, detail) => logger.info('menubar', message, detail),
   })
 }
@@ -5398,7 +5405,7 @@ const keepAlive = new ProcessKeepAlive()
  * runs. Constructing a `ResidentPresence` creates no `Tray` — `show()` does —
  * so this costs nothing on a launch that never goes to the background.
  */
-const presence = new ResidentPresence({
+const residentDeps: ResidentDeps = {
   sessions: () => ptys.list(),
   open: () => {
     if (mainWindow !== null && !mainWindow.isDestroyed()) {
@@ -5415,6 +5422,12 @@ const presence = new ResidentPresence({
     stopping = true
     app.quit()
   },
+}
+const presence = new ResidentPresence({
+  ...residentDeps,
+  // Hoot's owl, when it is in the menu bar, is the app's icon there; the
+  // background tray draws its own only when the owl is off. Never zero, never two.
+  represented: () => hootMenuBar?.isShowing().tray === true,
 })
 
 /** Every session that still has a process. Exited tabs keep their row and are not this. */
