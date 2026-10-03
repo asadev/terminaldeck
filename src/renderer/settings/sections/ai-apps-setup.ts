@@ -322,7 +322,7 @@ export function pushSummary(rows: SubscriptionRow[]): string | null {
  * given the choice — then the long wait still works.
  */
 export const CHATGPT_PUSH_SENTENCE =
-  'To be told without asking, say in a ChatGPT Work chat: “watch my sessions and tell me when one finishes”. Where ChatGPT offers it, it subscribes and this computer tells it the moment it happens; otherwise ask it to call notifications_wait.'
+  'Live push updates work in ChatGPT Work chats, on the web and in the desktop app (with Cloud selected), and may need a connector that signs in. To try it, say in a Work chat: “watch my sessions and tell me when one finishes”. Where ChatGPT does not offer it, ask it to call notifications_wait.'
 
 /** The sentence every agent setup ends with, so an agent waits instead of watching. */
 export const IDLE_SENTENCE =
@@ -477,9 +477,10 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
     }
     return {
       steps: [
-        'In ChatGPT, open Settings, then Apps & Connectors, then Advanced settings, and turn on Developer mode.',
-        `Back in Apps & Connectors choose Create. Name it “${context.name}”, paste the link below as the MCP server URL, and choose No authentication.`,
-        'Confirm you trust it and create it. In a chat, pick Developer mode and then this connector.',
+        // OpenAI's own steps as of October 2026 (developers.openai.com, "Connect and test your plugin").
+        'In ChatGPT, open Settings, then Security and login, and turn on Developer mode.',
+        `Go to ChatGPT Plugins (chatgpt.com/plugins) and select the plus button. Name it “${context.name}”, paste the link below as the MCP server URL, and choose No Authentication.`,
+        'Create it and check the tools it found. In a chat, choose Developer mode from the plus menu and pick this app.',
       ],
       snippet: link,
       missing,

@@ -165,9 +165,18 @@ describe('hearing back from sessions', () => {
   it('tells ChatGPT’s owner how to ask for the push, and honestly that it may not be offered', () => {
     const setup = setupFor('chatgpt', context())
     expect(setup.after).toBe(CHATGPT_PUSH_SENTENCE)
-    expect(CHATGPT_PUSH_SENTENCE).toMatch(/Work chat/)
-    expect(CHATGPT_PUSH_SENTENCE).toMatch(/Where ChatGPT offers it/)
+    expect(CHATGPT_PUSH_SENTENCE).toMatch(/Live push updates work in ChatGPT Work chats, on the web and in the desktop app/)
+    expect(CHATGPT_PUSH_SENTENCE).toMatch(/may need a connector that signs in/)
     expect(CHATGPT_PUSH_SENTENCE).toMatch(/notifications_wait/)
+  })
+
+  it('walks the ChatGPT setup the way OpenAI’s current page does', () => {
+    const steps = setupFor('chatgpt', context()).steps.join(' ')
+    expect(steps).toMatch(/Settings, then Security and login, and turn on Developer mode/)
+    expect(steps).toMatch(/ChatGPT Plugins \(chatgpt\.com\/plugins\) and select the plus button/)
+    expect(steps).toMatch(/choose No Authentication/)
+    expect(steps).toMatch(/Developer mode from the plus menu/)
+    expect(steps).not.toMatch(/Apps & Connectors|Advanced settings/)
   })
 
   it('reads push subscriptions, says what each one pushes where, and sums them up under the key', () => {
