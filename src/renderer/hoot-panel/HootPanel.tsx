@@ -103,7 +103,7 @@ function transitions(phase: Phase): Record<'shape' | 'shadow' | 'rest' | 'ears' 
       shadow: `${transition('transform', t.shape, EASE_OPEN)}, ${transition('opacity', t.shape, EASE_OPEN)}`,
       rest: transition('opacity', t.rest, 'linear'),
       ears: transition('transform', t.shape, EASE_OPEN),
-      full: `${transition('opacity', t.full, 'linear')}, visibility 0ms linear 0ms`,
+      full: transition('opacity', t.full, 'linear'),
     }
   }
   if (phase === 'close') {
@@ -113,7 +113,7 @@ function transitions(phase: Phase): Record<'shape' | 'shadow' | 'rest' | 'ears' 
       shadow: `${transition('transform', t.shape, EASE_CLOSE)}, ${transition('opacity', t.shape, EASE_CLOSE)}`,
       rest: transition('opacity', t.rest, 'linear'),
       ears: transition('transform', t.shape, EASE_CLOSE),
-      full: `${transition('opacity', t.full, 'linear')}, visibility 0ms linear ${t.full[1]}ms`,
+      full: transition('opacity', t.full, 'linear'),
     }
   }
   const t = TIMING.reshape
@@ -122,7 +122,7 @@ function transitions(phase: Phase): Record<'shape' | 'shadow' | 'rest' | 'ears' 
     shadow: `${transition('transform', t.shape, EASE_CLOSE)}, ${transition('opacity', t.shape, EASE_CLOSE)}`,
     rest: transition('opacity', t.rest, 'linear'),
     ears: transition('transform', t.shape, EASE_CLOSE),
-    full: `${transition('opacity', t.rest, 'linear')}, visibility 0ms linear 0ms`,
+    full: transition('opacity', t.rest, 'linear'),
   }
 }
 
@@ -516,15 +516,20 @@ export function HootPanel() {
           )}
         </div>
 
-        {/* Grown: one surface — the tab and the sessions along the top, the conversation filling the rest. */}
+        {/*
+          Grown: one surface — the tab and the sessions along the top, the
+          conversation filling the rest. At rest it is still drawn, transparent
+          and out of reach (`inert`), so the first time it grows there is
+          nothing to paint for the first time in the middle of the move.
+        */}
         <div
           className="hoot-island-full"
+          inert={!snap.expanded}
           style={{
             left: centre - grown.width / 2,
             width: grown.width,
             height: grown.height,
             opacity: snap.expanded ? 1 : 0,
-            visibility: snap.expanded ? 'visible' : 'hidden',
             transition: moving.full,
           }}
         >

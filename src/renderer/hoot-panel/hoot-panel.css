@@ -178,6 +178,11 @@ html.hoot-panel-page {
   will-change: opacity;
 }
 
+/* At rest the panel is drawn but out of reach, so nothing on it takes the pointer through the pill. */
+.hoot-island:not([data-expanded]) .hoot-island-full {
+  pointer-events: none;
+}
+
 /* The top row: on the same ground as everything under it. */
 .hoot-island-head {
   display: flex;
