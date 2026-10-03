@@ -251,9 +251,10 @@
 
 .an-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2);
+  min-height: var(--row-h);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-md);
   transition: background var(--dur-fast) var(--ease);
 }
@@ -262,52 +263,16 @@
   background: var(--fill-quaternary);
 }
 
-.an-row > .an-badge {
-  margin-top: 2px;
-}
-
-.an-row-body {
-  display: flex;
+/* What the marker is on — the row's whole content now that the note is one box
+   at the foot of the card rather than one under every marker. */
+.an-row > .an-element {
   flex: 1;
-  flex-direction: column;
-  gap: var(--sp-1);
   min-width: 0;
-}
-
-.an-element {
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.an-note {
-  width: 100%;
-  min-height: calc(var(--control-h) * 1.6);
-  padding: var(--sp-1) var(--sp-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--fill-tertiary);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  /* Grows with what is written instead of wearing a resize grip — a grip in
-     the corner of every note is a line drawn for no reason. */
-  field-sizing: content;
-  resize: none;
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.an-note::placeholder {
-  color: var(--text-muted);
-}
-
-.an-note:focus {
-  outline: none;
-  background: var(--bg-primary);
-  box-shadow: 0 0 0 2px var(--accent-line);
 }
 
 .an-remove {
@@ -326,7 +291,8 @@
   color: var(--color-critical);
 }
 
-/* The send box sits at the foot of the card whatever the list's length. */
+/* The send box — and with it the one note, "What should change?" — sits at the
+   foot of the card whatever the list's length. */
 .an-send {
   margin-top: auto;
 }

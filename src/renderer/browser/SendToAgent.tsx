@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { pathForSession } from '../session-transfer'
 import type { AgentTarget } from './useAgentTarget'
 
@@ -40,16 +40,28 @@ interface Props {
    * folder of drafts nobody asked for, so the picture is drawn and saved here,
    * once, at the press — and then travels exactly like {@link Props.attach}.
    * Null means it could not be made, and nothing is sent.
-   */
-  prepare?: () => Promise<{ path: string } | null>
-  /**
-   * Why there is nothing to send yet, when the sender itself knows.
    *
-   * An Annotate round with no notes written is a session picked and a button
-   * with nothing behind it. Said on the button's own hover and under it, the
-   * same way the no-session reason is, so the two reasons share one slot.
+   * Handed what was typed, because for Annotate the box *is* the note: the
+   * round that is saved for `devices.annotations` has to carry it.
+   */
+  prepare?: (typed: string) => Promise<{ path: string } | null>
+  /**
+   * Nothing to send yet, when the sender itself knows — Annotate with no
+   * marker on the picture. Send stays off; it says so only on the button's own
+   * hover, never as a line under the box.
    */
   notReady?: string
+  /**
+   * The box must have something in it before Send turns on. Annotate's one box
+   * is "What should change?", and a round with markers and no words says
+   * nothing an agent can act on. No sentence for it: the empty box asking the
+   * question is the instruction.
+   */
+  needsText?: boolean
+  /** A box that grows with what is written, for a note longer than a line. */
+  multiline?: boolean
+  /** The box takes the caret whenever this changes — Annotate bumps it when a marker lands. */
+  focusKey?: number
   placeholder: string
   /** The word on the button before anything has been sent. */
   action: string
@@ -76,7 +88,19 @@ interface Props {
  * moment the field is touched again — a button that says Sent about a line
  * nobody has sent is the same lie as one that says nothing at all.
  */
-export function SendToAgent({ agent, compose, attach, prepare, notReady = '', placeholder, action, onSent }: Props) {
+export function SendToAgent({
+  agent,
+  compose,
+  attach,
+  prepare,
+  notReady = '',
+  needsText = false,
+  multiline = false,
+  focusKey,
+  placeholder,
+  action,
+  onSent,
+}: Props) {
   const [instruction, setInstruction] = useState('')
   const [sent, setSent] = useState(false)
   const [sending, setSending] = useState(false)
@@ -90,8 +114,13 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
    */
   const [trouble, setTrouble] = useState('')
 
-  const blocked = agent.target === null || notReady !== ''
+  const blocked = agent.target === null || notReady !== '' || (needsText && instruction.trim() === '')
   const reason = agent.target === null ? agent.reason : notReady
+
+  const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (focusKey !== undefined && focusKey > 0) field.current?.focus()
+  }, [focusKey])
 
   /*
    * Awaited, since a target can be on another computer.
@@ -129,7 +158,7 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
       let handed = ''
       let file = attach
       if (prepare) {
-        const made = await prepare()
+        const made = await prepare(instruction)
         if (made === null) {
           setTrouble('The picture could not be saved, so nothing was sent.')
           return
@@ -156,6 +185,17 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
     })().finally(() => setSending(false))
   }
 
+  /*
+   * The one line under the box, or none. What failed comes first; then a
+   * reason the choice itself carries — the build cannot list sessions, none
+   * are open, the chosen one exited. Nothing chosen yet is not one of them any
+   * more: Asad, on Annotate in 0.16.0, *"remove that line"* — the greyed Send
+   * beside an empty picker says it, and a sentence under every popup saying it
+   * again was noise. `notReady` is hover-only for the same reason.
+   */
+  const line =
+    trouble !== '' ? trouble : agent.problem !== '' ? agent.problem : agent.target === null ? agent.reason : ''
+
   return (
     <div className="bw-send">
       <label className="bw-send-target">
@@ -181,23 +221,29 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
         </select>
       </label>
 
-      <input
-        className="bw-instruction"
-        type="text"
-        value={instruction}
-        placeholder={placeholder}
-        aria-label="Message for the agent"
-        onChange={(event) => {
-          setInstruction(event.target.value)
-          setSent(false)
-          setTrouble('')
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter') return
-          event.preventDefault()
-          send()
-        }}
-      />
+      {(() => {
+        const common = {
+          ref: field,
+          className: multiline ? 'bw-instruction bw-instruction-multi' : 'bw-instruction',
+          value: instruction,
+          placeholder,
+          'aria-label': 'Message for the agent',
+          onChange: (event: { target: { value: string } }) => {
+            setInstruction(event.target.value)
+            setSent(false)
+            setTrouble('')
+          },
+          // Return sends, in both shapes. Shift-Return is a new line in the
+          // growing box only — it is flattened to one line on the way into the
+          // terminal anyway, so it is a convenience for the writer, not a format.
+          onKeyDown: (event: { key: string; shiftKey: boolean; preventDefault(): void }) => {
+            if (event.key !== 'Enter' || (multiline && event.shiftKey)) return
+            event.preventDefault()
+            send()
+          },
+        }
+        return multiline ? <textarea rows={2} {...common} /> : <input type="text" {...common} />
+      })()}
 
       <button
         type="button"
@@ -205,7 +251,7 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
         disabled={blocked || sending}
         // The reason, on the control that is refusing. A greyed button with no
         // explanation is what this whole change is against.
-        title={blocked ? reason : `Send to ${agent.target?.label ?? ''}`}
+        title={blocked ? reason || undefined : `Send to ${agent.target?.label ?? ''}`}
         onClick={send}
       >
         {sending ? 'Sending…' : sent ? 'Sent' : action}
@@ -221,9 +267,9 @@ export function SendToAgent({ agent, compose, attach, prepare, notReady = '', pl
         so that a future case where they could be does not stack two sentences
         under a 26rem popup.
       */}
-      {(blocked || trouble !== '' || agent.problem !== '') && (
+      {line !== '' && (
         <p className="bw-send-reason" role="status">
-          {blocked ? reason : trouble !== '' ? trouble : agent.problem}
+          {line}
         </p>
       )}
     </div>

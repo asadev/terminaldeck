@@ -283,7 +283,9 @@ describe('whyDisabled', () => {
   const sessions = readSessions(LIVE)
 
   it('says which of the reasons it is', () => {
-    expect(whyDisabled('', sessions, true)).toMatch(/Choose a session/)
+    // Nothing chosen says nothing: the empty picker and the greyed Send are
+    // the whole of it. See the note in `whyDisabled`.
+    expect(whyDisabled('', sessions, true)).toBe('')
     expect(whyDisabled('', [], true)).toMatch(/No sessions are open/)
     expect(whyDisabled('', [], false)).toMatch(/cannot list your sessions/)
     expect(whyDisabled('gone', sessions, true)).toMatch(/gone/i)
@@ -313,7 +315,9 @@ describe('whyDisabled', () => {
     // listing, and now the case that works.
     const rows = readSessions({ here: [], elsewhere: MACHINES })
     expect(rows).toHaveLength(3)
-    expect(whyDisabled('', rows, true)).toMatch(/Choose a session/)
+    // Not "No sessions are open" — there are three — and, since nothing chosen
+    // says nothing at all, no sentence.
+    expect(whyDisabled('', rows, true)).toBe('')
     expect(whyDisabled('r1', rows, true)).toBe('')
   })
 

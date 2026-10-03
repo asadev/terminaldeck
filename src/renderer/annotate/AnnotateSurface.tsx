@@ -3,9 +3,7 @@ import {
   addAnnotation,
   composeHandoff,
   describeElement,
-  editNote,
   removeAnnotation,
-  written,
   type AnnotatedElement,
   type Annotation,
   type AnnotateWhere,
@@ -19,7 +17,13 @@ import { drawMarkedPicture, inkOf } from './marked-picture'
 import './annotate.css'
 
 /**
- * Annotate: the frozen screen, the markers on it, a note on each, and Send.
+ * Annotate: the frozen screen, the numbered markers on it, one note, and Send.
+ *
+ * One note for the whole round, in the box at the foot of the card — the same
+ * box, with the same words, in the browser and on a device. 0.16.0 also put a
+ * note box under every marker; Asad, reviewing it: *keep only one box*. He
+ * points at several things and says what he wants about them together, by
+ * number, so the markers are the list and the box is the sentence.
  *
  * ## One surface, two places
  *
@@ -147,16 +151,18 @@ export function AnnotateSurface({
   const roundId = useMemo(() => newId('round'), [])
   const createdAt = useMemo(() => Date.now(), [])
   const [annotations, setAnnotations] = useState<Annotation[]>(() =>
-    initial ? addAnnotation([], { id: newId('a'), rect: initial.rect, element: initial.element, note: '' }) : [],
+    initial ? addAnnotation([], { id: newId('a'), rect: initial.rect, element: initial.element }) : [],
   )
   const [focused, setFocused] = useState<string>(() => annotations[0]?.id ?? '')
+  // Bumped each time a marker lands, so the note box takes the caret: click,
+  // then type, is the whole of it.
+  const [focusKey, setFocusKey] = useState(() => (initial ? 1 : 0))
   const [hoverRect, setHoverRect] = useState<NormRect | null>(null)
   const [picking, setPicking] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const pictureRef = useRef<HTMLDivElement | null>(null)
   const inkRef = useRef<HTMLSpanElement | null>(null)
-  const noteRefs = useRef(new Map<string, HTMLTextAreaElement>())
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
 
   /*
@@ -181,13 +187,6 @@ export function AnnotateSurface({
     return () => observer.disconnect()
   }, [frame.width, frame.height])
 
-  // The newest marker's note gets the caret, so a click and then typing is the
-  // whole of adding one.
-  useEffect(() => {
-    if (focused === '') return
-    const node = noteRefs.current.get(focused)
-    if (node && document.activeElement !== node) node.focus()
-  }, [focused])
 
   const pointOf = (event: { clientX: number; clientY: number }): { x: number; y: number } | null => {
     const node = pictureRef.current
@@ -213,10 +212,10 @@ export function AnnotateSurface({
             id,
             rect: found?.rect ?? boxAround(x, y),
             element: found?.element ?? null,
-            note: '',
           }),
         )
         setFocused(id)
+        setFocusKey((key) => key + 1)
       } finally {
         setPicking(false)
       }
@@ -225,7 +224,7 @@ export function AnnotateSurface({
   )
 
   const leave = (): void => {
-    if (written(annotations).length > 0 && !confirming) {
+    if (annotations.length > 0 && !confirming) {
       setConfirming(true)
       return
     }
@@ -251,13 +250,13 @@ export function AnnotateSurface({
     where,
     frame: { width: frame.width, height: frame.height },
     annotations,
+    note: '',
   }
-  const notes = written(annotations)
 
-  const prepare = async (): Promise<{ path: string } | null> => {
-    const drawn = await drawMarkedPicture(frame.image, notes, inkOf(inkRef.current))
+  const prepare = async (typed: string): Promise<{ path: string } | null> => {
+    const drawn = await drawMarkedPicture(frame.image, annotations, inkOf(inkRef.current))
     if (!drawn) return null
-    const kept = await save(drawn.png, { ...round, annotations: notes, frame: { width: drawn.width, height: drawn.height } })
+    const kept = await save(drawn.png, { ...round, note: typed, frame: { width: drawn.width, height: drawn.height } })
     return kept ? { path: kept.path } : null
   }
 
@@ -303,7 +302,7 @@ export function AnnotateSurface({
         </div>
       </div>
 
-      <aside className="an-panel" aria-label="Notes">
+      <aside className="an-panel" aria-label="Markers and note">
         <header className="an-head">
           <span className="an-title">Annotate</span>
           <span className="an-where" title={shortWhere(where)}>
@@ -317,7 +316,7 @@ export function AnnotateSurface({
         {confirming && (
           <div className="an-confirm" role="alert">
             <span>
-              Discard {notes.length} note{notes.length === 1 ? '' : 's'}?
+              Discard {annotations.length} marker{annotations.length === 1 ? '' : 's'}?
             </span>
             <button type="button" className="an-text-button" onClick={() => setConfirming(false)}>
               Keep
@@ -331,7 +330,7 @@ export function AnnotateSurface({
         {notice !== '' && <p className="an-notice">{notice}</p>}
 
         {annotations.length === 0 ? (
-          <p className="an-empty">Click anything on the {noun} to add a note.</p>
+          <p className="an-empty">Click anything on the {noun} to mark it.</p>
         ) : (
           <ol className="an-list">
             {annotations.map((entry) => (
@@ -339,36 +338,13 @@ export function AnnotateSurface({
                 <b className="an-badge" aria-hidden="true">
                   {entry.n}
                 </b>
-                <div className="an-row-body">
-                  <span className="an-element" title={describeElement(entry.element)}>
-                    {describeElement(entry.element)}
-                  </span>
-                  <textarea
-                    ref={(node) => {
-                      if (node) noteRefs.current.set(entry.id, node)
-                      else noteRefs.current.delete(entry.id)
-                    }}
-                    className="an-note"
-                    rows={2}
-                    value={entry.note}
-                    placeholder="What should change?"
-                    aria-label={`Note ${entry.n}`}
-                    onFocus={() => setFocused(entry.id)}
-                    onChange={(event) => setAnnotations((prev) => editNote(prev, entry.id, event.target.value))}
-                    onKeyDown={(event) => {
-                      // Return finishes a note. It becomes one line in the
-                      // terminal anyway, and a newline there would submit it.
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        event.currentTarget.blur()
-                      }
-                    }}
-                  />
-                </div>
+                <span className="an-element" title={describeElement(entry.element)}>
+                  {describeElement(entry.element)}
+                </span>
                 <button
                   type="button"
                   className="an-remove"
-                  aria-label={`Delete note ${entry.n}`}
+                  aria-label={`Delete marker ${entry.n}`}
                   title="Delete"
                   onClick={() => {
                     setAnnotations((prev) => removeAnnotation(prev, entry.id))
@@ -388,10 +364,13 @@ export function AnnotateSurface({
           <SendToAgent
             agent={agent}
             prepare={prepare}
-            notReady={notes.length === 0 ? 'Write a note on at least one marker first.' : ''}
-            compose={(instruction, handed) => composeHandoff({ ...round, annotations: notes }, handed, instruction)}
-            placeholder="Anything else? (optional)"
-            action={notes.length > 1 ? `Send ${notes.length}` : 'Send'}
+            needsText
+            multiline
+            focusKey={focusKey}
+            notReady={annotations.length === 0 ? `Mark something on the ${noun} first.` : ''}
+            compose={(typed, handed) => composeHandoff({ ...round, note: typed }, handed)}
+            placeholder="What should change?"
+            action="Send"
             onSent={() => {
               const target = agent.target
               if (target) onSent?.(roundId, { sessionId: target.id, label: target.label })

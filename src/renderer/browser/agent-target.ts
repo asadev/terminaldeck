@@ -1094,7 +1094,10 @@ export function whyDisabled(
 ): string {
   if (!available) return 'This build cannot list your sessions, so there is nothing to send to.'
   if (sessions.length === 0) return 'No sessions are open. Start one, then choose it here.'
-  if (!chosenId) return 'Choose a session first — this will not guess one for you.'
+  // Nothing chosen yet answers no sentence. It used to — "Choose a session
+  // first — this will not guess one for you." — under every send box, and Asad
+  // asked for it gone: the empty picker beside a greyed Send already says it.
+  if (!chosenId) return ''
   const found = sessions.find((session) => session.id === chosenId)
   if (!found) return 'That session is gone. Choose another one.'
   if (found.ended) return `${found.label} has exited. Choose another one.`

@@ -18,12 +18,21 @@
  * One line, because it is typed into a terminal where a newline submits the
  * prompt. In order: where this is (which device and app, or which address), the
  * picture with the numbered markers drawn on it — by the path the chosen
- * session's own machine knows it by — and then each note with the element it is
- * about. An element is named the way a person would say it, followed by what
- * finds it again in code: an accessibility identifier, a test id, a CSS
- * selector, and the component and source file when the app exposes them. A
- * position is always given as well, as percentages of the picture, so a note
- * on an element with no name at all still says *where*.
+ * session's own machine knows it by — then every marked element by its number,
+ * and last the one note the person wrote about all of them. An element is named
+ * the way a person would say it, followed by what finds it again in code: an
+ * accessibility identifier, a test id, a CSS selector, and the component and
+ * source file when the app exposes them. A position is always given as well, as
+ * percentages of the picture, so a marker on something with no name still says
+ * *where*.
+ *
+ * ## One note, not one per marker
+ *
+ * 0.16.0 put a note box under every marker and a second, optional box at the
+ * bottom. Asad, reviewing it: keep only one box. He points at several things and
+ * says what he wants in one sentence — *"make #1 bold and move #2 above it"* —
+ * because the change is usually about how they relate, not about each alone. So
+ * a round has one `note` and the markers are what it refers to by number.
  *
  * Shared between the window and the main process: the window composes the
  * message, and the main process describes the last round to a model that asks
@@ -71,9 +80,8 @@ export interface Annotation {
   n: number
   /** Normalised to the frozen picture: 0..1 both ways. */
   rect: NormRect
-  /** Null for a point on blank space, which is still a place worth a note. */
+  /** Null for a point on blank space, which is still a place worth marking. */
   element: AnnotatedElement | null
-  note: string
 }
 
 /** One frozen picture and everything pointed at on it. */
@@ -84,6 +92,8 @@ export interface AnnotationRound {
   /** The picture's size in pixels. */
   frame: { width: number; height: number }
   annotations: Annotation[]
+  /** What should change — the one note about every marker, which refers to them by number. */
+  note: string
   /** Set once the marked picture has been written to disk. */
   picture?: { path: string; width: number; height: number }
   /** Set once it has been handed to a session. */
@@ -100,11 +110,6 @@ export function addAnnotation(
   return [...list, { ...entry, n: list.length + 1 }]
 }
 
-/** Change one note; nothing else about it moves. */
-export function editNote(list: readonly Annotation[], id: string, note: string): Annotation[] {
-  return list.map((entry) => (entry.id === id ? { ...entry, note } : entry))
-}
-
 /**
  * Remove one and close the gap.
  *
@@ -114,11 +119,6 @@ export function editNote(list: readonly Annotation[], id: string, note: string):
  */
 export function removeAnnotation(list: readonly Annotation[], id: string): Annotation[] {
   return list.filter((entry) => entry.id !== id).map((entry, index) => ({ ...entry, n: index + 1 }))
-}
-
-/** Annotations with something to say. An empty note is a marker nobody finished. */
-export function written(list: readonly Annotation[]): Annotation[] {
-  return list.filter((entry) => entry.note.trim() !== '')
 }
 
 /* ------------------------------------------------------------ the words -- */
@@ -185,50 +185,53 @@ export function describeWhere(where: AnnotateWhere): string {
   return parts.join(', ')
 }
 
+/** `#1 button "Save" (id save) at 4% across, 44% down, 92% x 6%` */
+export function describeMarker(entry: Annotation): string {
+  const { x, y, width, height } = entry.rect
+  const at = `at ${percent(x)} across, ${percent(y)} down, ${percent(width)} x ${percent(height)}`
+  return `#${entry.n} ${describeElement(entry.element)} ${at}`
+}
+
 /**
  * The exact message a session receives.
  *
  * `picturePath` is the path the *session's* machine knows the marked picture by
  * — `session-transfer.ts` decides that at the moment of the press — and is empty
  * only when nothing could be written, in which case the message says so rather
- * than naming a file that does not exist. `instruction` is whatever the person
- * typed in the send box; it leads, because it is the sentence they chose to say
- * first.
+ * than naming a file that does not exist.
+ *
+ * The markers come first and the note last, so the note can say "#2" and the
+ * agent has already read what #2 is.
  */
-export function composeHandoff(round: AnnotationRound, picturePath: string, instruction = ''): string {
-  const notes = written(round.annotations)
-  const count = `${notes.length} note${notes.length === 1 ? '' : 's'}`
+export function composeHandoff(round: AnnotationRound, picturePath: string): string {
+  const count = `${round.annotations.length} marked element${round.annotations.length === 1 ? '' : 's'}`
   const size = `${round.frame.width} x ${round.frame.height}`
   const picture = picturePath
     ? `picture with the numbered markers: ${picturePath} (${size})`
     : 'the picture could not be saved'
   const head = `[Annotate: ${count} on ${describeWhere(round.where)}; ${picture}]`
-  const body = notes.map((entry) => {
-    const { x, y, width, height } = entry.rect
-    const at = `at ${percent(x)} across, ${percent(y)} down, ${percent(width)} x ${percent(height)}`
-    return `#${entry.n} ${describeElement(entry.element)} ${at}: ${flat(entry.note)}`
-  })
-  const lead = flat(instruction)
-  return [lead, head, ...body].filter(Boolean).join(' ')
+  const marked = round.annotations.map(describeMarker).join('; ')
+  const note = flat(round.note)
+  return [head, marked ? `${marked}.` : '', note ? `What should change: ${note}` : ''].filter(Boolean).join(' ')
 }
 
 /**
  * The same round as plain data for a model that asked for it.
  *
  * Structured rather than the sentence above, because a tool's caller can read
- * fields and should not have to parse prose. Unwritten markers are left out for
- * the same reason they are left out of the message.
+ * fields and should not have to parse prose: the one note, and each marker with
+ * its number, its element and where it is.
  */
 export function roundForTools(round: AnnotationRound): Record<string, unknown> {
   return {
     id: round.id,
     createdAt: new Date(round.createdAt).toISOString(),
     where: round.where,
+    note: flat(round.note),
     picture: round.picture ?? null,
     sentTo: round.sentTo ? { session: round.sentTo.label, at: new Date(round.sentTo.at).toISOString() } : null,
-    annotations: written(round.annotations).map((entry) => ({
+    markers: round.annotations.map((entry) => ({
       n: entry.n,
-      note: flat(entry.note),
       element: entry.element,
       described: describeElement(entry.element),
       rect: entry.rect,

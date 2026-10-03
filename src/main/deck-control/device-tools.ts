@@ -1501,14 +1501,15 @@ export function deviceTools(deps: DeviceToolDeps): ToolSpec[] {
     tier: 'read',
     title: 'Read what a person annotated',
     description:
-      'What a person pointed at and wrote notes on with Annotate — on a phone or simulator screen, or on a ' +
-      'browser page; both kinds are kept here. Each round says where it was made (the device and app, or the ' +
-      'page address), the path of the picture with numbered markers drawn on it, which session it was sent to ' +
-      'if any, and each note with the element it is about — its name, identifier, component and source file ' +
-      'when known — and its rectangle as fractions of the picture. Newest first. count (default 1, at most ' +
+      'What a person marked with Annotate — on a phone or simulator screen, or on a browser page; both kinds ' +
+      'are kept here. Each round says where it was made (the device and app, or the page address), the path of ' +
+      'the picture with numbered markers drawn on it, which session it was sent to if any, the one note the ' +
+      'person wrote about the whole round (it refers to markers by number, "#2"), and each marker by its ' +
+      'number with the element it is on — its name, identifier, component and source file when known — and ' +
+      'its rectangle as fractions of the picture. Newest first. count (default 1, at most ' +
       `${MAX_ROUNDS}) and kind (device or browser) narrow it. Only rounds made since the app last started.`,
     index:
-      'Read the notes a person made with Annotate on a device screen or a browser page: each element, its note, the marked picture.',
+      'Read what a person marked with Annotate on a device screen or a browser page: the numbered elements, their one note, the marked picture.',
     inputSchema: ANNOTATIONS_SCHEMA,
     summary: (args) => {
       const count = intIn(args, 'count', 1, MAX_ROUNDS)

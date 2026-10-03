@@ -41,7 +41,11 @@ export interface AgentTarget {
   choose(id: string): void
   /** The session a send would reach right now, or null. */
   target: AgentSession | null
-  /** Why sending is off, in a sentence. Empty when it is on. */
+  /**
+   * Why sending is off, in a sentence — or empty, which is either "it is on" or
+   * "nothing is chosen yet". The second says nothing on purpose (see
+   * `whyDisabled`); `target === null` is what decides whether a send is off.
+   */
   reason: string
   /**
    * Put a line into the chosen session, and answer whether it landed.

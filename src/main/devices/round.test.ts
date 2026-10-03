@@ -9,9 +9,11 @@ describe('a round from the window', () => {
       createdAt: 5,
       where: { kind: 'device', place: 'iOS Simulator', name: 'x'.repeat(500), deviceId: 'ios:1', evil: 'dropped' },
       frame: { width: 1206.4, height: -3 },
+      note: 'Make #1 bold.',
       annotations: [
+        // A per-marker note from an older window is dropped: a round has one note.
         { id: 'a', n: 9, rect: { x: -1, y: 2, width: 0.5, height: 0.5 }, note: 'one', element: { role: 'button', script: 'x' } },
-        { id: 'b', rect: {}, note: 42, element: 'not an object' },
+        { id: 'b', rect: {}, element: 'not an object' },
       ],
     })
     expect(round.where).toEqual({ kind: 'device', place: 'iOS Simulator', name: 'x'.repeat(200), deviceId: 'ios:1' })
@@ -19,12 +21,14 @@ describe('a round from the window', () => {
     expect(round.annotations.map((a) => a.n)).toEqual([1, 2])
     expect(round.annotations[0].rect).toEqual({ x: 0, y: 1, width: 0.5, height: 0.5 })
     expect(round.annotations[0].element).toEqual({ role: 'button' })
-    expect(round.annotations[1].note).toBe('')
+    expect(round.note).toBe('Make #1 bold.')
+    expect('note' in round.annotations[0]).toBe(false)
     expect(round.annotations[1].element).toBeNull()
   })
 
   it('makes up an id for a round that came without one, rather than failing', () => {
     expect(readRound(null).id).toMatch(/^round-/)
+    expect(readRound(null).note).toBe('')
   })
 })
 
