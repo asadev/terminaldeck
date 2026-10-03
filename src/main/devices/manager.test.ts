@@ -142,6 +142,55 @@ describe('watching a device', () => {
     expect(session.preview).toBe(false)
   })
 
+  it('sends a hidden window nothing, stops the engine sending, and keeps the device open', async () => {
+    // Minimised or covered: no pictures cross into the window, and when every
+    // watcher is hidden the engine stops sending. The device stays open, so
+    // coming back is a keyframe rather than a restart a minute later.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const { manager, session } = make()
+    const window = viewer()
+    await manager.watch(window, ID, true)
+    await manager.watch(window, ID, 'paused')
+    expect(session.preview).toBe(false)
+    window.sent.length = 0
+    session.emit(Buffer.from([0x11, 1]))
+    expect(window.sent).toEqual([])
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(session.closed).toBe(false)
+  })
+
+  it('shows a window that comes back the configuration first, then the stream again', async () => {
+    const { manager, session } = make()
+    const window = viewer()
+    await manager.watch(window, ID, 'paused')
+    expect(session.preview).toBe(false)
+    await manager.watch(window, ID, true)
+    expect(session.preview).toBe(true)
+    session.emit(Buffer.from([0x11, 9]))
+    const packets = window.sent.filter(([channel]) => channel === 'devices:frame').map(([, args]) => [...(args[1] as Buffer)])
+    expect(packets).toEqual([
+      [0x10, 1, 0x64, 0, 0x33],
+      [0x11, 9],
+    ])
+  })
+
+  it('keeps the pictures coming while any one window can still see them', async () => {
+    const { manager, session } = make()
+    const a = viewer(1)
+    const b = viewer(2)
+    await manager.watch(a, ID, true)
+    await manager.watch(b, ID, true)
+    await manager.watch(a, ID, 'paused')
+    expect(session.preview).toBe(true)
+    await manager.watch(b, ID, 'paused')
+    expect(session.preview).toBe(false)
+    await manager.watch(b, ID, true)
+    expect(session.preview).toBe(true)
+    // The one that can see leaves; the one left is hidden, so the engine stops.
+    await manager.watch(b, ID, false)
+    expect(session.preview).toBe(false)
+  })
+
   it('forgets a window that closed', async () => {
     const { manager, session } = make()
     await manager.watch(viewer(7), ID, true)

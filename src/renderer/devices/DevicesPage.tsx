@@ -63,6 +63,26 @@ function readLast(): string {
   }
 }
 
+/** The hidden diagnostics readout over the live screen: on or off, remembered per window. */
+const DIAGNOSTICS_KEY = 'simulators.diagnostics'
+
+function readDiagnostics(): boolean {
+  try {
+    return localStorage.getItem(DIAGNOSTICS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeDiagnostics(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(DIAGNOSTICS_KEY, '1')
+    else localStorage.removeItem(DIAGNOSTICS_KEY)
+  } catch {
+    // Not remembered; it is still on for now.
+  }
+}
+
 function writeLast(id: string): void {
   try {
     if (id) localStorage.setItem(LAST_KEY, id)
@@ -142,6 +162,15 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
   const [frozen, setFrozen] = useState<FrozenScreen | null>(null)
   const [freezing, setFreezing] = useState(false)
   const [shot, setShot] = useState<DeviceShot | null>(null)
+  // Option-click the device's name. For measuring, not for everyday use, so it
+  // has no button of its own.
+  const [diagnostics, setDiagnostics] = useState(readDiagnostics)
+  const toggleDiagnostics = (): void => {
+    setDiagnostics((on) => {
+      writeDiagnostics(!on)
+      return !on
+    })
+  }
   /*
    * What just happened, said once. The surface closes the moment a round is
    * sent — the person is done with it — so without this line the only sign
@@ -311,7 +340,15 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
             </svg>
             Devices
           </button>
-          <span className="dv-name">{device.name}</span>
+          <span
+            className="dv-name"
+            title={diagnostics ? 'Option-click to hide the diagnostics' : undefined}
+            onClick={(event) => {
+              if (event.altKey) toggleDiagnostics()
+            }}
+          >
+            {device.name}
+          </span>
           <span className="dv-tools">
             {has('home') && (
               <ToolButton label="Home" onClick={() => void bridge.deviceButton(device.id, 'home')} disabled={frozen !== null}>
@@ -396,7 +433,7 @@ export function DevicesPage({ bridge: given }: { bridge?: DevicesBridge | null }
           />
         ) : (
           <div className="dv-stage">
-            <DeviceScreen bridge={bridge} device={device} live={!freezing} />
+            <DeviceScreen bridge={bridge} device={device} live={!freezing} diagnostics={diagnostics} />
             {freezing && <p className="dv-freezing">Freezing the screen…</p>}
           </div>
         )}

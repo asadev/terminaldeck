@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   backingSize,
   codecOf,
+  diagnosticLines,
   PACKET_CONFIG,
   PACKET_PICTURE,
   readPicture,
@@ -25,13 +26,18 @@ interface Recorder {
   resets: number
   queue: number
   output: ((frame: VideoFrame) => void) | null
+  error?: ((error: DOMException) => void) | null
+  /** What `isConfigSupported` answers; left out, the fake has no such method. */
+  supported?: boolean
 }
 
-function env(rec: Recorder): PlayerEnv {
+function env(rec: Recorder, frames?: Array<() => void>, clock?: { now: number }): PlayerEnv {
   class FakeDecoder {
+    static isConfigSupported = rec.supported === undefined ? undefined : async (config: VideoDecoderConfig) => ({ supported: rec.supported, config })
     state: CodecState = 'unconfigured'
     constructor(init: VideoDecoderInit) {
       rec.output = init.output
+      rec.error = init.error as (error: DOMException) => void
     }
     get decodeQueueSize(): number {
       return rec.queue
@@ -63,12 +69,14 @@ function env(rec: Recorder): PlayerEnv {
     VideoDecoder: FakeDecoder as unknown as typeof VideoDecoder,
     EncodedVideoChunk: FakeChunk as unknown as typeof EncodedVideoChunk,
     createImageBitmap: async () => ({ width: 1, height: 1, close: () => undefined }) as unknown as ImageBitmap,
+    // Paints at once, unless the test holds the refreshes to run them itself.
     requestAnimationFrame: (callback) => {
-      callback()
+      if (frames) frames.push(callback)
+      else callback()
       return 1
     },
     cancelAnimationFrame: () => undefined,
-    now: () => Date.now(),
+    now: () => (clock ? clock.now : Date.now()),
   }
 }
 
@@ -97,9 +105,11 @@ function picture(timestamp: number, key: boolean): Uint8Array {
   return packet
 }
 
-function frame(width: number, height: number): VideoFrame {
-  return { displayWidth: width, displayHeight: height, close: () => undefined } as unknown as VideoFrame
+function frame(width: number, height: number, timestamp = 0): VideoFrame {
+  return { displayWidth: width, displayHeight: height, timestamp, close: () => undefined } as unknown as VideoFrame
 }
+
+const fresh = (extra: Partial<Recorder> = {}): Recorder => ({ configured: [], decoded: [], resets: 0, queue: 0, output: null, ...extra })
 
 describe('reading the engine’s packets', () => {
   it('names the codec from the configuration’s profile, compatibility and level', () => {
@@ -176,5 +186,116 @@ describe('the player', () => {
     expect(element.width).toBe(666)
     expect(element.height).toBe(1448)
     expect(draws.at(-1)).toEqual({ w: 666, h: 1448, quality: 'high' })
+  })
+})
+
+describe('the hardware decoder', () => {
+  it('is asked for, and the readout says so once it works', () => {
+    const rec = fresh()
+    const { element } = canvas()
+    const player = new ScreenPlayer(element, { needKeyframe: () => undefined, onPicture: () => undefined }, env(rec))
+    player.push(AVCC)
+    expect(rec.configured[0]).toMatchObject({ hardwareAcceleration: 'prefer-hardware' })
+    expect(player.stats().hardware).toBe('unknown')
+    player.push(picture(1, true))
+    rec.output?.(frame(1206, 2622, 1))
+    expect(player.stats().hardware).toBe('yes')
+  })
+
+  it('is dropped when it refuses the stream, and the stream starts again from a keyframe without it', () => {
+    const rec = fresh()
+    const asks: number[] = []
+    const { element } = canvas()
+    const player = new ScreenPlayer(element, { needKeyframe: () => asks.push(1), onPicture: () => undefined }, env(rec))
+    player.push(AVCC)
+    rec.error?.(new DOMException('No hardware decoder for this stream.', 'NotSupportedError'))
+    expect(asks).toHaveLength(1)
+    expect(rec.configured.at(-1)?.hardwareAcceleration).toBeUndefined()
+    expect(player.stats().hardware).toBe('no')
+    // Later configurations — after a rotation, say — leave it off too.
+    player.push(AVCC)
+    expect(rec.configured.at(-1)?.hardwareAcceleration).toBeUndefined()
+  })
+
+  it('is dropped up front when the browser says it cannot do this stream', async () => {
+    const rec = fresh({ supported: false })
+    const { element } = canvas()
+    const player = new ScreenPlayer(element, { needKeyframe: () => undefined, onPicture: () => undefined }, env(rec))
+    player.push(AVCC)
+    expect(rec.configured[0]).toMatchObject({ hardwareAcceleration: 'prefer-hardware' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(rec.configured.at(-1)?.hardwareAcceleration).toBeUndefined()
+    expect(player.stats().hardware).toBe('no')
+  })
+})
+
+describe('the diagnostics numbers', () => {
+  it('count what arrived, what was decoded, what was painted and what was let go unpainted', () => {
+    const rec = fresh()
+    const frames: Array<() => void> = []
+    const clock = { now: 1_000 }
+    const { element } = canvas()
+    const player = new ScreenPlayer(element, { needKeyframe: () => undefined, onPicture: () => undefined }, env(rec, frames, clock))
+    player.push(AVCC)
+    player.push(picture(1, true))
+    player.push(picture(2, false))
+    clock.now += 3
+    // Two pictures decoded inside one refresh: only the newer is painted.
+    rec.output?.(frame(1206, 2622, 1))
+    rec.output?.(frame(1206, 2622, 2))
+    frames.splice(0).forEach((paint) => paint())
+    const stats = player.stats()
+    expect(stats).toMatchObject({ received: 2, decoded: 2, painted: 1, dropped: 1, resets: 0, codec: 'avc1.640033' })
+    expect(stats.decodeMs).toEqual([3, 3])
+    expect(stats.stream).toEqual({ width: 1206, height: 2622 })
+  })
+
+  it('time a touch to the next picture painted', () => {
+    const rec = fresh()
+    const frames: Array<() => void> = []
+    const clock = { now: 0 }
+    const { element } = canvas()
+    const player = new ScreenPlayer(element, { needKeyframe: () => undefined, onPicture: () => undefined }, env(rec, frames, clock))
+    player.push(AVCC)
+    player.push(picture(1, true))
+    clock.now = 100
+    player.markInput()
+    clock.now = 120
+    player.markInput() // a move in the same gesture: still timed from the first
+    clock.now = 180
+    rec.output?.(frame(1206, 2622, 1))
+    frames.splice(0).forEach((paint) => paint())
+    expect(player.stats().inputToPictureMs).toEqual([80])
+  })
+})
+
+describe('the diagnostics readout', () => {
+  const stats = (painted: number, received: number) => ({
+    received,
+    decoded: received,
+    painted,
+    dropped: 1,
+    resets: 0,
+    decodeMs: [2, 3, 9],
+    inputToPictureMs: [120, 80, 95],
+    stream: { width: 1206, height: 2622 },
+    canvas: { width: 355, height: 772 },
+    hardware: 'yes' as const,
+    codec: 'avc1.640033',
+  })
+
+  it('reads frames per second from two looks, and says what the stream and canvas are', () => {
+    expect(diagnosticLines(stats(10, 12), stats(40, 42), 1, 1, false)).toEqual([
+      'shown 30.0 fps · arriving 30.0 fps',
+      'decode 3 ms (p95 9 ms) · hardware yes',
+      'touch → picture 95 ms (last 95 ms)',
+      'dropped 1 · restarts 0',
+      'stream 1206×2622 → canvas 355×772 @1x · avc1.640033',
+    ])
+  })
+
+  it('says it is paused while the window is hidden, and shows dashes before it has two looks', () => {
+    expect(diagnosticLines(null, stats(0, 0), 0, 2, true)[0]).toBe('paused — window hidden')
+    expect(diagnosticLines(null, stats(0, 0), 0, 2, false)[0]).toBe('shown – fps · arriving – fps')
   })
 })

@@ -32,6 +32,37 @@
  * rather than with the compositor's bilinear. One resample, at the right size,
  * done well: the same thing Simulator.app does with the same framebuffer.
  *
+ * ## Under load (0.16.4)
+ *
+ * Asad, on the merged 0.16.2: *"simulator is still too slow"*. Measured in the
+ * real app, built and launched on its own, beside SimView's own preview window
+ * on the same simulator at the same moment, with the Mac at a load average of
+ * 650–1000 on ten cores (another session's Xcode builds):
+ *
+ *  - While the simulator itself was starved, it drew about **2.8 frames a
+ *    second** whatever was done to it, and both windows showed exactly that:
+ *    every frame the engine sent was decoded and painted in both, and
+ *    tap-to-picture spread over one frame interval (15–400 ms) in both.
+ *    Nothing a viewer does can show frames the simulator never drew.
+ *  - When the simulator did keep up, a drag showed **36–42 frames a second
+ *    here against 28–31 in SimView's preview**, taps 26–29 against 16–17, and
+ *    tap-to-picture was a median of about 10–25 ms here against about 70 ms
+ *    there. SimView's pictures take one more hop — a relay process that costs
+ *    20–25% of a core even at rest — and arrive fewer and later.
+ *  - The engine cannot be asked for a smaller stream: it ignores `maxWidth` and
+ *    `maxHeight` for H.264 and for MJPEG (read from the stream's own SPS at
+ *    three sizes), and SimView never sends them. The stream is always the full
+ *    framebuffer, so the decode is too — about 2 ms a picture in hardware. What
+ *    this window controls is the rest, and it does the least it can: the
+ *    decoder is asked for the hardware (`prefer-hardware`, dropped if refused),
+ *    nothing is sent or decoded while the window is hidden or minimised (the
+ *    engine is told to stop sending — `DeviceScreen.tsx`; 0% of a core hidden,
+ *    the picture back 37 ms after showing), the canvas is a low-latency one
+ *    like SimView's, and only the newest frame is ever painted.
+ *
+ * {@link ScreenPlayer.stats} is what the hidden diagnostics readout shows
+ * (Option-click the device's name).
+ *
  * ## Falling behind
  *
  * A coded picture is a difference from the one before, so none may be skipped
@@ -98,6 +129,34 @@ export interface PlayerEnv {
   now(): number
 }
 
+/** What the diagnostics readout shows. Counts run from the player's start. */
+export interface PlayerStats {
+  /** Coded pictures that arrived. */
+  received: number
+  /** Pictures the decoder handed back. */
+  decoded: number
+  /** Pictures painted. Fewer than decoded when two arrived within one refresh. */
+  painted: number
+  /** Decoded pictures replaced by a newer one before they could be painted. */
+  dropped: number
+  /** Times the decoder fell behind and started again from a keyframe. */
+  resets: number
+  /** Recent decode times: a picture handed in to its frame coming out, in ms. */
+  decodeMs: number[]
+  /** Recent times from a touch, key or wheel to the next picture painted, in ms. */
+  inputToPictureMs: number[]
+  /** The stream's own size, once a picture has arrived. */
+  stream: { width: number; height: number } | null
+  /** The canvas's backing store. */
+  canvas: { width: number; height: number }
+  /** Whether the decoder runs in hardware: asked for and working, refused, or not known yet. */
+  hardware: 'yes' | 'no' | 'unknown'
+  codec: string | null
+}
+
+/** How many recent timings the readout keeps. */
+const RECENT = 60
+
 function windowEnv(): PlayerEnv {
   return {
     VideoDecoder: typeof VideoDecoder === 'undefined' ? undefined : VideoDecoder,
@@ -107,6 +166,11 @@ function windowEnv(): PlayerEnv {
     cancelAnimationFrame: (handle) => cancelAnimationFrame(handle),
     now: () => performance.now(),
   }
+}
+
+function remember(list: number[], value: number): void {
+  list.push(Math.round(value * 10) / 10)
+  if (list.length > RECENT) list.splice(0, list.length - RECENT)
 }
 
 export class ScreenPlayer {
@@ -119,6 +183,14 @@ export class ScreenPlayer {
   private frame = 0
   private lastAsk = -Infinity
   private disposed = false
+  /** Set once the hardware decoder refused this stream; the hint is left off from then on. */
+  private softwareOnly = false
+  private hardware: PlayerStats['hardware'] = 'unknown'
+  private readonly counts = { received: 0, decoded: 0, painted: 0, dropped: 0, resets: 0 }
+  private readonly decodeStarted = new Map<number, number>()
+  private readonly decodeMs: number[] = []
+  private readonly inputToPicture: number[] = []
+  private inputAt: number | null = null
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -138,13 +210,20 @@ export class ScreenPlayer {
   private configure(avcC: Uint8Array): void {
     const Decoder = this.env.VideoDecoder
     if (!Decoder || avcC.length < 4) return
-    this.config = { codec: codecOf(avcC), description: avcC, optimizeForLatency: true }
+    const codec = codecOf(avcC)
+    this.config = {
+      codec,
+      description: avcC,
+      optimizeForLatency: true,
+      ...(this.softwareOnly ? {} : { hardwareAcceleration: 'prefer-hardware' as const }),
+    }
     if (!this.decoder || this.decoder.state === 'closed') {
       this.decoder = new Decoder({
-        output: (frame) => this.show(frame),
-        error: () => this.recover(),
+        output: (frame) => this.decoded(frame),
+        error: (error) => this.failed(error),
       })
     }
+    if (!this.softwareOnly && this.hardware === 'unknown') this.checkHardware(Decoder, this.config)
     try {
       this.decoder.configure(this.config)
       this.waitingForKey = true
@@ -153,7 +232,43 @@ export class ScreenPlayer {
     }
   }
 
+  /**
+   * Asks, once, whether this stream can be decoded in hardware at all. A "no"
+   * drops the hint and starts again from a keyframe, rather than waiting for
+   * the decoder to fail on the first picture.
+   */
+  private checkHardware(Decoder: typeof VideoDecoder, config: VideoDecoderConfig): void {
+    if (typeof Decoder.isConfigSupported !== 'function') return
+    const { description: _description, ...probe } = config
+    void Decoder.isConfigSupported(probe).then(
+      (answer) => {
+        if (this.disposed || answer.supported !== false || this.softwareOnly) return
+        this.refuseHardware()
+        this.recover()
+      },
+      () => undefined,
+    )
+  }
+
+  private refuseHardware(): void {
+    this.softwareOnly = true
+    this.hardware = 'no'
+    if (this.config) {
+      const { hardwareAcceleration: _hint, ...rest } = this.config
+      this.config = rest
+    }
+  }
+
+  private failed(error: unknown): void {
+    const name = error instanceof Error || (typeof DOMException !== 'undefined' && error instanceof DOMException) ? error.name : ''
+    if (!this.softwareOnly && this.config?.hardwareAcceleration === 'prefer-hardware' && name === 'NotSupportedError') {
+      this.refuseHardware()
+    }
+    this.recover()
+  }
+
   private decode(packet: Uint8Array): void {
+    this.counts.received += 1
     const decoder = this.decoder
     const Chunk = this.env.EncodedVideoChunk
     if (!decoder || !Chunk || decoder.state !== 'configured') {
@@ -170,12 +285,16 @@ export class ScreenPlayer {
       // keyframe, rather than paint a minute-old screen in slow motion.
       decoder.reset()
       if (this.config) decoder.configure(this.config)
+      this.counts.resets += 1
+      this.decodeStarted.clear()
       this.waitingForKey = true
       this.askForKeyframe()
       if (!picture.key) return
     }
     this.waitingForKey = false
     try {
+      if (this.decodeStarted.size > RECENT) this.decodeStarted.clear()
+      this.decodeStarted.set(picture.timestamp, this.env.now())
       decoder.decode(new Chunk({ type: picture.key ? 'key' : 'delta', timestamp: picture.timestamp, data: picture.data }))
     } catch {
       this.recover()
@@ -212,13 +331,27 @@ export class ScreenPlayer {
     this.hooks.needKeyframe()
   }
 
+  private decoded(frame: VideoFrame): void {
+    this.counts.decoded += 1
+    const started = this.decodeStarted.get(frame.timestamp)
+    if (started !== undefined) {
+      this.decodeStarted.delete(frame.timestamp)
+      remember(this.decodeMs, this.env.now() - started)
+    }
+    if (this.hardware === 'unknown' && this.config?.hardwareAcceleration === 'prefer-hardware') this.hardware = 'yes'
+    this.show(frame)
+  }
+
   /** The newest decoded picture; the one waiting before it was never shown and is let go. */
   private show(source: Source): void {
     if (this.disposed) {
       source.close()
       return
     }
-    this.pending?.close()
+    if (this.pending) {
+      this.pending.close()
+      this.counts.dropped += 1
+    }
     this.pending = source
     if (this.frame === 0) this.frame = this.env.requestAnimationFrame(() => this.paint())
   }
@@ -236,7 +369,30 @@ export class ScreenPlayer {
       this.hooks.onPicture(size)
     }
     this.draw()
+    this.counts.painted += 1
+    if (this.inputAt !== null) {
+      remember(this.inputToPicture, this.env.now() - this.inputAt)
+      this.inputAt = null
+    }
     this.hooks.onPaint?.()
+  }
+
+  /** A touch, key or wheel just went to the device: the next picture painted is timed from here. */
+  markInput(): void {
+    if (this.inputAt === null) this.inputAt = this.env.now()
+  }
+
+  /** A copy of the numbers, for the diagnostics readout. */
+  stats(): PlayerStats {
+    return {
+      ...this.counts,
+      decodeMs: [...this.decodeMs],
+      inputToPictureMs: [...this.inputToPicture],
+      stream: this.shownSize ? { ...this.shownSize } : null,
+      canvas: { width: this.canvas.width, height: this.canvas.height },
+      hardware: this.hardware,
+      codec: this.config?.codec ?? null,
+    }
   }
 
   /** Size the backing store to the shown size at this density, and redraw what is on screen. */
@@ -250,7 +406,9 @@ export class ScreenPlayer {
   private draw(): void {
     const source = this.shown
     if (!source) return
-    const context = this.canvas.getContext('2d', { alpha: false })
+    // `desynchronized`: SimView's preview asks for the same low-latency canvas,
+    // which may skip the compositor's queue where the platform allows it.
+    const context = this.canvas.getContext('2d', { alpha: false, desynchronized: true })
     if (!context) return
     context.imageSmoothingEnabled = true
     context.imageSmoothingQuality = 'high'
@@ -267,4 +425,38 @@ export class ScreenPlayer {
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close()
     this.decoder = null
   }
+}
+
+/* ---------------------------------------------------- the diagnostics -- */
+
+const median = (values: number[]): number | null => {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] ?? null
+}
+const p95 = (values: number[]): number | null => {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? null
+}
+
+/** The readout's lines, from two looks at the player's numbers `seconds` apart. */
+export function diagnosticLines(
+  before: PlayerStats | null,
+  now: PlayerStats,
+  seconds: number,
+  dpr: number,
+  paused: boolean,
+): string[] {
+  const rate = (key: 'painted' | 'received'): string =>
+    before && seconds > 0 ? ((now[key] - before[key]) / seconds).toFixed(1) : '–'
+  const ms = (value: number | null): string => (value === null ? '–' : `${Math.round(value)} ms`)
+  const size = (box: { width: number; height: number } | null): string => (box ? `${box.width}×${box.height}` : '–')
+  return [
+    paused ? 'paused — window hidden' : `shown ${rate('painted')} fps · arriving ${rate('received')} fps`,
+    `decode ${ms(median(now.decodeMs))} (p95 ${ms(p95(now.decodeMs))}) · hardware ${now.hardware}`,
+    `touch → picture ${ms(median(now.inputToPictureMs))} (last ${ms(now.inputToPictureMs.at(-1) ?? null)})`,
+    `dropped ${now.dropped} · restarts ${now.resets}`,
+    `stream ${size(now.stream)} → canvas ${size(now.canvas)} @${dpr}x${now.codec ? ` · ${now.codec}` : ''}`,
+  ]
 }

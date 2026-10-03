@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ScreenPlayer } from './screen-player'
+import { diagnosticLines, ScreenPlayer, type PlayerStats } from './screen-player'
 import type { DeviceDetails, DevicesBridge } from './devices-bridge'
 
 /**
@@ -28,6 +28,20 @@ import type { DeviceDetails, DevicesBridge } from './devices-bridge'
  * turn it arrives (`manager.ts`, `session.ts`). Moves go at most once per
  * animation frame.
  *
+ * ## Nothing decoded while nobody can see it
+ *
+ * When the window is minimised, hidden or covered, the page's visibility says
+ * so, and this tells the engine to stop sending pictures — the device stays
+ * open, so coming back is one keyframe, not a restart. Nothing is decoded,
+ * drawn or even carried between processes until the window shows again.
+ *
+ * ## Diagnostics
+ *
+ * Option-click the device's name (`DevicesPage.tsx`) for a small readout over
+ * the screen: frames shown and frames arriving per second, decode time,
+ * touch-to-picture time, frames dropped, the stream's size against the
+ * canvas's, and whether the decoder is in hardware.
+ *
  * ## The keyboard is the device's keyboard
  *
  * Once the screen has focus — a click on it gives it focus — typing goes to the
@@ -42,7 +56,21 @@ interface Props {
   device: DeviceDetails
   /** Turned off while Annotate holds a frozen picture: nothing should move it. */
   live: boolean
+  /** The hidden diagnostics readout, toggled with Option-click on the device's name. */
+  diagnostics?: boolean
   onFirstFrame?(): void
+}
+
+/** Whether the page can be seen: false while the window is minimised, hidden or covered. */
+function useVisible(): boolean {
+  const [visible, setVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const update = (): void => setVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+  return visible
 }
 
 const KEY_NAMES: Record<string, string> = {
@@ -59,7 +87,7 @@ const KEY_NAMES: Record<string, string> = {
 const TAP_TRAVEL = 0.015
 const LONG_PRESS_MS = 500
 
-export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
+export function DeviceScreen({ bridge, device, live, diagnostics = false, onFirstFrame }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [picture, setPicture] = useState<{ width: number; height: number } | null>(null)
@@ -68,6 +96,11 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
   firstRef.current = onFirstFrame
 
   const playerRef = useRef<ScreenPlayer | null>(null)
+  const visible = useVisible()
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  /** What the engine was last told about this window: sending, or paused. */
+  const toldVisible = useRef(visible)
 
   // Pictures in, while live.
   useEffect(() => {
@@ -77,7 +110,9 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
     const player = new ScreenPlayer(canvas, {
       // Watching again resends the decoder configuration and asks the engine
       // for a keyframe — the fresh start a decoder that fell behind needs.
-      needKeyframe: () => void bridge.deviceWatch(device.id, true).catch(() => undefined),
+      needKeyframe: () => {
+        if (visibleRef.current) void bridge.deviceWatch(device.id, true).catch(() => undefined)
+      },
       onPicture: (size) => {
         setPicture(size)
         firstRef.current?.()
@@ -87,7 +122,8 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
     const off = bridge.onDeviceFrame((id, packet) => {
       if (id === device.id) player.push(packet)
     })
-    void bridge.deviceWatch(device.id, true).catch(() => undefined)
+    toldVisible.current = visibleRef.current
+    void bridge.deviceWatch(device.id, visibleRef.current ? true : 'paused').catch(() => undefined)
     return () => {
       off()
       player.dispose()
@@ -95,6 +131,36 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
       void bridge.deviceWatch(device.id, false).catch(() => undefined)
     }
   }, [bridge, device.id, live])
+
+  // Hidden: the engine stops sending, and nothing is decoded. Shown again:
+  // the configuration and a keyframe, and the picture is live at once.
+  useEffect(() => {
+    if (!live || !playerRef.current) return
+    if (toldVisible.current === visible) return
+    toldVisible.current = visible
+    void bridge.deviceWatch(device.id, visible ? true : 'paused').catch(() => undefined)
+  }, [bridge, device.id, live, visible])
+
+  // The readout, twice a second, only while it is on.
+  const [readout, setReadout] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!diagnostics) {
+      setReadout(null)
+      return
+    }
+    let before: { stats: PlayerStats; at: number } | null = null
+    const tick = (): void => {
+      const player = playerRef.current
+      if (!player) return
+      const stats = player.stats()
+      const at = performance.now()
+      setReadout(diagnosticLines(before?.stats ?? null, stats, before ? (at - before.at) / 1000 : 0, window.devicePixelRatio || 1, !visibleRef.current))
+      before = { stats, at }
+    }
+    tick()
+    const timer = setInterval(tick, 500)
+    return () => clearInterval(timer)
+  }, [diagnostics])
 
   // The largest size that fits the stage, keeping the picture's shape.
   useLayoutEffect(() => {
@@ -130,6 +196,7 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
 
   // Sent at once; see the header for why order survives without a queue.
   const send = (step: () => Promise<unknown>): void => {
+    playerRef.current?.markInput()
     void step().catch(() => undefined)
   }
   const press = useRef<{ x: number; y: number; at: number; moved: boolean; last: { x: number; y: number } } | null>(null)
@@ -274,6 +341,11 @@ export function DeviceScreen({ bridge, device, live, onFirstFrame }: Props) {
         onBlur={flushTyping}
       />
       {picture === null && <p className="dv-screen-wait">Starting the live picture…</p>}
+      {readout && (
+        <pre className="dv-diag" aria-label="Live picture diagnostics">
+          {readout.join('\n')}
+        </pre>
+      )}
     </div>
   )
 }
