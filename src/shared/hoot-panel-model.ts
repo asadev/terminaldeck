@@ -158,20 +158,35 @@ export const OPEN_DELAY_MS = 160
 export const CLOSE_DELAY_MS = 500
 
 /**
- * The menu bar's title beside the owl: the moment while it lasts, then the
- * number of sessions waiting on the person, and nothing when none are.
+ * What the pill in the menu bar says: the moment while it lasts — "Session 2
+ * needs you", "Session 1 finished" — then a compact line about what is going on
+ * — "Needs you", "2 working" — and the assistant's name when all is quiet, so
+ * the pill always reads as Hoot's rather than as a blank chip.
  *
- * Kept tiny on purpose — the menu bar is shared with every other app on the
- * Mac, and a long title pushes other people's icons off it. A moment is cut to
- * {@link MAX_TITLE} characters; the badge is a number.
+ * The resting line is shorter than the panel's on purpose. The pill sits in a
+ * menu bar shared with every other app on the Mac and has to stay about the
+ * width of the clock; the full sentence is what it *grows* to say, for a few
+ * seconds, and the panel under it names the session for as long as it waits.
+ * Anything still too long is cut to {@link MAX_TITLE} characters.
  */
-export const MAX_TITLE = 24
+export const MAX_TITLE = 22
 
-export function menuBarTitle(moment: HootMoment | null, sessions: readonly HootSessionView[]): string {
-  if (moment !== null) {
-    const text = moment.text.length > MAX_TITLE ? `${moment.text.slice(0, MAX_TITLE - 1)}…` : moment.text
-    return ` ${text}`
-  }
+export function pillLabel(
+  moment: HootMoment | null,
+  sessions: readonly HootSessionView[],
+  assistant: string = BRAND.assistant,
+): { text: string; attention: boolean } {
   const waiting = needsYou(sessions).length
-  return waiting > 0 ? ` ${waiting}` : ''
+  const compact =
+    waiting === 1
+      ? { text: 'Needs you', attention: true }
+      : waiting > 1
+        ? { text: `${waiting} need you`, attention: true }
+        : restingLine(sessions)
+  const line = moment ?? compact
+  const text = line === null ? assistant : line.text
+  return {
+    text: text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text,
+    attention: line?.attention ?? false,
+  }
 }

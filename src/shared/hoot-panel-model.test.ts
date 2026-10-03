@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { menuBarTitle, MomentTracker, needsYou, readSnapshot, restingLine, type HootSessionView } from './hoot-panel-model'
+import { MomentTracker, pillLabel, needsYou, readSnapshot, restingLine, type HootSessionView } from './hoot-panel-model'
 
 const s = (id: string, label: string, status: HootSessionView['status']): HootSessionView => ({ id, label, status })
 
@@ -29,20 +29,35 @@ describe('the line in the panel’s header', () => {
   })
 })
 
-describe('the title beside the owl in the menu bar', () => {
-  it('is nothing when nothing needs him — not even a count of what is working', () => {
-    expect(menuBarTitle(null, [s('a', 'Session 1', 'working')])).toBe('')
+describe('what the pill in the menu bar says', () => {
+  it('is the assistant’s name when nothing is going on', () => {
+    expect(pillLabel(null, [s('a', 'Session 1', 'idle')])).toEqual({ text: 'Hoot', attention: false })
   })
 
-  it('is the number waiting on him, once any are', () => {
-    expect(menuBarTitle(null, [s('a', 'Session 1', 'input'), s('b', 'Session 2', 'input')])).toBe(' 2')
+  it('says how many are working, and who needs him, with attention only for the second', () => {
+    expect(pillLabel(null, [s('a', 'Session 1', 'working'), s('b', 'Session 2', 'working')])).toEqual({
+      text: '2 working',
+      attention: false,
+    })
+    // Compact at rest — the full sentence is what a moment grows to say.
+    expect(pillLabel(null, [s('a', 'Session 1', 'working'), s('b', 'Session 2', 'input')])).toEqual({
+      text: 'Needs you',
+      attention: true,
+    })
+    expect(pillLabel(null, [s('a', 'Session 1', 'input'), s('b', 'Session 2', 'input')])).toEqual({
+      text: '2 need you',
+      attention: true,
+    })
   })
 
   it('says the moment while it lasts, cut short so it never crowds the menu bar', () => {
-    expect(menuBarTitle({ sessionId: 'a', text: 'Session 2 needs you', attention: true }, [])).toBe(' Session 2 needs you')
-    const long = menuBarTitle({ sessionId: 'a', text: 'Fix the parser in the reader needs you', attention: true }, [])
-    expect(long.length).toBeLessThanOrEqual(25)
-    expect(long.endsWith('…')).toBe(true)
+    expect(pillLabel({ sessionId: 'a', text: 'Session 2 finished', attention: false }, [])).toEqual({
+      text: 'Session 2 finished',
+      attention: false,
+    })
+    const long = pillLabel({ sessionId: 'a', text: 'Fix the parser in the reader needs you', attention: true }, [])
+    expect(long.text.length).toBeLessThanOrEqual(22)
+    expect(long.text.endsWith('…')).toBe(true)
   })
 })
 

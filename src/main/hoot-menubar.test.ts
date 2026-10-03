@@ -23,7 +23,7 @@ describe('where the panel opens', () => {
   it('just under the owl, centred on it', () => {
     const icon = { x: 900, y: 3, width: 24, height: 24 }
     const bounds = panelBounds(icon, WORK, 300)
-    expect(bounds.y).toBe(32)
+    expect(bounds.y).toBe(31)
     expect(bounds.x + bounds.width / 2).toBe(912)
     expect(bounds.width).toBe(PANEL_WIDTH)
   })
@@ -65,16 +65,14 @@ describe('the setting and the blink', () => {
 /* ---------------------------------------------------------------- the rig -- */
 
 class FakeTray {
-  frames: string[] = []
-  titles: string[] = []
+  /** Every pill shown, in order: what it said, how wide, whose eyes. */
+  images: Array<{ text: string; width: number; eyes: string; attention: boolean }> = []
   menus: unknown[] = []
   destroyed = false
   private listeners = new Map<string, () => void>()
-  setFrame = (frame: string): void => {
-    this.frames.push(frame)
-  }
-  setTitle = (title: string): void => {
-    this.titles.push(title)
+  setImage = (frame: { width: number; image: unknown }): void => {
+    const spec = frame.image as { text: string; eyes: string; attention: boolean }
+    this.images.push({ text: spec.text, width: frame.width, eyes: spec.eyes, attention: spec.attention })
   }
   getBounds = () => ({ x: 1700, y: 3, width: 24, height: 24 })
   on(event: string, listener: () => void): void {
@@ -172,6 +170,9 @@ function rig(options: { hoot?: 'running' | 'stopped'; store?: Record<string, unk
     { id: 's2', title: 'web', status: 'idle' },
   ]
   const deps: Deps = {
+    // A painter that sizes the pill from its text, the way the real one does
+    // from its measured width, and hands the spec back as the "image".
+    paint: async (spec) => ({ width: spec.width ?? 40 + spec.text.length * 7, image: spec }),
     makeTray: () => {
       const tray = new FakeTray()
       trays.push(tray)
@@ -230,13 +231,26 @@ function rig(options: { hoot?: 'running' | 'stopped'; store?: Record<string, unk
 
 /* -------------------------------------------------------------- the owl -- */
 
-describe('the owl in the menu bar', () => {
-  it('is there by default, with no title while nothing needs him', () => {
+/** Let the painter's promises settle. */
+const flush = (): Promise<void> => new Promise((done) => setTimeout(done, 0))
+
+describe('the pill in the menu bar', () => {
+  it('is there by default — a pill with the owl and the name, not a bare icon', async () => {
+    const r = rig()
+    r.sessions[1].status = 'idle'
+    r.bar.apply()
+    await flush()
+    expect(r.trays).toHaveLength(1)
+    expect(r.trays[0].images.at(-1)).toEqual({ text: 'Hoot', width: 68, eyes: 'open', attention: false })
+    expect(r.bar.isShowing()).toMatchObject({ title: 'Hoot', width: 68 })
+    expect(r.panels).toHaveLength(0)
+  })
+
+  it('says how many sessions are working', async () => {
     const r = rig()
     r.bar.apply()
-    expect(r.trays).toHaveLength(1)
-    expect(r.bar.isShowing().title).toBe('')
-    expect(r.panels).toHaveLength(0)
+    await flush()
+    expect(r.bar.isShowing().title).toBe('1 working')
   })
 
   it('is not there when the setting is off, and goes and comes back with it', () => {
@@ -250,41 +264,95 @@ describe('the owl in the menu bar', () => {
     expect(r.store[MENUBAR_KEY]).toBe(false)
   })
 
-  it('blinks now and then, and not at all when the Mac is set to reduce motion', () => {
+  it('blinks by swapping to the same pill with its eyes shut and back, and not at all under reduced motion', async () => {
     const r = rig()
     r.bar.apply()
-    r.time.advance(10_200)
-    expect(r.trays[0].frames).toEqual(['closed', 'open'])
+    await flush()
+    const before = r.trays[0].images.length
+    r.time.advance(10_000)
+    await flush()
+    r.time.advance(200)
+    await flush()
+    const blink = r.trays[0].images.slice(before)
+    expect(blink.map((image) => image.eyes)).toEqual(['closed', 'open'])
+    expect(new Set(blink.map((image) => `${image.text}:${image.width}`)).size).toBe(1)
+
     const still = rig({ reducedMotion: true })
     still.bar.apply()
+    await flush()
     still.time.advance(30_000)
-    expect(still.trays[0].frames).toEqual([])
+    await flush()
+    expect(still.trays[0].images.map((image) => image.eyes)).toEqual(['open'])
   })
 })
 
 describe('a moment', () => {
-  it('says "Session 2 needs you" beside the owl for a few seconds, then settles to the count waiting', () => {
+  it('grows the pill in a few eased steps to say it, holds, and settles back', async () => {
     const r = rig()
     r.bar.apply()
     r.bar.setLabels({ s1: 'Session 1', s2: 'Session 2' })
+    await flush()
+    r.time.advance(200)
+    const rest = r.bar.isShowing().width
+    const before = r.trays[0].images.length
+    r.sessions[1].status = 'completed'
+    r.bar.forward('session:status', ['s1', 'completed'])
+    r.time.advance(100)
+    await flush()
+    r.time.advance(200)
+    const growth = r.trays[0].images.slice(before)
+    expect(growth.at(-1)?.text).toBe('Session 1 finished')
+    expect(growth.length).toBe(5)
+    const widths = growth.map((image) => image.width)
+    expect(widths).toEqual([...widths].sort((a, b) => a - b))
+    expect(widths[0]).toBeGreaterThan(rest)
+    // Then it settles back to what it said before.
+    r.time.advance(4000)
+    await flush()
+    r.time.advance(200)
+    expect(r.bar.isShowing().title).toBe('Hoot')
+    expect(r.trays[0].images.at(-1)?.width).toBeLessThan(widths.at(-1) ?? 0)
+  })
+
+  it('says the whole sentence as a moment, then settles to a compact "Needs you" with the dot while it waits', async () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.setLabels({ s1: 'Session 1', s2: 'Session 2' })
+    await flush()
     r.sessions[2].status = 'input'
     r.bar.forward('session:status', ['s2', 'input'])
     r.time.advance(100)
-    expect(r.bar.isShowing().title).toBe(' Session 2 needs you')
-    r.time.advance(4100)
-    expect(r.bar.isShowing().title).toBe(' 1')
-    r.sessions[2].status = 'waiting'
-    r.bar.forward('session:status', ['s2', 'waiting'])
-    r.time.advance(100)
-    expect(r.bar.isShowing().title).toBe('')
+    await flush()
+    r.time.advance(200)
+    expect(r.bar.isShowing().title).toBe('Session 2 needs you')
+    const wide = r.bar.isShowing().width
+    r.time.advance(4000)
+    await flush()
+    r.time.advance(200)
+    expect(r.bar.isShowing().title).toBe('Needs you')
+    expect(r.bar.isShowing().width).toBeLessThan(wide)
+    expect(r.trays[0].images.at(-1)?.attention).toBe(true)
   })
 
-  it('never takes the keyboard or opens the panel for a moment', () => {
+  it('grows in one step under reduced motion', async () => {
+    const r = rig({ reducedMotion: true })
+    r.bar.apply()
+    await flush()
+    const before = r.trays[0].images.length
+    r.sessions[2].status = 'input'
+    r.bar.forward('session:status', ['s2', 'input'])
+    r.time.advance(100)
+    await flush()
+    expect(r.trays[0].images.length - before).toBe(1)
+  })
+
+  it('never takes the keyboard or opens the panel for a moment', async () => {
     const r = rig()
     r.bar.apply()
     r.sessions[2].status = 'input'
     r.bar.forward('session:status', ['s2', 'input'])
     r.time.advance(100)
+    await flush()
     expect(r.panels).toHaveLength(0)
   })
 })
@@ -303,7 +371,7 @@ describe('the panel under the owl', () => {
     r.time.advance(200)
     expect(r.panels[0].visible).toBe(true)
     expect(r.panels[0].focused).toBe(0)
-    expect(r.panels[0].bounds.y).toBe(32)
+    expect(r.panels[0].bounds.y).toBe(31)
   })
 
   it('closes after the pointer has left both the owl and the panel', () => {

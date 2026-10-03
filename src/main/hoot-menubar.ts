@@ -14,14 +14,15 @@ import {
 import { BRAND } from '../shared/brand'
 import {
   CLOSE_DELAY_MS,
-  menuBarTitle,
   MOMENT_MS,
   MomentTracker,
   OPEN_DELAY_MS,
+  pillLabel,
   readSnapshot,
   type HootMoment,
 } from '../shared/hoot-panel-model'
 import { HOOT_TRAY_ICONS } from './hoot-tray-icons'
+import { createPillPainter, widthsBetween, type PillFrame, type PillSpec } from './hoot-pill'
 import type { CopilotChatMessage } from './remote/protocol'
 
 /**
@@ -34,14 +35,15 @@ import type { CopilotChatMessage } from './remote/protocol'
  * here"*. So this is a status item (Electron's `Tray`), and nothing floats in
  * the middle of anybody's screen.
  *
- * ## The icon
+ * ## The pill
  *
- * The orange owl, at menu-bar size, from `HootMark` itself
- * (`hoot-tray-icons.ts` and the script that makes it). Beside it a title only
- * when something needs him: for a few seconds the moment itself — "Session 2
- * needs you" — and then just the number waiting, or nothing. It blinks now and
- * then, the way every other owl in the app does, unless the Mac is set to
- * reduce motion.
+ * Not a bare icon: a near-black capsule — the shape of a MacBook's notch — with
+ * the orange owl on the left and one short line on the right: "Hoot" when all
+ * is quiet, "2 working", "Session 2 needs you". `hoot-pill.ts` paints it. When
+ * a session finishes or starts waiting, the pill grows to say so in a few
+ * eased steps, holds for a few seconds, and settles back. The owl in it blinks
+ * now and then — an image swap, no animation running in between — unless the
+ * Mac is set to reduce motion, which also makes the growing a single step.
  *
  * ## The panel
  *
@@ -106,7 +108,9 @@ export function panelBounds(icon: Rect, workArea: Rect, height: number): Rect {
   const x = Math.round(
     Math.min(Math.max(centre - PANEL_WIDTH / 2, workArea.x + 8), workArea.x + workArea.width - PANEL_WIDTH - 8),
   )
-  const y = Math.round(Math.max(icon.y + icon.height + 4, workArea.y + 2))
+  // Just under the pill, so it reads as the pill growing down rather than as a
+  // window that happens to be near it.
+  const y = Math.round(Math.max(icon.y + icon.height + 2, workArea.y + 1))
   return { x, y, width: PANEL_WIDTH, height: h }
 }
 
@@ -154,8 +158,8 @@ export type TrayIconFrame = 'open' | 'closed'
 
 /** The status item, as much of Electron's `Tray` as this module touches. */
 export interface TrayHandle {
-  setFrame(frame: TrayIconFrame): void
-  setTitle(title: string): void
+  /** Show one painted pill. */
+  setImage(frame: PillFrame): void
   getBounds(): Rect
   on(event: 'mouse-enter' | 'mouse-leave' | 'click' | 'right-click', listener: () => void): void
   popUpMenu(items: MenuItemConstructorOptions[]): void
@@ -178,6 +182,8 @@ export interface PanelHandle {
 
 export interface HootMenuBarDeps {
   makeTray(): TrayHandle
+  /** Paint one pill. `hoot-pill.ts` in the app; a fake in the tests. */
+  paint(spec: PillSpec): Promise<PillFrame | null>
   makePanel(): PanelHandle
   /** The work area of the display holding this point. */
   workAreaAt(point: { x: number; y: number }): Rect
@@ -250,7 +256,8 @@ export interface HootMenuBar {
   size(contentsId: number, height: number): void
   config(): { enabled: boolean }
   configure(patch: { enabled?: boolean }): { enabled: boolean }
-  isShowing(): { tray: boolean; panel: boolean; title: string }
+  /** Whether the owl is up, the panel open, and what the pill says and how wide it is. */
+  isShowing(): { tray: boolean; panel: boolean; title: string; width: number }
   dispose(): void
 }
 
@@ -276,7 +283,13 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   let watching: { sessionId: string; stop: () => void } | null = null
   let tracker = new MomentTracker()
   let moment: HootMoment | null = null
-  let title = ''
+  /** What the pill says now, and how wide it is drawn. */
+  let shown: { text: string; attention: boolean; width: number } | null = null
+  let eyes: TrayIconFrame = 'open'
+  /** Bumped by every repaint, so a slow paint never lands over a newer one. */
+  let generation = 0
+  let logged = false
+  const title = (): string => shown?.text ?? ''
   let panelHeight = 260
 
   // The panel's state, and why it is open.
@@ -292,6 +305,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     moment: null as { cancel(): void } | null,
     settle: null as { cancel(): void } | null,
     blink: null as { cancel(): void } | null,
+    grow: null as { cancel(): void } | null,
   }
   const cancel = (name: keyof typeof timers): void => {
     timers[name]?.cancel()
@@ -326,14 +340,58 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
 
   /* -- the menu bar item -- */
 
-  function retitle(): void {
-    const next = menuBarTitle(moment, readSnapshot(snapshot()).sessions)
-    if (next === title || tray === null) return
-    title = next
-    tray.setTitle(next)
-    // Written down, because nothing outside the menu bar can read it back: the
-    // log is how a moment that "never showed" can be told from one that did.
-    deps.log?.('menu bar: title', { title: next.trim() })
+  /** What the pill should say now. */
+  function wanted(): { text: string; attention: boolean } {
+    return pillLabel(moment, readSnapshot(snapshot()).sessions, BRAND.assistant)
+  }
+
+  function show(frame: PillFrame | null, mine: number): boolean {
+    if (frame === null || tray === null || mine !== generation) return false
+    tray.setImage(frame)
+    return true
+  }
+
+  /**
+   * Bring the pill up to what it should say.
+   *
+   * A change of words is drawn as a few frames of the pill growing or settling
+   * between its old width and its new one, on an ease-out, about 150 ms in all —
+   * a single step under reduced motion, or the first time it is drawn. Each
+   * frame is painted before any is shown, so the growth never stalls halfway on
+   * a slow paint.
+   */
+  function repaint(): void {
+    if (tray === null) return
+    const next = wanted()
+    if (shown !== null && shown.text === next.text && shown.attention === next.attention) return
+    const mine = ++generation
+    cancel('grow')
+    const from = shown?.width ?? null
+    void (async () => {
+      const final = await deps.paint({ ...next, eyes })
+      if (final === null || mine !== generation) return
+      const steps = from === null || deps.reducedMotion() ? 1 : 5
+      const widths = widthsBetween(from ?? final.width, final.width, steps)
+      const frames: Array<PillFrame | null> = []
+      for (const width of widths.slice(0, -1)) frames.push(await deps.paint({ ...next, eyes, width }))
+      if (mine !== generation) return
+      frames.push(final)
+      shown = { ...next, width: final.width }
+      // Written down, because nothing outside the menu bar can read the pill
+      // back: the log is how a moment that "never showed" is told from one that
+      // did, and the tray's own bounds say how wide macOS really drew it.
+      deps.log?.('menu bar: pill', { text: next.text, width: final.width })
+      const play = (index: number): void => {
+        timers.grow = null
+        if (!show(frames[index] ?? null, mine)) return
+        if (index + 1 < frames.length) timers.grow = deps.schedule(() => play(index + 1), 30)
+        else if (!logged && tray !== null) {
+          logged = true
+          deps.log?.('menu bar: pill shown', { bounds: tray.getBounds(), width: final.width })
+        }
+      }
+      play(0)
+    })()
   }
 
   function noticeSessions(): void {
@@ -345,19 +403,27 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       timers.moment = deps.schedule(() => {
         timers.moment = null
         moment = null
-        retitle()
+        repaint()
       }, MOMENT_MS)
     }
-    retitle()
+    repaint()
+  }
+
+  /** The same pill with the eyes shut, then open again: two image swaps. */
+  async function setEyes(next: TrayIconFrame): Promise<void> {
+    eyes = next
+    if (shown === null || timers.grow !== null) return
+    const mine = generation
+    show(await deps.paint({ text: shown.text, attention: shown.attention, eyes: next }), mine)
   }
 
   function blink(): void {
     cancel('blink')
     if (tray === null || deps.reducedMotion()) return
     timers.blink = deps.schedule(() => {
-      tray?.setFrame('closed')
+      void setEyes('closed')
       timers.blink = deps.schedule(() => {
-        tray?.setFrame('open')
+        void setEyes('open')
         blink()
       }, BLINK_SHUT_MS)
     }, nextBlinkMs())
@@ -466,7 +532,9 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   function addTray(): void {
     const made = deps.makeTray()
     tray = made
-    title = ''
+    shown = null
+    eyes = 'open'
+    logged = false
     made.on('mouse-enter', () => {
       overIcon = true
       cancel('close')
@@ -493,7 +561,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     made.on('right-click', () => made.popUpMenu(contextMenu()))
     tracker = new MomentTracker()
     tracker.next(readSnapshot(snapshot()).sessions, now())
-    retitle()
+    repaint()
     blink()
     deps.log?.('menu bar: owl shown', { bounds: made.getBounds() })
     deps.onShownChanged?.()
@@ -510,7 +578,8 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     tray?.destroy()
     tray = null
     moment = null
-    title = ''
+    shown = null
+    generation += 1
     if (had) deps.onShownChanged?.()
   }
 
@@ -571,7 +640,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       }
       if (JSON.stringify(clean) === JSON.stringify(labels)) return
       labels = clean
-      retitle()
+      repaint()
       push()
     },
     snapshot,
@@ -632,7 +701,7 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     },
     config: () => ({ enabled: readMenuBarEnabled(deps.read) }),
     configure,
-    isShowing: () => ({ tray: tray !== null, panel: open, title }),
+    isShowing: () => ({ tray: tray !== null, panel: open, title: title(), width: shown?.width ?? 0 }),
     dispose: removeTray,
   }
 }
@@ -696,33 +765,35 @@ export function registerHootMenuBarIpc(ipcMain: IpcMain, bar: HootMenuBar): void
 /* ----------------------------------------------------------------- electron -- */
 
 export interface WireHootMenuBarOptions
-  extends Omit<HootMenuBarDeps, 'makeTray' | 'makePanel' | 'workAreaAt' | 'reducedMotion' | 'dark' | 'schedule'> {
+  extends Omit<HootMenuBarDeps, 'makeTray' | 'paint' | 'makePanel' | 'workAreaAt' | 'reducedMotion' | 'dark' | 'schedule'> {
   ipcMain: IpcMain
   preload: string
   rendererUrl?: string
   rendererFile: string
 }
 
-function frameImage(frame: TrayIconFrame): Electron.NativeImage {
-  const icon = HOOT_TRAY_ICONS[frame]
+/** The plain owl, shown for the instant before the first pill is painted. */
+function placeholderImage(): Electron.NativeImage {
+  const icon = HOOT_TRAY_ICONS.open
   const image = nativeImage.createFromBuffer(Buffer.from(icon.colour1x, 'base64'))
   image.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(icon.colour2x, 'base64') })
-  // Colour on purpose, so not a template: see `.harness/tray-icons.mjs`.
   image.setTemplateImage(false)
   return image
 }
 
 /** Build the menu bar item on real Electron, register its channels, and show it if the setting says so. */
 export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
-  const images: Record<TrayIconFrame, Electron.NativeImage> = { open: frameImage('open'), closed: frameImage('closed') }
+  const painter = createPillPainter()
   const bar = createHootMenuBar({
     ...options,
+    paint: (spec) => painter.paint(spec),
     makeTray: () => {
-      const tray = new Tray(images.open)
+      const tray = new Tray(placeholderImage())
       tray.setIgnoreDoubleClickEvents(true)
+      // The words are in the pill; a title beside it would be the same words twice.
+      tray.setTitle('')
       return {
-        setFrame: (frame) => tray.setImage(images[frame]),
-        setTitle: (title) => tray.setTitle(title, { fontType: 'monospacedDigit' }),
+        setImage: (frame) => tray.setImage(frame.image as Electron.NativeImage),
         getBounds: () => tray.getBounds(),
         on: (event, listener) => {
           tray.on(event as 'click', listener)
