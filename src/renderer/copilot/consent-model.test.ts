@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   argRows,
+  askerSentence,
   nextQuestion,
   readConsentRequest,
   readConsentSettled,
@@ -55,6 +56,21 @@ describe('reading a request', () => {
   it('accepts a request with no arguments, because some tools take none', () => {
     const view = readConsentRequest({ ...request, args: undefined })
     expect(view?.args).toEqual({})
+  })
+
+  it('reads which AI app asked, and takes anything else as the copilot', () => {
+    expect(readConsentRequest({ ...request, askedBy: 'ChatGPT' })?.askedBy).toBe('ChatGPT')
+    expect(readConsentRequest(request)?.askedBy).toBeNull()
+    expect(readConsentRequest({ ...request, askedBy: '  ' })?.askedBy).toBeNull()
+    expect(readConsentRequest({ ...request, askedBy: 7 })?.askedBy).toBeNull()
+  })
+})
+
+describe('who the dialog says is asking', () => {
+  it('names the app by its key when an app asked, and the copilot otherwise', () => {
+    expect(askerSentence({ askedBy: 'E2E test (Claude)' })).toMatch(/^“E2E test \(Claude\)” is asking to do this/)
+    expect(askerSentence({ askedBy: 'E2E test (Claude)' })).not.toContain('copilot')
+    expect(askerSentence({ askedBy: null })).toMatch(/^The copilot is asking to do this/)
   })
 })
 

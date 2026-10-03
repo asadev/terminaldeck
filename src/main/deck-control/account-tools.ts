@@ -43,7 +43,7 @@ import type { CreateSessionInput, ProviderId } from '../../shared/types'
 import { requireKnownFolder, type JsonSchema, type ToolContext, type ToolSpec } from './catalogue'
 import { optBool, optStr, str, withoutSecrets } from './agents-area-args'
 import { remoteDevice, requireDeviceFolder } from './remote-start'
-import { Refused } from './surface'
+import { Refused, sessionOriginFor } from './surface'
 
 /** The little of an account this file reads itself: enough to name it in a dialog. */
 export interface AccountRef {
@@ -371,7 +371,7 @@ export function accountTools(deps: AccountToolDeps): ToolSpec[] {
           rows: START_ROWS,
           provider: account.provider as ProviderId,
           profileId: account.id,
-          origin: 'copilot',
+          ...sessionOriginFor(context.caller),
           originRunId: context.callId,
         }
         const meta = await context.surface.startSession(input, device ?? undefined)

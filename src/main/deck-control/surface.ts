@@ -233,6 +233,33 @@ export function actsAsOwner(caller: Caller): boolean {
   return caller.kind === 'local' || caller.kind === 'key'
 }
 
+/**
+ * What a session this caller starts should say about who started it.
+ *
+ * The copilot's sessions say `copilot`, and an AI app's say `app` with the name
+ * the owner gave its key — so the sidebar can put "ChatGPT" on a session
+ * ChatGPT started instead of filing it under the copilot, which did not. A
+ * label and never a permission: the session runs exactly as one the copilot or
+ * the person started would.
+ */
+export function sessionOriginFor(caller: Caller): { origin: 'copilot' } | { origin: 'app'; originApp: string } {
+  if (caller.kind === 'key') return { origin: 'app', originApp: caller.keyName ?? 'An AI app' }
+  return { origin: 'copilot' }
+}
+
+/**
+ * Whose "started this session" a caller's calls count against.
+ *
+ * Sessions a caller started itself are an ordinary `act` to type into or stop;
+ * anybody else's are `alter`. The copilot at the desk, a phone's copilot run and
+ * an ordinary session share one bucket, as they always did. Each access key has
+ * its own, so ChatGPT cannot type unasked into a session Cursor started, and the
+ * copilot cannot into one ChatGPT started.
+ */
+export function starterOf(caller: Caller): string {
+  return caller.kind === 'key' && caller.keyId !== undefined ? `key:${caller.keyId}` : 'copilot'
+}
+
 /* -------------------------------------------------------------- refusals -- */
 
 /**
@@ -372,6 +399,13 @@ export interface SessionView extends AttentionView {
    * has no such field yet. See `COPILOT-DESIGN.md`, phase 3.
    */
   startedByCopilot: boolean
+  /**
+   * The AI app outside this one that started it, by its access key's name, or
+   * null. Read off the session (`SessionMeta.originApp`), so it survives a
+   * restart and a renamed or revoked key. An app's own sessions are the ones it
+   * may type into or stop without asking.
+   */
+  startedByApp: string | null
   /**
    * The browser windows attached to this session, by the names on screen:
    * `['B1', 'B2']`.

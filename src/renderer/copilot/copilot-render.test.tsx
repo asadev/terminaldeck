@@ -487,6 +487,7 @@ describe('the consent dialog', () => {
     args: { scope: 'settings', patch: { 'appearance.theme': 'dark' } },
     requestedAt: Date.now(),
     expiresAt: Date.now() + 120_000,
+    askedBy: null,
   }
   const html = renderToStaticMarkup(
     <CopilotConsent
@@ -503,6 +504,20 @@ describe('the consent dialog', () => {
 
   it('says who is asking', () => {
     expect(html).toContain('The copilot is asking')
+  })
+
+  it('names an outside AI app in the headline when one asked, and does not call it the copilot', () => {
+    /*
+     * The first live run with an access key drew "The copilot is asking to do
+     * this" over a change "E2E test (Claude)" had asked for. The headline is
+     * what a person reads; it has to be the app.
+     */
+    const fromApp = renderToStaticMarkup(
+      <CopilotConsent question={{ ...question, askedBy: 'E2E test (Claude)' }} onAnswer={noop} />,
+    )
+    expect(fromApp).toContain('“E2E test (Claude)” is asking to do this')
+    expect(fromApp).toContain('an AI app you gave an access key to')
+    expect(fromApp).not.toContain('The copilot is asking')
   })
 
   it('shows every argument rather than a count of them', () => {

@@ -30,6 +30,8 @@ export interface OriginTab {
   kind: string
   /** Absent for every session a person started. See the header. */
   origin?: string
+  /** The outside AI app that started it, when `origin` is `app`. */
+  originApp?: string
   /** The action-log row of the copilot turn that started it, when one did. */
   originRunId?: string
 }
@@ -37,6 +39,21 @@ export interface OriginTab {
 /** Did the copilot start this? */
 export function startedByCopilot(tab: OriginTab): boolean {
   return tab.kind === 'session' && tab.origin === 'copilot'
+}
+
+/**
+ * Which outside AI app started this, or null.
+ *
+ * The third origin the header anticipated, and it is filed the way the header
+ * said the third one would be: by asking `origin === 'app'` exactly, so it
+ * never falls into the copilot's group by default. A session ChatGPT started is
+ * not the copilot's, and a person looking for "what did my copilot do" must not
+ * find it there. An app session with no name — a build that wrote the origin
+ * without one — still gets its own group rather than vanishing into yours.
+ */
+export function startedByApp(tab: OriginTab): string | null {
+  if (tab.kind !== 'session' || tab.origin !== 'app') return null
+  return typeof tab.originApp === 'string' && tab.originApp.trim() !== '' ? tab.originApp : 'An AI app'
 }
 
 /**
@@ -50,11 +67,23 @@ export function startedByCopilot(tab: OriginTab): boolean {
  */
 export function partitionByOrigin<T extends OriginTab>(
   tabs: readonly T[],
-): { mine: T[]; copilot: T[] } {
+): { mine: T[]; copilot: T[]; apps: Array<{ app: string; tabs: T[] }> } {
   const mine: T[] = []
   const copilot: T[] = []
-  for (const tab of tabs) (startedByCopilot(tab) ? copilot : mine).push(tab)
-  return { mine, copilot }
+  // One run per app, in the order each app first appears — the order its first
+  // session was opened, which is the order the rows already have.
+  const apps = new Map<string, T[]>()
+  for (const tab of tabs) {
+    const app = startedByApp(tab)
+    if (app !== null) {
+      const run = apps.get(app) ?? []
+      run.push(tab)
+      apps.set(app, run)
+      continue
+    }
+    ;(startedByCopilot(tab) ? copilot : mine).push(tab)
+  }
+  return { mine, copilot, apps: [...apps].map(([app, run]) => ({ app, tabs: run })) }
 }
 
 /**

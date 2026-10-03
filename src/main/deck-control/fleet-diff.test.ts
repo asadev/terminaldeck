@@ -33,6 +33,7 @@ function session(id: string, createdAt: number, cwd = ROOT): SessionView {
     resumed: false,
     profileName: null,
     startedByCopilot: false,
+    startedByApp: null,
     attention: 'running',
     attentionReason: 'output-streaming',
     attentionForMs: 0,

@@ -78,6 +78,12 @@ export interface WorkspaceTab {
    * you started — `src/main/session-origin.test.ts` pins that.
    */
   origin?: string
+  /**
+   * The AI app outside this one that started it, by its access key's name, when
+   * `origin` is `app`. Carried straight off `SessionMeta.originApp`; the rail
+   * files the session under that app rather than under the copilot.
+   */
+  originApp?: string
   /** The action-log row of the copilot turn that started it, when one did. */
   originRunId?: string
   /**

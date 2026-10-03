@@ -248,6 +248,18 @@ export interface ConsentRequest {
    * wire in its place.
    */
   label?: string
+  /**
+   * The AI app that asked, by the name the owner gave its access key — bare,
+   * with no sentence around it. Set only for a key's question.
+   *
+   * The desktop dialog's headline is built from it: *"“ChatGPT” is asking to do
+   * this"*, where every other question says *"The copilot is asking"*. A
+   * question that names the wrong asker is the reflex-Yes prompt in another
+   * shape — the person approves the copilot they trust, and ChatGPT acts.
+   * `summary` stays the tool's own plain sentence; each surface puts the name
+   * where its own layout has room for it.
+   */
+  askedBy?: string
 }
 
 export interface ConsentGranted {
@@ -324,6 +336,8 @@ export class ConsentBroker {
     origin?: string
     /** Who asked, in words. See {@link ConsentRequest.label}. */
     label?: string
+    /** Which AI app asked, bare. See {@link ConsentRequest.askedBy}. */
+    askedBy?: string
     /**
      * A shorter wait than the broker's own, for a caller whose client will not
      * wait as long.
@@ -364,6 +378,7 @@ export class ConsentBroker {
       // stay in.
       origin: input.origin ?? WINDOW_SURFACE,
       ...(input.label === undefined ? {} : { label: input.label }),
+      ...(input.askedBy === undefined ? {} : { askedBy: input.askedBy }),
     }
 
     /*

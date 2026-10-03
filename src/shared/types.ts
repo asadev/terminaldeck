@@ -133,8 +133,15 @@ export type SessionStatus = 'idle' | 'working' | 'waiting' | 'input' | 'complete
  *
  * Absent means `user`, which is every session that existed before this field
  * did. Nothing may treat the absence as unknown.
+ *
+ * `app` (0.16.0) is an AI app outside this one — claude.ai, ChatGPT, a Claude
+ * Code on another laptop — that started the session with an access key the
+ * owner made for it. It is not the copilot and must not be shown as the
+ * copilot: a person looking at the sidebar is asking *which* agent did this,
+ * and "the copilot" is the wrong answer about a session ChatGPT started.
+ * `originApp` carries the key's name as it was when the session started.
  */
-export type SessionOrigin = 'user' | 'copilot'
+export type SessionOrigin = 'user' | 'copilot' | 'app'
 
 export interface SessionMeta {
   id: string
@@ -209,6 +216,12 @@ export interface SessionMeta {
   profileName?: string
   /** Who wanted this session. Absent means the person did. See {@link SessionOrigin}. */
   origin?: SessionOrigin
+  /**
+   * The AI app that started it, by the name the owner gave its access key, when
+   * `origin` is `app`. The name at the time — a key renamed or revoked later
+   * still leaves the session saying who started it.
+   */
+  originApp?: string
   /**
    * The routine whose run started this session, when a routine did.
    *
@@ -298,6 +311,8 @@ export interface CreateSessionInput {
    * machine did on its own can be told apart from what you did.
    */
   origin?: SessionOrigin
+  /** Which AI app, when `origin` is `app`. See `SessionMeta.originApp`. */
+  originApp?: string
   originRoutineId?: string
   originRunId?: string
   /**

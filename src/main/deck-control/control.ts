@@ -70,6 +70,7 @@ import {
   LOCAL_CALLER,
   Refused,
   TIER_RANK,
+  starterOf,
   type Caller,
   type DeckSurface,
   type RefusalReason,
@@ -391,7 +392,16 @@ export function standingApproval(keyId: string): string {
 export class DeckControl {
   private readonly specs: Map<string, ToolSpec>
   private readonly catalogue: ToolSpec[]
-  private readonly started = new Set<string>()
+  /**
+   * Which sessions were started by whom, this run: session id → starter.
+   *
+   * A map rather than the set it was, since 0.16.0: an AI app on an access key
+   * starts sessions too, and "a session you started is `act`" has to mean the
+   * caller that started it — see `starterOf` in `surface.ts`. A set shared by
+   * every caller let ChatGPT type unasked into the copilot's sessions, and
+   * reported ChatGPT's as the copilot's.
+   */
+  private readonly started = new Map<string, string>()
   private readonly windows: Windows
   /**
    * One set of budget windows per access key, beside the process's own.
@@ -470,7 +480,7 @@ export class DeckControl {
 
   /** Sessions this run's copilot started. Exposed for the status channel. */
   copilotSessions(): string[] {
-    return [...this.started]
+    return [...this.started].filter(([, starter]) => starter === 'copilot').map(([id]) => id)
   }
 
   private context(
@@ -515,9 +525,11 @@ export class DeckControl {
       // something durable can point that thing back at the turn that made it.
       // `sessions.start` is the only user today; see `ToolContext.callId`.
       callId,
-      startedByCopilot: (id) => this.started.has(id),
+      // "Started by this caller": the copilot for the copilot, this key for an
+      // AI app. The name predates keys; `ToolContext.startedByCopilot` says so.
+      startedByCopilot: (id) => this.started.get(id) === starterOf(caller),
       noteStarted: (id) => {
-        this.started.add(id)
+        this.started.set(id, starterOf(caller))
       },
       // The same clock the budget windows use, so a test that freezes time
       // freezes the "blocked for 40 minutes" a session view reports as well.
@@ -1013,7 +1025,10 @@ export class DeckControl {
       const outcome = await this.options.consent.request({
         tool: spec.id,
         tier,
-        summary: fromKey(caller, summary),
+        // The tool's own sentence. Who asked travels beside it, so the desktop
+        // can say it in the headline and a phone in its own place — see
+        // `ConsentRequest.askedBy` and `copilot-consent.ts`.
+        summary,
         args: scrubbed,
         /*
          * An AI app's client waits on its own clock, which is shorter than a
@@ -1024,6 +1039,7 @@ export class DeckControl {
          */
         ...(keyed ? { timeoutMs: OUTSIDE_APP_CONSENT_TIMEOUT_MS } : {}),
         ...(keyed ? { label: `“${caller.keyName ?? 'An AI app'}” — an AI app you gave an access key to` } : {}),
+        ...(keyed ? { askedBy: caller.keyName ?? 'An AI app' } : {}),
         ...(signal === undefined ? {} : { signal }),
         /*
          * Which surface may answer this, besides the desktop.

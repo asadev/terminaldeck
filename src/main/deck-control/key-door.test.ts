@@ -268,7 +268,12 @@ describe('an AI app on this Mac, holding a key', () => {
     const question = rig.asked[0]
     expect(question.origin).toBe(keySurface(id))
     expect(question.label).toMatch(/“ChatGPT”/)
-    expect(question.summary.startsWith('From “ChatGPT”:')).toBe(true)
+    // The app travels beside the tool's own sentence: the desktop names it in
+    // the headline, a phone in front of the sentence (`copilot-consent.ts`).
+    expect(question.askedBy).toBe('ChatGPT')
+    expect(question.summary.startsWith('From')).toBe(false)
+    const { toConsentQuestion } = await import('../remote/copilot-consent')
+    expect(toConsentQuestion(question).summary.startsWith('From “ChatGPT”:')).toBe(true)
     expect(question.expiresAt - question.requestedAt).toBeLessThanOrEqual(OUTSIDE_APP_CONSENT_TIMEOUT_MS)
     // His phone may answer a key's question; it is not any device's own.
     expect(rig.consent.mayAnswer(question.id, 'device:phone-1')).toBe(true)

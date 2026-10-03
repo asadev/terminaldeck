@@ -15,7 +15,7 @@
  */
 
 import { join } from 'node:path'
-import type { SessionMeta } from '../../shared/types'
+import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { AccessKeys, type AccessLevel } from './access-keys'
 import { ActionLog } from './action-log'
 import { ConsentBroker, type ConsentRequest } from './consent'
@@ -36,6 +36,8 @@ export interface FakeApp {
   surface: DeckSurface
   settings: Record<string, string | number | boolean>
   started: string[]
+  /** What each start was asked for, so a test can read the provenance it carried. */
+  inputs: CreateSessionInput[]
   typed: Array<{ id: string; data: string }>
 }
 
@@ -44,14 +46,30 @@ export function fakeApp(): FakeApp {
     surface: {} as DeckSurface,
     settings: { 'appearance.density': 'comfortable' },
     started: [],
+    inputs: [],
     typed: [],
   }
+  /*
+   * A started session carries the provenance it was asked for, the way
+   * `pty-manager.ts` copies `origin` and `originApp` off the input — so a list
+   * after a start reads back what the start wrote.
+   */
+  const metas: SessionMeta[] = []
   app.surface = {
-    listSessions: () => [FIXTURE_SESSION],
+    listSessions: () => [FIXTURE_SESSION, ...metas],
     sessionStatus: () => ({ status: 'working', at: 2_000 }),
     startSession: async (input) => {
       app.started.push(input.cwd)
-      return { ...FIXTURE_SESSION, id: `started-${app.started.length}`, cwd: input.cwd }
+      app.inputs.push(input)
+      const meta: SessionMeta = {
+        ...FIXTURE_SESSION,
+        id: `started-${app.started.length}`,
+        cwd: input.cwd,
+        ...(input.origin ? { origin: input.origin } : {}),
+        ...(input.originApp ? { originApp: input.originApp } : {}),
+      }
+      metas.push(meta)
+      return meta
     },
     writeToSession: (id, data) => {
       app.typed.push({ id, data })

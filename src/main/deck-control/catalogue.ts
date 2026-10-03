@@ -68,6 +68,7 @@ import { typeLine } from './session-typing'
 import { chooseAccountFrom } from './account-choice'
 import {
   Refused,
+  sessionOriginFor,
   type Caller,
   type DeckSurface,
   type SessionView,
@@ -455,7 +456,15 @@ export interface ToolContext {
    * second boundary to keep in step with the first.
    */
   granted?: ReadonlySet<string>
-  /** Did this run's copilot start that session? Drives the tier escalation. */
+  /**
+   * Did **this caller** start that session, this run? Drives the tier escalation.
+   *
+   * The name is from when the copilot was the only caller that started
+   * anything. Since access keys it means "this caller": the copilot (and a
+   * phone's copilot run) for them, the same access key for an AI app. So an app
+   * types into its own sessions as `act`, and into the copilot's — or another
+   * app's — only by asking. See `starterOf` in `surface.ts`.
+   */
   startedByCopilot(sessionId: string): boolean
   /** Remember a session the copilot started, so later calls on it stay `act`. */
   noteStarted(sessionId: string): void
@@ -690,7 +699,14 @@ export function viewOf(context: ToolContext, meta: ReturnType<DeckSurface['listS
     exitCode: meta.exitCode,
     resumed: meta.resumed === true,
     profileName: meta.profileName ?? null,
-    startedByCopilot: context.startedByCopilot(meta.id),
+    /*
+     * The copilot's, and only the copilot's. `startedByCopilot(id)` answers
+     * "did *this caller* start it", which for an AI app on a key is that app —
+     * so the session's own label decides whose it was, and an app's session is
+     * never reported as the copilot's to anybody.
+     */
+    startedByCopilot: meta.origin !== 'app' && context.startedByCopilot(meta.id),
+    startedByApp: meta.origin === 'app' ? (meta.originApp ?? 'An AI app') : null,
     // Read from the binding map rather than carried on `SessionMeta`, because
     // the map is the single authority on this relation and a copy on the meta
     // would be a second one to keep in step. See `browser-binding.ts`.
@@ -1466,7 +1482,9 @@ export function buildCatalogue(): ToolSpec[] {
            * started. Pairing them by timestamp instead would be a guess, and a
            * wrong one for any two starts inside the same second.
            */
-          origin: 'copilot',
+          // `copilot`, or `app` with the key's name when an outside AI app
+          // started it — see `sessionOriginFor`.
+          ...sessionOriginFor(context.caller),
           originRunId: context.callId,
         }
         /*

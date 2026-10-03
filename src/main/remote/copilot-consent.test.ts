@@ -115,3 +115,29 @@ describe('a confirmation a device may answer', () => {
     expect(q.expiresAt - q.requestedAt).toBe(120_000)
   })
 })
+
+describe('a question an outside AI app asked, on a phone', () => {
+  /*
+   * The phone's sheet leads with the summary and has no headline saying who
+   * asked, so the app's name goes in front of the sentence there — on the
+   * question and on the watch row both. The desktop shows the summary bare and
+   * names the app in its own headline.
+   */
+  const fromApp = request({
+    origin: 'key:k1',
+    label: '“ChatGPT” — an AI app you gave an access key to',
+    askedBy: 'ChatGPT',
+  })
+
+  it('puts the app’s name on the sentence, and on the asked-by line instead of a key id', () => {
+    const question = toConsentQuestion(fromApp)
+    expect(question.summary.startsWith('From “ChatGPT”: ')).toBe(true)
+    expect(question.origin).toBe('“ChatGPT” — an AI app you gave an access key to')
+    expect(toPendingRow(fromApp, true).summary.startsWith('From “ChatGPT”: ')).toBe(true)
+  })
+
+  it('leaves the copilot’s own questions exactly as they were', () => {
+    expect(toConsentQuestion(request()).summary).toBe(request().summary)
+    expect(toPendingRow(request(), false).summary).toBe(request().summary)
+  })
+})

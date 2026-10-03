@@ -36,6 +36,12 @@ export interface ConsentRequestView {
   args: Record<string, unknown>
   requestedAt: number
   expiresAt: number
+  /**
+   * The AI app outside this one that asked, by its access key's name, or null
+   * when the copilot asked. Mirrors `ConsentRequest.askedBy`. It decides who
+   * the dialog says is asking — see {@link askerSentence}.
+   */
+  askedBy: string | null
 }
 
 /** Mirrors `RefusalReason`, as the settled push delivers it. */
@@ -117,6 +123,9 @@ export function readConsentRequest(value: unknown): ConsentRequestView | null {
     args: record(source.args) ?? {},
     requestedAt,
     expiresAt,
+    // Absent, empty or not a string is the copilot: the field is only ever set
+    // for a key's question, and the copilot is who asked every other one.
+    askedBy: typeof source.askedBy === 'string' && source.askedBy.trim() !== '' ? source.askedBy : null,
   }
 }
 
@@ -136,6 +145,26 @@ export function readConsentSettled(value: unknown): ConsentSettledView | null {
 }
 
 /* ------------------------------------------------------------------- words -- */
+
+/**
+ * Who is asking, in the dialog's headline sentence.
+ *
+ * **The second of the four questions, and the one that went wrong.** It used to
+ * be a constant — *"The copilot is asking to do this"* — because the copilot was
+ * the only thing that could ask. Since 0.16.0 an AI app outside this one can,
+ * with an access key, and on the first live run the dialog for a change ChatGPT
+ * asked for said the copilot was asking, with "From “E2E test (Claude)”" in
+ * smaller type underneath. A person who trusts their copilot approves that
+ * headline. So the asker is named where the eye lands first, and the rest of the
+ * sentence says what kind of thing it is.
+ */
+export function askerSentence(request: Pick<ConsentRequestView, 'askedBy'>): string {
+  if (request.askedBy === null) return 'The copilot is asking to do this. It will not happen unless you allow it.'
+  return (
+    `“${request.askedBy}” is asking to do this — an AI app you gave an access key to. ` +
+    'It will not happen unless you allow it.'
+  )
+}
 
 /**
  * What the copilot is asking to do, in a heading.

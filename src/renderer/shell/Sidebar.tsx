@@ -878,7 +878,7 @@ export function Sidebar({
    * to partition: a session in neither is a row missing from the rail, and one
    * in both is a row drawn twice. See `copilot/session-origin.ts`.
    */
-  const { mine: ownTabs, copilot: copilotTabs } = partitionByOrigin(listed)
+  const { mine: ownTabs, copilot: copilotTabs, apps: appGroups } = partitionByOrigin(listed)
 
   /*
    * Which rows sit under which heading — four comparisons of one folder against
@@ -1894,6 +1894,31 @@ export function Sidebar({
             </ul>
           </section>
         )}
+
+        {/*
+          What each outside AI app started, under that app's name.
+
+          One heading per app — the name the person gave its access key — for
+          the reason the copilot has a heading of its own and the reason each
+          machine does: a session nobody in this window asked for must say who
+          did, and "ChatGPT" is the answer about a session ChatGPT started,
+          where "Copilot sessions" would be a wrong one. The rows are drawn by
+          the same `rowsFor` with the folder per row, because an app's sessions
+          span folders exactly as the copilot's do.
+
+          Rendered only for an app that has a session open, like every other
+          heading on this rail.
+        */}
+        {appGroups.map((group) => (
+          <section className="sb-group" key={`app:${group.app}`}>
+            <h2 className="sb-group-label" title={`Started by ${group.app}, an AI app you gave an access key to`}>
+              {`From ${group.app}`}
+            </h2>
+            <ul className="sb-list">
+              {rowsFor(group.tabs, (tab) => (tab.projectPath ? folderName(tab.projectPath) : undefined))}
+            </ul>
+          </section>
+        ))}
 
         {/*
           Sessions on another machine, beside your own and not on a page of

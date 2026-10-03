@@ -952,6 +952,8 @@ function Workspace() {
     // "no origin" crosses into the tab as an absent key rather than as
     // `undefined`, which is the same distinction `PtyManager` preserves.
     ...(session.origin ? { origin: session.origin } : {}),
+    // Which outside AI app, when one started it — the rail names it.
+    ...(session.originApp ? { originApp: session.originApp } : {}),
     ...(session.originRunId ? { originRunId: session.originRunId } : {}),
     closable: true,
   })

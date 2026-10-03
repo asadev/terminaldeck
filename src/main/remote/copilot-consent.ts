@@ -57,11 +57,23 @@ import type { CopilotConsentQuestion, CopilotPendingRow } from './protocol'
  * other device asked for this* is not a device's business and an opaque id would
  * only invite a client to display it.
  */
+/**
+ * The sentence a phone shows, with the asking app's name on it when an app asked.
+ *
+ * The phone's sheet leads with the summary and has no headline of its own that
+ * says who asked, so the name goes in front of the sentence — the same words the
+ * activity log uses. The desktop puts it in its headline instead and shows the
+ * summary bare (`ConsentRequest.askedBy`).
+ */
+function phoneSummary(request: ConsentRequest): string {
+  return request.askedBy === undefined ? request.summary : `From “${request.askedBy}”: ${request.summary}`
+}
+
 export function toPendingRow(request: ConsentRequest, mine: boolean): CopilotPendingRow {
   return {
     id: request.id,
     tool: request.tool,
-    summary: request.summary,
+    summary: phoneSummary(request),
     requestedAt: request.requestedAt,
     expiresAt: request.expiresAt,
     mine,
@@ -86,7 +98,7 @@ export function toConsentQuestion(request: ConsentRequest): CopilotConsentQuesti
     id: request.id,
     tool: request.tool,
     tier: request.tier,
-    summary: request.summary,
+    summary: phoneSummary(request),
     args: request.args,
     /*
      * A key's question carries who asked *in words* where the surface id would

@@ -58,6 +58,19 @@ const sessions = [
    * row is the copilot's.
    */
   { id: 'copilot-1', cwd: '/Users/apple/Library/Application Support/terminaldeck/copilot', title: 'copilot', provider: 'claude', exitCode: null, createdAt: launchedAt, profileId: 'system', profileName: 'Default' },
+  /*
+   * `?from-apps`: a session the copilot started and two an outside AI app
+   * started through an access key — `origin` and `originApp` field for field
+   * as `pty-manager.ts` writes them — so the rail's "Copilot sessions" and
+   * "From <app>" headings can be looked at side by side.
+   */
+  ...(new URLSearchParams(location.search).has('from-apps')
+    ? [
+        { id: 'c-run', cwd: '/Users/apple/Projects/terminaldeck', title: 'Review the diff', provider: 'claude', exitCode: null, createdAt: launchedAt, origin: 'copilot', originRunId: 'turn-9' },
+        { id: 'a-run-1', cwd: '/Users/apple/Projects/terminaldeck', title: 'PONG test', provider: 'claude', exitCode: null, createdAt: launchedAt, origin: 'app', originApp: 'E2E test (Claude)' },
+        { id: 'a-run-2', cwd: '/Users/apple/Projects/website', title: 'Fix the footer', provider: 'codex', exitCode: null, createdAt: launchedAt, origin: 'app', originApp: 'ChatGPT' },
+      ]
+    : []),
 ]
 let sessionCounter = 0
 /**

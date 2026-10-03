@@ -324,6 +324,7 @@ export class PtyManager {
        * renderer, and only one of them survives JSON.
        */
       ...(input.origin ? { origin: input.origin } : {}),
+      ...(input.originApp ? { originApp: input.originApp } : {}),
       ...(input.originRoutineId ? { originRoutineId: input.originRoutineId } : {}),
       ...(input.originRunId ? { originRunId: input.originRunId } : {}),
     }

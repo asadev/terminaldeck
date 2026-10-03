@@ -193,3 +193,40 @@ describe('sessions the copilot started', () => {
     expect(html.slice(group)).not.toContain('>terminaldeck</span>')
   })
 })
+
+describe('sessions an outside AI app started', () => {
+  /*
+   * The first live run with an access key filed a session "E2E test (Claude)"
+   * started under "Copilot sessions". It is that app's, and the rail says so
+   * under the app's name — not the copilot's heading, and not your project run.
+   */
+  const fromApp: WorkspaceTab = {
+    id: 's7',
+    kind: 'session',
+    label: 'Ping test',
+    projectPath: projects[0].path,
+    origin: 'app',
+    originApp: 'E2E test (Claude)',
+    closable: true,
+  }
+  const html = render({ tabs: [...tabs, fromApp] })
+
+  it('are under a heading naming the app', () => {
+    expect(html).toContain('>From E2E test (Claude)</h2>')
+    expect(html.indexOf('Ping test')).toBeGreaterThan(html.indexOf('>From E2E test (Claude)</h2>'))
+  })
+
+  it('are not under the copilot’s heading, nor in your project’s run', () => {
+    const copilotGroup = html.indexOf('>Copilot sessions</h2>')
+    const appGroup = html.indexOf('>From E2E test (Claude)</h2>')
+    // The app's heading comes after the copilot's, so the row lies after both
+    // and inside neither the project run nor the copilot run.
+    expect(appGroup).toBeGreaterThan(copilotGroup)
+    expect(html.indexOf('Ping test')).toBeGreaterThan(appGroup)
+    expect(html.indexOf('Fix the parser')).toBeLessThan(copilotGroup)
+  })
+
+  it('draws no app heading when no app has a session open', () => {
+    expect(render()).not.toContain('>From ')
+  })
+})

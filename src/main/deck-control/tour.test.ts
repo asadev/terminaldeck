@@ -47,6 +47,7 @@ function sessionView(over: Partial<SessionView> = {}): SessionView {
     resumed: false,
     profileName: null,
     startedByCopilot: false,
+    startedByApp: null,
     ...over,
   }
 }

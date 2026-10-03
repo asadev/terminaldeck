@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal } from '../components/Modal'
 import {
   argRows,
+  askerSentence,
   secondsLeft,
   timeoutSentence,
   toolHeading,
@@ -20,10 +21,11 @@ import './copilot.css'
  *   itself and is the same string the action log records, so what somebody
  *   approves and what the log says they approved cannot differ.
  *
- *   **Who** — the copilot. Said in words rather than assumed from the fact that
- *   a dialog appeared: this app also opens dialogs on your own behalf, and the
- *   one difference that matters about this one is that nobody in this window
- *   asked for it.
+ *   **Who** — the copilot, or the AI app outside this one that asked, by the
+ *   name the person gave its access key (`askerSentence`). Said in words rather
+ *   than assumed from the fact that a dialog appeared: this app also opens
+ *   dialogs on your own behalf, and the one difference that matters about this
+ *   one is that nobody in this window asked for it.
  *
  *   **With what arguments** — every one, verbatim, already scrubbed on the far
  *   side. Not summarised, not hidden behind a disclosure. A dialog that says
@@ -104,7 +106,7 @@ export function CopilotConsent({ question, waiting = 0, titles = {}, onAnswer }:
       open
       size="lg"
       title={toolHeading(question.tool, titles)}
-      description="The copilot is asking to do this. It will not happen unless you allow it."
+      description={askerSentence(question)}
       // Every dismissal is a refusal. See the header — this is the rule, not a
       // shortcut, and the far side holds the same one.
       onClose={() => onAnswer(question.id, false)}
