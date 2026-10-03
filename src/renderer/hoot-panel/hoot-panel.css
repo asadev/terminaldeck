@@ -1,0 +1,178 @@
+/*
+  The panel under Hoot's owl in the menu bar.
+
+  The window is the system's popover glass (`vibrancy: 'popover'` in
+  `main/hoot-menubar.ts`), with its own rounded corners and shadow, so the page
+  paints no ground: everything here sits on that glass. Type, spacing and
+  colour are the app's tokens; it follows the app's theme, which the glass
+  follows too (the main process sets `nativeTheme` from the same preference).
+
+  It arrives with a short drop and fade on the app's own curve; under reduced
+  motion the duration tokens are near zero, so it simply appears.
+*/
+
+html.hoot-panel-page,
+html.hoot-panel-page body,
+html.hoot-panel-page #root {
+  height: auto;
+  background: transparent;
+  overflow: hidden;
+}
+
+.hoot-panel {
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--sp-3);
+  font-family: var(--font-ui);
+  font-size: var(--t-subhead);
+  color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.hoot-panel-in {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  animation: hoot-panel-in var(--dur) var(--ease-emphasis);
+}
+
+@keyframes hoot-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hoot-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
+}
+
+.hoot-panel-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+}
+
+.hoot-panel-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.hoot-panel-line[data-attention] {
+  color: var(--text-primary);
+}
+
+.hoot-panel-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hoot-panel-waiting {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hoot-panel-session {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hoot-panel-session:hover {
+  background: var(--fill-tertiary);
+}
+
+.hoot-panel-session-name {
+  font-weight: var(--w-medium);
+}
+
+.hoot-panel-session-what {
+  color: var(--text-secondary);
+}
+
+.hoot-panel-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  max-height: 240px;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.hoot-panel-msg {
+  margin: 0;
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hoot-panel-msg[data-role='you'] {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+}
+
+.hoot-panel-quiet {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.hoot-panel-input {
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+  outline: none;
+}
+
+.hoot-panel-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.hoot-panel-off {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.hoot-panel-problem {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}

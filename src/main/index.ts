@@ -153,7 +153,9 @@ import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
 import { wireAccountVault, type AccountVaultHandle } from './account-vault/wire'
 import { electronCipher } from './account-vault/electron-cipher'
-import { copilotState, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
+import { copilotState, ensureCopilot, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
+import { wireHootMenuBar, type HootMenuBar } from './hoot-menubar'
+import { uiDoCall } from './deck-control/ui-tools'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
 import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder'
 import { copilotFilesHere } from './copilot-files'
@@ -433,6 +435,8 @@ function send(channel: string, ...args: unknown[]): boolean {
    * each window gets.
    */
   if (!quitting) popouts?.forward(channel, args)
+  // And Hoot's menu bar item, which shows the sessions' state from every app.
+  if (!quitting) hootMenuBar?.forward(channel, args)
   if (quitting || !rendererAlive) return false
   const window = mainWindow
   if (!window || window.isDestroyed()) return false
@@ -689,6 +693,8 @@ let deckControl: DeckControlHandle | null = null
 let copilotRuntimeDeps: CopilotRuntimeDeps | null = null
 /** Sessions in windows of their own — `popout-windows.ts`. Built in `registerIpc`. */
 let popouts: PopoutRegistry | null = null
+/** Hoot in the macOS menu bar — `hoot-menubar.ts`. Built after the first window. */
+let hootMenuBar: HootMenuBar | null = null
 let copilotInspectDeps: CopilotInspectDeps | null = null
 
 /**
@@ -1383,6 +1389,61 @@ function showMainWindow(command?: string): void {
   }
 }
 
+/**
+ * Hoot in the menu bar, on the real tray and the real Hoot.
+ *
+ * Every dependency is a function the rest of the app already has: the desk
+ * Hoot's state and its start (`copilotState`, `ensureCopilot`), the phone's
+ * two-write submit (`typeAndSubmit`) and transcript reader (`watchRunChat`),
+ * and the window's own "bring this to the front" (`ui.do`).
+ */
+function wireMenuBar(): HootMenuBar | null {
+  const deps = copilotRuntimeDeps
+  if (deps === null) return null
+  return wireHootMenuBar({
+    ipcMain,
+    preload: join(__dirname, '../preload/index.js'),
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    rendererFile: join(__dirname, '../renderer/index.html'),
+    read: (key) => storedValue(key),
+    write: (patch) => {
+      patchStoredSettings(patch)
+    },
+    hoot: () => {
+      const state = copilotState(deps)
+      const meta = state.sessionId === null ? undefined : ptys.list().find((m) => m.id === state.sessionId)
+      return {
+        status: state.status === 'running' ? 'running' : state.status === 'starting' ? 'starting' : 'stopped',
+        problem: state.problem,
+        sessionId: state.sessionId,
+        cwd: state.paths.root,
+        agentSessionId: meta?.agentSessionId ?? null,
+      }
+    },
+    startHoot: async () => {
+      const state = await ensureCopilot(deps)
+      return { problem: state.status === 'running' || state.status === 'starting' ? null : state.problem }
+    },
+    say: (sessionId, text) => typeAndSubmit((data) => ptys.write(sessionId, data), text),
+    watchChat: (cwd, agentSessionId, onUpdate) => watchRunChat(cwd, onUpdate, agentSessionId),
+    sessions: () =>
+      ptys.list().map((meta) => ({ id: meta.id, title: meta.title, status: liveStatus.get(meta.id)?.status ?? 'idle' })),
+    showSession: (id) => {
+      showMainWindow()
+      const window = mainWindow
+      if (window === null || window.isDestroyed()) return
+      void window.webContents.executeJavaScript(uiDoCall({ kind: 'focus', target: id })).catch(() => undefined)
+    },
+    openApp: (page) => {
+      showMainWindow()
+      const window = mainWindow
+      if (page === undefined || window === null || window.isDestroyed()) return
+      void window.webContents.executeJavaScript(uiDoCall({ kind: 'settings', target: 'copilot' })).catch(() => undefined)
+    },
+    log: (message, detail) => logger.info('menubar', message, detail),
+  })
+}
+
 function syncNativeAppearance(): void {
   nativeTheme.themeSource = store().getPreferences().theme
 }
@@ -1797,6 +1858,8 @@ async function hydrateRenderer(): Promise<void> {
   // a restart, or when the window comes back from the background. A no-op for a
   // window that is already open, so a reload of the main window changes nothing.
   popouts?.restore(popoutSessions())
+  // Hoot in the menu bar, if the setting says so. A no-op once it is there.
+  hootMenuBar?.apply()
   // On every hydration, not only the first: a renderer reload throws away the
   // window's copy of this list exactly as it throws away its tabs, and the rows
   // it draws are the only place a person is told a session did not come back.
@@ -5288,6 +5351,7 @@ app.whenReady().then(async () => {
   routines.engine.start()
   createWindow()
   buildMenu(() => mainWindow, undefined, (command) => popouts?.routeMenu(command) ?? false)
+  hootMenuBar = wireMenuBar()
 
   app.on('activate', () => {
     /*

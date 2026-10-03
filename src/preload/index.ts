@@ -319,6 +319,53 @@ const api = {
     ipcRenderer.on('popout:state', handler)
     return () => ipcRenderer.off('popout:state', handler)
   },
+  /*
+   * The main window's names for its sessions, so the places outside it — Hoot's
+   * menu bar item — say "Session 2" exactly as the rail does rather than
+   * numbering them a second way.
+   */
+  reportSessionLabels: (labels: Record<string, string>): void => {
+    ipcRenderer.send('session:labels', labels)
+  },
+
+  /* ----------------------------------------------------- hoot's menu bar -- */
+  //
+  // Hoot's owl in the macOS menu bar and the panel under it —
+  // `main/hoot-menubar.ts`. The panel talks to the Hoot that is running,
+  // through the phone's say-and-read machinery; it never starts a second one.
+  hootPanelSnapshot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:snapshot'),
+  onHootPanelSnapshot: (cb: (snapshot: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, snapshot: unknown) => cb(snapshot)
+    ipcRenderer.on('hoot-panel:snapshot', handler)
+    return () => ipcRenderer.off('hoot-panel:snapshot', handler)
+  },
+  onHootPanelShown: (cb: () => void): (() => void) => {
+    const handler = () => cb()
+    ipcRenderer.on('hoot-panel:shown', handler)
+    return () => ipcRenderer.off('hoot-panel:shown', handler)
+  },
+  hootPanelSay: (text: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:say', text),
+  hootPanelStartHoot: (): Promise<unknown> => ipcRenderer.invoke('hoot-panel:start-hoot'),
+  hootPanelShowSession: (id: string): Promise<unknown> => ipcRenderer.invoke('hoot-panel:show-session', id),
+  hootPanelPointer: (inside: boolean): void => {
+    ipcRenderer.send('hoot-panel:pointer', inside)
+  },
+  hootPanelHeld: (held: boolean): void => {
+    ipcRenderer.send('hoot-panel:held', held)
+  },
+  hootPanelFocus: (): void => {
+    ipcRenderer.send('hoot-panel:focus')
+  },
+  hootPanelClose: (): void => {
+    ipcRenderer.send('hoot-panel:close')
+  },
+  hootPanelSize: (height: number): void => {
+    ipcRenderer.send('hoot-panel:size', height)
+  },
+  hootMenuBarConfig: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:config'),
+  hootMenuBarOpen: (): Promise<unknown> => ipcRenderer.invoke('hoot-menubar:open'),
+  hootMenuBarConfigure: (patch: { enabled?: boolean }): Promise<unknown> =>
+    ipcRenderer.invoke('hoot-menubar:configure', patch),
 
   /* ----------------------------------------------------------- usage -- */
   // Still spelled `cost:*` on both sides, and carrying no cost. Two methods
