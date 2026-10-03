@@ -346,6 +346,25 @@ describe('the Add-accounts menu', () => {
   })
 
   /**
+   * One of the concrete reasons more accounts could not be added: the row's act
+   * hung on a probe reading *signed in*, and with many accounts the probes are
+   * many processes racing a ten-second timeout. While none had answered, the
+   * row offered **Sign in** on the install instead of **Add account**.
+   */
+  it('keeps offering Add account to an agent that already has accounts, whatever the probes said', () => {
+    const rows = addAccountsRows({
+      present: new Set(['claude', 'codex']),
+      addable: new Set(['claude', 'codex']),
+      signedIn: new Set(),
+      signInable: new Set(['claude', 'codex']),
+      hasAccounts: new Set(['claude']),
+    })
+    expect(rows.find((row) => row.id === 'claude')?.action).toBe('add-account')
+    // An agent with nothing added yet still starts by signing its own install in.
+    expect(rows.find((row) => row.id === 'codex')?.action).toBe('sign-in')
+  })
+
+  /**
    * What came into the menu when the standing list went out of the pane.
    *
    *   > *"Why do we have all of this full list? Why not just one drop-down to

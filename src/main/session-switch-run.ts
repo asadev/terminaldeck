@@ -44,7 +44,8 @@ import { join } from 'node:path'
 import type { ProviderId, SessionMeta } from '../shared/types'
 import { logger } from './app-log'
 import type { HostCore } from './host-core'
-import { findProfile, getState as profilesState, resolveProfile } from './profiles'
+import { findProfile, getState as profilesState, keptManaged, keptUnavailable, resolveProfile } from './profiles'
+import { vaultSignedIn } from './account-vault/runtime'
 import {
   conversationOnDisk,
   conversationScope,
@@ -55,13 +56,15 @@ import {
   type SavedSession,
 } from './session-restore'
 import {
+  awaitReplacement,
   conversationToCarry,
   planSwitch,
   startFailed,
-  survivedStart,
+  startSignedOut,
   switchRefusal,
   type SwitchPlan,
 } from './session-switch'
+import { recoverConversationId } from './conversation-id'
 import { canJoinSharedHistory, joinSharedHistory } from './shared-projects'
 // `transcriptDir` and `projectPathSpellings`: where a named conversation is
 // filed under one account's store, in both spellings of a folder reached
@@ -115,6 +118,12 @@ export interface SessionSwitchHooks {
    * attached to the old id and follows it by the answer.
    */
   onSessionOpened?(meta: SessionMeta): void
+  /**
+   * How long and how often the switch looks for the replacement to be ready.
+   * Production passes nothing — see `SWITCH_READY_CEILING_MS`; tests shorten it
+   * and drive the clock.
+   */
+  readiness?: { ceilingMs?: number; pollMs?: number; wait?(ms: number): Promise<void> }
 }
 
 /**
@@ -182,6 +191,10 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
     const meta = core.ptys.list().find((session) => session.id === id) ?? null
     const saved = core.ledger.get(id)
     const target = wanted === '' ? null : findProfile(profilesState(), wanted)
+    // Known for certain only where the app keeps the login. See `switchRefusal`.
+    const targetSignedIn =
+      target === null ? null : vaultSignedIn(target, keptManaged(target))
+    const targetUnavailable = target === null ? null : keptUnavailable(target)
 
     /*
      * The decision is only asked for once the cheap refusals have passed, and
@@ -191,7 +204,7 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      * answer a question that has already been answered — and, on a WSL machine,
      * doing it across a filesystem boundary.
      */
-    const refused = switchRefusal({ meta, saved, target })
+    const refused = switchRefusal({ meta, saved, target, targetSignedIn, targetUnavailable })
     if (refused !== null || saved === null || target === null) {
       /*
        * `switchRefusal` and not `planSwitch` for the question itself, and that
@@ -213,6 +226,8 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
           occupied: false,
           // Nothing was decided, so nothing is being said about a conversation.
           sharedStore: false,
+          targetSignedIn,
+          targetUnavailable,
         }),
         saved,
         resume: false,
@@ -289,22 +304,77 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      * where the live list is, and applied by `planSwitch`.
      */
     const configDir = decision?.configDir ?? null
+
+    /*
+     * Which conversation this tab is on, by id.
+     *
+     * The id this app put on its command line when it has one. A tab restored
+     * at launch has none — it was started with `--continue`, and the CLI
+     * refuses `--session-id` beside that — so its id is recovered from the
+     * transcripts the agent writes, with every id another live tab is on taken
+     * out first. `conversation-id.ts` holds the rules, and answers null rather
+     * than guess when two unclaimed conversations are moving in one folder.
+     */
+    const others = core.ptys.list().filter((session) => session.id !== id && session.exitCode === null)
+    const claimed = new Set(
+      others
+        .map((session) => session.agentSessionId)
+        .filter((value): value is string => typeof value === 'string' && value !== ''),
+    )
+    let onScreen: string | null =
+      typeof meta?.agentSessionId === 'string' && meta.agentSessionId !== '' ? meta.agentSessionId : null
+    if (onScreen === null && meta !== null && meta.provider === 'claude') {
+      onScreen = await recoverConversationId({
+        dirs: projectPathSpellings(saved.cwd).map((spelling) => transcriptDir(spelling, source.configDir)),
+        startedAt: meta.createdAt,
+        claimed,
+      })
+    }
+    /*
+     * Both spellings of the folder, because on this platform everything under
+     * `/tmp` is reached through a symlink and the CLI files a transcript under
+     * whichever spelling it was handed.
+     */
+    const named = onScreen
+    const readableInTarget =
+      named !== null &&
+      configDir !== null &&
+      projectPathSpellings(saved.cwd).some((spelling) =>
+        existsSync(join(transcriptDir(spelling, configDir), `${named}.jsonl`)),
+      )
+
+    /*
+     * Is another tab already on the conversation this one would continue?
+     *
+     * When the conversation is named, the only tab that can collide with it is
+     * one on **that same conversation** — the replacement resumes it by id, so
+     * another tab in the same folder on a different conversation is no
+     * obstacle at all. Keying on the folder there is what dropped the
+     * conversation whenever a second tab of the same agent was open in the same
+     * repo, and with history shared between accounts that was most switches.
+     *
+     * Without a name, `--continue` means the folder's newest, and then any tab
+     * on the same store and folder can be on it: `conversationScope` is the
+     * shared answer to "which transcript would `--continue` attach to", reused
+     * rather than re-derived so the switch and the launch cannot disagree.
+     */
     const mine = configDir === null ? null : conversationScope(switched, configDir)
-    const occupied =
-      mine !== null &&
-      core.ledger
-        .entries()
-        .filter((entry) => entry.id !== id)
-        .some(
-          (entry) =>
-            conversationScope(
-              entry.saved,
-              resolveProfile(profilesState(), {
-                sessionProfileId: entry.saved.profileId ?? undefined,
-                projectPath: entry.saved.cwd,
-              }).configDir,
-            ) === mine,
-        )
+    const occupied = readableInTarget
+      ? claimed.has(named)
+      : mine !== null &&
+        core.ledger
+          .entries()
+          .filter((entry) => entry.id !== id)
+          .some(
+            (entry) =>
+              conversationScope(
+                entry.saved,
+                resolveProfile(profilesState(), {
+                  sessionProfileId: entry.saved.profileId ?? undefined,
+                  projectPath: entry.saved.cwd,
+                }).configDir,
+              ) === mine,
+          )
 
     /*
      * Do the two accounts read one conversation history?
@@ -330,35 +400,19 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
       decision: decision ?? null,
       occupied,
       sharedStore,
+      targetSignedIn,
+      targetUnavailable,
     })
 
     /*
-     * Which conversation the replacement is told to continue.
-     *
-     * `--continue` means "the folder's newest in the target's store", and the
-     * sheet has just promised something narrower than that — the conversation
-     * *on screen*. This app knows its id, because it put it on the outgoing
-     * process's own command line, so the replacement can name it instead of
-     * describing it. The check is the honest half: the transcript has to be
-     * readable from the store the replacement will run against, or `--resume`
-     * is a process that prints an error and exits. `conversationToCarry` holds
-     * the three conditions and is tested on its own.
-     *
-     * Both spellings of the folder, because on this platform everything under
-     * `/tmp` is reached through a symlink and the CLI files a transcript under
-     * whichever spelling it was handed.
+     * Which conversation the replacement is told to continue: the one on screen,
+     * by name, when the plan says it follows and the target can read it — see
+     * `conversationToCarry`, which holds the three conditions.
      */
-    const named = meta?.agentSessionId
     const carried =
-      configDir === null || typeof named !== 'string'
+      named === null
         ? null
-        : conversationToCarry({
-            plan,
-            agentSessionId: named,
-            readableInTarget: projectPathSpellings(saved.cwd).some((spelling) =>
-              existsSync(join(transcriptDir(spelling, configDir), `${named}.jsonl`)),
-            ),
-          })
+        : conversationToCarry({ plan, agentSessionId: named, readableInTarget })
 
     return { plan, saved, resume: plan.resume, conversationId: carried }
   }
@@ -430,28 +484,49 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
      *
      * `startSession` resolves the moment the pty exists, and the agent can still
      * refuse a second later — `--continue` against a transcript the CLI declines
-     * to continue is a real, reproduced case, and `survivedStart` carries it.
-     * Stopping the old session before knowing would leave a dead tab where a
-     * working agent was, which is the one outcome this feature must not produce.
+     * to continue is a real, reproduced case. Stopping the old session before
+     * knowing would leave a dead tab where a working agent was, which is the one
+     * outcome this feature must not produce.
+     *
+     * So the switch waits for the replacement to be *ready* — its prompt, or a
+     * question for the person, on its own screen — rather than for a fixed 1.5
+     * seconds to pass. The fixed wait got two cases wrong: an agent that died at
+     * 1.6 seconds took the tab with it, and an agent with no login, which sits
+     * alive at its sign-in screen, passed as started. `awaitReplacement` carries
+     * the signal and its ceiling.
      *
      * The replacement is cleaned up rather than left as a corpse: it never
      * became anybody's tab — this handler is the only thing that knows it exists
      * — so leaving it in the ledger would put a phantom session in `openSessions`
      * for the next launch to restore.
      */
-    const started = await survivedStart(meta.id, {
-      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      alive: (id) => core.ptys.list().some((session) => session.id === id),
-      screen: (id) => core.ptys.scrollback(id),
-    })
-    if (!started.alive) {
+    const started = await awaitReplacement(
+      meta.id,
+      {
+        wait: hooks.readiness?.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+        alive: (sid) => core.ptys.list().some((session) => session.id === sid),
+        // `screen` is the visible viewport through the session's own shadow
+        // terminal; a core without one (a test double) answers "unknown", and
+        // the wait then rests on the process being alive, as it always did.
+        screen: (sid) =>
+          typeof core.ptys.screen === 'function' ? core.ptys.screen(sid) : Promise.resolve(null),
+        scrollback: (sid) => core.ptys.scrollback(sid),
+      },
+      {
+        ...(hooks.readiness?.ceilingMs === undefined ? {} : { ceilingMs: hooks.readiness.ceilingMs }),
+        ...(hooks.readiness?.pollMs === undefined ? {} : { pollMs: hooks.readiness.pollMs }),
+      },
+    )
+    if (started.outcome === 'died' || started.outcome === 'signed-out') {
       core.ledger.forget(meta.id)
       core.ptys.kill(meta.id)
-      const why = startFailed(plan.to.name, started.said)
+      const why =
+        started.outcome === 'signed-out' ? startSignedOut(plan.to.name) : startFailed(plan.to.name, started.said)
       logger.warn('session', `account switch did not take: ${why}`, {
         folder: saved.cwd,
         agent: saved.provider,
         to: plan.to.id,
+        waitedMs: started.waitedMs,
       })
       throw new Error(why)
     }

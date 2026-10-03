@@ -33,10 +33,19 @@ import { createSessionSwitch, type SwitchCore } from './session-switch-run'
  */
 
 let dir: string
+const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'terminaldeck-switch-run-'))
   mkdirSync(join(dir, 'remote'), { recursive: true })
+  /*
+   * The machine's "own install" pointed at a scratch folder. A switch from the
+   * own install links the target account's history into the own install's
+   * `projects/` and lists conversations there — and without this that was the
+   * real `~/.claude/projects` of whoever ran the suite.
+   */
+  mkdirSync(join(dir, 'own-claude', 'projects'), { recursive: true })
+  process.env.CLAUDE_CONFIG_DIR = join(dir, 'own-claude')
   resetPaths()
   installPaths({
     userData: () => dir,
@@ -48,6 +57,8 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
   resetPaths()
   rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })

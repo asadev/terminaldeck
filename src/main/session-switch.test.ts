@@ -124,20 +124,23 @@ describe('what cannot be switched', () => {
     expect(why).toContain('copilot')
   })
 
-  it('refuses a shell in the agent’s own words, not a generic sentence', () => {
+  it('refuses a plain terminal by saying why — an agent typed into it was not started by this app', () => {
     /*
-     * `finish.test.ts` pins that a shell is never described as an agent. This is
-     * the same rule at the other end of the wire: an account is a config
-     * directory handed to an agent, so a session with no agent in it has nothing
-     * for one to be about. The sentence is `loginsNote`'s, so the chip and this
-     * refusal cannot come to say two different things about one situation.
+     * The tab is a shell, and if an agent is running in it somebody typed its
+     * name at the prompt: this app never launched it, never chose its login,
+     * and cannot restart it as anybody else. "A shell has no account" was true
+     * and read, to somebody looking at Claude running in that tab, as the app
+     * not having looked. The sentence says what is actually the case and what
+     * to do instead, and still never calls the shell itself an agent.
      */
     const why = switchRefusal({
       meta: meta({ provider: 'shell', profileId: undefined, profileName: undefined }),
       saved: saved({ provider: 'shell' }),
       target: profile(),
     })
-    expect(why).toBe('A plain shell has no account to sign in to.')
+    expect(why).toContain('This tab is a plain terminal.')
+    expect(why).toContain('was not started by this app')
+    expect(why).toContain('open a new session on the account you want')
   })
 
   it('refuses an account of a different agent, and names both', () => {
@@ -306,7 +309,9 @@ describe('the two passes the handler makes', () => {
     const handler = readFileSync(join(__dirname, 'session-switch-run.ts'), 'utf8')
     const subject = handler.slice(handler.indexOf('const subject = async'))
     const body = subject.slice(0, subject.indexOf('const perform = async'))
-    expect(body).toContain('switchRefusal({ meta, saved, target })')
+    // `targetSignedIn` rides along: it is the vault's answer, read from memory,
+    // so it is as cheap as the rest and belongs in the same first pass.
+    expect(body).toContain('switchRefusal({ meta, saved, target, targetSignedIn, targetUnavailable })')
     // And the plan is asked for exactly once afterwards, with a real decision.
     expect(body).toContain('await planSaved([switched])')
   })
@@ -549,7 +554,7 @@ describe('the arguments a switch actually spawns', () => {
     // context-window bar above all — uses to find *this* session's transcript.
     // A resume by name knows it; it simply must not put it on `--session-id`.
     expect(source).toMatch(
-      /const agentSessionId =\s*\n\s*declaredId \?\? \(named && chosen === resumeArgs/,
+      /const agentSessionId =\s*\n\s*declaredId \?\?\s*\n\s*\(named && chosen === resumeArgs/,
     )
   })
 })

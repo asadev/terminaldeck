@@ -467,15 +467,29 @@ export function addAccountsRows(state: {
   signInable: ReadonlySet<string>
   /** Agent id → the logins of it that are named. */
   logins?: Readonly<Record<string, readonly string[]>>
+  /**
+   * Agents this machine already holds an account of beyond the install's own.
+   *
+   * Somebody who has added one account is somebody who adds accounts, and for
+   * them the act on this row is **Add account** whatever the probes have said
+   * so far. Without it the row's act depended on a probe reading *signed in*,
+   * and the probes are one process per account with a ten-second timeout — so
+   * the more accounts there were, the likelier every one of them read "could
+   * not tell", and the row quietly swapped **Add account** for **Sign in** on
+   * the install. That was one of the concrete reasons more accounts could not
+   * be added.
+   */
+  hasAccounts?: ReadonlySet<string>
 }): AddAccountsRow[] {
   return LOOKUP_AGENTS.map((entry) => {
     const installed = state.present.has(entry.id)
     const signedIn = state.signedIn.has(entry.id)
+    const offerAnother = signedIn || (state.hasAccounts?.has(entry.id) ?? false)
     const action: AddAccountsAction = !installed
       ? entry.url
         ? 'install'
         : 'none'
-      : signedIn
+      : offerAnother
         ? // Signed in already: the only thing left to add is another login, and
           // Gemini keeps one per machine — so that row names what is there and
           // offers nothing, which is honest where **Add account** would open a
@@ -572,6 +586,7 @@ export function AddAccountsMenu({
   signedIn = new Set<string>(),
   signInable = new Set<string>(),
   logins,
+  hasAccounts,
   agents = [],
   onAddAccount,
   onSignIn,
@@ -594,6 +609,8 @@ export function AddAccountsMenu({
   signInable?: ReadonlySet<string>
   /** Agent id → the logins of it anybody has named, for the signed-in run. */
   logins?: Readonly<Record<string, readonly string[]>>
+  /** Agents with an account beyond the install's own. See `addAccountsRows`. */
+  hasAccounts?: ReadonlySet<string>
   /**
    * What the probe found, for the two facts a row can carry beyond its name.
    *
@@ -624,6 +641,7 @@ export function AddAccountsMenu({
     signedIn,
     signInable: onSignIn ? signInable : new Set(),
     logins,
+    ...(hasAccounts ? { hasAccounts } : {}),
   })
   const runs: AddAccountsRow['run'][] = ['signed-in', 'not-signed-in']
 
@@ -883,6 +901,13 @@ export function AgentsSection(props: SectionProps) {
     if (named !== null) (logins[profile.provider] ??= []).push(named)
   }
 
+  /** Agents holding an account beyond the install's own. See `addAccountsRows`. */
+  const hasAccounts = new Set(
+    (profiles?.profiles ?? [])
+      .filter((profile) => !profile.system && profile.provider !== null)
+      .map((profile) => profile.provider as string),
+  )
+
   /*
    * The agents whose own install login this window could sign in.
    *
@@ -1050,6 +1075,7 @@ export function AgentsSection(props: SectionProps) {
                   signedIn={signedIn}
                   signInable={signInable}
                   logins={logins}
+                  hasAccounts={hasAccounts}
                   agents={agents}
                   onAddAccount={(id) => askForAddAccount(id)}
                   onSignIn={props.startSession ? signInInstall : undefined}

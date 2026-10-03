@@ -43,7 +43,14 @@ import { isProviderId } from './preferences'
 /* ------------------------------------------------------------------ model -- */
 
 /** Mirror of `SwitchConversation` in `main/session-switch.ts`. */
-export type SwitchConversation = 'follows' | 'stays' | 'theirs' | 'taken' | 'unreadable' | 'none'
+export type SwitchConversation =
+  | 'follows'
+  | 'stays'
+  | 'theirs'
+  | 'taken'
+  | 'unreadable'
+  | 'none'
+  | 'separate'
 
 const CONVERSATIONS: readonly SwitchConversation[] = [
   'follows',
@@ -52,6 +59,7 @@ const CONVERSATIONS: readonly SwitchConversation[] = [
   'taken',
   'unreadable',
   'none',
+  'separate',
 ]
 
 /** Mirror of `SwitchAccount`. `provider` is a string here; the picker narrows it. */
@@ -222,6 +230,17 @@ export function switchConversationNote(
       )
     case 'none':
       return `${stays} This agent has no way to continue an earlier conversation, so ${names.to} starts fresh.`
+    case 'separate':
+      /*
+       * Codex: a conversation lives inside the account's own folder, so the
+       * account being switched to cannot see it. Said before the switch, in
+       * those words, rather than letting the new account quietly continue some
+       * other conversation of its own.
+       */
+      return (
+        `${stays} This agent keeps each account's conversations separate, so ${names.to} cannot see ` +
+        `this one and starts a new conversation.`
+      )
     default:
       return `${stays} ${names.to} has no conversation in this folder, so it starts a new one.`
   }

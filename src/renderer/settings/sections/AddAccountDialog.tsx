@@ -8,6 +8,7 @@ import {
   type AccountProviderRow,
 } from '../../components/ProviderPicker'
 import {
+  accountAwaitingLogin,
   accountHoldingLogin,
   MAX_ACCOUNT_NAME_LENGTH,
   type AccountView,
@@ -136,6 +137,16 @@ export interface AddAccountDialogProps {
    */
   accounts?: readonly AccountView[]
   signIn?: Readonly<Record<string, SignInFacts | undefined>>
+  /**
+   * Finish the sign-in of an account that was added for this address and never
+   * signed in — the row's own Sign in.
+   *
+   * The case it answers is a real one from this screen: an Add whose terminal
+   * was closed before the login finished left a row named after the address,
+   * and every later Add of the same address was refused as a duplicate of a
+   * login that did not exist. Absent keeps the old refusal.
+   */
+  onSignInExisting?: ((account: AccountView) => void) | null
   onClose(): void
 }
 
@@ -175,6 +186,7 @@ export function AddAccountSteps({
   provider = null,
   accounts = [],
   signIn = {},
+  onSignInExisting = null,
   onClose,
 }: AddAccountDialogProps) {
   const [draft, setDraft] = useState('')
@@ -235,6 +247,12 @@ export function AddAccountSteps({
    * screen and a keychain entry for nothing.
    */
   const already = chosen ? accountHoldingLogin(accounts, signIn, chosen.id, draft) : null
+  /*
+   * The same address, added before and never signed in. Not a duplicate of a
+   * login — there is no login yet — so it is finished rather than refused.
+   */
+  const unfinished =
+    chosen && onSignInExisting ? accountAwaitingLogin(accounts, signIn, chosen.id, draft) : null
 
   const submit = useCallback(
     (event: FormEvent) => {
@@ -248,10 +266,14 @@ export function AddAccountSteps({
       // and letting the session die is how the 2026-08-16 recording ended with
       // five orphan rows in the sidebar and nothing cleaned up.
       if (problem) return
+      if (unfinished && onSignInExisting) {
+        onSignInExisting(unfinished)
+        return
+      }
       if (already) return
       onSignIn(email, chosen.id)
     },
-    [already, chosen, draft, onSignIn, problem],
+    [already, chosen, draft, onSignIn, onSignInExisting, problem, unfinished],
   )
 
   if (!open) return null
@@ -337,10 +359,12 @@ export function AddAccountSteps({
             <p className="add-account-ask">
               Sign in, in the terminal that opens.
               <HoverNote label="Signing in">
-                A session starts on that agent and it asks you to log in, exactly as it would in
-                your own terminal — this app never sees your password or your token. Its
-                conversations are kept with your own install where the agent allows it, so one
-                started under this account can be continued under another.
+                A session starts on that agent and it asks you to log in. Your password goes only
+                to the agent’s own sign-in page; the login it hands back is kept by this app,
+                encrypted, so switching to this account later needs no sign-in. The agent signs in
+                whoever your browser is signed in as — if that is another account, sign out there
+                first. Its conversations are kept with your own install where the agent allows
+                it, so one started under this account can be continued under another.
               </HoverNote>
             </p>
           </li>
@@ -367,11 +391,17 @@ export function AddAccountSteps({
           describing the rule, because what a person needs here is *you already
           have this* and not a paragraph about config directories.
         */}
-        {already && (
-          <p className="add-account-warn" role="status" data-kind="already">
-            This {chosen?.label ?? 'agent'} login is already on this computer. Use it from the
-            account menu — a second copy would only be another sign-in for the same login.
+        {unfinished ? (
+          <p className="add-account-warn" role="status" data-kind="unfinished">
+            You started adding this one already. Sign in to finish it.
           </p>
+        ) : (
+          already && (
+            <p className="add-account-warn" role="status" data-kind="already">
+              This {chosen?.label ?? 'agent'} login is already on this computer. Use it from the
+              account menu — a second copy would only be another sign-in for the same login.
+            </p>
+          )
         )}
 
         {problem && (
@@ -412,7 +442,12 @@ export function AddAccountSteps({
             type="submit"
             className="add-account-go"
             disabled={
-              busy || draft.trim() === '' || !chosen || !onSignIn || problem !== null || already !== null
+              busy ||
+              draft.trim() === '' ||
+              !chosen ||
+              !onSignIn ||
+              problem !== null ||
+              (already !== null && unfinished === null)
             }
           >
             {busy ? 'Opening…' : 'Sign in'}

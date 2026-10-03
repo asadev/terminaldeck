@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  accountAwaitingLogin,
   accountForFolder,
+  accountHoldingLogin,
   accountIdentity,
   accountLabel,
   accountRail,
@@ -19,7 +21,10 @@ import {
   signInLabel,
   signInStateSummary,
   signInSummary,
+  duplicateLogins,
   type AccountsSnapshot,
+  type AccountView,
+  type SignInFacts,
 } from './accounts'
 
 /**
@@ -615,5 +620,87 @@ describe('parseSnapshot carries the inherited installs', () => {
   it('is empty for a payload from a build that predates it', () => {
     expect(parseSnapshot({ profiles: [] }).inherited).toEqual([])
     expect(parseSnapshot(null).inherited).toEqual([])
+  })
+})
+
+/**
+ * The account vault, as the window sees it, and the add-an-account rules it
+ * changed. Nothing here is ever a value — only where a login lives.
+ */
+describe('logins the app keeps', () => {
+  const account = (id: string, name: string, over: Partial<AccountView> = {}): AccountView => ({
+    id,
+    name,
+    provider: 'claude',
+    configDir: `/p/${id}`,
+    system: false,
+    color: '--accent',
+    lastUsedAt: null,
+    ...over,
+  })
+  const live = (address: string): SignInFacts => ({ state: 'signed-in', account: address })
+  const out: SignInFacts = { state: 'signed-out', account: null }
+
+  it('reads where each login lives off the snapshot, and nothing it does not recognise', () => {
+    const snapshot = parseSnapshot({
+      profiles: [
+        { id: 'a', name: 'a@x.com', provider: 'claude', configDir: '/p/a' },
+        { id: 'b', name: 'b@x.com', provider: 'claude', configDir: '/p/b' },
+        { id: 'c', name: 'c@x.com', provider: 'claude', configDir: '/p/c' },
+      ],
+      vault: {
+        a: { keptBy: 'app', signedIn: true, updatedAt: 1, plan: 'max' },
+        b: { keptBy: 'somewhere-else', signedIn: 'yes' },
+      },
+    })
+    expect(snapshot.accounts[0]).toMatchObject({ keptBy: 'app', keptSignedIn: true })
+    expect(snapshot.accounts[1].keptBy).toBeUndefined()
+    expect(snapshot.accounts[1].keptSignedIn).toBeUndefined()
+    expect(snapshot.accounts[2].keptBy).toBeUndefined()
+  })
+
+  it('does not lock an address out because a wrong sign-in landed under its name', () => {
+    // `b@x.com` was added while the browser was signed in as `a@x.com`.
+    const accounts = [account('a', 'a@x.com'), account('b', 'b@x.com')]
+    const signIn = { a: live('a@x.com'), b: live('a@x.com') }
+    expect(accountHoldingLogin(accounts, signIn, 'claude', 'b@x.com')).toBeNull()
+    expect(accountHoldingLogin(accounts, signIn, 'claude', 'a@x.com')?.id).toBe('a')
+  })
+
+  it('offers to finish an Add that never signed in, and refuses only a real duplicate', () => {
+    const accounts = [account('half', 'half@x.com', { keptBy: 'app', keptSignedIn: false }), account('done', 'done@x.com')]
+    const signIn = { half: out, done: live('done@x.com') }
+    expect(accountAwaitingLogin(accounts, signIn, 'claude', 'half@x.com')?.id).toBe('half')
+    expect(accountAwaitingLogin(accounts, signIn, 'claude', 'done@x.com')).toBeNull()
+    expect(accountHoldingLogin(accounts, signIn, 'claude', 'done@x.com')?.id).toBe('done')
+    // A kept login that the vault holds is signed in, whatever a slow probe says.
+    const held = [account('held', 'held@x.com', { keptBy: 'app', keptSignedIn: true })]
+    expect(accountAwaitingLogin(held, {}, 'claude', 'held@x.com')).toBeNull()
+  })
+
+  it('names the copy, never the original, when two rows hold one login', () => {
+    const accounts = [
+      account('system', 'Default', { system: true }),
+      account('x', 'x@x.com'),
+      account('y', 'y@x.com'),
+      account('codex', 'me@x.com', { provider: 'codex' }),
+    ]
+    const signIn = { system: live('me@x.com'), x: live('me@x.com'), y: live('y@x.com'), codex: live('me@x.com') }
+    const copies = duplicateLogins(accounts, signIn)
+    expect(Object.keys(copies)).toEqual(['x'])
+    expect(copies.x?.id).toBe('system')
+  })
+
+  /*
+   * Review finding 12. Before: "no address" was read as "not signed in", and a
+   * Codex login — whose status line never names an address — is signed in with
+   * no address. So a second Add of its address was offered as "finish signing
+   * in" to a login that was already finished.
+   */
+  it('reads a signed-in login with no address as finished, not as waiting to sign in', () => {
+    const codex = account('c', 'work@x.com', { provider: 'codex' })
+    const signIn = { c: { state: 'signed-in' as const, account: null } }
+    expect(accountHoldingLogin([codex], signIn, 'codex', 'work@x.com')?.id).toBe('c')
+    expect(accountAwaitingLogin([codex], signIn, 'codex', 'work@x.com')).toBeNull()
   })
 })

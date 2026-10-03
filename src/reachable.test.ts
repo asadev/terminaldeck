@@ -168,6 +168,10 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'store, door, tools.run and relay end-to-end tests all drive. Four slightly different fakes of ' +
     'one app is how one of them comes to disagree with the real surface; it lives in src/ so tsc ' +
     'checks it against the modules it assembles, the same reason `servers/test-fixtures.ts` does.',
+  'src/main/account-vault/fake-cipher.fixture.ts':
+    'unreachable on purpose: it is the `safeStorage` stand-in and the made-up logins the ' +
+    'account vault is tested with. A cipher whose ciphertext is not the plaintext and a login ' +
+    'nobody could sign in with — the app itself always uses `electron-cipher.ts`.',
   'src/main/browser-extension-zip.fixture.ts':
     'unreachable on purpose: it builds the zip archives `browser-extension-unzip.test.ts` reads, ' +
     'including the malformed ones — path traversal, symlinks, a lying size, zip64 — that no real ' +

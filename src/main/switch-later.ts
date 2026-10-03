@@ -59,6 +59,7 @@
  * worth spending a whole extra state on.
  */
 
+import type { SessionStatus } from '../shared/types'
 import type { SwitchPlan } from './session-switch'
 
 /* --------------------------------------------------------------- channels -- */
@@ -561,8 +562,22 @@ export type WriteAction =
  * shells that assemble this app each build their own core and a shared map
  * would leak one shell's sessions into the other's.
  */
+export interface PendingSwitchesOptions {
+  /**
+   * What the session is doing right now — the same status the sidebar shows.
+   *
+   * Read at the Enter, to tell a message from an answer: while the agent is
+   * asking the person something (`input` — a permission prompt, a trust
+   * dialog, a numbered choice) the Enter answers it, and switching there would
+   * stop the agent in the middle of the turn it was asking about.
+   */
+  statusOf?(sessionId: string): SessionStatus | null
+}
+
 export class PendingSwitches {
   private readonly armed = new Map<string, ArmedSwitch>()
+
+  constructor(private readonly options: PendingSwitchesOptions = {}) {}
 
   arm(entry: Omit<ArmedSwitch, 'armedAt' | 'composing'>): ArmedSwitch {
     const record: ArmedSwitch = { ...entry, armedAt: Date.now(), composing: EMPTY_LINE }
@@ -603,6 +618,33 @@ export class PendingSwitches {
     const { state: composing, submit: at } = feed(armed.composing, data)
     if (at === -1) {
       armed.composing = composing
+      return { kind: 'pass' }
+    }
+
+    /*
+     * Only a real message fires the switch.
+     *
+     * Two Enters are not one, and the register used to treat them alike:
+     *
+     *  - **An empty line.** Enter on an empty prompt sends nothing, and Enter on
+     *    a dialog's highlighted choice ("1. Yes" with the arrow on it) arrives
+     *    here as exactly that — an Enter with nothing typed. Switching there
+     *    stopped the agent the moment the person approved what it was doing.
+     *  - **An answer to a question.** "2" then Enter at a numbered choice has a
+     *    line, but it is an answer, and the session's own status says a
+     *    question is up (`input`).
+     *
+     * Both are written through untouched — the dialog gets its Enter — and the
+     * switch stays armed for the message that comes after, starting from a
+     * clean line so the answer is not mistaken for the start of it.
+     */
+    const isMessage =
+      composing.line.trim() !== '' && this.options.statusOf?.(sessionId) !== 'input'
+    if (!isMessage) {
+      armed.composing = EMPTY_LINE
+      // Anything after the Enter in this chunk is the start of the next line.
+      const after = data.slice(at + 1)
+      if (after !== '') armed.composing = feed(EMPTY_LINE, after).state
       return { kind: 'pass' }
     }
 

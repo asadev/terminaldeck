@@ -62,7 +62,19 @@
  * correctly understood to be in one conversation. See `session-restore.ts`.
  */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import {
@@ -201,21 +213,81 @@ export function shareState(profile: Profile): ProjectsShareState {
 /**
  * What happened, in the terms a screen has to report it.
  *
- * `moved` and `kept` are counted rather than summarised because they are the
- * two halves of the only lossy moment in this feature: a project directory that
- * already exists in the shared history cannot be merged into it without
- * deciding which of two files for the same folder wins, and this module refuses
- * to make that decision. Those stay where they are, in a directory the account
- * no longer reads, and the sentence on screen says so.
+ * `moved` counts what came into the shared history; `kept` counts what could
+ * not — and that is now only ever a file whose exact name the shared history
+ * already holds **with different contents**, which for transcripts named by a
+ * random conversation id does not happen in practice.
  */
 export interface ShareResult {
   state: ProjectsShareState
-  /** Project directories moved from this account's own history into the shared one. */
+  /** Entries moved from this account's own history into the shared one. */
   moved: number
-  /** Ones left behind because the shared history already has that folder. */
+  /** Files left behind because the shared history holds the same name with other contents. */
   kept: number
   /** Where they were left, when any were. */
   keptAt: string | null
+}
+
+/**
+ * Move everything in `from` into `to`, one entry at a time, and answer how
+ * many entries moved and which files could not.
+ *
+ * ## Why per file, where it used to refuse the whole folder
+ *
+ * A folder both histories had was refused outright, and the account's entire
+ * `projects/` was renamed out of sight so the link could be made. The person
+ * then switched account and the conversation on screen — which lived in that
+ * folder — was nowhere the agent looked: hidden, on the first switch, by the
+ * feature whose whole point was to keep it.
+ *
+ * The refusal was guarding against interleaving two accounts' lines inside one
+ * transcript, and moving files does not do that. Claude Code names each
+ * conversation's file after its own random id, so one account's
+ * `<id>.jsonl` and another's never share a name; they sit side by side in the
+ * folder exactly as two conversations of one account do, which is also exactly
+ * what shared history does with every conversation written after the link.
+ *
+ * So: an entry the shared side lacks is moved; a folder both have is merged
+ * into, recursively; a file both have with the **same bytes** is the same file
+ * and the extra copy goes; and a file both have with different bytes — the one
+ * case a merge would have to choose — is left where it is, to be set aside.
+ */
+function mergeInto(from: string, to: string): { moved: number; conflicts: number } {
+  let moved = 0
+  let conflicts = 0
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const source = join(from, entry.name)
+    const destination = join(to, entry.name)
+    if (!existsSync(destination)) {
+      renameSync(source, destination)
+      moved += 1
+      continue
+    }
+    const there = statSync(destination)
+    if (entry.isDirectory() && there.isDirectory()) {
+      const inner = mergeInto(source, destination)
+      moved += inner.moved
+      conflicts += inner.conflicts
+      if (inner.conflicts === 0) rmSync(source, { recursive: true, force: true })
+      continue
+    }
+    if (entry.isFile() && there.isFile() && sameBytes(source, destination)) {
+      unlinkSync(source)
+      continue
+    }
+    conflicts += 1
+  }
+  return { moved, conflicts }
+}
+
+/** Do two files hold exactly the same bytes? */
+function sameBytes(a: string, b: string): boolean {
+  try {
+    if (statSync(a).size !== statSync(b).size) return false
+    return readFileSync(a).equals(readFileSync(b))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -276,25 +348,15 @@ export function shareProjects(profile: Profile, platform: Platform = currentPlat
   let keptAt: string | null = null
 
   if (before.link === 'separate') {
-    for (const entry of readdirSync(path, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const from = join(path, entry.name)
-      const to = join(root, entry.name)
-      if (existsSync(to)) {
-        // Both histories have this folder. Merging them would mean interleaving
-        // two accounts' transcripts for one project, and there is nothing in a
-        // transcript line that says which account wrote it — `ACCOUNT-MODEL.md`
-        // establishes that the hard way. So this one is not merged.
-        kept += 1
-        continue
-      }
-      renameSync(from, to)
-      moved += 1
-    }
+    const merged = mergeInto(path, root)
+    moved = merged.moved
+    kept = merged.conflicts
 
     if (kept > 0) {
-      // Moved aside rather than deleted, and named so that somebody finding it
-      // in six months knows what it is.
+      // Only the files that could not be merged are left in it. Moved aside
+      // rather than deleted, outside `projects/` so no agent mistakes them for
+      // live history, and named so that somebody finding it in six months knows
+      // what it is.
       keptAt = `${path}.not-merged-${Date.now()}`
       renameSync(path, keptAt)
     } else {
@@ -434,9 +496,10 @@ export interface AdoptResult {
  * the only direction that matters: project directories move *into*
  * `~/.claude/projects` and the user's own history is never rewritten, which is
  * the first of the three conditions `ACCOUNT-MODEL.md` sets for Option C. A
- * folder the shared history already has is not merged — `shareProjects` sets it
- * aside under a name that says what it is — because there is nothing in a
- * transcript line that says which account wrote it.
+ * folder the shared history already has is merged into file by file — each
+ * conversation is its own uniquely named file, so nothing is interleaved — and
+ * history an earlier build set aside is brought back the same way
+ * (`restoreSetAside`). Existing files in the shared history are never touched.
  *
  * Nothing here may throw. It runs on the way up, before there is a window to
  * report to, and an account that cannot be linked is an account that keeps
@@ -448,6 +511,7 @@ export function adoptSharedHistory(profiles: readonly Profile[]): AdoptResult {
     try {
       if (readsSharedHistory(profile)) {
         result.already.push(profile.id)
+        restoreSetAside(profile)
         continue
       }
       if (!canJoinSharedHistory(profile)) {
@@ -461,6 +525,43 @@ export function adoptSharedHistory(profiles: readonly Profile[]): AdoptResult {
     }
   }
   return result
+}
+
+/**
+ * Bring back the history an earlier build set aside.
+ *
+ * Builds before 0.16.0 refused to merge a folder both histories had and moved
+ * the account's whole `projects/` to `projects.not-merged-<time>` — so on a
+ * machine that has already been through one switch, conversations are sitting
+ * there where no agent looks. For an account that now reads the shared
+ * history, each of those folders is merged in by the same per-file rule, and
+ * removed once nothing is left in it; anything that still cannot be merged
+ * stays exactly where it was. Answers how many entries came back.
+ */
+export function restoreSetAside(profile: Profile): number {
+  if (!readsSharedHistory(profile) || !canShareProjects(profile)) return 0
+  let restored = 0
+  let names: string[]
+  try {
+    names = readdirSync(profile.configDir)
+  } catch {
+    return 0
+  }
+  const root = sharedProjectsRoot()
+  for (const name of names) {
+    if (!name.startsWith('projects.not-merged-')) continue
+    const aside = join(profile.configDir, name)
+    try {
+      if (!statSync(aside).isDirectory()) continue
+      const merged = mergeInto(aside, root)
+      restored += merged.moved
+      if (merged.conflicts === 0) rmSync(aside, { recursive: true, force: true })
+    } catch {
+      // Left exactly as it is; the next launch tries again.
+    }
+  }
+  if (restored > 0) resetConversationStores()
+  return restored
 }
 
 /* ---------------------------------------------------------------- saying -- */
@@ -482,8 +583,8 @@ export function describeShare(state: ProjectsShareState): string {
   if (state.link === 'separate' && state.ownProjects > 0) {
     return (
       `${shared} This account already has ${state.ownProjects} folder${state.ownProjects === 1 ? '' : 's'} ` +
-      `of its own history; those are moved into the shared history, except any folder ` +
-      `the shared history already has, which is left where it is.`
+      `of its own history; every conversation in them is moved into the shared history, ` +
+      `including folders both histories already have.`
     )
   }
   return shared

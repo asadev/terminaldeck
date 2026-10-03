@@ -1,5 +1,16 @@
 # Account model — one switch for the whole app, or two logins side by side?
 
+> **2026-10-03 — the app keeps the logins now.** The blocker below (*"the app
+> cannot get a token to do them with"*) turned out to need no export at all: the
+> CLI asks for its login through `security`, looked up on `PATH`, and the shim
+> measured in this file can answer that for one session. `src/main/account-vault/`
+> keeps each account's login encrypted (`safeStorage`), answers each session with
+> its own account's login through a per-account ticket, and captures every write
+> the CLI makes back (sign-in, refresh, sign-out). Codex is the same idea through
+> its `auth.json`. Measured against the real CLI (2.1.287) with fake logins and a
+> local API in `account-vault/vault.cli.test.ts`. Option A's directories and
+> Option C's shared `projects/` are unchanged underneath it.
+
 Measured 2026-08-17 against the real CLI (`2.1.233`) on this machine.
 Nothing in this file is inferred from documentation.
 

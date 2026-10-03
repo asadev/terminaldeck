@@ -40,6 +40,7 @@ import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { argsForSpawn } from './one-conversation'
+import { recoverConversationId } from './conversation-id'
 import { PtyManager, type RemovalReason } from './pty-manager'
 // The controls a session's bar is drawn from, imported here so that a *remote*
 // window reaches the same two functions this machine's own window does. See the
@@ -71,7 +72,9 @@ import { AGENT_CATALOG } from '../shared/agent-catalog'
 import { isCustomProviderId, type CustomAgent } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
-import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
+import { getState as profilesState, keptUnavailable, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
+import { vaultPath } from './account-vault/runtime'
+import { withoutVaultEnv } from './session-env'
 // Which login each session's agent is actually running as — the one place that
 // answers it, so that the control cluster names the same account the chip and
 // the usage bar do. See {@link HostCore.controlAccess}.
@@ -102,7 +105,7 @@ import { forgetWindowOwner, noteWindowOwner } from './window-owner'
 import { sessionExited } from './browser-binding'
 import { currentOpenShim, prependShim } from './open-shim'
 import { currentAppContext } from './app-context'
-import { installDeviceHomes, installHomeScopes } from './transcript'
+import { installDeviceHomes, installHomeScopes, projectPathSpellings, transcriptDir } from './transcript'
 import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import {
   createCredentialProxy,
@@ -161,6 +164,18 @@ import {
  * was supposed to be catching; its header says what that cost on a real server.
  */
 export { AgentUnavailableError } from './agent-unavailable'
+
+/**
+ * The account a remembered tab is written down as: the one the session was
+ * resolved to and runs as, falling back to the request only when the session
+ * has no account at all (a shell, an agent whose login this app cannot move).
+ */
+export function rememberedAccount(
+  meta: Pick<SessionMeta, 'profileId'>,
+  input: Pick<CreateSessionInput, 'profileId'>,
+): string | null {
+  return meta.profileId ?? input.profileId ?? null
+}
 // And in scope here, because `startSession` below is the one place that throws
 // it. A re-export alone does not bind the name inside this module.
 import { AgentUnavailableError } from './agent-unavailable'
@@ -1374,6 +1389,20 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     extraArgs?: readonly string[],
   ): Promise<SessionMeta> {
     /*
+     * An account whose login this app keeps, in a process that cannot reach it
+     * — the headless host, which has no `safeStorage`, or a desktop whose vault
+     * would not unlock. Refused before anything is probed or spawned: the agent
+     * would otherwise read the keychain item its folder names, which the app
+     * stopped keeping up to date, and the session would run as a stale login or
+     * none, silently. Resolved the same way the spawn below resolves it, so the
+     * two cannot disagree about which account this is.
+     * `account-vault/runtime.ts` (`unavailable`) has the rest.
+     */
+    const unavailable = keptUnavailable(
+      resolveProfile(profilesState(), { sessionProfileId: input.profileId ?? undefined, projectPath: input.cwd }),
+    )
+    if (unavailable !== null) throw new Error(unavailable)
+    /*
      * Which side of the WSL boundary this session lives on, decided by its
      * folder and by nothing else.
      *
@@ -1869,7 +1898,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * whoever adds the third caller.
      */
     const profileEnv = {
-      ...sessionEnv(profile, provider),
+      /*
+       * Without the vault's ticket when the session is confined. A device's
+       * held session is denied the keychain by its sandbox, and it has always
+       * meant that its agent could not read the owner's login from there; a
+       * ticket would quietly hand it that login over the socket instead. That
+       * is a change to what a paired device can reach, which is the owner's to
+       * decide, not a side effect of where logins are stored — so it is not
+       * made here. A confined session behaves exactly as it did before.
+       */
+      ...(confined ? withoutVaultEnv(sessionEnv(profile, provider)) : sessionEnv(profile, provider)),
       ...(guest?.set ?? {}),
       ...(confined && confine ? confinedHomeEnv(confine.home, platform) : {}),
       /*
@@ -1899,6 +1937,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * it is a gap in the *proxy*, not in the isolation.
      */
     const guestPaths = guest?.paths ?? []
+    /*
+     * The `security` shim, first on the PATH of a session running as an account
+     * this app keeps the login of — and of no other session. `vaultPath` reads
+     * the ticket `sessionEnv` put in `profileEnv`, so the PATH and the ticket
+     * cannot disagree about which sessions are vault sessions. Composed here,
+     * before the confinement plan reads `path`, for the reason the open shim's
+     * placement gives above: a PATH entry the plan has no rule for is an exec
+     * the sandbox refuses. `account-vault/keychain-shim.ts` has the rest.
+     */
+    const sessionPath = vaultPath(path, profileEnv)
     const env =
       target === null
         ? profileEnv
@@ -1986,6 +2034,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * `one-conversation.ts` carries the argument.
        */
       replaces: typeof input.replaces === 'string' ? input.replaces : null,
+      // The conversation named on the command line, when one is: a named
+      // resume collides only with a tab on that same conversation, not with
+      // every tab in the folder. See `argsForSpawn`.
+      conversationId: named ? (input.resumeConversationId as string) : null,
       // `provider`, the same value handed to `ptys.create` below and therefore
       // the same one `SessionMeta.provider` carries — so the comparison is
       // like for like. The *requested* provider is not: an agent that is not
@@ -2051,8 +2103,36 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * what makes that unreachable rather than merely unintended.
      */
     const declaredId = namesConversation ? randomUUID() : null
+    /*
+     * And the third way: a `--continue` that named nothing — every tab restored
+     * at launch. The CLI attaches it to the folder's newest conversation, and
+     * that is the transcript this reads, before the spawn, with every
+     * conversation another live tab is on taken out (`conversation-id.ts`).
+     * Without it a restored tab had no id, and its account switch carried "the
+     * folder's newest" — which, by then, could be another tab's conversation.
+     */
+    const continuedId =
+      declaredId === null &&
+      !named &&
+      provider === 'claude' &&
+      target === null &&
+      resumeArgs.length > 0 &&
+      chosen === resumeArgs
+        ? await recoverConversationId({
+            dirs: projectPathSpellings(input.cwd).map((spelling) => transcriptDir(spelling, profile.configDir)),
+            startedAt: Date.now(),
+            claimed: new Set(
+              ptys
+                .list()
+                .map((session) => session.agentSessionId)
+                .filter((value): value is string => typeof value === 'string' && value !== ''),
+            ),
+          })
+        : null
     const agentSessionId =
-      declaredId ?? (named && chosen === resumeArgs ? (input.resumeConversationId as string) : null)
+      declaredId ??
+      (named && chosen === resumeArgs ? (input.resumeConversationId as string) : null) ??
+      continuedId
     /**
      * Did the agent actually get a continue flag?
      *
@@ -2154,7 +2234,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
             folder: input.cwd,
             device: held,
             accountHome: homeDir(),
-            path,
+            path: sessionPath,
             // Absent for the system profile on purpose. `sessionEnv` returns
             // nothing for it — `profiles.ts` explains why — so the CLI finds
             // its own default, which with `HOME` redirected is inside the
@@ -2190,7 +2270,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       provider,
       command: launch.command,
       args: launch.args,
-      path,
+      path: sessionPath,
       env,
       ...(guest ? { removeEnv: guest.remove } : {}),
       /*
@@ -2283,9 +2363,15 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * relaunch afterwards restored a bare terminal that then reported, quite
      * correctly, that it had no conversation to continue.
      *
-     * `input.profileId`, not the resolved `profile`: a null here means "whatever
-     * this project's default profile is", and that is a question worth asking
-     * again next launch rather than freezing today's answer.
+     * The account it **actually ran as** — `meta.profileId`, the resolved one —
+     * and not the request. This used to write `input.profileId`, and a null
+     * there ("whatever this project's default is") was written down as null, on
+     * the argument that the default was worth asking again next launch. But the
+     * session was not running as "the default"; it was running as one login,
+     * and everything that later asks about the tab — the account switch above
+     * all — re-resolved that null against whatever the default had *become*,
+     * and so reasoned about a different account than the one the agent was
+     * signed in as. See {@link rememberedAccount}.
      *
      * ## A confined session is remembered, carrying the device it belongs to
      *
@@ -2338,7 +2424,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       ledger.note(meta.id, {
         cwd: input.cwd,
         provider: requested,
-        profileId: input.profileId ?? null,
+        profileId: rememberedAccount(meta, input),
         cols: input.cols,
         rows: input.rows,
         lastSeenAt: Date.now(),

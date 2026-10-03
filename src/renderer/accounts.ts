@@ -146,6 +146,30 @@ export interface AccountView {
   color: string
   /** Null until a session has actually been started under it. */
   lastUsedAt: number | null
+  /**
+   * Where this account's login lives — `main/account-vault/runtime.ts`'s
+   * `KeptBy`, read off the snapshot's `vault` map.
+   *
+   *  - `app`       this app keeps it, encrypted; switching to it needs no
+   *                sign-in, and removing the account deletes it.
+   *  - `adopting`  an account made before the app kept logins; it moves in the
+   *                first time a session or a status check reads it.
+   *  - `unavailable` this app keeps it and cannot open its store right now; the
+   *                account is not usable until it can, and nothing falls back.
+   *  - `agent`     the agent keeps it, as before — the machine's own install,
+   *                always, and every account on a build with no vault.
+   *
+   * Optional, and absent reads as `agent`: a payload from a build before the
+   * vault, or a list built by hand in a test, claims nothing about the app
+   * holding anything — which is the safe direction to be wrong in, because
+   * "kept in this app" is a promise that a removal deletes a login.
+   */
+  keptBy?: 'app' | 'adopting' | 'unavailable' | 'agent'
+  /**
+   * Whether the app holds a login for it, when the app keeps it: true, false
+   * (kept here and signed out — definitively), or null when the app cannot say.
+   */
+  keptSignedIn?: boolean | null
 }
 
 /**
@@ -173,10 +197,10 @@ export interface AccountsSnapshot {
    * > *"per machine all the accounts, and then one machine name, then all the
    * > accounts under that machine in one drop-down."*
    *
-   * An account is a login held by an agent CLI **on one machine** — the
-   * credential is in that machine's keychain or in a file in its own home, and
-   * this app never holds it — so which machine a list of accounts belongs to is
-   * part of what the list means rather than decoration on it. Empty is a real
+   * An account is a login held **on one machine** — by that machine's copy of
+   * this app (encrypted, in its own data folder) or by the agent CLI itself —
+   * and it never travels between machines, so which machine a list of accounts
+   * belongs to is part of what the list means rather than decoration on it. Empty is a real
    * answer and a caller substitutes its own noun; see `thisMachineName`.
    */
   machine: string
@@ -289,6 +313,24 @@ export function parseSnapshot(value: unknown): AccountsSnapshot {
       env: typeof row.env === 'string' ? row.env : '',
       dir: row.dir,
     })
+  }
+
+  /*
+   * Where each login lives, from the snapshot's `vault` map. Narrowed field by
+   * field, and an unrecognised value is dropped rather than guessed: the one
+   * claim this carries — "the app keeps this login" — changes what Remove says
+   * it will do, so it is only ever made from an answer the main process gave.
+   */
+  const vault = asRecord(raw?.vault)
+  if (vault) {
+    for (const account of accounts) {
+      const entry = asRecord(vault[account.id])
+      if (!entry) continue
+      const kept = entry.keptBy
+      if (kept === 'app' || kept === 'adopting' || kept === 'unavailable' || kept === 'agent') account.keptBy = kept
+      const signed = entry.signedIn
+      if (signed === true || signed === false || signed === null) account.keptSignedIn = signed
+    }
   }
 
   return {
@@ -944,12 +986,91 @@ export function accountHoldingLogin(
   if (wanted === '') return null
   for (const account of accounts) {
     if (account.provider !== provider) continue
-    const login = namedLogin(account, signIn[account.id])
-    if (login !== null && login.trim().toLowerCase() === wanted) return account
-    // The name it was added under, for the moment before a login exists to read.
+    const facts = signIn[account.id]
+    const live = accountLabel(facts)
+    if (facts?.state === 'signed-in' && live === null) {
+      // Signed in, and the agent names no address — Codex, whose status line
+      // never carries one. The name it was added under is the only label it
+      // has, and it is a login, finished: a second Add of that address is a
+      // duplicate, not a sign-in to finish.
+      if (!isGeneratedAccount(account) && account.name.trim().toLowerCase() === wanted) return account
+      continue
+    }
+    if (live !== null) {
+      /*
+       * Signed in: what it *is* signed in as is the only thing that counts.
+       *
+       * The name it was added under used to count too, and that is how one
+       * wrong sign-in locked an address out for good. Adding `b@…` while the
+       * browser was still signed in to `a@…` makes a directory signed in as
+       * `a@…` that is *named* `b@…` — and every later Add of `b@…` was then
+       * refused as "already on this computer", though `b@…` was on it nowhere.
+       */
+      if (live.trim().toLowerCase() === wanted) return account
+      continue
+    }
+    // Not signed in yet: the name it was added under is the address that was
+    // typed at it, and that is the moment a second Add must be caught. See
+    // `accountAwaitingLogin`, which is what the dialog offers instead.
     if (!isGeneratedAccount(account) && account.name.trim().toLowerCase() === wanted) return account
   }
   return null
+}
+
+/**
+ * The account already added for this address whose sign-in never finished, or
+ * null.
+ *
+ * > *"cannot add as many accounts as we want"* — and one concrete reason was
+ * > this: an Add whose terminal was closed before the login completed left a row
+ * > named after the address, and every later Add of that address was refused as
+ * > a duplicate of a login that did not exist.
+ *
+ * So the dialog no longer refuses that case. It offers to finish the sign-in of
+ * the row that is already there, which is what the person was trying to do.
+ */
+export function accountAwaitingLogin(
+  accounts: readonly AccountView[],
+  signIn: Readonly<Record<string, SignInFacts | undefined>>,
+  provider: ProviderId,
+  address: string,
+): AccountView | null {
+  const held = accountHoldingLogin(accounts, signIn, provider, address)
+  if (held === null) return null
+  // The state, not the address: a signed-in Codex login has no address and is
+  // nonetheless finished.
+  return signIn[held.id]?.state !== 'signed-in' && held.keptSignedIn !== true ? held : null
+}
+
+/**
+ * Accounts that turned out to be a second copy of a login another row already
+ * has — by account id, naming the row it duplicates.
+ *
+ * The usual way it happens is the browser: an agent signs in whoever the
+ * browser is signed in as, so adding a second account while the browser is
+ * still on the first one makes a second directory holding the *first* login.
+ * The session chip folds the two into one row (`oneRowPerLogin`), so from there
+ * the new account simply seems not to have been added. The Accounts list keeps
+ * both and says which one is the copy — the newer one, and never the machine's
+ * own install — so it can be removed and added again properly.
+ */
+export function duplicateLogins(
+  accounts: readonly AccountView[],
+  signIn: Readonly<Record<string, SignInFacts | undefined>>,
+): Record<string, AccountView> {
+  const first = new Map<string, AccountView>()
+  const copies: Record<string, AccountView> = {}
+  // The machine's own install first, so it is always the original.
+  const ordered = [...accounts].sort((a, b) => Number(b.system) - Number(a.system))
+  for (const account of ordered) {
+    const live = accountLabel(signIn[account.id])
+    if (live === null) continue
+    const key = `${account.provider ?? ''}\u0000${live.trim().toLowerCase()}`
+    const original = first.get(key)
+    if (original === undefined) first.set(key, account)
+    else copies[account.id] = original
+  }
+  return copies
 }
 
 /**
