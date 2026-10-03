@@ -169,10 +169,20 @@ describe('the catalogue that ships', () => {
      * `tools.run`, because those clients can only call what they are listed —
      * and one sentence more in the meta-tool telling them to use it.
      *
-     * Measured 2026-10-03: **20 tools, ~5,922 estimated tokens.**
+     * Measured 2026-10-03: **20 tools, ~5,922 estimated tokens.** Then
+     * `notifications_wait` joined it (0.16.2) — the call an app makes when it is
+     * idle, so it has to be listed — and `app_where` moved behind tools_describe
+     * for key callers only, because the screen of a Mac nobody is at is not an
+     * outside app's first reach. Still twenty tools: **~6,081 tokens.**
      */
     const cost = catalogueCost(keyListing())
-    expect(keyListing().map((spec) => spec.wire)).toContain(RUN_WIRE)
+    const wire = keyListing().map((spec) => spec.wire)
+    expect(wire).toContain(RUN_WIRE)
+    expect(wire).toContain('notifications_wait')
+    expect(wire).not.toContain('app_where')
+    // The copilot's listing has neither the inbox nor any line about it.
+    expect(advertised().map((spec) => spec.wire).filter((name) => name.startsWith('notifications_'))).toEqual([])
+    expect(advertised().map((spec) => spec.wire)).toContain('app_where')
     expect(cost.tools).toBe(20)
     expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
     expect(cost.tokens).toBeLessThanOrEqual(MAX_CATALOGUE_TOKENS)

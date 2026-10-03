@@ -1650,6 +1650,13 @@ const api = {
     ipcRenderer.invoke('ai-apps:folders', id, folders),
   aiAppsRevoke: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:revoke', id),
   aiAppsInternet: (on: boolean): Promise<unknown> => ipcRenderer.invoke('ai-apps:internet', on),
+  // How an app hears about its sessions: off, when it asks, or a signed webhook.
+  // `aiAppsNotify` and `aiAppsNotifySecret` carry a webhook secret back once,
+  // when they mint one; `aiAppsNotifyTest` posts one signed test now.
+  aiAppsNotify: (id: string, input: { mode: string; url?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('ai-apps:notify', id, input),
+  aiAppsNotifySecret: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:notify-secret', id),
+  aiAppsNotifyTest: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:notify-test', id),
   onAiAppsChanged: (cb: () => void): (() => void) => {
     const handler = (): void => cb()
     ipcRenderer.on('ai-apps:changed', handler)

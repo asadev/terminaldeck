@@ -5,6 +5,8 @@ import { sectionMeta } from '../settings-schema'
 import {
   APPS,
   LEVELS,
+  NOTIFY_CHOICES,
+  deliveryLine,
   levelCopy,
   setupFor,
   toAiAppsResult,
@@ -15,6 +17,8 @@ import {
   type AiAppsResult,
   type AiAppsState,
   type AppId,
+  type LastDeliveryRow,
+  type NotifyMode,
   type SetupWhere,
 } from './ai-apps-setup'
 import './AiAppsSection.css'
@@ -66,6 +70,12 @@ export interface AiAppsBridge {
   aiAppsFolders(id: string, folders: string[] | null): Promise<unknown>
   aiAppsRevoke(id: string): Promise<unknown>
   aiAppsInternet(on: boolean): Promise<unknown>
+  /** How an app hears about its sessions. Answers with a webhook secret once, when it mints one. */
+  aiAppsNotify(id: string, input: { mode: NotifyMode; url?: string }): Promise<unknown>
+  /** A new webhook signing secret, shown once. */
+  aiAppsNotifySecret(id: string): Promise<unknown>
+  /** Post one signed test notification to the webhook and say what the address answered. */
+  aiAppsNotifyTest(id: string): Promise<unknown>
   onAiAppsChanged(callback: () => void): () => void
 }
 
@@ -78,6 +88,9 @@ const BRIDGE_METHODS: ReadonlyArray<keyof AiAppsBridge> = [
   'aiAppsFolders',
   'aiAppsRevoke',
   'aiAppsInternet',
+  'aiAppsNotify',
+  'aiAppsNotifySecret',
+  'aiAppsNotifyTest',
   'onAiAppsChanged',
 ]
 
@@ -216,6 +229,7 @@ export function AiAppsSection({ bridge: injected }: { bridge?: Partial<AiAppsBri
                   key={key.id}
                   row={key}
                   folders={state.folders}
+                  delivery={state.delivery[key.id]}
                   busy={busy}
                   bridge={bridge}
                   run={run}
@@ -340,12 +354,14 @@ function folderSummary(folders: string[] | null): string {
 function KeyRow({
   row,
   folders,
+  delivery,
   busy,
   bridge,
   run,
 }: {
   row: AccessKeyRow
   folders: string[]
+  delivery: LastDeliveryRow | undefined
   busy: boolean
   bridge: Partial<AiAppsBridge>
   run: Run
@@ -368,6 +384,7 @@ function KeyRow({
           {folderSummary(row.folders)}
           {row.level === 'full' && (row.askFirst ? ' · Asks before big changes' : ' · Big changes without asking')}
         </span>
+        {deliveryLine(delivery) !== null && <span className="settings-tool-note">{deliveryLine(delivery)}</span>}
       </div>
       <div className="settings-profile-actions">
         <Button onClick={() => setOpen((was) => !was)} disabled={busy}>
@@ -427,6 +444,8 @@ function KeyRow({
             onSave={(next) => void run(() => bridge.aiAppsFolders?.(row.id, next))}
           />
 
+          <NotifyBlock row={row} busy={busy} bridge={bridge} run={run} />
+
           {revoking ? (
             <div className="settings-confirm" role="group" aria-label={`Revoke ${row.name}`}>
               <span>Revoke “{row.name}”? The app stops working right away.</span>
@@ -449,6 +468,138 @@ function KeyRow({
         </div>
       )}
     </li>
+  )
+}
+
+/**
+ * "Notify this app": off, when it asks (long-poll), or a webhook — and how the
+ * last one went.
+ *
+ * The webhook's signing secret appears here exactly once, on the answer that
+ * minted it, beside a Copy button and the sentence that says the receiver needs
+ * it. After that the page knows only that one exists; "New secret" mints
+ * another and shows that once.
+ */
+function NotifyBlock({
+  row,
+  busy,
+  bridge,
+  run,
+}: {
+  row: AccessKeyRow
+  busy: boolean
+  bridge: Partial<AiAppsBridge>
+  run: Run
+}) {
+  const ids = useId()
+  const [url, setUrl] = useState(row.notify.url ?? '')
+  const [secret, setSecret] = useState<string | null>(null)
+  const [tested, setTested] = useState<{ ok: boolean; message: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+  // The mode being set up, which can be "webhook" before an address is saved.
+  const [mode, setMode] = useState<NotifyMode>(row.notify.mode)
+  const { copied, copy } = useCopy()
+  useEffect(() => setMode(row.notify.mode), [row.notify.mode])
+  useEffect(() => setUrl(row.notify.url ?? ''), [row.notify.url])
+
+  const choose = (next: NotifyMode): void => {
+    setMode(next)
+    setTested(null)
+    // A webhook needs an address first; the others take effect at once.
+    if (next !== 'webhook' || row.notify.url !== null) {
+      void run(() => bridge.aiAppsNotify?.(row.id, { mode: next })).then((result) => {
+        if (result?.secret) setSecret(result.secret)
+      })
+    }
+  }
+
+  const saveUrl = (): void => {
+    setTested(null)
+    void run(() => bridge.aiAppsNotify?.(row.id, { mode: 'webhook', url: url.trim() })).then((result) => {
+      if (result?.secret) setSecret(result.secret)
+    })
+  }
+
+  const help = NOTIFY_CHOICES.find((choice) => choice.id === mode)?.help ?? ''
+  return (
+    <div className="ai-field">
+      <span className="settings-label" id={`${ids}-label`}>
+        Notify this app
+      </span>
+      <SegmentedSwitch<NotifyMode>
+        inline
+        label="How this app hears about its sessions"
+        options={NOTIFY_CHOICES.map((choice) => ({ id: choice.id, label: choice.label }))}
+        value={mode}
+        disabled={busy}
+        onChange={choose}
+      />
+      <span className="settings-help">{help}</span>
+
+      {mode === 'webhook' && (
+        <>
+          <span className="ai-field-row">
+            <input
+              className="settings-input wide"
+              aria-labelledby={`${ids}-label`}
+              placeholder="https://…"
+              value={url}
+              disabled={busy}
+              onChange={(event) => setUrl(event.target.value)}
+            />
+            <Button disabled={busy || url.trim() === '' || url.trim() === row.notify.url} onClick={saveUrl}>
+              Save
+            </Button>
+            <Button
+              disabled={busy || testing || row.notify.url === null || row.notify.mode !== 'webhook'}
+              title={row.notify.url === null ? 'Save an address first' : 'Send one signed test notification now'}
+              onClick={() => {
+                // Its own answer, beside the button — not the page's error line,
+                // because "the address answered 500" is a result, not a fault here.
+                const pending = bridge.aiAppsNotifyTest?.(row.id)
+                if (!pending) return
+                setTesting(true)
+                void pending
+                  .then((raw) => {
+                    const result = toAiAppsResult(raw)
+                    setTested({ ok: result.ok, message: result.message ?? (result.ok ? 'Delivered.' : 'Not delivered.') })
+                  })
+                  .catch((error: unknown) => setTested({ ok: false, message: error instanceof Error ? error.message : String(error) }))
+                  .finally(() => setTesting(false))
+              }}
+            >
+              {testing ? 'Testing…' : 'Test'}
+            </Button>
+          </span>
+          {tested && <Notice tone={tested.ok ? 'info' : 'warn'}>{tested.message}</Notice>}
+          {secret !== null ? (
+            <>
+              <Notice tone="warn">Copy the signing secret now — it is shown only this once. The receiver uses it to check each post came from this Mac.</Notice>
+              <div className="ai-secret">
+                <code className="ai-secret-value">{secret}</code>
+                <CopyButton id={`secret-${row.id}`} value={secret} copied={copied} onCopy={copy} />
+              </div>
+            </>
+          ) : (
+            row.notify.hasSecret && (
+              <span className="ai-field-row">
+                <span className="settings-help">Posts are signed (Standard Webhooks).</span>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(() => bridge.aiAppsNotifySecret?.(row.id)).then((result) => {
+                      if (result?.secret) setSecret(result.secret)
+                    })
+                  }
+                >
+                  New secret
+                </Button>
+              </span>
+            )
+          )}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -627,6 +778,7 @@ function NewKeyMade({
     internetBase: state.internet.base,
     localUrl: state.local.url,
     where,
+    channelBridge: state.channelBridge,
   })
 
   return (
@@ -688,6 +840,25 @@ function NewKeyMade({
         </div>
       ) : (
         setup.missing && <Notice tone="warn">{setup.missing}</Notice>
+      )}
+
+      {/* What to tell the agent so it waits for news instead of watching. */}
+      {setup.after && setup.snippet !== null && <p className="ai-after">{setup.after}</p>}
+
+      {setup.extra && (
+        <div className="ai-snippet">
+          <h6 className="settings-label">{setup.extra.title}</h6>
+          {setup.extra.steps.map((step) => (
+            <p className="ai-after" key={step}>
+              {step}
+            </p>
+          ))}
+          <pre className="settings-code">{setup.extra.snippet}</pre>
+          <div className="settings-actions">
+            <CopyButton id={`extra-${app}`} value={setup.extra.snippet} copied={copied} onCopy={copy} />
+          </div>
+          <span className="settings-help">{setup.extra.caution}</span>
+        </div>
       )}
 
       <div className="settings-actions">

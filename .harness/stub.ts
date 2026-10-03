@@ -436,6 +436,7 @@ let aiAppsKeys: Array<Record<string, unknown>> = aiAppsEmpty
         lastUsedAt: launchedAt - 240_000,
         lastApp: 'openai-mcp 1.0.0',
         lastVia: 'internet',
+        notify: { mode: 'webhook', url: 'https://hooks.example.com/agent', hasSecret: true },
       },
       {
         id: 'k-cursor',
@@ -447,6 +448,7 @@ let aiAppsKeys: Array<Record<string, unknown>> = aiAppsEmpty
         lastUsedAt: null,
         lastApp: null,
         lastVia: null,
+        notify: { mode: 'wait', url: null, hasSecret: false },
       },
     ]
 function aiAppsState(): Record<string, unknown> {
@@ -462,6 +464,12 @@ function aiAppsState(): Record<string, unknown> {
     local: { url: 'http://127.0.0.1:47821/mcp', movedFrom: null },
     folders: ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/website'],
     problem: null,
+    // `LastDelivery` per key, field for field: the webhook key delivered a few
+    // minutes ago with one not yet acknowledged; the other has had none.
+    delivery: aiAppsEmpty
+      ? {}
+      : { 'k-chatgpt': { state: 'delivered', at: launchedAt - 180_000, via: 'webhook', error: null, outstanding: 1 } },
+    channelBridge: '/Users/apple/Library/Application Support/terminaldeck/notify-channel.mjs',
   }
 }
 function aiAppsChange(edit: () => string | null): Record<string, unknown> {
@@ -2178,6 +2186,7 @@ const api: Record<string, unknown> = new Proxy(
           lastUsedAt: null,
           lastApp: null,
           lastVia: null,
+          notify: { mode: 'wait', url: null, hasSecret: false },
         },
       ]
       for (const listener of [...aiAppsListeners]) listener()
@@ -2200,6 +2209,33 @@ const api: Record<string, unknown> = new Proxy(
         aiAppsInternetOn = on === true
         return null
       }),
+    // The three notify channels, the store's behaviour in miniature: a webhook
+    // needs an address and mints its secret once; the test answers like a
+    // receiver that took it.
+    aiAppsNotify: async (id: unknown, input: { mode?: unknown; url?: unknown }) => {
+      const found = aiAppsKeys.find((key) => key.id === id)
+      if (!found) return { ok: false, message: 'That key no longer exists. It may have been revoked.', state: aiAppsState() }
+      const notify = found.notify as { mode: string; url: string | null; hasSecret: boolean }
+      if (input.mode === 'webhook') {
+        const url = typeof input.url === 'string' && input.url !== '' ? input.url : notify.url
+        if (url === null) return { ok: false, message: 'Give the web address to post notifications to.', state: aiAppsState() }
+        if (!/^https:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(url)) {
+          return { ok: false, message: 'Use an https:// address. Plain http:// is only allowed to this Mac (localhost).', state: aiAppsState() }
+        }
+        const minted = notify.hasSecret ? null : `whsec_${'c2lnbmluZy1zZWNyZXQtZm9yLWhhcm5lc3M'}=`
+        aiAppsEdit(id, { notify: { mode: 'webhook', url, hasSecret: true } })
+        for (const listener of [...aiAppsListeners]) listener()
+        return { ok: true, secret: minted, state: aiAppsState() }
+      }
+      aiAppsEdit(id, { notify: { ...notify, mode: input.mode === 'off' ? 'off' : 'wait' } })
+      for (const listener of [...aiAppsListeners]) listener()
+      return { ok: true, secret: null, state: aiAppsState() }
+    },
+    aiAppsNotifySecret: async (id: unknown) => {
+      if (!aiAppsKeys.some((key) => key.id === id)) return { ok: false, message: 'That key no longer exists.', state: aiAppsState() }
+      return { ok: true, secret: `whsec_${'bmV3LXNpZ25pbmctc2VjcmV0LWZvci1oYXJuZXNz'}=`, state: aiAppsState() }
+    },
+    aiAppsNotifyTest: async () => ({ ok: true, message: 'Delivered: the address answered 200.', state: aiAppsState() }),
     onAiAppsChanged: (callback: () => void) => {
       aiAppsListeners.add(callback)
       return () => aiAppsListeners.delete(callback)

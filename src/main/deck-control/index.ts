@@ -125,6 +125,7 @@
  */
 
 import { rmSync } from 'node:fs'
+import type { SessionStatus } from '../../shared/types'
 import { join } from 'node:path'
 import { copilotPaths } from '../copilot-home'
 import { userDataDir } from '../platform/paths'
@@ -144,8 +145,12 @@ import { WHERE_CALL, whereTool } from './where-tool'
 import { browserDrive } from '../browser-drive-current'
 import { relayMcp } from '../remote/relay-mcp'
 import { AccessKeys } from './access-keys'
-import { registerAiAppsIpc } from './ai-apps-ipc'
+import { AI_APPS_CHANGED_CHANNEL, registerAiAppsIpc } from './ai-apps-ipc'
 import { AccessKeyDoor } from './key-door'
+import { NotificationHub, REAL_CLOCK } from './notify-hub'
+import { NotifyDetector } from './notify-detect'
+import { writeChannelBridge } from './notify-channel'
+import { notifyTools } from './notify-tools'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -373,6 +378,16 @@ export interface DeckControlHandle {
    */
   keys: AccessKeys
   door: AccessKeyDoor
+  /**
+   * Tell the AI apps' notifications what sessions did. `src/main/index.ts`
+   * calls these from the same `onStatus` and `onExit` that colour the sidebar's
+   * dots — events, never a poll. See `notify-detect.ts`.
+   */
+  notify: {
+    noteStatus(sessionId: string, status: SessionStatus): void
+    noteExit(sessionId: string, exitCode: number): void
+    hub: NotificationHub
+  }
   stop(): Promise<void>
 }
 
@@ -526,6 +541,37 @@ export async function registerDeckControlIpc(
   let controlRef: DeckControl | null = null
   const door = new AccessKeyDoor({ keys, control: () => controlRef, consent: () => consent })
 
+  /*
+   * Notifications for AI apps: one queue (`notify-hub.ts`), fed by one detector
+   * (`notify-detect.ts`) that the main process tells about every status change
+   * and exit through the handle below. Beside the keys because a notification
+   * belongs to a key, and is kept in the same folder.
+   */
+  const notifyHub = new NotificationHub({
+    dir: deps.keysDir ?? accessKeysDir(),
+    settings: (keyId) => keys.notifySettings(keyId),
+    onChange: () => deps.broadcast(AI_APPS_CHANGED_CHANNEL),
+  })
+  const unwatchNotifyKeys = keys.onChange(() => notifyHub.reconcile())
+  /*
+   * The Claude Code channel bridge, rewritten on every launch so an old copy is
+   * never what runs. A failure costs Claude Code its push, not the app its
+   * tools: long-poll and webhooks do not need it.
+   */
+  let channelBridge: string | null = null
+  try {
+    channelBridge = writeChannelBridge(deps.keysDir ?? userDataDir())
+  } catch (error) {
+    console.error('[deck-control] could not write the Claude Code channel bridge:', error)
+  }
+
+  const notifyDetector = new NotifyDetector({
+    surface,
+    starterOf: (sessionId) => controlRef?.starterOf(sessionId) ?? null,
+    enqueue: (keyId, event) => notifyHub.enqueue(keyId, event),
+    clock: REAL_CLOCK,
+  })
+
   const control = new DeckControl({
     surface,
     log,
@@ -566,11 +612,17 @@ export async function registerDeckControlIpc(
         // that must not crash — so the tool answers "no page" rather than `!`.
         page: () => browserDrive(),
       }),
+      // The inbox of each AI app on a key. Listed to key callers only.
+      ...notifyTools({ hub: () => notifyHub }),
       ...(deps.extraTools ?? []),
     ],
     driving: () => tours.driving(),
     ...(deps.budgets === undefined ? {} : { budgets: deps.budgets }),
-    onRow: (row: ActionRow) => deps.broadcast(ACTION_CHANNEL, row),
+    onRow: (row: ActionRow) => {
+      // A send or a keypress names whose turn is starting — see `notify-detect.ts`.
+      notifyDetector.noteRow(row)
+      deps.broadcast(ACTION_CHANNEL, row)
+    },
   })
 
   controlRef = control
@@ -632,6 +684,11 @@ export async function registerDeckControlIpc(
         : { url: link.url, hostId: link.hostId, connected: link.connected, reason: link.reason }
     },
     folders: () => surface.listProjects().map((project) => project.path),
+    notify: {
+      lastDelivery: (keyId) => notifyHub.lastDelivery(keyId),
+      test: (keyId) => notifyHub.testWebhook(keyId),
+    },
+    channelBridge: () => channelBridge,
     broadcast: deps.broadcast,
   })
 
@@ -745,11 +802,20 @@ export async function registerDeckControlIpc(
     unattendedConfigPath: configs.unattended,
     keys,
     door,
+    notify: {
+      noteStatus: (sessionId, status) => notifyDetector.noteStatus(sessionId, status),
+      noteExit: (sessionId, exitCode) => notifyDetector.noteExit(sessionId, exitCode),
+      hub: notifyHub,
+    },
     stop: async () => {
       // The door first: nothing new comes in from an AI app while the rest is
       // torn down, and every request still in flight is aborted.
       relayMcp.install(null)
       door.stop()
+      // Then the notifications: no more detection, waiters answered, queue saved.
+      notifyDetector.stop()
+      unwatchNotifyKeys()
+      notifyHub.stop()
       unwatchAiApps()
       try {
         keys.flush()

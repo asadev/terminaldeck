@@ -71,6 +71,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { writeSecretFile } from '../remote/secret-file'
+import { SECRET_PREFIX, newWebhookSecret, webhookUrlProblem } from './notify-webhook'
 import { ALL_TIERS, type TierGrant } from './surface'
 
 /* -------------------------------------------------------------- constants -- */
@@ -150,7 +151,27 @@ interface StoredKey {
   lastUsedAt: number | null
   lastApp: string | null
   lastVia: AccessVia | null
+  /**
+   * How this app is told about its sessions. See `notify-hub.ts`.
+   *
+   * `wait` (the default) keeps its notifications for `notifications.wait` and
+   * `notifications.list`; `webhook` also posts each one to `url`, signed with
+   * `secret`; `off` keeps nothing. The secret is kept here in the clear because
+   * it *signs* — a hash cannot — and this file is 0600 and fenced from the
+   * copilot's own shell, like the hashes beside it.
+   */
+  notify: StoredNotify
 }
+
+interface StoredNotify {
+  mode: NotifyMode
+  url: string | null
+  secret: string | null
+}
+
+export type NotifyMode = 'off' | 'wait' | 'webhook'
+
+export const NOTIFY_MODES: readonly NotifyMode[] = ['off', 'wait', 'webhook']
 
 /** One key as anything outside this module may see it. No hash, no secret. */
 export interface AccessKeyView {
@@ -163,6 +184,8 @@ export interface AccessKeyView {
   lastUsedAt: number | null
   lastApp: string | null
   lastVia: AccessVia | null
+  /** How the app is told about its sessions. The webhook secret is never in a view — only whether there is one. */
+  notify: { mode: NotifyMode; url: string | null; hasSecret: boolean }
 }
 
 interface StoredFile {
@@ -254,7 +277,17 @@ function view(key: StoredKey): AccessKeyView {
     lastUsedAt: key.lastUsedAt,
     lastApp: key.lastApp,
     lastVia: key.lastVia,
+    notify: { mode: key.notify.mode, url: key.notify.url, hasSecret: key.notify.secret !== null },
   }
+}
+
+function asNotify(raw: unknown): StoredNotify {
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  const mode: NotifyMode = r.mode === 'off' || r.mode === 'webhook' ? r.mode : 'wait'
+  const url = typeof r.url === 'string' && webhookUrlProblem(r.url) === null ? r.url : null
+  const secret = typeof r.secret === 'string' && r.secret.startsWith(SECRET_PREFIX) ? r.secret : null
+  // A webhook with no usable address or secret is waiting, not posting into nothing.
+  return { mode: mode === 'webhook' && (url === null || secret === null) ? 'wait' : mode, url, secret }
 }
 
 function asStoredKey(raw: unknown): StoredKey | null {
@@ -289,6 +322,7 @@ function asStoredKey(raw: unknown): StoredKey | null {
     lastUsedAt: typeof r.lastUsedAt === 'number' ? r.lastUsedAt : null,
     lastApp: cleanAppLabel(r.lastApp),
     lastVia: r.lastVia === 'this-mac' || r.lastVia === 'internet' ? r.lastVia : null,
+    notify: asNotify(r.notify),
   }
 }
 
@@ -354,6 +388,7 @@ export class AccessKeys {
       lastUsedAt: null,
       lastApp: null,
       lastVia: null,
+      notify: { mode: 'wait', url: null, secret: null },
     }
     this.state = { ...this.state, keys: [...this.state.keys, stored] }
     this.save()
@@ -373,6 +408,54 @@ export class AccessKeys {
     // Only a literal `false` turns asking off. A wiring mistake that sent
     // `undefined` must leave the narrow setting in place.
     return this.change(id, (key) => ({ ...key, askFirst: askFirst !== false }))
+  }
+
+  /**
+   * How this app is told about its sessions.
+   *
+   * Switching to `webhook` needs an address this Mac may post to
+   * (`webhookUrlProblem`) and mints the signing secret the first time; the
+   * secret is in the return value then and never again, like the key itself.
+   * Switching away keeps the address and secret, so switching back needs no
+   * new setup on the receiver.
+   */
+  setNotify(id: string, input: { mode: unknown; url?: unknown }): { view: AccessKeyView; secret: string | null } {
+    if (input.mode !== 'off' && input.mode !== 'wait' && input.mode !== 'webhook') {
+      throw new KeyRefused('Choose how this app hears about its sessions: off, waiting, or a webhook.')
+    }
+    const mode = input.mode
+    let minted: string | null = null
+    const view = this.change(id, (key) => {
+      if (mode !== 'webhook') return { ...key, notify: { ...key.notify, mode } }
+      const url = typeof input.url === 'string' && input.url.trim() !== '' ? input.url.trim() : key.notify.url
+      if (url === null) throw new KeyRefused('Give the web address to post notifications to.')
+      const problem = webhookUrlProblem(url)
+      if (problem !== null) throw new KeyRefused(problem)
+      let secret = key.notify.secret
+      if (secret === null) {
+        secret = newWebhookSecret()
+        minted = secret
+      }
+      return { ...key, notify: { mode, url, secret } }
+    })
+    return { view, secret: minted }
+  }
+
+  /** A new signing secret for the key's webhook. The old one stops verifying at once. Shown once. */
+  rotateWebhookSecret(id: string): { view: AccessKeyView; secret: string } {
+    const secret = newWebhookSecret()
+    const view = this.change(id, (key) => ({ ...key, notify: { ...key.notify, secret } }))
+    return { view, secret }
+  }
+
+  /**
+   * What the notification queue needs to deliver for a key, secret included —
+   * or null when the key no longer exists. For `notify-hub.ts` and nothing
+   * else: no view and no channel ever carries the secret.
+   */
+  notifySettings(id: string): { mode: NotifyMode; url: string | null; secret: string | null } | null {
+    const key = this.state.keys.find((entry) => entry.id === id)
+    return key ? { ...key.notify } : null
   }
 
   setFolders(id: string, folders: unknown): AccessKeyView {

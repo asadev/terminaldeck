@@ -50,6 +50,15 @@ export const agentsCoverage: CoverageMap = {
   'ai-apps:internet': {
     skip: 'Opening this computer to AI apps on the internet is the owner’s switch in Settings, never something a tool turns on.',
   },
+  'ai-apps:notify': {
+    skip: 'Where an outside AI app’s notifications go, a webhook address included, is the owner’s choice in Settings, never a tool’s.',
+  },
+  'ai-apps:notify-secret': {
+    skip: 'A new webhook signing secret is handed back in the clear, once, to the owner’s own window; no tool may return a secret.',
+  },
+  'ai-apps:notify-test': {
+    skip: 'The Settings button that checks the owner’s webhook address; an AI app hears about its sessions through notifications_wait instead.',
+  },
   'ai-apps:level': {
     skip: 'A tool that changed what an access key may do would let an AI raise its own key, so levels are changed only in Settings.',
   },

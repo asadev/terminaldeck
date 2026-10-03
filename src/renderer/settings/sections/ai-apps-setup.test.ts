@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   APPS,
+  CHANNEL_SERVER,
+  IDLE_SENTENCE,
   LEVELS,
   SERVER_KEY,
+  deliveryLine,
   ago,
   secretLink,
   setupFor,
@@ -132,14 +135,72 @@ describe('the last-used line', () => {
     const now = 10_000_000
     expect(
       usedLine(
-        { id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: now - 240_000, lastApp: 'claude-ai 0.1.0', lastVia: 'internet' },
+        { id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: now - 240_000, lastApp: 'claude-ai 0.1.0', lastVia: 'internet', notify: { mode: 'wait', url: null, hasSecret: false } },
         now,
       ),
     ).toBe('Last used 4 minutes ago by claude-ai 0.1.0 over the internet')
     expect(
-      usedLine({ id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: null, lastApp: null, lastVia: null }),
+      usedLine({ id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: null, lastApp: null, lastVia: null, notify: { mode: 'wait', url: null, hasSecret: false } }),
     ).toBe('Not used yet')
     expect(ago(now - 10_000, now)).toBe('just now')
     expect(ago(now - 26 * 3_600_000, now)).toBe('yesterday')
+  })
+})
+
+describe('hearing back from sessions', () => {
+  it('tells every agent that can loop to wait for news instead of watching', () => {
+    for (const app of ['claude-code', 'codex', 'gemini', 'cursor', 'vscode'] as const) {
+      const setup = setupFor(app, context())
+      expect(setup.after, app).toBe(IDLE_SENTENCE)
+    }
+    expect(IDLE_SENTENCE).toMatch(/notifications_wait/)
+    expect(IDLE_SENTENCE).toMatch(/instead of polling sessions_wait/)
+    // The web apps cannot loop on their own, so they are not told to.
+    expect(setupFor('claude-web', context()).after).toBeUndefined()
+  })
+
+  it('offers Claude Code the channel push on this Mac only, with the bridge, the key and the preview caution', () => {
+    const bridge = '/Users/me/Library/Application Support/app/notify-channel.mjs'
+    const here = setupFor('claude-code', context({ channelBridge: bridge }))
+    expect(here.extra?.snippet).toContain(`claude mcp add --scope user ${CHANNEL_SERVER}`)
+    expect(here.extra?.snippet).toContain(`NOTIFY_KEY=${KEY}`)
+    expect(here.extra?.snippet).toContain(`NOTIFY_URL=${LOCAL}`)
+    expect(here.extra?.snippet).toContain(`node "${bridge}"`)
+    expect(here.extra?.snippet).toContain(`--dangerously-load-development-channels server:${CHANNEL_SERVER}`)
+    expect(here.extra?.caution).toMatch(/preview/)
+    // On another computer the bridge file is not there to start.
+    expect(setupFor('claude-code', context({ channelBridge: bridge, where: 'elsewhere' })).extra).toBeUndefined()
+    expect(setupFor('claude-code', context({ channelBridge: null })).extra).toBeUndefined()
+    expect(setupFor('codex', context({ channelBridge: bridge })).extra).toBeUndefined()
+  })
+
+  it('reads how each key is told, drawing anything unreadable as waiting', () => {
+    const state = toAiAppsState({
+      keys: [
+        { id: 'a', name: 'A', level: 'work', notify: { mode: 'webhook', url: 'https://h.example', hasSecret: true } },
+        { id: 'b', name: 'B', level: 'work', notify: { mode: 'carrier pigeon' } },
+        { id: 'c', name: 'C', level: 'work' },
+      ],
+      delivery: { a: { state: 'undelivered', at: 1, via: null, error: 'x', outstanding: 2 }, b: { state: 'weird', at: 1 } },
+      channelBridge: '/x/notify-channel.mjs',
+    })
+    expect(state?.keys.map((key) => key.notify.mode)).toEqual(['webhook', 'wait', 'wait'])
+    expect(state?.keys[0].notify).toEqual({ mode: 'webhook', url: 'https://h.example', hasSecret: true })
+    expect(Object.keys(state?.delivery ?? {})).toEqual(['a'])
+    expect(state?.channelBridge).toBe('/x/notify-channel.mjs')
+  })
+
+  it('says how the last notification went in plain words', () => {
+    const now = 10_000_000
+    expect(deliveryLine(undefined)).toBeNull()
+    expect(deliveryLine({ state: 'delivered', at: now - 120_000, via: 'webhook', error: null, outstanding: 0 }, now)).toBe(
+      'Last notification delivered 2 minutes ago by webhook',
+    )
+    expect(deliveryLine({ state: 'undelivered', at: now, via: null, error: null, outstanding: 1 }, now)).toMatch(
+      /Not delivered after four tries .* kept until the app collects it/,
+    )
+    expect(deliveryLine({ state: 'failed', at: now, via: null, error: 'the webhook answered 500', outstanding: 1 }, now)).toMatch(
+      /failed .* trying again: the webhook answered 500/,
+    )
   })
 })

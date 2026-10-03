@@ -144,6 +144,13 @@ export function whereTool(deps: WhereDeps): ToolSpec {
     wire: 'app_where',
     tier: 'read',
     title: 'See what they are looking at',
+    /*
+     * The copilot's first move on "this", and listed to it in full. An AI app on
+     * the far side of the internet is not looking at this Mac's window, so for
+     * a key caller it is one line behind tools.describe — which is what makes
+     * room for notifications_wait in that listing. See `ToolSpec.keyIndex`.
+     */
+    keyIndex: 'What is on the Mac’s screen right now: the window in front, the session, the open page.',
     description:
       'What is on their screen right now: which window is in front, whether they are looking at a ' +
       'terminal or a conversation, which session it is, and — when a page is open in the browser you ' +

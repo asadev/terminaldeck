@@ -257,3 +257,40 @@ describe('the records fence', () => {
     ).toBe(true)
   })
 })
+
+describe('how a key’s app hears about its sessions', () => {
+  it('starts waiting, needs an address for a webhook, and mints the signing secret once', () => {
+    const keys = store()
+    const { view } = keys.create({ name: 'A', level: 'work' })
+    expect(view.notify).toEqual({ mode: 'wait', url: null, hasSecret: false })
+    expect(() => keys.setNotify(view.id, { mode: 'webhook' })).toThrow(KeyRefused)
+    expect(() => keys.setNotify(view.id, { mode: 'webhook', url: 'http://hooks.example.com/x' })).toThrow(/https/)
+    const first = keys.setNotify(view.id, { mode: 'webhook', url: 'https://hooks.example.com/x' })
+    expect(first.secret).toMatch(/^whsec_/)
+    expect(first.view.notify).toEqual({ mode: 'webhook', url: 'https://hooks.example.com/x', hasSecret: true })
+    // Switching away and back keeps the address and the secret, and shows no new one.
+    keys.setNotify(view.id, { mode: 'off' })
+    const again = keys.setNotify(view.id, { mode: 'webhook' })
+    expect(again.secret).toBeNull()
+    expect(keys.notifySettings(view.id)).toEqual({ mode: 'webhook', url: 'https://hooks.example.com/x', secret: first.secret })
+  })
+
+  it('never puts the secret in a view or a list, and a new one replaces the old', () => {
+    const keys = store()
+    const { view } = keys.create({ name: 'A', level: 'work' })
+    const { secret } = keys.setNotify(view.id, { mode: 'webhook', url: 'https://hooks.example.com/x' })
+    expect(JSON.stringify(keys.list())).not.toContain(String(secret))
+    const rotated = keys.rotateWebhookSecret(view.id)
+    expect(rotated.secret).not.toBe(secret)
+    expect(keys.notifySettings(view.id)?.secret).toBe(rotated.secret)
+    // And it survives a restart, in the 0600 file beside the hashes.
+    expect(store().notifySettings(view.id)?.secret).toBe(rotated.secret)
+  })
+
+  it('allows plain http only to this Mac', () => {
+    const keys = store()
+    const { view } = keys.create({ name: 'A', level: 'work' })
+    expect(() => keys.setNotify(view.id, { mode: 'webhook', url: 'http://127.0.0.1:9000/hook' })).not.toThrow()
+    expect(() => keys.setNotify(view.id, { mode: 'webhook', url: 'https://u:p@hooks.example.com/x' })).toThrow(/password/)
+  })
+})

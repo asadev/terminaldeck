@@ -29,6 +29,17 @@ import { BRAND } from '../../../shared/brand'
 export type AccessLevel = 'look' | 'work' | 'full'
 export type AccessVia = 'this-mac' | 'internet'
 
+export type NotifyMode = 'off' | 'wait' | 'webhook'
+
+/** Mirrors `LastDelivery` in `src/main/deck-control/notify-hub.ts`. */
+export interface LastDeliveryRow {
+  state: 'pending' | 'delivered' | 'undelivered' | 'failed'
+  at: number
+  via: 'wait' | 'webhook' | 'list' | null
+  error: string | null
+  outstanding: number
+}
+
 /** Mirrors `AccessKeyView` in `src/main/deck-control/access-keys.ts`. */
 export interface AccessKeyRow {
   id: string
@@ -40,6 +51,8 @@ export interface AccessKeyRow {
   lastUsedAt: number | null
   lastApp: string | null
   lastVia: AccessVia | null
+  /** How the app hears about its sessions. Never the webhook secret — only whether one exists. */
+  notify: { mode: NotifyMode; url: string | null; hasSecret: boolean }
 }
 
 /** Mirrors `AiAppsState` in `src/main/deck-control/ai-apps-ipc.ts`. */
@@ -55,6 +68,10 @@ export interface AiAppsState {
   local: { url: string | null; movedFrom: number | null }
   folders: string[]
   problem: string | null
+  /** How each key's last notification went, by key id. */
+  delivery: Record<string, LastDeliveryRow>
+  /** The Claude Code channel bridge on disk, or null. */
+  channelBridge: string | null
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -88,7 +105,37 @@ function toKey(raw: unknown): AccessKeyRow | null {
     lastUsedAt: typeof r.lastUsedAt === 'number' ? r.lastUsedAt : null,
     lastApp: text(r.lastApp),
     lastVia: r.lastVia === 'this-mac' || r.lastVia === 'internet' ? r.lastVia : null,
+    notify: toNotify(r.notify),
   }
+}
+
+function toNotify(raw: unknown): AccessKeyRow['notify'] {
+  const r = record(raw) ?? {}
+  return {
+    // Waiting is the default the main process writes; anything unreadable is
+    // drawn as that rather than as a webhook that may not exist.
+    mode: r.mode === 'off' || r.mode === 'webhook' ? r.mode : 'wait',
+    url: text(r.url),
+    hasSecret: r.hasSecret === true,
+  }
+}
+
+const DELIVERY_STATES = new Set(['pending', 'delivered', 'undelivered', 'failed'])
+
+function toDelivery(raw: unknown): Record<string, LastDeliveryRow> {
+  const out: Record<string, LastDeliveryRow> = {}
+  for (const [id, value] of Object.entries(record(raw) ?? {})) {
+    const r = record(value)
+    if (!r || typeof r.state !== 'string' || !DELIVERY_STATES.has(r.state) || typeof r.at !== 'number') continue
+    out[id] = {
+      state: r.state as LastDeliveryRow['state'],
+      at: r.at,
+      via: r.via === 'wait' || r.via === 'webhook' || r.via === 'list' ? r.via : null,
+      error: text(r.error),
+      outstanding: typeof r.outstanding === 'number' ? r.outstanding : 0,
+    }
+  }
+  return out
 }
 
 /** Null when the answer is not the state at all — the page then says so. */
@@ -114,6 +161,8 @@ export function toAiAppsState(raw: unknown): AiAppsState | null {
     },
     folders: Array.isArray(r.folders) ? r.folders.filter((f): f is string => typeof f === 'string') : [],
     problem: text(r.problem),
+    delivery: toDelivery(r.delivery),
+    channelBridge: text(r.channelBridge),
   }
 }
 
@@ -125,18 +174,67 @@ export interface AiAppsResult {
   /** Present only on a create, and only on the answer to it. Shown once. */
   key: string | null
   id: string | null
+  /** A webhook signing secret, on the one answer that minted it. Shown once. */
+  secret: string | null
 }
 
 export function toAiAppsResult(raw: unknown): AiAppsResult {
   const r = record(raw)
   return {
     ok: r?.ok === true,
+    // A success can carry a sentence too — the webhook test says what the address answered.
     message: text(r?.message) ?? (r?.ok === true ? null : 'That did not go through, and the app did not say why.'),
     state: toAiAppsState(r?.state),
     key: text(r?.key),
     id: text(r?.id),
+    secret: text(r?.secret),
   }
 }
+
+/* -------------------------------------------------------- notifications -- */
+
+export interface NotifyChoice {
+  id: NotifyMode
+  label: string
+  help: string
+}
+
+/** The three ways an app hears about its sessions, in plain words. */
+export const NOTIFY_CHOICES: readonly NotifyChoice[] = [
+  { id: 'off', label: 'Off', help: 'Nothing is kept for this app. It has to look for itself.' },
+  {
+    id: 'wait',
+    label: 'When it asks',
+    help: 'Kept until the app collects it — it is handed over the moment the app is waiting.',
+  },
+  {
+    id: 'webhook',
+    label: 'Webhook',
+    help: 'Also posted to an address you give, signed so the receiver can check it came from this Mac.',
+  },
+]
+
+/** The one line under a key that says how its last notification went. */
+export function deliveryLine(last: LastDeliveryRow | undefined, now: number = Date.now()): string | null {
+  if (last === undefined) return null
+  const when = ago(last.at, now)
+  const waiting =
+    last.outstanding === 1 ? '1 the app has not marked as handled' : `${last.outstanding} the app has not marked as handled`
+  switch (last.state) {
+    case 'delivered':
+      return `Last notification delivered ${when}${last.via === 'webhook' ? ' by webhook' : ''}${last.outstanding > 0 ? ` · ${waiting}` : ''}`
+    case 'pending':
+      return `A notification is waiting to be collected (${when})`
+    case 'failed':
+      return `Last delivery failed ${when}, trying again${last.error ? `: ${last.error}` : ''}`
+    case 'undelivered':
+      return `Not delivered after four tries (${when}) — kept until the app collects it`
+  }
+}
+
+/** The sentence every agent setup ends with, so an agent waits instead of watching. */
+export const IDLE_SENTENCE =
+  'Then tell the agent: when you are idle, call notifications_wait instead of polling sessions_wait in a loop.'
 
 /* --------------------------------------------------------------- levels -- */
 
@@ -213,6 +311,8 @@ export interface SetupContext {
   localUrl: string | null
   /** For the local apps: on this Mac, or on another computer through the relay. */
   where: SetupWhere
+  /** The Claude Code channel bridge on this Mac, for the optional push setup. Null when there is none. */
+  channelBridge?: string | null
 }
 
 export interface Setup {
@@ -224,7 +324,17 @@ export interface Setup {
   missing: string | null
   /** This setup only works with internet reach switched on. */
   needsInternet: boolean
+  /**
+   * One line after the snippet: what to tell the agent so it waits for news
+   * instead of watching. On every agent that can loop — see {@link IDLE_SENTENCE}.
+   */
+  after?: string
+  /** A second, optional setup under its own heading — Claude Code's channel push. */
+  extra?: { title: string; steps: string[]; snippet: string; caution: string }
 }
+
+/** The name the channel bridge is added to Claude Code under. Mirrors `CHANNEL_SERVER_NAME`. */
+export const CHANNEL_SERVER = `${BRAND.id}-notify`
 
 /** The server's name inside each app's configuration. The product's own slug. */
 export const SERVER_KEY = BRAND.id
@@ -293,6 +403,30 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
     case 'claude-code':
       return {
         ...base,
+        after: IDLE_SENTENCE,
+        // Only on this Mac: the bridge is a file here, and Claude Code starts it
+        // as a program — it cannot start a file on another computer.
+        ...(context.where === 'this-mac' && context.channelBridge && url !== null
+          ? {
+              extra: {
+                title: 'Optional: let Claude Code hear about your sessions on its own',
+                steps: [
+                  'Add the notification channel, then start Claude Code with the second line. Messages about your ' +
+                    'sessions then arrive in the conversation by themselves.',
+                ],
+                snippet: [
+                  `claude mcp add --scope user ${CHANNEL_SERVER} \\`,
+                  `  -e NOTIFY_URL=${url} \\`,
+                  `  -e NOTIFY_KEY=${context.key} \\`,
+                  `  -- node "${context.channelBridge}"`,
+                  `claude --dangerously-load-development-channels server:${CHANNEL_SERVER}`,
+                ].join('\n'),
+                caution:
+                  'Channels are a Claude Code preview: it shows a warning when it starts, needs a Claude account ' +
+                  'login, and a work or school organisation has to allow them. Without it, notifications_wait still works.',
+              },
+            }
+          : {}),
         steps: ['Run this in a terminal. It adds the tools for every folder you open Claude Code in.'],
         // Continued across lines with a backslash, which every shell a person
         // pastes this into reads as one command — and which keeps the key on a
@@ -309,6 +443,7 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
     case 'codex':
       return {
         ...base,
+        after: IDLE_SENTENCE,
         steps: ['Add this to ~/.codex/config.toml, then start Codex again.'],
         snippet:
           url === null
@@ -318,6 +453,7 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
     case 'gemini':
       return {
         ...base,
+        after: IDLE_SENTENCE,
         steps: [
           'Add this to ~/.gemini/settings.json. If the file already has an mcpServers block, add just the inner entry to it.',
         ],
@@ -327,12 +463,14 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
     case 'cursor':
       return {
         ...base,
+        after: IDLE_SENTENCE,
         steps: ['Add this to ~/.cursor/mcp.json, or paste it under Cursor Settings, then MCP.'],
         snippet: url === null ? null : json({ mcpServers: { [SERVER_KEY]: { url, headers: { Authorization: bearer } } } }),
       }
     case 'vscode':
       return {
         ...base,
+        after: IDLE_SENTENCE,
         steps: ['Add this to .vscode/mcp.json in a project, or to your user MCP configuration for every project.'],
         snippet:
           url === null

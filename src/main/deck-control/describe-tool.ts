@@ -335,6 +335,20 @@ export function describeIndex(behind: readonly ToolSpec[]): string {
  * the payload — measuring the catalogue behind it would be measuring the thing
  * progressive disclosure exists to stop paying for.
  */
+/**
+ * One tool as a given caller's listing treats it, or null when it is not theirs.
+ *
+ * Two audience rules, applied in one place so the listing and `tools.describe`
+ * cannot disagree: a `keys` tool does not exist for anybody but an AI app on a
+ * key, and a tool with a `keyIndex` is held back with that line for such an app
+ * while staying in full for everybody else. See `ToolSpec.audience`.
+ */
+export function asListedFor(spec: ToolSpec, keyCaller: boolean): ToolSpec | null {
+  if (spec.audience === 'keys' && !keyCaller) return null
+  if (keyCaller && spec.keyIndex !== undefined && spec.index === undefined) return { ...spec, index: spec.keyIndex }
+  return spec
+}
+
 export function advertisedCatalogue(
   visible: readonly ToolSpec[],
   /**
@@ -345,13 +359,19 @@ export function advertisedCatalogue(
    */
   options: { run?: boolean } = {},
 ): ToolSpec[] {
-  const behind = visible.filter((spec) => spec.index !== undefined)
-  const full = visible.filter(
+  /*
+   * `run` is also "this is an AI app on a key", which is what decides the two
+   * audience rules — see `asListedFor`.
+   */
+  const keyCaller = options.run === true
+  const mine = visible.map((spec) => asListedFor(spec, keyCaller)).filter((spec): spec is ToolSpec => spec !== null)
+  const behind = mine.filter((spec) => spec.index !== undefined)
+  const full = mine.filter(
     (spec) =>
       spec.index === undefined && spec.id !== DESCRIBE_ID && (spec.id !== RUN_ID || options.run === true),
   )
   if (behind.length === 0) return full
-  const describe = visible.find((spec) => spec.id === DESCRIBE_ID)
+  const describe = mine.find((spec) => spec.id === DESCRIBE_ID)
   /*
    * No describe tool for this caller, so nothing may be hidden from it.
    *
@@ -463,9 +483,11 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
        */
       let areaAnswer: Record<string, unknown> | null = null
       if (area !== null) {
-        const inside = catalogue.filter(
-          (spec) => spec.id !== DESCRIBE_ID && areaOf(spec) === area && visibleTo(context.granted, spec),
-        )
+        const keyCaller = context.caller?.kind === 'key'
+        const inside = catalogue
+          .map((spec) => asListedFor(spec, keyCaller))
+          .filter((spec): spec is ToolSpec => spec !== null)
+          .filter((spec) => spec.id !== DESCRIBE_ID && areaOf(spec) === area && visibleTo(context.granted, spec))
         if (inside.length === 0) {
           unknown.push(`no area called ${area}`)
         } else {
@@ -483,7 +505,9 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
       }
 
       for (const name of names) {
-        const spec = catalogue.find((entry) => entry.id === name || entry.wire === name)
+        const found = catalogue.find((entry) => entry.id === name || entry.wire === name)
+        // A tool for another audience does not exist for this caller.
+        const spec = found === undefined ? undefined : (asListedFor(found, context.caller?.kind === 'key') ?? undefined)
         /*
          * One branch for both cases, on purpose.
          *
