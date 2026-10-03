@@ -327,6 +327,26 @@
   color: var(--text-primary);
 }
 
+/* One of Hoot's turns: the owl, then the bubble. The row takes the bubble's
+   place in the column, so it is the row that is held to the left and to the
+   bubble's width, and the bubble inside it fills what is left. */
+.cp-turn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  max-width: 78%;
+}
+
+.cp-turn > .cp-bubble {
+  max-width: none;
+  min-width: 0;
+}
+
+.cp-avatar {
+  margin-top: var(--sp-05);
+}
+
 .cp-bubble[data-role='you'] {
   align-self: flex-end;
   background: var(--fill-tertiary);

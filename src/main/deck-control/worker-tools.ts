@@ -3,6 +3,7 @@ import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { emptySummary, withEmptiness } from './empty-result'
 import { liftAskTool } from './lift-ask-tool'
 import { Refused, actsAsOwner } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The two worker verbs, and — much more importantly — the one that is not here.
@@ -214,8 +215,8 @@ function windowsByWorker(deps: WorkerToolDeps, context: ToolContext): Map<string
 function noWindowLine(context: ToolContext, one: boolean): string {
   if (callingSession(context) === null) {
     return one
-      ? 'The hold is yours, but a worker profile is driven from a session’s own browser window and the copilot’s tab is not one. Ask a session to drive it, or say what you would have done.'
-      : 'None of these can be driven from here: a worker profile is driven from a session’s own browser window, and the copilot’s tab is not one.'
+      ? `The hold is yours, but a worker profile is driven from a session’s own browser window and ${BRAND.assistant}’s tab is not one. Ask a session to drive it, or say what you would have done.`
+      : `None of these can be driven from here: a worker profile is driven from a session’s own browser window, and ${BRAND.assistant}’s tab is not one.`
   }
   return one
     ? 'This worker has no window of yours showing a page in it, so you cannot drive it yet. Ask the person to open a page in it and attach that window; the hold is yours in the meantime.'

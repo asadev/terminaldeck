@@ -24,6 +24,7 @@ import {
   type DeviceKind,
 } from './DeviceApproval'
 import './RemoteSection.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * Remote — every device paired with this machine, and the machines it can reach.
@@ -1376,7 +1377,7 @@ export function RemoteView({
               other, and it is read by somebody deciding whether to hand a phone
               to a colleague.
             */
-            more={`Letting a device in asks you two things: whose it is, and what it may open. One of your own gets everything — every folder, every session, the copilot. A guest gets the folders you choose and nothing else: not your other projects, not the sessions running in them, and never the copilot. Nothing is published to the internet either way — everything is sealed end to end, so the relay that carries it routes bytes it holds no key for. That seal lets nothing in on its own; a code you mint here and an approval you give here do.`}
+            more={`Letting a device in asks you two things: whose it is, and what it may open. One of your own gets everything — every folder, every session, ${BRAND.assistant}. A guest gets the folders you choose and nothing else: not your other projects, not the sessions running in them, and never ${BRAND.assistant}. Nothing is published to the internet either way — everything is sealed end to end, so the relay that carries it routes bytes it holds no key for. That seal lets nothing in on its own; a code you mint here and an approval you give here do.`}
             labelId={`${ids}-label`}
             helpId={`${ids}-help`}
             control={
@@ -1649,9 +1650,9 @@ export function RemoteView({
                     {device.state === 'approved' && kinds !== null && (
                       <span className="remote-row-note">
                         {kinds.get(device.id) === 'mine' ? (
-                          <>Your device — full access, the copilot included.</>
+                          <>Your device — full access, {BRAND.assistant} included.</>
                         ) : kinds.get(device.id) === 'guest' ? (
-                          <>Guest — only the folders you chose. Never the copilot.</>
+                          <>Guest — only the folders you chose. Never {BRAND.assistant}.</>
                         ) : (
                           <>
                             Paired before folder approval existed, so it is treated as a guest and

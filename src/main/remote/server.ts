@@ -4240,7 +4240,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       send(connection, {
         t: 'error',
         code: 'unauthorized',
-        message: 'There is no copilot to reach on this machine.',
+        message: `${BRAND.assistant} is not available on this machine.`,
       })
       return null
     }
@@ -4266,7 +4266,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         t: 'error',
         code: 'unauthorized',
         message:
-          'This device is not connected to the copilot. ' +
+          `This device is not connected to ${BRAND.assistant}. ` +
           `Connect it on the ${machineNoun(currentPlatform())} itself, in Settings → Remote.`,
       })
       return null
@@ -4285,7 +4285,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       send(connection, {
         t: 'error',
         code: 'unauthorized',
-        message: 'The copilot is not shared with guest devices.',
+        message: `${BRAND.assistant} is not shared with guest devices.`,
       })
       return null
     }
@@ -4303,7 +4303,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         t: 'error',
         code: 'unauthorized',
         message:
-          'This device has not been given that much access to the copilot. ' +
+          `This device has not been given that much access to ${BRAND.assistant}. ` +
           `Change it on the ${machineNoun(currentPlatform())} itself, in Settings → Remote.`,
       })
       return null
@@ -4390,7 +4390,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       send(connection, {
         t: 'error',
         code: 'unauthorized',
-        message: 'The copilot is not shared with guest devices. Pair this device again as your own to use it.',
+        message: `${BRAND.assistant} is not shared with guest devices. Pair this device again as your own to use it.`,
       })
       return
     }
@@ -4601,7 +4601,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       send(connection, {
         t: 'error',
         code: 'unauthorized',
-        message: 'The copilot’s files cannot be reached on this machine.',
+        message: `${BRAND.assistant}’s files cannot be reached on this machine.`,
       })
       return
     }
@@ -4627,7 +4627,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             t: 'copilot.file.text',
             id: message.id,
             text: '',
-            error: 'That is not a file the copilot keeps.',
+            error: `That is not a file ${BRAND.assistant} keeps.`,
           })
           return
         }
@@ -4643,7 +4643,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'copilot.file.write': {
         const target = copilotFileTarget(message.id)
         if (target === null) {
-          refuseFile(connection, 'That is not a file the copilot keeps.')
+          refuseFile(connection, `That is not a file ${BRAND.assistant} keeps.`)
           return
         }
         const written = files.write(target, message.text)
@@ -4668,7 +4668,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         if (message.id !== 'yours') {
           refuseFile(
             connection,
-            'Only the copilot’s own instructions have a version this build can put back. ' +
+            `Only ${BRAND.assistant}’s own instructions have a version this build can put back. ` +
               'The other files are either generated on every start or yours to write.',
           )
           send(connection, { t: 'copilot.files.rows', files: files.list() })
@@ -7413,7 +7413,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           send(connection, {
             t: 'error',
             code: 'unauthorized',
-            message: 'There is no copilot to reach on this machine.',
+            message: `${BRAND.assistant} is not available on this machine.`,
           })
           return
         }
@@ -7426,7 +7426,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             // Not quoted, for the reason every other refusal here is not: the
             // error came from a hash or a file write on this machine and the
             // sentence is drawn on somebody's phone.
-            message: 'The copilot connection could not be set up just now.',
+            message: `The connection to ${BRAND.assistant} could not be set up just now.`,
           })
         })
         return
@@ -7474,7 +7474,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
             // that reasons never quote what was refused applies more sharply
             // here, because the value could be a line of the copilot's own
             // conversation.
-            message: 'The copilot could not be reached just now.',
+            message: `${BRAND.assistant} could not be reached just now.`,
           })
         })
         return

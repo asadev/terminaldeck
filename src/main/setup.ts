@@ -139,7 +139,7 @@ export interface SetupSnapshot {
  * between a check that informs and a check that implies something untrue.
  */
 const COPILOT_NOTE =
-  'Detected only — this build does not start Copilot sessions, and Copilot has no session-hook configuration this app can write.'
+  'Detected only — this build does not start GitHub Copilot sessions, and GitHub Copilot has no session-hook configuration this app can write.'
 
 /* -------------------------------------------------------------- composing -- */
 

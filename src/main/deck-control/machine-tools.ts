@@ -22,6 +22,7 @@ import { BadArgument, sanitizeSendText, type ToolContext, type ToolOutput, type 
 import type { ChannelCall, ChannelTap } from './channel-tap'
 import type { MachineWatch } from './machine-watch'
 import { Refused, type Tier } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The other computers this app is paired to, driven from a tool.
@@ -651,14 +652,14 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
     id: 'machines.copilot',
     wire: 'machines_copilot',
     tier: 'act',
-    title: 'Talk to another computer’s copilot',
+    title: `Talk to ${BRAND.assistant} on another computer`,
     description:
-      'The copilot on another paired computer, when that computer shares it with this one (machines.look says ' +
+      `${BRAND.assistant} on another paired computer, when that computer shares it with this one (machines.look says ` +
       'sharesCopilot). do: "read" returns its conversation and state; "say" sends it one line — set waitSeconds ' +
       'to wait for its answer, which is returned with the conversation; "start" starts this computer’s run on ' +
       'it. It acts with that computer’s own tools and asks that computer’s person before anything it may not do ' +
       'alone; nothing here widens that.',
-    index: 'Read, start or talk to the copilot on another paired computer, and wait for its answer.',
+    index: `Read, start or talk to ${BRAND.assistant} on another paired computer, and wait for its answer.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -672,7 +673,7 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
       additionalProperties: false,
     },
     precheck: (args, context) => {
-      hereOnly(context.caller, 'Talking to another computer’s copilot')
+      hereOnly(context.caller, `Talking to ${BRAND.assistant} on another computer`)
       knownIfListed(str(args, 'machineId'))
       if (oneOf(args, 'do', COPILOT_VERBS) === 'say') sanitizeSendText(str(args, 'text'))
       if (args.waitSeconds !== undefined) int(args, 'waitSeconds', 0, MAX_REPLY_WAIT_S)
@@ -680,9 +681,9 @@ export function machineTools(deps: MachineToolsDeps): ToolSpec[] {
     },
     summary: (args) => {
       const machine = nameOf(typeof args.machineId === 'string' ? args.machineId : '?')
-      if (verbOf(args) === 'say') return `Say to the copilot on ${machine}: “${typeof args.text === 'string' ? args.text : ''}”`
-      if (verbOf(args) === 'start') return `Start a copilot run on ${machine}`
-      return `Read the copilot conversation on ${machine}`
+      if (verbOf(args) === 'say') return `Say to ${BRAND.assistant} on ${machine}: “${typeof args.text === 'string' ? args.text : ''}”`
+      if (verbOf(args) === 'start') return `Start ${BRAND.assistant} on ${machine}`
+      return `Read the conversation with ${BRAND.assistant} on ${machine}`
     },
     run: async (args): Promise<ToolOutput> => {
       const machineId = str(args, 'machineId')

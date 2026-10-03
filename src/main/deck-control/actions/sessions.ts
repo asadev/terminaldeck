@@ -6,6 +6,7 @@
  */
 
 import type { CoverageMap } from './types'
+import { BRAND } from '../../../shared/brand'
 
 /*
  * The skips that more than one channel shares, written once so the reason is
@@ -30,7 +31,7 @@ const SKIP_ACTION_LOG =
 
 /** `copilot.home` is under the `copilot.` prefix every tool is refused (`catalogue.ts`). */
 const SKIP_COPILOT_FOLDER =
-  'Which folder the copilot runs in is a copilot. setting, refused to every tool however a person answers; reading it is copilot.state.'
+  `Which folder ${BRAND.assistant} runs in is a \`copilot.\` setting, refused to every tool however a person answers; reading it is hoot.state.`
 
 /** The clipboard can hold a password the person just copied. */
 const SKIP_CLIPBOARD =
@@ -49,27 +50,27 @@ export const sessionsCoverage: CoverageMap = {
   'chat:load': { tool: ['sessions.transcript', 'chats.read'] },
   'chat:tail': { tool: ['sessions.transcript', 'chats.read'] },
   'copilot:actions': { skip: SKIP_ACTION_LOG },
-  'copilot:ensure': { tool: 'copilot.run' },
-  'copilot:files': { tool: 'copilot.state' },
-  'copilot:folder': { tool: 'copilot.state' },
+  'copilot:ensure': { tool: 'hoot.run' },
+  'copilot:files': { tool: 'hoot.state' },
+  'copilot:folder': { tool: 'hoot.state' },
   'copilot:folder:clear': { skip: SKIP_COPILOT_FOLDER },
   'copilot:folder:pick': { skip: SKIP_COPILOT_FOLDER },
-  'copilot:memory': { tool: 'copilot.memory' },
-  'copilot:memory-delete': { tool: 'copilot.memory' },
-  'copilot:memory-read': { tool: 'copilot.memory' },
-  'copilot:memory-write': { tool: 'copilot.memory' },
-  'copilot:read-composed': { tool: 'copilot.instructions' },
-  'copilot:read-contract': { tool: 'copilot.instructions' },
-  'copilot:read-folder-instructions': { tool: 'copilot.instructions' },
-  'copilot:read-instructions': { tool: 'copilot.instructions' },
-  'copilot:reset-instructions': { tool: 'copilot.instructions' },
-  'copilot:reveal': { tool: 'copilot.run' },
-  'copilot:scaffold': { tool: 'copilot.run' },
-  'copilot:signin': { tool: 'copilot.state' },
-  'copilot:state': { tool: 'copilot.state' },
-  'copilot:stop': { tool: 'copilot.run' },
-  'copilot:write-folder-instructions': { tool: 'copilot.instructions' },
-  'copilot:write-instructions': { tool: 'copilot.instructions' },
+  'copilot:memory': { tool: 'hoot.memory' },
+  'copilot:memory-delete': { tool: 'hoot.memory' },
+  'copilot:memory-read': { tool: 'hoot.memory' },
+  'copilot:memory-write': { tool: 'hoot.memory' },
+  'copilot:read-composed': { tool: 'hoot.instructions' },
+  'copilot:read-contract': { tool: 'hoot.instructions' },
+  'copilot:read-folder-instructions': { tool: 'hoot.instructions' },
+  'copilot:read-instructions': { tool: 'hoot.instructions' },
+  'copilot:reset-instructions': { tool: 'hoot.instructions' },
+  'copilot:reveal': { tool: 'hoot.run' },
+  'copilot:scaffold': { tool: 'hoot.run' },
+  'copilot:signin': { tool: 'hoot.state' },
+  'copilot:state': { tool: 'hoot.state' },
+  'copilot:stop': { tool: 'hoot.run' },
+  'copilot:write-folder-instructions': { tool: 'hoot.instructions' },
+  'copilot:write-instructions': { tool: 'hoot.instructions' },
   'dashboard:clear': { tool: 'dashboard.layout' },
   'dashboard:load': { tool: 'dashboard.layout' },
   'dashboard:save': { tool: 'dashboard.layout' },

@@ -198,7 +198,7 @@ describe('nothing changes while a tour is playing', () => {
       'sessions.account',
       'sessions.held',
       'ui.do',
-      'copilot.run',
+      'hoot.run',
       'settings.reset',
       'agents.set_control',
       'accounts.sign_in',

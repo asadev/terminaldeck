@@ -2,7 +2,8 @@ import { StatusDot } from '../components/StatusDot'
 import { entryDot, entryTooltip, type CopilotStage, type CopilotStateView } from './copilot-model'
 import { COPILOT_ACTIVE_ATTR, COPILOT_ROW_ATTR } from '../driving/where'
 import { openRailPanel, useRailPanel } from './driving/rail-panel'
-import { COPILOT_BLURB, COPILOT_ICON, COPILOT_NAME } from './identity'
+import { COPILOT_BLURB, COPILOT_NAME } from './identity'
+import { HootMark } from './HootMark'
 import './copilot.css'
 
 /**
@@ -145,20 +146,10 @@ export function CopilotEntry({
         }
         onClick={parked ? openRailPanel : onOpen}
       >
-        <svg
-          className="sb-glyph"
-          width="17"
-          height="17"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d={COPILOT_ICON} />
-        </svg>
+        {/* The owl, where every other row has a line glyph. The one
+            coloured picture in the rail, on purpose: it is the one row that is
+            a character rather than a place. */}
+        <HootMark size={17} className="sb-glyph" />
         <span className="sb-label">{name}</span>
         {/*
           Where the panel is. A chevron pointing back out of the row, mirroring

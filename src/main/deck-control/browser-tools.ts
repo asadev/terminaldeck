@@ -11,6 +11,7 @@ import {
 import { HANDOVER_WINDOW_MS } from '../browser-drive'
 import type { JsonSchema, ToolContext, ToolOutput, ToolSpec } from './catalogue'
 import { Refused, actsAsOwner, type Tier } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The six browser tools, and the decisions inside them.
@@ -428,7 +429,7 @@ export function whereOf(args: Record<string, unknown>, context: ToolContext): st
   const name = optStr(args, 'window')
   const found = maybeBound(args, context)?.target.name ?? null
   if (found !== null) return found
-  return name ?? (callingSession(context) === null ? 'the copilot’s browser tab' : 'its browser window')
+  return name ?? (callingSession(context) === null ? `${BRAND.assistant}’s browser tab` : 'its browser window')
 }
 
 /**
@@ -769,7 +770,7 @@ export function browserTools(drive: BrowserDrive, forward?: VerbForwarder): Tool
         if (args.isolate === true) {
           throw new Refused(
             'not-permitted',
-            'isolate only applies to the copilot’s own tab. A session’s window is a page in the strip and ' +
+            `isolate only applies to ${BRAND.assistant}’s own tab. A session’s window is a page in the strip and ` +
               'it keeps the partition it was built with.',
           )
         }
@@ -1131,7 +1132,7 @@ export function browserTools(drive: BrowserDrive, forward?: VerbForwarder): Tool
     tier: 'read',
     title: 'Photograph the page',
     description:
-      'A PNG of your own tab or of a session’s window, written to the copilot’s folder. Returns the path ' +
+      `A PNG of your own tab or of a session’s window, written to ${BRAND.assistant}’s folder. Returns the path ` +
       'and the size, never the ' +
       'image. Every password, one-time-code and file field is painted out before the file is written. Prefer ' +
       'browser.read — the outline is what tells you what to click, and a picture is not.',

@@ -73,6 +73,7 @@ import type { IpcMain } from 'electron'
 import { isAbsolute, normalize, parse, relative, sep } from 'node:path'
 import { CHOOSING_A_FOLDER } from '../shared/copilot-text'
 import { defaultCopilotHome } from './copilot-home'
+import { BRAND } from '../shared/brand'
 
 /**
  * The settings key holding the chosen folder.
@@ -181,7 +182,7 @@ export function validateCopilotFolder(
       path,
       problem:
         'That is inside this app’s own storage, where the action log, the routines and the ' +
-        'paired-device records are kept — the files the copilot is deliberately held away from. ' +
+        `paired-device records are kept — the files ${BRAND.assistant} is deliberately held away from. ` +
         'Choose a folder of your own.',
     }
   }
@@ -189,7 +190,7 @@ export function validateCopilotFolder(
     return {
       ok: false,
       path,
-      problem: 'There is no folder there, or it cannot be read. The copilot starts in it, so it has to exist first.',
+      problem: `There is no folder there, or it cannot be read. ${BRAND.assistant} starts in it, so it has to exist first.`,
     }
   }
   return { ok: true, path, problem: null }
@@ -402,7 +403,7 @@ export function registerCopilotFolderIpc(ipcMain: IpcMain, deps: CopilotFolderDe
     const after = report()
     deps.log?.({
       action: 'folder.chosen',
-      detail: `you pointed the copilot at ${verdict.path}. Nothing of this app’s is written there; it takes effect the next time the copilot starts.`,
+      detail: `you pointed ${BRAND.assistant} at ${verdict.path}. Nothing of this app’s is written there; it takes effect the next time ${BRAND.assistant} starts.`,
     })
     return { report: after, problem: null, cancelled: false }
   })
@@ -412,7 +413,7 @@ export function registerCopilotFolderIpc(ipcMain: IpcMain, deps: CopilotFolderDe
     const after = report()
     deps.log?.({
       action: 'folder.cleared',
-      detail: `the copilot goes back to ${after.home} the next time it starts. Nothing was moved out of the folder you had chosen.`,
+      detail: `${BRAND.assistant} goes back to ${after.home} the next time it starts. Nothing was moved out of the folder you had chosen.`,
     })
     return { report: after, problem: null, cancelled: false }
   })

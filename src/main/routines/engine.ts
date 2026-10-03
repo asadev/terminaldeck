@@ -109,6 +109,7 @@ import { missedRuns, nextDue } from './schedule'
 import type { RoutineStore, StoredRoutine } from './store'
 import { noteRefusal, RuntimeState, type RoutineRefusal } from './runtime-state'
 import type { ToolCaller } from '../deck-control/control'
+import { BRAND } from '../../shared/brand'
 
 /* ------------------------------------------------------------------ limits */
 
@@ -683,7 +684,7 @@ export class RoutineEngine {
     }
     if (this.runner === null) {
       entry.armProblem =
-        'The copilot is not running in this build yet, so there is nothing for a routine to run through.'
+        `${BRAND.assistant} is not running in this build yet, so there is nothing for a routine to run through.`
       return
     }
     if (!isAbsolute(routine.folder)) {
@@ -950,7 +951,7 @@ export class RoutineEngine {
       return {
         started: false,
         reason:
-          'The copilot is not running in this build yet, so there is nothing for a routine to run through.',
+          `${BRAND.assistant} is not running in this build yet, so there is nothing for a routine to run through.`,
       }
     }
     return this.fire(entry, { kind: 'manual', by }, [], { ignoreQuiet: true })
@@ -1603,7 +1604,7 @@ function clock(at: number): string {
 export function describeCause(cause: RoutineCause): string {
   switch (cause.kind) {
     case 'manual':
-      return cause.by === 'copilot' ? 'The copilot asked for it.' : 'You asked for it.'
+      return cause.by === 'copilot' ? `${BRAND.assistant} asked for it.` : 'You asked for it.'
     case 'session-finished':
       return `Session ${cause.sessionId.slice(0, 8)} finished.`
     case 'session-failed':

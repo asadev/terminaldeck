@@ -74,7 +74,7 @@ export function configPaths(): ConfigPath[] {
       // already changed something is a row nobody finds in time.
       key: 'settingsLastGood',
       label: 'Settings — last good',
-      purpose: 'A copy of your settings taken before the copilot changed any. Written only then.',
+      purpose: `A copy of your settings taken before ${BRAND.assistant} changed any. Written only then.`,
       path: join(userData, SETTINGS_SNAPSHOT_FILE),
       kind: 'file',
     },

@@ -260,8 +260,8 @@ export function hasNeverStarted(
  */
 export function logTrustLine(report: ActionLogReport): string {
   return report.outsideCopilotFolder
-    ? 'Checked just now: this file is outside every path the copilot can write to.'
-    : 'This file is inside the copilot’s own folder, which it can write to. That is a defect — the log is not trustworthy until it moves.'
+    ? `Checked just now: this file is outside every path ${BRAND.assistant} can write to.`
+    : `This file is inside ${BRAND.assistant}’s own folder, which it can write to. That is a defect — the log is not trustworthy until it moves.`
 }
 
 /* --------------------------------------------------------------- section -- */
@@ -333,7 +333,7 @@ export function CopilotSection({ setUpCopilot }: { setUpCopilot?(): void } = {})
         bridge.copilotState().then(
           (raw) => fresh(toCopilotState(raw), setState),
           (cause: unknown) =>
-            fresh(errorText(cause, 'Could not read the copilot’s state.'), setProblem),
+            fresh(errorText(cause, `Could not read ${BRAND.assistant}’s state.`), setProblem),
         ),
       )
     }
@@ -420,10 +420,10 @@ export function CopilotSection({ setUpCopilot }: { setUpCopilot?(): void } = {})
   if (!bridge.copilotState) {
     return (
       <>
-        <SectionHead title="Copilot" blurb={BLURB} />
+        <SectionHead title={BRAND.assistant} blurb={BLURB} />
         <Notice tone="warn">
-          This build has no copilot channels wired into its preload, so there is nothing here to
-          show. Nothing is broken on disk — the pane simply cannot ask.
+          This build has no channels for {BRAND.assistant} wired into its preload, so there is nothing
+          here to show. Nothing is broken on disk — the pane simply cannot ask.
         </Notice>
       </>
     )
@@ -433,7 +433,7 @@ export function CopilotSection({ setUpCopilot }: { setUpCopilot?(): void } = {})
 
   return (
     <>
-      <SectionHead title="Copilot" blurb={BLURB} />
+      <SectionHead title={BRAND.assistant} blurb={BLURB} />
 
       {problem && <Notice tone="error">{problem}</Notice>}
 
@@ -701,13 +701,13 @@ function SessionGroup({
             */}
             <span className="settings-help">
               {setup.identity.name === null
-                ? `Nobody has named it, so this app calls it the ${DEFAULT_COPILOT_NAME}.`
+                ? `It goes by ${DEFAULT_COPILOT_NAME}, the name this app gives it.`
                 : `It is called ${setup.identity.name}.`}
               {setup.identity.callThem === null
                 ? ' It has not been told what to call you.'
                 : ` It calls you ${setup.identity.callThem}.`}
               <HoverNote label="its name">
-                {'The name is not a setting — it is a sentence in the copilot’s own instructions, ' +
+                {`The name is not a setting — it is a sentence in ${BRAND.assistant}’s own instructions, ` +
                   'which is why there is one copy of it and not two. Running these questions again ' +
                   'rewrites that sentence, and so does editing it yourself under Its files.'}
               </HoverNote>
@@ -770,7 +770,7 @@ function SessionGroup({
                 act('start', async () => {
                   const next = toCopilotState(await bridge.ensureCopilot?.())
                   return next?.status === 'running'
-                    ? 'The copilot is running.'
+                    ? `${BRAND.assistant} is running.`
                     : (next?.problem ?? 'It did not start, and said nothing about why.')
                 })
               }
@@ -822,7 +822,7 @@ function SessionGroup({
               <HoverNote label="its account">
                 {'It resolves an account out of Accounts the same way any session you start in ' +
                   'this folder resolves one: the folder’s account if it has been given one, and ' +
-                  'your default otherwise. There is no separate login anywhere for the copilot ' +
+                  `your default otherwise. There is no separate login anywhere for ${BRAND.assistant} ` +
                   'and nothing signs in on its behalf.'}
               </HoverNote>
             </span>
@@ -956,7 +956,7 @@ function FolderRow({
 
         {folder?.restartNeeded && (
           <Notice tone="info">
-            The copilot running now is still working in {folder.runningIn}. {FOLDER_NEEDS_A_RESTART}
+            {BRAND.assistant} is still working in {folder.runningIn} for now. {FOLDER_NEEDS_A_RESTART}
           </Notice>
         )}
 
@@ -975,7 +975,7 @@ function FolderRow({
               if (result.problem !== null) return result.problem
               return result.folder === null
                 ? 'The folder could not be changed.'
-                : `The copilot will start in ${result.folder.home}. ${FOLDER_NEEDS_A_RESTART}`
+                : `${BRAND.assistant} will start in ${result.folder.home}. ${FOLDER_NEEDS_A_RESTART}`
             })
           }
         >
@@ -1043,7 +1043,7 @@ const INSTRUCTIONS: Record<
   superseded: {
     badge: 'out of date',
     quiet: false,
-    says: 'A default an older build wrote, untouched since — nothing in it is yours. It describes powers this build has changed, so the copilot is being told something untrue about itself.',
+    says: `A default an older build wrote, untouched since — nothing in it is yours. It describes powers this build has changed, so ${BRAND.assistant} is being told something untrue about itself.`,
   },
   edited: {
     // `your words`, not `yours`. The row's other badge said `yours` too, so an
@@ -1053,7 +1053,7 @@ const INSTRUCTIONS: Record<
     // badge at all.
     badge: 'your words',
     quiet: true,
-    says: 'These are your words, and they are the truth for the copilot rather than this build’s wording. Nothing in the app will replace them.',
+    says: `These are your words, and they are the truth for ${BRAND.assistant} rather than this build’s wording. Nothing in the app will replace them.`,
   },
 }
 
@@ -1435,7 +1435,7 @@ function FilesGroup({
                   note={saveNote}
                   effect={
                     running
-                      ? 'Saving changes what it is told the next time it starts. The copilot running now still has the old text — restart it to hand it the new one.'
+                      ? `Saving changes what it is told the next time it starts. ${BRAND.assistant} is still running with the old text — restart it to hand it the new one.`
                       : 'Saving changes what it is told the next time it starts.'
                   }
                   onSave={(next) => {
@@ -1455,8 +1455,8 @@ function FilesGroup({
                         const where = result.backup === null ? '' : ` What was there is at ${result.backup}.`
                         setSaveNote({
                           text: running
-                            ? `Saved.${where} The running copilot still has the old text — restart it to apply this.`
-                            : `Saved.${where} It applies the next time the copilot starts.`,
+                            ? `Saved.${where} ${BRAND.assistant} is still running with the old text — restart it to apply this.`
+                            : `Saved.${where} It applies the next time ${BRAND.assistant} starts.`,
                           ok: true,
                         })
                       }
@@ -1613,7 +1613,7 @@ function FilesGroup({
           <FileRow
             label="What it was handed"
             badges={[{ text: 'generated' }]}
-            says="The two halves above, composed — byte for byte what the running copilot was given, and never written into its folder."
+            says={`The two halves above, composed — byte for byte what the running ${BRAND.assistant} was given, and never written into its folder.`}
             action={open === 'composed' ? 'Close' : 'View'}
             onAction={toggle('composed')}
           >
@@ -1624,13 +1624,13 @@ function FilesGroup({
                 problem={
                   composed.problem ??
                   (composedFile !== null && !composedFile.exists
-                    ? 'It has not been written yet — it is composed when the copilot starts.'
+                    ? `It has not been written yet — it is composed when ${BRAND.assistant} starts.`
                     : null)
                 }
                 rows={16}
                 because={
                   'A copy, made at the moment it started. Editing it would change nothing: it is ' +
-                  'written again from the two halves every time the copilot starts.'
+                  `written again from the two halves every time ${BRAND.assistant} starts.`
                 }
               >
                 <Button onClick={() => onReveal('composed')} disabled={!bridge.copilotReveal}>
@@ -1678,7 +1678,7 @@ function FilesGroup({
             says={
               folderFile?.exists === true
                 ? 'Whatever assistant already lives in that folder, read the ordinary way. This app writes it only when you press Save here.'
-                : 'Nothing in that folder claims to be the copilot. Write one here and it does — for this copilot and for any session you start there.'
+                : `Nothing in that folder claims to be ${BRAND.assistant}. Write one here and it does — for ${BRAND.assistant} and for any session you start there.`
             }
             action={open === 'folder' ? 'Close' : 'Edit'}
             onAction={toggle('folder')}
@@ -1740,8 +1740,8 @@ function FilesGroup({
                  */
                 effect={
                   running
-                    ? 'This is a file in your folder. Saving writes it there and nothing else does — it applies the next time the copilot starts, so restart it to hand it the new one.'
-                    : 'This is a file in your folder. Saving writes it there and nothing else does. It applies the next time the copilot starts.'
+                    ? `This is a file in your folder. Saving writes it there and nothing else does — it applies the next time ${BRAND.assistant} starts, so restart it to hand it the new one.`
+                    : `This is a file in your folder. Saving writes it there and nothing else does. It applies the next time ${BRAND.assistant} starts.`
                 }
                 onSave={(next) => {
                   setSaveNote(null)
@@ -1762,8 +1762,8 @@ function FilesGroup({
                         text: result.created
                           ? `Written. That folder now has its own instructions, and every session you start there reads them.${where}`
                           : running
-                            ? `Saved.${where} The running copilot still has the old text — restart it to apply this.`
-                            : `Saved.${where} It applies the next time the copilot starts.`,
+                            ? `Saved.${where} ${BRAND.assistant} is still running with the old text — restart it to apply this.`
+                            : `Saved.${where} It applies the next time ${BRAND.assistant} starts.`,
                         ok: true,
                       })
                     }
@@ -2036,8 +2036,8 @@ function ActionsGroup({
       title="The action log"
       says="Every tool call it made, what came back, and whether a human said yes."
       more={
-        'Append-only, and kept outside the copilot’s own folder on purpose — a record the ' +
-        'audited party can compose is not a record. The app writes every line; the copilot’s ' +
+        `Append-only, and kept outside ${BRAND.assistant}’s own folder on purpose — a record the ` +
+        `audited party can compose is not a record. The app writes every line; ${BRAND.assistant}’s ` +
         'only way to add one is a log.note call, which is itself recorded.'
       }
     >
@@ -2059,7 +2059,7 @@ function ActionsGroup({
               <span className="settings-help">
                 {actions?.exists
                   ? 'The file is there and has nothing in it yet.'
-                  : 'Nothing has been recorded — the copilot has done nothing yet.'}
+                  : `Nothing has been recorded — ${BRAND.assistant} has done nothing yet.`}
               </span>
             )}
 
@@ -2219,7 +2219,7 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
                 {'They come before it runs a command or edits a file, exactly as in every ' +
                   'other session you open, and they are governed by your own settings file for ' +
                   'that CLI — on this machine, ~/.claude/settings.json. ' +
-                  'If you have set that to bypass them, the copilot will not stop to ask either. ' +
+                  `If you have set that to bypass them, ${BRAND.assistant} will not stop to ask either. ` +
                   'This app does not change that setting in either direction.'}
               </HoverNote>
             </span>
@@ -2229,7 +2229,7 @@ function ReachGroup({ state }: { state: CopilotState | null }) {
               <HoverNote label="this app’s confirmation">
                 {'It is asked by the desktop rather than by the CLI, before this app writes a ' +
                   'setting, starts a session or changes a routine, over a request the agent cannot ' +
-                  'answer for itself — so nothing the copilot says can wave itself through. With ' +
+                  `answer for itself — so nothing ${BRAND.assistant} says can wave itself through. With ` +
                   'no window open to ask, it is refused rather than allowed.'}
               </HoverNote>
             </span>
@@ -2681,10 +2681,10 @@ function RoutinesGroup({
   return (
     <Block
       title="Routines"
-      says="Saved instructions the app runs on its own, kept where the copilot cannot reach them — and editable here, by you."
+      says={`Saved instructions the app runs on its own, kept where ${BRAND.assistant} cannot reach them — and editable here, by you.`}
       more={
         'A routine is a trigger, a prompt and a folder — one file each. They are kept in the ' +
-        'app’s own storage, which the copilot may read and cannot write, so one can only be ' +
+        `app’s own storage, which ${BRAND.assistant} may read and cannot write, so one can only be ` +
         'created or changed by you: here, in your own editor, or by a tool call you confirm.'
       }
     >

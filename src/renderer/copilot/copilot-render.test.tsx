@@ -107,7 +107,7 @@ describe('the pinned sidebar entry', () => {
   )
 
   it('names itself', () => {
-    expect(html).toContain('>Copilot</span>')
+    expect(html).toContain('>Hoot</span>')
   })
 
   it('offers no way to end it and no way to start a second', () => {
@@ -123,7 +123,7 @@ describe('the pinned sidebar entry', () => {
 
   it('makes no claim when the window has not asked', () => {
     const quiet = renderToStaticMarkup(<CopilotEntry active={false} onOpen={noop} />)
-    expect(quiet).toContain('>Copilot</span>')
+    expect(quiet).toContain('>Hoot</span>')
     expect(quiet).not.toContain('status-dot')
     expect(quiet).toContain(COPILOT_BLURB)
   })
@@ -355,7 +355,7 @@ describe('a machine that will not answer', () => {
         bridge={bridge}
       />,
     )
-    expect(html).toContain('office-pc is not offering its copilot to this computer')
+    expect(html).toContain('office-pc is not offering Hoot to this computer')
     expect(html).not.toContain('guest')
     expect(html).not.toContain('Pair it again as your own')
   })
@@ -503,7 +503,7 @@ describe('the consent dialog', () => {
   })
 
   it('says who is asking', () => {
-    expect(html).toContain('The copilot is asking')
+    expect(html).toContain('Hoot is asking')
   })
 
   it('names an outside AI app in the headline when one asked, and does not call it the copilot', () => {

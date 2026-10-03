@@ -70,7 +70,7 @@ describe('who the dialog says is asking', () => {
   it('names the app by its key when an app asked, and the copilot otherwise', () => {
     expect(askerSentence({ askedBy: 'E2E test (Claude)' })).toMatch(/^“E2E test \(Claude\)” is asking to do this/)
     expect(askerSentence({ askedBy: 'E2E test (Claude)' })).not.toContain('copilot')
-    expect(askerSentence({ askedBy: null })).toMatch(/^The copilot is asking to do this/)
+    expect(askerSentence({ askedBy: null })).toMatch(/^Hoot is asking to do this/)
   })
 })
 

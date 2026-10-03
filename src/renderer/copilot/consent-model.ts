@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand'
 /**
  * The alter-tier question, as a person has to be able to read it.
  *
@@ -159,7 +160,7 @@ export function readConsentSettled(value: unknown): ConsentSettledView | null {
  * sentence says what kind of thing it is.
  */
 export function askerSentence(request: Pick<ConsentRequestView, 'askedBy'>): string {
-  if (request.askedBy === null) return 'The copilot is asking to do this. It will not happen unless you allow it.'
+  if (request.askedBy === null) return `${BRAND.assistant} is asking to do this. It will not happen unless you allow it.`
   return (
     `“${request.askedBy}” is asking to do this — an AI app you gave an access key to. ` +
     'It will not happen unless you allow it.'
@@ -288,7 +289,7 @@ export function settledSentence(settled: ConsentSettledView): string | null {
       // and one of their own devices dropping its socket while the question it
       // raised was on screen. The sentence covers both because the outcome is
       // the same — nobody is waiting for the answer any more.
-      return 'The copilot stopped waiting, so the question was withdrawn.'
+      return `${BRAND.assistant} stopped waiting, so the question was withdrawn.`
     case 'shutting-down':
       return 'The app is quitting, so it was refused.'
     case 'approver-gone':

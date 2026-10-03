@@ -136,7 +136,7 @@ describe('the words he chose, on the screen where the choice is made', () => {
     expect(said).toContain('My device')
     expect(said).toContain('Full access. It’s you at another keyboard.')
     expect(said).toContain('Guest')
-    expect(said).toContain('You choose what they can reach. The copilot is never shared.')
+    expect(said).toContain('You choose what they can reach. Hoot is never shared.')
   })
 
   it('says a kind cannot be changed afterwards, before it is chosen for good', () => {
@@ -213,7 +213,7 @@ describe('one of the owner’s own machines', () => {
   it('is told it has everything, and is asked nothing about folders', () => {
     const said = text(view({ step: 'confirm', kind: 'mine' as DeviceKind }))
     expect(said).toContain('full access')
-    expect(said).toContain('use the copilot')
+    expect(said).toContain('use Hoot')
     expect(said).not.toContain('Add a folder')
   })
 })

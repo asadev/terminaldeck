@@ -152,6 +152,7 @@ import { detectPlatform } from './platform'
 import { readLastFolder, writeLastFolder } from './session-start'
 import { chordFor, resolveCommand, scopeForTarget } from './keymap'
 import './shell/shell.css'
+import { HootMark } from './copilot/HootMark'
 
 /**
  * A close waiting on the user.
@@ -6365,6 +6366,8 @@ function Workspace() {
                focus mark at all, because it deliberately has no border to ring. */
             headingFocused={headingFocused}
             subtitle={heading.subtitle}
+            // The owl beside Hoot's name, when Hoot's window is the one named.
+            {...(headingTab?.isCopilot === true ? { mark: <HootMark size={28} /> } : {})}
             meta={
               headingFolder ? (
                 /* Where, and who. The folder is a plain title — a pty has one
@@ -6378,7 +6381,7 @@ function Workspace() {
                    other machines: same chip, same mono, same place. Only the
                    thing beside it changes, and the note below says why. */
                     <div className="toolbar-chips">
-                      <FolderTitle path={headingFolder} />
+                      <FolderTitle path={headingFolder} assistant={headingTab?.isCopilot === true} />
                       {/*
                     And beside it, the second fact — which is a different fact
                     for a session running somewhere else.

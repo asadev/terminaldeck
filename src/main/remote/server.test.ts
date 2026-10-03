@@ -3495,7 +3495,7 @@ describe('a socket that has not opened the copilot has no reach', () => {
       // The sentence says *this device is not connected*, not *you need more
       // access*. Two different remedies, and the second would send somebody
       // looking for a checkbox that is not the obstacle.
-      expect(error.t === 'error' && error.message).toMatch(/not connected to the copilot/)
+      expect(error.t === 'error' && error.message).toMatch(/not connected to Hoot/)
     }
     // Nothing about the copilot leaked into any of it.
     expect(client.received.some((m) => m.t.startsWith('copilot.'))).toBe(false)

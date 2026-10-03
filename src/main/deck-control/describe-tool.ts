@@ -136,6 +136,7 @@
 import { advertiseTool, type ToolSpec } from './catalogue'
 import { RUN_ID } from './run-tool'
 import { Refused } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /** The canonical id and the wire spelling, in one place because five files name them. */
 export const DESCRIBE_ID = 'tools.describe'
@@ -230,9 +231,9 @@ export const TOOL_AREAS: readonly ToolArea[] = [
   {
     id: 'app',
     covers:
-      'this app itself: version, logs, diagnostics, updates, settings, notifications, the in-app copilot, clicks in ' +
+      `this app itself: version, logs, diagnostics, updates, settings, notifications, ${BRAND.assistant}, clicks in ` +
       'its window, opening links, and what this tool server covers',
-    prefixes: ['app', 'settings', 'updates', 'notifications', 'copilot', 'ui', 'links', 'tools'],
+    prefixes: ['app', 'settings', 'updates', 'notifications', 'hoot', 'ui', 'links', 'tools'],
   },
 ]
 
@@ -274,9 +275,15 @@ function areasOf(behind: readonly ToolSpec[]): Array<{ id: string; count: number
  */
 export function visibleTo(
   granted: ReadonlySet<string> | undefined,
-  spec: { id: string; wire: string },
+  spec: { id: string; wire: string; aliases?: readonly string[] },
 ): boolean {
-  return granted === undefined || granted.has(spec.id) || granted.has(spec.wire)
+  return (
+    granted === undefined ||
+    granted.has(spec.id) ||
+    granted.has(spec.wire) ||
+    // A grant written with a tool's old name still covers it. See `ToolSpec.aliases`.
+    (spec.aliases ?? []).some((alias) => granted.has(alias))
+  )
 }
 
 /** One line of the index: the wire name a caller would send, and what it is for. */
@@ -505,7 +512,9 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
       }
 
       for (const name of names) {
-        const found = catalogue.find((entry) => entry.id === name || entry.wire === name)
+        const found = catalogue.find(
+          (entry) => entry.id === name || entry.wire === name || (entry.aliases ?? []).includes(name),
+        )
         // A tool for another audience does not exist for this caller.
         const spec = found === undefined ? undefined : (asListedFor(found, context.caller?.kind === 'key') ?? undefined)
         /*

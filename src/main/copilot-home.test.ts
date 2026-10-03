@@ -354,7 +354,7 @@ describe('the instructions — the half that is the person’s', () => {
     expect(readFileSync(paths.instructions, 'utf8')).toBe(copilotInstructions())
   })
 
-  it('frames a developer\'s copilot, not an assistant for the app', () => {
+  it('frames a developer\'s assistant, not an assistant for the app', () => {
     /*
      * The framing Asad ruled out on 2026-08-17, pinned so it cannot come back.
      * The first scaffold opened *"you are the assistant for the app itself and
@@ -363,7 +363,7 @@ describe('the instructions — the half that is the person’s', () => {
      * decision rather than an oversight.
      */
     const body = text()
-    expect(body).toMatch(/You are a \*\*developer's copilot\*\*/i)
+    expect(body).toMatch(/You are a \*\*developer's assistant\*\*/i)
     expect(body).not.toMatch(/the assistant for the \*app itself\*/i)
     expect(body).toMatch(/not\*\* a general personal assistant/i)
     expect(body).toMatch(/No inbox, no calendar/i)

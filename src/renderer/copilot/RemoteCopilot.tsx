@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { PageEmpty } from '../components/PageEmpty'
-import { COPILOT_ICON } from './identity'
+import { HootMark } from './HootMark'
 import {
   applyChat,
   readChatFrame,
@@ -10,6 +10,7 @@ import {
 } from './remote-copilot-model'
 import type { CopilotReach } from './useCopilotMachines'
 import './copilot.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The copilot on **another** machine, in this window.
@@ -215,7 +216,7 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
 
   if (!deck) {
     return (
-      <PageEmpty icon={COPILOT_ICON} title="This build cannot reach another machine's copilot">
+      <PageEmpty mark={<HootMark size={96} />} title={`This build cannot reach ${BRAND.assistant} on another machine`}>
         Update this app on both computers.
       </PageEmpty>
     )
@@ -232,7 +233,7 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
    * because the switch is watching the same push.
    */
   if (reach === 'unreachable') {
-    return <PageEmpty icon={COPILOT_ICON} title={`${machineName} is not connected`} />
+    return <PageEmpty mark={<HootMark size={96} />} title={`${machineName} is not connected`} />
   }
   if (reach === 'refused') {
     /*
@@ -247,8 +248,8 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
      */
     return (
       <PageEmpty
-        icon={COPILOT_ICON}
-        title={`${machineName} is not offering its copilot to this computer`}
+        mark={<HootMark size={96} />}
+        title={`${machineName} is not offering ${BRAND.assistant} to this computer`}
       />
     )
   }
@@ -264,7 +265,7 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
    */
   if (report === null) {
     return (
-      <PageEmpty icon={COPILOT_ICON} title={`Reaching ${machineName}…`}>
+      <PageEmpty mark={<HootMark size={96} />} title={`Reaching ${machineName}…`}>
         {problem}
       </PageEmpty>
     )
@@ -273,8 +274,8 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
   if (report.run === null) {
     return (
       <PageEmpty
-        icon={COPILOT_ICON}
-        title={`No copilot running for you on ${machineName}`}
+        mark={<HootMark size={96} />}
+        title={`${BRAND.assistant} is not running for you on ${machineName}`}
         action={{ label: busy ? 'Starting…' : 'Start it', onClick: start, primary: true }}
       >
         {problem || `It runs there, in that computer's folders, as that computer's account.`}
@@ -285,11 +286,22 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
   return (
     <div className="cp-remote">
       <div className="cp-remote-log scroll-fade">
-        {bubbles.map((bubble) => (
-          <div key={bubble.id} className="cp-bubble" data-role={bubble.role}>
-            {bubble.text}
-          </div>
-        ))}
+        {bubbles.map((bubble) =>
+          /* Hoot's turns carry the owl beside them, the way a chat app puts a
+             face beside the other person's messages; yours do not need one. */
+          bubble.role === 'agent' ? (
+            <div key={bubble.id} className="cp-turn">
+              <HootMark size={32} className="cp-avatar" />
+              <div className="cp-bubble" data-role={bubble.role}>
+                {bubble.text}
+              </div>
+            </div>
+          ) : (
+            <div key={bubble.id} className="cp-bubble" data-role={bubble.role}>
+              {bubble.text}
+            </div>
+          ),
+        )}
       </div>
       {problem !== '' && (
         <p className="cp-remote-problem" role="status">
@@ -301,8 +313,8 @@ export function RemoteCopilot({ machineId, machineName, reach, open, bridge }: P
           className="cp-remote-field"
           type="text"
           value={typed}
-          aria-label={`Ask the copilot on ${machineName}`}
-          placeholder={`Ask the copilot on ${machineName}`}
+          aria-label={`Ask ${BRAND.assistant} on ${machineName}`}
+          placeholder={`Ask ${BRAND.assistant} on ${machineName}`}
           onChange={(event) => setTyped(event.target.value)}
           onKeyDown={(event) => {
             if (event.key !== 'Enter') return

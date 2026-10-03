@@ -3,6 +3,7 @@ import { isAbsolute, normalize, sep } from 'node:path'
 import { BadArgument } from './catalogue'
 import { KeyError, NAMED_KEYS as NAMED_KEYS_TABLE, resolveKeys, type ResolvedKey } from './session-typing'
 import { Refused, actsAsOwner, type Caller } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * What the machine, server, device and GitHub tools share, in one place.
@@ -116,7 +117,7 @@ export function hereOnly(caller: Caller, what: string): void {
   if (actsAsOwner(caller)) return
   throw new Refused(
     'not-granted',
-    `${what} only works for the person at this computer, the copilot they are talking to, and AI apps they ` +
+    `${what} only works for the person at this computer, ${BRAND.assistant} (the assistant they talk to here), and AI apps they ` +
       'gave an access key to. A paired device cannot do it from here. Say what you would have done and let them do it.',
   )
 }

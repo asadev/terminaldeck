@@ -111,7 +111,7 @@ describe('the pane is reachable', () => {
       <SettingsPanel bridge={{}} platform="mac" initialSection="copilot" />,
     )
     expect(html).toContain('data-section="copilot" class="settings-nav-item" aria-selected="true"')
-    expect(html).toContain('Copilot')
+    expect(html).toContain('Hoot')
   })
 
   it('says so plainly when the build has no copilot channels', () => {
@@ -120,7 +120,7 @@ describe('the pane is reachable', () => {
     const html = renderToStaticMarkup(
       <SettingsPanel bridge={{}} platform="mac" initialSection="copilot" />,
     )
-    expect(html).toContain('no copilot channels wired')
+    expect(html).toContain('no channels for Hoot wired')
   })
 })
 
@@ -170,7 +170,7 @@ describe('the claims the pane makes', () => {
     // source. The mechanism, not just the placement: an audit log the audited
     // party can append to, edit or delete is not one, and the copilot's single
     // way to add a line is a tool call that is itself recorded.
-    expect(SOURCE).toContain('kept outside the copilot')
+    expect(SOURCE).toContain('kept outside ${BRAND.assistant}’s own folder')
     expect(SOURCE).toContain('log.note')
     // What stays on the page with the list closed: whether the file can be
     // trusted at all. Hiding *that* behind the same button would hide it exactly
@@ -285,7 +285,7 @@ describe('the claims the pane makes', () => {
     expect(markup).toContain('it has no login of its own')
     expect(markup).not.toContain('Pinned to a login of its own')
     expect(SOURCE).toContain('the same way any session you start in')
-    expect(SOURCE).toContain('There is no separate login anywhere for the copilot')
+    expect(SOURCE).toContain('There is no separate login anywhere for ${BRAND.assistant}')
   })
 })
 
@@ -416,7 +416,7 @@ describe('whether the action log can be trusted', () => {
   })
 
   it('reassures only when the file really is outside the writable folder', () => {
-    expect(logTrustLine(report(true))).toContain('outside every path the copilot can write to')
+    expect(logTrustLine(report(true))).toContain('outside every path Hoot can write to')
   })
 
   it('reports a defect rather than reassuring, if the log ever moves back inside', () => {

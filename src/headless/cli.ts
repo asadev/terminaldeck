@@ -55,7 +55,7 @@ import type { HostStatus } from './host'
  * importing the host module would put the whole daemon into the CLI's bundle.
  */
 export const NO_COPILOT_HERE =
-  'no copilot offered here (a public demo box has no owner to give it to, or the copilot’s ' +
+  `${BRAND.assistant} is not offered here (a public demo box has no owner to give it to, or ${BRAND.assistant}’s ` +
   'tools did not start)'
 
 /* ---------------------------------------------------------------- parsing -- */
@@ -645,7 +645,7 @@ export function renderKindQuestion(): string {
     '  What is this device?',
     '',
     "    mine    Full access. It’s you at another keyboard.",
-    '    guest   You choose what they can reach. The copilot is never shared.',
+    `    guest   You choose what they can reach. ${BRAND.assistant} is never shared.`,
     '',
     '  Decided once, when you approve it. Nothing changes it afterwards — a device',
     '  that turned out to be the other one is revoked and paired again.',
@@ -683,7 +683,7 @@ export function renderApproved(device: Device, kind: DeviceKind): string {
       '  It sees whatever projects this host has open, and the ports on this machine.',
       `  "${BRAND.id} folders add <path>" narrows it to exactly what you choose.`,
       '',
-      '  It gets the copilot too — its chat, files, routines and settings — driven from',
+      `  It gets ${BRAND.assistant} too — its chat, files, routines and settings — driven from`,
       '  the app, because this server has no screen of its own to run it on.',
     )
   } else {
@@ -694,7 +694,7 @@ export function renderApproved(device: Device, kind: DeviceKind): string {
       '  It has an empty folder list, which means it cannot start a session anywhere',
       `  yet. Give it one: "${BRAND.id} folders add <path>".`,
       '',
-      '  A guest is never offered the copilot, and cannot reach the ports on this',
+      `  A guest is never offered ${BRAND.assistant}, and cannot reach the ports on this`,
       '  machine.',
     )
   }

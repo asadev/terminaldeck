@@ -41,6 +41,7 @@ import {
   type SetupStep,
 } from './copilot-setup-model'
 import './CopilotSetup.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The few steps before somebody's copilot runs for the first time.
@@ -346,7 +347,7 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
       .then(async (text) => {
         if (text === null || !bridge.copilotWriteInstructions) {
           setProblem(
-            'Its instructions could not be read, so nothing was saved. Settings → Copilot has the file itself.',
+            `Its instructions could not be read, so nothing was saved. Settings → ${BRAND.assistant} has the file itself.`,
           )
           return
         }
@@ -417,7 +418,7 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
       open={open}
       hidden={picking}
       size="lg"
-      title="Set up your copilot"
+      title={`Set up ${BRAND.assistant}`}
       /*
        * No description line, and its absence is the instruction rather than an
        * oversight.
@@ -627,17 +628,18 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
               It runs as one of your accounts. Leave this and it uses whatever your defaults
               already resolve to.
               <HoverNote label="the account">
-                The copilot has no login of its own — it runs as one of your accounts, exactly like
-                any other session, and choosing one here pins it to the copilot’s folder. That pin
-                is the same one the New-session dialog sets, so it takes effect the next time the
-                copilot starts and can be changed later under Settings → Accounts.
+                {`${BRAND.assistant} has no login of its own — it runs as one of your accounts, ` +
+                  `exactly like any other session, and choosing one here pins it to ` +
+                  `${BRAND.assistant}’s folder. That pin is the same one the New-session dialog ` +
+                  `sets, so it takes effect the next time ${BRAND.assistant} starts and can be ` +
+                  `changed later under Settings → Accounts.`}
               </HoverNote>
             </p>
             {accounts.loading && <p className="cs-quiet">Reading your accounts…</p>}
             {!accounts.loading && claudeAccounts.length === 0 && (
               <p className="cs-quiet">
-                No accounts to choose from yet. Settings → Accounts is where they are added, and the
-                copilot will use your own install until then.
+                No accounts to choose from yet. Settings → Accounts is where they are added, and
+                {BRAND.assistant} will use your own install until then.
               </p>
             )}
             <ul className="cs-accounts">

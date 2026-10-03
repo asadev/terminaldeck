@@ -83,7 +83,7 @@ describe('the pinned entry', () => {
   const html = render()
 
   it('is above the views and above what you have open', () => {
-    const copilot = html.indexOf('>Copilot</span>')
+    const copilot = html.indexOf('>Hoot</span>')
     expect(copilot).toBeGreaterThan(-1)
     expect(copilot).toBeLessThan(html.indexOf('>Overview</span>'))
     expect(copilot).toBeLessThan(html.indexOf('>Open</h2>'))
@@ -92,7 +92,7 @@ describe('the pinned entry', () => {
 
   it('is drawn even with no copilot described, and claims nothing then', () => {
     const quiet = render({ copilot: null })
-    expect(quiet).toContain('>Copilot</span>')
+    expect(quiet).toContain('>Hoot</span>')
     // No dot, because nothing has been read. The row still opens the window.
     expect(quiet.slice(0, quiet.indexOf('>Overview</span>'))).not.toContain('status-dot')
   })
@@ -124,7 +124,7 @@ describe('the pinned entry', () => {
       ],
     })
     // Once, in the pinned block — and the pinned block is above everything.
-    expect(withCopilot.match(/>Copilot<\/span>/g)).toHaveLength(1)
+    expect(withCopilot.match(/>Hoot<\/span>/g)).toHaveLength(1)
     expect(withCopilot).not.toContain('Application Support')
   })
 })
@@ -133,12 +133,12 @@ describe('sessions the copilot started', () => {
   const html = render()
 
   it('are under their own heading', () => {
-    expect(html).toContain('>Copilot sessions</h2>')
+    expect(html).toContain('>Started by Hoot</h2>')
   })
 
   it('are not in the project run with the sessions you started', () => {
     const open = html.indexOf('>Open</h2>')
-    const group = html.indexOf('>Copilot sessions</h2>')
+    const group = html.indexOf('>Started by Hoot</h2>')
     expect(group).toBeGreaterThan(open)
     // "Fix the parser" is yours and sits in the project run; both copilot
     // sessions are past the heading.
@@ -163,11 +163,11 @@ describe('sessions the copilot started', () => {
     expect(source).toContain("choice === 'copilot' && turn !== null")
     const menu = readFileSync(join(__dirname, '..', '..', 'main', 'session-row-menu.ts'), 'utf8')
     expect(menu).toContain('if (request.copilotTurn)')
-    expect(menu).toContain('Started by the copilot — open that turn')
+    expect(menu).toContain('Started by ${BRAND.assistant} — open that turn')
   })
 
   it('draws no heading when the copilot has started nothing', () => {
-    expect(render({ tabs: [tabs[0]] })).not.toContain('Copilot sessions')
+    expect(render({ tabs: [tabs[0]] })).not.toContain('Started by Hoot')
   })
 
   it('numbers a session still wearing its folder name instead of printing the folder', () => {
@@ -188,7 +188,7 @@ describe('sessions the copilot started', () => {
       closable: true,
     }
     const html = render({ tabs: [untitled] })
-    const group = html.indexOf('>Copilot sessions</h2>')
+    const group = html.indexOf('>Started by Hoot</h2>')
     expect(html.slice(group)).toContain('>Session 1</span>')
     expect(html.slice(group)).not.toContain('>terminaldeck</span>')
   })
@@ -217,7 +217,7 @@ describe('sessions an outside AI app started', () => {
   })
 
   it('are not under the copilot’s heading, nor in your project’s run', () => {
-    const copilotGroup = html.indexOf('>Copilot sessions</h2>')
+    const copilotGroup = html.indexOf('>Started by Hoot</h2>')
     const appGroup = html.indexOf('>From E2E test (Claude)</h2>')
     // The app's heading comes after the copilot's, so the row lies after both
     // and inside neither the project run nor the copilot run.

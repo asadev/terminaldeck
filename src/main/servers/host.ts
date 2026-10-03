@@ -722,7 +722,7 @@ export function hostConsequence(serverName: string, room: HostRoom): string {
     // spend within a minute, and this sentence would have been a lie.
     'This computer is linked to it as part of the install, so there is nothing to type in ' +
     'afterwards. A code is only for a phone, and only when you ask for one.\n\n' +
-    'It has no Copilot. That part of the app needs a window, and this host has none.'
+    `${BRAND.assistant} is not on it. That part of the app needs a window, and this host has none.`
   )
 }
 

@@ -47,6 +47,7 @@ import type {
   TranscriptMessage,
   TranscriptTotals,
 } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The parts of the running app that only the main process holds.
@@ -224,7 +225,7 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
      * months later knows what wrote it rather than having to guess from the
      * timestamp — the same courtesy `settings.json.bak-<time>` never extended.
      */
-    snapshotSettings: () => writeSettingsSnapshot(store().getPreferences(), 'copilot settings.write'),
+    snapshotSettings: () => writeSettingsSnapshot(store().getPreferences(), `${BRAND.assistant} settings.write`),
 
     writeSettings: (patch) => patchStoredSettings(patch).values,
 

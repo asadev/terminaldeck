@@ -76,6 +76,7 @@ import {
   type RefusalReason,
   type Tier,
 } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /* --------------------------------------------------------------- budgets -- */
 
@@ -340,7 +341,7 @@ export const NOT_WHILE_DRIVING: readonly string[] = [
   // The window's own clicks (`ui-tools.ts`). A tour owns the screen while it
   // plays; a view switched under it is the screen moving twice at once.
   'ui.do',
-  'copilot.run',
+  'hoot.run',
   // Typing into a session or a terminal on another machine (`machine-tools.ts`,
   // `server-room-tools.ts`). The tour may be showing that very session, and a
   // line that appears in it mid-tour is a change nobody watching could place.
@@ -450,6 +451,18 @@ export class DeckControl {
       // have to know which form it is holding.
       this.specs.set(spec.wire, spec)
       this.specs.set(spec.id, spec)
+    }
+    /*
+     * The old names, after every real one is in, so that an alias can never
+     * shadow a tool that genuinely has that name: a clash is a build mistake
+     * and fails loudly here, the same as two tools with one id. See
+     * `ToolSpec.aliases`. Only the lookup knows them; the listing does not.
+     */
+    for (const spec of this.catalogue) {
+      for (const alias of spec.aliases ?? []) {
+        if (this.specs.has(alias)) throw new Error(`deck-control: the old name ${alias} is taken`)
+        this.specs.set(alias, spec)
+      }
     }
     const budgets: Budgets = {
       all: options.budgets?.all ?? DEFAULT_BUDGETS.all,
@@ -1209,7 +1222,7 @@ function notGrantedSentence(caller: Caller, tool: string, tier: Tier): string {
   const allowed = (['read', 'act', 'alter'] as const).filter((entry) => caller.tiers[entry])
   const has =
     allowed.length === 0
-      ? 'It has not been given any copilot access at all.'
+      ? `It has not been given any access to ${BRAND.assistant}’s tools at all.`
       : `It has ${allowed.join(' and ')} access only.`
   return (
     `${tool} needs ${tier} access and this device does not have it. ${has} ` +

@@ -853,7 +853,7 @@ describe('a caller that was never granted the tier', () => {
     const result = await control.call('sessions_list', {}, { caller: stranger })
 
     expect(result.refusal).toBe('not-granted')
-    expect(result.error).toContain('not been given any copilot access')
+    expect(result.error).toContain('not been given any access to Hoot’s tools')
   })
 
   /**
@@ -1379,5 +1379,48 @@ describe('the copilot writing a line of its own', () => {
     )
     expect(result.ok).toBe(false)
     expect(result.refusal).toBe('not-granted')
+  })
+})
+
+describe('a renamed tool keeps answering to its old name for a release', () => {
+  /*
+   * The assistant was renamed from "Copilot" to Hoot, and its four tools with
+   * it: `copilot.state` is `hoot.state` now. An AI app or a routine configured
+   * the day before still calls the old name, and must get the tool rather than
+   * "no such tool" — but nothing new may learn the old name from the listing.
+   */
+  const renamed: ToolSpec = {
+    id: 'hoot.state',
+    wire: 'hoot_state',
+    aliases: ['copilot.state', 'copilot_state'],
+    tier: 'read',
+    title: 'Hoot’s state',
+    description: 'A stand-in for the renamed tool.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    summary: () => 'Read Hoot’s state',
+    run: async () => ({ value: { running: true }, summary: {} }),
+  }
+
+  it('routes both old spellings to the tool, and logs it under its new name', async () => {
+    const { control } = build({ extraTools: [renamed] })
+    for (const old of ['copilot.state', 'copilot_state']) {
+      const result = await control.call(old, {})
+      expect(result.ok, old).toBe(true)
+      expect(result.value).toEqual({ running: true })
+      expect(result.row.tool).toBe('hoot.state')
+    }
+  })
+
+  it('never lists the old name', () => {
+    const { control } = build({ extraTools: [renamed] })
+    const names = control.tools().flatMap((spec) => [spec.id, spec.wire])
+    expect(names).toContain('hoot_state')
+    expect(names).not.toContain('copilot_state')
+    expect(names).not.toContain('copilot.state')
+  })
+
+  it('refuses to build when an old name collides with a real tool', () => {
+    const clash: ToolSpec = { ...renamed, id: 'hoot.other', wire: 'hoot_other', aliases: ['sessions_list'] }
+    expect(() => build({ extraTools: [clash] })).toThrow(/old name sessions_list is taken/)
   })
 })

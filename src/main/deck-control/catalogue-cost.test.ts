@@ -107,7 +107,7 @@ describe('the catalogue that ships', () => {
       'store_community',
       'sessions_wait',
       'files_read',
-      'copilot_state',
+      'hoot_state',
       'ui_do',
       'tools_coverage',
       RUN_WIRE,

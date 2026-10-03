@@ -1415,6 +1415,23 @@
 }
 
 /*
+  Hoot's window: the owl beside the name and the line under it. A grid rather
+  than a row so the title and its subtitle keep stacking as they do on every
+  other heading, and the owl spans both lines.
+*/
+.toolbar-heading[data-marked='true'] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  align-items: center;
+}
+
+.toolbar-mark {
+  grid-row: span 2;
+  display: flex;
+}
+
+/*
   Drawn back while the keyboard is in another pane.
 
   This is the host pane's focus mark, and it is up here because the host pane's
@@ -2847,3 +2864,13 @@
    one of the two ever said what to do about it. Nothing inside `.server-pane`
    draws `.servers-card-why` any more; the class is still `ServerCard`'s and
    `ServerHost`'s, on the page, where it is right. */
+
+/* The picture slot on an empty page, for the one page whose subject is a
+   character: Hoot's own window draws the owl here instead of a line glyph
+   (`PageEmpty`'s `mark`). Full strength, unlike `.page-blank-mark`, because a
+   dimmed mascot reads as a broken image rather than a quiet one. */
+.page-blank-art {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto var(--sp-4);
+}

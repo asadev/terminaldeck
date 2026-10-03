@@ -19,7 +19,7 @@
  *  - **Choosing the copilot's folder.** `copilot.home` is under `copilot.`, which
  *    `catalogue.ts` refuses to every tool however a person answers — it decides
  *    where the agent runs, and a permission an agent can edit is a suggestion.
- *    Reading which folder it is in is fine and is in `copilot.state`.
+ *    Reading which folder it is in is fine and is in `hoot.state`.
  *  - **Reading the action log.** `confine/records.ts` fences it from the copilot
  *    on purpose — *"a record of what something did is worth nothing if that same
  *    thing can compose it"*, and being able to check which actions were recorded,
@@ -32,6 +32,7 @@
  */
 
 import { BadArgument, optBool, optInt, optStr, str, type ToolSpec } from './catalogue'
+import { BRAND } from '../../shared/brand'
 
 /* -------------------------------------------------------------- the deps -- */
 
@@ -82,20 +83,30 @@ const PLACES = ['root', 'instructions', 'memory', 'log', 'routines', 'layer', 'c
 
 /* ----------------------------------------------------------------- tools -- */
 
+
 export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
   return [
     {
-      id: 'copilot.state',
-      wire: 'copilot_state',
+      id: 'hoot.state',
+      wire: 'hoot_state',
+      /*
+       * The names these four had before the assistant was called Hoot. Outside
+       * AI apps read tool names, so they follow the rename; but an app or a
+       * routine set up the day before must not start failing with "no such
+       * tool", so both old spellings keep answering for one release, unlisted
+       * (`ToolSpec.aliases`). Delete the four `aliases` lines in the release
+       * after 0.16.x.
+       */
+      aliases: ['copilot.state', 'copilot_state'],
       tier: 'read',
-      title: 'The copilot’s state',
-      index: 'Whether the in-app copilot is running, signed in, which folder and account it uses, and its files.',
+      title: `${BRAND.assistant}’s state`,
+      index: `Whether ${BRAND.assistant} is running, signed in, which folder and account it uses, and its files.`,
       description:
-        'The app’s own copilot (the assistant pinned in the sidebar): whether it is running and its session id, ' +
+        `${BRAND.assistant}, the assistant built into this app (pinned at the top of the sidebar): whether it is running and its session id, ` +
         'whether it is signed in and as which account and plan, the folder it works in (and why, if a chosen ' +
         'folder could not be used), its startup files and whether its instructions are the default.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      summary: () => 'Read the copilot’s state',
+      summary: () => `Read ${BRAND.assistant}’s state`,
       run: async () => ({
         value: { state: deps.copilot.state(), signIn: await deps.copilot.signIn() },
         summary: {},
@@ -103,14 +114,15 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
     },
 
     {
-      id: 'copilot.run',
-      wire: 'copilot_run',
+      id: 'hoot.run',
+      wire: 'hoot_run',
+      aliases: ['copilot.run', 'copilot_run'],
       tier: 'act',
-      title: 'Start, stop or set up the copilot',
-      index: 'Start or stop the in-app copilot, create its folder and starter files, or open one of its places in Finder.',
+      title: `Start, stop or set up ${BRAND.assistant}`,
+      index: `Start or stop ${BRAND.assistant}, create its folder and starter files, or open one of its places in Finder.`,
       description:
-        '"start" starts the copilot if it is not running (it spends money like any agent session). "stop" ends ' +
-        'its session — confirmed, and if you ARE that copilot it ends you. "scaffold" writes its folder and ' +
+        `"start" starts ${BRAND.assistant} if it is not running (it spends money like any agent session). "stop" ends ` +
+        `its session — confirmed, and if you ARE ${BRAND.assistant} it ends you. "scaffold" writes its folder and ` +
         'starter files without starting it, so they can be read first. "reveal" opens one of its places in ' +
         `Finder on this Mac: ${PLACES.join(', ')}. A changed instruction file takes effect at the next start.`,
       inputSchema: {
@@ -130,13 +142,13 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
       summary: (args) => {
         switch (optStr(args, 'action')) {
           case 'start':
-            return 'Start the copilot'
+            return `Start ${BRAND.assistant}`
           case 'stop':
-            return 'Stop the copilot'
+            return `Stop ${BRAND.assistant}`
           case 'scaffold':
-            return 'Create the copilot’s folder and starter files'
+            return `Create ${BRAND.assistant}’s folder and starter files`
           default:
-            return `Open the copilot’s ${optStr(args, 'place') ?? '?'} in Finder`
+            return `Open ${BRAND.assistant}’s ${optStr(args, 'place') ?? '?'} in Finder`
         }
       },
       run: async (args) => {
@@ -150,17 +162,18 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
     },
 
     {
-      id: 'copilot.instructions',
-      wire: 'copilot_instructions',
+      id: 'hoot.instructions',
+      wire: 'hoot_instructions',
+      aliases: ['copilot.instructions', 'copilot_instructions'],
       tier: 'read',
-      title: 'What the copilot is told',
-      index: 'Read or change the copilot’s instructions — yours, its folder’s, the generated part, or all composed.',
+      title: `What ${BRAND.assistant} is told`,
+      index: `Read or change ${BRAND.assistant}’s instructions — yours, its folder’s, the generated part, or all composed.`,
       description:
-        'The copilot’s instructions, the same four the Settings pane shows. "read" with `which`: "yours" (the ' +
+        `${BRAND.assistant}’s instructions, the same four the Settings pane shows. "read" with \`which\`: "yours" (the ` +
         'part the person edits), "folder" (the working folder’s own instructions file), "contract" (generated from what ' +
         'is wired — read only), "composed" (everything it was handed at its last start). "write" replaces ' +
         '"yours" or "folder" with `text`; the previous file is kept beside it. "reset" puts this build’s default ' +
-        'wording back. Writes are confirmed, and reach the copilot only at its next start.',
+        `wording back. Writes are confirmed, and reach ${BRAND.assistant} only at its next start.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -179,10 +192,10 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
         const action = optStr(args, 'action')
         const which = optStr(args, 'which') ?? 'yours'
         if (action === 'write') {
-          return `Replace the copilot’s ${which === 'folder' ? 'folder' : 'own'} instructions (${typeof args.text === 'string' ? args.text.length : 0} characters)`
+          return `Replace ${BRAND.assistant}’s ${which === 'folder' ? 'folder' : 'own'} instructions (${typeof args.text === 'string' ? args.text.length : 0} characters)`
         }
-        if (action === 'reset') return 'Put the copilot’s instructions back to this build’s default'
-        return `Read the copilot’s ${which} instructions`
+        if (action === 'reset') return `Put ${BRAND.assistant}’s instructions back to this build’s default`
+        return `Read ${BRAND.assistant}’s ${which} instructions`
       },
       run: async (args) => {
         const call = instructionsCall(args)
@@ -196,13 +209,14 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
     },
 
     {
-      id: 'copilot.memory',
-      wire: 'copilot_memory',
+      id: 'hoot.memory',
+      wire: 'hoot_memory',
+      aliases: ['copilot.memory', 'copilot_memory'],
       tier: 'read',
-      title: 'What the copilot remembers',
-      index: 'List, read, write or delete the copilot’s remembered facts.',
+      title: `What ${BRAND.assistant} remembers`,
+      index: `List, read, write or delete ${BRAND.assistant}’s remembered facts.`,
       description:
-        'The copilot’s memory: one small file per remembered fact, in its memory folder. "list" names them, ' +
+        `${BRAND.assistant}’s memory: one small file per remembered fact, in its memory folder. "list" names them, ` +
         '"read" returns one, "write" saves one (a new name creates it), "delete" removes one — confirmed. A name ' +
         'is a plain file name with no folders in it.',
       inputSchema: {
@@ -226,13 +240,13 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
         const name = optStr(args, 'name') ?? '?'
         switch (optStr(args, 'action')) {
           case 'read':
-            return `Read the copilot’s memory “${name}”`
+            return `Read ${BRAND.assistant}’s memory “${name}”`
           case 'write':
-            return `Save the copilot’s memory “${name}”`
+            return `Save ${BRAND.assistant}’s memory “${name}”`
           case 'delete':
-            return `Delete the copilot’s memory “${name}”`
+            return `Delete ${BRAND.assistant}’s memory “${name}”`
           default:
-            return 'List what the copilot remembers'
+            return `List what ${BRAND.assistant} remembers`
         }
       },
       run: async (args) => {
@@ -261,7 +275,7 @@ export function copilotAdminTools(deps: CopilotAdminDeps): ToolSpec[] {
       index: 'This tool server: its tools and tiers, how many confirmations are waiting, whether the log is written.',
       description:
         'The state of this tool server: every tool and its tier, what the listing costs in tokens, how many ' +
-        'confirmations are waiting for a person right now, which sessions the copilot started, and whether the ' +
+        `confirmations are waiting for a person right now, which sessions ${BRAND.assistant} started, and whether the ` +
         'action log is actually being written. Never a token or a key.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summary: () => 'Read the tool server’s status',

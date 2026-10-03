@@ -1,6 +1,8 @@
+import { BRAND } from '../../shared/brand'
+
 /**
- * What the copilot is called and what it is drawn as — in one place, because
- * five surfaces now say it.
+ * What the assistant is called, in one place, because five surfaces say it.
+ * What it is drawn as lives in `HootMark.tsx`.
  *
  * ## Why this is not in `panels.ts` any more
  *
@@ -35,23 +37,17 @@
  * again.
  */
 
-/** The one spelling of its name. Nothing else may type it. */
-export const COPILOT_NAME = 'Copilot'
-
 /**
- * A compass rose — a ring with a needle through it.
- *
- * Chosen against the two marks it has to be told apart from at a glance in the
- * same rail and now in the same tab strip: the session's `>_` and the browser's
- * globe. Not a sparkle, which is what every product draws beside the word "AI"
- * and says nothing about what this one does, and not a speech bubble, which
- * would promise a chatbot when the whole argument of `COPILOT-DESIGN.md` is that
- * this is a window onto machinery.
- *
- * SVG path data on a 24×24 grid at 1.5 stroke, like every other glyph here.
+ * Its name on screen when nobody has given it one of their own: Hoot, from
+ * `BRAND.assistant`, the one spelling. Nothing else may type it.
  */
-export const COPILOT_ICON =
-  'M12 3.4a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2zM15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5z'
+export const COPILOT_NAME: string = BRAND.assistant
+
+/*
+ * There is no icon constant here any more. The compass rose that used to live
+ * here was replaced on 2026-10-03 by the owl, a picture rather than a
+ * path, and every surface draws it through one component: `HootMark.tsx`.
+ */
 
 /** One line about what it is for. The pinned row's hover label when nothing
     better is known, and the empty state's subtitle. */

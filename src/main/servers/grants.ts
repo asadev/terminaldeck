@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand'
 /**
  * Whether the copilot may act on one server, and for how much longer.
  *
@@ -187,7 +188,7 @@ export class ServerGrants {
     if (!this.live.has(serverId) && this.live.size >= MAX_LIVE_GRANTS) {
       throw new GrantRefused(
         'too-many',
-        `Too many servers are already under the copilot’s control. Take control back from one first.`,
+        `Too many servers are already under ${BRAND.assistant}’s control. Take control back from one first.`,
       )
     }
     const at = this.now()

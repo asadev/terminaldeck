@@ -6,6 +6,7 @@ import {
   copilotIdentityBlock,
   copilotName,
   DEFAULT_COPILOT_NAME,
+  withCurrentDefaultName,
   IDENTITY_HEADING,
   MAX_ADDRESS_NOTE,
   MAX_COPILOT_NAME,
@@ -26,9 +27,9 @@ import {
  */
 
 /** The file the app seeds, in the shape that matters here: a title, then prose. */
-const SEEDED = `# ${BRAND.name} Copilot
+const SEEDED = `# ${BRAND.name} assistant
 
-You are a **developer's copilot**. The person you work for is shipping code.
+You are a **developer's assistant**. The person you work for is shipping code.
 
 ## How to answer
 
@@ -68,10 +69,39 @@ describe('the block, written and read back', () => {
     expect(read.identity).toEqual(NO_IDENTITY)
   })
 
-  it('tells a skipped copilot not to name itself', () => {
+  it('tells an unnamed assistant it is Hoot, and not to name itself', () => {
     const block = copilotIdentityBlock(NO_IDENTITY)
-    expect(block).toContain('They have not named you yet')
-    expect(block).toContain('should not pick a name')
+    expect(block).toContain(`**${BRAND.assistant}**`)
+    expect(block).toContain('Do not pick a different name for yourself')
+    // Hoot is the app's default, not a name they gave it, so reading the block
+    // back must still say nobody named it.
+    expect(readCopilotIdentity(withCopilotIdentity(SEEDED, NO_IDENTITY)).identity.name).toBeNull()
+  })
+
+  /*
+   * Installs whose setup flow ran before the rename have the old paragraph in
+   * the person's file, telling the model it is "the Copilot". The app does not
+   * rewrite their file, but hands the model the current wording in its place,
+   * and only when the paragraph is exactly what the app wrote.
+   */
+  it('hands an untouched pre-Hoot paragraph over in its current wording', () => {
+    const before = [
+      '## Who you are',
+      '',
+      'They have not named you yet, and until they do you should not pick a name',
+      'for yourself. If they ask what you are called, say exactly that. In the',
+      'meantime this app calls you the Copilot, which is a description',
+      'rather than a name.',
+      '',
+      '---',
+    ].join('\n')
+    const now = withCurrentDefaultName(before)
+    expect(now).not.toContain('the Copilot')
+    expect(now).toContain(`**${BRAND.assistant}**`)
+    expect(withCurrentDefaultName(now)).toBe(now)
+    // Edited by even a word, it is theirs and is left exactly as it is.
+    const edited = before.replace('say exactly that', 'say you have no name')
+    expect(withCurrentDefaultName(edited)).toBe(edited)
   })
 
   it('says nothing about a name it was not given', () => {
@@ -107,7 +137,7 @@ describe('re-running the flow', () => {
     const twice = withCopilotIdentity(withCopilotIdentity(SEEDED, answered), NO_IDENTITY)
     expect(twice).toContain('## How to answer')
     expect(twice).toContain('Short. Lead with what needs them.')
-    expect(twice).toContain("You are a **developer's copilot**.")
+    expect(twice).toContain("You are a **developer's assistant**.")
   })
 
   it('leaves the block where somebody moved it', () => {
@@ -134,7 +164,7 @@ describe('re-running the flow', () => {
 describe('where a first block goes', () => {
   it('sits under the document title', () => {
     const file = withCopilotIdentity(SEEDED, answered)
-    expect(file.indexOf(`# ${BRAND.name} Copilot`)).toBeLessThan(file.indexOf(IDENTITY_HEADING))
+    expect(file.indexOf(`# ${BRAND.name} assistant`)).toBeLessThan(file.indexOf(IDENTITY_HEADING))
     expect(file.indexOf(IDENTITY_HEADING)).toBeLessThan(file.indexOf('## How to answer'))
   })
 
@@ -235,6 +265,7 @@ describe('the copilot’s name and the product’s name are different things', (
    */
   it('never falls back to the product’s name', () => {
     expect(DEFAULT_COPILOT_NAME).not.toBe(BRAND.name)
+    expect(DEFAULT_COPILOT_NAME).toBe(BRAND.assistant)
     expect(copilotName(null)).toBe(DEFAULT_COPILOT_NAME)
     expect(copilotName(NO_IDENTITY)).toBe(DEFAULT_COPILOT_NAME)
   })

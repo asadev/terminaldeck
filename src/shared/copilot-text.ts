@@ -1,3 +1,4 @@
+import { BRAND } from './brand'
 /**
  * Sentences about the copilot's folder that both sides of the app have to say
  * in the same words.
@@ -34,7 +35,7 @@
  * of them, and it stays true of the next one.
  */
 export const CHOOSING_A_FOLDER =
-  'The copilot works in this folder as you would: it reads the folder’s own instructions and ' +
+  `${BRAND.assistant} works in this folder as you would: it reads the folder’s own instructions and ` +
   'memory, and anything else in it — including any credentials kept there. That is the same ' +
   'access any session you start in that folder already has. Nothing of this app’s is ever ' +
   'written into it.'
@@ -48,5 +49,5 @@ export const CHOOSING_A_FOLDER =
  * and the other two are written up in `copilot-home.ts`.
  */
 export const FOLDER_NEEDS_A_RESTART =
-  'A session’s folder is fixed when it starts, so this takes effect the next time the copilot ' +
+  `A session’s folder is fixed when it starts, so this takes effect the next time ${BRAND.assistant} ` +
   'starts. The one running now keeps working where it began.'

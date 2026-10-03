@@ -38,6 +38,7 @@ import type { WriteResult } from '../routines/ipc'
 import { requireKnownFolder, type JsonSchema, type ToolSpec } from './catalogue'
 import { optBool, optNumber, optStr, optStrings, str } from './agents-area-args'
 import { Refused } from './surface'
+import { BRAND } from '../../shared/brand'
 
 /** The operations `RoutineApi` exposes, by the names it gives them. `routines.api` satisfies this. */
 export interface RoutineToolDeps {
@@ -66,7 +67,7 @@ const DRAFT_PROPERTIES = {
       '"file-change src/**", "manual".',
   },
   folder: { type: 'string', description: 'The open folder it runs in and watches. See projects.list.' },
-  prompt: { type: 'string', description: 'What the copilot is told to do each time it runs.' },
+  prompt: { type: 'string', description: `What ${BRAND.assistant} is told to do each time it runs.` },
   enabled: { type: 'boolean' },
   overlap: { type: 'string', enum: ['queue', 'skip', 'cancel'], description: 'If it fires while still running.' },
   maxRunsPerHour: { type: 'number' },
@@ -155,7 +156,7 @@ export function routineTools(deps: RoutineToolDeps): ToolSpec[] {
       description:
         'Every routine on this computer: what triggers it, the folder it runs in, whether it is armed, paused ' +
         'or broken and why, when it last ran and how that went, when it is next due, and any calls its runs ' +
-        'were not allowed to make. A routine is a saved prompt the copilot runs on a trigger — a schedule, a ' +
+        `were not allowed to make. A routine is a saved prompt ${BRAND.assistant} runs on a trigger — a schedule, a ` +
         'session finishing, an alert, a file change — with nobody watching.',
       index: 'List the routines (saved prompts that run on a trigger) and how each is doing.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -296,7 +297,7 @@ export function routineTools(deps: RoutineToolDeps): ToolSpec[] {
       summary: (args) => `Pause the routine ${optStr(args, 'routineId') ?? '?'}`,
       run: async (args) => {
         const view = exists(str(args, 'routineId'))
-        const paused = deps.pause(view.id, optStr(args, 'reason') ?? 'Paused by the copilot.')
+        const paused = deps.pause(view.id, optStr(args, 'reason') ?? `Paused by ${BRAND.assistant}.`)
         return { value: { routineId: view.id, paused, routine: deps.get(view.id) }, summary: { routineId: view.id, paused } }
       },
     },

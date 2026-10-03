@@ -85,6 +85,7 @@ import type { SpawnFence } from '../main/copilot-session'
 import type { BrowserDrive } from '../main/browser-driver'
 import type { PtyManager } from '../main/pty-manager'
 import type { CreateSessionInput, SessionMeta, SessionStatus } from '../shared/types'
+import { BRAND } from '../shared/brand'
 
 /** What the copilot needs from the host it runs inside, and nothing else. */
 export interface HeadlessCopilotDeps {
@@ -191,7 +192,7 @@ function headlessDesk(root: string, available: boolean): {
     // for, and the run surfaces a real sign-out at its first turn.
     signedIn: null,
     available,
-    reason: available ? null : 'The copilot’s tools are not running on this server.',
+    reason: available ? null : `${BRAND.assistant}’s tools are not running on this server.`,
     // No screen to show a driving scan on, so the machine-facing switch is off
     // and there is nothing here for `setInteractive` to move.
     interactive: false,

@@ -173,6 +173,6 @@ describe('who the row says asked', () => {
   })
 
   it('names the copilot as itself', () => {
-    expect(askerName(context({ kind: 'local', tiers: ALL }))).toBe('The copilot')
+    expect(askerName(context({ kind: 'local', tiers: ALL }))).toBe('Hoot')
   })
 })

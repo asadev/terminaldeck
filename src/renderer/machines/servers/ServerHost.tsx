@@ -659,7 +659,7 @@ export function awayLine(name: string): string {
  * tell a guest's withheld copilot from a host that has none.
  */
 export const SERVER_COPILOT =
-  'A device you sign in as your own gets the copilot on this server too — its chat, files, ' +
+  `A device you sign in as your own gets ${BRAND.assistant} on this server too — its chat, files, ` +
   'routines and settings — driven from here, because the server has no screen of its own. A ' +
   'device you add as a guest never gets it.'
 

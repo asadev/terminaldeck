@@ -12,6 +12,7 @@ import {
   type TourStopRecord,
 } from './tour'
 import './tour-recap.css'
+import { BRAND } from '../../../shared/brand'
 
 /**
  * The answer — phase two, and the only part of driving mode meant to be read.
@@ -385,7 +386,7 @@ export function TourRecap({ read, limit = 5, watch }: Props) {
         drew a box around, not what a model remembers having written.
       */}
       <p className="tr-provenance">
-        Written by the app, outside the copilot’s folder — every quote is the text it checked
+        Written by the app, outside {BRAND.assistant}’s folder — every quote is the text it checked
         before it put a box around it.
       </p>
       {records.map((record) => (

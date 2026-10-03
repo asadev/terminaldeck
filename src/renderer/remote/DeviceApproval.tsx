@@ -6,6 +6,7 @@ import { thisMachine, type UiPlatform } from '../platform'
 import { profileLoginLabel, useAccounts } from '../accounts'
 import { folderName } from './DeviceFolders'
 import './DeviceApproval.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * Letting a device in, one decision at a time, before it can reach anything.
@@ -271,7 +272,7 @@ export function DeviceApproval({
             >
               <span className="da-choice-name">Guest</span>
               <span className="da-choice-note">
-                You choose what they can reach. The copilot is never shared.
+                You choose what they can reach. {BRAND.assistant} is never shared.
               </span>
             </button>
           </div>
@@ -401,8 +402,8 @@ export function DeviceApproval({
           )}
           <p className="da-note">
             {kind === 'mine'
-              ? 'It can open any folder here, see every session, and use the copilot.'
-              : 'It will not be offered the copilot. You can change its folders and logins later.'}
+              ? `It can open any folder here, see every session, and use ${BRAND.assistant}.`
+              : `It will not be offered ${BRAND.assistant}. You can change its folders and logins later.`}
           </p>
           {/* Said here rather than on the approved row, because this is the
               moment it is a decision. There is no toggle afterwards on purpose:

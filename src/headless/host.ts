@@ -964,12 +964,12 @@ export async function createHeadlessHost(
         announce: () => tellDevices?.(),
       })
       if (headlessCopilot !== null) {
-        logger.info('headless', 'the copilot and its tool endpoint are up', {
+        logger.info('headless', `${BRAND.assistant} and its tool endpoint are up`, {
           port: headlessCopilot.endpoint.port,
         })
       }
     } catch (error) {
-      logger.error('headless', 'the copilot did not start; none is offered', {
+      logger.error('headless', `${BRAND.assistant} did not start; none is offered`, {
         error: error instanceof Error ? error.message : String(error),
       })
     }

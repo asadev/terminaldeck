@@ -4,10 +4,11 @@ import { TerminalView } from '../components/TerminalView'
 import { CopilotMachines } from './CopilotMachines'
 import { RemoteCopilot } from './RemoteCopilot'
 import { TourRecap } from './driving/TourRecap'
-import { COPILOT_ICON } from './identity'
+import { HootMark } from './HootMark'
 import { useCopilotMachines } from './useCopilotMachines'
 import type { Copilot } from './useCopilot'
 import './copilot.css'
+import { BRAND } from '../../shared/brand'
 
 /**
  * The copilot's **window** — what fills the pane when its tab is the one in
@@ -310,7 +311,7 @@ export function CopilotView({
           <div className="cp-notice" data-kind="first-run">
             <h2>The account it runs as is signed out</h2>
             <p>
-              The copilot runs as one of your accounts, the same as any other session — it has no
+              {BRAND.assistant} runs as one of your accounts, the same as any other session — it has no
               login of its own. This one is not signed in yet. Signing it in here signs it in
               everywhere that account is used, and you can do it under Settings → Accounts instead.
             </p>
@@ -329,7 +330,7 @@ export function CopilotView({
         {!elsewhere && stage === 'unverified' && (
           <div className="cp-notice" data-kind="unverified">
             <p>
-              This window could not check whether the copilot is signed in — asking timed out or was
+              This window could not check whether {BRAND.assistant} is signed in — asking timed out or was
               refused. It is running, so the conversation below is live; if it answers with a login
               prompt, open the terminal.
             </p>
@@ -438,10 +439,10 @@ export function CopilotView({
           />
         ) : sessionId === null || root === null ? (
           <PageEmpty
-            // The copilot's own glyph, from the one constant that defines it, so
-            // this window and the row that opened it cannot draw two marks.
-            icon={COPILOT_ICON}
-            title={stage === 'starting' ? 'Starting the copilot…' : 'The copilot is not running'}
+            // The owl, at welcome size, from the same component the row
+            // that opened this window draws, so the two cannot be different owls.
+            mark={<HootMark size={200} />}
+            title={stage === 'starting' ? `Starting ${BRAND.assistant}…` : `${BRAND.assistant} is not running`}
             action={{ label: 'Start it', onClick: copilot.ensure, primary: true }}
           >
             It runs in a folder of its own, with its own memory, as one of your accounts. Ask it

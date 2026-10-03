@@ -3,6 +3,12 @@ import type { ReactNode } from 'react'
 interface Props {
   /** SVG path data on the 24×24 grid the rest of the app draws on. */
   icon?: string
+  /**
+   * A picture in place of the line glyph, for the one page whose subject is a
+   * character rather than a place: Hoot's own window draws the owl here
+   * (`HootMark`). Wins over `icon` when both are given.
+   */
+  mark?: ReactNode
   title: string
   children?: ReactNode
   /**
@@ -36,10 +42,11 @@ interface Props {
  * runner does not resolve — importing it from a panel takes that panel's whole
  * test file down with it.
  */
-export function PageEmpty({ icon, title, children, action, hint, extra }: Props) {
+export function PageEmpty({ icon, mark, title, children, action, hint, extra }: Props) {
   return (
     <div className="page-blank" role="status">
-      {icon && (
+      {mark !== undefined && <div className="page-blank-art">{mark}</div>}
+      {mark === undefined && icon && (
         <svg
           className="page-blank-mark"
           width="30"

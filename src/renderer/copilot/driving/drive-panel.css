@@ -147,6 +147,9 @@
 }
 
 .dp-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   margin: 0;
   font-size: var(--t-caption);
   letter-spacing: var(--t-caption-ls);

@@ -235,7 +235,7 @@ export function appTools(deps: AppToolDeps): ToolSpec[] {
       title: 'Reset settings to defaults',
       description:
         'Put every app setting back to its default, as Settings → Reset does — except the protected ones ' +
-        '(anything under remote., copilot., security. or confine., plus browser.persistSession and ' +
+        '(anything under `remote.`, `copilot.`, `security.` or `confine.`, plus browser.persistSession and ' +
         'advanced.debugMode), which are never changed through these tools and are left exactly as they are. A ' +
         'copy of the current settings is saved first; the result names it and the keys that were kept. ' +
         'Preferences (theme, default agent) are not touched — use settings.write for those.',

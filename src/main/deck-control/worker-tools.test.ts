@@ -219,7 +219,7 @@ describe('what the list says', () => {
      */
     const deck = control(fakeDeps(), dir)
     const result = await deck.call('browser_workers', {})
-    expect((result.value as { note: string }).note).toContain('copilot’s tab is not one')
+    expect((result.value as { note: string }).note).toContain('Hoot’s tab is not one')
   })
 
   it('says there are none when there are none', async () => {

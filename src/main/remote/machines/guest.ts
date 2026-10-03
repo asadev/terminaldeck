@@ -82,6 +82,7 @@ import { overPasteCap } from '../../../shared/paste-cap'
 import type { HeldSession } from '../../../shared/held-window'
 import type { MachineSecrets } from './store'
 import { createUploadSender, type SendFileOutcome, type UploadProgress } from './upload-send'
+import { BRAND } from '../../../shared/brand'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -1196,9 +1197,9 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
     if (current.state !== 'online') return 'This desktop is not connected to that machine right now.'
     if (!current.capabilities.includes(CAPABILITY.copilot) || current.copilot === null) {
       return (
-        'That machine is not sharing a copilot with this desktop. ' +
+        `That machine is not sharing ${BRAND.assistant} with this desktop. ` +
         'Either it has none, or this desktop is paired there as a guest — ' +
-        'the copilot is only shared with a machine paired as one of your own, and that is decided by pairing it again.'
+        `${BRAND.assistant} is only shared with a machine paired as one of your own, and that is decided by pairing it again.`
       )
     }
     return null
@@ -2495,9 +2496,9 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       if (answer === null || answer.t !== 'github.state') return null
       return answer.github
     },
-    copilotAttach: () => copilotVerb({ t: 'copilot.attach' }, 'Watching that machine’s copilot.'),
-    copilotStart: () => copilotVerb({ t: 'copilot.start' }, 'Asked that machine to start a copilot run.'),
-    copilotState: () => copilotVerb({ t: 'copilot.state' }, 'Asked that machine what its copilot is doing.'),
+    copilotAttach: () => copilotVerb({ t: 'copilot.attach' }, `Watching ${BRAND.assistant} on that machine.`),
+    copilotStart: () => copilotVerb({ t: 'copilot.start' }, `Asked that machine to start ${BRAND.assistant}.`),
+    copilotState: () => copilotVerb({ t: 'copilot.state' }, `Asked that machine what ${BRAND.assistant} is doing there.`),
     copilotSay(text): CopilotVerbOutcome {
       const barred = copilotBarred()
       if (barred !== null) return { ok: false, message: barred }
@@ -2528,7 +2529,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           message:
             frame.code === 'too-large'
               ? 'That message is longer than this connection carries in one piece. Shorten it and send it again.'
-              : 'That message cannot be sent as it is: a copilot message may not contain line breaks or control characters.',
+              : `That message cannot be sent as it is: a message to ${BRAND.assistant} may not contain line breaks or control characters.`,
         }
       }
       return sendCopilot(frame.message, 'Sent.')
