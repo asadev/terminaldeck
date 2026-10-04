@@ -62,6 +62,11 @@ describe('Machines in the rail', () => {
       // apps as well, for simulators as well"* — and it is one row, not the
       // three (iOS, Android, phones) the engine could have been split into.
       'simulators',
+      // `staysfixed` is a new place too, in 0.16.5 — Stays Fixed, the owner's own
+      // regression check, built in: *"make it part of Terminal Deck as well."*
+      // Nothing in the app checked a project for regressions before, so it is
+      // not a second door to anything.
+      'staysfixed',
       // `store` is the one row added to this rail since, and it is not a
       // counter-example to the requirement above — it *removed* two surfaces
       // rather than adding one. The store was a modal inside the browser and a

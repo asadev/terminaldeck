@@ -12,6 +12,8 @@ import { AGENT_ENTRIES } from '../src/shared/agent-catalog'
 // The Simulators page's channels, in a file of their own: a drawn phone with a
 // tree that matches the drawing. See its header.
 import { devicesStub } from './devices-stub'
+// The Stays Fixed page's channels: real engine output through the real reader.
+import { staysFixedStub } from './staysfixed-stub'
 
 const noop = () => () => {}
 /** When these sessions started, which is what decides whose transcript is whose. */
@@ -2370,6 +2372,7 @@ const api: Record<string, unknown> = new Proxy(
     removeServerSetup: async () => ({ ok: false, sentence: 'There is nothing here to remove.' }),
     onServerSetup: () => () => {},
     ...devicesStub,
+    ...staysFixedStub,
   },
   {
     // Mirror the real preload's shape: on* methods are subscriptions that

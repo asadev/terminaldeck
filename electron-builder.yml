@@ -130,6 +130,17 @@ asarUnpack:
   # executable inside an archive, and its xctest-provider is a folder of app
   # bundles the engine hands to an iOS Simulator by path.
   - '**/node_modules/@toolingtools/simview/**'
+  # Stays Fixed, run by path as Node by this app's own executable
+  # (`ELECTRON_RUN_AS_NODE=1`, see `src/main/staysfixed/engine.ts`). Node's ES
+  # module loader cannot read a module out of an archive, and Stays Fixed hands
+  # its own files to other programs (`osascript`, a child Node, ssh). Its three
+  # dependencies are unpacked with it because Node resolves them from the
+  # unpacked copy by walking up `app.asar.unpacked/node_modules`, which never
+  # looks inside `app.asar`. WIRING-staysfixed.md has the longer version.
+  - '**/node_modules/staysfixed/**'
+  - '**/node_modules/playwright-core/**'
+  - '**/node_modules/pngjs/**'
+  - '**/node_modules/pixelmatch/**'
 
 mac:
   # The platform `files` list REPLACES the top-level allowlist rather than adding

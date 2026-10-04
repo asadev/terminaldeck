@@ -1,0 +1,230 @@
+{
+  "runId": "20261004-034541",
+  "product": "tiny-shop",
+  "ok": false,
+  "mode": "stored-record",
+  "reference": {
+    "id": "git-76e2ab57c913",
+    "product": "tiny-shop",
+    "platform": "darwin-arm64",
+    "builtAt": "2026-10-03T23:45:09.962Z",
+    "gitSha": "76e2ab57c9131c7f14a3866471632a5b6467f4c0",
+    "version": "1.0.0",
+    "branch": "main"
+  },
+  "candidate": {
+    "id": "work-0f72dd0e31b2",
+    "product": "tiny-shop",
+    "platform": "darwin-arm64",
+    "builtAt": "2026-10-03T23:45:41.255Z",
+    "gitSha": "76e2ab57c9131c7f14a3866471632a5b6467f4c0",
+    "version": "1.0.0 with uncommitted changes",
+    "dirty": true,
+    "branch": "main"
+  },
+  "findings": [
+    {
+      "id": "f-b630b5",
+      "title": "On screen, \"button:Add to basket\" is now called \"button:Add to bag\". The same kind of change in 2 places, each with its own values — this is one of them, not all of them.",
+      "why": "Nothing says which code this comes from, so how far it sits from your edit is unknown. Treat it as unexplained until you have checked.",
+      "class": "ordinary",
+      "differences": [
+        {
+          "path": "screen./about%2Ehtml.end.tree.under:Blue mug.button:Add to bag",
+          "channel": "meaning",
+          "kind": "appeared",
+          "distance": 1,
+          "candidate": "a button called \"Add to bag\"",
+          "journey": "/about.html",
+          "describe": "A button called \"Add to bag\" inside under:Blue mug.",
+          "real": true,
+          "wobbling": false,
+          "proven": true
+        },
+        {
+          "path": "screen./about%2Ehtml.end.tree.under:Blue mug.button:Add to basket",
+          "channel": "meaning",
+          "kind": "vanished",
+          "distance": 1,
+          "reference": "a button called \"Add to basket\"",
+          "journey": "/about.html",
+          "describe": "A button called \"Add to basket\" inside under:Blue mug.",
+          "real": true,
+          "wobbling": false,
+          "proven": true
+        },
+        {
+          "path": "screen.the front page.end.tree.under:Blue mug.button:Add to bag",
+          "channel": "meaning",
+          "kind": "appeared",
+          "distance": 1,
+          "candidate": "a button called \"Add to bag\"",
+          "journey": "the front page",
+          "describe": "A button called \"Add to bag\" inside under:Blue mug.",
+          "real": true,
+          "wobbling": false,
+          "proven": true
+        },
+        {
+          "path": "screen.the front page.end.tree.under:Blue mug.button:Add to basket",
+          "channel": "meaning",
+          "kind": "vanished",
+          "distance": 1,
+          "reference": "a button called \"Add to basket\"",
+          "journey": "the front page",
+          "describe": "A button called \"Add to basket\" inside under:Blue mug.",
+          "real": true,
+          "wobbling": false,
+          "proven": true
+        }
+      ],
+      "rank": 44,
+      "count": 2,
+      "signature": "meaning | renamed | button:Add to basket | button:Add to bag",
+      "paths": [
+        "screen./about%2Ehtml.end.tree.under:Blue mug.button:Add to bag",
+        "screen./about%2Ehtml.end.tree.under:Blue mug.button:Add to basket",
+        "screen.the front page.end.tree.under:Blue mug.button:Add to bag",
+        "screen.the front page.end.tree.under:Blue mug.button:Add to basket"
+      ],
+      "sample": {
+        "path": "screen./about%2Ehtml.end.tree.under:Blue mug.button:Add to bag",
+        "channel": "meaning",
+        "kind": "appeared",
+        "distance": 1,
+        "candidate": "a button called \"Add to bag\"",
+        "journey": "/about.html",
+        "describe": "A button called \"Add to bag\" inside under:Blue mug.",
+        "real": true,
+        "wobbling": false,
+        "proven": true
+      },
+      "sealed": false,
+      "fingerprint": "49f178a94bb30eaa"
+    }
+  ],
+  "differencesReal": 4,
+  "differencesNoise": 0,
+  "newlyUnstable": [],
+  "coverage": {
+    "paths": 51,
+    "journeys": 4,
+    "byChannel": {
+      "contract": 4,
+      "counters": 18,
+      "results": 3,
+      "effects": 2,
+      "pixels": 2,
+      "meaning": 22
+    },
+    "gaps": [
+      {
+        "what": "None of this project's own tests were run, because there are none this tool can find.",
+        "why": "This project has no test script, so there is no suite to harvest journeys from. A test suite is the only source that walks this product with the arguments somebody actually thought about, so without one the check compares what it can read and call for itself, and no more.",
+        "unlockedBy": "Point the project at vitest or Node's own test runner and every test file becomes a journey, run twice on each build and compared."
+      },
+      {
+        "what": "1 journey could not be compared, because the build on record as working never got the product to do anything there: ask the server for GET /about.",
+        "why": "Everything this build did on those journeys is new coverage, not a change: there is nothing on the old build's side of it. Reported as findings until 2026-08-31, which is how a product that started working came back as a pile of regressions nobody had caused.",
+        "unlockedBy": "Ship once from a run in which these journeys actually ran, and they become part of what \"working\" means."
+      },
+      {
+        "what": "\"ask the server for GET /about\" was not compared: this build never got the product to do anything there.",
+        "why": "the thing being observed fell over before it could be read The old build has a record of what this journey does and this build has none, so there is nothing to compare — which is not the same as nothing having changed, and is not a pass.",
+        "unlockedBy": "Run that one journey on its own and see what stops it. Nothing behind it is being watched until it runs."
+      },
+      {
+        "what": "Anything the old build never had a record for.",
+        "why": "The old build was only booted to re-check the differences already suspected, not to walk everything.",
+        "unlockedBy": "Run with --paired to boot the old build and walk every journey against it."
+      },
+      {
+        "what": "\"ask the server for GET /about\" was not tried: There is no command to start the server, so nothing can be walked. The routes are still listed from the source.",
+        "why": "the thing being observed fell over before it could be read (crashed)",
+        "unlockedBy": "Nothing. This is deliberate and permanent — the effect is watched at the call, never at the result.",
+        "channel": "results"
+      },
+      {
+        "what": "Walking the steps of \"/about.html\": under a second. That is recorded and NOT compared: a stopwatch on a shared machine measures the machine as much as the product, so a busy laptop would otherwise invent a slowdown that nobody caused. A build that hangs is still caught — it gets stopped for taking too long, and how it finished is compared. This does not count opening the browser, which is our time and not the app's.",
+        "why": "a stopwatch measures how busy this machine was at least as much as it measures the product, so the number is recorded and never compared (measures the machine)",
+        "unlockedBy": "Nothing. This is deliberate and permanent — the effect is watched at the call, never at the result.",
+        "channel": "counters"
+      },
+      {
+        "what": "Walking the steps of \"the front page\": under a second. That is recorded and NOT compared: a stopwatch on a shared machine measures the machine as much as the product, so a busy laptop would otherwise invent a slowdown that nobody caused. A build that hangs is still caught — it gets stopped for taking too long, and how it finished is compared. This does not count opening the browser, which is our time and not the app's.",
+        "why": "a stopwatch measures how busy this machine was at least as much as it measures the product, so the number is recorded and never compared (measures the machine)",
+        "unlockedBy": "Nothing. This is deliberate and permanent — the effect is watched at the call, never at the result.",
+        "channel": "counters"
+      },
+      {
+        "what": "4 of this product's 4 doors have never been opened by this tool.",
+        "why": "No journey reaches them, so a break behind one of them would not show up in any run — clean or otherwise.",
+        "unlockedBy": "3 of them could be covered by journeys that reach them — read out of your source, or named by hand in a journeys file.",
+        "channel": "contract",
+        "doors": 4
+      },
+      {
+        "what": "routes under /about — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Ask for them. A journey that requests each route writes down the status, the shape of the answer and what went out. Start with \"/about\".",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "the command \"npm run start\" — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Run them. Each one is a program with a stdout, a stderr and an exit code, and all three are compared. Start with \"npm run start\".",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "what the top-level files export — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Write a journeys file that calls them and pass it with --journeys — starting with \"default\". (Or ask for a source that answers this for free: --journeys suite harvests the project's own tests.)",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "The code was read as this ledger was drawn up: 2 files in ., 4 doors, and nothing was run.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "No journey here has steps that name the door they knock on, so a door counts as opened only when something was observed at its own address. A route and a command are both addressed to the journey rather than to the door, so those 2 are undercounted. Walk the journeys the code reader generates and the answer becomes exact.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "Nothing here knows which functions the test suite ran, so an exported name counts as opened only if a journey addressed it directly — which is why 1 of them read as never opened. Install the test runner's coverage package and the suite says exactly what it touched.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "1 door was never tried at all (ANY /about). The journey that would have opened it either never ran, or ran and could not get past what the route asked for — and the reason is on the record beside it. It is counted here as never opened, because nothing knocked.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      }
+    ],
+    "doorsKnown": 4,
+    "doorsWalked": 0
+  },
+  "summary": "1 thing behaves differently, checked against 1.0.0, run live. 3 of 4 journeys had anything on the old build's side to be compared against; the other 1 was not compared at all, and is named in the coverage list. Running the new build twice showed 0 addresses that will not sit still, and 51 that do. 0 differences landed on the unsteady ones and were dropped; 4 remain. Nothing that used to be steady has become unpredictable. Everything reported here was re-checked against the old build booted live, so none of it is drift. What is NOT reported rests on the stored record from the last time the old build ran — a difference the store never captured cannot show up in this list. NOT EVERYTHING WAS CHECKED: 4 of the 4 ways into this product have never been walked through, so nothing here says anything about them, and 8 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list.",
+  "durationMs": 26743,
+  "startedAt": "2026-10-03T23:45:41.290Z",
+  "tool": "staysfixed 0.15.0",
+  "modeWarning": "Everything reported here was re-checked against the old build booted live, so none of it is drift. What is NOT reported rests on the stored record from the last time the old build ran — a difference the store never captured cannot show up in this list.",
+  "accounted": {
+    "reported": 1,
+    "waived": 0,
+    "unwaivable": 0,
+    "expiredWaivers": 0,
+    "budget": 5,
+    "spent": 0,
+    "left": 5,
+    "intent": null,
+    "note": "Nothing has been recorded as intended, so everything reported is exactly what the run found."
+  },
+  "comparedNothing": null,
+  "notChecked": "NOT EVERYTHING WAS CHECKED: 4 of the 4 ways into this product have never been walked through, so nothing here says anything about them, and 8 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list.",
+  "doorsNeverOpened": 4
+}

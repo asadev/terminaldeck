@@ -192,8 +192,14 @@ export const TOOL_AREAS: readonly ToolArea[] = [
     id: 'sessions',
     covers:
       'sessions beyond the listed tools (wait for an answer, press keys, read the screen, rename, switch account, ' +
-      'held sessions), past conversations, projects, files, git, dev servers and the overview',
-    prefixes: ['sessions', 'chats', 'projects', 'files', 'git', 'dev', 'dashboard', 'artifacts', 'alerts', 'log', 'tour'],
+      'held sessions), past conversations, projects, files, git, dev servers, the overview, and Stays Fixed checks ' +
+      '(that nothing which already worked has changed)',
+    /*
+     * `fixed` is Stays Fixed, the regression check on a project's own page — a
+     * project tool, so it sits with projects, files and git rather than in an
+     * area of its own that a model would have to guess the meaning of.
+     */
+    prefixes: ['sessions', 'chats', 'projects', 'files', 'git', 'dev', 'dashboard', 'artifacts', 'alerts', 'log', 'tour', 'fixed'],
   },
   {
     id: 'browser',

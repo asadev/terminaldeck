@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "cut": true,
+  "unchanged": false,
+  "product": "tiny-greeter",
+  "root": "/Users/you/Projects/tiny-greeter",
+  "warnings": [
+    "This release was made from a working tree with uncommitted changes, so what shipped and what is in git are not the same thing. The reference points at what was actually checked."
+  ],
+  "summary": "1.0.0 with uncommitted changes is now what tiny-greeter calls working. It replaces git-a54e4cd3e911. All 12 addresses it answered at answered the same way twice. This was FORCED past a refusal, and the refusal is on the record beside it.",
+  "lines": [
+    "tiny-greeter shipped at commit a54e4cd. There was no new tag, no version bump and no npm publish to go on, so this is being recorded as the release because somebody said it shipped.",
+    "1.0.0 with uncommitted changes is now what tiny-greeter calls working. It replaces git-a54e4cd3e911. All 12 addresses it answered at answered the same way twice. This was FORCED past a refusal, and the refusal is on the record beside it.",
+    "Nobody has to approve anything. The next check compares against this.",
+    "NOT EVERYTHING WAS CHECKED: 3 of the 3 ways into this product have never been walked through, so nothing here says anything about them, and 5 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list."
+  ],
+  "release": {
+    "how": "commit",
+    "what": "a54e4cd",
+    "describe": "shipped at commit a54e4cd. There was no new tag, no version bump and no npm publish to go on, so this is being recorded as the release because somebody said it shipped.",
+    "gitSha": "a54e4cd3e9117ad3222ecb8bc1a8a025e02fd817",
+    "branch": "main",
+    "dirty": true,
+    "version": "1.0.0"
+  },
+  "buildId": "work-b63f5e292f71",
+  "decision": {
+    "ok": false,
+    "state": "broken",
+    "needsForce": true,
+    "buildId": "work-b63f5e292f71",
+    "checkedAt": "2026-10-03T23:41:37.020Z",
+    "findings": 1,
+    "waived": 0,
+    "why": "The last check on 1.0.0 with uncommitted changes left 1 difference unaccounted for.",
+    "refusal": "Refusing to make 1.0.0 with uncommitted changes the standard for tiny-greeter: the last check left 1 difference nobody accounted for, 1 of which is in a class nobody may wave through. Cutting a broken build as the standard is how a safety net silently becomes a rubber stamp: from tomorrow the tool would call this behaviour correct, stop reporting it, and go on quietly passing every run that keeps it broken. Fix them, or force the cut and accept that it is recorded as forced with the reason above kept beside it."
+  },
+  "reference": {
+    "id": "ref-20261004-034203-9f206d",
+    "product": "tiny-greeter",
+    "buildId": "work-b63f5e292f71",
+    "at": "2026-10-03T23:42:03.514Z",
+    "summary": "1.0.0 with uncommitted changes is now what tiny-greeter calls working. It replaces git-a54e4cd3e911. All 12 addresses it answered at answered the same way twice. This was FORCED past a refusal, and the refusal is on the record beside it."
+  }
+}

@@ -1,3 +1,4 @@
+import { STAYS_FIXED } from '../../shared/stays-fixed'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Modal } from './Modal'
 import { PANELS, type PanelId } from '../shell/panels'
@@ -91,6 +92,8 @@ export const PANEL_HELP: Record<PanelId, string> = {
   artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
   simulators: 'The iOS Simulators, Android emulators and Android phones on this Mac, live. Click to tap, drag to swipe, type to type. Annotate freezes the screen: click the things you mean, say what should change in one note, and send it to a session with a marked picture. Needs Xcode or Android Studio.',
+  staysfixed:
+    `${STAYS_FIXED} checks that nothing that already worked has changed after you or an agent edit the project, and shows only the differences nobody asked for — with before and after. Set it up once, run a check after a change, and mark a build as good when you are happy with it; agents you start here can run the same check themselves.`,
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',
   store: 'One store for everything you can add to the app: extensions for the built-in browser, and the MCP servers your agents can reach. One search box covers both; the rail on the left is every shelf, with how much is on it.',
   readiness: 'How ready this repo is for an agent to work in — instructions, tests, structure — with a fix offered where one is safe.',

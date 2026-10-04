@@ -1,0 +1,129 @@
+{
+  "runId": "20261004-034205",
+  "product": "tiny-greeter",
+  "ok": true,
+  "mode": "stored-record",
+  "reference": {
+    "id": "work-b63f5e292f71",
+    "product": "tiny-greeter",
+    "platform": "darwin-arm64",
+    "builtAt": "2026-10-03T23:42:05.239Z",
+    "gitSha": "a54e4cd3e9117ad3222ecb8bc1a8a025e02fd817",
+    "version": "1.0.0 with uncommitted changes",
+    "dirty": true,
+    "branch": "main"
+  },
+  "candidate": {
+    "id": "work-b63f5e292f71",
+    "product": "tiny-greeter",
+    "platform": "darwin-arm64",
+    "builtAt": "2026-10-03T23:42:05.239Z",
+    "gitSha": "a54e4cd3e9117ad3222ecb8bc1a8a025e02fd817",
+    "version": "1.0.0 with uncommitted changes",
+    "dirty": true,
+    "branch": "main"
+  },
+  "findings": [],
+  "differencesReal": 0,
+  "differencesNoise": 0,
+  "newlyUnstable": [],
+  "coverage": {
+    "paths": 12,
+    "journeys": 2,
+    "byChannel": {
+      "contract": 3,
+      "counters": 4,
+      "complaints": 2,
+      "results": 1,
+      "effects": 2
+    },
+    "gaps": [
+      {
+        "what": "None of this project's own tests were run, because there are none this tool can find.",
+        "why": "This project has no test script, so there is no suite to harvest journeys from. A test suite is the only source that walks this product with the arguments somebody actually thought about, so without one the check compares what it can read and call for itself, and no more.",
+        "unlockedBy": "Point the project at vitest or Node's own test runner and every test file becomes a journey, run twice on each build and compared."
+      },
+      {
+        "what": "Every difference that came from the days between the two builds.",
+        "why": "The old build was not run live, so nothing separates a real change from a change in the machine around it.",
+        "unlockedBy": "Make the old build buildable here, or run with --paired."
+      },
+      {
+        "what": "\"ask greet to print its help, and compare every word of it\": instant. That is recorded and NOT compared: a stopwatch on a shared machine measures the machine as much as the product, so a busy laptop would otherwise invent a slowdown that nobody caused. A build that hangs is still caught — it gets stopped for taking too long, and how it finished is compared.",
+        "why": "a stopwatch measures how busy this machine was at least as much as it measures the product, so the number is recorded and never compared (measures the machine)",
+        "unlockedBy": "Nothing. This is deliberate and permanent — the effect is watched at the call, never at the result.",
+        "channel": "counters"
+      },
+      {
+        "what": "Files written into .git, .staysfixed, node_modules were not watched. node_modules is the one that costs something: a build step that patches a dependency, generates a client into it, or rebuilds a native module changes what ships and is not seen here. It is left out because fingerprinting it twice per run makes a check nobody waits for. Name it under \"process.alsoWatch\" in the settings to watch it anyway.",
+        "why": "the value was too large to keep, so only a fingerprint of it was kept (too big)",
+        "unlockedBy": "Nothing. This is deliberate and permanent — the effect is watched at the call, never at the result.",
+        "channel": "effects"
+      },
+      {
+        "what": "3 of this product's 3 doors have never been opened by this tool.",
+        "why": "No journey reaches them, so a break behind one of them would not show up in any run — clean or otherwise.",
+        "unlockedBy": "3 of them could be covered by journeys that reach them — read out of your source, or named by hand in a journeys file.",
+        "channel": "contract",
+        "doors": 3
+      },
+      {
+        "what": "the command \"greet\" — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Run them. Each one is a program with a stdout, a stderr and an exit code, and all three are compared. Start with \"greet\".",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "the command \"npm run start\" — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Run them. Each one is a program with a stdout, a stderr and an exit code, and all three are compared. Start with \"npm run start\".",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "what the top-level files export — 1 of 1 never opened.",
+        "why": "Nothing has ever walked any of this. If it broke, no run of this tool would notice.",
+        "unlockedBy": "Write a journeys file that calls them and pass it with --journeys — starting with \"default\". (Or ask for a source that answers this for free: --journeys suite harvests the project's own tests.)",
+        "channel": "contract",
+        "doors": 1
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "The code was read as this ledger was drawn up: 2 files in ., 3 doors, and nothing was run.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "No journey here has steps that name the door they knock on, so a door counts as opened only when something was observed at its own address. A route and a command are both addressed to the journey rather than to the door, so those 2 are undercounted. Walk the journeys the code reader generates and the answer becomes exact.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      },
+      {
+        "what": "This coverage count is less exact than it looks.",
+        "why": "Nothing here knows which functions the test suite ran, so an exported name counts as opened only if a journey addressed it directly — which is why 1 of them read as never opened. Install the test runner's coverage package and the suite says exactly what it touched.",
+        "unlockedBy": "Read the caveat: it says what would make it exact."
+      }
+    ],
+    "doorsKnown": 3,
+    "doorsWalked": 0
+  },
+  "summary": "This is the build that is already on record as working, run again and compared with itself, so nothing here could be a change. 11 addresses were watched. Two runs of one build, and they agreed about everything. Nothing has been edited since it was shipped, so there was nothing here that could have been a change. Change the code, or ship again to cut a fresh record, to have something to compare against. This run compared against the stored record from the last time the old build ran, not against the old build run live. That is genuinely weaker: every difference that came from the days in between is still in this list. The old build here is 1.0.0 with uncommitted changes. NOT EVERYTHING WAS CHECKED: 3 of the 3 ways into this product have never been walked through, so nothing here says anything about them, and 5 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list.",
+  "durationMs": 396,
+  "startedAt": "2026-10-03T23:42:05.275Z",
+  "tool": "staysfixed 0.15.0",
+  "modeWarning": "This run compared against the stored record from the last time the old build ran, not against the old build run live. That is genuinely weaker: every difference that came from the days in between is still in this list. The old build here is 1.0.0 with uncommitted changes.",
+  "accounted": {
+    "reported": 0,
+    "waived": 0,
+    "unwaivable": 0,
+    "expiredWaivers": 0,
+    "budget": 5,
+    "spent": 0,
+    "left": 5,
+    "intent": null,
+    "note": "Nothing was waived and nothing was hidden: this run reports every difference it found."
+  },
+  "comparedNothing": null,
+  "notChecked": "NOT EVERYTHING WAS CHECKED: 3 of the 3 ways into this product have never been walked through, so nothing here says anything about them, and 5 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list.",
+  "doorsNeverOpened": 3
+}

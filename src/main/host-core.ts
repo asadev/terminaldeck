@@ -513,6 +513,32 @@ export interface HostCoreOptions {
      */
     insideDistro?(target: WslTarget): Promise<WslPlacementSeam | null>
   }
+  /**
+   * Tools a session gets because of the **project** it starts in, rather than
+   * because of what this app is — today, Stays Fixed's MCP server for a project
+   * that is set up with "Give agents Stays Fixed" on. See
+   * `staysfixed/agents.ts` for how each agent takes it and why nothing in the
+   * agents' own settings files is written.
+   *
+   * A structural seam for the same reason {@link sessionTools} is one: this file
+   * knows how a pty is spawned, and has no business knowing what Stays Fixed is.
+   * Absent — the headless host, a test — and every session launches as before.
+   *
+   * Answers with arguments to add and environment to set, or null. It is asked
+   * only for a session a person at this computer started in an ordinary folder
+   * on this machine: not for one a paired device asked for (held inside a
+   * sandbox that would refuse the files it names), not inside WSL (the paths
+   * are this machine's), not for a launch the app composed itself (the copilot
+   * owns its tool surface), and not for an agent somebody added by hand.
+   * Anything it throws is a session started without it, never a session that
+   * did not start.
+   */
+  projectTools?: {
+    launch(
+      provider: string,
+      cwd: string,
+    ): Promise<{ args: readonly string[]; env: Readonly<Record<string, string>> } | null>
+  }
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
   /**
@@ -1777,8 +1803,20 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * `--session-id` rebuild that threw away a resume. One name for the flags,
      * used everywhere they are needed, is what stops there being a third.
      */
-    const composed: readonly string[] =
-      sessionTools === null ? (extraArgs ?? []) : [...(extraArgs ?? []), ...sessionTools.args]
+    /*
+     * The project's own tools — Stays Fixed's server where the project is set
+     * up for it. Gated like the verbs above on everything that would make the
+     * flag a claim rather than a capability; see `projectTools` for each case.
+     */
+    const projectLaunch =
+      !forDevice && target === null && (extraArgs ?? []).length === 0 && !addedRuns
+        ? ((await options.projectTools?.launch(provider, input.cwd).catch(() => null)) ?? null)
+        : null
+    const composed: readonly string[] = [
+      ...(extraArgs ?? []),
+      ...(sessionTools === null ? [] : sessionTools.args),
+      ...(projectLaunch === null ? [] : projectLaunch.args),
+    ]
     const spec = withLaunchArgs(table, composed, platform, process.env, target)
 
     // Resolve the profile the session should run as and hand the PTY its
@@ -1971,6 +2009,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
        * actually runs opening pages in a browser somewhere else on the machine.
        */
       ...(shim?.browser ? { BROWSER: shim.browser } : {}),
+      // The project's own tools, where they travel by environment (Gemini's).
+      ...(projectLaunch?.env ?? {}),
     }
     /*
      * The guest's git variables have to cross the WSL boundary too, and they are

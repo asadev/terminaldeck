@@ -1,0 +1,258 @@
+{
+  "tool": {
+    "name": "staysfixed",
+    "version": "0.15.0",
+    "generatedAt": "2026-10-03T23:40:18.022Z"
+  },
+  "project": {
+    "root": "/Users/you/Projects/tiny-greeter",
+    "configFile": null,
+    "isGitRepo": true,
+    "hasReference": false,
+    "referenceNote": "Nothing recorded yet, so there is nothing to compare against. Run `staysfixed check --paired` once, or ship once with the reference hook in place."
+  },
+  "surfaces": [
+    {
+      "id": "cli",
+      "name": "command-line tools and libraries",
+      "status": "partial",
+      "summary": "This machine can cover it in full, but nothing is set up in this folder yet, so a check cannot run here at all.",
+      "canCheck": [
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters"
+      ],
+      "cannotCheck": [
+        "meaning",
+        "pixels"
+      ],
+      "needs": [
+        {
+          "what": "a command to run, or something to import",
+          "why": "Nothing here is walked otherwise, and a run that walks nothing still finishes and still says nothing changed.",
+          "fix": "Add `process: { commands: [{ name: \"help\", run: \"node bin/cli.js --help\" }] }` to your settings, or `imports: [{ name: \"the package entry\", module: \"index.js\" }]`.",
+          "automatic": true,
+          "unlocks": "Everything a command does — what it printed, what it exited with, what it wrote to disk, what it reached for."
+        }
+      ],
+      "state": "the agent can fix this"
+    },
+    {
+      "id": "server",
+      "name": "servers and APIs",
+      "status": "partial",
+      "summary": "Mostly covered. Without a way to restore the same data twice, anything that depends on stored data cannot be compared fairly.",
+      "canCheck": [
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters"
+      ],
+      "cannotCheck": [
+        "meaning",
+        "pixels"
+      ],
+      "needs": [
+        {
+          "what": "a database snapshot that can be restored twice",
+          "why": "Both builds have to see identical data or every difference is really a data difference.",
+          "fix": "Install Docker, or point the settings at a dump file the tool may restore.",
+          "automatic": false,
+          "unlocks": "Anything on your server that depends on stored data — totals, lists, permissions — gets compared fairly instead of being left out."
+        }
+      ],
+      "state": "only a person can do this"
+    },
+    {
+      "id": "web",
+      "name": "web apps and sites",
+      "status": "ready",
+      "summary": "Covered, including what the screen says each control is and does. It opens Chrome for Testing, which is a separate application from the browser you use.",
+      "canCheck": [
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "meaning",
+        "pixels"
+      ],
+      "cannotCheck": [],
+      "needs": [],
+      "state": "ready"
+    },
+    {
+      "id": "electron",
+      "name": "Electron desktop apps",
+      "status": "unavailable",
+      "summary": "Nothing to check: no desktop app was found in this project, and the settings do not name one.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "This project has no desktop app in it. If yours is built somewhere else, name the built app in your settings under electron.binary and this becomes available — nothing else is needed, and no browser is needed for it at all.",
+      "notInThisProject": true
+    },
+    {
+      "id": "android",
+      "name": "Android apps",
+      "status": "unavailable",
+      "summary": "Nothing to check: no Android app was found in this project, and the settings do not name one.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "This project has no Android app in it, so there is nothing here for an emulator to run. If yours is built somewhere else, name the built APK in your settings under android.apk and this becomes available — nothing else is needed.",
+      "notInThisProject": true
+    },
+    {
+      "id": "ios",
+      "name": "iPhone apps, on the simulator",
+      "status": "unavailable",
+      "summary": "Nothing to check: no iPhone app was found in this project, and the settings do not name one.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "This project has no iPhone app in it, so there is nothing for a simulator to run. If yours is built somewhere else, name the built .app in your settings under ios.app.",
+      "notInThisProject": true
+    },
+    {
+      "id": "windows",
+      "name": "native Windows apps",
+      "status": "unavailable",
+      "summary": "Nothing to check: this project names no native Windows program in its settings. Most Windows products are Electron, and those are covered over their debug port from any machine.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "A native Windows window can only be read from Windows itself, and no Windows desktop answers from here. If your Windows product is Electron — most are — it is already covered over its debug port and you need nothing. If it is genuinely native, this becomes possible the day an SSH host in your config reaches a Windows machine.",
+      "notInThisProject": true
+    },
+    {
+      "id": "macos",
+      "name": "native Mac apps",
+      "status": "unavailable",
+      "summary": "Nothing to check: this project names no native Mac app in its settings. Most Mac products are Electron, and those are covered over their debug port from any machine.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "This project names no native Mac app in its settings, so there is nothing to open. If yours is built somewhere else, name the built .app under macos.app. Most Mac products are Electron, and those are covered over their debug port from any machine.",
+      "notInThisProject": true
+    },
+    {
+      "id": "linux",
+      "name": "native Linux desktop apps",
+      "status": "unavailable",
+      "summary": "Nothing to check: this project names no native Linux program in its settings. Most Linux desktop products are Electron, and those are covered over their debug port from any machine.",
+      "canCheck": [],
+      "cannotCheck": [
+        "meaning",
+        "effects",
+        "complaints",
+        "results",
+        "contract",
+        "counters",
+        "pixels"
+      ],
+      "needs": [],
+      "state": "not possible here",
+      "instead": "This project has no native Linux program named in its settings, so there is nothing to open on a Linux desktop. If yours is built somewhere else, name it under linux.remoteExe (already on that machine) or linux.exe (copied over each run). Most Linux desktop products are Electron, and those are covered over their debug port from any machine.",
+      "notInThisProject": true
+    }
+  ],
+  "covers": {
+    "short": "Nothing is set up in this folder, so a check cannot run here at all and would cover nothing. Run `staysfixed init` first. Once it is set up, this machine can drive web apps and sites. It covers command-line tools and libraries and servers and APIs only partly — read the summary for each before treating a clean result as proof. It does NOT check Electron desktop apps, Android apps, iPhone apps, on the simulator, native Windows apps, native Mac apps and native Linux desktop apps at all, so a clean result says nothing whatever about those. There is nothing of those kinds in this repository — Electron desktop apps, Android apps, iPhone apps, on the simulator, native Windows apps, native Mac apps and native Linux desktop apps — so there is nothing here to check, and that is not a limit of this machine.",
+    "covered": [
+      "web apps and sites"
+    ],
+    "partly": [
+      {
+        "name": "command-line tools and libraries",
+        "why": "This machine can cover it in full, but nothing is set up in this folder yet, so a check cannot run here at all."
+      },
+      {
+        "name": "servers and APIs",
+        "why": "Mostly covered. Without a way to restore the same data twice, anything that depends on stored data cannot be compared fairly."
+      }
+    ],
+    "notCovered": [
+      {
+        "name": "Electron desktop apps",
+        "why": "This project has no desktop app in it. If yours is built somewhere else, name the built app in your settings under electron.binary and this becomes available — nothing else is needed, and no browser is needed for it at all.",
+        "whoFixes": "not possible here"
+      },
+      {
+        "name": "Android apps",
+        "why": "This project has no Android app in it, so there is nothing here for an emulator to run. If yours is built somewhere else, name the built APK in your settings under android.apk and this becomes available — nothing else is needed.",
+        "whoFixes": "not possible here"
+      },
+      {
+        "name": "iPhone apps, on the simulator",
+        "why": "This project has no iPhone app in it, so there is nothing for a simulator to run. If yours is built somewhere else, name the built .app in your settings under ios.app.",
+        "whoFixes": "not possible here"
+      },
+      {
+        "name": "native Windows apps",
+        "why": "A native Windows window can only be read from Windows itself, and no Windows desktop answers from here. If your Windows product is Electron — most are — it is already covered over its debug port and you need nothing. If it is genuinely native, this becomes possible the day an SSH host in your config reaches a Windows machine.",
+        "whoFixes": "not possible here"
+      },
+      {
+        "name": "native Mac apps",
+        "why": "This project names no native Mac app in its settings, so there is nothing to open. If yours is built somewhere else, name the built .app under macos.app. Most Mac products are Electron, and those are covered over their debug port from any machine.",
+        "whoFixes": "not possible here"
+      },
+      {
+        "name": "native Linux desktop apps",
+        "why": "This project has no native Linux program named in its settings, so there is nothing to open on a Linux desktop. If yours is built somewhere else, name it under linux.remoteExe (already on that machine) or linux.exe (copied over each run). Most Linux desktop products are Electron, and those are covered over their debug port from any machine.",
+        "whoFixes": "not possible here"
+      }
+    ],
+    "everything": false,
+    "canRunHere": false
+  }
+}

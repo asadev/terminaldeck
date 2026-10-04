@@ -1,0 +1,67 @@
+{
+  "ok": true,
+  "written": [
+    "/Users/you/Projects/tiny-greeter/staysfixed.config.js",
+    "/Users/you/Projects/tiny-greeter/.gitignore"
+  ],
+  "kept": [],
+  "problems": [],
+  "plan": {
+    "root": "/Users/you/Projects/tiny-greeter",
+    "readiness": [
+      {
+        "product": "the `greet` command",
+        "kind": "cli",
+        "surface": "cli",
+        "state": "ready",
+        "summary": "The `greet` command can be checked here now. Something you type at a terminal. Watched by running it and reading what it printed, what it exited with and what it wrote.",
+        "needs": []
+      }
+    ],
+    "needs": {
+      "agent": [
+        {
+          "what": "one build on record as working",
+          "why": "Until one build has been recorded there is nothing to compare a new one against, and a clean result would mean nothing at all.",
+          "unlocks": "every check from then on",
+          "fix": "staysfixed ship    (only shipping records what \"working\" means — run it once at the end of your release)",
+          "who": "the agent"
+        }
+      ],
+      "person": [],
+      "impossible": []
+    },
+    "journeys": [
+      {
+        "name": "the-code",
+        "what": "read every door out of the source without running any of it — 0 routes, 0 private channels, 0 exported names, 2 commands",
+        "from": "the source",
+        "surface": "any",
+        "automatic": true,
+        "ready": true
+      },
+      {
+        "name": "greet --help",
+        "what": "run `node ./greet.js --help` and compare what it printed, what it exited with and every file it touched",
+        "from": "package.json",
+        "surface": "cli",
+        "automatic": false,
+        "ready": true
+      }
+    ],
+    "covers": {
+      "covered": [
+        "the `greet` command"
+      ],
+      "partly": [],
+      "notCovered": [],
+      "short": "Right now a check here can walk the `greet` command. How much of it a run actually opens is a different question, and `staysfixed coverage` is the one that answers it. Nothing is being left out on this machine — though how much of the project a run actually walks is a separate question, and every check answers it."
+    },
+    "config": {
+      "file": "/Users/you/Projects/tiny-greeter/staysfixed.config.js",
+      "exists": false,
+      "format": "js",
+      "why": "The settings will be written to staysfixed.config.js, with an explanation beside every option."
+    }
+  }
+}
