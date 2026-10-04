@@ -256,6 +256,12 @@ export function registerAiAppsIpc(ipcMain: InvokeRegistrar, deps: AiAppsIpcDeps)
     return change(() => void deps.keys.setAskFirst(id(key), on))
   })
 
+  /** Let this app use the task tools, or stop it. */
+  ipcMain.handle('ai-apps:tasks', (event, key: unknown, on: unknown) => {
+    guard(event)
+    return change(() => void deps.keys.setTasks(id(key), on))
+  })
+
   ipcMain.handle('ai-apps:folders', (event, key: unknown, folders: unknown) => {
     guard(event)
     return change(() => void deps.keys.setFolders(id(key), folders))

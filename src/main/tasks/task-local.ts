@@ -24,6 +24,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
+import { actorNow } from './task-actor'
 import { LOCAL_STATUSES, TaskConfigProblem, type TaskConfig } from './task-config'
 import type { TaskEngine } from './task-engine'
 import { LOCAL_KEY, ME, PRIORITIES, TaskStore, TO_ME, UNASSIGNED, type TaskAssignee, type TaskNote, type TaskPriority, type TaskRecord } from './task-store'
@@ -281,7 +282,7 @@ export class LocalTasks {
     const task = newLocalTask({ title, instructions, project, assignee, status }, this.now())
     Object.assign(task, { labels: [], taskType: 'task', ...fields, completedAt: status === LOCAL_STATUSES.completed ? this.now() : null })
     this.deps.store.put(task)
-    this.deps.store.note(task, { by: ME, kind: 'edited', text: `Created, assigned to ${this.nameOf(assignee)}.` })
+    this.deps.store.note(task, { by: actorNow(), kind: 'edited', text: `Created, assigned to ${this.nameOf(assignee)}.` })
     await this.deps.engine.accept(task)
     this.changed()
     return task
@@ -321,18 +322,18 @@ export class LocalTasks {
     )
     if (Object.keys(fields).length > 0) this.deps.store.update(task, fields)
     for (const key of changed) edited.push(FIELD_WORDS[key])
-    if (edited.length > 0) note({ by: ME, kind: 'edited', text: `Changed the ${edited.join(', ')}.` })
+    if (edited.length > 0) note({ by: actorNow(), kind: 'edited', text: `Changed the ${edited.join(', ')}.` })
     if (status !== undefined && status !== task.crmStatus) {
       // Done alone is completed, and stamps when; every other status clears it (the CRM's rule).
       this.deps.store.update(task, { crmStatus: status, completedAt: status === LOCAL_STATUSES.completed ? this.now() : null })
-      note({ by: ME, kind: 'status', text: `Status: ${status}` })
+      note({ by: actorNow(), kind: 'status', text: `Status: ${status}` })
     }
     if (archive !== null && archive !== (task.archivedAt != null)) {
       this.deps.store.update(task, { archivedAt: archive ? this.now() : null })
-      note({ by: ME, kind: 'edited', text: archive ? 'Archived.' : 'Restored from the archive.' })
+      note({ by: actorNow(), kind: 'edited', text: archive ? 'Archived.' : 'Restored from the archive.' })
     }
     if (assignee !== null && assignee.identity !== task.assignee.identity) {
-      note({ by: ME, kind: 'assigned', text: `Assigned to ${this.nameOf(assignee)}.` })
+      note({ by: actorNow(), kind: 'assigned', text: `Assigned to ${this.nameOf(assignee)}.` })
       await this.deps.engine.reassign(task, assignee)
       this.deps.store.update(task, { handedFrom: null })
     }
@@ -359,7 +360,7 @@ export class LocalTasks {
   async remove(id: unknown): Promise<void> {
     const task = this.task(id)
     if (task.sessionId !== null) await this.deps.engine.cancel(task, 'the task was deleted.')
-    this.deps.store.note(task, { by: ME, kind: 'edited', text: 'Moved to Trash.' })
+    this.deps.store.note(task, { by: actorNow(), kind: 'edited', text: 'Moved to Trash.' })
     this.deps.store.trash(task.id)
     this.changed()
   }
@@ -369,7 +370,7 @@ export class LocalTasks {
     const task = typeof id === 'string' ? this.deps.store.trashedById(id) : null
     if (task === null || task.local !== true) throw new TaskConfigProblem('That task is not in the Trash.')
     this.deps.store.restore(task.id)
-    this.deps.store.note(task, { by: ME, kind: 'edited', text: 'Restored from Trash.' })
+    this.deps.store.note(task, { by: actorNow(), kind: 'edited', text: 'Restored from Trash.' })
     this.changed()
     return task
   }

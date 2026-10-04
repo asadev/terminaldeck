@@ -70,6 +70,7 @@ export interface AiAppsBridge {
   aiAppsRename(id: string, name: string): Promise<unknown>
   aiAppsLevel(id: string, level: AccessLevel): Promise<unknown>
   aiAppsAskFirst(id: string, on: boolean): Promise<unknown>
+  aiAppsTasks(id: string, on: boolean): Promise<unknown>
   aiAppsFolders(id: string, folders: string[] | null): Promise<unknown>
   aiAppsRevoke(id: string): Promise<unknown>
   aiAppsInternet(on: boolean): Promise<unknown>
@@ -90,6 +91,7 @@ const BRIDGE_METHODS: ReadonlyArray<keyof AiAppsBridge> = [
   'aiAppsRename',
   'aiAppsLevel',
   'aiAppsAskFirst',
+  'aiAppsTasks',
   'aiAppsFolders',
   'aiAppsRevoke',
   'aiAppsInternet',
@@ -447,6 +449,13 @@ function KeyRow({
             />
           )}
 
+          <TasksRow
+            on={row.tasks}
+            limited={row.folders !== null}
+            busy={busy}
+            onChange={(next) => void run(() => bridge.aiAppsTasks?.(row.id, next))}
+          />
+
           <FolderPicker
             available={folders}
             chosen={row.folders}
@@ -641,6 +650,27 @@ function AskFirstRow({ on, busy, onChange }: { on: boolean; busy: boolean; onCha
       control={
         <Switch checked={on} disabled={busy} labelledBy={`${ids}-label`} describedBy={`${ids}-help`} onChange={onChange} />
       }
+    />
+  )
+}
+
+/** May this app use the task tools? Off for every key until turned on here. */
+function TasksRow({ on, limited, busy, onChange }: { on: boolean; limited: boolean; busy: boolean; onChange(next: boolean): void }) {
+  const ids = useId()
+  return (
+    <Row
+      label="Your tasks"
+      help={
+        on
+          ? limited
+            ? 'This app can read and change your tasks whose project folder is one of its folders.'
+            : 'This app can read and change your tasks.'
+          : 'This app cannot see your tasks.'
+      }
+      more="What it may change still follows what this key may do and whether it asks first. Deleting puts a task in the Trash; nothing is removed for good."
+      labelId={`${ids}-label`}
+      helpId={`${ids}-help`}
+      control={<Switch checked={on} disabled={busy} labelledBy={`${ids}-label`} describedBy={`${ids}-help`} onChange={onChange} />}
     />
   )
 }

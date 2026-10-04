@@ -135,7 +135,7 @@
 
 import { advertiseTool, type ToolSpec } from './catalogue'
 import { RUN_ID } from './run-tool'
-import { Refused } from './surface'
+import { Refused, type Caller } from './surface'
 import { BRAND } from '../../shared/brand'
 
 /** The canonical id and the wire spelling, in one place because five files name them. */
@@ -218,8 +218,8 @@ export const TOOL_AREAS: readonly ToolArea[] = [
     id: 'agents',
     covers:
       'the coding agents, their logins, models and controls, their MCP servers and hooks, routines, usage and cost, ' +
-      'dictation, setup and readiness checks, and the community store',
-    prefixes: ['agents', 'accounts', 'mcp', 'hooks', 'routines', 'usage', 'voice', 'setup', 'readiness', 'store'],
+      'dictation, setup and readiness checks, the community store, and tasks — your own and CRM tasks — with the task agents',
+    prefixes: ['agents', 'accounts', 'mcp', 'hooks', 'routines', 'usage', 'voice', 'setup', 'readiness', 'store', 'tasks', 'crm'],
   },
   {
     /*
@@ -356,6 +356,17 @@ export function describeIndex(behind: readonly ToolSpec[]): string {
  * key, and a tool with a `keyIndex` is held back with that line for such an app
  * while staying in full for everybody else. See `ToolSpec.audience`.
  */
+/**
+ * Is a tool behind a key switch (`ToolSpec.keyGrant`) there for this caller?
+ * Always for anybody not on a key; for a key only when its switch is on. The one
+ * place it is decided — the listing, `tools.describe`, `tools.run` and the
+ * transport's own allow-list all ask this.
+ */
+export function keyGrantOk(spec: Pick<ToolSpec, 'keyGrant'>, caller: Pick<Caller, 'kind' | 'tasks'> | undefined): boolean {
+  if (spec.keyGrant === undefined || caller === undefined || caller.kind !== 'key') return true
+  return spec.keyGrant === 'tasks' && caller.tasks === true
+}
+
 export function asListedFor(spec: ToolSpec, keyCaller: boolean): ToolSpec | null {
   if (spec.audience === 'keys' && !keyCaller) return null
   if (spec.audience === 'copilot' && keyCaller) return null
@@ -501,7 +512,7 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
         const inside = catalogue
           .map((spec) => asListedFor(spec, keyCaller))
           .filter((spec): spec is ToolSpec => spec !== null)
-          .filter((spec) => spec.id !== DESCRIBE_ID && areaOf(spec) === area && visibleTo(context.granted, spec))
+          .filter((spec) => spec.id !== DESCRIBE_ID && areaOf(spec) === area && visibleTo(context.granted, spec) && keyGrantOk(spec, context.caller))
         if (inside.length === 0) {
           unknown.push(`no area called ${area}`)
         } else {
@@ -533,7 +544,7 @@ export function describeTool(deps: DescribeToolDeps): ToolSpec {
          * edit can make one of them say something the other does not — the
          * wording is `server.ts`'s, and matching it is the point.
          */
-        if (spec === undefined || !visibleTo(context.granted, spec)) {
+        if (spec === undefined || !visibleTo(context.granted, spec) || !keyGrantOk(spec, context.caller)) {
           unknown.push(`no tool called ${name}`)
           continue
         }

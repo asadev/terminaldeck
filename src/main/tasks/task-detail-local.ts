@@ -117,6 +117,7 @@ import type { DescriptionVersion, TaskMore } from '../../shared/crm/task-more-ac
 import { isTaskType, MAX_LABELS, normalizeLabels, normalizeRecurrenceRule, type RecurrenceRule, type SubtaskMeta, type TaskPageExtras, type TimeEntry } from '../../shared/crm/task-page'
 import type { TaskAssignee, TaskComment, TaskPriority } from '../../shared/crm/tasks-data'
 import { writeSecretFile } from '../remote/secret-file'
+import { actorNow, appActorName } from './task-actor'
 import { TaskConfigProblem, type TaskConfig } from './task-config'
 import type { LocalChange, LocalTasks } from './task-local'
 import { PRIORITIES, type TaskNote, type TaskRecord, type TaskStore } from './task-store'
@@ -677,7 +678,7 @@ export class LocalTaskDetail {
 
   /** A person by id; one no longer known (a removed agent) is still named by its id. */
   private named(id: string): TaskAssignee {
-    return this.person(id) ?? localPerson(id, id)
+    return this.person(id) ?? localPerson(id, appActorName(id) ?? id)
   }
 
   private requirePerson(id: string): TaskAssignee {
@@ -686,7 +687,7 @@ export class LocalTaskDetail {
     return p
   }
 
-  private record(task: TaskRecord, kind: ActivityKind, payload: ActivityReadPayload, by: string = ME_ID): void {
+  private record(task: TaskRecord, kind: ActivityKind, payload: ActivityReadPayload, by: string = actorNow()): void {
     const d = this.detail(task)
     d.activity.push({ id: randomUUID(), kind, payload, by, at: this.now() })
   }
@@ -952,7 +953,7 @@ export class LocalTaskDetail {
     if (complete && (row.status === 'open' || row.status === 'missed')) {
       row.status = 'done'
       row.completedAt = this.iso(task.completedAt ?? this.now())
-      row.completedBy = ME_ID
+      row.completedBy = actorNow()
     } else if (!complete && row.status === 'done') {
       row.status = 'open'
       row.completedAt = null
@@ -1620,7 +1621,7 @@ export class LocalTaskDetail {
     const path = join(this.deps.filesDir, rel)
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     const size = write(path)
-    return { id, kind: 'upload', fileName: basename(name).slice(0, 200) || 'file', mimeType: mimeOf(name, mime), sizeBytes: size, file: rel, documentId: null, uploadedBy: ME_ID, at: this.now() }
+    return { id, kind: 'upload', fileName: basename(name).slice(0, 200) || 'file', mimeType: mimeOf(name, mime), sizeBytes: size, file: rel, documentId: null, uploadedBy: actorNow(), at: this.now() }
   }
 
   private uploadTaskFile(taskId: string, raw: unknown): { ok: true; attachment: TaskAttachment } | Fail {
@@ -1698,7 +1699,7 @@ export class LocalTaskDetail {
       sizeBytes: src.sizeBytes,
       file: src.file,
       documentId,
-      uploadedBy: ME_ID,
+      uploadedBy: actorNow(),
       at: this.now(),
     }
     d.attachments.push(row)
@@ -1879,7 +1880,7 @@ export class LocalTaskDetail {
       config: cfg.value,
       value,
       sortOrder: d.fields.reduce((m, f) => Math.max(m, f.sortOrder ?? -1), -1) + 1,
-      createdBy: ME_ID,
+      createdBy: actorNow(),
       createdAt: now,
       updatedAt: now,
     }
@@ -1996,7 +1997,7 @@ export class LocalTaskDetail {
     }
     const live = this.findField(fieldId).field
     const prev = live.value && typeof live.value === 'object' ? (live.value as { count?: unknown }).count : 0
-    live.value = { count: (typeof prev === 'number' ? prev : 0) + 1, lastBy: ME_ID, lastAt: this.iso() }
+    live.value = { count: (typeof prev === 'number' ? prev : 0) + 1, lastBy: actorNow(), lastAt: this.iso() }
     live.updatedAt = this.iso()
     this.fieldLine(task, { action: 'pressed', field_id: live.id, label: live.label })
     this.save(task)
@@ -2127,7 +2128,7 @@ export class LocalTaskDetail {
     if (typeof opts.assigneeUserId === 'string' && opts.assigneeUserId !== '') assignee = this.requirePerson(opts.assigneeUserId).id
     const d = this.detail(task)
     const id = randomUUID()
-    d.comments.push({ id, authorUserId: ME_ID, body, at: this.now() })
+    d.comments.push({ id, authorUserId: actorNow(), body, at: this.now() })
     if (d.comments.length > MAX_COMMENTS) d.comments = d.comments.slice(-MAX_COMMENTS)
     // A scheduled one waits for the clock: until it goes out, it is not delivered (the CRM's record, not the time).
     d.commentMeta[id] = { parentId, resolvedAt: null, resolvedBy: null, assigneeUserId: assignee, scheduledFor: scheduled, ...(scheduled === null ? {} : { deliveredAt: null }) }
@@ -2166,7 +2167,7 @@ export class LocalTaskDetail {
     this.comment(task, commentId)
     const meta = this.metaOf(task, commentId)
     meta.resolvedAt = resolved ? this.iso() : null
-    meta.resolvedBy = resolved ? ME_ID : null
+    meta.resolvedBy = resolved ? actorNow() : null
     this.save(task)
     return { ok: true }
   }
@@ -2187,7 +2188,7 @@ export class LocalTaskDetail {
   private async sendScheduledNow(taskId: string, commentId: string): Promise<{ ok: true; warning?: string; alreadySent?: boolean } | Fail> {
     const task = this.task(taskId)
     const c = this.comment(task, commentId)
-    if (c.authorUserId !== ME_ID) return fail('Only the person who wrote it can send it now')
+    if (c.authorUserId !== actorNow()) return fail('Only the person who wrote it can send it now')
     const meta = this.metaOf(task, commentId)
     if (!meta.scheduledFor) return fail('That comment is not scheduled')
     if (meta.deliveredAt) return { ok: true, alreadySent: true }
@@ -2317,10 +2318,11 @@ export class LocalTaskDetail {
     const closed: StoredTimeEntry[] = []
     const now = this.now()
     for (const task of onlyTask === null ? this.locals() : [onlyTask]) {
-      const running = (task.detail?.time ?? []).filter((e) => e.endedAt === null)
+      // One running timer per person: yours, Hoot's or an app's never stops another's.
+      const running = (task.detail?.time ?? []).filter((e) => e.endedAt === null && e.userId === actorNow())
       if (running.length === 0) continue
       for (const e of this.detail(task).time) {
-        if (e.endedAt !== null) continue
+        if (e.endedAt !== null || e.userId !== actorNow()) continue
         const secs = Math.min(DAY_SECONDS, Math.max(0, Math.floor((now - Date.parse(e.startedAt)) / 1000)))
         e.endedAt = this.iso(now)
         e.seconds = secs
@@ -2336,7 +2338,7 @@ export class LocalTaskDetail {
     const task = this.task(taskId)
     // One timer at a time, across every task: one running elsewhere stops first.
     this.stopRunning(null)
-    const entry: StoredTimeEntry = { id: randomUUID(), userId: ME_ID, startedAt: this.iso(), endedAt: null, seconds: null, note: null, billable: false, tags: [] }
+    const entry: StoredTimeEntry = { id: randomUUID(), userId: actorNow(), startedAt: this.iso(), endedAt: null, seconds: null, note: null, billable: false, tags: [] }
     this.detail(task).time.push(entry)
     this.save(task)
     return { ok: true, entry: entryOf(entry) }
@@ -2361,7 +2363,7 @@ export class LocalTaskDetail {
     const ended = date === today ? now : localInstantAt(date, 12).getTime()
     const entry: StoredTimeEntry = {
       id: randomUUID(),
-      userId: ME_ID,
+      userId: actorNow(),
       startedAt: this.iso(ended - seconds * 1000),
       endedAt: this.iso(ended),
       seconds,
@@ -2378,7 +2380,7 @@ export class LocalTaskDetail {
   private deleteTaskTimeEntry(taskId: string, entryId: string): Ok | Fail {
     const task = this.task(taskId)
     const d = this.detail(task)
-    if (!d.time.some((e) => e.id === entryId && e.userId === ME_ID)) return fail('Time entry not found or not yours')
+    if (!d.time.some((e) => e.id === entryId && e.userId === actorNow())) return fail('Time entry not found or not yours')
     d.time = d.time.filter((e) => e.id !== entryId)
     this.save(task)
     return { ok: true }
@@ -2387,7 +2389,7 @@ export class LocalTaskDetail {
   private setTimeEntryTags(taskId: string, entryId: string, raw: unknown): { ok: true; tags: string[] } | Fail {
     if (!Array.isArray(raw)) return fail('Invalid tags')
     const task = this.task(taskId)
-    const entry = this.detail(task).time.find((e) => e.id === entryId && e.userId === ME_ID)
+    const entry = this.detail(task).time.find((e) => e.id === entryId && e.userId === actorNow())
     if (entry === undefined) return fail('That time entry is not yours')
     const next = normalizeLabels(raw).slice(0, 10)
     const was = entry.tags.join(', ')

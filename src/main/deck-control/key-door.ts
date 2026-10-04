@@ -85,6 +85,7 @@ export function keyCaller(keys: AccessKeys, keyId: string, nameAtArrival: string
     keyName: key.name,
     tiers: tiersFor(key.level),
     askFirst: key.askFirst,
+    tasks: key.tasks,
     ...(key.folders === null ? {} : { folders: key.folders }),
   }
 }

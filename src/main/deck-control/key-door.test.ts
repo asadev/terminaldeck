@@ -185,7 +185,11 @@ describe('resolving a key', () => {
       keyName: 'Cursor',
       askFirst: false,
       folders: ['/work/site'],
+      tasks: false,
     })
+    // The "Your tasks" switch reaches the caller the task tools check.
+    rig.keys.setTasks(id, true)
+    expect(keyCaller(rig.keys, id, 'old name').tasks).toBe(true)
   })
 })
 

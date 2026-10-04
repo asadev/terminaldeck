@@ -105,6 +105,26 @@ describe('matching a key', () => {
 })
 
 describe('changing and taking back a key', () => {
+  it('the task tools are off for every key until the owner turns them on, and a file from before them reads as off', () => {
+    const keys = store()
+    const made = keys.create({ name: 'Claude Desktop', level: 'full' })
+    expect(keys.get(made.view.id)?.tasks).toBe(false)
+    keys.setTasks(made.view.id, 'yes')
+    expect(keys.get(made.view.id)?.tasks).toBe(false)
+    keys.setTasks(made.view.id, true)
+    expect(keys.get(made.view.id)?.tasks).toBe(true)
+    expect(store().get(made.view.id)?.tasks).toBe(true)
+    keys.setTasks(made.view.id, false)
+    expect(store().get(made.view.id)?.tasks).toBe(false)
+    // A key saved before the switch existed carries no `tasks` at all: it stays off.
+    keys.flush()
+    const file = join(dir, 'remote', ACCESS_KEYS_FILE)
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { keys: Array<Record<string, unknown>> }
+    for (const key of raw.keys) delete key.tasks
+    writeFileSync(file, JSON.stringify(raw))
+    expect(store().get(made.view.id)?.tasks).toBe(false)
+  })
+
   it('a revoke means the very next match finds nothing', () => {
     const keys = store()
     const made = keys.create({ name: 'ChatGPT', level: 'full' })

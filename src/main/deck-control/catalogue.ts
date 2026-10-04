@@ -555,6 +555,15 @@ export interface ToolSpec {
    * reach under the same twenty-tool ceiling.
    */
   keyIndex?: string
+  /**
+   * For an AI app on an access key: this tool exists only when that key's switch
+   * of this name is on (`Caller.tasks` for `'tasks'`). Off — the default for every
+   * key, and for every key made before the tool existed — and the tool is not
+   * listed, not described and not callable for it, exactly like a tool on
+   * nobody's grant. The copilot is unaffected. See `keyGrantOk` in
+   * `describe-tool.ts`, the one place it is decided.
+   */
+  keyGrant?: 'tasks'
   inputSchema: JsonSchema
   /**
    * Raise the tier for these particular arguments.

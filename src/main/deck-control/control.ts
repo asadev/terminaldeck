@@ -63,7 +63,7 @@ import {
   keySurface,
   type ConsentBroker,
 } from './consent'
-import { advertisedCatalogue, visibleTo, withDescribe } from './describe-tool'
+import { advertisedCatalogue, keyGrantOk, visibleTo, withDescribe } from './describe-tool'
 import { RUN_ID, RUN_WIRE, runTarget, runToolSpec } from './run-tool'
 import { checkToolArgs } from './schema'
 import {
@@ -715,7 +715,7 @@ export class DeckControl {
     if (spec?.id === RUN_ID) {
       const target = runTarget(args)
       const inner = target.ok ? this.specs.get(target.name) : undefined
-      if (target.ok && inner !== undefined && inner.id !== RUN_ID && visibleTo(options.granted, inner)) {
+      if (target.ok && inner !== undefined && inner.id !== RUN_ID && visibleTo(options.granted, inner) && keyGrantOk(inner, options.caller)) {
         return this.call(inner.id, target.args, options)
       }
       scrubbed = scrubArgs(target.ok ? { name: target.name } : {})

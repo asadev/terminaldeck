@@ -138,12 +138,12 @@ describe('the last-used line', () => {
     const now = 10_000_000
     expect(
       usedLine(
-        { id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: now - 240_000, lastApp: 'claude-ai 0.1.0', lastVia: 'internet', notify: { mode: 'wait', url: null, hasSecret: false } },
+        { id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, tasks: false, createdAt: 0, lastUsedAt: now - 240_000, lastApp: 'claude-ai 0.1.0', lastVia: 'internet', notify: { mode: 'wait', url: null, hasSecret: false } },
         now,
       ),
     ).toBe('Last used 4 minutes ago by claude-ai 0.1.0 over the internet')
     expect(
-      usedLine({ id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, createdAt: 0, lastUsedAt: null, lastApp: null, lastVia: null, notify: { mode: 'wait', url: null, hasSecret: false } }),
+      usedLine({ id: 'a', name: 'A', level: 'look', askFirst: true, folders: null, tasks: false, createdAt: 0, lastUsedAt: null, lastApp: null, lastVia: null, notify: { mode: 'wait', url: null, hasSecret: false } }),
     ).toBe('Not used yet')
     expect(ago(now - 10_000, now)).toBe('just now')
     expect(ago(now - 26 * 3_600_000, now)).toBe('yesterday')

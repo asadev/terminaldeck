@@ -186,7 +186,8 @@ describe.skipIf(!posix)('running it for real', () => {
       onEvent: (event) => events.push(event.type),
     })
     const answer = lastJson(result.stdout) as Record<string, unknown> | null
-    expect(answer).not.toBeNull()
+    // No answer: say what the check did instead — its exit, whether it timed out, its last events and words.
+    expect(answer, `no answer: code ${String(result.code)}, timedOut ${String(result.timedOut)}, events ${events.slice(-8).join(' ')}, stderr ${result.stderr.slice(-1500)}, stdout ${result.stdout.slice(-500)}`).not.toBeNull()
     expect(answer?.unsupported).toBeUndefined()
     // Either the engine's refusal object or a blocked verdict — both are an answer with a reason.
     expect(Boolean(answer?.error) || answer?.blocked === true).toBe(true)

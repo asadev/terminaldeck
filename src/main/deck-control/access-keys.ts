@@ -146,6 +146,13 @@ interface StoredKey {
   askFirst: boolean
   /** Folders sessions may be started in, or null for every folder the app has open. */
   folders: string[] | null
+  /**
+   * May this app see and change your own tasks (the Tasks page), through the task
+   * tools? Off unless the owner turns it on for this key in Settings: a key made
+   * before the tools existed never gains them by an update. Its level, its
+   * asking and its folders still apply to every task call.
+   */
+  tasks: boolean
   hash: string
   createdAt: number
   lastUsedAt: number | null
@@ -180,6 +187,8 @@ export interface AccessKeyView {
   level: AccessLevel
   askFirst: boolean
   folders: string[] | null
+  /** May this app use the task tools? Off unless turned on in Settings. */
+  tasks: boolean
   createdAt: number
   lastUsedAt: number | null
   lastApp: string | null
@@ -273,6 +282,7 @@ function view(key: StoredKey): AccessKeyView {
     level: key.level,
     askFirst: key.askFirst,
     folders: key.folders === null ? null : [...key.folders],
+    tasks: key.tasks === true,
     createdAt: key.createdAt,
     lastUsedAt: key.lastUsedAt,
     lastApp: key.lastApp,
@@ -317,6 +327,8 @@ function asStoredKey(raw: unknown): StoredKey | null {
     // Anything but a literal false is "ask". The default is the narrow value.
     askFirst: r.askFirst !== false,
     folders,
+    // Only a literal true: a key from before the task tools, or a damaged file, has none.
+    tasks: r.tasks === true,
     hash: r.hash,
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     lastUsedAt: typeof r.lastUsedAt === 'number' ? r.lastUsedAt : null,
@@ -388,6 +400,7 @@ export class AccessKeys {
       lastUsedAt: null,
       lastApp: null,
       lastVia: null,
+      tasks: false,
       notify: { mode: 'wait', url: null, secret: null },
     }
     this.state = { ...this.state, keys: [...this.state.keys, stored] }
@@ -460,6 +473,11 @@ export class AccessKeys {
 
   setFolders(id: string, folders: unknown): AccessKeyView {
     return this.change(id, (key) => ({ ...key, folders: cleanFolders(folders) }))
+  }
+
+  /** Let this app use the task tools, or stop it. Only a literal `true` turns it on. */
+  setTasks(id: string, on: unknown): AccessKeyView {
+    return this.change(id, (key) => ({ ...key, tasks: on === true }))
   }
 
   /** Take a key back. Returns whether there was one. Lands on the very next call. */

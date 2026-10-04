@@ -165,6 +165,11 @@ export interface Caller {
    */
   folders?: readonly string[]
   /**
+   * May this key use the task tools (`local-task-tools.ts`)? Read only for
+   * `kind: 'key'`; absent means no. The owner turns it on per key in Settings.
+   */
+  tasks?: boolean
+  /**
    * Which session is calling, for `kind: 'session'`, and the machine it runs on
    * — `''` for this computer, a machine id for a paired device, a server id for
    * a shell on a server. The same pair `browser-binding.ts` keys its map with.

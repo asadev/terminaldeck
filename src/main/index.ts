@@ -5354,6 +5354,11 @@ app.whenReady().then(async () => {
       settled: (id, outcome) => copilotRuns?.settled(id, outcome),
     },
     broadcast: (channel, ...args) => send(channel, ...args),
+    // Hoot's island setting, for the `hoot_island` tool — the same switch as Settings → Hoot.
+    island: () => {
+      const bar = hootMenuBar
+      return bar === null ? null : { get: () => bar.config(), set: (enabled) => bar.configure({ enabled }) }
+    },
     // A task reminder clicked: the app in front, on the Tasks page, the task open.
     showTask: (taskId) => {
       if (mainWindow === null) return

@@ -159,6 +159,7 @@ import { TaskEngine } from '../tasks/task-engine'
 import { LocalTasks } from '../tasks/task-local'
 import { LocalTaskDetail, type ReminderDelivery, type ReminderNotice } from '../tasks/task-detail-local'
 import { TaskClock } from '../tasks/task-clock'
+import { localTaskTools, type IslandControl } from '../tasks/local-task-tools'
 import { taskHttpHandler } from '../tasks/task-http'
 import { TaskOutbox } from '../tasks/task-outbox'
 import { TaskStore } from '../tasks/task-store'
@@ -417,6 +418,8 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
   taskReminders?: TaskReminderDeps | null
   /** Bring the app to the front on the Tasks page with this task open — a reminder clicked. */
   showTask?(taskId: string): void
+  /** Hoot's island setting, for `hoot_island`. Absent or null: there is no island here. */
+  island?(): IslandControl | null
   /** Replaces the real app surface. Tests only; production passes nothing. */
   surface?: DeckSurface
   /** Overrides the copilot log directory. Tests only. */
@@ -770,6 +773,14 @@ export async function registerDeckControlIpc(
       ...notifyTools({ hub: () => notifyHub }),
       // CRM tasks: the CRM's tools on a key, Hoot's on the desk.
       ...taskTools({ api: () => taskApi, engine: () => taskEngine, store: () => taskStore, config: () => taskConfig }),
+      // Your own tasks and the task agents: Hoot's, and an app's whose key has "Your tasks" on.
+      ...localTaskTools({
+        local: () => localTasksRef,
+        detail: () => taskDetail,
+        store: () => taskStore,
+        config: () => taskConfig,
+        island: () => deps.island?.() ?? null,
+      }),
       ...(deps.extraTools ?? []),
     ],
     driving: () => tours.driving(),
@@ -784,6 +795,8 @@ export async function registerDeckControlIpc(
   controlRef = control
   // Declared before the engine: an agent finishing a repeating task reaches its routine through it.
   let taskDetail: LocalTaskDetail | null = null
+  /** Your own tasks, once made below; the task tools read it when called. */
+  let localTasksRef: LocalTasks | null = null
   taskEngine = new TaskEngine({
     config: taskConfig,
     store: taskStore,
@@ -969,13 +982,14 @@ export async function registerDeckControlIpc(
    * page): every change LocalTasks makes is told to the popup's Activity. A
    * deleted task goes to the Trash with its files, which stay until it is restored.
    */
-  const localTasks = new LocalTasks({
+  const localTasks: LocalTasks = new LocalTasks({
     store: taskStore,
     config: taskConfig,
     engine: taskEngine,
     onChange: () => tasksChanged(),
     onUpdated: (task, changes, notes) => taskDetail?.noteUpdate(task, changes, notes),
   })
+  localTasksRef = localTasks
   const taskFiles = deps.taskFiles ?? ELECTRON_TASK_FILES
   taskDetail = new LocalTaskDetail({
     store: taskStore,

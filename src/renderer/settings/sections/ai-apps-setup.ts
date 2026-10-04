@@ -60,6 +60,8 @@ export interface AccessKeyRow {
   level: AccessLevel
   askFirst: boolean
   folders: string[] | null
+  /** May this app use the task tools? Off unless turned on here. */
+  tasks: boolean
   createdAt: number
   lastUsedAt: number | null
   lastApp: string | null
@@ -115,6 +117,8 @@ function toKey(raw: unknown): AccessKeyRow | null {
     // Pessimistic, like every narrowing on this page: anything but a literal
     // false is drawn as "asks first", which is what the main process does too.
     askFirst: r.askFirst !== false,
+    // Only a literal true, as the main process reads it.
+    tasks: r.tasks === true,
     folders: Array.isArray(r.folders) ? r.folders.filter((f): f is string => typeof f === 'string') : null,
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     lastUsedAt: typeof r.lastUsedAt === 'number' ? r.lastUsedAt : null,

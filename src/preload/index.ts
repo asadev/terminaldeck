@@ -1727,6 +1727,8 @@ const api = {
   aiAppsRename: (id: string, name: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:rename', id, name),
   aiAppsLevel: (id: string, level: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:level', id, level),
   aiAppsAskFirst: (id: string, on: boolean): Promise<unknown> => ipcRenderer.invoke('ai-apps:ask-first', id, on),
+  /** Let this app use the task tools, or stop it. */
+  aiAppsTasks: (id: string, on: boolean): Promise<unknown> => ipcRenderer.invoke('ai-apps:tasks', id, on),
   aiAppsFolders: (id: string, folders: string[] | null): Promise<unknown> =>
     ipcRenderer.invoke('ai-apps:folders', id, folders),
   aiAppsRevoke: (id: string): Promise<unknown> => ipcRenderer.invoke('ai-apps:revoke', id),

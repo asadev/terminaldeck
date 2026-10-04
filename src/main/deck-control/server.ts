@@ -101,7 +101,7 @@ import { claimOwnPort, releaseOwnPort } from '../own-ports'
 import { CallerTable, bearerOf, type KeyDoor, type KeyedGrant, type TokenGrant } from './callers'
 import { advertiseTool } from './catalogue'
 import { OUTSIDE_APP_CONSENT_TIMEOUT_MS } from './consent'
-import { advertisedCatalogue, visibleTo } from './describe-tool'
+import { advertisedCatalogue, keyGrantOk, visibleTo } from './describe-tool'
 import type { DeckControl } from './control'
 import { EventsError } from './mcp-events'
 import { serveMcp, type McpEra } from './mcp-serve'
@@ -537,7 +537,7 @@ export function createMcpServer(
    * Both spellings are checked because the wire name and the dotted id are two
    * spellings of one tool and a caller chooses which to send.
    */
-  const allowed = (spec: { id: string; wire: string }): boolean => visibleTo(grant.tools, spec)
+  const allowed = (spec: { id: string; wire: string; keyGrant?: 'tasks' }): boolean => visibleTo(grant.tools, spec) && keyGrantOk(spec, grant.caller())
 
   /*
    * Filtered by the grant, then reduced to what is actually advertised.

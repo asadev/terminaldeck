@@ -25,6 +25,8 @@
 
 import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
+import { localTaskTools } from '../tasks/local-task-tools'
+import { taskTools } from '../tasks/task-tools'
 import { agentsAreaTools, type AgentsAreaDeps } from './agents-area'
 import { assetTools } from './asset-tools'
 import { dataTools, importTools } from './browser-data-tools'
@@ -74,6 +76,9 @@ export function assembledExtraTools(): ToolSpec[] {
     tourTool({} as TourStage),
     whereTool({ window: { read: async () => null }, page: () => null }),
     ...notifyTools({ hub: () => null }),
+    // Tasks: the CRM's and Hoot's CRM task tools, and your own tasks with the task agents.
+    ...taskTools({ api: () => null, engine: () => null, store: () => null, config: () => null }),
+    ...localTaskTools({ local: () => null, detail: () => null, store: () => null, config: () => null, island: () => null }),
     // `src/main/index.ts`, in its order.
     ...sessionWindowTools({
       view: () => ({ windows: [], displays: [] }),
