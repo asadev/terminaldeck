@@ -10,6 +10,23 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Tasks.** A Tasks page in every project for your own tasks — no outside system needed. Give a task to nobody, to yourself, to Hoot or to one of your task agents; an agent that cannot go on hands it back to you, and your reply goes to it. See them as a table grouped into stages, a board of cards you drag between stages, or a week calendar, with filters, a search, Favorites and bulk actions.
+- **The task page.** Click a task for its full page: status, dates, priority, tags, subtasks, checklists, links to other tasks, attachments, your own fields, comments with replies and reactions, time tracking, a history of every change, and a More menu to move, merge, duplicate, convert, archive or delete.
+- **Repeating tasks.** A task can come back when it is finished or on a schedule — daily, weekly, monthly, yearly or your own interval — with an end date or a number of times, a copy per person if you like, and a history of each date. Reminders arrive as a Mac notification at the time you pick; comments can be scheduled for later.
+- **Trash.** A task you delete, merge into another or make a subtask waits in the Trash, files and history included, until you restore it. Nothing empties it by itself.
+- **Task agents and an outside task system.** Set up task agents with their own instructions, preferred tools and skills. An outside task system can hand tasks to Hoot and your agents over MCP and hear back on the same task.
+
+### Fixed
+
+- **AI apps hear about each finished turn once** — no notices at start-up or on a redraw, and one delivery whether they wait or are pushed to.
+- **The island opens reliably on hover**, and hovering its session count lists every session.
+
 ## [0.17.0] — 2026-10-04
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
