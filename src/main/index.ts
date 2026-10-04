@@ -231,6 +231,8 @@ import type { MachineBrowser } from './remote/browser-control'
 import { storeTools } from './deck-control/store-tools'
 import { extensionTools } from './deck-control/extension-tools'
 import { deviceTools } from './deck-control/device-tools'
+import { fixedTools } from './deck-control/fixed-tools'
+import { createStaysFixed, fixedToolDeps, registerStaysFixedIpc } from './staysfixed/ipc'
 import { deviceToolDeps } from './devices/tool-deps'
 import { deviceManager, registerDevicesIpc } from './devices/ipc'
 import { registerBrowserAnnotateIpc } from './browser-annotate'
@@ -864,7 +866,20 @@ const windowAsks = createWindowAsks()
  */
 const machineWindowAsks = createWindowAsks()
 
+/*
+ * Stays Fixed — one instance for the page, the tools and the session launcher,
+ * so one check per project holds whoever asks. See `staysfixed/ipc.ts`.
+ */
+const staysFixed = createStaysFixed(send)
+
 const core = createHostCore({
+  /*
+   * Stays Fixed's MCP server for agent sessions started in a project that is
+   * set up with "Give agents Stays Fixed" on — Claude Code, Codex and Gemini,
+   * each on its own command line or environment, written into none of their
+   * own settings files. `staysfixed/agents.ts` has how each one takes it.
+   */
+  projectTools: { launch: (provider, cwd) => staysFixed.agentLaunch(provider, cwd) },
   storageDir: remoteStorageDir(),
   userData: app.getPath('userData'),
   // The GitHub authenticator host-core builds needs these to answer the panel's
@@ -4210,6 +4225,7 @@ function registerIpc(): void {
    */
   registerBrowserAnnotateIpc(ipcMain)
   registerDevicesIpc(ipcMain)
+  registerStaysFixedIpc(ipcMain, staysFixed)
   // Beside the browser, because that is where a link now lands. The two
   // channels are the explicit way *out* — `link:system` and the context menu —
   // which only exists because in-app became the default.
@@ -5258,6 +5274,11 @@ app.whenReady().then(async () => {
             window: () => mainWindow,
             deckControl: () => deckControl,
           })),
+      /*
+       * A project's Stays Fixed page, as tools: status, set up, check, results,
+       * stop, mark good (always asks the owner), and the agents' switch.
+       */
+      ...fixedTools(fixedToolDeps(staysFixed)),
     ],
     /*
      * The one session starter, shared with the window and with a paired phone —

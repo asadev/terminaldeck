@@ -1945,6 +1945,31 @@ const api = {
     return () => ipcRenderer.off('devices:closed', handler)
   },
 
+  /* ------------------------------------------------------- stays fixed -- */
+
+  /**
+   * A project's Stays Fixed page — `src/main/staysfixed/ipc.ts` has every
+   * channel and what it answers. `staysfixed:changed` carries only the folder;
+   * the page asks for the status again, so there is one shape of the truth.
+   */
+  staysFixedStatus: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('staysfixed:status', projectPath),
+  staysFixedReadiness: (projectPath: string, refresh: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('staysfixed:readiness', projectPath, refresh),
+  staysFixedSetup: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('staysfixed:setup', projectPath),
+  staysFixedCheck: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('staysfixed:check', projectPath),
+  staysFixedStop: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('staysfixed:stop', projectPath),
+  staysFixedResults: (projectPath: string, full: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('staysfixed:results', projectPath, full),
+  staysFixedMarkGood: (projectPath: string, anyway: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('staysfixed:mark-good', projectPath, anyway),
+  staysFixedAgents: (projectPath: string, on: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('staysfixed:agents', projectPath, on),
+  onStaysFixedChanged: (cb: (projectPath: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, projectPath: string) => cb(projectPath)
+    ipcRenderer.on('staysfixed:changed', handler)
+    return () => ipcRenderer.off('staysfixed:changed', handler)
+  },
+
   /* ------------------------------------------------------------ links -- */
 
   /**
