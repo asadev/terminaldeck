@@ -1,6 +1,6 @@
 {
   "name": "terminaldeck",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "Run your coding agents on one deck — Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
@@ -59,7 +59,7 @@
     "node-pty": "^1.1.0",
     "picomatch": "^4.0.3",
     "ssh2": "^1.17.0",
-    "staysfixed": "0.15.0"
+    "staysfixed": "file:vendor/staysfixed-0.15.0-neutral.tgz"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

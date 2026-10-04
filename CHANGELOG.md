@@ -10,6 +10,14 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.2] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Changed
+
+- **Stays Fixed inside the app uses neutral example names too.** The app ships Stays Fixed 0.15.0 from a pinned local copy whose comments and notes use the same neutral placeholders; its code, version and licence are byte-for-byte the published ones. `vendor/STAYSFIXED.md` records where it came from and how to rebuild it.
+
 ## [0.18.1] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
