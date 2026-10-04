@@ -11,9 +11,13 @@
 
   ## One piece
 
-  Grown, the panel is one surface from the top edge of the screen down: the
-  top row — the "Hoot" tab and the session chips — sits on the same ground as
-  the conversation under it, with no band, line or change of shade between.
+  Grown, the panel is one surface from the top edge of the screen down. The
+  conversation is one text area running the full height, top edge to the box;
+  the "Hoot" tab and the session chips float over it on small solid pills of
+  their own, and that is all that is up there — between and around the pills
+  the text passing under them shows. There is no band, fade, line or change of
+  shade where the menu bar ends. Asad, 2026-10-04: *"text should keep going
+  even behind both of the pills, and even if there are more pills."*
 
   ## The app's own colours
 
@@ -183,14 +187,24 @@ html.hoot-panel-page {
   pointer-events: none;
 }
 
-/* The top row: on the same ground as everything under it. */
+/* The pills along the top: floating over the conversation, which scrolls on behind them. */
 .hoot-island-head {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
   display: flex;
-  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
   min-width: 0;
+  pointer-events: none;
+}
+
+.hoot-island-head .hoot-island-tab,
+.hoot-island-head .hoot-island-chips {
+  pointer-events: auto;
 }
 
 .hoot-island-side {
@@ -205,6 +219,7 @@ html.hoot-panel-page {
   justify-content: flex-end;
 }
 
+/* Solid, not see-through: the text passing behind must not show through the words on top. */
 .hoot-island-tab {
   display: inline-flex;
   flex-shrink: 0;
@@ -213,7 +228,8 @@ html.hoot-panel-page {
   height: 22px;
   padding: 0 10px 0 5px;
   border-radius: var(--radius-pill);
-  background: var(--fill-secondary);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 0.5px var(--border);
   font-size: var(--t-footnote);
   font-weight: var(--w-semibold);
 }
@@ -227,7 +243,7 @@ html.hoot-panel-page {
   flex: 0 1 auto;
   gap: 4px;
   min-width: 0;
-  padding-right: 18px;
+  padding: 0 18px 0 1px;
   overflow-x: auto;
   scrollbar-width: none;
   /* Only the mask's opacity counts; its colour does nothing. */
@@ -245,19 +261,35 @@ html.hoot-panel-page {
   gap: 5px;
   max-width: 160px;
   height: 20px;
+  margin: 1px 0;
   padding: 0 8px 0 7px;
   border: none;
   border-radius: var(--radius-pill);
-  background: var(--fill-quaternary);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 0.5px var(--border);
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--t-caption);
+  white-space: nowrap;
   cursor: pointer;
 }
 
+/* The app's hover tint laid over the solid pill, so it stays solid. */
 .hoot-island-chip:hover {
-  background: var(--fill-tertiary);
+  background: linear-gradient(var(--bg-active), var(--bg-active)), var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+/* "No sessions running": in the same place the sessions will be, and nothing to press. */
+.hoot-island-chip[data-quiet] {
+  padding: 0 9px;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.hoot-island-chip[data-quiet]:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
 }
 
 .hoot-island-chip-name {
@@ -292,16 +324,16 @@ html.hoot-panel-page {
   background: var(--text-primary);
 }
 
-/* The conversation: the panel's middle, centred and wide. */
+/* The conversation: the whole panel above the box, from the top edge down, centred and wide. */
 .hoot-island-chat {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
-  padding-top: 8px;
 }
 
 .hoot-island-log {
+  box-sizing: border-box;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -310,6 +342,7 @@ html.hoot-panel-page {
   max-width: 680px;
   min-height: 0;
   margin: 0 auto;
+  padding-bottom: 4px;
   overflow-y: auto;
   -webkit-user-select: text;
   user-select: text;
@@ -341,6 +374,7 @@ html.hoot-panel-page {
 }
 
 .hoot-island-off {
+  box-sizing: border-box;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

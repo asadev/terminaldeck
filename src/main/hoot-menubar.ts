@@ -45,6 +45,14 @@ import type { CopilotChatMessage } from './remote/protocol'
  * MacBook's notch: a wide, short black panel whose top corners curve out into
  * the menu bar.
  *
+ * ## One island, on the main display
+ *
+ * Exactly one, however many displays there are — on the main display, the one
+ * macOS puts the menu bar on first (`screen.getPrimaryDisplay()`), and moved
+ * there again when the displays change. With a menu bar on every display an
+ * island on each was possible, but one is the only way two of them can never
+ * say different things: there is one controller, one snapshot, one window.
+ *
  * ## One window that never moves, one shape inside it
  *
  * The island is a single frameless, transparent window whose top edge is the
@@ -230,6 +238,14 @@ export interface HootMenuBarDeps {
   ): () => void
   /** Every session on this computer; Hoot's own is left out here, by its id. */
   sessions(): Array<{ id: string; title: string; status: string }>
+  /**
+   * Whether this session is Hoot's own — `isCopilotSession`, asked fresh each
+   * time rather than read off a copy of Hoot's state. A copy taken while Hoot
+   * was still starting has no session id yet, and a session counted from it
+   * showed up as a chip that opened "another Hoot" and as one more in the
+   * counts (Asad, 2026-10-04, on his second display).
+   */
+  isHoot?(sessionId: string): boolean
   /** Bring the main window forward with this session in front. */
   showSession(id: string): void
   /** Bring the main window forward, on a page when one is named. */
@@ -304,7 +320,13 @@ const CHANGES_SESSIONS = new Set([
   'session:removed',
   'session:created',
 ])
-const CHANGES_HOOT = new Set(['session:created', 'session:exit', 'session:removed', 'session:switched'])
+/**
+ * The pushes after which Hoot's own state is read again. A status change is one:
+ * Hoot finishing its start changes no session's existence, only statuses — and
+ * a state read while it was starting would otherwise say "starting" until
+ * something else happened.
+ */
+const CHANGES_HOOT = new Set(['session:created', 'session:exit', 'session:removed', 'session:switched', 'session:status'])
 
 /** A burst of status pushes gathered into one update. */
 const SETTLE_MS = 60
@@ -358,9 +380,10 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     return hootCache
   }
 
+  /** Every session but Hoot's own: never a chip, never in the counts, never offered as "another Hoot". */
   function theirs(): Array<{ id: string; title: string; status: string }> {
     const own = hoot().sessionId
-    return deps.sessions().filter((session) => session.id !== own)
+    return deps.sessions().filter((session) => session.id !== own && deps.isHoot?.(session.id) !== true)
   }
 
   function sessionsView(): HootMenuBarSnapshot['sessions'] {

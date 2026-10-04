@@ -154,7 +154,7 @@ import { adoptSharedHistory, registerSharedProjectsIpc } from './shared-projects
 import { registerSignInIpc, signOutAccount } from './profiles-signin'
 import { wireAccountVault, type AccountVaultHandle } from './account-vault/wire'
 import { electronCipher } from './account-vault/electron-cipher'
-import { copilotState, ensureCopilot, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
+import { copilotState, ensureCopilot, isCopilotSession, registerCopilotIpc, type CopilotRuntimeDeps } from './copilot-session'
 import { wireHootMenuBar, type HootMenuBar } from './hoot-menubar'
 import { uiDoCall } from './deck-control/ui-tools'
 import { appendCopilotAction, copilotPaths } from './copilot-home'
@@ -1431,6 +1431,7 @@ function wireMenuBar(): HootMenuBar | null {
     watchChat: (cwd, agentSessionId, onUpdate) => watchRunChat(cwd, onUpdate, agentSessionId),
     sessions: () =>
       ptys.list().map((meta) => ({ id: meta.id, title: meta.title, status: liveStatus.get(meta.id)?.status ?? 'idle' })),
+    isHoot: (id) => isCopilotSession(id),
     showSession: (id) => {
       showMainWindow()
       const window = mainWindow

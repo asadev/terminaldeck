@@ -38,10 +38,16 @@ import './hoot-panel.css'
  * divider, no second material. The numbers are `shared/hoot-island.ts`.
  *
  * At rest it says the state of things at a glance — "4 open · 2 working · 1
- * waiting". Grown, the conversation with Hoot is the panel: its messages in the
- * middle and "Ask Hoot…" across the bottom, with the open sessions as small
- * chips along the top beside the "Hoot" tab, a press away. It wears the app's
- * theme, light or dark, with the app's own surface colours.
+ * waiting". Grown, the conversation with Hoot is the panel: one text surface
+ * from the top edge of the screen down to "Ask Hoot…" across the bottom. The
+ * "Hoot" tab and the sessions — small chips, a press away, or a quiet "No
+ * sessions running" in the same place so he always knows where to look — float
+ * over the top of that text on solid pills of their own; the conversation
+ * starts just under them and scrolls on behind them. Asad, 2026-10-04: *"text
+ * should still go behind those pill buttons, and those pill buttons should be on
+ * the top of that. So it is overall one text and pill buttons are overlaying
+ * over the text."* It wears the app's theme, light or dark, with the app's own
+ * surface colours.
  *
  * ## The window never changes; the shape does, on the browser's own clock
  *
@@ -422,10 +428,15 @@ export function HootPanel() {
   // left, the sessions to its right.
   const beside: CSSProperties | undefined = notch ? { maxWidth: `calc(50% - ${notch.width / 2 + 14}px)` } : undefined
 
-  const chips =
-    open.length === 0 ? null : (
-      <div className="hoot-island-chips" role="list" aria-label="Open sessions" style={notch ? beside : undefined}>
-        {open.map((session) => (
+  // Always there, in the same place: the sessions, or a quiet word that there are none.
+  const chips = (
+    <div className="hoot-island-chips" role="list" aria-label="Open sessions">
+      {open.length === 0 ? (
+        <span className="hoot-island-chip" role="listitem" data-quiet="">
+          No sessions running
+        </span>
+      ) : (
+        open.map((session) => (
           <button
             key={session.id}
             type="button"
@@ -438,9 +449,10 @@ export function HootPanel() {
             <span className="hoot-island-chip-name">{session.label}</span>
             <span className="hoot-island-visually-hidden">, {what(session.status)}</span>
           </button>
-        ))}
-      </div>
-    )
+        ))
+      )}
+    </div>
+  )
 
   return (
     <div
@@ -533,21 +545,14 @@ export function HootPanel() {
             transition: moving.full,
           }}
         >
-          <header className="hoot-island-head" style={{ height: row }}>
-            <span className="hoot-island-side" style={notch ? beside : undefined}>
-              <span className="hoot-island-tab">
-                <HootMark size={14} />
-                {name}
-                {waiting > 0 ? <span className="hoot-island-dot" aria-label={`${waiting} waiting on you`} /> : null}
-              </span>
-              {notch ? null : chips}
-            </span>
-            {notch ? <span className="hoot-island-side" data-side="right">{chips}</span> : null}
-          </header>
-
+          {/*
+            The conversation: one text surface from the very top edge down to
+            the box. It starts just under the pills, so nothing is hidden at
+            rest, and scrolls on up behind them.
+          */}
           <div className="hoot-island-chat">
             {running ? (
-              <div className="hoot-island-log" ref={log}>
+              <div className="hoot-island-log" ref={log} style={{ paddingTop: row + 8 }}>
                 {snap.messages.length === 0 ? (
                   <p className="hoot-island-quiet">Ask {name} anything about your sessions.</p>
                 ) : (
@@ -559,7 +564,7 @@ export function HootPanel() {
                 )}
               </div>
             ) : (
-              <div className="hoot-island-off">
+              <div className="hoot-island-off" style={{ paddingTop: row }}>
                 {status === 'starting' ? (
                   <p className="hoot-island-quiet">{name} is starting…</p>
                 ) : (
@@ -598,6 +603,26 @@ export function HootPanel() {
               />
             </div>
           ) : null}
+
+          {/*
+            The pills, floating over the text. Nothing else is up here — no
+            band, no fade: between and around the pills the passing text shows.
+          */}
+          <header className="hoot-island-head" style={{ height: row }}>
+            <span className="hoot-island-side" style={notch ? beside : undefined}>
+              <span className="hoot-island-tab">
+                <HootMark size={14} />
+                {name}
+                {waiting > 0 ? <span className="hoot-island-dot" aria-label={`${waiting} waiting on you`} /> : null}
+              </span>
+              {notch ? null : chips}
+            </span>
+            {notch ? (
+              <span className="hoot-island-side" data-side="right" style={beside}>
+                {chips}
+              </span>
+            ) : null}
+          </header>
 
           {(['left', 'right'] as const).map((side) => (
             <span

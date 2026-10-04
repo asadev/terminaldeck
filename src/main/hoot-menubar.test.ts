@@ -301,6 +301,70 @@ describe('where the island is — one window that never moves', () => {
   })
 })
 
+describe('one island, one source of truth', () => {
+  it('is one window on the main display however many displays there are, moved there when they change', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.apply()
+    // A second and a third display arrive; the island stays one window, on the main one.
+    r.place.display = { x: 0, y: 0, width: 2560, height: 1440 }
+    r.bar.displaysChanged()
+    r.bar.displaysChanged()
+    expect(r.islands).toHaveLength(1)
+    expect(r.catchers).toHaveLength(1)
+    expect(r.islands[0].bounds.x + r.islands[0].bounds.width / 2).toBe(1280)
+  })
+
+  it('says the same thing in its counts as in its list, from the one set of sessions', () => {
+    const r = rig()
+    r.bar.apply()
+    r.sessions[2].status = 'input'
+    const snap = r.bar.snapshot()
+    const open = snap.sessions.filter((s) => s.status !== 'exited').length
+    expect(snap.label.text).toBe(`${open} open · 1 working · 1 waiting`)
+    expect(r.bar.isShowing().label).toBe(snap.label.text)
+  })
+})
+
+describe('Hoot’s own session', () => {
+  it('is never a chip, never in the counts, never opened as another Hoot', () => {
+    const r = rig()
+    r.bar.apply()
+    expect(r.bar.snapshot().sessions.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(r.bar.snapshot().label.text).toBe('2 open · 1 working')
+    expect(r.bar.showSession('hoot-1')).toEqual({ ok: false })
+    expect(r.shown).toEqual([])
+  })
+
+  it('is left out even while Hoot is still starting and its state has no session id yet', () => {
+    const r = rig({ hoot: 'stopped' })
+    // Hoot's session exists, but the state read says "not running, no id" — the
+    // moment between the session starting and Hoot taking it as its own.
+    const bar = createHootMenuBar({ ...r.deps, isHoot: (id) => id === 'hoot-1' })
+    bar.apply()
+    expect(bar.snapshot().sessions.map((s) => s.id)).toEqual(['s1', 's2'])
+    expect(bar.snapshot().label.text).toBe('2 open · 1 working')
+    expect(bar.showSession('hoot-1')).toEqual({ ok: false })
+  })
+
+  it('reads Hoot’s state again when a session’s status changes, so "starting" does not outlive the start', () => {
+    let reads = 0
+    const r = rig()
+    const bar = createHootMenuBar({
+      ...r.deps,
+      hoot: () => {
+        reads += 1
+        return { status: 'running', problem: null, sessionId: 'hoot-1', cwd: '/copilot', agentSessionId: 'agent-1' }
+      },
+    })
+    bar.apply()
+    const before = reads
+    bar.forward('session:status', ['hoot-1', 'working'])
+    r.time.advance(100)
+    expect(reads).toBeGreaterThan(before)
+  })
+})
+
 describe('the catcher over the resting pill', () => {
   it('sits exactly over the pill the page says it is drawing, centred at the top', () => {
     const r = rig()
