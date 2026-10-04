@@ -10,6 +10,17 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.3] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Your tasks over MCP.** Hoot — and an AI app you allow — can read and work your own tasks: create, edit, assign, comment, archive, move to the Trash and restore; subtasks, checklists, links, custom fields, attached files and tracked time; repeats, reminders and scheduled comments; and the task agents. Six tools behind `tools_describe`, each a short list of verbs, so the tool list barely grows. `docs/mcp-tasks.md` lists every verb, its tier and its limits.
+- **"Your tasks" per AI app.** Settings → Connect an AI app has a new switch for each key. It is off for every key, including the ones you already have: no app gains your tasks by updating. A key limited to folders sees only tasks in them. Big changes are asked first wherever they already are.
+- **Changes say who made them.** A change Hoot or an app makes is written in the task's history as theirs, never as yours, and its tracked time never stops yours.
+- **Hoot can show or hide its island** when you ask it to.
+
 ## [0.18.2] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
