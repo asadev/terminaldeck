@@ -141,6 +141,7 @@ export type PanelId =
   | 'artifacts'
   | 'git'
   | 'simulators'
+  | 'tasks'
   | 'staysfixed'
   | 'github'
   | 'readiness'
@@ -336,6 +337,19 @@ export const PANELS: PanelSpec[] = [
    * and `reachable.test.ts` need it present.
    */
   ...(detectPlatform() === 'windows' ? [] : [SIMULATORS_PANEL]),
+  {
+    /*
+     * The work a CRM gives Hoot and the task agents, and what is happening to
+     * each piece — a page beside Simulators, which is where the owner looked
+     * for it. Setting agents and connections up stays in Settings → Tasks.
+     * Not per-folder: a task names its own project. No `command`, like
+     * Simulators.
+     */
+    id: 'tasks',
+    label: 'Tasks',
+    group: 'project',
+    icon: 'M9.5 6.5h10M9.5 12h10M9.5 17.5h10M4.5 6.5l1 1 2-2M4.5 12l1 1 2-2M4.5 17.5l1 1 2-2',
+  },
   {
     /*
      * Last in the Project run: Overview, Files, Artifacts and Source control are

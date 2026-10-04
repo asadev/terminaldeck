@@ -9,6 +9,7 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
 import { StorePage } from '../store/StorePage'
 import { DevicesPage } from '../devices/DevicesPage'
+import { TasksPage } from '../tasks/TasksPage'
 import { StaysFixedPage } from '../staysfixed/StaysFixedPage'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
@@ -49,6 +50,8 @@ interface Props {
    * than two implementations and two doors. See `store/StorePage.tsx`.
    */
   onShowPanel(id: PanelId): void
+  /** Open Settings at one section. The Tasks page uses it for agents and connections. */
+  onOpenSettings?(section: string): void
   /*
    * There was a `showInsights` and an `onAlertAction` here, and both left with
    * the Alerts page: *"notifications should be a pop-up just like settings,
@@ -315,6 +318,7 @@ export function PanelView({
   onOpenFile,
   focus,
   onShowPanel,
+  onOpenSettings,
   dashboard,
 }: Props) {
   const spec = panelSpec(panel)
@@ -360,6 +364,12 @@ export function PanelView({
        */
       case 'simulators':
         return <DevicesPage />
+      /*
+       * Above the project gate too: a CRM task names its own project, and the
+       * list is every task, whichever folder is open.
+       */
+      case 'tasks':
+        return <TasksPage openTask={focus?.startsWith('task:') ? focus.slice('task:'.length) : null} onOpenSettings={onOpenSettings ? () => onOpenSettings('tasks') : undefined} />
       /*
        * Above the project gate, deliberately — like `hooks` and `mcp`.
        *

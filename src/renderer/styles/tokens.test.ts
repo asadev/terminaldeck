@@ -1324,7 +1324,17 @@ describe('the app type scale reaches the terminal it sits around', () => {
       ['src/renderer/settings/SettingsWindow.css:inherit', 'a control taking the row it is on'],
     ])
     const stray: string[] = []
+    /*
+     * One generated file is outside the ladder on purpose. The task popup is
+     * the reference CRM's own task page, and the owner asked for it exact —
+     * only the colours are this app's — so `crm-task.css` keeps the CRM's type
+     * sizes, built by `scripts/build-crm-task-css.mjs` and scoped under the
+     * popup's root so none of them reaches the rest of the app. Exempted by
+     * name, so every other sheet is held to the rule as before.
+     */
+    const GENERATED_ELSEWHERE = new Set(['src/renderer/crm-task/crm-task.css'])
     for (const file of cssFiles()) {
+      if (GENERATED_ELSEWHERE.has(file)) continue
       for (const decl of stripComments(read(file)).matchAll(/font-size:\s*([^;]+);/g)) {
         const value = decl[1].trim()
         if (/^var\(--t-[a-z0-9]+\)$/.test(value)) continue

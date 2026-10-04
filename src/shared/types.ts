@@ -464,6 +464,8 @@ export interface DeckApi {
    * on. Applied here so one session never shows two names on two of his screens.
    */
   onSessionRenamed(cb: (id: string, title: string) => void): () => void
+  /** A task to open on the Tasks page — a reminder for it was clicked. Absent in builds without tasks. */
+  onTasksOpen?(cb: (taskId: string) => void): () => void
   /**
    * A session this window did not start — today, one started from a phone.
    *

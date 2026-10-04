@@ -3767,6 +3767,8 @@ function Workspace() {
     },
     [selectPanel],
   )
+  // A task reminder clicked: the Tasks page, that task open.
+  useEffect(() => window.deck.onTasksOpen?.((taskId) => showPanel('tasks', `task:${taskId}@${Date.now()}`)), [showPanel])
 
   /**
    * Open the copilot's window — the pinned row, the palette row, and the "why
@@ -5005,6 +5007,8 @@ function Workspace() {
           /* How a page sends the window to another one. The MCP page's Store
              control uses it, so there is one store and several doors into it. */
           onShowPanel={showPanel}
+          /* The Tasks page's door to Settings → Tasks, where agents and CRM connections are set up. */
+          onOpenSettings={(section) => openSettings(section as SectionId)}
           /* There was a `copilot` object here. It went with the copilot's page:
              the copilot is a window now, rendered beside the other sessions'
              terminals further down this file, because that is where a session is

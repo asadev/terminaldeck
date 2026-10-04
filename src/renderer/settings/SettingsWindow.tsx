@@ -45,6 +45,7 @@ import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
 import { CopilotSection } from './sections/CopilotSection'
 import { AiAppsSection } from './sections/AiAppsSection'
+import { TasksSection } from './sections/TasksSection'
 import { HelpSection } from './sections/HelpSection'
 import { ShortcutsPopover } from './ShortcutsPopover'
 import { RailFooter } from './RailFooter'
@@ -133,6 +134,13 @@ const ScrapingSectionView: ComponentType<SectionProps> = () => <ScrapingSection 
  */
 const AiAppsSectionView: ComponentType<SectionProps> = () => <AiAppsSection />
 
+/**
+ * The same wrapping, for the same reason: agents and CRM connections live in
+ * their own store, read off `window.deck`. `goTo` is passed so the pane can
+ * send someone with no access key to the section that makes one.
+ */
+const TasksSectionView: ComponentType<SectionProps> = ({ goTo }) => <TasksSection goTo={goTo} />
+
 const CopilotSectionView: ComponentType<SectionProps> = ({ setUpCopilot }) => (
   // One prop, and it is a capability of the *window* rather than a setting —
   // see `SectionProps.setUpCopilot` for why the setup flow cannot open from
@@ -173,6 +181,9 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   // Resolves its own bridge, like Copilot and Power, and holds none of this
   // window's values: keys live in their own store. See `AiAppsSection.tsx`.
   'ai-apps': AiAppsSectionView,
+  // CRM tasks: the agents and the CRMs allowed to send them work. Resolves its
+  // own bridge, like the entry above. See `TasksSection.tsx`.
+  tasks: TasksSectionView,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings
   // bridge — and casting RemoteSection to this type handed it that object as
   // its `bridge` prop, so it decided remote access was "not wired into this

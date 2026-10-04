@@ -489,6 +489,24 @@ export const SECTIONS = [
     blurb: 'Let AI apps on this Mac or on the internet use your sessions, with a key you can take back.',
   },
   /*
+   * Work a CRM sends here, and who does it. The CRM is the task master: it
+   * sends tasks through an access key made in the entry above, and Terminal
+   * Deck runs them on the agents set up here and posts status back.
+   *
+   * Right after Connect an AI app because a CRM connection is built on one of
+   * its keys. Not folded into it, on this rail's rule that a section is a
+   * subject: that pane is keys and setup for outside apps, and this is agents,
+   * their limits, and which CRM users may hand them work. Like it, it stores
+   * nothing in the settings file — agents and connections live in
+   * `task-config.json`, fenced from settings writes because a connection
+   * decides who can run agents on this Mac.
+   */
+  {
+    id: 'tasks',
+    label: 'Tasks',
+    blurb: 'The agents that take work from your CRM, and the CRMs allowed to send it.',
+  },
+  /*
    * There is no GitHub section here, and that is a decision rather than a gap.
    *
    * One existed for exactly one row — "Use classic GitHub sign-in", the switch

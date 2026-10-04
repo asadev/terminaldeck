@@ -466,6 +466,9 @@
    eye and typed elsewhere if the clipboard is not to hand, so a key containing
    `->` or `==` must show those characters, not one glyph standing for two. */
 .ai-secret-value,
+.tasks-mono,
+.tasks-lines,
+.tasks-secret-value,
 /* Stays Fixed. A value before and after a change is the program's own output,
    compared character by character — `->` drawn as one arrow would hide the very
    difference the page exists to show. The fix line is a command somebody may

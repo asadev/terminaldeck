@@ -7,8 +7,18 @@ vi.mock('electron', () => ({
   screen: {},
 }))
 
-const { createHootMenuBar, MENUBAR_KEY, mergeMessages, readIslandSize, readMenuBarEnabled, registerHootMenuBarIpc, SIZE_KEYS } =
-  await import('./hoot-menubar')
+const {
+  CATCHER_PAGE,
+  CATCHER_REPEAT_MS,
+  createHootMenuBar,
+  FOCUS_GRACE_MS,
+  MENUBAR_KEY,
+  mergeMessages,
+  readIslandSize,
+  readMenuBarEnabled,
+  registerHootMenuBarIpc,
+  SIZE_KEYS,
+} = await import('./hoot-menubar')
 type Deps = Parameters<typeof createHootMenuBar>[0]
 
 describe('the setting', () => {
@@ -43,6 +53,8 @@ class FakeIsland {
   visible = false
   focused = 0
   blurred = 0
+  /** Whether it is the key window — macOS makes a pressed panel key by itself. */
+  key = false
   /** Every setIgnoreMouseEvents, in order. */
   ignoring: boolean[] = []
   menus: unknown[] = []
@@ -57,12 +69,15 @@ class FakeIsland {
   showInactive = (): void => {
     this.visible = true
   }
+  isFocused = (): boolean => this.key
   focus = (): void => {
     this.focused += 1
+    this.key = true
     this.emit('focus')
   }
   blur = (): void => {
     this.blurred += 1
+    this.key = false
     this.emit('blur')
   }
   destroy = (): void => {
@@ -78,6 +93,9 @@ class FakeIsland {
     this.listeners.set(event, listener)
   }
   emit(event: string): void {
+    // A window that loses or gains the keyboard is, from then on, not or the key window.
+    if (event === 'blur') this.key = false
+    if (event === 'focus') this.key = true
     this.listeners.get(event)?.()
   }
   /** The last snapshot pushed to the page. */
@@ -771,3 +789,99 @@ describe('the channels', () => {
     expect(r.bar.isShowing().expanded).toBe(false)
   })
 })
+
+/* ------------------------------------------- it opens every time it is asked -- */
+
+/**
+ * The catcher's own page script, run against a fake page and clock, with what
+ * it says wired straight into the controller — the hand-over the real island
+ * makes, minus the windows.
+ */
+function catcherPage(say: (kind: 'enter' | 'leave' | 'press') => void) {
+  const script = /<script>([\s\S]*)<\/script>/.exec(CATCHER_PAGE)?.[1] ?? ''
+  const on: Record<string, (event?: { button?: number; preventDefault?: () => void }) => void> = {}
+  let now = 1_000_000
+  const document = {
+    addEventListener: (type: string, listener: () => void) => void (on[type] = listener),
+    documentElement: { addEventListener: (type: string, listener: () => void) => void (on[`root:${type}`] = listener) },
+  }
+  const window = { deck: { hootPanelCatch: say, hootPanelMenu: () => undefined } }
+  new Function('window', 'document', 'Date', script)(window, document, { now: () => now })
+  return {
+    move: () => on.mousemove?.(),
+    leave: () => on['root:mouseleave']?.(),
+    press: () => on.mousedown?.({ button: 0 }),
+    wait: (ms: number) => void (now += ms),
+  }
+}
+
+describe('it opens every time — on hover and on a click', () => {
+  it('the catcher says the pointer arrived again after a pause, though it never heard it leave', () => {
+    const said: string[] = []
+    const page = catcherPage((kind) => said.push(kind))
+    page.move()
+    page.move()
+    expect(said).toEqual(['enter'])
+    // The island took the pointer and the catcher was told to ignore it: no leave ever came.
+    page.wait(CATCHER_REPEAT_MS)
+    page.move()
+    expect(said).toEqual(['enter', 'enter'])
+    page.leave()
+    page.press()
+    expect(said).toEqual(['enter', 'enter', 'leave', 'press'])
+  })
+
+  it('grows on the second hover too, after the island took the pointer and gave it back', () => {
+    const r = rig()
+    r.bar.apply()
+    const page = catcherPage((kind) => r.bar.catch(77, kind))
+    page.move()
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(true)
+    // The pointer leaves across the island's own page, never the catcher's.
+    r.bar.pointer(42, false)
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(false)
+    expect(r.catchers[0].ignoring.at(-1)).toBe(false)
+    // And comes back: the catcher, listening again, wakes it.
+    page.wait(1_000)
+    page.move()
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(true)
+  })
+
+  it('a click whose keyboard is taken straight back stays open like a hover, and settles when the pointer leaves', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'press')
+    expect(r.bar.isShowing().expanded).toBe(true)
+    // The app came forward and its own window took the keyboard, in the same breath.
+    r.islands[0].key = false
+    r.islands[0].emit('blur')
+    expect(r.bar.isShowing().expanded).toBe(true)
+    r.time.advance(5_000)
+    expect(r.bar.isShowing().expanded).toBe(true)
+    r.bar.pointer(42, false)
+    r.time.advance(200)
+    expect(r.bar.isShowing().expanded).toBe(false)
+  })
+
+  it('a click elsewhere once the grace has passed still settles it at once', () => {
+    const r = rig()
+    r.bar.apply()
+    r.bar.catch(77, 'press')
+    r.time.advance(FOCUS_GRACE_MS)
+    r.islands[0].emit('blur')
+    expect(r.bar.isShowing().expanded).toBe(false)
+  })
+
+  it('does not ask for the keyboard again when the press already made the island the key window', () => {
+    const r = rig()
+    r.bar.apply()
+    r.islands[0].key = true
+    r.bar.focus(42)
+    expect(r.bar.isShowing().expanded).toBe(true)
+    expect(r.islands[0].focused).toBe(0)
+  })
+})
+

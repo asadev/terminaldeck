@@ -1,27 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  barRow,
-  clampExpanded,
-  defaultExpanded,
-  EASE_CLOSE,
-  EASE_OPEN,
-  edgeShape,
-  EXPANDED,
-  expandedLimits,
-  expandedShape,
-  islandCentre,
-  islandPath,
-  islandWindow,
-  mixShape,
-  placeIsland,
-  REST,
-  restBox,
-  restShape,
-  SHADOW,
-  TIMING,
-  transition,
-  type IslandGeometry,
-} from './hoot-island'
+import { barRow, clampExpanded, defaultExpanded, EASE_CLOSE, EASE_OPEN, edgeShape, EXPANDED, expandedLimits, expandedShape, islandCentre, islandPath, islandWindow, mixShape, placeIsland, REST, restBox, restShape, SHADOW, TIMING, transition, type IslandGeometry, onRestBox } from './hoot-island'
 
 /** His Mac mini: a 1920-wide display, a 30-point menu bar, no notch. */
 const MINI: IslandGeometry = { barHeight: 30, displayWidth: 1920, notch: null }
@@ -211,3 +189,20 @@ describe('the morph', () => {
     expect(edgeShape(a)).toEqual({ width: 102, height: 31, radius: 13, shoulder: 6 })
   })
 })
+
+describe('where "on the pill" is at rest', () => {
+  it('is the catcher’s own box — shoulders and rounded corners included — centred at the top of the window', () => {
+    const box = { width: 120, height: 30 }
+    const width = 600
+    // Centre, and each corner of the box (where the drawn shape curves away).
+    expect(onRestBox(300, 15, width, box)).toBe(true)
+    expect(onRestBox(240, 0, width, box)).toBe(true)
+    expect(onRestBox(359.5, 29.5, width, box)).toBe(true)
+    // Just outside on every side.
+    expect(onRestBox(239.5, 10, width, box)).toBe(false)
+    expect(onRestBox(360, 10, width, box)).toBe(false)
+    expect(onRestBox(300, 30, width, box)).toBe(false)
+    expect(onRestBox(300, -1, width, box)).toBe(false)
+  })
+})
+

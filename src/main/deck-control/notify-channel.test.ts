@@ -34,6 +34,7 @@ let dir = ''
 let rig: KeyRig
 let hub: NotificationHub
 let detector: NotifyDetector
+let said = 0
 let server: StandaloneDeckControlServer | null = null
 let child: ChildProcessWithoutNullStreams | null = null
 
@@ -50,8 +51,10 @@ beforeEach(() => {
   detector = new NotifyDetector({
     surface: rig.app.surface,
     starterOf: (sessionId) => rig.control.starterOf(sessionId),
-    enqueue: (keyId, event) => hub.enqueue(keyId, event),
+    enqueue: (keyId, event, turn) => hub.enqueue(keyId, event, turn),
     clock: REAL_CLOCK,
+    // Each turn ends on something new, as a real transcript would.
+    answer: async () => ({ at: Date.now(), text: `answer ${(said += 1)}`, truncated: false }),
   })
   detectorRef = detector
 })

@@ -23,6 +23,20 @@
  * subscriptions. One app never receives another app's events, exactly as one
  * key's `notifications_list` never shows another key's notifications.
  *
+ * **Within one key, the session's own subscription wins.** Every ChatGPT chat
+ * on one connector shares its key, and each chat subscribes with its own
+ * callback. When any of them subscribed to the event's session by `sessionId`,
+ * only those are told; the key's catch-all subscriptions hear only about
+ * sessions no chat claimed. Otherwise a chat that started a session wakes every
+ * other chat on the same connector each time it finishes. Nothing this server
+ * reads names the chat, so two catch-all chats on one key still both hear.
+ *
+ * **One delivery per event, whichever way.** The queue asks {@link McpEvents.owes}
+ * before it hands an event to `notifications_wait` or a webhook, and this file
+ * asks the queue (`owed`) before every post: an event taken by a waiter is never
+ * also pushed, and one being pushed is never also handed to a waiter. When the
+ * push gives up, the queue still has it.
+ *
  * ## The rules this follows
  *
  * From OpenAI's MCP Events guide and the draft it implements:
@@ -145,6 +159,8 @@ export interface McpEventsOptions {
   post?: CallbackPost
   /** An event reached its subscriber: the queue records it as delivered. */
   onDelivered?(keyId: string, eventId: string): void
+  /** Does the queue still owe this event, not yet delivered some other way? Asked before every post. */
+  owed?(keyId: string, eventId: string): boolean
   /** Anything a Settings page would redraw for. */
   onChange?(): void
 }
@@ -231,7 +247,9 @@ const INPUT_SCHEMA = {
   properties: {
     sessionId: {
       type: 'string',
-      description: 'Only this session. Leave it out for every session this app started or sent a message to.',
+      description:
+        'Only this session: pass the one this chat started, so other chats on the same connection are not woken for it. ' +
+        'Leave it out for every session this app started or sent a message to.',
     },
   },
   additionalProperties: false,
@@ -458,11 +476,17 @@ export class McpEvents {
     if (this.stopped) return 0
     this.expire()
     const name = EVENT_NAMES[event.type]
+    const wanting = [...this.subs.values()].filter(
+      (sub) =>
+        sub.keyId === keyId &&
+        sub.name === name &&
+        (sub.sessionId === null || sub.sessionId === event.sessionId) &&
+        this.allowed(sub),
+    )
+    // The chat that subscribed to this session, when one did; the catch-alls otherwise.
+    const claimed = wanting.filter((sub) => sub.sessionId !== null)
     let offered = 0
-    for (const sub of this.subs.values()) {
-      if (sub.keyId !== keyId || sub.name !== name) continue
-      if (sub.sessionId !== null && sub.sessionId !== event.sessionId) continue
-      if (!this.allowed(sub)) continue
+    for (const sub of claimed.length > 0 ? claimed : wanting) {
       if (sub.seen.includes(event.id)) continue
       if (this.outbox.some((item) => item.subscriptionId === sub.id && item.eventId === event.id)) continue
       const body = JSON.stringify({
@@ -540,6 +564,11 @@ export class McpEvents {
     return this.outbox.length
   }
 
+  /** Is a push of this event still being tried? The queue holds it back from every other way out meanwhile. */
+  owes(keyId: string, eventId: string): boolean {
+    return this.outbox.some((item) => item.eventId === eventId && this.subs.get(item.subscriptionId)?.keyId === keyId)
+  }
+
   /* ------------------------------------------------------------ verify -- */
 
   private async verify(id: string, url: string, secret: string): Promise<void> {
@@ -586,6 +615,11 @@ export class McpEvents {
       if (item.nextAt === null || item.nextAt > now || this.posting.has(item)) continue
       const sub = this.subs.get(item.subscriptionId)
       if (!sub || sub.refreshBefore <= now || !this.allowed(sub)) {
+        this.discard(item)
+        continue
+      }
+      // Already taken by a waiter or a webhook, or acknowledged: told once is enough.
+      if (this.options.owed !== undefined && !this.options.owed(sub.keyId, item.eventId)) {
         this.discard(item)
         continue
       }

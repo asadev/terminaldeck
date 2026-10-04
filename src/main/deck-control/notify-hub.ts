@@ -40,7 +40,9 @@
  * long-poll. A plain server-to-client notification on the HTTP connection is
  * not sent: this server is stateless, and no client would show it to a model.
  *
- * Whichever delivers first wins and the rest stop trying. Every notification
+ * Whichever delivers first wins and the rest stop trying. While an MCP Events
+ * push of a notification is still being tried (`pushing`), it is not handed to
+ * a waiter or posted to a webhook as well; once the push gives up, it is. Every notification
  * stays fetchable by `list` until its key **acknowledges it by id**; acking is
  * idempotent, so an app that acks twice, or acks one it got twice, sees one.
  *
@@ -65,6 +67,16 @@
  * most {@link MAX_PER_KEY} per key and none older than {@link MAX_AGE_MS}; the
  * oldest go first. A restart of the app loses nothing outstanding: pending ones
  * pick their schedule up where it was.
+ *
+ * ## One turn, one notification
+ *
+ * Each id is new per notification, so the id alone cannot stop the same turn
+ * being told twice. The detector therefore hands over what the turn *was* — the
+ * answer it ended on — and the queue keeps every turn it has taken in the same
+ * file, for as long as it keeps notifications. A second notification for a
+ * turn already taken is refused, whoever it would go to, and whether or not
+ * the first was acknowledged: on 2026-10-04 one answer reached the same app
+ * five times over six hours, each time the screen redrew.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -91,6 +103,9 @@ export const MAX_PER_WAIT = 20
 
 /** How long a webhook post may take before it counts as a failed attempt. */
 export const WEBHOOK_TIMEOUT_MS = 10_000
+
+/** Most turns remembered as told, so one answer is never told twice. The oldest go first. */
+export const MAX_TURNS_KEPT = 1_000
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -201,6 +216,8 @@ export interface NotificationHubOptions {
   post?: WebhookPost
   /** Told after anything a Settings page would redraw for. */
   onChange?(): void
+  /** Is an MCP Events push of this notification still being tried? `McpEvents.owes`. */
+  pushing?(keyId: string, id: string): boolean
 }
 
 interface Waiter {
@@ -214,6 +231,8 @@ interface Waiter {
 export class NotificationHub {
   private items: Stored[] = []
   private last = new Map<string, Omit<LastDelivery, 'outstanding'>>()
+  /** Turns already told, by what the detector says the turn was, with when. Oldest first. */
+  private turns = new Map<string, number>()
   private readonly waiters = new Set<Waiter>()
   private readonly clock: HubClock
   private readonly post: WebhookPost
@@ -240,11 +259,18 @@ export class NotificationHub {
    * Nothing is queued for a key that is gone or set to off: off means *do not
    * keep these for me*, and a queue filling up for an app that said so would be
    * a pile of other people's answers on disk for nobody.
+   *
+   * `turn` names the turn this is about (see "One turn, one notification"); a
+   * turn already taken is refused.
    */
-  enqueue(keyId: string, event: NotificationEvent): boolean {
+  enqueue(keyId: string, event: NotificationEvent, turn?: string): boolean {
     if (this.stopped) return false
     const settings = this.options.settings(keyId)
     if (settings === null || settings.mode === 'off') return false
+    if (turn !== undefined) {
+      if (this.turns.has(turn)) return false
+      this.turns.set(turn, this.clock.now())
+    }
     this.items.push({
       event,
       keyId,
@@ -379,6 +405,11 @@ export class NotificationHub {
     return true
   }
 
+  /** Is this notification still the key's and not yet delivered? What a push asks before each post. */
+  owes(keyId: string, id: string): boolean {
+    return this.items.some((item) => item.keyId === keyId && item.event.id === id && item.state !== 'delivered')
+  }
+
   /** How the key's last notification went, for Settings. Null when it never had one. */
   lastDelivery(keyId: string): LastDelivery | null {
     const last = this.last.get(keyId)
@@ -432,6 +463,10 @@ export class NotificationHub {
       if (this.posting.has(item.event.id)) continue
       const settings = this.options.settings(item.keyId)
       if (settings === null || settings.mode === 'off') continue
+      if (this.isPushing(item)) {
+        this.missed(item, 'its push to the app is still being tried')
+        continue
+      }
       // A parked waiter takes it first, whatever the mode: the app is listening
       // right now, and that is the fastest delivery there is.
       if (this.offer(item)) continue
@@ -513,12 +548,16 @@ export class NotificationHub {
     const out: NotificationEvent[] = []
     for (const item of this.items) {
       if (out.length >= max) break
-      if (item.keyId !== keyId || item.state === 'delivered') continue
+      if (item.keyId !== keyId || item.state === 'delivered' || this.isPushing(item)) continue
       this.delivered(item, via)
       out.push(item.event)
     }
     if (out.length > 0) this.arm()
     return out
+  }
+
+  private isPushing(item: Stored): boolean {
+    return this.options.pushing?.(item.keyId, item.event.id) === true
   }
 
   /** The one timer, at the earliest attempt due — or none when nothing is. */
@@ -563,6 +602,10 @@ export class NotificationHub {
       for (const item of run.slice(0, run.length - MAX_PER_KEY)) drop.add(item)
     }
     this.items = kept.filter((item) => !drop.has(item))
+    for (const [turn, at] of this.turns) {
+      if (at >= cutoff && this.turns.size <= MAX_TURNS_KEPT) break
+      this.turns.delete(turn)
+    }
   }
 
   private note(keyId: string, last: Omit<LastDelivery, 'outstanding'>): void {
@@ -594,7 +637,7 @@ export class NotificationHub {
     const file = this.file()
     if (file === null || this.options.dir === null) return
     try {
-      const state = { v: 1, items: this.items, last: Object.fromEntries(this.last) }
+      const state = { v: 1, items: this.items, last: Object.fromEntries(this.last), turns: [...this.turns] }
       writeSecretFile(this.options.dir, file, `${JSON.stringify(state)}\n`)
     } catch (error) {
       console.error('[notify] could not save the notification queue:', error)
@@ -605,7 +648,7 @@ export class NotificationHub {
     const file = this.file()
     if (file === null || !existsSync(file)) return
     try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as { v?: unknown; items?: unknown; last?: unknown }
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as { v?: unknown; items?: unknown; last?: unknown; turns?: unknown }
       if (raw.v !== 1 || !Array.isArray(raw.items)) return
       this.items = raw.items.filter(isStored).map((item) =>
         // A post that was in the air when the app stopped is retried, not lost.
@@ -614,6 +657,14 @@ export class NotificationHub {
       if (typeof raw.last === 'object' && raw.last !== null) {
         for (const [keyId, value] of Object.entries(raw.last as Record<string, unknown>)) {
           if (isLast(value)) this.last.set(keyId, value)
+        }
+      }
+      // Absent in a file written before turns were kept: nothing told yet, then.
+      if (Array.isArray(raw.turns)) {
+        for (const entry of raw.turns) {
+          if (Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'number') {
+            this.turns.set(entry[0], entry[1])
+          }
         }
       }
     } catch (error) {

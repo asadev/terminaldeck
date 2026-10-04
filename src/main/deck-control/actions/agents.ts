@@ -29,6 +29,9 @@ const PUSH_PLUMBING =
  * keyboard is the only door*). An AI that could make a key could let itself back
  * in; one that could raise a level could raise its own.
  */
+const TASK_SETUP_IS_THE_OWNERS =
+  'Which agents exist and which CRM users may give them work is the owner’s setting; an AI must not be able to grant itself agents or senders.'
+
 const KEYS_ARE_THE_OWNERS =
   'Access keys decide which outside AI apps may reach this computer, so they are changed only by the owner in Settings, never by a tool an AI could call.'
 
@@ -69,6 +72,31 @@ export const agentsCoverage: CoverageMap = {
     skip: 'A key’s name is how the owner recognises an outside app in the activity log, so only the owner renames one, in Settings.',
   },
   'ai-apps:revoke': { skip: KEYS_ARE_THE_OWNERS },
+  // CRM tasks: the board is Hoot's to read; who may give work to which agents is the owner's alone.
+  'tasks:state': {
+    skip: 'The board mirrors CRM tasks for the person; Hoot reads the same records through its own CRM task tools, added beside this catalogue.',
+  },
+  'tasks:agent-save': { skip: TASK_SETUP_IS_THE_OWNERS },
+  'tasks:agent-remove': { skip: TASK_SETUP_IS_THE_OWNERS },
+  'tasks:connection-save': { skip: TASK_SETUP_IS_THE_OWNERS },
+  'tasks:connection-remove': { skip: TASK_SETUP_IS_THE_OWNERS },
+  'tasks:close-session': { tool: 'sessions.stop' },
+  'tasks:local-create': {
+    skip: 'Local tasks are the owner’s own to-do list in the window; Hoot hands work on with its own task tools, which add the child tasks here.',
+  },
+  'tasks:local-update': {
+    skip: 'Editing, reassigning and setting the status of the owner’s own tasks happens in the window; Hoot sets a status with its own task tools.',
+  },
+  'tasks:local-reply': { tool: 'sessions.send' },
+  'tasks:local-detail': {
+    skip: 'The task popup is the owner’s own view of a task — its subtasks, files, fields and comments — in the window; Hoot works a task with its own task tools.',
+  },
+  'tasks:local-delete': {
+    skip: 'Deleting one of the owner’s own tasks (into the Trash) is a choice made in the window; nothing an AI does needs to delete a task.',
+  },
+  'tasks:local-restore': {
+    skip: 'Bringing one of the owner’s own tasks back from the Trash is the owner’s choice, made in the window.',
+  },
   'ai-apps:state': {
     skip: 'The list of which outside AI apps hold keys is the owner’s audit screen; an app holding one has no business listing the others.',
   },

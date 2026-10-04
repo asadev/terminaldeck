@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -9,7 +10,17 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { HootMark } from '../copilot/HootMark'
-import { EMPTY_SNAPSHOT, needsYou, readSnapshot, type HootPanelSnapshot } from '../../shared/hoot-panel-model'
+import {
+  allSessionsInOrder,
+  CHAT_VIEW,
+  EMPTY_SNAPSHOT,
+  needsYou,
+  nextSessionsView,
+  readSnapshot,
+  SESSIONS_INTENT_MS,
+  type HootPanelSnapshot,
+  type HootSessionView,
+} from '../../shared/hoot-panel-model'
 import {
   barRow,
   clampExpanded,
@@ -19,6 +30,7 @@ import {
   expandedShape,
   islandPath,
   restBox,
+  onRestBox,
   restShape,
   TIMING,
   transition,
@@ -133,11 +145,50 @@ function transitions(phase: Phase): Record<'shape' | 'shadow' | 'rest' | 'ears' 
 }
 
 /** The status words beside a session's dot, for a screen reader. */
-function what(status: string): string {
+export function what(status: string): string {
   if (status === 'input') return 'needs you'
   if (status === 'working') return 'working'
   if (status === 'completed') return 'finished'
+  if (status === 'exited') return 'ended'
   return 'idle'
+}
+
+/**
+ * Every session, in place of the conversation while the sessions row is
+ * hovered: one button each, scrolling when there are more than fit. A click
+ * opens it in the app, the same as a chip does.
+ */
+export function AllSessions({
+  sessions,
+  top,
+  onOpen,
+}: {
+  sessions: readonly HootSessionView[]
+  top: number
+  onOpen(id: string): void
+}) {
+  return (
+    <div className="hoot-island-all" role="list" aria-label="All sessions" style={{ paddingTop: top }}>
+      {sessions.length === 0 ? (
+        <p className="hoot-island-quiet">No sessions open.</p>
+      ) : (
+        sessions.map((session) => (
+          <button
+            key={session.id}
+            type="button"
+            role="listitem"
+            className="hoot-island-all-row"
+            title={`${session.label}: ${what(session.status)}`}
+            onClick={() => onOpen(session.id)}
+          >
+            <span className="hoot-island-status" data-status={session.status} aria-hidden="true" />
+            <span className="hoot-island-all-name">{session.label}</span>
+            <span className="hoot-island-all-what">{what(session.status)}</span>
+          </button>
+        ))
+      )}
+    </div>
+  )
 }
 
 /** How long without a move before the next one counts as the pointer arriving afresh. */
@@ -156,6 +207,8 @@ interface Drag {
 export function HootPanel() {
   const [deck] = useState(bridge)
   const [snap, setSnap] = useState<HootPanelSnapshot>(EMPTY_SNAPSHOT)
+  // The conversation, or every session while the sessions row is hovered (`nextSessionsView`).
+  const [listing, sayListing] = useReducer(nextSessionsView, CHAT_VIEW)
   const [draft, setDraft] = useState('')
   const [focused, setFocused] = useState(false)
   const [sending, setSending] = useState(false)
@@ -178,6 +231,8 @@ export function HootPanel() {
   const input = useRef<HTMLInputElement>(null)
   const drag = useRef<Drag | null>(null)
   const pointerAt = useRef<{ inside: boolean; at: number } | null>(null)
+  /** At rest, "on the pill" is the catcher's box (`onRestBox`), not only the drawn shape. */
+  const restHit = useRef<{ expanded: boolean; box: { width: number; height: number } } | null>(null)
   const wasExpanded = useRef<boolean | null>(null)
   const lastWords = useRef<string | null>(null)
 
@@ -284,6 +339,8 @@ export function HootPanel() {
   })
   const grown = expandedShape(geometry, dragSize ?? keptSize ?? snap.size)
   const target: IslandShape = snap.expanded ? grown : rest
+  // Read by the window's own listeners below, which are set up once.
+  restHit.current = { expanded: snap.expanded, box: restBox(rest) }
 
   // Which way it is moving: growing, settling, or changing shape where it is.
   const previous = wasExpanded.current
@@ -331,25 +388,56 @@ export function HootPanel() {
         return
       }
       pointerAt.current = { inside, at: now }
+      // Off the island altogether: the list folds back to the conversation.
+      if (!inside) sayListing('island-leave')
       deck.hootPanelPointer?.(inside)
+    }
+    const onGround = (event: MouseEvent): boolean => {
+      const ground = groundEl.current
+      return ground !== null && event.target instanceof Node && ground.contains(event.target)
+    }
+    const onRest = (event: MouseEvent): boolean => {
+      const hit = restHit.current
+      return hit !== null && !hit.expanded && onRestBox(event.clientX, event.clientY, window.innerWidth, hit.box)
     }
     const onMove = (event: MouseEvent): void => {
       if (drag.current !== null) return
-      const ground = groundEl.current
-      tell(ground !== null && event.target instanceof Node && ground.contains(event.target))
+      tell(onGround(event) || onRest(event))
+    }
+    // A press in the resting pill's box but off the drawn shape — a rounded
+    // corner, a shoulder — is a press on the pill, exactly as it is on the
+    // catcher. The shape's own handler takes the rest.
+    const onDown = (event: MouseEvent): void => {
+      if (event.button !== 0 || onGround(event) || !onRest(event)) return
+      deck.hootPanelFocus?.()
     }
     const onLeave = (): void => {
       if (drag.current !== null) return
       pointerAt.current = null
+      sayListing('island-leave')
       deck.hootPanelPointer?.(false)
     }
     window.addEventListener('mousemove', onMove)
+    window.addEventListener('mousedown', onDown)
     document.documentElement.addEventListener('mouseleave', onLeave)
     return () => {
       window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mousedown', onDown)
       document.documentElement.removeEventListener('mouseleave', onLeave)
     }
   }, [deck])
+
+  // The row waits a beat before the list replaces the conversation, so passing over it changes nothing.
+  useEffect(() => {
+    if (!listing.pending) return
+    const timer = setTimeout(() => sayListing('intent'), SESSIONS_INTENT_MS)
+    return () => clearTimeout(timer)
+  }, [listing.pending])
+
+  // Settled: the next time it grows, it opens on the conversation.
+  useEffect(() => {
+    if (!snap.expanded) sayListing('settled')
+  }, [snap.expanded])
 
   /* -- resizing by the bottom corners -- */
 
@@ -430,7 +518,13 @@ export function HootPanel() {
 
   // Always there, in the same place: the sessions, or a quiet word that there are none.
   const chips = (
-    <div className="hoot-island-chips" role="list" aria-label="Open sessions">
+    <div
+      className="hoot-island-chips"
+      role="list"
+      aria-label="Open sessions"
+      onMouseEnter={() => sayListing('row-enter')}
+      onMouseLeave={() => sayListing('row-leave')}
+    >
       {open.length === 0 ? (
         <span className="hoot-island-chip" role="listitem" data-quiet="">
           No sessions running
@@ -551,7 +645,16 @@ export function HootPanel() {
             rest, and scrolls on up behind them.
           */}
           <div className="hoot-island-chat">
-            {running ? (
+            {listing.view === 'sessions' ? (
+              <AllSessions
+                sessions={allSessionsInOrder(snap.sessions)}
+                top={row + 8}
+                onOpen={(id) => {
+                  sayListing('chosen')
+                  void deck.hootPanelShowSession?.(id)
+                }}
+              />
+            ) : running ? (
               <div className="hoot-island-log" ref={log} style={{ paddingTop: row + 8 }}>
                 {snap.messages.length === 0 ? (
                   <p className="hoot-island-quiet">Ask {name} anything about your sessions.</p>

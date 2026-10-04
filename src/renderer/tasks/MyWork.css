@@ -1,0 +1,406 @@
+/* ============================================================================
+   My Work — the CRM's task table, board and week, drawn with Terminal Deck's
+   own tokens. Colour comes only from tokens.css; the five statuses take the
+   app's status colours, the priorities the same scale.
+   ============================================================================ */
+
+.mw {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.mw [data-status='todo'] { --mw-tone: var(--status-idle); }
+.mw [data-status='working'] { --mw-tone: var(--status-working); }
+.mw [data-status='progress'] { --mw-tone: var(--accent); }
+.mw [data-status='stuck'] { --mw-tone: var(--status-input); }
+.mw [data-status='done'] { --mw-tone: var(--status-completed); }
+.mw [data-priority='Critical'] { --mw-flag: var(--status-input); }
+.mw [data-priority='High'] { --mw-flag: var(--status-waiting); }
+.mw [data-priority='Medium'] { --mw-flag: var(--accent); }
+.mw [data-priority='Low'] { --mw-flag: var(--status-idle); }
+
+.mw-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-2);
+}
+
+.mw-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mw-tile[data-on] { border-color: var(--accent-line); }
+.mw-tile-value { font-size: var(--t-title2); font-weight: var(--w-semibold); }
+.mw-tile[data-tone='overdue'] .mw-tile-value { color: var(--status-input); }
+.mw-tile-label { color: var(--text-secondary); font-size: var(--t-footnote); }
+
+.mw-bar,
+.mw-filters,
+.mw-bulk,
+.mw-calendar-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mw-tabs {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.mw-tab {
+  padding: var(--sp-1) var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mw-tab[data-on] { background: var(--bg-tertiary); color: var(--text-primary); }
+
+.mw-search,
+.mw-select,
+.mw-cell-select,
+.mw-status {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.mw-search { flex: 1 1 180px; }
+
+.mw-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.mw-filter-label { color: var(--text-muted); font-size: var(--t-footnote); }
+
+.mw-chip {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--bg-tertiary);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.mw-chip[data-on] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text-primary); }
+
+.mw-columns summary { color: var(--text-secondary); font-size: var(--t-footnote); cursor: pointer; }
+
+.mw-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.mw-bulk {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  font-size: var(--t-callout);
+}
+
+.mw-empty { margin: 0; color: var(--text-secondary); font-size: var(--t-callout); }
+
+.mw-trash { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.mw-trash-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-md);
+}
+.mw-trash-row:hover { background: var(--bg-tertiary); }
+.mw-trash-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mw-trash-when { color: var(--text-secondary); font-size: var(--t-callout); white-space: nowrap; }
+
+.mw-groups { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.mw-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1) var(--sp-1);
+}
+
+.mw-group-head[data-accent='overdue'] .mw-fold { color: var(--status-input); }
+.mw-group-head[data-accent='today'] .mw-fold { color: var(--accent); }
+
+.mw-fold {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+}
+
+.mw-count { color: var(--text-muted); font-size: var(--t-footnote); }
+
+.mw-rows,
+.mw-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: var(--sp-1);
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.mw-row { border-radius: var(--radius-md); }
+.mw-row[data-open] { background: var(--bg-tertiary); }
+
+.mw-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.mw-handle { color: var(--text-muted); cursor: grab; user-select: none; }
+
+.mw-ring {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 2px solid var(--mw-tone);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mw-row[data-status='done'] .mw-ring { background: var(--mw-tone); }
+.mw-ring[data-shape='diamond'] { border-radius: 2px; transform: rotate(45deg) scale(0.85); }
+
+.mw-title {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mw-title[data-done] { color: var(--text-muted); text-decoration: line-through; }
+
+.mw-badges { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); }
+
+.mw-badge,
+.mw-tag,
+.mw-project,
+.mw-created,
+.mw-card-board {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.mw-badge[data-tone='attention'] { background: var(--accent-soft); color: var(--text-primary); }
+
+.mw-cells {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.mw-cell-select { max-width: 150px; font-size: var(--t-footnote); }
+.mw-cell-select[data-priority] { color: var(--mw-flag, var(--text-secondary)); }
+
+.mw-due {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.mw-due[data-overdue] { color: var(--status-input); }
+
+/* The native date picker sits over the label, invisible, so a click opens it. */
+.mw-due input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.mw-status { border-left: 3px solid var(--mw-tone); font-size: var(--t-footnote); }
+
+.mw-next,
+.mw-delete {
+  padding: 0 var(--sp-1);
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mw-delete { opacity: 0; }
+.mw-row:hover .mw-delete,
+.mw-delete:focus-visible { opacity: 1; }
+
+.mw-add { padding: var(--sp-1) var(--sp-2); display: flex; }
+
+/* The board: a column per stage, scrolling sideways when the window is narrow. */
+.mw-board-wrap { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.mw-board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(160px, 1fr);
+  gap: var(--sp-2);
+  overflow-x: auto;
+  padding-bottom: var(--sp-1);
+}
+
+.mw-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  border-radius: var(--radius-lg);
+}
+
+.mw-stage[data-over] .mw-cards { outline: 2px dashed var(--accent-line); outline-offset: -2px; }
+
+.mw-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1);
+  font-weight: var(--w-semibold);
+}
+
+.mw-stage-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mw-tone); }
+
+.mw-cards { min-height: 80px; }
+
+.mw-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  cursor: grab;
+}
+
+.mw-card[data-open] { outline: 2px solid var(--accent-line); }
+
+.mw-card-title {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: var(--w-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mw-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.mw-card-due[data-overdue] { color: var(--status-input); }
+.mw-card-priority { color: var(--mw-flag); }
+
+/* The week. */
+.mw-calendar { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+.mw-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: var(--sp-1);
+  overflow-x: auto;
+}
+
+.mw-day {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-height: 140px;
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.mw-day[data-today] { outline: 2px solid var(--accent-line); }
+.mw-day-head { margin: 0; color: var(--text-secondary); font-size: var(--t-footnote); font-weight: var(--w-semibold); }
+
+.mw-day-task {
+  padding: 2px var(--sp-1);
+  border: none;
+  border-left: 3px solid var(--mw-tone);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-footnote);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mw-day-task[data-status='done'] { color: var(--text-muted); text-decoration: line-through; }
+
+/* A calendar task: its ring marks it done, its name opens it. */
+.mw-day-item { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.mw-day-item .mw-day-task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mw-day-item[data-open] .mw-day-task { background: var(--accent-soft); }
+.mw-ring[data-status='done'] { background: var(--mw-tone); }

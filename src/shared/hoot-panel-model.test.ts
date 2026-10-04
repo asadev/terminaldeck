@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { MomentTracker, pillLabel, needsYou, readSnapshot, restingLine, type HootSessionView } from './hoot-panel-model'
+import {
+  MomentTracker,
+  pillLabel,
+  needsYou,
+  readSnapshot,
+  restingLine,
+  type HootSessionView,
+  allSessionsInOrder,
+  CHAT_VIEW,
+  nextSessionsView,
+  type SessionsViewEvent,
+} from './hoot-panel-model'
 
 const s = (id: string, label: string, status: HootSessionView['status']): HootSessionView => ({ id, label, status })
 
@@ -135,3 +146,42 @@ describe('the snapshot off the wire', () => {
     expect(readSnapshot({ size: { width: 'wide', height: 300 } }).size).toBeNull()
   })
 })
+
+describe('every session, on hovering the sessions row', () => {
+  const run = (events: SessionsViewEvent[]) => events.reduce(nextSessionsView, CHAT_VIEW)
+
+  it('swaps the conversation for the list once the pointer rests on the row', () => {
+    expect(run(['row-enter'])).toEqual({ view: 'chat', pending: true })
+    expect(run(['row-enter', 'intent'])).toEqual({ view: 'sessions', pending: false })
+  })
+
+  it('never swaps for a pointer only passing over the row — no flicker', () => {
+    expect(run(['row-enter', 'row-leave', 'intent'])).toEqual(CHAT_VIEW)
+    // A second entry while waiting does not start the wait again.
+    expect(run(['row-enter', 'row-enter'])).toEqual({ view: 'chat', pending: true })
+  })
+
+  it('stays while the pointer moves down from the row into the list, and back', () => {
+    expect(run(['row-enter', 'intent', 'row-leave'])).toEqual({ view: 'sessions', pending: false })
+    expect(run(['row-enter', 'intent', 'row-leave', 'row-enter', 'row-leave'])).toEqual({ view: 'sessions', pending: false })
+  })
+
+  it('folds back to the conversation when the pointer leaves the island, it settles, or a session is chosen', () => {
+    for (const end of ['island-leave', 'settled', 'chosen'] as const) {
+      expect(run(['row-enter', 'intent', 'row-leave', end])).toEqual(CHAT_VIEW)
+      expect(run(['row-enter', end, 'intent'])).toEqual(CHAT_VIEW)
+    }
+  })
+
+  it('lists every session, the ones waiting on him first and the ended ones last', () => {
+    const sessions: HootSessionView[] = [
+      { id: 'a', label: 'api', status: 'idle' },
+      { id: 'b', label: 'web', status: 'exited' },
+      { id: 'c', label: 'docs', status: 'working' },
+      { id: 'd', label: 'ios', status: 'input' },
+    ]
+    expect(allSessionsInOrder(sessions).map((session) => session.id)).toEqual(['d', 'c', 'a', 'b'])
+    expect(sessions.map((session) => session.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+})
+

@@ -471,3 +471,54 @@ html.hoot-panel-page {
     linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 4px / 10px 10px no-repeat,
     linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 8px / 6px 6px no-repeat;
 }
+
+/* Every session, in place of the conversation while the sessions row is
+   hovered. The chat's own room, scrolling when there are more than fit. */
+.hoot-island-all {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 8px;
+}
+
+.hoot-island-all-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hoot-island-all-row:hover,
+.hoot-island-all-row:focus-visible {
+  background: var(--bg-tertiary);
+}
+
+.hoot-island-all-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoot-island-all-what {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+

@@ -115,7 +115,7 @@ const TRANSCRIPT_PROVIDERS: readonly ProviderId[] = ['claude']
  * refusing on a missing field would turn "we did not say" into "certainly not",
  * which is the wrong direction for a match that is otherwise good.
  */
-function writesTranscripts(provider: ProviderId | undefined): boolean {
+export function writesTranscripts(provider: ProviderId | undefined): boolean {
   return provider === undefined || TRANSCRIPT_PROVIDERS.includes(provider)
 }
 

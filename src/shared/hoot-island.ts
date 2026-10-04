@@ -223,6 +223,21 @@ export function restBox(shape: IslandShape): { width: number; height: number } {
   return { width: Math.ceil(shape.width + shape.shoulder * 2), height: Math.ceil(shape.height) }
 }
 
+/**
+ * Is a point, in the island window's own coordinates, on the resting pill's box?
+ *
+ * The same box the catcher covers (`restBox`, centred at the top of a window
+ * that is centred on the same line), so the island and the catcher agree on
+ * where "on the pill" is. They did not: the page counted only the drawn shape,
+ * so its rounded corners and shoulders were inside the catcher and outside the
+ * island — a click there after the hand-over landed on nothing, and a pointer
+ * resting there was passed back and forth until the intent delay never ran out.
+ */
+export function onRestBox(x: number, y: number, windowWidth: number, box: { width: number; height: number }): boolean {
+  const left = (windowWidth - box.width) / 2
+  return y >= 0 && y < box.height && x >= left && x < left + box.width
+}
+
 export interface Rect {
   x: number
   y: number

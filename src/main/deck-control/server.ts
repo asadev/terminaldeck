@@ -105,6 +105,7 @@ import { advertisedCatalogue, visibleTo } from './describe-tool'
 import type { DeckControl } from './control'
 import { EventsError } from './mcp-events'
 import { serveMcp, type McpEra } from './mcp-serve'
+import type { TaskHttpHandler } from '../tasks/task-http'
 import { RUN_ID } from './run-tool'
 import { LOCAL_CALLER, type Caller } from './surface'
 
@@ -219,6 +220,8 @@ export interface DeckControlServerOptions {
    * copilot's own — a session's browser-only endpoint never accepts a key.
    */
   keys?: KeyDoor
+  /** The CRM task API's plain web routes (`tasks/task-http.ts`), on the copilot's endpoint only. */
+  tasks?: TaskHttpHandler
 }
 
 /* --------------------------------------------------------------- guarding -- */
@@ -742,6 +745,7 @@ async function handle(
   live: DeckControlEndpoint,
   control: DeckControl,
   keys: KeyDoor | undefined,
+  tasks?: TaskHttpHandler,
 ): Promise<void> {
   if (!isLoopback(req.socket.remoteAddress)) return deny(res, 403)
   if (!hostIsLocal(req.headers.host)) return deny(res, 403)
@@ -755,6 +759,16 @@ async function handle(
    * adding an entry to it.
    */
   if (typeof req.headers.origin === 'string') return deny(res, 403)
+
+  // The CRM task API: its own routes, its own key check, the same loopback and no-browser rules above.
+  const route = (req.url ?? '').split('?')[0]
+  if (tasks !== undefined && (route === '/tasks' || route.startsWith('/tasks/'))) {
+    const body = req.method === 'POST' ? await readBody(req) : ''
+    const answer = await tasks({ method: req.method ?? 'GET', path: route, authorization: req.headers.authorization, body })
+    res.writeHead(answer.status, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(answer.body))
+    return
+  }
 
   /*
    * Token before path, so an unauthenticated caller learns nothing about which
@@ -1005,7 +1019,7 @@ async function openServer(options: DeckControlServerOptions): Promise<OpenedDeck
   const live: DeckControlEndpoint = { port: 0, token, unattendedToken, url: '', callers }
 
   const next = createServer((req, res) => {
-    void handle(req, res, live, options.control, options.keys).catch((error) => {
+    void handle(req, res, live, options.control, options.keys, options.tasks).catch((error) => {
       console.error('[deck-control] handler threw:', error)
       if (!res.headersSent) deny(res, 500)
       else if (!res.writableEnded) res.end()

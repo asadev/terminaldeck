@@ -120,7 +120,7 @@ export function resolveAiAppsBridge(host?: unknown): Partial<AiAppsBridge> {
 
 /* ------------------------------------------------------------- clipboard -- */
 
-function useCopy(): { copied: string | null; copy(id: string, value: string): void } {
+export function useCopy(): { copied: string | null; copy(id: string, value: string): void } {
   const [copied, setCopied] = useState<string | null>(null)
   useEffect(() => {
     if (copied === null) return
@@ -141,7 +141,7 @@ function useCopy(): { copied: string | null; copy(id: string, value: string): vo
   return { copied, copy }
 }
 
-function CopyButton({ id, value, copied, onCopy }: { id: string; value: string; copied: string | null; onCopy(id: string, value: string): void }) {
+export function CopyButton({ id, value, copied, onCopy }: { id: string; value: string; copied: string | null; onCopy(id: string, value: string): void }) {
   const label = copied === id ? 'Copied' : copied === `${id}:failed` ? 'Select and copy it by hand' : 'Copy'
   return (
     <Button onClick={() => onCopy(id, value)} title="Copy to the clipboard">

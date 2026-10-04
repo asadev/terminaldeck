@@ -15,7 +15,7 @@ import {
   SUBSCRIPTION_HEADER,
   subscriptionId,
 } from './mcp-events'
-import type { HubClock, NotificationEvent } from './notify-hub'
+import { NotificationHub, type HubClock, type NotificationEvent } from './notify-hub'
 import { verifyWebhook } from './notify-webhook'
 
 /**
@@ -131,13 +131,23 @@ let internet = true
 let delivered: Array<[string, string]>
 const open: McpEvents[] = []
 
-function hub(options: { dir?: string | null } = {}): McpEvents {
+function hub(
+  options: {
+    dir?: string | null
+    owed?: (keyId: string, eventId: string) => boolean
+    onDelivered?: (keyId: string, eventId: string) => void
+  } = {},
+): McpEvents {
   const events = new McpEvents({
     dir: options.dir === undefined ? null : options.dir,
     access: { mode: (keyId) => modes.get(keyId) ?? null, internet: () => internet },
     clock,
     post: receiver.post,
-    onDelivered: (keyId, eventId) => delivered.push([keyId, eventId]),
+    onDelivered: (keyId, eventId) => {
+      delivered.push([keyId, eventId])
+      options.onDelivered?.(keyId, eventId)
+    },
+    ...(options.owed === undefined ? {} : { owed: options.owed }),
   })
   open.push(events)
   return events
@@ -356,6 +366,92 @@ describe('delivery', () => {
     const urls = receiver.deliveries().map((post) => post.url)
     expect(urls).toEqual([URL_A, URL_A])
     expect(urls).not.toContain('https://other.example.com/cb')
+  })
+
+  it('tells only the chat that subscribed to the session, when one did, among chats sharing a key', async () => {
+    const events = hub()
+    const chatOne = 'https://callbacks.example.com/chat-one'
+    const chatTwo = 'https://callbacks.example.com/chat-two'
+    const catchAll = 'https://callbacks.example.com/chat-three'
+    await events.subscribe('key-a', 'internet', subscribeParams({ arguments: { sessionId: 'started-1' } }, { url: chatOne }))
+    await events.subscribe('key-a', 'internet', subscribeParams({ arguments: { sessionId: 'started-2' } }, { url: chatTwo }))
+    await events.subscribe('key-a', 'internet', subscribeParams({}, { url: catchAll }))
+
+    expect(events.offer('key-a', event({ sessionId: 'started-1' }))).toBe(1)
+    expect(events.offer('key-a', event({ sessionId: 'started-2' }))).toBe(1)
+    // A session no chat claimed goes to the catch-all.
+    expect(events.offer('key-a', event({ sessionId: 'started-3' }))).toBe(1)
+    await settle()
+    expect(receiver.deliveries().map((post) => post.url)).toEqual([chatOne, chatTwo, catchAll])
+  })
+
+  it('does not post what the queue already delivered another way, before the first try or a retry', async () => {
+    const owedIds = new Set<string>()
+    const events = hub({ owed: (_keyId, eventId) => owedIds.has(eventId) })
+    await events.subscribe('key-a', 'internet', subscribeParams())
+    // Taken by a waiter before the push was offered: nothing is posted.
+    events.offer('key-a', event())
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(0)
+    expect(events.owed()).toBe(0)
+
+    // Taken by a waiter between the first try and the retry: the retry is not posted.
+    receiver.statuses = [503]
+    const news = event()
+    owedIds.add(news.id)
+    events.offer('key-a', news)
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(1)
+    expect(events.owes('key-a', news.id)).toBe(true)
+    owedIds.delete(news.id)
+    clock.advance(5_000)
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(1)
+    expect(events.owes('key-a', news.id)).toBe(false)
+    expect(events.armed()).toBe(false)
+  })
+
+  it('wired to the queue, delivers each notification once: by the waiter, or by the push', async () => {
+    let live: McpEvents | null = null
+    const queue = new NotificationHub({
+      dir: null,
+      settings: () => ({ mode: 'wait', url: null, secret: null }),
+      clock,
+      pushing: (keyId, id) => live?.owes(keyId, id) === true,
+    })
+    const events = hub({
+      owed: (keyId, eventId) => queue.owes(keyId, eventId),
+      onDelivered: (keyId, eventId) => queue.deliveredBy(keyId, eventId, 'event'),
+    })
+    live = events
+    const enqueue = (news: NotificationEvent): void => {
+      if (queue.enqueue('key-a', news)) events.offer('key-a', news)
+    }
+    await events.subscribe('key-a', 'internet', subscribeParams())
+
+    // A waiter already parked takes it; the push stands down.
+    const parked = queue.wait('key-a', 30_000)
+    const first = event()
+    enqueue(first)
+    expect((await parked).map((n) => n.id)).toEqual([first.id])
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(0)
+
+    // Nobody waiting: the push is tried, and a waiter arriving while it is
+    // still being retried is not handed it as well.
+    receiver.statuses = [503, 200]
+    const second = event()
+    enqueue(second)
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(1)
+    const late = queue.wait('key-a', 60_000)
+    clock.advance(5_000)
+    await settle()
+    expect(receiver.deliveries()).toHaveLength(2)
+    expect(queue.list('key-a').find((n) => n.id === second.id)).toMatchObject({ delivery: 'delivered', via: 'event' })
+    clock.advance(60_000)
+    expect(await late).toEqual([])
+    queue.stop()
   })
 
   it('posts an event once even if it is offered twice', async () => {

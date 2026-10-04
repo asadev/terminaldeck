@@ -236,3 +236,48 @@ export function pillLabel(
   if (waiting > 0) parts.push(`${waiting} waiting`)
   return { text: cut(parts.join(' · ')), attention: waiting > 0 }
 }
+
+/* ------------------------------------------------- every session, on hover -- */
+
+/**
+ * Hovering the sessions row in the grown island swaps the conversation for
+ * every session, scrollable, and it stays that way while the pointer is
+ * anywhere on the island — moving down from the row into the list included.
+ * It goes back to the conversation once the pointer leaves the island, the
+ * island settles, or a session is chosen.
+ *
+ * Asad, 2026-10-04: hover must work, and the list must not flicker. So the row
+ * waits a short intent delay before it swaps, and a pointer only passing over
+ * the row never swaps at all.
+ */
+export type SessionsView = { view: 'chat' | 'sessions'; pending: boolean }
+
+export const CHAT_VIEW: SessionsView = Object.freeze({ view: 'chat', pending: false }) as SessionsView
+
+/** How long the pointer rests on the sessions row before the list replaces the conversation. */
+export const SESSIONS_INTENT_MS = 150
+
+export type SessionsViewEvent = 'row-enter' | 'row-leave' | 'intent' | 'island-leave' | 'settled' | 'chosen'
+
+export function nextSessionsView(state: SessionsView, event: SessionsViewEvent): SessionsView {
+  switch (event) {
+    case 'row-enter':
+      return state.view === 'sessions' || state.pending ? state : { view: 'chat', pending: true }
+    case 'row-leave':
+      // Into the list once it is open — it stays. Only passing over — it never opens.
+      return state.view === 'sessions' ? state : CHAT_VIEW
+    case 'intent':
+      return state.pending ? { view: 'sessions', pending: false } : state
+    case 'island-leave':
+    case 'settled':
+    case 'chosen':
+      return state.view === 'chat' && !state.pending ? state : CHAT_VIEW
+  }
+}
+
+/** Every session for the list: waiting on him first, then working, then idle, then ended. */
+export function allSessionsInOrder(sessions: readonly HootSessionView[]): HootSessionView[] {
+  const rank = (status: string): number => (status === 'input' ? 0 : status === 'working' ? 1 : status === 'exited' ? 3 : 2)
+  return [...sessions].sort((a, b) => rank(a.status) - rank(b.status))
+}
+

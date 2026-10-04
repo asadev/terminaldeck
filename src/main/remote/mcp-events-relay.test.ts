@@ -44,6 +44,7 @@ let rig: KeyRig
 let hub: NotificationHub
 let events: McpEvents
 let detector: NotifyDetector
+let said = 0
 let receiver: HttpServer | null = null
 let receiverUrl = ''
 let received: Array<{ headers: Record<string, string>; body: string }> = []
@@ -119,12 +120,14 @@ async function boot(): Promise<{ port: number; hostId: string }> {
   detector = new NotifyDetector({
     surface: rig.app.surface,
     starterOf: (sessionId) => rig.control.starterOf(sessionId),
-    enqueue: (keyId, event) => {
-      if (!hub.enqueue(keyId, event)) return false
+    enqueue: (keyId, event, turn) => {
+      if (!hub.enqueue(keyId, event, turn)) return false
       events.offer(keyId, event)
       return true
     },
     clock: REAL_CLOCK,
+    // Each turn ends on something new, as a real transcript would.
+    answer: async () => ({ at: Date.now(), text: `answer ${(said += 1)}`, truncated: false }),
   })
   detectorRef = detector
 

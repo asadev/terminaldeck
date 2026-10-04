@@ -62,6 +62,10 @@ describe('Machines in the rail', () => {
       // apps as well, for simulators as well"* — and it is one row, not the
       // three (iOS, Android, phones) the engine could have been split into.
       'simulators',
+      // `tasks` is a new place too: the work a CRM gives Hoot and the task
+      // agents, asked for by the owner beside Simulators — *"i want to have it
+      // in side panel just like simulators"*. Its set-up stays in Settings.
+      'tasks',
       // `staysfixed` is a new place too, in 0.16.5 — Stays Fixed, the owner's own
       // regression check, built in: *"make it part of Terminal Deck as well."*
       // Nothing in the app checked a project for regressions before, so it is

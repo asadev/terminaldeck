@@ -1747,6 +1747,44 @@ const api = {
     return () => ipcRenderer.off('ai-apps:changed', handler)
   },
 
+  /* ----------------------------------------------------------- tasks -- */
+  // Settings → Tasks and the Overview's CRM tasks list. The CRM is the task
+  // master: these set up the agents and the CRMs allowed to send work, and read
+  // back what this app is doing about each task. Main refuses every channel
+  // unless the sender is the app's own window, the same guard as AI app keys.
+  // `tasksConnectionSave` carries a new signing secret back once, when it makes
+  // one (a new connection, or `rotateSecret: true`).
+  tasksState: (): Promise<unknown> => ipcRenderer.invoke('tasks:state'),
+  tasksAgentSave: (agent: unknown): Promise<unknown> => ipcRenderer.invoke('tasks:agent-save', agent),
+  tasksAgentRemove: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:agent-remove', id),
+  tasksConnectionSave: (keyId: string, patch: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('tasks:connection-save', keyId, patch),
+  tasksConnectionRemove: (keyId: string): Promise<unknown> => ipcRenderer.invoke('tasks:connection-remove', keyId),
+  // Closes a task's kept-open session now; its conversation stays resumable.
+  tasksCloseSession: (taskId: string): Promise<unknown> => ipcRenderer.invoke('tasks:close-session', taskId),
+  // Tasks made here, with no CRM: create, change (title, details, folder, status, who has it), and reply to an agent.
+  tasksLocalCreate: (input: unknown): Promise<unknown> => ipcRenderer.invoke('tasks:local-create', input),
+  tasksLocalUpdate: (id: string, patch: unknown): Promise<unknown> => ipcRenderer.invoke('tasks:local-update', id, patch),
+  tasksLocalReply: (id: string, text: string): Promise<unknown> => ipcRenderer.invoke('tasks:local-reply', id, text),
+  tasksLocalDelete: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:local-delete', id),
+  /** Back from the Trash. */
+  tasksLocalRestore: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:local-restore', id),
+  // The task popup: one of the reference CRM's task-page calls by name, answered with its own result.
+  tasksLocalDetail: (fn: string, args: unknown[]): Promise<unknown> => ipcRenderer.invoke('tasks:local-detail', fn, args),
+  onTasksChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('tasks:changed', handler)
+    return () => ipcRenderer.off('tasks:changed', handler)
+  },
+  /** A task to open — a reminder for it was clicked. */
+  onTasksOpen: (cb: (taskId: string) => void): (() => void) => {
+    const handler = (_event: unknown, taskId: unknown): void => {
+      if (typeof taskId === 'string') cb(taskId)
+    }
+    ipcRenderer.on('tasks:open', handler)
+    return () => ipcRenderer.off('tasks:open', handler)
+  },
+
   /* --------------------------------------------------------- driving -- */
 
   /**

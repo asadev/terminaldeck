@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { tiersFor } from './access-keys'
 import type { ActionRow } from './action-log'
 import { keyRig, type KeyRig } from './key-door.fixture'
-import { SETTLE_MS, NotifyDetector } from './notify-detect'
+import { ANSWER_LAG_MS, ANSWER_LAG_RETRIES, SETTLE_MS, NotifyDetector } from './notify-detect'
 import { NotificationHub, type HubClock, type NotificationEvent } from './notify-hub'
 import { notifyTools } from './notify-tools'
 import { openStandaloneDeckControlServer, type StandaloneDeckControlServer } from './server'
@@ -69,6 +69,31 @@ let hub: NotificationHub
 let detector: NotifyDetector
 let clock: ManualClock
 let server: StandaloneDeckControlServer | null = null
+/**
+ * The newest thing each session's agent said, as its transcript would show it.
+ * A session not in here has said one thing; `null` means nothing yet, the way a
+ * Claude Code session that has only drawn its banner has no transcript.
+ */
+let answers: Map<string, { at: number; text: string } | null>
+let said = 0
+
+/** The agent says something new in this session. */
+function say(sessionId: string, text = `answer ${(said += 1)}`): void {
+  answers.set(sessionId, { at: clock.now() + said, text })
+}
+
+function newDetector(target: NotificationHub): NotifyDetector {
+  return new NotifyDetector({
+    surface: rig.app.surface,
+    starterOf: (sessionId) => rig.control.starterOf(sessionId),
+    enqueue: (keyId, event, turn) => target.enqueue(keyId, event, turn),
+    clock,
+    answer: async (meta) => {
+      const answer = answers.has(meta.id) ? answers.get(meta.id) : { at: clock.now(), text: `the first answer in ${meta.id}` }
+      return answer === null || answer === undefined ? null : { ...answer, truncated: false }
+    },
+  })
+}
 
 function caller(id: string, name: string, level: 'work' | 'full' = 'work'): Caller {
   return { kind: 'key', keyId: id, keyName: name, tiers: tiersFor(level), askFirst: false }
@@ -77,6 +102,7 @@ function caller(id: string, name: string, level: 'work' | 'full' = 'work'): Call
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'td-notify-detect-'))
   clock = new ManualClock()
+  answers = new Map()
   // The hub and the detector are built before the rig so the rig's row listener
   // can reach the detector — the same order `deck-control/index.ts` uses.
   let detectorRef: NotifyDetector | null = null
@@ -88,12 +114,7 @@ beforeEach(() => {
   })
   hub = new NotificationHub({ dir: null, settings: (keyId) => rig.keys.notifySettings(keyId), clock })
   hubRef = hub
-  detector = new NotifyDetector({
-    surface: rig.app.surface,
-    starterOf: (sessionId) => rig.control.starterOf(sessionId),
-    enqueue: (keyId, event) => hub.enqueue(keyId, event),
-    clock,
-  })
+  detector = newDetector(hub)
   detectorRef = detector
 })
 
@@ -112,10 +133,20 @@ async function start(who: Caller | undefined, cwd: string): Promise<string> {
   return (result.value as { session: { id: string } }).session.id
 }
 
-/** One whole turn, the way the hooks report it. */
+/** One whole turn, the way the hooks report it, ending on something new. */
 async function turn(sessionId: string): Promise<void> {
+  say(sessionId)
   detector.noteStatus(sessionId, 'working')
   detector.noteStatus(sessionId, 'completed')
+  await settle()
+}
+
+/** Every re-read of a transcript that has not caught up, on the test's clock. */
+async function waitOutLag(): Promise<void> {
+  for (let i = 0; i <= ANSWER_LAG_RETRIES; i += 1) {
+    await settle()
+    clock.advance(ANSWER_LAG_MS)
+  }
   await settle()
 }
 
@@ -199,6 +230,154 @@ describe('two apps, two keys, interleaved', () => {
     clock.advance(SETTLE_MS)
     await settle()
     expect(types(a.id)).toEqual([[sA, 'finished']])
+  })
+
+  it('tells one answer once, however often the screen redraws after it', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    const sent = await rig.control.call('sessions.send', { sessionId: sA, text: 'reply OK' }, { caller: caller(a.id, 'App A') })
+    expect(sent.ok, sent.error ?? '').toBe(true)
+    say(sA, 'DOT_PUSH_TEST_OK')
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'idle')
+    clock.advance(SETTLE_MS)
+    await settle()
+    expect(hub.list(a.id).map((n) => n.answer?.text)).toEqual(['DOT_PUSH_TEST_OK'])
+
+    // The redraws seen in his queue: 7 s, 17 min, an hour and six hours later,
+    // a hook's `completed` among them, the answer unchanged — and one acked.
+    hub.ack(a.id, [hub.list(a.id)[0].id])
+    for (const gap of [7_000, 17 * 60_000, 60 * 60_000, 6 * 60 * 60_000]) {
+      clock.advance(gap)
+      detector.noteStatus(sA, 'working')
+      detector.noteStatus(sA, gap === 7_000 ? 'completed' : 'idle')
+      clock.advance(SETTLE_MS)
+      await settle()
+    }
+    expect(hub.size(a.id)).toBe(0)
+
+    // Something new said is a new turn.
+    await turn(sA)
+    expect(hub.size(a.id)).toBe(1)
+  })
+
+  it('does not count a Claude Code session starting up as a finished turn', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    // No transcript yet; the banner reads as working then calm, four times over.
+    answers.set(sA, null)
+    for (let i = 0; i < 4; i += 1) {
+      detector.noteStatus(sA, 'working')
+      detector.noteStatus(sA, 'idle')
+      clock.advance(SETTLE_MS + 6_500)
+      await settle()
+    }
+    expect(hub.size(a.id)).toBe(0)
+
+    // The app's first message is a turn: told, with the answer.
+    const sent = await rig.control.call('sessions.send', { sessionId: sA, text: 'hello' }, { caller: caller(a.id, 'App A') })
+    expect(sent.ok, sent.error ?? '').toBe(true)
+    await turn(sA)
+    expect(types(a.id)).toEqual([[sA, 'finished']])
+    expect(hub.list(a.id)[0].answer).toBeDefined()
+  })
+
+  it('still tells a turn an app sent when no transcript can be found, from the screen, once', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    answers.set(sA, null)
+    const sent = await rig.control.call('sessions.send', { sessionId: sA, text: 'hello' }, { caller: caller(a.id, 'App A') })
+    expect(sent.ok, sent.error ?? '').toBe(true)
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'completed')
+    await waitOutLag()
+    expect(hub.list(a.id)).toHaveLength(1)
+    expect(hub.list(a.id)[0]).toMatchObject({ type: 'finished', suggestedTool: 'sessions_screen' })
+    // The redraw after it has no sender and no transcript: nothing.
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'completed')
+    await waitOutLag()
+    expect(hub.size(a.id)).toBe(1)
+  })
+
+  it('does not count a session resumed on an older answer as a finished turn', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    say(sA, 'said yesterday, and never told')
+    clock.advance(24 * 60 * 60_000)
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'idle')
+    clock.advance(SETTLE_MS)
+    await settle()
+    expect(hub.size(a.id)).toBe(0)
+  })
+
+  it('reads the transcript again when the hook that ends a turn beats the answer to it', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    say(sA, 'the answer before')
+    clock.advance(60_000)
+    const sent = await rig.control.call('sessions.send', { sessionId: sA, text: 'go on' }, { caller: caller(a.id, 'App A') })
+    expect(sent.ok, sent.error ?? '').toBe(true)
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'completed')
+    await settle()
+    // The transcript still ends on the last turn's answer: not told yet, and not told wrong.
+    expect(hub.size(a.id)).toBe(0)
+    say(sA, 'the late answer')
+    clock.advance(ANSWER_LAG_MS)
+    await settle()
+    expect(hub.list(a.id).map((n) => n.answer?.text)).toEqual(['the late answer'])
+  })
+
+  it('tells a turn an app sent from the screen when its answer never reaches the transcript', async () => {
+    const a = rig.key('work', { name: 'App A' })
+    const sA = await start(caller(a.id, 'App A'), '/work/api')
+    say(sA, 'the answer before')
+    clock.advance(60_000)
+    const sent = await rig.control.call('sessions.send', { sessionId: sA, text: 'go on' }, { caller: caller(a.id, 'App A') })
+    expect(sent.ok, sent.error ?? '').toBe(true)
+    detector.noteStatus(sA, 'working')
+    detector.noteStatus(sA, 'completed')
+    for (let i = 0; i < ANSWER_LAG_RETRIES; i += 1) {
+      await settle()
+      expect(hub.size(a.id)).toBe(0)
+      clock.advance(ANSWER_LAG_MS)
+    }
+    await settle()
+    expect(hub.list(a.id)).toHaveLength(1)
+    expect(hub.list(a.id)[0]).toMatchObject({ type: 'finished', suggestedTool: 'sessions_screen' })
+  })
+
+  it('remembers what it told across a restart, acknowledged or not', async () => {
+    const disk = mkdtempSync(join(tmpdir(), 'td-notify-turns-'))
+    try {
+      const a = rig.key('work', { name: 'App A' })
+      const sA = await start(caller(a.id, 'App A'), '/work/api')
+      const first = new NotificationHub({ dir: disk, settings: (keyId) => rig.keys.notifySettings(keyId), clock })
+      const before = newDetector(first)
+      say(sA, 'the answer before the restart')
+      before.noteStatus(sA, 'working')
+      before.noteStatus(sA, 'completed')
+      await settle()
+      expect(first.size(a.id)).toBe(1)
+      first.ack(a.id, [first.list(a.id)[0].id])
+      before.stop()
+      first.stop()
+
+      // The app comes back; the session redraws on the same last answer.
+      const second = new NotificationHub({ dir: disk, settings: (keyId) => rig.keys.notifySettings(keyId), clock })
+      const after = newDetector(second)
+      after.noteStatus(sA, 'working')
+      after.noteStatus(sA, 'idle')
+      clock.advance(SETTLE_MS)
+      await settle()
+      expect(second.size(a.id)).toBe(0)
+      after.stop()
+      second.stop()
+    } finally {
+      rmSync(disk, { recursive: true, force: true })
+    }
   })
 
   it('keeps an app set to off out of it entirely', async () => {

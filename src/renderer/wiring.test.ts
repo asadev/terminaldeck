@@ -307,6 +307,14 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // its buttons do nothing.
     why: 'without it a driven page moves with no explanation, and a handover can never be answered',
   },
+  {
+    file: 'renderer/shell/PanelView.tsx',
+    child: 'TasksPage',
+    props: ['onOpenSettings'],
+    // Without it the page's "Set up agents and connections" button is not drawn
+    // and the empty page has no way forward.
+    why: 'it is the only place in the app that shows the tasks a CRM sent and what is happening to them',
+  },
 ]
 
 describe('components that are built are also wired', () => {

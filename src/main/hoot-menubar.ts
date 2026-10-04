@@ -190,6 +190,8 @@ export interface IslandHandle {
   setBounds(bounds: Rect): void
   getBounds(): Rect
   showInactive(): void
+  /** Whether it is the key window now. Absent: assume not. */
+  isFocused?(): boolean
   focus(): void
   /** Give the keyboard back to whatever had it. */
   blur(): void
@@ -334,6 +336,14 @@ const SETTLE_MS = 60
 /** The catcher's size before the page has said how big the pill is: about a short pill. */
 const FIRST_PILL = { width: 96, height: 24 }
 
+/**
+ * A blur this soon after a click asked for the keyboard is that request being
+ * taken away — the app coming forward and its own window taking the keyboard —
+ * not a click somewhere else. The island stays open, as if hovered, and settles
+ * when the pointer leaves, instead of shutting the instant it opened.
+ */
+export const FOCUS_GRACE_MS = 500
+
 export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
   let island: IslandHandle | null = null
   let catcher: CatcherHandle | null = null
@@ -360,6 +370,8 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
    * pointer has left and come back.
    */
   let quiet = false
+  /** When the keyboard was last asked for, for {@link FOCUS_GRACE_MS}. */
+  let focusAskedAt = Number.NEGATIVE_INFINITY
 
   const timers = {
     open: null as { cancel(): void } | null,
@@ -510,7 +522,12 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
       follow()
       push()
     }
-    if (withKeyboard) target.focus()
+    if (withKeyboard) {
+      focusAskedAt = now()
+      // A press on the island itself has already made it the key window;
+      // asking again brings the whole app forward for nothing.
+      if (target.isFocused?.() !== true) target.focus()
+    }
   }
 
   /** Settle. `onPurpose`: a close somebody asked for, so it waits for the pointer to leave before growing again. */
@@ -607,7 +624,15 @@ export function createHootMenuBar(deps: HootMenuBarDeps): HootMenuBar {
     // A click anywhere else, once it has the keyboard, is a click outside.
     made.on('blur', () => {
       keyed = false
-      if (expanded && !holding) collapse(true)
+      if (!expanded || holding) return
+      if (now() - focusAskedAt < FOCUS_GRACE_MS) {
+        // The keyboard it was just given went straight to another window: stay
+        // open like a hover, unpinned, and settle once the pointer has gone.
+        pinned = false
+        if (!over) closeSoon()
+        return
+      }
+      collapse(true)
     })
     made.on('closed', () => {
       if (island === made) {
@@ -918,6 +943,16 @@ function islandDisplay(): Electron.Display {
 }
 
 /**
+ * How long the catcher waits before saying "enter" again for a pointer it
+ * already announced. Once the island takes the pointer the catcher is told to
+ * ignore it, so it never hears it leave and would otherwise stay sure the
+ * pointer is still on it — and say nothing the next time it arrives, which is
+ * the island that "sometimes opens and sometimes does not". The main process
+ * treats a repeat as nothing new.
+ */
+export const CATCHER_REPEAT_MS = 100
+
+/**
  * The catcher's page: nothing to see, and three things to say.
  *
  * Painted at the faintest alpha there is (1 in 255) rather than not at all,
@@ -928,9 +963,9 @@ function islandDisplay(): Electron.Display {
 export const CATCHER_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;background:rgba(0,0,0,0.004);cursor:default}
 </style></head><body><script>
-var d=window.deck||{};var inside=false;
+var d=window.deck||{};var inside=false;var said=0;
 function say(k){if(d.hootPanelCatch)d.hootPanelCatch(k)}
-document.addEventListener('mousemove',function(){if(!inside){inside=true;say('enter')}});
+document.addEventListener('mousemove',function(){var t=Date.now();if(!inside||t-said>=${CATCHER_REPEAT_MS}){inside=true;said=t;say('enter')}});
 document.documentElement.addEventListener('mouseleave',function(){if(inside){inside=false;say('leave')}});
 document.addEventListener('mousedown',function(e){if(e.button===0)say('press')});
 document.addEventListener('contextmenu',function(e){e.preventDefault();if(d.hootPanelMenu)d.hootPanelMenu()});
@@ -1018,6 +1053,7 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
         setBounds: (bounds) => window.setBounds(bounds),
         getBounds: () => window.getBounds(),
         showInactive: () => window.showInactive(),
+        isFocused: () => window.isFocused(),
         focus: () => window.focus(),
         blur: () => window.blur(),
         destroy: () => window.destroy(),

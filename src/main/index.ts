@@ -162,6 +162,7 @@ import { COPILOT_HOME_SETTING, registerCopilotFolderIpc } from './copilot-folder
 import { copilotFilesHere } from './copilot-files'
 import { registerCopilotInspectIpc, type CopilotInspectDeps } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
+import { TASKS_OPEN_CHANNEL } from './tasks/tasks-ipc'
 import { INTERACTIVE_KEY } from './deck-control/tour-tool'
 import { createSessionTools, type SessionTools } from './deck-control/session-tools'
 import { registerDeckignoreIpc } from './deckignore'
@@ -3936,6 +3937,8 @@ function registerIpc(): void {
      * listened to, rather than one more timer asking what the clock says.
      */
     routines.engine.wake()
+    // And your tasks' own due work — a reminder or a scheduled routine that came due asleep.
+    deckControl?.tasksWake()
   })
   // The GitHub sign-in stores a token of its own when the user connects from
   // inside the app. Bound to `core.github` — the one authenticator host-core
@@ -5086,6 +5089,8 @@ app.whenReady().then(async () => {
    * bound would be the wrong trade by a wide margin.
    */
   void registerDeckControlIpc(ipcMain, {
+    // CRM tasks given to Hoot are put to it in its own session, started if need be.
+    hoot: async () => (copilotRuntimeDeps === null ? null : (await ensureCopilot(copilotRuntimeDeps)).sessionId),
     /*
      * The live terminals, with one difference: typing goes through
      * `typeIntoSession`, the road a person's keystrokes take, rather than straight
@@ -5349,6 +5354,14 @@ app.whenReady().then(async () => {
       settled: (id, outcome) => copilotRuns?.settled(id, outcome),
     },
     broadcast: (channel, ...args) => send(channel, ...args),
+    // A task reminder clicked: the app in front, on the Tasks page, the task open.
+    showTask: (taskId) => {
+      if (mainWindow === null) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+      send(TASKS_OPEN_CHANNEL, taskId)
+    },
   })
     .then((handle) => {
       deckControl = handle

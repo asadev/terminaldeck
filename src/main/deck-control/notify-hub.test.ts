@@ -312,6 +312,27 @@ describe('keeping it across a restart', () => {
     second.hub.stop()
   })
 
+  it('takes one turn once, for any key, until it is older than anything kept', async () => {
+    const first = rig()
+    expect(first.hub.enqueue('A', event('s'), 'answer:1:abc')).toBe(true)
+    expect(first.hub.enqueue('A', event('s'), 'answer:1:abc')).toBe(false)
+    // Another app is never told a turn somebody was already told.
+    expect(first.hub.enqueue('B', event('s'), 'answer:1:abc')).toBe(false)
+    expect(first.hub.enqueue('A', event('s'), 'answer:2:def')).toBe(true)
+    first.hub.ack('A', first.hub.list('A').map((n) => n.id))
+    first.hub.stop()
+
+    const second = rig({ settings: first.settings, clock: first.clock })
+    expect(second.hub.enqueue('A', event('s'), 'answer:1:abc')).toBe(false)
+    second.hub.stop()
+
+    // Seven days on, the turn is forgotten with everything else that old.
+    first.clock.at += MAX_AGE_MS + 1
+    const third = rig({ settings: first.settings, clock: first.clock })
+    expect(third.hub.enqueue('A', event('s', { at: first.clock.now() }), 'answer:1:abc')).toBe(true)
+    third.hub.stop()
+  })
+
   it('holds each key to its caps, oldest first', () => {
     const { hub, clock } = rig({ disk: false })
     for (let i = 0; i < MAX_PER_KEY + 5; i += 1) hub.enqueue('A', event('s', { at: clock.now() }))

@@ -152,6 +152,18 @@ import { NotificationHub, REAL_CLOCK } from './notify-hub'
 import { NotifyDetector } from './notify-detect'
 import { writeChannelBridge } from './notify-channel'
 import { notifyTools } from './notify-tools'
+import { bearerOf } from './callers'
+import { TaskApi } from '../tasks/task-api'
+import { TaskConfig } from '../tasks/task-config'
+import { TaskEngine } from '../tasks/task-engine'
+import { LocalTasks } from '../tasks/task-local'
+import { LocalTaskDetail, type ReminderDelivery, type ReminderNotice } from '../tasks/task-detail-local'
+import { TaskClock } from '../tasks/task-clock'
+import { taskHttpHandler } from '../tasks/task-http'
+import { TaskOutbox } from '../tasks/task-outbox'
+import { TaskStore } from '../tasks/task-store'
+import { taskTools } from '../tasks/task-tools'
+import { registerTasksIpc, TASKS_CHANGED_CHANNEL } from '../tasks/tasks-ipc'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -250,6 +262,65 @@ function accessKeysDir(): string {
 
 /* ------------------------------------------------------------------ types -- */
 
+/** What the task popup needs from the Mac itself. */
+export interface TaskFilesDeps {
+  chooseFiles(): Promise<string[]>
+  chooseFolder(): Promise<string | null>
+  /** '' when it opened, else Electron's reason. */
+  openPath(path: string): Promise<string>
+}
+
+/** The real choosers, attached to the window in front, loaded on first use. */
+const ELECTRON_TASK_FILES: TaskFilesDeps = {
+  async chooseFiles() {
+    const { BrowserWindow, dialog } = await import('electron')
+    const options = { title: 'Attach files', properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'> }
+    const parent = BrowserWindow.getFocusedWindow()
+    const chosen = parent === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(parent, options)
+    return chosen.canceled ? [] : chosen.filePaths
+  },
+  async chooseFolder() {
+    const { BrowserWindow, dialog } = await import('electron')
+    const options = { title: 'Choose the project folder', properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
+    const parent = BrowserWindow.getFocusedWindow()
+    const chosen = parent === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(parent, options)
+    return chosen.canceled || chosen.filePaths.length === 0 ? null : chosen.filePaths[0]
+  },
+  async openPath(path) {
+    const { shell } = await import('electron')
+    return shell.openPath(path)
+  },
+}
+
+/** How a task reminder is delivered. */
+export interface TaskReminderDeps {
+  notify(notice: ReminderNotice, onClick: () => void): Promise<ReminderDelivery>
+}
+
+/** Shown ones, held until clicked or closed — a notification nothing holds loses its click. */
+const liveReminders = new Set<Electron.Notification>()
+
+/**
+ * A Mac notification, loaded on first use. "Delivered" means macOS took it:
+ * macOS does not tell an app whether its notifications are switched off, so
+ * that is the most this side can know.
+ */
+const ELECTRON_TASK_REMINDERS: TaskReminderDeps = {
+  async notify(notice, onClick) {
+    const { Notification } = await import('electron')
+    if (!Notification.isSupported()) return { delivered: false, reason: 'this computer does not show notifications from the app', retry: false }
+    const shown = new Notification({ title: notice.title, body: notice.body })
+    liveReminders.add(shown)
+    shown.on('click', () => {
+      liveReminders.delete(shown)
+      onClick()
+    })
+    shown.on('close', () => liveReminders.delete(shown))
+    shown.show()
+    return { delivered: true }
+  },
+}
+
 /**
  * The second place a confirmation can be shown and answered.
  *
@@ -332,12 +403,28 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
    * `settings.write` would be the stricter of the two disappearing silently.
    */
   extraTools?: readonly ToolSpec[]
+  /**
+   * The Mac's file and folder choosers and its "open in the app for it", for
+   * the task popup's attachments and project folder. Absent (production): the
+   * real ones, reached only when the popup asks — so a test that never opens a
+   * task never loads Electron.
+   */
+  taskFiles?: TaskFilesDeps
+  /**
+   * How a task reminder reaches you. Absent (production): a Mac notification;
+   * `null`: nothing delivers reminders here, and the popup does not offer them.
+   */
+  taskReminders?: TaskReminderDeps | null
+  /** Bring the app to the front on the Tasks page with this task open — a reminder clicked. */
+  showTask?(taskId: string): void
   /** Replaces the real app surface. Tests only; production passes nothing. */
   surface?: DeckSurface
   /** Overrides the copilot log directory. Tests only. */
   logDir?: string
   /** Overrides where access keys are kept. Tests only. */
   keysDir?: string
+  /** Hoot's session, started if it is not running; null when it cannot be. For CRM tasks given to Hoot. */
+  hoot?(): Promise<string | null>
 }
 
 export interface DeckControlHandle {
@@ -390,6 +477,8 @@ export interface DeckControlHandle {
     hub: NotificationHub
     events: McpEvents
   }
+  /** The Mac woke: what came due on your tasks while it slept is done now. */
+  tasksWake(): void
   stop(): Promise<void>
 }
 
@@ -556,6 +645,8 @@ export async function registerDeckControlIpc(
     dir: deps.keysDir ?? accessKeysDir(),
     settings: (keyId) => keys.notifySettings(keyId),
     onChange: () => deps.broadcast(AI_APPS_CHANGED_CHANNEL),
+    // A push still being tried is not also handed to a waiter — see `mcp-events.ts`.
+    pushing: (keyId, id) => mcpEvents?.owes(keyId, id) === true,
   })
   /*
    * MCP Events: the true push, to an app that subscribes (ChatGPT, on protocol
@@ -570,6 +661,7 @@ export async function registerDeckControlIpc(
       internet: () => keys.internet(),
     },
     onDelivered: (keyId, eventId) => notifyHub.deliveredBy(keyId, eventId, 'event'),
+    owed: (keyId, eventId) => notifyHub.owes(keyId, eventId),
     onChange: () => deps.broadcast(AI_APPS_CHANGED_CHANNEL),
   })
   const liveEvents = mcpEvents
@@ -589,11 +681,45 @@ export async function registerDeckControlIpc(
     console.error('[deck-control] could not write the Claude Code channel bridge:', error)
   }
 
+  /*
+   * CRM tasks (`src/main/tasks/`): the agents and connections the owner set up,
+   * an execution record per task, and the outbox that tells the CRM. The engine
+   * and the API are built once the dispatcher exists, below; everything reads
+   * them through these refs, so nothing here needs a more careful order.
+   */
+  const tasksDir = deps.keysDir ?? accessKeysDir()
+  const taskConfig = new TaskConfig({ dir: tasksDir })
+  const taskStore = new TaskStore({ dir: tasksDir })
+  /*
+   * Every change to tasks: the window redraws, and the task clock aims again at
+   * whatever is due next (a reminder just set, a routine just saved).
+   */
+  let taskClock: TaskClock | null = null
+  const tasksChanged = (): void => {
+    deps.broadcast(TASKS_CHANGED_CHANNEL)
+    taskClock?.poke()
+  }
+  const taskOutbox = new TaskOutbox({
+    dir: tasksDir,
+    target: (keyId) => {
+      const connection = taskConfig.connection(keyId)
+      if (connection === null || !connection.enabled || connection.eventsUrl === null || connection.eventsSecret === null) {
+        return null
+      }
+      return { url: connection.eventsUrl, secret: connection.eventsSecret }
+    },
+    onCommentId: (keyId, id) => taskStore.markOurs(keyId, id),
+    onChange: () => tasksChanged(),
+  })
+  let taskEngine: TaskEngine | null = null
+  let taskApi: TaskApi | null = null
+  const unwatchTaskConfig = taskConfig.onChange(() => tasksChanged())
+
   const notifyDetector = new NotifyDetector({
     surface,
     starterOf: (sessionId) => controlRef?.starterOf(sessionId) ?? null,
-    enqueue: (keyId, event) => {
-      if (!notifyHub.enqueue(keyId, event)) return false
+    enqueue: (keyId, event, turn) => {
+      if (!notifyHub.enqueue(keyId, event, turn)) return false
       liveEvents.offer(keyId, event)
       return true
     },
@@ -642,6 +768,8 @@ export async function registerDeckControlIpc(
       }),
       // The inbox of each AI app on a key. Listed to key callers only.
       ...notifyTools({ hub: () => notifyHub }),
+      // CRM tasks: the CRM's tools on a key, Hoot's on the desk.
+      ...taskTools({ api: () => taskApi, engine: () => taskEngine, store: () => taskStore, config: () => taskConfig }),
       ...(deps.extraTools ?? []),
     ],
     driving: () => tours.driving(),
@@ -654,10 +782,30 @@ export async function registerDeckControlIpc(
   })
 
   controlRef = control
+  // Declared before the engine: an agent finishing a repeating task reaches its routine through it.
+  let taskDetail: LocalTaskDetail | null = null
+  taskEngine = new TaskEngine({
+    config: taskConfig,
+    store: taskStore,
+    outbox: taskOutbox,
+    surface,
+    call: (tool, args) => control.call(tool, args),
+    hoot: async () => (deps.hoot === undefined ? null : await deps.hoot()),
+    onChange: () => tasksChanged(),
+    onLocalStatus: (taskId) => taskDetail?.noteStatus(taskId),
+  })
+  taskApi = new TaskApi({
+    config: taskConfig,
+    store: taskStore,
+    engine: taskEngine,
+    onChange: () => tasksChanged(),
+  })
+  taskEngine.recover()
   const rememberedPort = keys.port()
   const endpoint = await startDeckControlServer({
     control,
     keys: door,
+    tasks: taskHttpHandler({ api: () => taskApi, keyOf: (authorization) => keys.match(bearerOf(authorization))?.id ?? null }),
     ...(deps.port === undefined
       ? { preferredPort: rememberedPort ?? DEFAULT_TOOLS_PORT }
       : { port: deps.port }),
@@ -816,6 +964,45 @@ export async function registerDeckControlIpc(
     }
   })
 
+  /*
+   * Your own tasks, and the task popup on them (the reference CRM's task
+   * page): every change LocalTasks makes is told to the popup's Activity. A
+   * deleted task goes to the Trash with its files, which stay until it is restored.
+   */
+  const localTasks = new LocalTasks({
+    store: taskStore,
+    config: taskConfig,
+    engine: taskEngine,
+    onChange: () => tasksChanged(),
+    onUpdated: (task, changes, notes) => taskDetail?.noteUpdate(task, changes, notes),
+  })
+  const taskFiles = deps.taskFiles ?? ELECTRON_TASK_FILES
+  taskDetail = new LocalTaskDetail({
+    store: taskStore,
+    config: taskConfig,
+    local: localTasks,
+    filesDir: join(tasksDir, 'task-files'),
+    chooseFiles: () => taskFiles.chooseFiles(),
+    chooseFolder: () => taskFiles.chooseFolder(),
+    openPath: (path) => taskFiles.openPath(path),
+    notify: deps.taskReminders === null ? undefined : (notice) => (deps.taskReminders ?? ELECTRON_TASK_REMINDERS).notify(notice, () => deps.showTask?.(notice.taskId)),
+    onChange: () => tasksChanged(),
+  })
+  // Due work — a routine on a schedule, a reminder, a scheduled comment — at its moment.
+  const detail = taskDetail
+  taskClock = new TaskClock({ nextDueAt: () => detail.nextDueAt(), runDue: () => detail.runDue() })
+  taskClock.start()
+  registerTasksIpc(ipcMain, {
+    config: taskConfig,
+    store: taskStore,
+    outbox: taskOutbox,
+    keys: () => keys.list(),
+    isApprover: deps.isApprover,
+    closeSession: (taskId) => taskEngine?.closeSession(taskId) ?? false,
+    local: localTasks,
+    detail: taskDetail,
+  })
+
   /** Past tours, newest first. What the recap card and the Settings list read. */
   ipcMain.handle('deck-control:tours', (_event, count?: unknown) => {
     const want = typeof count === 'number' && Number.isFinite(count) ? Math.trunc(count) : 10
@@ -833,11 +1020,18 @@ export async function registerDeckControlIpc(
     keys,
     door,
     notify: {
-      noteStatus: (sessionId, status) => notifyDetector.noteStatus(sessionId, status),
-      noteExit: (sessionId, exitCode) => notifyDetector.noteExit(sessionId, exitCode),
+      noteStatus: (sessionId, status) => {
+        notifyDetector.noteStatus(sessionId, status)
+        taskEngine?.noteStatus(sessionId, status)
+      },
+      noteExit: (sessionId, exitCode) => {
+        notifyDetector.noteExit(sessionId, exitCode)
+        taskEngine?.noteExit(sessionId, exitCode)
+      },
       hub: notifyHub,
       events: liveEvents,
     },
+    tasksWake: () => taskClock?.wake(),
     stop: async () => {
       // The door first: nothing new comes in from an AI app while the rest is
       // torn down, and every request still in flight is aborted.
@@ -848,6 +1042,12 @@ export async function registerDeckControlIpc(
       unwatchNotifyKeys()
       liveEvents.stop()
       notifyHub.stop()
+      // Tasks: no more due work, starts or deadlines, the outbox and the records saved.
+      taskClock?.stop()
+      taskEngine?.stop()
+      taskOutbox.stop()
+      taskStore.flush()
+      unwatchTaskConfig()
       unwatchAiApps()
       try {
         keys.flush()

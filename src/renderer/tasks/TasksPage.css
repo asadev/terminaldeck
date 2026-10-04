@@ -1,0 +1,229 @@
+/* ============================================================================
+   Tasks, the sidebar page. Laid out like the other pages: the page fill, one
+   column, the list drawn by CrmTasks.css. Colour comes only from tokens.css.
+   ============================================================================ */
+
+.tasks-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-8);
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.tasks-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.tasks-page-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.tasks-page-fact,
+.tasks-page-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.tasks-page .crm-tasks {
+  padding-top: 0;
+}
+
+.crm-task-details {
+  color: var(--text-muted);
+}
+
+/* Before the first read answers: the page's fill and nothing on it. */
+.tasks-page-loading {
+  justify-content: center;
+}
+
+.tasks-page-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.tasks-page-problem {
+  margin: 0;
+  color: var(--status-input);
+  font-size: var(--t-callout);
+}
+
+.tasks-page-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.tasks-page-heading {
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+}
+
+.tasks-local-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-2);
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.tasks-local-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-2);
+}
+
+.tasks-local-main {
+  display: flex;
+  flex: 1 1 320px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tasks-local-title {
+  font-weight: var(--w-medium);
+}
+
+.tasks-local-details {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  white-space: pre-wrap;
+}
+
+.tasks-local-notes {
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.tasks-local-note-by {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.tasks-local-controls,
+.tasks-local-pair,
+.tasks-local-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.tasks-local-control,
+.tasks-local-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.tasks-local-reply {
+  display: flex;
+  flex: 1 1 100%;
+  gap: var(--sp-2);
+}
+
+.tasks-local-reply .tasks-page-input {
+  flex: 1;
+}
+
+.tasks-local-form {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.tasks-page-input {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.tasks-page-area {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.tasks-page-new {
+  font-weight: var(--w-medium);
+}
+
+/* A task, opened under its row or card. */
+.td-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-1) var(--sp-2) var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.td-detail-status,
+.td-detail-actions,
+.td-detail-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.td-detail-label {
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.td-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-2);
+}
+
+.td-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.td-wide {
+  grid-column: 1 / -1;
+}

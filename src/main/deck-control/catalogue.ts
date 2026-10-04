@@ -538,8 +538,12 @@ export interface ToolSpec {
    * any other caller itself, because "not listed" is the weaker half of "may
    * not use". The notification tools are the first: an inbox that belongs to a
    * key has no meaning for the copilot.
+   *
+   * `copilot`: the opposite — never listed to an AI app on a key, not even as
+   * an index line. Hoot's CRM task tools are the first: an app must not be able
+   * to verify work or post as Hoot.
    */
-  audience?: 'keys'
+  audience?: 'keys' | 'copilot'
   /**
    * For an AI app on an access key only: hold this tool behind `tools.describe`
    * with this line, though it is listed in full to the copilot.
@@ -1457,6 +1461,11 @@ export function buildCatalogue(): ToolSpec[] {
               'one agent, so it also decides the agent when `provider` is left out.',
           },
           resume: { type: 'boolean', description: 'Continue the most recent conversation in that folder.' },
+          conversation: {
+            type: 'string',
+            description:
+              'Continue exactly this conversation, by the agent’s own conversation id, rather than the folder’s most recent.',
+          },
           brief: {
             type: 'string',
             description:
@@ -1503,11 +1512,18 @@ export function buildCatalogue(): ToolSpec[] {
         }
         // An account is a login of one agent, so naming one names the agent.
         const provider = asked ?? account?.provider ?? null
+        // Becomes a command-line argument: an id, never something that reads as a flag.
+        const conversation = optStr(args, 'conversation')
+        if (conversation !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(conversation)) {
+          throw new BadArgument('conversation must be a conversation id')
+        }
         const input: CreateSessionInput = {
           cwd,
           cols: START_COLS,
           rows: START_ROWS,
-          resume: optBool(args, 'resume', false),
+          resume: optBool(args, 'resume', false) || conversation !== null,
+          // A named conversation: exactly that one, never "the newest in the folder".
+          ...(conversation === null ? {} : { resumeConversationId: conversation }),
           ...(provider === null ? {} : { provider: provider as ProviderId }),
           ...(account === null ? {} : { profileId: account.id }),
           /*

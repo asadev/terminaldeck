@@ -278,7 +278,22 @@ describe('every section id still resolves to a pane', () => {
      * log and reach, and this is every *other* agent's way in. Putting a list
      * of keys for ChatGPT under "Copilot" is where somebody stops finding it.
      */
-    expect(sectionsFor('mac').length).toBe(12)
+    /*
+     * ## The thirteenth is **Tasks**, 2026-10-04, and this is what it paid
+     *
+     * The first screen its subject has had: a CRM sends tasks, and Terminal
+     * Deck runs them on agents set up here — their coding agent, limits, how
+     * long a finished session stays open, the check that marks work complete —
+     * and on the CRM connections that say which CRM users may hand them work,
+     * in which folders, with which statuses. None of it existed before.
+     *
+     * Folding it into Connect an AI app was considered and loses on this
+     * table's rule that a section is a subject: that pane is keys and setup for
+     * outside apps, and a list of agent profiles and CRM statuses under it is
+     * where somebody stops finding them. It sits right after it, because every
+     * CRM connection is built on one of that pane's keys.
+     */
+    expect(sectionsFor('mac').length).toBe(13)
     /*
      * Windows derived rather than restated, so the two platforms cannot be raised
      * apart — and so this file holds one number instead of two. Linux is the only

@@ -358,6 +358,7 @@ export function describeIndex(behind: readonly ToolSpec[]): string {
  */
 export function asListedFor(spec: ToolSpec, keyCaller: boolean): ToolSpec | null {
   if (spec.audience === 'keys' && !keyCaller) return null
+  if (spec.audience === 'copilot' && keyCaller) return null
   if (keyCaller && spec.keyIndex !== undefined && spec.index === undefined) return { ...spec, index: spec.keyIndex }
   return spec
 }

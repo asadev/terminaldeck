@@ -1,0 +1,108 @@
+/* ============================================================================
+   Overview → CRM tasks. A read-only list between the session board and the
+   project's widgets, drawn in the board's own terms: the same heading size,
+   the same `--bg-secondary` fill with a large radius, no rules between rows.
+   Colour comes only from tokens.css.
+   ============================================================================ */
+
+.crm-tasks {
+  flex-shrink: 0;
+  padding-top: var(--sp-8);
+}
+
+.crm-tasks-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: 0 var(--sp-2) var(--sp-3);
+}
+
+.crm-tasks-heading {
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+}
+
+.crm-tasks-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+.crm-tasks-empty,
+.crm-tasks-problem {
+  margin: 0;
+  padding: 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.crm-tasks-problem {
+  padding-bottom: var(--sp-2);
+  color: var(--status-input);
+}
+
+.crm-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-2);
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.crm-task {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-2);
+}
+
+.crm-task-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.crm-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--w-medium);
+}
+
+.crm-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+
+.crm-task-meta > span + span::before {
+  content: '·';
+  margin-inline-end: var(--sp-2);
+  color: var(--text-muted);
+}
+
+/* The CRM's own word, spelt as the CRM spells it. */
+.crm-task-status {
+  color: var(--text-primary);
+}
+
+.crm-task[data-process='running'] .crm-task-process {
+  color: var(--accent);
+  font-weight: var(--w-medium);
+}
+
+.crm-task-close {
+  flex-shrink: 0;
+}
