@@ -44,6 +44,7 @@ import { copilotAdminTools, type CopilotAdminDeps } from './copilot-admin-tools'
 import { coverageTool } from './coverage-tool'
 import { extensionTools } from './extension-tools'
 import { filesTools, type FilesToolDeps } from './files-tools'
+import { fixedTools, type FixedToolDeps } from './fixed-tools'
 import { createMachineArea } from './machine-area'
 import { notifyTools } from './notify-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
@@ -125,6 +126,9 @@ export function assembledExtraTools(): ToolSpec[] {
     ...copilotAdminTools({} as CopilotAdminDeps),
     ...uiTools({ evaluate: async () => null }),
     coverageTool(),
+    // A project's Stays Fixed page, after the sessions lane's — where
+    // `WIRING-staysfixed.md` puts it in `src/main/index.ts`.
+    ...fixedTools({} as FixedToolDeps),
   ]
 }
 

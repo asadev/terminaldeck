@@ -9,6 +9,7 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
 import { StorePage } from '../store/StorePage'
 import { DevicesPage } from '../devices/DevicesPage'
+import { StaysFixedPage } from '../staysfixed/StaysFixedPage'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { PageScope } from '../components/PageScope'
@@ -89,6 +90,7 @@ const SCOPED_PANELS: ReadonlySet<PanelId> = new Set<PanelId>([
   'artifacts',
   'git',
   'readiness',
+  'staysfixed',
 ])
 
 function asGitGroup(focus: string | null | undefined): GitFileGroup | undefined {
@@ -414,6 +416,12 @@ export function PanelView({
         return <GitHubPanel cwd={projectPath} initialTab={focus === 'issues' ? 'issues' : 'pulls'} />
       case 'readiness':
         return <ReadinessPanel projectPath={projectPath} />
+      // Below the project gate: a check is of one project, and without one
+      // there is nothing to set up. The page can send the reader to Source
+      // control, where a folder becomes a git repository — which Stays Fixed
+      // needs before it can put an old build back.
+      case 'staysfixed':
+        return <StaysFixedPage projectPath={projectPath} onShowPanel={onShowPanel} />
       // There was an `alerts` case here and it is gone with the panel entry, in
       // the same way the `machines` case went above: *"notifications should be
       // a pop-up just like settings, not a full page."* Alerts is `AlertsWindow`

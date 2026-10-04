@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "cut": true,
+  "unchanged": false,
+  "product": "tiny-greeter",
+  "root": "/Users/you/Projects/tiny-greeter",
+  "warnings": [],
+  "summary": "1.0.0 is now what tiny-greeter calls working. Nothing was being compared against before this — from now on it is. All 12 addresses it answered at answered the same way twice.",
+  "lines": [
+    "tiny-greeter shipped at commit a54e4cd. There was no new tag, no version bump and no npm publish to go on, so this is being recorded as the release because somebody said it shipped.",
+    "1.0.0 is now what tiny-greeter calls working. Nothing was being compared against before this — from now on it is. All 12 addresses it answered at answered the same way twice.",
+    "Nobody has to approve anything. The next check compares against this.",
+    "NOT EVERYTHING WAS CHECKED: 3 of the 3 ways into this product have never been walked through, so nothing here says anything about them, and 4 other things were not looked at (None of this project's own tests were run, because there are none this tool can find, and more). A clean result only covers what was walked — `staysfixed coverage` has the whole list."
+  ],
+  "release": {
+    "how": "commit",
+    "what": "a54e4cd",
+    "describe": "shipped at commit a54e4cd. There was no new tag, no version bump and no npm publish to go on, so this is being recorded as the release because somebody said it shipped.",
+    "gitSha": "a54e4cd3e9117ad3222ecb8bc1a8a025e02fd817",
+    "branch": "main",
+    "version": "1.0.0"
+  },
+  "buildId": "git-a54e4cd3e911",
+  "decision": {
+    "ok": true,
+    "state": "clean",
+    "needsForce": false,
+    "buildId": "git-a54e4cd3e911",
+    "checkedAt": "2026-10-03T23:41:17.790Z",
+    "findings": 0,
+    "waived": 0,
+    "why": "The last check on 1.0.0 found nothing unaccounted for."
+  },
+  "reference": {
+    "id": "ref-20261004-034127-c7afa8",
+    "product": "tiny-greeter",
+    "buildId": "git-a54e4cd3e911",
+    "at": "2026-10-03T23:41:27.601Z",
+    "summary": "1.0.0 is now what tiny-greeter calls working. Nothing was being compared against before this — from now on it is. All 12 addresses it answered at answered the same way twice."
+  }
+}

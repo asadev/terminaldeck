@@ -1,5 +1,6 @@
 /** Single source of truth for the sidebar's views — icons and labels. */
 
+import { STAYS_FIXED } from '../../shared/stays-fixed'
 import { detectPlatform } from '../platform'
 
 /**
@@ -126,12 +127,21 @@ import { detectPlatform } from '../platform'
  * own, and coming back to it costs a reconnect rather than a lost page.
  * `devices/DevicesPage.tsx` has the longer version of that argument.
  */
+/**
+ * And a `staysfixed`, added in 0.16.5: Stays Fixed, the owner's own regression
+ * check, built into the app. A page for the same reason Source control is one —
+ * it is about the open project, you go there to run something and read what it
+ * found, and you come back to it after every change. Not a pop-up, because the
+ * findings are the whole of what you came for; not a window, because nothing on
+ * it keeps running once you leave except a check, and a check reports back here.
+ */
 export type PanelId =
   | 'overview'
   | 'files'
   | 'artifacts'
   | 'git'
   | 'simulators'
+  | 'staysfixed'
   | 'github'
   | 'readiness'
   | 'store'
@@ -326,6 +336,22 @@ export const PANELS: PanelSpec[] = [
    * and `reachable.test.ts` need it present.
    */
   ...(detectPlatform() === 'windows' ? [] : [SIMULATORS_PANEL]),
+  {
+    /*
+     * Last in the Project run: Overview, Files, Artifacts and Source control are
+     * what the project *is*; Simulators and this are what you do to check it.
+     * The name is the product's own, said the way he says it, because it is a
+     * separate tool of his with its own users and its own npm page — renaming
+     * it here would give one thing two names.
+     *
+     * The glyph is a shield with a tick: something that guards what already
+     * works. No `command`, like Store and Simulators.
+     */
+    id: 'staysfixed',
+    label: STAYS_FIXED,
+    group: 'project',
+    icon: 'M12 3.5l7 2.6v5.4c0 4.2-2.9 7.7-7 9-4.1-1.3-7-4.8-7-9V6.1zM9 12.2l2.1 2.1 4-4.3',
+  },
   {
     /*
      * First in the run, and above GitHub, because it is the door the rest of

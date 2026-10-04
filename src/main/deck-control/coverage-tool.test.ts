@@ -23,8 +23,9 @@ describe('tools.coverage', () => {
   it('answers the counts when asked nothing, without dumping the table', async () => {
     const output = await coverageTool().run({}, context())
     const value = output.value as { counts: Record<string, { actions: number; withTool: number }>; rows?: unknown }
-    // `devices` is the Simulators page's channels, added with Annotate in 0.16.0.
-    expect(Object.keys(value.counts)).toEqual(['sessions', 'machines', 'agents', 'browser', 'devices', 'window'])
+    // `devices` is the Simulators page's channels, added with Annotate in 0.16.0;
+    // `fixed` is a project's Stays Fixed page, added in 0.16.5.
+    expect(Object.keys(value.counts)).toEqual(['sessions', 'machines', 'agents', 'browser', 'devices', 'fixed', 'window'])
     expect(value.counts.sessions.actions).toBe(Object.keys(COVERAGE_AREAS.sessions).length)
     expect(value.rows).toBeUndefined()
   })
