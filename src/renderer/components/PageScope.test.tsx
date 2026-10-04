@@ -30,7 +30,7 @@ describe('PageScope', () => {
   })
 
   it('names another machine when the page is reporting on one', () => {
-    const html = renderToStaticMarkup(<PageScope path="/home/imza/AAAA" machine="DESKTOP-DDGMNCV" />)
+    const html = renderToStaticMarkup(<PageScope path="/home/kiwi/AAAA" machine="DESKTOP-DDGMNCV" />)
     expect(html).toContain('on DESKTOP-DDGMNCV')
     expect(html).not.toContain('on this ')
   })

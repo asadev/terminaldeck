@@ -179,8 +179,8 @@ export function containerName(deviceKey: string): string {
  * The directories on the path from the drive root down to `path`, not including
  * `path` itself.
  *
- * `C:\Users\Imza\Projects\app` produces `C:\`, `C:\Users`, `C:\Users\Imza` and
- * `C:\Users\Imza\Projects`.
+ * `C:\Users\Kiwi\Projects\app` produces `C:\`, `C:\Users`, `C:\Users\Kiwi` and
+ * `C:\Users\Kiwi\Projects`.
  *
  * A UNC path produces **nothing**, and that is deliberate rather than an
  * omission: `\\server\share` has no ancestor an ACL can be written on from

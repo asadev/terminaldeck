@@ -130,8 +130,8 @@ export function reachFor(
      * running session — and a session almost always runs in a project that is
      * open, so two projects with a session in each offer four entries, two of
      * them repeats. Asad's recording caught exactly that: the browser client's
-     * "Start in" list showed `/home/asad/ClaudeImza` and
-     * `/home/asad/ClaudeImzacrm`, and then both again.
+     * "Start in" list showed `/home/asad/ClaudeKiwi` and
+     * `/home/asad/ClaudeKiwicrm`, and then both again.
      *
      * `sameFolder` rather than a Set, so `/a/b` and `/a/b/` are one folder and
      * Windows' case-insensitivity is honoured — the same comparison the

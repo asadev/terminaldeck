@@ -170,8 +170,8 @@ function supportedEnvironment(): UpdateEnvironment {
 /** The paths a properly signed, properly packaged build would have. */
 const SUPPORTED_FILES = new Set([codeSignaturePath(SIGNED_BUNDLE), FEED])
 
-const WIN_EXEC = 'C:\\Users\\Imza\\AppData\\Local\\Programs\\Terminal Deck\\Terminal Deck.exe'
-const WIN_FEED = 'C:\\Users\\Imza\\AppData\\Local\\Programs\\Terminal Deck\\resources\\app-update.yml'
+const WIN_EXEC = 'C:\\Users\\Kiwi\\AppData\\Local\\Programs\\Terminal Deck\\Terminal Deck.exe'
+const WIN_FEED = 'C:\\Users\\Kiwi\\AppData\\Local\\Programs\\Terminal Deck\\resources\\app-update.yml'
 
 /**
  * The installed Windows build, as it is on `desktop-ddgmncv`.

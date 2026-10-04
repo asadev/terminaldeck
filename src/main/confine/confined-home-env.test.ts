@@ -36,7 +36,7 @@ import { windowsConfinedEnv } from './appcontainer'
  */
 
 const HOME_POSIX = '/Users/x/Library/Application Support/td/remote/device-homes/abc'
-const HOME_WIN = 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-homes\\abc'
+const HOME_WIN = 'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-homes\\abc'
 
 let dir: string | null = null
 

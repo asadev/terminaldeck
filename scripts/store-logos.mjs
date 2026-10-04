@@ -526,7 +526,12 @@ async function main() {
       const raw = await get(logo.url)
       const sha256 = createHash('sha256').update(raw).digest('hex')
       const shaped = shape(raw, logo.url)
-      const src = `data:${shaped.mime};base64,${shaped.bytes.toString('base64')}`
+      // An SVG goes in as text, not base64: it draws the same, and base64 of a
+      // picture can happen to spell words that were never in it.
+      const src =
+        shaped.mime === 'image/svg+xml'
+          ? `data:image/svg+xml,${encodeURIComponent(shaped.bytes.toString('utf8'))}`
+          : `data:${shaped.mime};base64,${shaped.bytes.toString('base64')}`
       if (src.length > MAX_BYTES) {
         throw new Error(`${src.length} bytes encoded, over the ${MAX_BYTES} cap`)
       }

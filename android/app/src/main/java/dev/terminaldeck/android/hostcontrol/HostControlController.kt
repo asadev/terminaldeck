@@ -12,7 +12,7 @@ import dev.terminaldeck.android.protocol.ServerMessage
  * ## "The relay is the network." — Asad's rule, pinned
  *
  * A server page reaches one box by two roads: an SSH address it was added with, and the relay it is
- * paired over. Asad's SSH address is a Tailscale name (`imza-pc-wsl`) that drops on its own — and
+ * paired over. Asad's SSH address is a Tailscale name (`kiwi-pc-wsl`) that drops on its own — and
  * when it does, the SSH survey on the server page reports the box as unreachable while every session
  * on it is still running over the public relay. His rule is that the relay *is* the network, so this
  * controller reaches the box the other way: when the server is a connected machine, its status and

@@ -38,7 +38,7 @@ import {
  * So the fixtures are split by platform, and each side was read off real
  * `.claude/projects` directories rather than derived from the rule being
  * tested: the macOS ones from this Mac, the Windows ones from
- * `C:\Users\Imza\.claude\projects`.
+ * `C:\Users\Kiwi\.claude\projects`.
  */
 const ON_WINDOWS = process.platform === 'win32'
 
@@ -97,8 +97,8 @@ describe('encodeProjectPath', () => {
   })
 
   it.skipIf(ON_WINDOWS)('collapses a dot-directory into a double hyphen', () => {
-    expect(encodeProjectPath('/Users/apple/ClaudeImza/.claude/worktrees/focused-lumiere-5424d6')).toBe(
-      '-Users-apple-ClaudeImza--claude-worktrees-focused-lumiere-5424d6',
+    expect(encodeProjectPath('/Users/apple/ClaudeKiwi/.claude/worktrees/focused-lumiere-5424d6')).toBe(
+      '-Users-apple-ClaudeKiwi--claude-worktrees-focused-lumiere-5424d6',
     )
   })
 

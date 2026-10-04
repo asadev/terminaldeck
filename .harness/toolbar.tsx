@@ -59,7 +59,7 @@ const PROFILES = {
 const LOGINS: Record<string, { profileId: string; origin: string; username: string; updatedAt: number }[]> = {
   default: [{ profileId: 'default', origin: 'https://github.com', username: 'asadev', updatedAt: 0 }],
   '6f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60': [
-    { profileId: '6f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60', origin: 'https://app.imza.ae', username: 'asad', updatedAt: 0 },
+    { profileId: '6f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60', origin: 'https://app.kiwi.test', username: 'asad', updatedAt: 0 },
     { profileId: '6f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60', origin: 'http://staging.local', username: 'admin', updatedAt: 0 },
   ],
 }

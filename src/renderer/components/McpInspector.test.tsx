@@ -206,7 +206,7 @@ describe('<McpInspector>', () => {
    */
   it('offers this machine and every one it can report on', () => {
     const targets = [
-      { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/home/imza/AAAA' },
+      { machineId: 'm1', name: 'DESKTOP-DDGMNCV', sessionId: 's1', sessionTitle: 'AAAA', cwd: '/home/kiwi/AAAA' },
     ]
     const html = renderToStaticMarkup(
       <MachinePills targets={targets} here="Studio" pick={null} onPick={() => {}} />,

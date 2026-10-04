@@ -331,7 +331,7 @@ describe('the address, in both spellings', () => {
      */
     const packaged = hookAddress('C:\\Users\\asad\\AppData\\Roaming\\terminaldeck', 'win32')
     const dev = hookAddress('C:\\Users\\asad\\scratch\\terminaldeck', 'win32')
-    const other = hookAddress('C:\\Users\\imza\\AppData\\Roaming\\terminaldeck', 'win32')
+    const other = hookAddress('C:\\Users\\kiwi\\AppData\\Roaming\\terminaldeck', 'win32')
     expect(new Set([packaged, dev, other]).size).toBe(3)
   })
 

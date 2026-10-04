@@ -960,7 +960,7 @@ export function Sidebar({
    * qualifiers.
    *
    * When it *is* named, it goes on the second line rather than beside the agent,
-   * and that was measured rather than chosen: `Claude Code — ClaudeImza` on a
+   * and that was measured rather than chosen: `Claude Code — ClaudeKiwi` on a
    * 264px rail comes out as **Claude Code — Claude…**, so the one row that has
    * to identify its own folder was the one row whose folder was cut off. The
    * second line wraps, so it has the width, and the agent — which is what the

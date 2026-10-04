@@ -1209,7 +1209,7 @@ export const UNNAMED_LOGIN = 'This agent does not name its login'
  *   > *"So, like, if I have any account login here, it should be showing that
  *   > one."*
  *
- * The rows read "imzapremium@gmail.com", "Your own Codex CLI install · Signed
+ * The rows read "examplemail@gmail.com", "Your own Codex CLI install · Signed
  * in" and "Your own Gemini CLI install · Not signed in". The second of those is
  * the defect: something *is* signed in there, and the row answers "which login?"
  * with the name of the directory it runs out of.
@@ -1261,7 +1261,7 @@ export function accountRowLabel(account: NamedAccount, signIn: SignInFacts | und
  *
  * What is *not* in scope is the account chip on the session bar over the
  * terminal, which prints the whole address and which he wants: *"Templates · ✳
- * imzapremium@gmail.com ⌄"* is the answer to "who is this session running as",
+ * examplemail@gmail.com ⌄"* is the answer to "who is this session running as",
  * asked in the one place there is room to answer it. This is the rail's column,
  * and the rail's answer is a name or nothing.
  *

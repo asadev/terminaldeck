@@ -11,7 +11,7 @@ Two rules govern it, both learned the hard way in this project:
   in a screenshot of the real app.
 - **On the machine it ships to, not the one it was built on.** A dozen bugs this
   week existed only on a clean Windows box. His PC is `DESKTOP-DDGMNCV`,
-  reachable over `ssh imza-pc`, and Terminal Deck is installed and running on it
+  reachable over `ssh kiwi-pc`, and Terminal Deck is installed and running on it
   now — so 0.2.0 reaches it as a real self-update, the way a stranger would get
   it.
 

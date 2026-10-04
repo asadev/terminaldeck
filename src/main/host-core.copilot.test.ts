@@ -144,7 +144,7 @@ describe('the order the list is written in', () => {
     await core.startSession({ cwd: live, cols: 80, rows: 24, provider: 'shell' })
     core.ledger.held.hold(
       {
-        cwd: '/home/asad/ClaudeImza',
+        cwd: '/home/asad/ClaudeKiwi',
         provider: 'claude',
         profileId: null,
         cols: 100,
@@ -155,7 +155,7 @@ describe('the order the list is written in', () => {
     )
 
     const list = store().getOpenSessions()
-    expect(list[0]?.cwd).toBe('/home/asad/ClaudeImza')
+    expect(list[0]?.cwd).toBe('/home/asad/ClaudeKiwi')
     // And it is written as the agent that was asked for. This is the whole of
     // the second bug: the app used to answer "claude would not start" by
     // recording `shell`, which made a transient failure permanent.

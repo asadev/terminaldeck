@@ -621,10 +621,10 @@ export async function conversationOnDisk(
  * compose, and either one alone is enough to lose the conversation:
  *
  *  1. **`encodeProjectPath` resolves against the host.** It calls
- *     `path.resolve`, so on Windows `/home/asad/ClaudeImza` becomes
- *     `C:\home\asad\ClaudeImza` and encodes to `C--home-asad-ClaudeImza`. The
+ *     `path.resolve`, so on Windows `/home/asad/ClaudeKiwi` becomes
+ *     `C:\home\asad\ClaudeKiwi` and encodes to `C--home-asad-ClaudeKiwi`. The
  *     agent that actually wrote the transcript was a Linux process and encoded
- *     the same folder as `-home-asad-ClaudeImza`.
+ *     the same folder as `-home-asad-ClaudeKiwi`.
  *  2. **The config directory is the host's.** `resolveProfile` answers
  *     `C:\Users\<user>\.claude`; the agent's own is `/home/asad/.claude`, inside
  *     the distribution, where Windows has no `.claude` at all.
@@ -635,9 +635,9 @@ export async function conversationOnDisk(
  * every tab clean. His app log says it in those words, twice, once per tab:
  *
  *     [restore] started clean: no earlier conversation was found on disk for
- *     this folder {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *     this folder {"folder":"/home/asad/ClaudeKiwi","agent":"claude"}
  *
- * while `/home/asad/.claude/projects/-home-asad-ClaudeImza` sat inside the
+ * while `/home/asad/.claude/projects/-home-asad-ClaudeKiwi` sat inside the
  * distribution with that morning's conversation in it. On macOS neither fault
  * can fire — the folder is already a host path and the agent is a host process —
  * which is exactly why the feature looked fine on one platform and broken on

@@ -940,8 +940,8 @@ export function SessionControls({
    * ## The bug this is the whole of the answer to
    *
    * Asad's Windows recording, 0.4.0. Two sessions, one window, the same width:
-   * `ClaudeImza` carried the usage reading, the model chip and the effort chip,
-   * and `ClaudeImzacrm` carried none of the three — while the terminal directly
+   * `ClaudeKiwi` carried the usage reading, the model chip and the effort chip,
+   * and `ClaudeKiwicrm` carried none of the three — while the terminal directly
    * underneath the empty bar printed `Claude Code v2.1.224 · Opus 5 with xhigh
    * effort · Claude API`. Not a fold, not a width: a per-session fact, and it
    * held across five frames.

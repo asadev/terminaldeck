@@ -530,7 +530,7 @@ different identity. Non-TTY output is often redacted — a pty reveals it.
 Styled controls swallow synthetic clicks — use real pixel clicks. When you do
 escalate, say what you tried and why each failed.
 
-Earned the hard way in one night: the issuer ID *was* in the Imza folder
+Earned the hard way in one night: the issuer ID *was* in the Kiwi folder
 (`apps/eas.json`); the App Store record *could* be created, just not by the API;
 npm's auth URL *was* recoverable, just not without a pty.
 

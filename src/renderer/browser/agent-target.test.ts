@@ -48,9 +48,9 @@ const MACHINES = {
       id: 'm1',
       state: 'online',
       sessions: [
-        { id: 'r1', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'claude', exitCode: null },
-        { id: 'r2', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'shell', exitCode: null },
-        { id: 'r3', cwd: 'C:\\Users\\Imza\\Projects\\imza', provider: 'claude', exitCode: null },
+        { id: 'r1', cwd: 'C:\\Users\\Kiwi\\Projects\\terminaldeck', provider: 'claude', exitCode: null },
+        { id: 'r2', cwd: 'C:\\Users\\Kiwi\\Projects\\terminaldeck', provider: 'shell', exitCode: null },
+        { id: 'r3', cwd: 'C:\\Users\\Kiwi\\Projects\\kiwi', provider: 'claude', exitCode: null },
       ],
       capabilities: ['create'],
       hostPlatform: 'win32',
@@ -77,8 +77,8 @@ const GUESTS = {
       sessionIds: [],
       tunnels: [],
       sessions: [
-        { id: 'g1', title: 'terminaldeck', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'claude', status: 'idle', exitCode: null },
-        { id: 'g2', title: 'terminaldeck', cwd: 'C:\\Users\\Imza\\Projects\\terminaldeck', provider: 'shell', status: 'idle', exitCode: null },
+        { id: 'g1', title: 'terminaldeck', cwd: 'C:\\Users\\Kiwi\\Projects\\terminaldeck', provider: 'claude', status: 'idle', exitCode: null },
+        { id: 'g2', title: 'terminaldeck', cwd: 'C:\\Users\\Kiwi\\Projects\\terminaldeck', provider: 'shell', status: 'idle', exitCode: null },
       ],
     },
     {
@@ -191,7 +191,7 @@ describe('readSessions', () => {
       'science-locus · Session 1',
       'Studio PC · terminaldeck · Session 1',
       'Studio PC · terminaldeck · Session 2',
-      'Studio PC · imza · Session 1',
+      'Studio PC · kiwi · Session 1',
     ])
     expect(rows.map((row) => row.machineId)).toEqual(['', '', '', 'm1', 'm1', 'm1'])
   })
@@ -512,7 +512,7 @@ describe('terminals on servers', () => {
       'science-locus · Session 1',
       'Studio PC · terminaldeck · Session 1',
       'Studio PC · terminaldeck · Session 2',
-      'Studio PC · imza · Session 1',
+      'Studio PC · kiwi · Session 1',
       // No folder: the shell landed wherever the sign-in did, which is what the
       // rail calls `Office PC › Session 1`.
       'Office PC · Session 1',

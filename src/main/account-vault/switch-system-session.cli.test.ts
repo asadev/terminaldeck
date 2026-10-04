@@ -45,13 +45,13 @@ describe.skipIf(!LIVE)('the real CLI on the Mac’s own login, switched in place
   let socket: VaultSocket
   let shimDir = ''
   let fake = ''
-  const adopting = new Set(['imzapremium'])
+  const adopting = new Set(['examplemail'])
   const ran: string[] = []
 
   beforeAll(async () => {
     root = mkdtempSync('/tmp/tdsys-')
     home = join(root, 'home')
-    cfgB = join(root, 'profiles', 'imzapremium')
+    cfgB = join(root, 'profiles', 'examplemail')
     storeBase = join(root, 'userData', 'account-vault', 'store')
     mkdirSync(join(home, '.claude'), { recursive: true })
     mkdirSync(cfgB, { recursive: true })
@@ -61,7 +61,7 @@ describe.skipIf(!LIVE)('the real CLI on the Mac’s own login, switched in place
     const keychain = join(root, 'keychain')
     mkdirSync(keychain)
     writeFileSync(join(keychain, 'Claude Code-credentials'), claudeLogin('MAC-OWN-LOGIN'))
-    writeFileSync(join(keychain, `Claude Code-credentials-${sha256(cfgB).slice(0, 8)}`), claudeLogin('IMZAPREMIUM'))
+    writeFileSync(join(keychain, `Claude Code-credentials-${sha256(cfgB).slice(0, 8)}`), claudeLogin('EXAMPLEMAIL'))
     fake = join(root, 'fake-security')
     writeFileSync(
       fake,
@@ -98,7 +98,7 @@ describe.skipIf(!LIVE)('the real CLI on the Mac’s own login, switched in place
       vault,
       tickets,
       providerOf: () => 'claude',
-      configDirOf: (id) => (id === 'imzapremium' ? cfgB : id === 'system' ? join(home, '.claude') : null),
+      configDirOf: (id) => (id === 'examplemail' ? cfgB : id === 'system' ? join(home, '.claude') : null),
       adopting: (id) => adopting.has(id) && !vault.has(id),
       markKept: (id) => adopting.delete(id),
       sourceOf: (id) => (id === 'system' ? { kind: 'keychain', dir: null } : { kind: 'vault' }),
@@ -173,13 +173,13 @@ describe.skipIf(!LIVE)('the real CLI on the Mac’s own login, switched in place
       expect(rig.seen.at(-1)?.auth).toBe('Bearer sk-ant-oat01-MAC-OWN-LOGIN')
       before = readdirSync(join(home, '.claude')).sort()
 
-      const moved = await switchInPlace('session-1', { id: 'imzapremium', name: 'imzapremium@gmail.com', configDir: cfgB }, deps)
+      const moved = await switchInPlace('session-1', { id: 'examplemail', name: 'examplemail@gmail.com', configDir: cfgB }, deps)
       expect(moved.ok).toBe(true)
       const sent = rig.seen.length
       await turn('two')
       // The very next request: the other account, moved in from its own item.
-      expect(rig.seen.slice(sent).map((seen) => seen.auth)).toEqual(['Bearer sk-ant-oat01-IMZAPREMIUM'])
-      expect(vault.read('imzapremium', SLOT)).toBe(claudeLogin('IMZAPREMIUM'))
+      expect(rig.seen.slice(sent).map((seen) => seen.auth)).toEqual(['Bearer sk-ant-oat01-EXAMPLEMAIL'])
+      expect(vault.read('examplemail', SLOT)).toBe(claudeLogin('EXAMPLEMAIL'))
       // And ~/.claude is exactly as it was: no credentials file, nothing else.
       expect(readdirSync(join(home, '.claude')).sort()).toEqual(before)
       expect(existsSync(join(home, '.claude', '.credentials.json'))).toBe(false)

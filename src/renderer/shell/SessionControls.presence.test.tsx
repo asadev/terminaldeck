@@ -13,8 +13,8 @@ import type { AgentPresence, ChromeSession } from './agent-presence'
  *
  * Asad, on Windows, 0.4.0, with one line of commentary — *"this is what keeps
  * happening repeatedly on Windows."* Two sessions in one window at one width.
- * The bar over `ClaudeImza` carried the usage reading, the model chip and the
- * effort chip. The bar over `ClaudeImzacrm` carried none of them — while the
+ * The bar over `ClaudeKiwi` carried the usage reading, the model chip and the
+ * effort chip. The bar over `ClaudeKiwicrm` carried none of them — while the
  * terminal an inch below that empty bar printed `Claude Code v2.1.224 · Opus 5
  * with xhigh effort · Claude API`. Five of the fifteen frames show it, so it
  * was neither a fold nor a flicker: a per-session fact, and the wrong one.

@@ -113,8 +113,8 @@ import {
  * Every character that is not `[a-zA-Z0-9]` becomes `-`. Worked out from the
  * real directories on this machine and verified against the `cwd` field each
  * transcript records — 7/7 local projects round-trip, including the awkward
- * ones: `/Users/apple/ClaudeImza/.claude/worktrees/x` becomes
- * `-Users-apple-ClaudeImza--claude-worktrees-x` (the `/.` collapses to `--`),
+ * ones: `/Users/apple/ClaudeKiwi/.claude/worktrees/x` becomes
+ * `-Users-apple-ClaudeKiwi--claude-worktrees-x` (the `/.` collapses to `--`),
  * and iCloud's `com~apple~CloudDocs` becomes `com-apple-CloudDocs`.
  *
  * The encoding is lossy and deliberately one-way: `-` is produced by `/`, `.`,

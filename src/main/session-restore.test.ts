@@ -375,15 +375,15 @@ describe('conversationOnDisk', () => {
    *
    * Reproduced on his own PC rather than reasoned about. `DESKTOP-DDGMNCV` runs
    * every session inside WSL, so `state.json` there holds
-   * `{"cwd":"/home/asad/ClaudeImza",…}`, and the app log for that launch reads:
+   * `{"cwd":"/home/asad/ClaudeKiwi",…}`, and the app log for that launch reads:
    *
    *     [restore] started clean: no earlier conversation was found on disk for
-   *     this folder {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+   *     this folder {"folder":"/home/asad/ClaudeKiwi","agent":"claude"}
    *
-   * while the distribution held `/home/asad/.claude/projects/-home-asad-ClaudeImza`
+   * while the distribution held `/home/asad/.claude/projects/-home-asad-ClaudeKiwi`
    * with that morning's conversation in it, and the Windows side's
-   * `C:\Users\Imza\.claude\projects\` held no such directory at all — only
-   * `--wsl-localhost-ubuntu-24-04-home-asad-ClaudeImza`, written by a Claude
+   * `C:\Users\Kiwi\.claude\projects\` held no such directory at all — only
+   * `--wsl-localhost-ubuntu-24-04-home-asad-ClaudeKiwi`, written by a Claude
    * that had been launched from Windows against the UNC path.
    *
    * The lookup was asking a directory that cannot hold the answer, about a
@@ -392,7 +392,7 @@ describe('conversationOnDisk', () => {
    */
   it('does not claim a WSL session has no conversation just because Windows cannot see one', async () => {
     const configDir = join(TMP, 'windows-side-claude')
-    const session = saved({ cwd: '/home/asad/ClaudeImza' })
+    const session = saved({ cwd: '/home/asad/ClaudeKiwi' })
 
     // On Windows this folder is a Linux folder and its agent ran inside the
     // distribution: unknown, so `--continue` is passed and the CLI finds its
@@ -410,7 +410,7 @@ describe('conversationOnDisk', () => {
     // `unknown` for it would hand `--continue` to a folder that has genuinely
     // never been used.
     const configDir = join(TMP, 'claude-config-windows-native')
-    const session = saved({ cwd: 'C:\\Users\\Imza\\Projects\\app' })
+    const session = saved({ cwd: 'C:\\Users\\Kiwi\\Projects\\app' })
     await expect(conversationOnDisk(session, configDir, 'win32')).resolves.toBe('none')
   })
 
@@ -420,11 +420,11 @@ describe('conversationOnDisk', () => {
      * probe. Without the fix both tabs come back as `fresh` — which is what
      * his log recorded — and the morning's conversation is left on disk.
      */
-    const sessions = [saved({ cwd: '/home/asad/ClaudeImza' })]
+    const sessions = [saved({ cwd: '/home/asad/ClaudeKiwi' })]
     const plan = await planRestore(
       sessions,
       probes({
-        configDir: () => 'C:\\Users\\Imza\\.claude',
+        configDir: () => 'C:\\Users\\Kiwi\\.claude',
         conversation: (session, configDir) => conversationOnDisk(session, configDir, 'win32'),
       }),
     )
@@ -456,7 +456,7 @@ describe('folderExists', () => {
  * folder out, and billing on every launch.
  */
 describe('personalSessions', () => {
-  const userData = 'C:\\Users\\Imza\\AppData\\Roaming\\terminaldeck'
+  const userData = 'C:\\Users\\Kiwi\\AppData\\Roaming\\terminaldeck'
   const copilot = join(userData, 'copilot')
 
   it('drops the copilot’s own sessions, however many of them there are', () => {
@@ -477,16 +477,16 @@ describe('personalSessions', () => {
   })
 
   it('keeps every session when there is nothing to exclude', () => {
-    const list = [saved(), saved({ cwd: '/home/asad/ClaudeImza' })]
+    const list = [saved(), saved({ cwd: '/home/asad/ClaudeKiwi' })]
     expect(personalSessions(list, [])).toEqual(list)
     expect(personalSessions(list, [copilot])).toEqual(list)
   })
 
   it('keeps a WSL session, whose path resolves nowhere near the exclusion', () => {
-    // `/home/asad/ClaudeImza` on Windows resolves to `C:\home\asad\ClaudeImza`,
+    // `/home/asad/ClaudeKiwi` on Windows resolves to `C:\home\asad\ClaudeKiwi`,
     // which must not be judged to be inside anything under `%APPDATA%`. This is
     // the session the whole change exists to bring back.
-    expect(personalSessions([saved({ cwd: '/home/asad/ClaudeImza' })], [copilot])).toHaveLength(1)
+    expect(personalSessions([saved({ cwd: '/home/asad/ClaudeKiwi' })], [copilot])).toHaveLength(1)
   })
 
   it('never widens beyond the folders it is given', () => {
@@ -663,7 +663,7 @@ describe('restoreOpenSessions', () => {
    * fire, which is exactly why the feature looked fine on one platform.
    */
   it('brings a WSL session back on its own account, continuing its conversation', async () => {
-    const wslSession = saved({ cwd: '/home/asad/ClaudeImza', profileId: 'work' })
+    const wslSession = saved({ cwd: '/home/asad/ClaudeKiwi', profileId: 'work' })
 
     // The plan, made the way index.ts makes it: a per-profile config directory
     // (a real Windows path, meaningless inside the distro), and
@@ -672,7 +672,7 @@ describe('restoreOpenSessions', () => {
       [wslSession],
       probes({
         configDir: (session) =>
-          `C:\\Users\\Imza\\AppData\\Roaming\\terminaldeck\\profiles\\${session.profileId}`,
+          `C:\\Users\\Kiwi\\AppData\\Roaming\\terminaldeck\\profiles\\${session.profileId}`,
         conversation: (session, configDir) => conversationOnDisk(session, configDir, 'win32'),
       }),
     )
@@ -683,7 +683,7 @@ describe('restoreOpenSessions', () => {
     const harness = driver(plan)
     await harness.run()
     expect(harness.spawned[0].input).toMatchObject({
-      cwd: '/home/asad/ClaudeImza',
+      cwd: '/home/asad/ClaudeKiwi',
       resume: true,
       profileId: 'work',
     })
@@ -700,7 +700,7 @@ describe('restoreOpenSessions', () => {
   it('hands the spawn the device to re-confine for, when a device started the session', async () => {
     const harness = driver([
       {
-        session: saved({ cwd: '/home/asad/ClaudeImza', confineDeviceId: 'phone-7' }),
+        session: saved({ cwd: '/home/asad/ClaudeKiwi', confineDeviceId: 'phone-7' }),
         outcome: 'resume',
         reason: 'r',
       },

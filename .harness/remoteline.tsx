@@ -47,7 +47,7 @@ const old = query.has('old')
 
 const SESSION = 'a1b2c3d4-5e6f-4071-8293-a4b5c6d7e8f9'
 const MACHINE = 'office-pc'
-const CWD = 'C:\\Users\\Imza\\Projects\\terminaldeck'
+const CWD = 'C:\\Users\\Kiwi\\Projects\\terminaldeck'
 
 /** The far machine's own `mcp:list`, as `ControlsReadingWire.connectors` carries it. */
 const CONNECTORS = [

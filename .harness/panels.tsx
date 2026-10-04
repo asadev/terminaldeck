@@ -43,7 +43,7 @@ const CWD = '/Users/apple/Projects/terminaldeck'
 const deck = (globalThis as { deck?: Record<string, unknown> }).deck
 if (deck) {
   deck.listServers = async () => [
-    { id: 's1', name: 'imza-vps', address: '203.0.113.10', username: 'root' },
+    { id: 's1', name: 'kiwi-vps', address: '203.0.113.10', username: 'root' },
   ]
 }
 
@@ -153,7 +153,7 @@ function mcpBridge(): McpBridge {
 const MACHINES = [
   { id: '', name: 'this Mac', reach: 'ready' as const, open: true },
   { id: 'm1', name: 'MacBookPro', reach: 'ready' as const, open: true },
-  { id: 'server s1', name: 'imza-vps', reach: 'server' as const, open: false },
+  { id: 'server s1', name: 'kiwi-vps', reach: 'server' as const, open: false },
 ]
 
 /* -------------------------------------------------------------------------- */

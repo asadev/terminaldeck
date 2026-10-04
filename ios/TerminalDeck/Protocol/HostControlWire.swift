@@ -6,7 +6,7 @@
  *
  * A server page reaches one box by two roads: an SSH address it was added with,
  * and the relay it is paired over. Asad's SSH address is a Tailscale name
- * (`imza-pc-wsl`) that goes offline on its own — and when it does, the page
+ * (`kiwi-pc-wsl`) that goes offline on its own — and when it does, the page
  * reports the box as unreachable while every session on it is still running over
  * the public relay. This shape is what the page draws *instead* of that failure:
  * a host the relay reached, so it is plainly running, whatever the SSH name is

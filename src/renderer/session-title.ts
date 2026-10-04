@@ -270,7 +270,7 @@ export function distinguishingIdLength(ids: readonly string[]): number {
  * Last path segment — the fallback title, and what the sidebar calls a project.
  *
  * Both separators, because this app runs on Windows. Splitting on `/` alone
- * returns the *whole* path for `C:\Users\Imza\Projects\app`, so every surface
+ * returns the *whole* path for `C:\Users\Kiwi\Projects\app`, so every surface
  * that asks this for a name — a project row, a tab's qualifier, the folder on a
  * held session's row, the "in <folder>" line in two pickers — printed a full
  * Windows path where a word belongs. Seen on `DESKTOP-DDGMNCV` on 2026-08-17, in

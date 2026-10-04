@@ -220,13 +220,13 @@ describe('folderName', () => {
     /*
      * This app runs on Windows, and splitting on `/` alone answers with the
      * *whole* path there — so every surface that asks this for a name printed
-     * `C:\Users\Imza\Projects\app` where a word belongs. Seen on
+     * `C:\Users\Kiwi\Projects\app` where a word belongs. Seen on
      * `DESKTOP-DDGMNCV` on 2026-08-17, on a held session's row in a 264px rail.
      */
-    expect(folderName('C:\\Users\\Imza\\Projects\\app')).toBe('app')
-    expect(folderName('C:\\Users\\Imza\\Projects\\app\\')).toBe('app')
+    expect(folderName('C:\\Users\\Kiwi\\Projects\\app')).toBe('app')
+    expect(folderName('C:\\Users\\Kiwi\\Projects\\app\\')).toBe('app')
     // The two spellings a folder picker can hand back for one folder.
-    expect(folderName('C:/Users/Imza/Projects/app')).toBe('app')
+    expect(folderName('C:/Users/Kiwi/Projects/app')).toBe('app')
     // A drive root has one segment and it is the drive.
     expect(folderName('C:\\')).toBe('C:')
   })

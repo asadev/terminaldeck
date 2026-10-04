@@ -87,7 +87,7 @@ const REAL_SHAPE = folder({
   agent: '', // a directory, read as empty
   authorized_keys: PUBLIC,
   'authorized_keys.bak-2026-06-23-removed-commander-key': PUBLIC,
-  config: 'Host imza-vps\n  HostName 1.2.3.4\n  User root\n',
+  config: 'Host kiwi-vps\n  HostName 1.2.3.4\n  User root\n',
   'config.bak-20260815-2242': 'Host old\n',
   hetzner_personal: OPENSSH_OPEN,
   'hetzner_personal.pub': PUBLIC,

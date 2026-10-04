@@ -26,7 +26,7 @@ document.documentElement.dataset.theme = theme
 const running = [
   { id: 's1', title: 'terminaldeck', cwd: '/Users/apple/Projects/terminaldeck', exitCode: null },
   { id: 's2', title: 'Update Claude Code terminal to new API', cwd: '/Users/apple/Projects/terminaldeck/pwa', exitCode: null },
-  { id: 's3', title: 'imza-crm', cwd: '/Users/apple/Projects/imza-crm', exitCode: null },
+  { id: 's3', title: 'kiwi-crm', cwd: '/Users/apple/Projects/kiwi-crm', exitCode: null },
   // Exited, so the panel must not offer a tick for it.
   { id: 's4', title: 'old build', cwd: '/Users/apple/Projects/terminaldeck', exitCode: 0 },
 ]

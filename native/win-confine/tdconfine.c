@@ -280,7 +280,7 @@ static DWORD rightsFor(GrantKind kind) {
  * A directory the session works in wants `(OI)(CI)` — every file and folder
  * created under it inherits the grant, or the first file the session writes is
  * a file it cannot read back. An ancestor wants `NO_INHERITANCE`, and that is
- * the whole point of the traverse kind: an inheriting ACE on `C:\Users\Imza`
+ * the whole point of the traverse kind: an inheriting ACE on `C:\Users\Kiwi`
  * would grant the container everything under it, which is precisely what the
  * boundary exists to prevent — it is the difference between "you may walk
  * through my home directory" and "you may read my home directory". A single
@@ -371,7 +371,7 @@ static DWORD editPathInheritable(LPWSTR path, PSID sid, GrantKind kind, ACCESS_M
  * The ancestor case: `SetFileSecurityW`, and it walks nothing.
  *
  * This exists because of a measurement that would otherwise have shipped as a
- * hang. `C:\Users\Imza\tdwin\granted` cannot be resolved to a real path by
+ * hang. `C:\Users\Kiwi\tdwin\granted` cannot be resolved to a real path by
  * `git` or by `fs.realpathSync` without the container being able to stat its
  * ancestors — including the volume root — so the plan carries a
  * `GRANT_ANCESTOR` entry for each of them. Writing those with
@@ -781,7 +781,7 @@ static void closeStation(Station *station) {
  *
  * `CreateProcessW` takes a string and the child takes an argument vector, and
  * the function in the middle is this one. Getting it wrong is not cosmetic
- * here: a folder called `C:\Users\Imza\My Projects` would arrive as two
+ * here: a folder called `C:\Users\Kiwi\My Projects` would arrive as two
  * arguments and the session would start somewhere else entirely, or not at all.
  * The rule being implemented is the documented one — backslashes are literal
  * except immediately before a quote, where they double.

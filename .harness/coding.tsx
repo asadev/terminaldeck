@@ -102,7 +102,7 @@ const base: Row[] = [
 const extra: Row[] = many
   ? [
       { id: 'work', name: 'Work', provider: 'claude', configDir: '/Users/apple/Library/Application Support/terminaldeck/profiles/work', system: false, color: '--color-blue' },
-      { id: 'imza', name: 'Imza', provider: 'claude', configDir: '/Users/apple/Library/Application Support/terminaldeck/profiles/imza', system: false, color: '--color-green' },
+      { id: 'kiwi', name: 'Kiwi', provider: 'claude', configDir: '/Users/apple/Library/Application Support/terminaldeck/profiles/kiwi', system: false, color: '--color-green' },
       { id: 'second', name: 'second', provider: 'codex', configDir: '/Users/apple/Library/Application Support/terminaldeck/profiles/second', system: false, color: '--color-orange' },
     ]
   : []
@@ -112,10 +112,10 @@ let defaultId: string | null = 'system'
 
 const SIGNED_IN: Record<string, { account: string; plan: string }> = {
   system: { account: 'asadiqbalonline@gmail.com', plan: 'max' },
-  'system-codex': { account: 'asad@imza.ae', plan: 'plus' },
+  'system-codex': { account: 'asad@kiwi.test', plan: 'plus' },
   'system-gemini': { account: 'asadiqbalonline@gmail.com', plan: 'free' },
   work: { account: 'app.imatch.ae', plan: 'max' },
-  imza: { account: 'ops@imza.ae', plan: 'max' },
+  kiwi: { account: 'ops@kiwi.test', plan: 'max' },
 }
 
 const after = <T,>(value: T, ms = 120): Promise<T> =>

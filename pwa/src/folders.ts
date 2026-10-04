@@ -39,7 +39,7 @@
  * ## The second bug: one folder, listed twice
  *
  * Caught on video. The browser client's "Start in" list read
- * `/home/asad/ClaudeImza`, `/home/asad/ClaudeImzacrm`, and then both again.
+ * `/home/asad/ClaudeKiwi`, `/home/asad/ClaudeKiwicrm`, and then both again.
  * Nothing here was appending: the desktop genuinely sent four entries.
  *
  * When nobody has chosen folders for a device, `foldersForDevice` in

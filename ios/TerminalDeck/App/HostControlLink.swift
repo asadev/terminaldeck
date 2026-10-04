@@ -6,7 +6,7 @@
  *
  * A server page reaches one box two ways: an SSH address it was added with, and
  * the relay it is paired over. Asad's SSH address is a Tailscale name
- * (`imza-pc-wsl`) that drops on its own — and when it does, the page reports the
+ * (`kiwi-pc-wsl`) that drops on its own — and when it does, the page reports the
  * box as unreachable while every session on it still runs over the public relay.
  * This link is how the page reaches the box the other way: when the server is a
  * connected machine, its status and its restart/stop go over the relay, and SSH

@@ -20,7 +20,7 @@ function bridge(over: Partial<TransferBridge> = {}): TransferBridge {
   return {
     uploadToMachine: vi.fn(async () => ({ ok: true, path: 'C:\\Users\\asad\\Downloads\\Terminal Deck\\shot.png' })),
     stageForSession: vi.fn(async () => ({ ok: true, path: '/Users/apple/Downloads/Terminal Deck/pasted.png' })),
-    uploadToServer: vi.fn(async () => ({ ok: true, path: '/home/imza/Terminal Deck/shot.png' })),
+    uploadToServer: vi.fn(async () => ({ ok: true, path: '/home/kiwi/Terminal Deck/shot.png' })),
     ...over,
   }
 }
@@ -165,7 +165,7 @@ describe('a session on a server', () => {
   it('gets a path on that server, over the server channel', async () => {
     const api = bridge()
     const out = await pathForSession(SERVER, { path: '/Users/apple/Pictures/Terminal Deck/shot.png' }, api)
-    expect(out).toEqual({ ok: true, path: '/home/imza/Terminal Deck/shot.png' })
+    expect(out).toEqual({ ok: true, path: '/home/kiwi/Terminal Deck/shot.png' })
     expect(api.uploadToServer).toHaveBeenCalledWith('srv-1', '/Users/apple/Pictures/Terminal Deck/shot.png')
     // The relay is not involved, and asking it would be this window sending a
     // file to a machine that is not the one the session is on.
@@ -213,6 +213,6 @@ describe('a session on a server', () => {
     const out = await pathForSession(SERVER, { name: 'pasted.png', bytes: new ArrayBuffer(8) }, api)
     expect(api.stageForSession).toHaveBeenCalled()
     expect(api.uploadToServer).toHaveBeenCalledWith('srv-1', '/Users/apple/Downloads/Terminal Deck/pasted.png')
-    expect(out).toEqual({ ok: true, path: '/home/imza/Terminal Deck/shot.png' })
+    expect(out).toEqual({ ok: true, path: '/home/kiwi/Terminal Deck/shot.png' })
   })
 })

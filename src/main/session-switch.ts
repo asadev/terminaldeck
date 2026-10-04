@@ -59,14 +59,14 @@ import { BRAND } from '../shared/brand'
  *     ALPHA
  *     $ claude --continue -p 'What single word did you reply with a moment ago?'
  *     ALPHA
- *     $ CLAUDE_CONFIG_DIR=…/profiles/imzapremium-gmail-com \
+ *     $ CLAUDE_CONFIG_DIR=…/profiles/examplemail-gmail-com \
  *         claude --continue -p 'What single word did you reply with a moment ago?'
  *     I don't have any earlier reply in this conversation — this is your first
  *     message to me, so there's nothing I said "a moment ago."
  *
  * and afterwards the two stores held two different files for the same folder:
  * `~/.claude/projects/-private-tmp-td-switch-evidence/0d1a070e….jsonl` and
- * `…/profiles/imzapremium-gmail-com/projects/-private-tmp-td-switch-evidence/532c2a5f….jsonl`.
+ * `…/profiles/examplemail-gmail-com/projects/-private-tmp-td-switch-evidence/532c2a5f….jsonl`.
  * Same binary, same folder, same flag; two conversations that cannot see each
  * other.
  *

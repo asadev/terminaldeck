@@ -105,7 +105,7 @@ let heldSessions: Array<Record<string, unknown>> = new URLSearchParams(location.
       },
       {
         key: 'held-2',
-        cwd: '/home/asad/ClaudeImza',
+        cwd: '/home/asad/ClaudeKiwi',
         provider: 'claude',
         reason: 'the folder it ran in is no longer on this machine',
         at: launchedAt,
@@ -332,8 +332,8 @@ const machinesView = {
            * the wire invents bugs that do not exist and hides ones that do.
            */
           id: 'remote-a',
-          title: 'imza-crm',
-          cwd: '/home/asad/ClaudeImzacrm',
+          title: 'kiwi-crm',
+          cwd: '/home/asad/ClaudeKiwicrm',
           provider: 'claude',
           status: 'working',
           exitCode: null,
@@ -347,7 +347,7 @@ const machinesView = {
           exitCode: null,
         },
       ],
-      folders: ['/home/asad/ClaudeImzacrm', '/home/asad/site'],
+      folders: ['/home/asad/ClaudeKiwicrm', '/home/asad/site'],
       // `web` is here because the far machine has a window and this device is
       // one of the owner's own. A guest would get the identical list with `web`
       // missing, and the Open there button simply absent — which is the state

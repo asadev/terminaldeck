@@ -62,14 +62,14 @@ const PATH_ON_THAT_MACHINE = [
   'C:\\Program Files\\dotnet\\',
   'C:\\Program Files\\Git\\cmd',
   'C:\\Program Files\\nodejs\\',
-  'C:\\Users\\Imza\\AppData\\Local\\Microsoft\\WindowsApps',
-  'C:\\Users\\Imza\\AppData\\Roaming\\npm',
+  'C:\\Users\\Kiwi\\AppData\\Local\\Microsoft\\WindowsApps',
+  'C:\\Users\\Kiwi\\AppData\\Roaming\\npm',
 ].join(';')
 
 const INSTALLED = lookupOf([
   'C:\\Program Files\\nodejs\\node.exe',
   'C:\\Program Files\\Git\\cmd\\git.exe',
-  'C:\\Users\\Imza\\AppData\\Roaming\\npm\\claude.cmd',
+  'C:\\Users\\Kiwi\\AppData\\Roaming\\npm\\claude.cmd',
   'C:\\WINDOWS\\system32\\node.exe',
 ])
 
@@ -113,7 +113,7 @@ describe('windowsToolDirs', () => {
     expect(dirs).toEqual([
       'C:\\Program Files\\nodejs',
       'C:\\Program Files\\Git\\cmd',
-      'C:\\Users\\Imza\\AppData\\Roaming\\npm',
+      'C:\\Users\\Kiwi\\AppData\\Roaming\\npm',
     ])
   })
 
@@ -159,14 +159,14 @@ describe('windowsToolDirs', () => {
 describe('toolGrant', () => {
   const grant = toolGrant({
     dirs: windowsToolDirs({ path: PATH_ON_THAT_MACHINE, lookup: INSTALLED }),
-    accountHome: 'C:\\Users\\Imza',
+    accountHome: 'C:\\Users\\Kiwi',
   })
 
   it('grants read and execute on the tool directories and nothing else', () => {
     expect(grant.read).toEqual([
       'C:\\Program Files\\nodejs',
       'C:\\Program Files\\Git\\cmd',
-      'C:\\Users\\Imza\\AppData\\Roaming\\npm',
+      'C:\\Users\\Kiwi\\AppData\\Roaming\\npm',
     ])
   })
 
@@ -180,7 +180,7 @@ describe('toolGrant', () => {
   })
 
   it('covers the account home, which is where every granted folder lives', () => {
-    expect(grant.ancestors).toContain('C:\\Users\\Imza')
+    expect(grant.ancestors).toContain('C:\\Users\\Kiwi')
   })
 
   it('never names Program Files, which nobody can write', () => {
@@ -200,14 +200,14 @@ describe('toolGrant', () => {
   it('does not put a weaker ACE on something it already grants outright', () => {
     const nested = toolGrant({
       dirs: ['C:\\tools', 'C:\\tools\\bin'],
-      accountHome: 'C:\\Users\\Imza',
+      accountHome: 'C:\\Users\\Kiwi',
     })
     expect(nested.ancestors).not.toContain('C:\\tools')
   })
 })
 
 describe('the launcher arguments', () => {
-  const grant = toolGrant({ dirs: ['C:\\Program Files\\nodejs'], accountHome: 'C:\\Users\\Imza' })
+  const grant = toolGrant({ dirs: ['C:\\Program Files\\nodejs'], accountHome: 'C:\\Users\\Kiwi' })
 
   it('establish and withdraw name exactly the same paths', () => {
     // If they ever differed, the undo would leave the difference behind — a
@@ -269,7 +269,7 @@ describe('the record', () => {
     resetWindowsTools()
   })
 
-  const grant = toolGrant({ dirs: ['C:\\Program Files\\nodejs'], accountHome: 'C:\\Users\\Imza' })
+  const grant = toolGrant({ dirs: ['C:\\Program Files\\nodejs'], accountHome: 'C:\\Users\\Kiwi' })
 
   it('survives a round trip', () => {
     const file = join(scratch(), GRANT_RECORD)
@@ -321,7 +321,7 @@ describe('the record', () => {
 describe('grantShortfall', () => {
   const needed = toolGrant({
     dirs: ['C:\\Program Files\\nodejs', 'C:\\Program Files\\Git\\cmd'],
-    accountHome: 'C:\\Users\\Imza',
+    accountHome: 'C:\\Users\\Kiwi',
   })
 
   it('is everything when nothing has been granted', () => {
@@ -364,8 +364,8 @@ describe('grantShortfall', () => {
   it('counts a directory granted read as covering the ancestor rule too', () => {
     const record = {
       capability: capabilitySid(),
-      read: [...needed.read, 'C:\\Users\\Imza'],
-      ancestors: needed.ancestors.filter((dir) => dir !== 'C:\\Users\\Imza'),
+      read: [...needed.read, 'C:\\Users\\Kiwi'],
+      ancestors: needed.ancestors.filter((dir) => dir !== 'C:\\Users\\Kiwi'),
       established: '2026-08-16T05:00:00.000Z',
     }
     expect(grantIsComplete(record, needed)).toBe(true)
@@ -386,7 +386,7 @@ describe('establishToolGrant', () => {
     resetWindowsTools()
   })
 
-  const ask = { path: PATH_ON_THAT_MACHINE, accountHome: 'C:\\Users\\Imza', lookup: INSTALLED }
+  const ask = { path: PATH_ON_THAT_MACHINE, accountHome: 'C:\\Users\\Kiwi', lookup: INSTALLED }
 
   it('asks for the prompt once and writes the record when it worked', async () => {
     const dir = scratch()
@@ -435,7 +435,7 @@ describe('establishToolGrant', () => {
     let calls = 0
     const result = await establishToolGrant({
       path: 'C:\\WINDOWS\\system32',
-      accountHome: 'C:\\Users\\Imza',
+      accountHome: 'C:\\Users\\Kiwi',
       lookup: lookupOf([]),
       run: async () => {
         calls++

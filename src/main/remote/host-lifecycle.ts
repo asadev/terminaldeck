@@ -6,7 +6,7 @@
  *
  * A phone's server page reaches one box by two roads: an SSH address it was
  * added with, and the relay it is paired over. Asad's own SSH address is a
- * Tailscale name (`imza-pc-wsl`) that goes offline on its own — and when it
+ * Tailscale name (`kiwi-pc-wsl`) that goes offline on its own — and when it
  * does, the server page reports the box as unreachable *even though every
  * session on it is still working over the public relay*. That is the exact
  * shape of defect this seam removes: a machine whose sessions run is a machine

@@ -44,12 +44,12 @@ import { confinedEnv } from './plan'
 import type { ConfinementPlan } from './plan'
 
 const plan: ConfinementPlan = {
-  folder: 'C:\\Users\\Imza\\Projects\\app',
-  accountHome: 'C:\\Users\\Imza',
-  home: 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc',
-  writable: ['C:\\Users\\Imza\\Projects\\app', 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc'],
+  folder: 'C:\\Users\\Kiwi\\Projects\\app',
+  accountHome: 'C:\\Users\\Kiwi',
+  home: 'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc',
+  writable: ['C:\\Users\\Kiwi\\Projects\\app', 'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc'],
   readable: ['C:\\Program Files\\nodejs'],
-  readableFiles: ['C:\\Users\\Imza\\AppData\\Roaming\\td\\guest-git\\askpass.cmd'],
+  readableFiles: ['C:\\Users\\Kiwi\\AppData\\Roaming\\td\\guest-git\\askpass.cmd'],
   readableProjects: [],
   readExclusions: [],
 }
@@ -64,15 +64,15 @@ const tools = {
   read: [
     'C:\\Program Files\\nodejs',
     'C:\\Program Files\\Git\\cmd',
-    'C:\\Users\\Imza\\AppData\\Roaming\\npm',
+    'C:\\Users\\Kiwi\\AppData\\Roaming\\npm',
   ],
   ancestors: [
     'C:\\',
     'C:\\Users',
-    'C:\\Users\\Imza',
+    'C:\\Users\\Kiwi',
     'C:\\Program Files\\Git',
-    'C:\\Users\\Imza\\AppData',
-    'C:\\Users\\Imza\\AppData\\Roaming',
+    'C:\\Users\\Kiwi\\AppData',
+    'C:\\Users\\Kiwi\\AppData\\Roaming',
   ],
   probe: 'C:\\Program Files\\nodejs\\node.exe',
 }
@@ -97,11 +97,11 @@ function fakeFiles(): ProbeFiles & { written: Map<string, string>; removed: stri
 
 describe('ancestorsOf', () => {
   it('walks from the drive root down to the folder, excluding it', () => {
-    expect(ancestorsOf('C:\\Users\\Imza\\Projects\\app')).toEqual([
+    expect(ancestorsOf('C:\\Users\\Kiwi\\Projects\\app')).toEqual([
       'C:\\',
       'C:\\Users',
-      'C:\\Users\\Imza',
-      'C:\\Users\\Imza\\Projects',
+      'C:\\Users\\Kiwi',
+      'C:\\Users\\Kiwi\\Projects',
     ])
   })
 
@@ -132,8 +132,8 @@ describe('planAncestors', () => {
     // A session that can reach its folder but not its own home is a session
     // whose shell cannot read its startup files, and the device home lives
     // under the app's storage rather than under the project.
-    expect(ancestors).toContain('C:\\Users\\Imza\\AppData\\Roaming\\td')
-    expect(ancestors).toContain('C:\\Users\\Imza')
+    expect(ancestors).toContain('C:\\Users\\Kiwi\\AppData\\Roaming\\td')
+    expect(ancestors).toContain('C:\\Users\\Kiwi')
   })
 
   it('does not walk the readable list, because nothing grants it per session', () => {
@@ -148,7 +148,7 @@ describe('planAncestors', () => {
   })
 
   it('names each directory once however many plan entries are under it', () => {
-    expect(ancestors.filter((dir) => dir === 'C:\\Users\\Imza')).toHaveLength(1)
+    expect(ancestors.filter((dir) => dir === 'C:\\Users\\Kiwi')).toHaveLength(1)
     expect(new Set(ancestors).size).toBe(ancestors.length)
   })
 
@@ -158,14 +158,14 @@ describe('planAncestors', () => {
     // way for a teardown to be half done.
     const inner: ConfinementPlan = {
       ...plan,
-      writable: ['C:\\Users\\Imza\\Projects', 'C:\\Users\\Imza\\Projects\\app'],
+      writable: ['C:\\Users\\Kiwi\\Projects', 'C:\\Users\\Kiwi\\Projects\\app'],
       readable: [],
       readableFiles: [],
       readableProjects: [],
       readExclusions: [],
     }
-    expect(planAncestors(inner)).not.toContain('C:\\Users\\Imza\\Projects')
-    expect(planAncestors(inner)).toContain('C:\\Users\\Imza')
+    expect(planAncestors(inner)).not.toContain('C:\\Users\\Kiwi\\Projects')
+    expect(planAncestors(inner)).toContain('C:\\Users\\Kiwi')
   })
 
   it('includes the account home, which is the cost this mechanism has', () => {
@@ -174,7 +174,7 @@ describe('planAncestors', () => {
     // quietly dropped it would be a change to the boundary. See the comment on
     // GRANT_ANCESTOR in native/win-confine/tdconfine.c: without list access on
     // every ancestor, `GetLongPathNameW` fails and every git command dies.
-    expect(ancestors).toContain('C:\\Users\\Imza')
+    expect(ancestors).toContain('C:\\Users\\Kiwi')
   })
 })
 
@@ -258,7 +258,7 @@ describe('appContainerArgs', () => {
     expect(emitted).not.toContain('C:\\')
     expect(emitted).not.toContain('C:\\Users')
     // And the one below the home directory, which the user owns, is still ours.
-    expect(emitted).toContain('C:\\Users\\Imza\\Projects')
+    expect(emitted).toContain('C:\\Users\\Kiwi\\Projects')
   })
 
   it('starts the session in the granted folder', () => {
@@ -338,25 +338,25 @@ describe('releaseArgs', () => {
 })
 
 describe('windowsConfinedEnv', () => {
-  const env = windowsConfinedEnv('C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc')
+  const env = windowsConfinedEnv('C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc')
 
   it('redirects every variable Windows programs actually read for a home', () => {
     // Setting only HOME leaves most of a session pointed at the owner's home,
     // which is outside the boundary. Measured: git reported `warning: unable to
-    // access 'C:/Users/Imza/.gitconfig': Permission denied` three times and
+    // access 'C:/Users/Kiwi/.gitconfig': Permission denied` three times and
     // then `fatal: unknown error occurred while reading the configuration
     // files`. The boundary was working perfectly and the session was unusable.
-    expect(env.HOME).toBe('C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc')
+    expect(env.HOME).toBe('C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc')
     expect(env.USERPROFILE).toBe(env.HOME)
     expect(env.HOMEDRIVE).toBe('C:')
-    expect(env.HOMEPATH).toBe('\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc')
+    expect(env.HOMEPATH).toBe('\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc')
   })
 
   it('redirects the two temp variables Windows reads, not TMPDIR', () => {
     // `confinedEnv` in plan.ts sets TMPDIR, which is the POSIX spelling and is
     // read by almost nothing on Windows. The default TEMP is under the owner's
     // home, so a session without these has no writable temp at all.
-    expect(env.TEMP).toBe('C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc\\tmp')
+    expect(env.TEMP).toBe('C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc\\tmp')
     expect(env.TMP).toBe(env.TEMP)
   })
 
@@ -390,7 +390,7 @@ describe('windowsConfinedEnv', () => {
      */
     expect(env.CLAUDE_CODE_TMPDIR).toBe(env.TEMP)
     expect(env.CLAUDE_CODE_TMPDIR).toBe(
-      'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc\\tmp',
+      'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc\\tmp',
     )
   })
 
@@ -529,13 +529,13 @@ describe('proveAppContainer', () => {
     // Reached when the grant covers the account's home directory. Refusing is
     // the honest answer: there is nothing left for the session to be held
     // inside, and the check that was supposed to notice cannot.
-    const wide: ConfinementPlan = { ...plan, writable: ['C:\\Users\\Imza'] }
+    const wide: ConfinementPlan = { ...plan, writable: ['C:\\Users\\Kiwi'] }
     const files = fakeFiles()
     const runner: LauncherRunner = async () => ({ stdout: '', stderr: '', code: 0 })
     const proof = await proveAppContainer(
       { container: launch.container, plan: wide, tools },
       'tdconfine.exe',
-      'C:\\Users\\Imza',
+      'C:\\Users\\Kiwi',
       runner,
       files,
     )

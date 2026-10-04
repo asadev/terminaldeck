@@ -16,7 +16,7 @@ import type { MachineLinkState, RemoteSession } from '../machines/types'
  */
 
 function session(over: Partial<RemoteSession> = {}): RemoteSession {
-  return { id: 's1', title: 'AAAA', cwd: '/home/imza/AAAA', provider: 'claude', status: 'idle', exitCode: null, ...over }
+  return { id: 's1', title: 'AAAA', cwd: '/home/kiwi/AAAA', provider: 'claude', status: 'idle', exitCode: null, ...over }
 }
 
 function link(over: Partial<MachineLinkState> = {}): MachineLinkState {
@@ -61,7 +61,7 @@ describe('reportableMachines', () => {
     expect(target?.sessionId).toBe('s1')
     // The folder travels too: it is what the far end resolved the list for, and
     // two of the three MCP scopes are keyed on it.
-    expect(target?.cwd).toBe('/home/imza/AAAA')
+    expect(target?.cwd).toBe('/home/kiwi/AAAA')
   })
 
   it('skips a machine that is not connected', () => {
@@ -126,7 +126,7 @@ describe('the pick a machine leaving takes with it', () => {
     name: 'DESKTOP-DDGMNCV',
     sessionId: 's1',
     sessionTitle: 'AAAA',
-    cwd: '/home/imza/AAAA',
+    cwd: '/home/kiwi/AAAA',
   }
 
   it('keeps a pick that is still on the switch', () => {

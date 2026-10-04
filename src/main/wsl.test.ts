@@ -511,7 +511,7 @@ describe('quoting for the shell on the far side', () => {
  * restarted after a reboot, and his app log said so once per tab, every launch:
  *
  *     [restore] did not come back: it could not be started again: File not
- *               found: {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *               found: {"folder":"/home/asad/ClaudeKiwi","agent":"claude"}
  *
  * with nothing after the second colon. node-pty's `get_shell_path` resolves a
  * relative program name against **the calling process's current directory**, and

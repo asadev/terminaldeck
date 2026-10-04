@@ -485,7 +485,7 @@ export function linuxPathFromUnc(path: string): { distro: string; path: string }
  * Asad's app log had this, once per WSL tab, every launch:
  *
  *     [restore] did not come back: it could not be started again: File not found:
- *               {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *               {"folder":"/home/asad/ClaudeKiwi","agent":"claude"}
  *     [ipc] session:create failed File not found:
  *
  * Note what is *after* the colon: nothing. That is the whole clue, and it names
@@ -515,9 +515,9 @@ export function linuxPathFromUnc(path: string): { distro: string; path: string }
  * folder, different inherited cwd.
  *
  * Reproduced directly, on that machine, against the very `node-pty` this app
- * ships (`C:\Users\Imza\td-verify\node_modules\node-pty`, prebuild `win32-x64`):
+ * ships (`C:\Users\Kiwi\td-verify\node_modules\node-pty`, prebuild `win32-x64`):
  *
- *     cwd = C:\Users\Imza\tdfix        pty.spawn('wsl.exe', …)  → runs, prints PROBE-HI
+ *     cwd = C:\Users\Kiwi\tdfix        pty.spawn('wsl.exe', …)  → runs, prints PROBE-HI
  *     cwd = C:\Windows\System32        pty.spawn('wsl.exe', …)  → throws "File not found: "
  *     cwd = C:\Windows\System32        pty.spawn('C:\Windows\System32\wsl.exe', …) → runs
  *

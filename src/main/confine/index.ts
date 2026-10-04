@@ -577,7 +577,7 @@ const realRunner: ProofRunner = async (command, args) => {
  * and of {@link confineSpawn}, untestable through its real entry point.
  *
  * The workaround the test settled on is the reason this is now threaded through.
- * It let the *real* `fs` write `C:\Users\Imza\AppData\…\.terminaldeck-confine-probe`,
+ * It let the *real* `fs` write `C:\Users\Kiwi\AppData\…\.terminaldeck-confine-probe`,
  * which on macOS is not a path at all: backslashes are ordinary characters here,
  * so it is one long filename in the working directory, and the write succeeds.
  * On Windows it is a real absolute path to a directory that has never existed on

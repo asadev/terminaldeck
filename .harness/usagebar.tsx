@@ -354,7 +354,7 @@ const CASES: Case[] = [
     props: {
       report: report([], NOTHING),
       provider: 'claude',
-      accountLabel: 'imzapremium@gmail.com',
+      accountLabel: 'examplemail@gmail.com',
       blocked: NO_LIMITS,
       // The word in the figure column changes with this, and the change is the
       // point: `Not reported` describes a number that has not arrived, and this
@@ -373,7 +373,7 @@ const CASES: Case[] = [
     props: {
       report: report([], NOTHING),
       provider: 'claude',
-      accountLabel: 'imzapremium@gmail.com',
+      accountLabel: 'examplemail@gmail.com',
       blocked: SIGNED_OUT,
       onCheck: () => {},
       now: NOW,

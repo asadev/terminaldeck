@@ -218,7 +218,7 @@ Watching the recording turned up four things he did not mention, three of which
 are defects:
 
 - **The web client lists every folder twice.** `app.terminaldeck.dev`, paired to
-  his Windows PC, offers `/home/asad/ClaudeImza` and `/home/asad/ClaudeImzacrm`
+  his Windows PC, offers `/home/asad/ClaudeKiwi` and `/home/asad/ClaudeKiwicrm`
   under "Start in" — and then offers both again. Almost certainly the folder list
   being concatenated from two sources, or a re-render appending rather than
   replacing.

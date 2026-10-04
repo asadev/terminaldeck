@@ -512,7 +512,7 @@ describe('the conversation carried across a switch', () => {
  *     noted
  *     $ CLAUDE_CONFIG_DIR=…/acct2 claude --session-id aa4603b5-… -p 'What codeword…'
  *     Error: Session ID aa4603b5-922a-4695-ab24-38a45e702bed is already in use.
- *     $ CLAUDE_CONFIG_DIR=…/imzapremium-gmail-com claude --resume aa4603b5-… -p 'What codeword…'
+ *     $ CLAUDE_CONFIG_DIR=…/examplemail-gmail-com claude --resume aa4603b5-… -p 'What codeword…'
  *     PINEAPPLE-7731
  *
  * Same binary, same folder, same conversation, two flags: one refuses and one

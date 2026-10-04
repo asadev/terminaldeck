@@ -19,7 +19,7 @@ import type { SavedSession } from './session-restore'
  */
 
 const session = (over: Partial<SavedSession> = {}): SavedSession => ({
-  cwd: '/home/asad/ClaudeImza',
+  cwd: '/home/asad/ClaudeKiwi',
   provider: 'claude',
   profileId: null,
   cols: 100,

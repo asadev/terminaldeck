@@ -6,7 +6,7 @@
  *
  * A server page reaches one box by two roads: an SSH address it was added with,
  * and the relay it is paired over. Asad's SSH address is a Tailscale name
- * (`imza-pc-wsl`) that drops on its own — and when it does, the SSH survey on
+ * (`kiwi-pc-wsl`) that drops on its own — and when it does, the SSH survey on
  * this page reports the box as unreachable while every session on it is still
  * running over the public relay. His rule is that the relay *is* the network, so
  * the status a headless server has no screen to show, and the restart/stop it

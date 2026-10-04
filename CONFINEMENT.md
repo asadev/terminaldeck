@@ -37,7 +37,7 @@ Two lines are load-bearing and read like tidy-up candidates:
 
 ## Linux / WSL — BUILD IT, and the machine is reachable
 
-`ssh imza-pc-linux` from this Mac reaches Ubuntu 24.04 under WSL2. **Note: that
+`ssh kiwi-pc-linux` from this Mac reaches Ubuntu 24.04 under WSL2. **Note: that
 host config now pins `KexAlgorithms curve25519-sha256`** — OpenSSH 10's
 post-quantum key exchange exceeds the 1280-byte MTU there and hangs.
 
@@ -55,7 +55,7 @@ Then build it, and test the **escapes** rather than the happy path.
 
 ## Windows — BUILD IT, and the machine is reachable
 
-`ssh imza-pc` reaches `DESKTOP-DDGMNCV`. Terminal Deck is installed there, and a
+`ssh kiwi-pc` reaches `DESKTOP-DDGMNCV`. Terminal Deck is installed there, and a
 previous session already streamed a build onto it, so the route is known.
 
 Measure before choosing:
@@ -108,7 +108,7 @@ was executed; nothing is inferred from documentation.
 
 ## The two hosts are one machine
 
-`ssh imza-pc` and `ssh imza-pc-linux` both land in the **same** Ubuntu 24.04
+`ssh kiwi-pc` and `ssh kiwi-pc-linux` both land in the **same** Ubuntu 24.04
 under WSL2 on `DESKTOP-DDGMNCV` (kernel `6.18.33.2-microsoft-standard-WSL2`).
 There is no separate Windows shell on that name. The Windows side is reachable
 from it through interop — `/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe`
@@ -223,7 +223,7 @@ The launcher is `native/win-confine/tdconfine.c`; the module that drives it is
 it to the child through ordinary handle inheritance — no second pty, no byte
 pumping, no resize forwarding. Measured end to end: a live prompt, typed input
 echoed with VT and cursor-positioning sequences, `type hello.txt` returning the
-granted-folder canary, `type C:\Users\Imza\outside-canary.txt` returning
+granted-folder canary, `type C:\Users\Kiwi\outside-canary.txt` returning
 `Access is denied.`, and the exit code coming back.
 
 ## The escapes
@@ -620,9 +620,9 @@ granted, and a confined session cannot run them.
 
     read+execute, inheritable    C:\Program Files\nodejs
                                  C:\Program Files\Git\cmd
-                                 C:\Users\Imza\AppData\Roaming\npm
-    list+traverse, no inherit    C:\   C:\Users   C:\Users\Imza
-                                 C:\Users\Imza\AppData   ...\Roaming
+                                 C:\Users\Kiwi\AppData\Roaming\npm
+    list+traverse, no inherit    C:\   C:\Users   C:\Users\Kiwi
+                                 C:\Users\Kiwi\AppData   ...\Roaming
                                  C:\Program Files\Git
 
 Cost: **0.54s** to grant, the same to withdraw. Verified by string-comparing
@@ -667,7 +667,7 @@ medium-integrity process in the user's session, with the environment
     git status --porcelain              ?? clip.exe  ?? inside.txt  ...
     claude --version                    2.1.231 (Claude Code)
     type inside.txt                     INSIDE-SECRET-9911
-    type C:\Users\Imza\<outside>.txt     Access is denied.
+    type C:\Users\Kiwi\<outside>.txt     Access is denied.
     cd .. & dir /b                      (lists the ancestor: the weakening above)
     exit                                <<<EXIT 0>>>
 
@@ -680,7 +680,7 @@ with the capability removed from the token:
 
 `git` also needs the redirected environment, and this is the failure that looks
 like a broken boundary and is not: with only `HOME` set, git printed
-`warning: unable to access 'C:/Users/Imza/.gitconfig': Permission denied` three
+`warning: unable to access 'C:/Users/Kiwi/.gitconfig': Permission denied` three
 times and then `fatal: unknown error occurred while reading the configuration
 files`. The boundary was working perfectly. With `windowsConfinedEnv` —
 `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`

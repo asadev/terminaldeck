@@ -2186,7 +2186,7 @@ describe('taking the active tab off the bar', () => {
   const TABS: WorkspaceTab[] = [
     { id: 'copilot', kind: 'session', label: 'Commander', isCopilot: true, closable: true },
     session('s1', 'Session 1'),
-    { id: 'b1', kind: 'browser', label: 'IMZA CRM', closable: true },
+    { id: 'b1', kind: 'browser', label: 'KIWI CRM', closable: true },
     {
       id: MACHINE_TAB,
       kind: 'session',

@@ -81,13 +81,13 @@ final class WireCodecTests: XCTestCase {
     func testAWelcomeCarriesTheGrantedFolders() {
         let raw = """
         {"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[],
-         "folders":["/Users/asad/Projects/deck","/Users/asad/Projects/imza"]}
+         "folders":["/Users/asad/Projects/deck","/Users/asad/Projects/kiwi"]}
         """
         guard case let .ok(message, _) = WireCodec.decode(raw),
               case let .welcome(_, _, _, _, _, _, _, _, folders, _, _, _) = message else {
             return XCTFail("expected a welcome")
         }
-        XCTAssertEqual(folders, ["/Users/asad/Projects/deck", "/Users/asad/Projects/imza"])
+        XCTAssertEqual(folders, ["/Users/asad/Projects/deck", "/Users/asad/Projects/kiwi"])
     }
 
     func testAMalformedFolderEntryIsDroppedRatherThanFatal() {

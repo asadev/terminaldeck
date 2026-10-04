@@ -1090,7 +1090,7 @@ describe('usage:context', () => {
  * Asad, recording his screen on 2026-08-19 with two accounts in play:
  *
  *   > *"it is giving me 50% and 64 which is correct according to the account …
- *   > but here it is showing actually the wrong account — app.imza… is not the
+ *   > but here it is showing actually the wrong account — app.kiwi… is not the
  *   > correct account which is connected to this session"*
  *
  * He has five logins in one folder. A figure that is true of one of them, drawn

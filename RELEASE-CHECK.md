@@ -213,9 +213,9 @@ broad to fix as a side quest, and each is real.
 - [ ] **The headless daemon cannot write `host.json` on a workgroup Windows box
       started over ssh.** `windowsPrincipal()` builds `${USERDOMAIN}\${username}`,
       and in an OpenSSH-service session `USERDOMAIN=WORKGROUP`, so
-      `icacls /grant:r WORKGROUP\Imza:(F)` fails with **1332, "No mapping between
+      `icacls /grant:r WORKGROUP\Kiwi:(F)` fails with **1332, "No mapping between
       account names and security IDs was done"** and `writeSecretFile` refuses.
-      Bare `Imza` and `DESKTOP-DDGMNCV\Imza` both work. The Electron app is
+      Bare `Kiwi` and `DESKTOP-DDGMNCV\Kiwi` both work. The Electron app is
       unaffected — it runs in a desktop session — but this is exactly the
       deployment `HEADLESS.md` targets. A blind fallback to the bare name is not
       obviously safe on a domain-joined machine, which is why it was reported
@@ -416,7 +416,7 @@ copilot. You're Asad."*
 
 The dialog currently says the conversation does not come with you:
 
-> *"This conversation stays with app.imatch.ae@gmail.com. imzapremium@gmail.com
+> *"This conversation stays with app.imatch.ae@gmail.com. examplemail@gmail.com
 > has its own conversation in this folder and that is the one that will be
 > continued here — not the one on screen now."*
 
@@ -499,7 +499,7 @@ goes out until every surface below is aligned and tested.
 
 - [ ] **macOS** — the reference implementation. Everything above must be green.
 - [ ] **Windows** — **his PC is on 0.1.9**, so this is a build ship, not just a
-      UI port. `imza-pc` → WSL2 on `DESKTOP-DDGMNCV`; toolchain verified (Node
+      UI port. `kiwi-pc` → WSL2 on `DESKTOP-DDGMNCV`; toolchain verified (Node
       26.7, npm 11.19, git 2.55). Drive the GUI over **CDP**, not GDI — the
       desktop sits at the lock screen so `CopyFromScreen` fails with "handle is
       invalid". Launch into Session 1 via `schtasks /IT`; Session 0 has no

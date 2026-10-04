@@ -37,18 +37,18 @@ describe('the sentence for a process that would not start', () => {
   it('names the agent, the folder, the program and where the process was to run', () => {
     const message = spawnFailureMessage(
       spec(),
-      '/home/asad/ClaudeImza',
-      'C:\\Users\\Imza',
+      '/home/asad/ClaudeKiwi',
+      'C:\\Users\\Kiwi',
       new Error('File not found: '),
     )
 
     expect(message).toContain('claude')
-    expect(message).toContain('/home/asad/ClaudeImza')
+    expect(message).toContain('/home/asad/ClaudeKiwi')
     expect(message).toContain('C:\\Windows\\System32\\wsl.exe')
     // Named separately from the session's folder, because for a WSL session the
     // two are deliberately different and a message with only one of them
     // explains the wrong half.
-    expect(message).toContain('C:\\Users\\Imza')
+    expect(message).toContain('C:\\Users\\Kiwi')
   })
 
   it('keeps what the layer below said, verbatim and last', () => {

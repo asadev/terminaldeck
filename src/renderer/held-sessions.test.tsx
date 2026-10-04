@@ -33,7 +33,7 @@ const held: HeldSessionView[] = [
   },
   {
     key: 'held-2',
-    cwd: '/home/asad/ClaudeImza',
+    cwd: '/home/asad/ClaudeKiwi',
     provider: 'claude',
     reason: 'the folder it ran in is no longer on this machine',
     at: 1_700_000_000_000,
@@ -154,20 +154,20 @@ describe('the rail draws them', () => {
     /*
      * Under `terminaldeck`, naming it would be the same word twice twenty pixels
      * apart. And where it *is* named it goes on the wrapping second line, not
-     * beside the agent: `Claude Code — ClaudeImza` on a 264px rail renders as
+     * beside the agent: `Claude Code — ClaudeKiwi` on a 264px rail renders as
      * **Claude Code — Claude…**, so the one row that has to identify its own
      * folder was the one row whose folder was cut off. Measured in the harness,
      * which is the only thing in this project that catches that class of defect.
      */
-    expect(html).toContain('<span class="sb-held-where">ClaudeImza</span>')
+    expect(html).toContain('<span class="sb-held-where">ClaudeKiwi</span>')
     expect(html).not.toContain('<span class="sb-held-where">terminaldeck</span>')
     // Two held rows, one folder caption — the other has a heading saying it.
     expect(html.match(/sb-held-where/g)).toHaveLength(1)
   })
 
   it('offers to try again, and to stop keeping it', () => {
-    expect(html).toContain('Try Claude Code again in /home/asad/ClaudeImza')
-    expect(html).toContain('Stop keeping Claude Code in /home/asad/ClaudeImza')
+    expect(html).toContain('Try Claude Code again in /home/asad/ClaudeKiwi')
+    expect(html).toContain('Stop keeping Claude Code in /home/asad/ClaudeKiwi')
   })
 
   it('says a row is already trying, and cannot be pressed twice', () => {

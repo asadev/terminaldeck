@@ -138,7 +138,7 @@ actually needs, rather than a narrower one that then fails.
   like the very similar same options as we have in the iOS application."*
 
 **Also found in the recording, unprompted:** the web client's "Start in" list
-shows `/home/asad/ClaudeImza` and `/home/asad/ClaudeImzacrm` **twice each**.
+shows `/home/asad/ClaudeKiwi` and `/home/asad/ClaudeKiwicrm` **twice each**.
 
 ## The iOS app
 

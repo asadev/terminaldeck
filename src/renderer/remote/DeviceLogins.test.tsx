@@ -36,7 +36,7 @@ const DEVICES = [
 ]
 
 const LOGINS = [
-  { id: 'system', label: 'imzapremium@gmail.com' },
+  { id: 'system', label: 'examplemail@gmail.com' },
   { id: 'p-work', label: 'work@example.com' },
 ]
 
@@ -70,7 +70,7 @@ describe('the four states', () => {
       choices: new Map([['dev-phone', { mode: 'selected' as const, accounts: ['p-work'] }]]),
     })
     expect(html).toContain('work@example.com')
-    expect(html).toContain('imzapremium@gmail.com')
+    expect(html).toContain('examplemail@gmail.com')
     expect(html).not.toContain('Default')
   })
 

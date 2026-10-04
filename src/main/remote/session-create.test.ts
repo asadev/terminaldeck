@@ -68,7 +68,7 @@ const defaultSpawn: SessionStarter['spawn'] = async (input) => ({ ...META, cwd: 
 function starter(overrides: Partial<SessionStarter> = {}): SessionStarter & { spawn: SpawnSpy } {
   return {
     folders:
-      overrides.folders ?? (() => ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/imza']),
+      overrides.folders ?? (() => ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/kiwi']),
     spawn: vi.fn(overrides.spawn ?? defaultSpawn),
   }
 }
@@ -119,10 +119,10 @@ describe('a request that names no folder', () => {
 describe('a request that names one', () => {
   it('accepts a folder the desktop is already offering', async () => {
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/imza' })
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/kiwi' })
 
     expect(outcome).toMatchObject({ ok: true })
-    expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/Users/apple/Projects/imza' }))
+    expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/Users/apple/Projects/kiwi' }))
   })
 
   it('accepts the same folder written a different way', async () => {
@@ -130,7 +130,7 @@ describe('a request that names one', () => {
     // trailing slash and a session's cwd without one are the same directory,
     // and refusing over that would be a refusal nobody could act on.
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/imza/' })
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/kiwi/' })
     expect(outcome).toMatchObject({ ok: true })
   })
 
@@ -165,7 +165,7 @@ describe('a request that names one', () => {
     const deps = starter()
     for (const cwd of [
       '/Users/apple/Projects/terminaldeck/../../.ssh',
-      '/Users/apple/Projects/imza/..',
+      '/Users/apple/Projects/kiwi/..',
       '/Users/apple/Projects/terminaldeck/node_modules',
     ]) {
       expect((await remoteSessionCreator(deps)({ deviceId: PHONE, cwd })).ok, cwd).toBe(false)
@@ -177,7 +177,7 @@ describe('a request that names one', () => {
     // `normalize('projects/..')` is `'.'`, which would then lose a comparison
     // against absolute paths for the wrong reason. Refused for the true one.
     const deps = starter()
-    for (const cwd of ['Projects/imza', '.', '..', '~/Projects/imza']) {
+    for (const cwd of ['Projects/kiwi', '.', '..', '~/Projects/kiwi']) {
       expect((await remoteSessionCreator(deps)({ deviceId: PHONE, cwd })).ok, cwd).toBe(false)
     }
   })
@@ -503,14 +503,14 @@ describe('the session it reports back', () => {
   it('is the real one, with the id the desktop gave it', async () => {
     const outcome = await remoteSessionCreator(starter())({
       deviceId: PHONE,
-      cwd: '/Users/apple/Projects/imza',
+      cwd: '/Users/apple/Projects/kiwi',
     })
     expect(outcome).toEqual({
       ok: true,
       session: {
         id: 'sess-new',
         title: 'terminaldeck',
-        cwd: '/Users/apple/Projects/imza',
+        cwd: '/Users/apple/Projects/kiwi',
         provider: 'claude',
         // Nothing has printed yet, so there is nothing to read a status off.
         status: 'idle',

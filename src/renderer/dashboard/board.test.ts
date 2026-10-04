@@ -229,7 +229,7 @@ describe('labels', () => {
 
   it('takes the last segment of a path on either platform', () => {
     expect(folderOf('/Users/apple/Projects/terminaldeck')).toBe('terminaldeck')
-    expect(folderOf('C:\\Users\\asad\\ClaudeImza')).toBe('ClaudeImza')
+    expect(folderOf('C:\\Users\\asad\\ClaudeKiwi')).toBe('ClaudeKiwi')
     expect(folderOf('/Users/apple/Projects/terminaldeck/')).toBe('terminaldeck')
   })
 })

@@ -129,7 +129,7 @@ describe('the pane offers every agent, not the one this app is built by', () => 
       // a screen with nothing behind it, which is worse than not listing it.
       expect(installCommand(id, ROOM), `${id} has no install command`).not.toBeNull()
       expect(whyNotInstall(id, ROOM), `${id} is refused on a healthy server`).toBeNull()
-      expect(installConsequence(id, 'imza-vps')).toContain('imza-vps')
+      expect(installConsequence(id, 'kiwi-vps')).toContain('kiwi-vps')
     }
   })
 
@@ -182,7 +182,7 @@ describe('the pane offers every agent, not the one this app is built by', () => 
 
 describe('what a person is told before a button exists', () => {
   it('names the server in the sentence, so it is about their machine', () => {
-    expect(installConsequence('claude', 'imza-vps')).toContain('imza-vps')
+    expect(installConsequence('claude', 'kiwi-vps')).toContain('kiwi-vps')
     // The three claims that were measured rather than guessed.
     expect(installConsequence('claude', 'x')).toMatch(/320 MB/)
     expect(installConsequence('claude', 'x')).toMatch(/administrator access/)
@@ -378,7 +378,7 @@ describe('an install that cannot happen', () => {
       'claude',
       shell,
       { ...ROOM, downloader: '' },
-      'imza-vps',
+      'kiwi-vps',
     )
     expect(state.step).toBe('failed')
     expect(typed).toEqual([])

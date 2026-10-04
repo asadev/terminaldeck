@@ -10,6 +10,15 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Changed
+
+- **Neutral example names.** Names, paths and addresses used as examples in the code, its tests and its notes are now neutral placeholders. Nothing the app does changes.
+- **Store logos are kept as text.** The vector logos in the store are stored as plain text rather than base64; they draw exactly the same.
+
 ## [0.18.0] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.

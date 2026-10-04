@@ -122,7 +122,7 @@ describe('the Windows gate', () => {
       writeGrantRecord(join(dir, 'windows-confinement.json'), {
         capability: capabilitySid(),
         read: ['C:\\Program Files\\nodejs'],
-        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Imza'],
+        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Kiwi'],
         established: '2026-08-16T05:00:00.000Z',
       })
     }
@@ -403,12 +403,12 @@ describe('confineSpawn', () => {
   describe('on Windows', () => {
     const dirs: string[] = []
     const windowsPlan: ConfinementPlan = {
-      folder: 'C:\\Users\\Imza\\Projects\\app',
-      accountHome: 'C:\\Users\\Imza',
-      home: 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc',
+      folder: 'C:\\Users\\Kiwi\\Projects\\app',
+      accountHome: 'C:\\Users\\Kiwi',
+      home: 'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc',
       writable: [
-        'C:\\Users\\Imza\\Projects\\app',
-        'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc',
+        'C:\\Users\\Kiwi\\Projects\\app',
+        'C:\\Users\\Kiwi\\AppData\\Roaming\\td\\device-home\\abc',
       ],
       readable: ['C:\\Program Files\\nodejs'],
       readableFiles: [],
@@ -426,7 +426,7 @@ describe('confineSpawn', () => {
       writeGrantRecord(join(dir, 'windows-confinement.json'), {
         capability: capabilitySid(),
         read: ['C:\\Program Files\\nodejs'],
-        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Imza'],
+        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Kiwi'],
         established: '2026-08-16T05:00:00.000Z',
       })
       installWindowsTools({
@@ -445,7 +445,7 @@ describe('confineSpawn', () => {
      * plan — and every path in a Windows plan starts with a drive letter. This
      * block used to let the real `fs` write them. On macOS a backslash is an
      * ordinary filename character, so
-     * `C:\Users\Imza\AppData\Roaming\td\device-home\abc\.terminaldeck-confine-probe-…`
+     * `C:\Users\Kiwi\AppData\Roaming\td\device-home\abc\.terminaldeck-confine-probe-…`
      * is not a path at all, it is one very long filename in the working directory,
      * and the write succeeds. On a Windows runner it is a real absolute path to a
      * directory that has never existed there, the write is `ENOENT`, the proof

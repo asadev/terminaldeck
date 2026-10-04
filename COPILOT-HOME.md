@@ -1364,7 +1364,7 @@ logins and no reason to agree.
 
 When the copilot's home moves (§3), its account moves with it, because the account
 is part of the home. That is worth saying on the switch screen: somebody who has
-`imzapremium` selected locally and nothing signed in on the server should be told
+`examplemail` selected locally and nothing signed in on the server should be told
 before the move, not after.
 
 ### 13.4 · Migration

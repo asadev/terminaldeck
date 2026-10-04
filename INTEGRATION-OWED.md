@@ -27,9 +27,9 @@ Ticked items were applied directly by me because no agent held the file.
 
 - [ ] **`src/main/transcript.ts` — `encodeProjectPath` is wrong for every WSL
       path.** The most important item here. It calls `path.resolve`, so on a
-      Windows host `/home/asad/ClaudeImza` becomes `C:\home\asad\ClaudeImza` and
-      encodes to `C--home-asad-ClaudeImza`, while the Linux agent that wrote the
-      transcript encoded `-home-asad-ClaudeImza`. Nothing matches.
+      Windows host `/home/asad/ClaudeKiwi` becomes `C:\home\asad\ClaudeKiwi` and
+      encodes to `C--home-asad-ClaudeKiwi`, while the Linux agent that wrote the
+      transcript encoded `-home-asad-ClaudeKiwi`. Nothing matches.
       This is not only a restore bug — **chat view and cost read the same encoded
       directory**, which makes it a live candidate for the "chat and terminal show
       different conversations" fault, at least on Windows. The proper fix is
@@ -38,7 +38,7 @@ Ticked items were applied directly by me because no agent held the file.
       "genuinely nothing" is distinguishable from "cannot see". Needs the distro
       and home from `WslLink`. *Owner: session-view agent.*
 - [ ] **`src/main/fs-tree.ts`** — same root cause, different symptom: the app log
-      on his PC shows `fs:list failed ENOENT: realpath 'C:\home\asad\ClaudeImzacrm'`.
+      on his PC shows `fs:list failed ENOENT: realpath 'C:\home\asad\ClaudeKiwicrm'`.
       This is almost certainly his *"Files — I don't see any files here"* on
       Windows. Route through `statablePath`. *Owner: artifacts agent.*
 - [ ] **`src/renderer/shell/PanelView.tsx`** — Overview is gated behind
@@ -141,7 +141,7 @@ Ticked items were applied directly by me because no agent held the file.
       `workflow` scope, and no account here has it (checked live against the API:
       `admin:public_key, gist, read:org, repo`). One command grants it:
       `gh auth refresh -h github.com -s workflow`, approved for **asadev** —
-      which `gh` still labels `imzapremium`, its pre-rename name.
+      which `gh` still labels `examplemail`, its pre-rename name.
 
       Two things ride on that file, and both fail *quietly* without it:
       - the macOS signing step, so a tag would build an unsigned dmg again and

@@ -112,7 +112,7 @@ class FakeSftp {
 
   realpath(path: string, cb: (err: undefined, absolute: string) => void): void {
     this.calls.push(`realpath ${path}`)
-    setImmediate(() => cb(undefined, path === '.' ? this.options.home ?? '/home/imza' : path))
+    setImmediate(() => cb(undefined, path === '.' ? this.options.home ?? '/home/kiwi' : path))
   }
 
   readdir(path: string, cb: (err: undefined, list: never[]) => void): void {
@@ -817,8 +817,8 @@ describe('putting a file on a server', () => {
   }
 
   it('answers the path the server knows it by, not the one it left with', async () => {
-    const where = await put({ home: '/home/imza' })
-    expect(where).toBe('/home/imza/Terminal Deck/shot.png')
+    const where = await put({ home: '/home/kiwi' })
+    expect(where).toBe('/home/kiwi/Terminal Deck/shot.png')
     // The bytes go to a partial and the rename is what gives them the name.
     // Changed deliberately when the two SFTP writes were unified: this caller
     // used to `fastPut` straight at the final name, and of the two the
@@ -826,9 +826,9 @@ describe('putting a file on a server', () => {
     // failure halfway left a ruined file wearing a real name and a real
     // extension, and the person found out about it in whatever opened it.
     const sftp = FakeClient.made[0].sftpChannels[0]
-    expect(sftp.put).toEqual([[LOCAL, '/home/imza/Terminal Deck/shot.png.part']])
+    expect(sftp.put).toEqual([[LOCAL, '/home/kiwi/Terminal Deck/shot.png.part']])
     expect(sftp.renamed).toEqual([
-      { from: '/home/imza/Terminal Deck/shot.png.part', to: '/home/imza/Terminal Deck/shot.png' },
+      { from: '/home/kiwi/Terminal Deck/shot.png.part', to: '/home/kiwi/Terminal Deck/shot.png' },
     ])
   })
 
@@ -840,27 +840,27 @@ describe('putting a file on a server', () => {
   })
 
   it('makes its one folder, and only when it is not already there', async () => {
-    await put({ home: '/home/imza' })
-    expect(FakeClient.made[0].sftpChannels[0].made).toEqual(['/home/imza/Terminal Deck'])
+    await put({ home: '/home/kiwi' })
+    expect(FakeClient.made[0].sftpChannels[0].made).toEqual(['/home/kiwi/Terminal Deck'])
 
     FakeClient.made = []
-    await put({ home: '/home/imza', present: ['/home/imza/Terminal Deck'] })
+    await put({ home: '/home/kiwi', present: ['/home/kiwi/Terminal Deck'] })
     expect(FakeClient.made[0].sftpChannels[0].made).toEqual([])
   })
 
   it('lands beside a file of the same name rather than on top of it', async () => {
     const where = await put({
-      home: '/home/imza',
-      present: ['/home/imza/Terminal Deck', '/home/imza/Terminal Deck/shot.png'],
+      home: '/home/kiwi',
+      present: ['/home/kiwi/Terminal Deck', '/home/kiwi/Terminal Deck/shot.png'],
     })
-    expect(where).toBe('/home/imza/Terminal Deck/shot (2).png')
+    expect(where).toBe('/home/kiwi/Terminal Deck/shot (2).png')
   })
 
   it('reduces whatever it is handed to one file name', async () => {
     // `safeName` is the rule, shared with the phone's upload, and the property
     // this relies on is that it never answers anything containing a separator.
-    expect(await put({ home: '/home/imza' }, '../../etc/passwd')).toBe(
-      '/home/imza/Terminal Deck/passwd',
+    expect(await put({ home: '/home/kiwi' }, '../../etc/passwd')).toBe(
+      '/home/kiwi/Terminal Deck/passwd',
     )
   })
 
@@ -868,7 +868,7 @@ describe('putting a file on a server', () => {
     // Permission denied is not "that name is free". Walking on to `shot (2).png`
     // would write nothing and answer a path to a file that is not there.
     await expect(
-      put({ home: '/home/imza', refuse: { '/home/imza/Terminal Deck': 3 } }),
+      put({ home: '/home/kiwi', refuse: { '/home/kiwi/Terminal Deck': 3 } }),
     ).rejects.toMatchObject({ kind: 'not-allowed' })
   })
 
@@ -882,7 +882,7 @@ describe('putting a file on a server', () => {
   })
 
   it('closes its own channel and leaves the socket to the pool', async () => {
-    await put({ home: '/home/imza' })
+    await put({ home: '/home/kiwi' })
     // The channel is this function's and is always closed. The socket is the
     // pool's: it went here only because nothing else was holding this server —
     // a page with it open keeps the reference, and then the handover rides the
@@ -893,7 +893,7 @@ describe('putting a file on a server', () => {
 
   it('rides a connection somebody else is already holding', async () => {
     const server = store.add({ name: 'a', address: 'example.test', username: 'ada' })
-    const pool = connections({ sftp: { home: '/home/imza' } })
+    const pool = connections({ sftp: { home: '/home/kiwi' } })
     // A page looking at this server, which is what §5.4 says holds it open.
     await pool.acquire(server.id)
     await pool.putFile(server.id, LOCAL, 'shot.png', 'Terminal Deck')

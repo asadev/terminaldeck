@@ -74,7 +74,7 @@ import './AddAccountDialog.css'
  *   > naming, please."
  *
  * He is right, and the evidence was already on his disk: every account in
- * `profiles.json` is called `imzapremium@gmail.com` or
+ * `profiles.json` is called `examplemail@gmail.com` or
  * `asadiqbalonline@gmail.com`, because the address is the only thing that tells
  * two logins of one agent apart. So there is no separate name any more. The
  * field asks for the address, and the address *is* the profile name — one field,

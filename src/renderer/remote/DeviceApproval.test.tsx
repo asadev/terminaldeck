@@ -47,7 +47,7 @@ function view(overrides: Partial<DeviceApprovalProps> = {}): string {
     platform: 'mac',
     folders: [],
     logins: [
-      { id: 'system', label: 'imzapremium@gmail.com', provider: 'claude' },
+      { id: 'system', label: 'examplemail@gmail.com', provider: 'claude' },
       { id: 'p-work', label: 'work@example.com', provider: 'claude' },
     ],
     accountMode: 'all',
@@ -231,7 +231,7 @@ describe('choosing logins', () => {
   it('offers this machine’s logins by their addresses, never by the profile key', () => {
     const said = text(view({ step: 'accounts', kind: 'guest' as DeviceKind, accountMode: 'selected' }))
     expect(said).toContain('work@example.com')
-    expect(said).toContain('imzapremium@gmail.com')
+    expect(said).toContain('examplemail@gmail.com')
     // The keys `profiles.ts` mints are the same on every machine and name
     // nobody. They must never reach a screen where somebody is choosing.
     expect(said).not.toContain('Default')

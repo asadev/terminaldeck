@@ -1130,16 +1130,16 @@ describe('servers:upload', () => {
 
   it('answers the path the server gave it', async () => {
     writeFileSync(HERE, 'x')
-    const { call } = harness({ putFile: async () => '/home/imza/Terminal Deck/shot.png' })
+    const { call } = harness({ putFile: async () => '/home/kiwi/Terminal Deck/shot.png' })
     expect(await call('servers:upload', 's1', HERE)).toEqual({
       ok: true,
-      path: '/home/imza/Terminal Deck/shot.png',
+      path: '/home/kiwi/Terminal Deck/shot.png',
     })
   })
 
   it('sends the file’s own name as the suggestion, never a path', async () => {
     writeFileSync(HERE, 'x')
-    const putFile = vi.fn(async () => '/home/imza/Terminal Deck/x.png')
+    const putFile = vi.fn(async () => '/home/kiwi/Terminal Deck/x.png')
     const { call } = harness({ putFile })
     await call('servers:upload', 's1', HERE)
     expect(putFile).toHaveBeenCalledWith('s1', HERE, 'td-upload-fixture.png')

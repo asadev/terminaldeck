@@ -253,14 +253,14 @@ describe('stopping', () => {
  *   > message."*
  *
  * The shape below is the one taken off his own machine on 2026-08-20:
- * `profiles/imzapremium-gmail-com/projects` was an ordinary directory with
+ * `profiles/examplemail-gmail-com/projects` was an ordinary directory with
  * seven project folders in it, five of which the user's own `~/.claude` also
  * had. That is the case these tests are about.
  */
 describe('bringing existing accounts onto the shared history', () => {
   it('links an account whose projects folder is an ordinary directory', async () => {
     const { adoptSharedHistory, readsSharedHistory, shareState } = await subject()
-    const old = account('imzapremium-gmail-com')
+    const old = account('examplemail-gmail-com')
     mkdirSync(join(old.configDir, 'projects', '-Users-apple-bin'), { recursive: true })
     expect(shareState(old).link).toBe('separate')
     expect(readsSharedHistory(old)).toBe(false)
@@ -279,7 +279,7 @@ describe('bringing existing accounts onto the shared history', () => {
    */
   it('makes the conversation on screen visible to the account he switches to', async () => {
     const { adoptSharedHistory, sharedProjectsRoot } = await subject()
-    const mine = account('imzapremium-gmail-com')
+    const mine = account('examplemail-gmail-com')
     mkdirSync(mine.configDir, { recursive: true })
 
     // His own install writes the conversation he is looking at.
@@ -405,7 +405,7 @@ function seedOwnHistory(folders: readonly string[]): void {
  * what happens to those five.
  */
 
-/** What his `profiles/imzapremium-gmail-com/projects` actually holds. */
+/** What his `profiles/examplemail-gmail-com/projects` actually holds. */
 const HIS_ACCOUNT_FOLDERS = [
   '-private-tmp-deck-switch-demo',
   '-private-tmp-td-acct-model-work',
@@ -431,10 +431,10 @@ describe('his three accounts, as they are on disk', () => {
     const { adoptSharedHistory, readsSharedHistory, sharedProjectsRoot } = await subject()
     seedOwnHistory(HIS_OWN_FOLDERS)
 
-    // `imzapremium@gmail.com` — provider claude, a real projects directory.
-    const imza = account('imzapremium-gmail-com')
+    // `examplemail@gmail.com` — provider claude, a real projects directory.
+    const kiwi = account('examplemail-gmail-com')
     for (const folder of HIS_ACCOUNT_FOLDERS) {
-      const dir = join(imza.configDir, 'projects', folder)
+      const dir = join(kiwi.configDir, 'projects', folder)
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'theirs.jsonl'), '{"type":"user"}\n')
     }
@@ -445,15 +445,15 @@ describe('his three accounts, as they are on disk', () => {
     // And his own install, which is the shared history rather than a link to it.
     const own: Profile = { ...account('system-claude'), configDir: join(home, '.claude'), system: true }
 
-    const result = adoptSharedHistory([imza, codex, own])
+    const result = adoptSharedHistory([kiwi, codex, own])
 
-    expect(result.joined).toEqual(['imzapremium-gmail-com'])
+    expect(result.joined).toEqual(['examplemail-gmail-com'])
     expect(result.left).toEqual(['asadiqbalonline-gmail-com-2'])
     expect(result.already).toEqual(['system-claude'])
     expect(result.failed).toEqual([])
 
     // The switch he actually makes now sees one store on both sides.
-    expect(readsSharedHistory(imza)).toBe(true)
+    expect(readsSharedHistory(kiwi)).toBe(true)
     expect(readsSharedHistory(own)).toBe(true)
 
     // His own history is intact, to the file.
@@ -471,25 +471,25 @@ describe('his three accounts, as they are on disk', () => {
     for (const folder of HIS_ACCOUNT_FOLDERS.filter((name) => HIS_OWN_FOLDERS.includes(name))) {
       expect(readdirSync(join(sharedProjectsRoot(), folder)).sort(), folder).toEqual(['own.jsonl', 'theirs.jsonl'])
     }
-    expect(readdirSync(imza.configDir).some((entry) => entry.startsWith('projects.not-merged-'))).toBe(false)
+    expect(readdirSync(kiwi.configDir).some((entry) => entry.startsWith('projects.not-merged-'))).toBe(false)
 
     // And the account's projects/ is a link, so deleting the account later
     // takes the link and not his history.
-    expect(lstatSync(join(imza.configDir, 'projects')).isSymbolicLink()).toBe(true)
+    expect(lstatSync(join(kiwi.configDir, 'projects')).isSymbolicLink()).toBe(true)
   })
 
   it('the folder he was working in becomes readable from the other account', async () => {
     const { adoptSharedHistory } = await subject()
     seedOwnHistory(HIS_OWN_FOLDERS)
-    const imza = account('imzapremium-gmail-com')
-    mkdirSync(imza.configDir, { recursive: true })
+    const kiwi = account('examplemail-gmail-com')
+    mkdirSync(kiwi.configDir, { recursive: true })
 
-    adoptSharedHistory([imza])
+    adoptSharedHistory([kiwi])
 
     // `--continue` scans `projects/` for the encoded cwd; this is that lookup,
     // done from the account he is switching *to*, against a conversation his
     // own login wrote.
-    const seen = join(imza.configDir, 'projects', '-Users-apple-Projects-terminaldeck')
+    const seen = join(kiwi.configDir, 'projects', '-Users-apple-Projects-terminaldeck')
     expect(readdirSync(seen)).toEqual(['own.jsonl'])
   })
 })
