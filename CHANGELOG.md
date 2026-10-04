@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-10-04
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Hoot.** The assistant is called Hoot now, an orange owl in round glasses who blinks now and then. It lives in an island at the top centre of the menu bar: a small pill with the owl and your session counts that grows smoothly into a chat when you hover, with your open sessions as small chips you can click. Drag a corner to resize it; it remembers. On a MacBook it sits around the notch. Turn it off in Settings → Hoot.
+- **Stays Fixed, built in.** A Stays Fixed page in every project proves nothing that already worked has changed: set it up in one click, run a check, and see only the differences nobody asked for, with before-and-after pictures. Mark a build as good when you are happy. Agents in that project get Stays Fixed automatically, and Hoot and connected AI apps can run it too.
+- **Pop a session out into its own window** on any monitor, and bring it back by closing the window. Placement is remembered.
+- **Notifications for connected AI apps.** Each app hears about its own sessions only — finished, needs input, exited — by waiting on `notifications_wait`, by a signed web address, through Claude Code's channels, or through ChatGPT's MCP Events. Set it per key in Settings → Connect an AI app.
+
+### Changed
+
+- **A switched account shows everywhere at once** — the header, the tick, your phone and the AI tools — with "Switching… / Switched" under the account chip. Claude's own `/status` keeps the first account's email until that session restarts; the tooltip says so.
+- **The simulator view** streams video at full resolution, stops entirely when hidden, and keeps your simulators listed even when the Mac is overloaded.
+
+### Fixed
+
+- **A switch from the Mac's own login no longer writes into Claude's settings folder.** 0.16.1 briefly placed an empty credentials file in `~/.claude` during a switch.
+- **The "start your dev server" panel** and several labels that said "copilot".
+
 ## [0.16.1] — 2026-10-03
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2270,7 +2291,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.17.0
 [0.16.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.16.1
 [0.16.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.16.0
 [0.15.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.15.0
