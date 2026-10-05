@@ -69,6 +69,7 @@ struct TerminalDeckShortcuts: AppShortcutsProvider {
             systemImageName: "flag")
         // Last on purpose: the metadata reader gives every shortcut after an
         // `if #available` block that block's availability too.
+        #if compiler(>=6.4)
         if #available(macOS 27.0, *) {
             AppShortcut(
                 intent: OpenProjectIntent(),
@@ -79,6 +80,16 @@ struct TerminalDeckShortcuts: AppShortcutsProvider {
                 shortTitle: "Open Project",
                 systemImageName: "folder")
         }
+        #else
+        AppShortcut( // an older SDK: the plain intent (IntentsActions.swift), on every macOS
+            intent: OpenProjectIntent(),
+            phrases: [
+                "Open \(\.$target) in \(.applicationName)",
+                "Show \(\.$target) in \(.applicationName)",
+            ],
+            shortTitle: "Open Project",
+            systemImageName: "folder")
+        #endif
     }
 
     static let shortcutTileColor: ShortcutTileColor = .grayBlue

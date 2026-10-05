@@ -177,6 +177,10 @@ struct StartSessionIntent: AppIntent {
 /// session shown (or its heading unfolded when it has none). On macOS 27 it is
 /// the system's own Open action for a project (`.system.open`), so Siri and
 /// Spotlight can open one by name; the schema does not exist on macOS 26.
+///
+/// Built with an older SDK (Swift 6.3 = Xcode 26, the release machine's, has no
+/// `.system.open`) it is a plain intent with the same phrases, doing the same work.
+#if compiler(>=6.4)
 @available(macOS 27.0, *)
 @AppIntent(schema: .system.open)
 struct OpenProjectIntent: OpenIntent {
@@ -187,6 +191,31 @@ struct OpenProjectIntent: OpenIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        try await OpenProject.show(target)
+        return .result()
+    }
+}
+#else
+struct OpenProjectIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Project"
+    static let description = IntentDescription("Shows a project's newest session in Terminal Deck.")
+    static let supportedModes: IntentModes = .foreground(.immediate)
+
+    @Parameter(title: "Project")
+    var target: ProjectEntity
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try await OpenProject.show(target)
+        return .result()
+    }
+}
+#endif
+
+/// The work of `OpenProjectIntent`, whichever SDK built it.
+enum OpenProject {
+    @MainActor
+    static func show(_ target: ProjectEntity) async throws {
         let budget = IntentBudget(IntentDeadline.readBudget)
         IntentsEngine.bringForward()
         try await IntentsEngine.ready(budget)
@@ -201,7 +230,6 @@ struct OpenProjectIntent: OpenIntent {
         if let session = heading.sessions.last(where: { $0.kind == .session }) {
             model.select(session.id)
         }
-        return .result()
     }
 }
 

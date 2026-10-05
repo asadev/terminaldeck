@@ -27,9 +27,12 @@ SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
 # behaviour (Liquid Glass toolbar etc.) for the SDK it was actually built with.
 echo "==> swift build -c release (macOS $MIN_OS+, SDK $SDK_VERSION)"
 SCRATCH="${TD_SCRATCH:-$PKG/.build}"   # lanes building at once: give each its own
-swift build -c release --package-path "$PKG" --scratch-path "$SCRATCH" \
-  -Xlinker -platform_version -Xlinker macos -Xlinker "$MIN_OS" -Xlinker "$SDK_VERSION"
-BIN_DIR="$(swift build -c release --package-path "$PKG" --scratch-path "$SCRATCH" --show-bin-path)"
+# Swift Build named outright: it is the default only from Swift 6.4 (Xcode 27). Swift
+# 6.3 (Xcode 26, the release machine's) defaults to the old native system, which writes
+# no .swiftconstvalues and no Intermediates.noindex — so intents-metadata.sh has nothing to read.
+BUILD=(swift build -c release --build-system swiftbuild --package-path "$PKG" --scratch-path "$SCRATCH")
+"${BUILD[@]}" -Xlinker -platform_version -Xlinker macos -Xlinker "$MIN_OS" -Xlinker "$SDK_VERSION"
+BIN_DIR="$("${BUILD[@]}" --show-bin-path)"
 [ -x "$BIN_DIR/$EXE" ] || { echo "error: $BIN_DIR/$EXE was not built" >&2; exit 1; }
 
 echo "==> assembling $APP"
