@@ -43,8 +43,12 @@ export interface HeldSessionView {
   key: string
   cwd: string
   provider: string
-  /** Why it did not start, in the main process's own words. */
+  /** Why it did not start, in the main process's own words. Shown on hover, not on the row. */
   reason: string
+  /** Opening it shows Claude Code's conversation list, because no exact conversation could be continued. */
+  pick: boolean
+  /** The tab it was, so the session it opens as can be brought to the front. */
+  tabKey?: string
   /** When the last attempt failed. Epoch ms. */
   at: number
 }
@@ -102,6 +106,8 @@ export function readHeldSessions(raw: unknown): HeldSessionView[] {
       cwd,
       reason,
       provider: typeof entry.provider === 'string' ? entry.provider : 'shell',
+      pick: entry.pick === true,
+      ...(typeof entry.tabKey === 'string' && entry.tabKey !== '' ? { tabKey: entry.tabKey } : {}),
       at: typeof entry.at === 'number' ? entry.at : 0,
     })
   }

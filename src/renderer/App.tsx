@@ -500,6 +500,20 @@ function Workspace() {
    * switched off is a report that will be off on the machine where it mattered.
    */
   const held = useHeldSessions()
+  /*
+   * Pressing a kept row opens it: the session it starts arrives through
+   * `session:created` like any other, so the row's tab key is remembered here
+   * and the matching arrival is brought to the front.
+   */
+  const openingHeldTab = useRef<string | null>(null)
+  const [openedHeldId, setOpenedHeldId] = useState<string | null>(null)
+  const openHeld = useCallback(
+    (key: string) => {
+      openingHeldTab.current = held.rows.find((row) => row.key === key)?.tabKey ?? null
+      held.retry(key)
+    },
+    [held.rows, held.retry],
+  )
   /**
    * Running the session you already have as a different account.
    *
@@ -1825,6 +1839,10 @@ function Workspace() {
       window.deck.onSessionCreated((meta) => {
         addSession(meta, { focus: false })
         unread.recordOutput(meta.id)
+        if (meta.tabKey !== undefined && meta.tabKey === openingHeldTab.current) {
+          openingHeldTab.current = null
+          setOpenedHeldId(meta.id)
+        }
       }),
     [addSession, unread],
   )
@@ -3864,6 +3882,13 @@ function Workspace() {
    * are two different arrivals. Watching for the id is the only thing that is
    * true of both orders.
    */
+  /** A kept row that was pressed has its session now — show it. See `openHeld`. */
+  useEffect(() => {
+    if (openedHeldId === null) return
+    setOpenedHeldId(null)
+    selectTab(openedHeldId)
+  }, [openedHeldId, selectTab])
+
   useEffect(() => {
     if (!copilotPending || copilotSessionId === null) return
     setCopilotPending(false)
@@ -6233,7 +6258,7 @@ function Workspace() {
              log file and a window that looked completely normal. */
           held={held.rows}
           heldRetrying={held.retrying}
-          onRetryHeld={held.retry}
+          onRetryHeld={openHeld}
           onForgetHeld={held.forget}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the

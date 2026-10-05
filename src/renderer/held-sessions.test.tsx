@@ -14,8 +14,8 @@ import { Sidebar } from './shell/Sidebar'
  * symptom three steps from the cause.
  *
  * So: the narrower is total, because a channel that goes missing must cost the
- * rows and not the window; and the rail draws a row per held session, with the
- * reason on it and an offer to try again. `react-dom/server`, like every render
+ * rows and not the window; and the rail draws one compact row per held session
+ * that opens it when pressed, with the reason in its tooltip. `react-dom/server`, like every render
  * test in this project — there is no DOM in the test setup, deliberately.
  */
 
@@ -29,6 +29,8 @@ const held: HeldSessionView[] = [
     cwd: '/Users/apple/Projects/terminaldeck',
     provider: 'claude',
     reason: 'it could not be started again: File not found',
+    pick: false,
+    tabKey: 'tab-1',
     at: 1_700_000_000_000,
   },
   {
@@ -36,6 +38,15 @@ const held: HeldSessionView[] = [
     cwd: '/home/asad/ClaudeKiwi',
     provider: 'claude',
     reason: 'the folder it ran in is no longer on this machine',
+    pick: false,
+    at: 1_700_000_000_000,
+  },
+  {
+    key: 'held-3',
+    cwd: '/Users/apple/Projects/terminaldeck',
+    provider: 'claude',
+    reason: 'no conversation was saved for this tab — open it to choose one',
+    pick: true,
     at: 1_700_000_000_000,
   },
 ]
@@ -69,13 +80,24 @@ function rail(over: Partial<Parameters<typeof Sidebar>[0]> = {}): string {
   )
 }
 
+/** The first held row's markup, and nothing around it. */
+function heldItem(markup: string): string {
+  const from = markup.slice(markup.indexOf('<li class="sb-held"'))
+  return from.slice(0, from.indexOf('</li>'))
+}
+
 describe('reading the held list off the bridge', () => {
   it('keeps every field a row needs', () => {
     expect(
       readHeldSessions([
         { key: 'held-1', cwd: '/p', provider: 'claude', reason: 'no', at: 12 },
       ]),
-    ).toEqual([{ key: 'held-1', cwd: '/p', provider: 'claude', reason: 'no', at: 12 }])
+    ).toEqual([{ key: 'held-1', cwd: '/p', provider: 'claude', reason: 'no', pick: false, at: 12 }])
+    expect(
+      readHeldSessions([
+        { key: 'held-2', cwd: '/p', provider: 'claude', reason: 'no', pick: true, tabKey: 'tab-9', at: 12 },
+      ]),
+    ).toEqual([{ key: 'held-2', cwd: '/p', provider: 'claude', reason: 'no', pick: true, tabKey: 'tab-9', at: 12 }])
   })
 
   it('drops an entry with no key, folder or reason rather than drawing a blank', () => {
@@ -92,7 +114,7 @@ describe('reading the held list off the bridge', () => {
     // An unknown agent and an unknown time is still a row saying a session did
     // not come back, which is the fact worth having on screen.
     expect(readHeldSessions([{ key: 'k', cwd: '/p', reason: 'no' }])).toEqual([
-      { key: 'k', cwd: '/p', reason: 'no', provider: 'shell', at: 0 },
+      { key: 'k', cwd: '/p', reason: 'no', provider: 'shell', pick: false, at: 0 },
     ])
   })
 
@@ -142,44 +164,72 @@ describe('the rail draws them', () => {
     expect(html).toContain('Claude Code')
   })
 
-  it('says why, on the row', () => {
-    // The sentence is the reason the row exists. A rail that said only "Claude
-    // Code — did not start" would be the app admitting a failure and still
-    // making somebody go and find out what it was.
-    expect(html).toContain('it could not be started again: File not found')
-    expect(html).toContain('the folder it ran in is no longer on this machine')
+  it('is one line — the name and a status mark — with why it was kept in the tooltip', () => {
+    // Each row used to be the name plus five wrapped lines and a retry button,
+    // about 120px apiece. Now it is the height of every other session row.
+    expect(html).not.toContain('sb-held-why')
+    expect(html).not.toContain('sb-held-retry')
+    const row = heldItem(html)
+    expect(row).not.toMatch(/<p[\s>]/) // no paragraph under the name
+    expect(row.match(/<button/g)).toHaveLength(2) // the row itself, and stop keeping it
+    expect(row).toContain('sb-held-mark')
+    expect(html).toContain('title="Claude Code — Not reopened: it could not be started again: File not found"')
   })
 
-  it('names the folder only where no heading above it does', () => {
-    /*
-     * Under `terminaldeck`, naming it would be the same word twice twenty pixels
-     * apart. And where it *is* named it goes on the wrapping second line, not
-     * beside the agent: `Claude Code — ClaudeKiwi` on a 264px rail renders as
-     * **Claude Code — Claude…**, so the one row that has to identify its own
-     * folder was the one row whose folder was cut off. Measured in the harness,
-     * which is the only thing in this project that catches that class of defect.
-     */
-    expect(html).toContain('<span class="sb-held-where">ClaudeKiwi</span>')
-    expect(html).not.toContain('<span class="sb-held-where">terminaldeck</span>')
-    // Two held rows, one folder caption — the other has a heading saying it.
-    expect(html.match(/sb-held-where/g)).toHaveLength(1)
+  it('says a row with no usable conversation opens on the list to choose one', () => {
+    expect(html).toContain('Not reopened — open it to choose the conversation')
   })
 
-  it('offers to try again, and to stop keeping it', () => {
-    expect(html).toContain('Try Claude Code again in /home/asad/ClaudeKiwi')
-    expect(html).toContain('Stop keeping Claude Code in /home/asad/ClaudeKiwi')
+  it('names the folder only where no heading above it does, ahead of the agent', () => {
+    // Folder first, so the rail's ellipsis eats the agent's name and not the
+    // folder that tells this row from the others.
+    expect(html).toContain('<span class="sb-label">ClaudeKiwi · Claude Code</span>')
+    expect(html).not.toContain('terminaldeck · Claude Code')
   })
 
-  it('says a row is already trying, and cannot be pressed twice', () => {
+  it('opens when the row is pressed, and still offers to stop keeping it', () => {
+    const row = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={[]}
+        activeTabId={null}
+        activePanel={null}
+        held={[held[1]]}
+        onRetryHeld={noop}
+        onForgetHeld={noop}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    const item = heldItem(row)
+    const main = item.slice(item.indexOf('class="sb-row-main sb-held-open"'))
+    expect(main.slice(0, main.indexOf('</button>'))).toContain('aria-label="Open Claude Code in /home/asad/ClaudeKiwi.')
+    expect(row).toContain('Stop keeping Claude Code in /home/asad/ClaudeKiwi')
+  })
+
+  it('says a row is already opening, and cannot be pressed twice', () => {
     /*
      * Not cosmetic. A retry spawns a session; two of them spawn two, in one
      * folder, on one agent — and `planRestore` then has to decide which of the
      * pair continues the conversation, so the duplicate does not merely waste a
      * process, it demotes the real one to a fresh start.
      */
-    const trying = rail({ heldRetrying: ['held-1'] })
-    expect(trying).toContain('Trying again…')
-    expect(trying).toContain('disabled=""')
+    const opening = rail({ heldRetrying: ['held-1'] })
+    expect(opening).toContain('Opening…')
+    expect(opening).toContain('disabled=""')
+    expect(opening).toContain('aria-busy="true"')
   })
 
   it('draws nothing at all when nothing is being held', () => {

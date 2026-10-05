@@ -220,6 +220,17 @@ export interface RestoreDecision {
    */
   reason: string
   /**
+   * Kept, and opening it means letting the person choose the conversation.
+   *
+   * Set on a Claude tab the exact planner could not continue by id — no id was
+   * saved, the saved one is not on disk, or another tab already has it. Launch
+   * still keeps it rather than starting anything; pressing its row starts Claude
+   * Code on its own conversation list (`CreateSessionInput.pickConversation`),
+   * which is a choice the person makes, never a guess and never a silent new
+   * conversation.
+   */
+  pick?: boolean
+  /**
    * The conversation store this decision was made against.
    *
    * Carried on the decision rather than recomputed by whoever needs it next,
@@ -401,7 +412,7 @@ export async function planRestore(
         continue
       }
       if (!session.agentSessionId) {
-        decisions.push({ session, outcome: 'skip', reason: 'kept: an older version did not save which conversation this was, so none was guessed. Open Claude in this folder and type /resume to pick it.' })
+        decisions.push({ session, outcome: 'skip', pick: true, reason: 'no conversation was saved for this tab — open it to choose one' })
         continue
       }
       if (!probes.canContinue(session.provider) || (session.provider !== 'claude' && session.provider !== 'codex')) {
@@ -412,8 +423,11 @@ export async function planRestore(
       const key = `${session.provider}\u0000${conversationStore(configDir)}\u0000${session.agentSessionId}`
       const conversation = await probes.conversation(session, configDir)
       if (conversation === 'none' || claimed.has(key)) {
+        const pick = session.provider === 'claude'
+        const why = conversation === 'none' ? 'the saved conversation was not found' : 'another tab is already on this conversation'
         decisions.push({ session, outcome: 'skip', configDir, conversation,
-          reason: conversation === 'none' ? 'the saved conversation is not available; kept for recovery' : 'another tab is already on this exact conversation; kept for recovery' })
+          ...(pick ? { pick: true } : {}),
+          reason: pick ? `${why} — open it to choose one` : `${why}; kept for recovery` })
         continue
       }
       claimed.add(key)

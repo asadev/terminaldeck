@@ -136,6 +136,8 @@ import { isHiddenSession } from './remote/hidden-sessions'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
 import { HeldSessions } from './session-held'
+import { PickedConversations } from './picked-conversation'
+import { onHookEvent } from './hook-server'
 import { limitsOf, personalSessions, type SavedSession } from './session-restore'
 import { TOOL_NAME } from '../shared/agent-tools'
 import { copilotPaths } from './copilot-home'
@@ -951,6 +953,11 @@ export interface HostCore {
   /** The same login, mapped for the wire and with the change hook a phone rides. */
   hostGitHub: GitHubHostAccess
   ledger: OpenSessionLedger
+  /**
+   * The person typed into a session. A tab opened on Claude Code's conversation
+   * list reads which conversation was picked — see `picked-conversation.ts`.
+   */
+  noteTyped(id: string): void
   /**
    * Start a session. The one place that does, for a window and for a phone.
    *
@@ -2154,12 +2161,23 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * conversation into the other account's folder (`codex-carry.ts`) names it,
      * where `resume --last` would pick whatever that account did last here.
      */
+    /*
+     * `--resume` with no id: Claude Code's own conversation list, for a kept
+     * tab whose exact conversation could not be continued by id. The person
+     * picks; this app neither guesses one (`--continue`) nor starts a new one,
+     * so it is never downgraded by `argsForSpawn` below. What they pick is
+     * learnt afterwards by `PickedConversations`.
+     */
+    const picking = provider === 'claude' && input.pickConversation === true
     const named =
+      !picking &&
       (provider === 'claude' || provider === 'codex') &&
       input.resume === true &&
       typeof input.resumeConversationId === 'string' &&
       input.resumeConversationId !== ''
-    const resumeArgs = named
+    const resumeArgs = picking
+      ? withLaunchArgs(spec, ['--resume'], platform, process.env, target).spawn.args
+      : named
       ? withLaunchArgs(
           spec,
           provider === 'codex'
@@ -2171,7 +2189,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         ).spawn.args
       : spec.spawn.resumeArgs
 
-    const chosen = argsForSpawn({
+    const chosen = picking ? resumeArgs : argsForSpawn({
       resume: input.resume === true,
       resumeArgs,
       args: spec.spawn.args,
@@ -2270,6 +2288,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const continuedId =
       declaredId === null &&
       !named &&
+      !picking &&
       provider === 'claude' &&
       target === null &&
       resumeArgs.length > 0 &&
@@ -2585,7 +2604,13 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     if (tabKey !== null) {
       ledger.note(meta.id, {
-        ...(meta.agentSessionId ? { agentSessionId: meta.agentSessionId } : {}),
+        // A tab opened on the conversation list keeps the id it had until the
+        // one picked is known, so cancelling the list loses nothing.
+        ...(meta.agentSessionId
+          ? { agentSessionId: meta.agentSessionId }
+          : picking && input.resumeConversationId
+            ? { agentSessionId: input.resumeConversationId }
+            : {}),
         ...(input.model ? { model: input.model } : {}),
         ...limitsOf(input),
         cwd: input.cwd,
@@ -2607,6 +2632,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         ...(confineDeviceId !== null ? { confineDeviceId } : {}),
       })
     }
+
+    if (picking && target === null) picked.watch(meta.id, { cwd: input.cwd, configDir: profile.configDir })
 
     // Last, so that anything listening sees a session that is fully built: the
     // pty is running and the ledger already knows about it. A listener that
@@ -3050,12 +3077,26 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     ),
   })
 
+  /*
+   * The conversation a tab opened on Claude Code's own list was picked onto,
+   * written onto its record so the next launch continues it by id.
+   */
+  const picked = new PickedConversations({
+    pidOf: (id) => ptys.pidOf(id),
+    learned: (id, conversationId) => {
+      ptys.setAgentSessionId(id, conversationId)
+      ledger.update(id, { agentSessionId: conversationId })
+    },
+  })
+  onHookEvent((event) => void picked.noteHook(event))
+
   const ptys = new PtyManager(
     (id, data) => {
       sessions.noteData(id, data)
       options.onData?.(id, data)
     },
     (id, exitCode) => {
+      picked.forget(id)
       // An exited process leaves a readable tab. Only removing the tab forgets it.
       ledger.flush()
       // The boundary outlives nothing. A dead session cannot be attached to, and
@@ -3125,6 +3166,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     (id, reason) => {
       ledger.forget(id)
+      picked.forget(id)
       options.onSessionRemoved?.(id, reason)
     },
   )
@@ -3203,6 +3245,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     github,
     hostGitHub,
     ledger,
+    noteTyped: (id) => void picked.noteTyping(id),
     startSession,
     restoreSpawn,
     statablePath,

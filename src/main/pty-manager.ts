@@ -420,6 +420,12 @@ export class PtyManager {
     return { ...session.meta }
   }
 
+  /** The conversation the agent was found to be on after it started — see `picked-conversation.ts`. */
+  setAgentSessionId(id: string, conversationId: string): void {
+    const session = this.sessions.get(id)
+    if (session) session.meta.agentSessionId = conversationId
+  }
+
   write(id: string, data: string): void {
     this.sessions.get(id)?.proc.write(data)
   }

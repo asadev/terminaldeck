@@ -1868,7 +1868,7 @@ async function hydrateRenderer(): Promise<void> {
            */
           for (const decision of decisions) {
             if (decision.outcome === 'failed' || decision.outcome === 'skip') {
-              ledger.held.hold(decision.session, decision.reason)
+              ledger.held.hold(decision.session, decision.reason, decision.pick === true)
             }
           }
           announceHeld()
@@ -2450,7 +2450,14 @@ async function retryHeld(key: unknown): Promise<HeldSession[]> {
   if (!held) return ledger.held.list()
 
   const [decision] = await planSaved([savedFrom(held)])
-  if (!decision || decision.outcome === 'skip') {
+  /*
+   * A Claude tab whose exact conversation cannot be continued by id opens on
+   * Claude Code's own conversation list, so the person chooses it. Never a
+   * guess, never a silent new conversation — and the id it had, if any, stays
+   * on its record until the choice is known (`pickConversation` in host-core).
+   */
+  const pick = decision?.outcome === 'skip' && decision.pick === true
+  if (!decision || (decision.outcome === 'skip' && !pick)) {
     ledger.held.fail(held.key, decision?.reason ?? 'it could not be planned')
     announceHeld()
     return ledger.held.list()
@@ -2470,7 +2477,8 @@ async function retryHeld(key: unknown): Promise<HeldSession[]> {
         rows: held.rows,
         provider: held.provider,
         profileId: held.profileId,
-        resume: decision.outcome === 'resume',
+        resume: decision.outcome === 'resume' || pick,
+        ...(pick ? { pickConversation: true } : {}),
         ...(held.agentSessionId ? { resumeConversationId: held.agentSessionId } : {}),
         ...(held.model ? { model: held.model } : {}),
         ...limitsOf(held),
@@ -2648,6 +2656,7 @@ function typeIntoSession(id: string, data: string): void {
   // freshened value reaches the file on the next open or close, and on
   // `before-quit` — which is where a clean shutdown makes it exact.
   ledger.touch(id)
+  core.noteTyped(id)
 
   /*
    * The one place a deferred account switch can fire.

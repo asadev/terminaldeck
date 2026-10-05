@@ -124,6 +124,12 @@ export interface HeldSession {
    * support conversation goes wrong.
    */
   reason: string
+  /**
+   * Opening it shows Claude Code's own conversation list, because the exact
+   * conversation could not be continued by id. See `RestoreDecision.pick`.
+   * Like `reason`, about this row and never written to `openSessions`.
+   */
+  pick?: boolean
   /** When the most recent attempt failed. Epoch ms. */
   at: number
 }
@@ -189,7 +195,7 @@ export class HeldSessions {
    * Returns the entry so the caller can log or announce it without looking it up
    * again.
    */
-  hold(session: SavedSession, reason: string): HeldSession {
+  hold(session: SavedSession, reason: string, pick = false): HeldSession {
     this.counter += 1
     const entry: HeldSession = {
       ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
@@ -212,6 +218,7 @@ export class HeldSessions {
         ? { confineDeviceId: session.confineDeviceId }
         : {}),
       reason,
+      ...(pick ? { pick: true } : {}),
       at: Date.now(),
     }
     this.held.set(entry.key, entry)

@@ -200,8 +200,7 @@ interface Props {
   /**
    * The sessions that were open, did not come back, and are being kept.
    *
-   * A row under the project it belonged to, saying what did not start and why,
-   * with Try again beside it. `renderer/held-sessions.ts` has the account of the
+   * One compact row under the project it belonged to; pressing it opens it. `renderer/held-sessions.ts` has the account of the
    * bug this closes and `main/session-held.ts` the mechanism; what matters here
    * is that the rail is where it has to be *seen*. When four of Asad's sessions
    * failed to restart on 2026-08-16 the app wrote a warning to a log nobody had
@@ -482,7 +481,6 @@ function serverFoldKey(serverId: string): string {
  */
 const CHEVRON_LEFT = 'M14.5 6.5 9 12l5.5 5.5'
 const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
-const RESUME = 'M4 12a8 8 0 1 0 2.7-6M4 4.5v4h4'
 const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 /**
  * A session that did not come back: an outline circle with a bar through it.
@@ -946,52 +944,38 @@ export function Sidebar({
     tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
 
   /**
-   * One held session, as a row.
+   * One held session, as one compact row: its name and a small status mark.
    *
-   * Two lines rather than one, and the second line is the whole reason the row
-   * exists: a rail that said only "Claude Code — did not start" would be the
-   * app admitting a failure and still making somebody go and find out what it
-   * was. The sentence is the main process's own, verbatim, and is the same one
-   * in the app log — one event, one explanation, wherever you read it.
+   * Pressing the row opens it — by its exact saved conversation when there is
+   * one, otherwise on Claude Code's own conversation list so the person picks
+   * (`row.pick`). The reason is the main process's own sentence and lives in
+   * the tooltip; on the row it was five wrapped lines per session.
    *
-   * The folder is named only when there is no heading above already naming it.
-   * Under `terminaldeck`, a row reading "Claude Code — terminaldeck" is the same
-   * word twice, twenty pixels apart; the same argument `rowsFor` makes about
-   * qualifiers.
-   *
-   * When it *is* named, it goes on the second line rather than beside the agent,
-   * and that was measured rather than chosen: `Claude Code — ClaudeKiwi` on a
-   * 264px rail comes out as **Claude Code — Claude…**, so the one row that has
-   * to identify its own folder was the one row whose folder was cut off. The
-   * second line wraps, so it has the width, and the agent — which is what the
-   * row is *about* — keeps the line it was already readable on.
-   *
-   * Try again is a `sb-row-action` like every other hover control on a rail row,
-   * but this one is drawn always rather than on hover. A control that appears
-   * only under the pointer is fine for closing a tab you can see; it is wrong
-   * for the single offer to recover work, on a row a person is reading precisely
-   * because something went wrong.
+   * The folder leads the name only where no heading above names it, and leads
+   * rather than trails so it survives the rail's ellipsis.
    */
   const heldRow = (row: HeldSessionView, nameFolder: boolean) => {
     const agent = heldAgentName(row.provider)
-    const trying = heldRetrying.includes(row.key)
+    const opening = heldRetrying.includes(row.key)
+    const name = nameFolder ? `${folderName(row.cwd)} · ${agent}` : agent
+    const status = opening
+      ? 'Opening…'
+      : row.pick
+        ? 'Not reopened — open it to choose the conversation'
+        : `Not reopened: ${row.reason}`
     return (
       <li key={row.key} className="sb-held">
-        <div className="sb-row sb-held-row">
-          <Glyph path={HELD} size={15} className="sb-held-mark" />
-          <span className="sb-label">{agent}</span>
+        <div className="sb-row" aria-busy={opening || undefined}>
           <button
             type="button"
-            className="sb-row-action sb-held-retry"
-            // `title` carries the folder as well, because the label above drops
-            // it under a project heading and this is the one control whose
-            // press starts a process somewhere.
-            title={trying ? `Starting ${agent} in ${row.cwd}…` : `Try ${agent} again in ${row.cwd}`}
-            aria-label={`Try ${agent} again in ${row.cwd}`}
-            disabled={trying || !onRetryHeld}
+            className="sb-row-main sb-held-open"
+            title={`${name} — ${status}`}
+            aria-label={`Open ${agent} in ${row.cwd}. ${status}`}
+            disabled={opening || !onRetryHeld}
             onClick={() => onRetryHeld?.(row.key)}
           >
-            <Glyph path={RESUME} size={13} />
+            <Glyph path={HELD} size={13} className="sb-held-mark" />
+            <span className="sb-label">{name}</span>
           </button>
           <button
             type="button"
@@ -1004,14 +988,6 @@ export function Sidebar({
             <Glyph path={CLOSE} size={13} />
           </button>
         </div>
-        {/* Not `aria-hidden`, and not a `title`: this sentence is the content of
-            the row for anyone reading it with anything. The folder is a span in
-            front of it rather than words folded into it — the reason is the main
-            process's own sentence, verbatim, and the log carries the same one. */}
-        <p className="sb-held-why">
-          {nameFolder && <span className="sb-held-where">{folderName(row.cwd)}</span>}
-          {trying ? 'Trying again…' : row.reason}
-        </p>
       </li>
     )
   }

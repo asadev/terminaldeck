@@ -41,7 +41,16 @@ describe('exact conversation recovery', () => {
       ...probes, conversation: async (s: SavedSession) => s.tabKey === 'missing' ? 'none' : 'found',
     })
     expect(decisions.map((d) => d.outcome)).toEqual(['skip', 'resume', 'skip', 'skip'])
-    expect(decisions.filter((d) => d.outcome === 'skip').every((d) => d.reason.includes('kept'))).toBe(true)
+    // Kept, and opening any of them lets the person choose — never a guess.
+    expect(decisions.map((d) => d.pick === true)).toEqual([true, false, true, true])
+  })
+
+  it('keeps a Codex tab whose exact conversation is missing without offering the Claude list', async () => {
+    const codex = { ...saved('codex-tab', 'thread-1'), provider: 'codex' as const }
+    const [decision] = await planRestore([codex], { ...probes, conversation: async () => 'none' })
+    expect(decision).toMatchObject({ outcome: 'skip' })
+    expect(decision.pick).toBeUndefined()
+    expect(decision.reason).toContain('kept for recovery')
   })
 
   it('does not take a newer sibling transcript when the exact saved one is missing', async () => {
@@ -67,7 +76,7 @@ describe('exact conversation recovery', () => {
     expect(decisions.map((d) => [d.session.tabKey, d.outcome])).toEqual([
       ['codex', 'resume'], ['gemini', 'fresh'], ['shell', 'fresh'], ['claude', 'skip'],
     ])
-    expect(decisions[3].reason).toContain('/resume')
+    expect(decisions[3].pick).toBe(true)
   })
 
   it('restarts a session with the enforced limits it had, and never adds them to one that had none', async () => {
@@ -88,6 +97,12 @@ describe('exact conversation recovery', () => {
     const held = new HeldSessions()
     const original = saved('held')
     expect(savedFrom(held.hold(original, 'offline'))).toEqual(original)
+    // The "choose it" mark is about the row, and never reaches `openSessions`.
+    const marked = held.hold(original, 'no id', true)
+    expect(marked.pick).toBe(true)
+    expect(savedFrom(marked)).toEqual(original)
+    held.fail(marked.key, 'still no id')
+    expect(held.get(marked.key)?.pick).toBe(true)
   })
 })
 
@@ -136,6 +151,47 @@ describe('interrupted and repeated restart with isolated app data', () => {
     ledger.dropPending()
     ledger.note('process-new', saved('new'))
     expect(disk(root).map((s) => s.tabKey)).toEqual(['new'])
+  }, 15_000)
+
+  it('a legacy tab is kept with no guess, keeps its data while it is opened on the list, and once picked comes back by id on every restart', async () => {
+    const root = join(dir, 'legacy-claude-data')
+    mkdirSync(root)
+    const { agentSessionId: _id, ...legacy } = { ...saved('legacy-tab'), deniedTools: ['WebFetch'] }
+    writeFileSync(join(root, 'state.json'), JSON.stringify({ openSessions: [legacy] }))
+    const picked = 'conversation-picked'
+    const conversation = async (s: SavedSession) => (s.agentSessionId === picked ? 'found' as const : 'none' as const)
+
+    // Launch: kept for the person to choose, not started.
+    let ledger = await ledgerAt(root)
+    const [first] = await planRestore(disk(root), { ...probes, conversation })
+    expect(first).toMatchObject({ outcome: 'skip', pick: true })
+    const row = ledger.held.hold(first.session, first.reason, true)
+    expect(disk(root)).toEqual([legacy])
+
+    // Pressed: the list opens as the same tab; until a pick is known it is still the same record.
+    ledger.note('process-list', savedFrom(row))
+    ledger.held.release(row.key)
+    expect(disk(root)).toEqual([legacy])
+
+    // Interrupted before anything was picked: kept again, never started fresh.
+    ledger = await ledgerAt(root)
+    const [again] = await planRestore(disk(root), { ...probes, conversation })
+    expect(again).toMatchObject({ outcome: 'skip', pick: true })
+
+    // Picked, and learnt: the record now names it, with everything else intact.
+    ledger.note('process-list-2', disk(root)[0])
+    ledger.update('process-list-2', { agentSessionId: picked })
+    expect(disk(root)).toEqual([{ ...legacy, agentSessionId: picked }])
+
+    // Two restarts: each continues that exact conversation.
+    for (const launch of [1, 2]) {
+      ledger = await ledgerAt(root)
+      const [decision] = await planRestore(disk(root), { ...probes, conversation })
+      expect(decision, `restart ${launch}`).toMatchObject({ outcome: 'resume' })
+      expect(decision.session).toEqual({ ...legacy, agentSessionId: picked })
+      ledger.note(`process-${launch}`, decision.session)
+    }
+    expect(disk(root)).toHaveLength(1)
   }, 15_000)
 
   it('retains unrestored tabs before first paint, after partial restore, after another restart, and after a failed restore', async () => {

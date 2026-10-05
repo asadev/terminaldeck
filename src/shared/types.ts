@@ -300,6 +300,17 @@ export interface CreateSessionInput {
    * are the same thing right up until they are not.
    */
   resumeConversationId?: string
+  /**
+   * Open Claude Code on its own conversation list (`claude --resume` with no
+   * id) so the person chooses which conversation this tab continues.
+   *
+   * For a kept tab whose exact conversation cannot be continued by id — see
+   * `RestoreDecision.pick`. Nothing is guessed and nothing new is started on
+   * the app's say-so. `resumeConversationId` beside it is not resumed; it is
+   * only kept on the tab's record until the chosen conversation is known.
+   * Ignored for every other agent.
+   */
+  pickConversation?: boolean
   /** Confirmed per-tab model, retained when recovering a conversation. */
   model?: string
   /** Tools Claude Code must refuse (`--disallowedTools`). Any other agent is refused rather than started without them. */

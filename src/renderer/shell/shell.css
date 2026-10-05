@@ -832,91 +832,20 @@
 /*
   A session that was open, did not come back, and is being kept.
 
-  Two lines, and no box around them. The rule this rail is built on is separate
-  with space, then a tint, and only then a line — so what marks this row as a
-  different kind of thing from the session rows beside it is a little air above
-  it, a mark in the status column that is an outline rather than a dot, and a
-  second line in the caption size. Not a card, not a border, not a tinted panel:
-  the app is already telling somebody that something failed, and shouting it in
-  chrome as well would make four of these look like a crash report.
+  One line, the height of every other session row: an outline mark where a
+  live row has its status dot, then its name. Pressing the row opens it; why it
+  was kept is in the tooltip rather than five wrapped lines under it.
 
-  `sb-held` is the `<li>`, so the space belongs to the whole entry rather than
-  to the row inside it — the reason line has to sit tight under its own row and
-  clear of the next one, which is what makes a run of them readable at all.
-*/
-.sb-held {
-  margin-top: var(--sp-1);
-}
-
-/*
-  The mark where a live row has its status dot.
-
-  Muted rather than a warning colour, deliberately, and the reason is the same
-  one behind the glyph itself: this is the absence of a session, not a session
-  in a bad state. `--color-warning` here would put the loudest thing in the rail
-  next to the quietest row in it, and it would say "this is going wrong right
-  now" about something that already finished going wrong.
+  Muted rather than a warning colour: this is the absence of a session, not a
+  session in a bad state.
 */
 .sb-held-mark {
   flex-shrink: 0;
   color: var(--text-muted);
 }
 
-/*
-  Try again, and it does not wait for a hover.
-
-  Every other action in this rail lives at `opacity: 0` until the pointer is on
-  the row, which is right for closing a tab you can already see. It is wrong
-  here: this is the only offer to recover work, on a row somebody is reading
-  precisely because something went wrong, and a control they have to discover by
-  sweeping the mouse over the failure is a control most people never find.
-*/
-.sb-held-row .sb-held-retry {
-  opacity: 1;
-}
-
-/*
-  Why it did not start, in the main process's own words.
-
-  Indented to the label's column — the row's own left padding, plus the 15px
-  glyph, plus the gap after it — so it reads as belonging to the line above
-  rather than as a new row. It wraps rather than truncating: this sentence is
-  the entire content of the row, and "the folder it ran in is no longer o…" is a
-  row that has stopped saying anything.
-*/
-.sb-held-why {
-  margin: 0 var(--sp-2) 0 calc(var(--sp-2) + 15px + var(--sp-2));
-  font-size: var(--t-caption);
-  letter-spacing: var(--t-caption-ls);
-  line-height: var(--lh-body);
-  color: var(--text-muted);
-}
-
-/* Under a project heading the row itself is indented one step further, and the
-   sentence has to move with it or it sits left of the name it explains. */
-.sb-sessions .sb-held-why {
-  margin-left: calc(var(--sp-3) + 15px + var(--sp-2));
-}
-
-/*
-  Which folder, on the rows that have no heading above them saying so.
-
-  In front of the reason and a shade stronger than it, because it is the thing a
-  person recognises — "ClaudeKiwi" is the session they lost — while the sentence
-  after it is what happened. It sits here rather than beside the agent name on
-  the line above for a measured reason: `Claude Code — ClaudeKiwi` on a 264px
-  rail renders as **Claude Code — Claude…**, so the one row that has to identify
-  its own folder was the one row whose folder was being cut off.
-
-  The middle dot is generated rather than typed into the markup, so the folder
-  span is exactly the folder and nothing that reads it aloud says "middle dot".
-*/
-.sb-held-where {
-  color: var(--text-secondary);
-}
-
-.sb-held-where::after {
-  content: ' · ';
+/* While it is opening, the row cannot be pressed again, and says so by greying. */
+.sb-held-open:disabled .sb-label {
   color: var(--text-muted);
 }
 
