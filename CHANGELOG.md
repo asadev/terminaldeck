@@ -10,6 +10,19 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.7] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Terminal Deck Native (Preview)** — a separate download beside the normal app, built in Swift. Terminals, the browser (Safari's engine, with tabs in the window's top bar, Annotate, Draw, Record, screenshots and address suggestions — and agents drive it with the same browser tools), simulators with an inspector that sends what you pick to a session, Artifacts and Settings → Coding AI are drawn natively; the rest is the same app as before. It has the island at the top of the screen, separate windows for any screen, Hoot's own icon, and Siri and Shortcuts actions. It needs Terminal Deck 0.18.7 installed, which it runs underneath. It is signed but not notarized, so the first launch goes through System Settings › Privacy & Security › Open Anyway.
+
+### Fixed
+
+- **Settings › server accounts no longer says a server "was not asked about coding agents" right after asking it.** The answer was read one level too high.
+- **A setting saved in one window is shown in every window.** Before, another open window could keep the old value and write it back with its next save.
+
 ## [0.18.6] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.

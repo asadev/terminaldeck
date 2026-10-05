@@ -188,6 +188,23 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
     } else {
       note('ok    out/main/index.js is present')
     }
+
+    /*
+     * The page layer Terminal Deck Native (Preview) loads from the installed app.
+     * `npm run build` does not make it, so a release built without
+     * `npm run build:native-web` starts fine on its own and the preview opens onto
+     * "the native shim has not been built". Mac only: the preview is Mac only.
+     */
+    if (platform === 'mac') {
+      if (!entries.includes('out/native-web/shim.js')) {
+        problems.push(
+          'app.asar does not contain out/native-web/shim.js — Terminal Deck Native (Preview) cannot load. ' +
+            'Run `npm run build:native-web` after `npm run build`.',
+        )
+      } else {
+        note('ok    out/native-web/shim.js is present')
+      }
+    }
   }
 
   /*
@@ -285,9 +302,23 @@ if (platform === 'win' && resources !== null) {
   }
 }
 
+/*
+ * Terminal Deck Native (Preview) ships beside the mac release as its own small zip
+ * (a few MB — the size floor below is for the Electron app). It is not this package
+ * and is built, signed and verified by scripts/mac-native-preview.sh, so it is
+ * skipped here; everything else is checked exactly as before.
+ */
+const isNativePreview = (f) => f.includes('native-preview')
+
 const installers = readdirSync(RELEASE).filter((f) =>
-  platform === 'win' ? f.endsWith('.exe') : f.endsWith('.dmg') || f.endsWith('.zip'),
+  platform === 'win' ? f.endsWith('.exe') : (f.endsWith('.dmg') || f.endsWith('.zip')) && !isNativePreview(f),
 )
+
+if (platform === 'mac') {
+  for (const f of readdirSync(RELEASE).filter((f) => f.endsWith('.zip') && isNativePreview(f))) {
+    note(`skip  ${f} (Terminal Deck Native preview — checked by scripts/mac-native-preview.sh)`)
+  }
+}
 
 if (installers.length === 0) problems.push(`no installers in ${RELEASE}`)
 

@@ -1,0 +1,38 @@
+/*
+  Settings as a page of its own (`SettingsPage.tsx`) — what the native macOS
+  window's Settings window loads. The same panel as the sheet, filling the
+  window, on the same one surface the sheet is (`SettingsWindow.css`), with the
+  save status at its foot where the sheet's footer had it.
+
+  Kept apart from `SettingsWindow.css` for the reason `Modal.css` paints the
+  sheet's header and footer: this is the window around the panel, not the
+  panel, and `settings-surface.test.ts` holds the panel's own sheet to exactly
+  two painted surfaces.
+*/
+.settings-page {
+  /* The containing block for the Shortcuts popover, as `.settings` is in the sheet. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-secondary);
+}
+
+.settings-page > .settings {
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-page-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-6) var(--sp-3);
+}
+
+/* The rail's own button, without the rail's column padding around it. */
+.settings-page-foot .settings-rail-foot {
+  padding: 0;
+}

@@ -2235,3 +2235,16 @@
      a long capture path must wrap rather than widen the column. */
   min-width: 0;
 }
+
+/* ------------------------------------ the native macOS Settings window -- */
+
+/* The list of sections is drawn natively beside the page (`SettingsPage.tsx`),
+   so the web one goes and the pane takes its width. Only inside the native
+   shell; the sheet in the Electron window keeps its rail. */
+:root[data-shell='native'] .settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-shell='native'] .settings-rail {
+  display: none;
+}

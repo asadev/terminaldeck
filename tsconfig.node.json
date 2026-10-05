@@ -21,6 +21,7 @@
   "include": [
     "src/main/**/*",
     "src/preload/**/*",
+    "src/native-web/**/*",
     "src/shared/**/*",
     "src/headless/**/*",
     "src/renderer/platform.ts",
@@ -31,6 +32,7 @@
     "ios/Harness/**/*",
     "electron.vite.config.ts",
     "vite.headless.config.ts",
+    "vite.native-web.config.ts",
     "vitest.config.ts"
   ]
 }

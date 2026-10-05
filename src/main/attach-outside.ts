@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { clipboard, dialog, type BrowserWindow, type IpcMain } from 'electron'
 import { linuxPathFromUnc } from './wsl'
+import { isNativeShell } from './native-shell/mode'
 
 /**
  * Getting a file into a message from somewhere other than the open project.
@@ -407,11 +408,12 @@ export function registerAttachOutsideIpc(ipcMain: IpcMain, deps: AttachOutsideDe
 
   ipcMain.handle('attach:browse', async (_event, request: BrowseRequest): Promise<BrowseResult> => {
     const window = deps.window()
-    if (!window) return { ok: false, reason: 'no-window' }
+    // Native shell: no Electron window, and none is needed — a null window opens the free-standing panel (`native-shell/dialogs.ts`).
+    if (!window && !isNativeShell()) return { ok: false, reason: 'no-window' }
 
     const folder = request.mode === 'folder'
     const extensions = (request.extensions ?? []).filter((e) => typeof e === 'string' && e !== '')
-    const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+    const { canceled, filePaths } = await dialog.showOpenDialog(window as BrowserWindow, {
       /*
        * `multiSelections` on the two file modes, and deliberately not on the
        * folder one.

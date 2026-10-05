@@ -83,6 +83,7 @@ import type { HeldSession } from '../../../shared/held-window'
 import type { MachineSecrets } from './store'
 import { createUploadSender, type SendFileOutcome, type UploadProgress } from './upload-send'
 import { BRAND } from '../../../shared/brand'
+import { nativeMachineName } from '../../native-shell/mode'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -947,7 +948,8 @@ export interface MachineLinkOptions {
  */
 export function describeThisMachine(): { name: string; platform: string } {
   const name = thisMachineName()
-  return { name: name === '' ? 'A desktop' : name, platform: process.platform }
+  // Native shell: its own relay identity, so a name of its own — "<name> (native)".
+  return { name: nativeMachineName(name === '' ? 'A desktop' : name), platform: process.platform }
 }
 
 export function createMachineLink(options: MachineLinkOptions): MachineLink {

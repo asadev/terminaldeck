@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { chromeDim } from '../shell/chrome-dim'
+import { usePageModal } from '../shell/page-modal'
 import './Modal.css'
 
 /**
@@ -137,6 +138,9 @@ export function Modal({
     if (!open || hidden) return
     return chromeDim.dim()
   }, [open, hidden])
+
+  // And the native window, which may be drawing a screen over the page.
+  usePageModal(open && !hidden)
 
   // Escape is bound on the window, not the panel, so it still fires if focus
   // has drifted to <body> (a click on the scrim, an iframe stealing it).

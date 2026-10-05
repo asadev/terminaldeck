@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { app, session, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { BRAND } from '../shared/brand'
 import { GUEST_PARTITION } from './browser-session'
+import { SETTINGS_CHANGED_CHANNEL } from './live-push'
 import { traceFilePath } from './ipc-trace'
 import { updateSupport } from './updates/updater'
 import {
@@ -408,12 +409,30 @@ export async function clearBrowserDataIfNotPersisting(): Promise<ClearResult> {
  * - `settings:about`              → {@link AboutInfo}
  * - `settings:clear-browser-data` → {@link ClearResult}
  */
-export function registerSettingsIpc(ipcMain: IpcMain): void {
+export function registerSettingsIpc(
+  ipcMain: IpcMain,
+  /**
+   * Tell every window the store changed, with the whole store — `settings:changed`.
+   *
+   * Every save, not only one from somewhere else: a window holds its settings in
+   * memory, and a page that did not make the change (the native shell's other
+   * pages, a native Settings screen, a session's own window) would otherwise
+   * keep its old copy and write it back with its next save. The window that
+   * saved takes its own echo as a no-op — see `mergePushed` in the renderer.
+   */
+  broadcast: (channel: string, payload: unknown) => void = () => undefined,
+): void {
   ipcMain.handle('settings:get', () => getStoredSettings())
-  ipcMain.handle('settings:set', (_e: IpcMainInvokeEvent, patch: unknown) =>
-    patchStoredSettings(patch),
-  )
-  ipcMain.handle('settings:reset', () => resetStoredSettings())
+  ipcMain.handle('settings:set', (_e: IpcMainInvokeEvent, patch: unknown) => {
+    const stored = patchStoredSettings(patch)
+    broadcast(SETTINGS_CHANGED_CHANNEL, stored)
+    return stored
+  })
+  ipcMain.handle('settings:reset', () => {
+    const stored = resetStoredSettings()
+    broadcast(SETTINGS_CHANGED_CHANNEL, stored)
+    return stored
+  })
   ipcMain.handle('settings:paths', () => configPaths())
   ipcMain.handle('settings:open-path', (_e: IpcMainInvokeEvent, key: unknown) => openConfigPath(key))
   ipcMain.handle('settings:about', () => aboutInfo())

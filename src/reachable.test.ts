@@ -69,6 +69,18 @@ const ENTRIES = [
    * asserting that nothing else in the tree enters the mode.
    */
   'src/headless/demo.ts',
+  /*
+   * The native macOS window's page bridge (`vite.native-web.config.ts` builds it
+   * into `out/native-web/shim.js`): the real preload, compiled for a WKWebView,
+   * with `electron` aliased to `src/native-web/electron.ts`.
+   *
+   * `electron.ts` is listed as well because that alias is how it is reached —
+   * the preload's own `import … from 'electron'` — and this walk mirrors the
+   * tsconfig aliases only. `src/native-web/built-preload.test.ts` builds the
+   * bundle and calls through it, so an alias that stopped resolving fails there.
+   */
+  'src/native-web/index.ts',
+  'src/native-web/electron.ts',
 ]
 
 const SOURCE = /\.tsx?$/

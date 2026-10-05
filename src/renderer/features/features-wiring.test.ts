@@ -43,7 +43,9 @@ describe('the window asks before it draws', () => {
   const seams: Array<{ file: string; needle: string; why: string }> = [
     {
       file: 'renderer/App.tsx',
-      needle: 'panels={PANELS.filter',
+      // Named `railPanels` since the native window's side panel is built from the
+      // same list; the rail is handed it as `panels={railPanels}`.
+      needle: 'const railPanels = PANELS.filter((entry) => features.panelOn(entry.id))',
       why: 'the sidebar would list a row for every view, including the ones whose feature is uninstalled',
     },
     {

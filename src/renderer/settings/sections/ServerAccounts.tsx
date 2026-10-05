@@ -6,7 +6,7 @@ import { ProviderBadge } from '../../components/ProviderBadge'
 import { Notice } from '../controls'
 import {
   AGENT_IDS,
-  asView,
+  lookResult,
   type AgentOnServer,
   type Server,
   type ServerView,
@@ -123,13 +123,10 @@ export function ServerAccounts() {
       setLooks((current) => ({ ...current, [server.id]: { state: 'looking' } }))
       void bridge.lookAtServer(server.id).then(
         (raw) => {
-          const view = asView(raw)
-          setLooks((current) => ({
-            ...current,
-            [server.id]: view
-              ? { state: 'ready', view }
-              : { state: 'failed', problem: `${server.name} answered with something this build cannot read.` },
-          }))
+          // The reply carries the view; it is not the view (`lookResult`).
+          const result = lookResult(raw, server.name)
+          if (result.state === 'failed') opened.current.delete(server.id)
+          setLooks((current) => ({ ...current, [server.id]: result }))
         },
         (cause: unknown) => {
           opened.current.delete(server.id)

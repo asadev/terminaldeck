@@ -1,0 +1,107 @@
+/*
+  The native island's page (`IslandPage.tsx`) — what sits inside the island
+  shape the native window draws. The page itself is see-through, so nothing
+  but the native shape has a ground; the words are in the dark scheme the
+  island always wears (`IslandPage.tsx` sets it).
+*/
+
+html.island-page,
+html.island-page body,
+html.island-page #root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.island {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.island-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.island-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-callout);
+}
+
+.island-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2) 0;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.island-message {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.island-message[data-role='you'] {
+  color: var(--text-secondary);
+}
+
+.island-ask {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.island-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.island-start {
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+}
+
+.island-problem {
+  margin: var(--sp-1) 0 0;
+  color: var(--color-critical);
+  font-size: var(--t-footnote);
+}

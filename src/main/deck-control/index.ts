@@ -143,6 +143,7 @@ import { MAX_TOURS_KEPT, TourStage } from './tour-stage'
 import { tourTool } from './tour-tool'
 import { WHERE_CALL, whereTool } from './where-tool'
 import { browserDrive } from '../browser-drive-current'
+import { isNativeShell } from '../native-shell/mode'
 import { relayMcp } from '../remote/relay-mcp'
 import { AccessKeys } from './access-keys'
 import { AI_APPS_CHANGED_CHANNEL, registerAiAppsIpc } from './ai-apps-ipc'
@@ -879,7 +880,8 @@ export async function registerDeckControlIpc(
     keys: door,
     tasks: taskHttpHandler({ api: () => taskApi, keyOf: (authorization) => keys.match(bearerOf(authorization))?.id ?? null }),
     ...(deps.port === undefined
-      ? { preferredPort: rememberedPort ?? DEFAULT_TOOLS_PORT }
+      ? // Native shell: its own remembered port, never the installed app's default one.
+        { preferredPort: rememberedPort ?? (isNativeShell() ? 0 : DEFAULT_TOOLS_PORT) }
       : { port: deps.port }),
   })
   /*

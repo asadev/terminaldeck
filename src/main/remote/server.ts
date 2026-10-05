@@ -216,6 +216,7 @@ import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
 import { FrameReader, OPCODE, acceptKey, encodeFrame } from '../../shared/ws-frame'
 import type { HeldSession } from '../../shared/held-window'
+import { isNativeShell, NATIVE_REFUSAL } from '../native-shell/mode'
 
 /**
  * The one refusal that really does mean "this machine does not do sign-in".
@@ -8373,7 +8374,8 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
   }
 
   async function open(): Promise<RemoteStatus> {
-    const direct = directPlan(await readTailnet())
+    // Native shell: relay only — the direct Tailscale address, its port and `tailscale serve` stay with the installed app.
+    const direct: Direct = isNativeShell() ? { ok: false, reason: NATIVE_REFUSAL.direct } : directPlan(await readTailnet())
 
     // Nothing to run and nothing to fall back on. Reported exactly as before:
     // the tailnet's own sentence, which names the switch to flick.

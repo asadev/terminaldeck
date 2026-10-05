@@ -54,6 +54,7 @@ import type { SessionStatus } from '../shared/types'
 import { BRAND } from '../shared/brand'
 import { CONFIG_FILE, currentHookEndpoint, type HookEndpoint } from './hook-server'
 import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
+import { isNativeShell, NATIVE_REFUSAL } from './native-shell/mode'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -1065,6 +1066,8 @@ export function readAllStatus(context: HookContext): HookProviderStatus[] {
 /* ------------------------------------------------------------ install/rm -- */
 
 export function installHooks(context: HookContext, id: HookProviderId): HookWriteResult {
+  // Native shell: never writes an agent's hook settings — the installed app owns them.
+  if (isNativeShell()) return { ok: false, message: NATIVE_REFUSAL.hooks, status: readStatus(context, id) }
   const spec = HOOK_PROVIDERS[id]
   const file = fileFor(context, id)
 
@@ -1119,6 +1122,8 @@ export function installHooks(context: HookContext, id: HookProviderId): HookWrit
 }
 
 export function removeHooks(context: HookContext, id: HookProviderId): HookWriteResult {
+  // Native shell: never writes an agent's hook settings — the installed app owns them.
+  if (isNativeShell()) return { ok: false, message: NATIVE_REFUSAL.hooks, status: readStatus(context, id) }
   const file = fileFor(context, id)
 
   let settings: LoadedSettings
@@ -1260,6 +1265,8 @@ export function migratedCodexFeatures(toml: string): { changed: boolean; text: s
  * say here.
  */
 export function migrateCodexFeatureFlag(context: HookContext): string {
+  // Native shell: never rewrites an agent's config — the installed app owns it.
+  if (isNativeShell()) return ''
   const file = join(context.home, '.codex', 'config.toml')
   let raw: string
   let mode: number

@@ -25,6 +25,7 @@
  */
 
 import { DEFAULT_CONSENT_TIMEOUT_MS } from '../deck-control/consent'
+import { isNativeShell } from '../native-shell/mode'
 import type { PluginConsent, PluginConsentOutcome } from './host'
 
 export const PLUGIN_CONSENT_TIMEOUT_MS = DEFAULT_CONSENT_TIMEOUT_MS
@@ -37,8 +38,9 @@ export function nativePluginConsent(approver: () => Electron.WebContents | null)
     if (contents === null || contents.isDestroyed()) return { granted: false, reason: 'no-approver', at: at() }
     // Loaded on first use, so nothing that imports this module loads Electron.
     const { BrowserWindow, dialog } = await import('electron')
-    const parent = BrowserWindow.fromWebContents(contents)
-    if (parent === null || parent.isDestroyed()) return { granted: false, reason: 'no-approver', at: at() }
+    // Native shell: the approver is the native window, which has no Electron window — the box stands on its own.
+    const parent = isNativeShell() ? null : BrowserWindow.fromWebContents(contents)
+    if ((parent === null || parent.isDestroyed()) && !isNativeShell()) return { granted: false, reason: 'no-approver', at: at() }
     const abort = new AbortController()
     let timedOut = false
     const timer = setTimeout(() => {
@@ -46,7 +48,7 @@ export function nativePluginConsent(approver: () => Electron.WebContents | null)
       abort.abort()
     }, PLUGIN_CONSENT_TIMEOUT_MS)
     try {
-      const answer = await dialog.showMessageBox(parent, {
+      const box: Electron.MessageBoxOptions = {
         type: 'warning',
         buttons: ['Don’t allow', 'Allow'],
         defaultId: 0,
@@ -55,7 +57,9 @@ export function nativePluginConsent(approver: () => Electron.WebContents | null)
         message: request.message,
         detail: request.detail,
         signal: abort.signal,
-      })
+      }
+      const answer =
+        parent !== null && !parent.isDestroyed() ? await dialog.showMessageBox(parent, box) : await dialog.showMessageBox(box)
       const outcome: PluginConsentOutcome =
         answer.response === 1 && !timedOut
           ? { granted: true, at: at() }

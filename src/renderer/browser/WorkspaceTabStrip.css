@@ -344,6 +344,15 @@
   padding-left: 52px;
 }
 
+/* Inside the native macOS window the tabs are drawn natively, in its title bar
+   (`shell/native-tabs.ts` publishes them), so this row goes whole — the tabs,
+   the ›_ and globe openers, the reveal button — and the window takes its height
+   back. Still mounted, so its own bookkeeping (which sessions are up here, in
+   what order) goes on serving the native tabs. */
+:root[data-shell='native'] .strip {
+  display: none;
+}
+
 /* Parked over the traffic-light strip, out of the flow — so it stays put
    whatever the tabs beside it do. In the flow it would slide sideways with
    every tab that opened. */

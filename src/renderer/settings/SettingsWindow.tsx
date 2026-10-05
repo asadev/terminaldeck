@@ -22,6 +22,7 @@ import {
   valuesFromPreferences,
   type LiveSectionId,
   type SectionId,
+  type Section,
   type SettingValues,
 } from './settings-schema'
 import { detectPlatform, type UiPlatform } from '../platform'
@@ -209,7 +210,7 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
  * merge must still land somewhere real rather than being silently ignored —
  * which is what a check against the live rail alone would do.
  */
-function isSectionId(value: unknown): value is SectionId {
+export function isSectionId(value: unknown): value is SectionId {
   if (typeof value !== 'string') return false
   if (SECTIONS.some((section) => section.id === value)) return true
   return Object.prototype.hasOwnProperty.call(MERGED_SECTIONS, value)
@@ -219,6 +220,25 @@ function isSectionId(value: unknown): value is SectionId {
  * Density is an attribute on the root element, the same mechanism `theme.ts`
  * uses — one write, and any stylesheet can answer to it.
  */
+/**
+ * What is stored, as one set of values. Preferences win for the four keys they
+ * own: `store.ts` is what the main process reads at spawn and at launch, so it
+ * is the truth for those.
+ */
+export function storedValues(prefsRaw: unknown, extraRaw: unknown): SettingValues {
+  return mergeSettings({
+    ...toStoredSettings(extraRaw),
+    ...valuesFromPreferences(prefsRaw),
+  })
+}
+
+/** Whether two sets of values say the same thing, key for key. */
+export function sameValues(a: SettingValues, b: SettingValues): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false
+  return true
+}
+
 function applyDensity(values: SettingValues): void {
   if (typeof document === 'undefined') return
   document.documentElement.dataset.density = stringSetting(values, 'appearance.density')
@@ -276,6 +296,13 @@ export interface SettingsPanelProps {
   onChange?(values: SettingValues): void
   /** Rendered in the footer by the window; exposed so the panel can drive it. */
   onSaveState?(state: SaveState): void
+  /**
+   * The list of sections and the selected one, whenever either changes, with
+   * the function that selects another — for a host that draws the list itself.
+   * Only the native macOS window's Settings page passes it (`SettingsPage.tsx`);
+   * the sheet does not, and nothing changes for it.
+   */
+  onSections?(sections: readonly Section[], selected: LiveSectionId, select: (id: string) => void): void
 }
 
 /**
@@ -292,6 +319,7 @@ export function SettingsPanel({
   onSetUpCopilot,
   onChange,
   onSaveState,
+  onSections,
 }: SettingsPanelProps) {
   const bridge = useMemo(() => injected ?? resolveSettingsBridge(), [injected])
   const features = useFeatures()
@@ -391,12 +419,7 @@ export function SettingsPanel({
     void Promise.all([prefs, extra]).then(
       ([prefsRaw, extraRaw]) => {
         if (!settle()) return
-        // Preferences win for the four keys they own: store.ts is what the main
-        // process reads at spawn and at launch, so it is the truth for those.
-        const merged = mergeSettings({
-          ...toStoredSettings(extraRaw),
-          ...valuesFromPreferences(prefsRaw),
-        })
+        const merged = storedValues(prefsRaw, extraRaw)
         latest.current = merged
         setValues(merged)
         setLoading(false)
@@ -417,6 +440,44 @@ export function SettingsPanel({
 
   useEffect(load, [load])
 
+  /*
+   * This window's own saves: how many there have been, and how many are still
+   * on their way to disk. A save is now told to every window, this one included
+   * (`registerSettingsIpc`, `prefs:set`), and its echo must not reach back into
+   * a control somebody is still typing in.
+   */
+  const saves = useRef(0)
+  const writing = useRef(0)
+
+  /*
+   * The same re-read `load` does, without the loading state — for a store that
+   * changed under this window. Skipped while a save of this window's own is in
+   * flight (that change is already on screen), and its answer dropped if this
+   * window saved again or reloaded while it was reading: a newer push is
+   * already on its way, and an older read landing last would put a value back
+   * under the cursor. And nothing at all happens when what is stored is what
+   * is on screen, which is what this window's own echo always is.
+   */
+  const refresh = useCallback(() => {
+    if (writing.current > 0) return
+    const savesAtStart = saves.current
+    const generation = loadId.current
+    const prefs = bridge.getPreferences?.() ?? Promise.resolve(null)
+    const extra = bridge.getSettings?.() ?? Promise.resolve(null)
+    void Promise.all([prefs, extra]).then(
+      ([prefsRaw, extraRaw]) => {
+        if (saves.current !== savesAtStart || writing.current > 0 || loadId.current !== generation) return
+        const merged = storedValues(prefsRaw, extraRaw)
+        if (sameValues(merged, latest.current)) return
+        latest.current = merged
+        setValues(merged)
+        applyStoredTheme(merged['appearance.theme'])
+        applyDensity(merged)
+      },
+      () => undefined,
+    )
+  }, [bridge])
+
   /**
    * Somebody else changed a stored value while this window was open.
    *
@@ -432,18 +493,21 @@ export function SettingsPanel({
    * reply landing last, and repaints the theme and the density from what is
    * actually stored. A second path that merged a payload would be a second
    * answer to the same question, and this window has had that bug before.
+   * `refresh` is that re-read without the loading state, because every save is
+   * now pushed — this window's own too — and a save is not a reason to grey the
+   * window out.
    *
    * Guarded with `?.` because the bridge is `Partial` by house rule — a build
    * without these channels loses the live update and keeps the window.
    */
   useEffect(() => {
-    const offPrefs = bridge.onPreferencesChanged?.(() => load())
-    const offSettings = bridge.onSettingsChanged?.(() => load())
+    const offPrefs = bridge.onPreferencesChanged?.(() => refresh())
+    const offSettings = bridge.onSettingsChanged?.(() => refresh())
     return () => {
       offPrefs?.()
       offSettings?.()
     }
-  }, [bridge, load])
+  }, [bridge, refresh])
 
   // The timer outlives the window otherwise, and fires setState into a tree
   // that is no longer mounted.
@@ -491,12 +555,16 @@ export function SettingsPanel({
       if (jobs.length === 0) return
 
       onSaveState?.({ kind: 'saving' })
+      saves.current += 1
+      writing.current += 1
       void Promise.all(jobs).then(
         () => {
+          writing.current -= 1
           onSaveState?.({ kind: 'saved' })
           onChange?.(next)
         },
         (cause: unknown) => {
+          writing.current -= 1
           onSaveState?.({
             kind: 'error',
             message: errorText(cause, 'Could not save that change — it may not survive a restart.'),
@@ -510,6 +578,11 @@ export function SettingsPanel({
   const goTo = useCallback((next: string) => {
     if (isSectionId(next)) setSection(resolveSection(next))
   }, [])
+
+  // The native Settings window's list, kept in step (see `onSections`).
+  useEffect(() => {
+    onSections?.(sections, section, goTo)
+  }, [onSections, sections, section, goTo])
 
   /**
    * Arrow keys move between sections, which is what a vertical tab list is
@@ -645,7 +718,7 @@ export interface SettingsWindowProps extends SettingsPanelProps {
   onClose(): void
 }
 
-const STATUS_TEXT: Record<SaveState['kind'], string> = {
+export const STATUS_TEXT: Record<SaveState['kind'], string> = {
   idle: 'Changes save as you make them.',
   saving: 'Saving…',
   saved: 'Saved.',

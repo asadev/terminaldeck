@@ -1422,6 +1422,26 @@ export function succeeded(value: unknown): boolean {
   return isRecord(value) && value.ok === true
 }
 
+/**
+ * A `servers:look` reply, read: the view it carries, or the sentence it failed
+ * with.
+ *
+ * The reply is `{ ok: true, view }` or `{ ok: false, sentence, … }` — the view
+ * is one level down. Reading the whole reply *as* the view found no `facts` on
+ * it, and every fact then read as never asked: Settings' server accounts said
+ * "was not asked about coding agents" for every server it had just asked.
+ */
+export function lookResult(
+  raw: unknown,
+  serverName: string,
+): { state: 'ready'; view: ServerView } | { state: 'failed'; problem: string } {
+  if (!succeeded(raw)) return { state: 'failed', problem: asRefusal(raw).sentence }
+  const view = asView((raw as { view?: unknown }).view)
+  return view === null
+    ? { state: 'failed', problem: `${serverName} answered with something this build cannot read.` }
+    : { state: 'ready', view }
+}
+
 export function asOutcome(value: unknown): ActionOutcome {
   if (!isRecord(value)) return { done: 'Done.', wayBack: null }
   const wayBack = isRecord(value.wayBack)

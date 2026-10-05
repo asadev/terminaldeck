@@ -1294,6 +1294,56 @@
   padding-left: max(52px, calc((100% - var(--page-measure)) / 2));
 }
 
+/* ------------------------------------------ inside the native macOS window -- */
+
+/*
+  The native window (`macos/`) draws its own title bar, toolbar and side panel,
+  traffic lights included, *around* this page. Its page shim
+  (`src/native-web/native-shell.ts`) sets `data-shell="native"` on the root, and
+  these rules take away everything here that the native window now draws — and
+  only inside it; the Electron window is untouched by every one of them.
+
+  The side panel goes whole: the rail and the eight-pixel edge that peeks it
+  out. With it go the rail's own collapse arrow, its New session button and its
+  Settings line, and the content takes the width back.
+*/
+:root[data-shell='native'] .sidebar,
+:root[data-shell='native'] .sidebar-edge {
+  display: none;
+}
+
+/* No drag strip: the native title bar is what moves the window. */
+:root[data-shell='native'] .window-drag {
+  display: none;
+}
+
+/*
+  The rail's reveal button on the top bar, and the room kept for it and for the
+  traffic lights while the rail is away. There is no web rail to reveal, so a
+  collapsed rail leaves the bar exactly as an open one does.
+*/
+:root[data-shell='native'] .toolbar-reveal {
+  display: none;
+}
+
+:root[data-shell='native'] .toolbar[data-sidebar-collapsed]:not([data-under-strip]) {
+  padding-left: var(--sp-4);
+}
+
+:root[data-shell='native'] .toolbar[data-sidebar-collapsed]:not([data-under-strip])[data-page]:not([data-page='files']) {
+  padding-left: max(var(--sp-8), calc((100% - var(--page-measure)) / 2));
+}
+
+/*
+  A top bar that says nothing but a name — "Terminal Deck" over the launch
+  screen, a page's name over that page — repeats the native window's own title,
+  which carries exactly that name. So it goes. A bar with anything else on it (a
+  session's folder and login, its controls, the mode switch, Hoot's mark) stays.
+*/
+:root[data-shell='native'] .toolbar:not(:has(.toolbar-actions > *, .toolbar-chips, .toolbar-subtitle, .toolbar-mark)) {
+  display: none;
+}
+
 /* Deliberately *not* `no-drag`, which is what this used to be.
 
    The heading is the one part of a title bar everybody grabs to move a window,
@@ -2811,4 +2861,14 @@
   display: flex;
   justify-content: center;
   margin: 0 auto var(--sp-4);
+}
+
+/*
+  Where a screen the native window draws itself would be (`native-screens.ts`):
+  the room it takes, and nothing in it — the native screen is in front.
+*/
+.native-screen {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }

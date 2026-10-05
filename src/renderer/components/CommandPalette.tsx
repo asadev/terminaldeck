@@ -18,6 +18,7 @@ import {
   type MatchRange,
 } from '../fuzzy'
 import { formatChord } from '../keymap'
+import { usePageModal } from '../shell/page-modal'
 import { relativeTime } from './relative-time'
 import './CommandPalette.css'
 
@@ -544,6 +545,8 @@ export function CommandPalette({
   const seedQuery =
     projectRoot === null || mode === 'commands' ? '>' : mode === 'sessions' ? '?' : ''
   const [query, setQuery] = useState(seedQuery)
+  // Over the whole page, like a sheet — said to the native window (`shell/page-modal.ts`).
+  usePageModal(open)
   const [copied, setCopied] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)

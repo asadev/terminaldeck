@@ -1,0 +1,4 @@
+build/
+TerminalDeckNative/.build/
+TerminalDeckNative/.swiftpm/
+TerminalDeckNative/.build-*/

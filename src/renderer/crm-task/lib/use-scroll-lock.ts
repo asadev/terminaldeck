@@ -1,5 +1,6 @@
 // Copied from the reference CRM.
 import { useEffect } from "react";
+import { usePageModal } from "../../shell/page-modal";
 
 /**
  * Body/scroll lock for modals, drawers, sheets and slide-over menus.
@@ -69,4 +70,7 @@ export function useScrollLock(active: boolean) {
     lockScroll();
     return unlockScroll;
   }, [active]);
+  // Every task overlay locks scroll through here, so this is where they all
+  // tell the native window a dialog is up (`shell/page-modal.ts`).
+  usePageModal(active);
 }

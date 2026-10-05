@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import { createPortal } from 'react-dom'
 import type { ProviderId } from '@shared/types'
 import { HoverNote } from '../../components/HoverNote'
+import { usePageModal } from '../../shell/page-modal'
 import {
   AccountProviderList,
   chosenAccountProvider,
@@ -160,6 +161,8 @@ export interface AddAccountDialogProps {
  * asserted. Everything worth pinning is in the panel.
  */
 export function AddAccountDialog(props: AddAccountDialogProps) {
+  // A dialog of its own, over the page — said to the native window (`shell/page-modal.ts`).
+  usePageModal(props.open)
   if (!props.open) return null
   return createPortal(
     <div className="add-account-layer">

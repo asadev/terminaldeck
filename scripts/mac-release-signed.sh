@@ -258,7 +258,7 @@ else
     # different product. It is deliberately absent from the search list; if
     # something has put it back, signing breaks in a way that takes hours to
     # attribute.
-    if security list-keychains | grep -q "imatch-ship"; then
+    if grep -q "imatch-ship" <<<"$(security list-keychains)"; then # not a pipe: see APP_SIG below
         die "imatch-ship.keychain-db is in the search list." \
             "Remove it: security list-keychains -s $KEYCHAIN ~/Library/Keychains/login.keychain-db"
     fi
@@ -284,6 +284,9 @@ security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Applic
 
 step "Build"
 npm run build
+# The page layer Terminal Deck Native (Preview) loads from this app (out/native-web/shim.js).
+# Not part of `npm run build`; without it the preview opens onto "the native shim has not been built".
+npm run build:native-web
 npm run build:pwa
 # The headless host package (out/headless-package) — the afterPack hook copies it
 # into the .app's Resources. `dist:mac`/`dist:win` run this; this signed path
@@ -414,10 +417,16 @@ if [[ "$SIGNED_ONLY" -eq 1 ]]; then
     # exact failure this whole file exists to prevent — and the two are
     # indistinguishable from the outside until a stranger downloads one and is
     # told the app is damaged.
+    #
+    # codesign's report is read once and then searched. `codesign … | grep -q` under
+    # `pipefail` is a race: grep -q quits at the match, codesign is still writing
+    # (stderr, line by line), dies of SIGPIPE, and the pipeline fails — so the first
+    # check could fail a good build and the negated one could pass an ad-hoc one.
+    APP_SIG="$(codesign -dv --verbose=2 "$APP" 2>&1 || true)"
     check "Developer ID authority on the app" \
-        "codesign -dv --verbose=2 '$APP' 2>&1 | grep -q 'Authority=Developer ID Application'"
+        "grep -q 'Authority=Developer ID Application' <<<\"\$APP_SIG\""
     check "the signature is not ad-hoc" \
-        "! codesign -dv --verbose=2 '$APP' 2>&1 | grep -q 'Signature=adhoc'"
+        "! grep -q 'Signature=adhoc' <<<\"\$APP_SIG\""
     printf '  \033[33m—\033[0m spctl and stapler not checked: this build is not notarized\n'
 else
     check "spctl accepts the app"              "spctl -a -vv -t exec '$APP'"
@@ -447,8 +456,9 @@ if [[ -n "$ZIP_APP" ]]; then
         # verified above. electron-builder signs it in its own pass, and a
         # release where the dmg is signed and the update zip is not would hand
         # every self-updating user an app that cannot open.
+        ZIP_SIG="$(codesign -dv --verbose=2 "$ZIP_APP" 2>&1 || true)" # read once: see APP_SIG above
         check "Developer ID authority on the app inside the zip" \
-            "codesign -dv --verbose=2 '$ZIP_APP' 2>&1 | grep -q 'Authority=Developer ID Application'"
+            "grep -q 'Authority=Developer ID Application' <<<\"\$ZIP_SIG\""
     else
         check "stapler validate (app inside the zip)" "xcrun stapler validate '$ZIP_APP'"
         check "spctl accepts the app inside the zip"  "spctl -a -vv -t exec '$ZIP_APP'"
@@ -471,6 +481,26 @@ ls -lh "$DMG" "$ZIP" 2>/dev/null | awk '{print "  " $9 "  " $5}'
 
 if [[ "$fail" -ne 0 ]]; then
     die "at least one verification failed — do not publish this build."
+fi
+
+# ------------------------------------------------ Terminal Deck Native (Preview)
+#
+# The native preview ships beside this release, signed by the same Developer ID
+# out of the same keychain — so it runs here, inside the signed session, before
+# `cleanup` throws the keychain away. It is notarized exactly when this build is.
+# A preview that fails to build, sign or verify stops the release rather than
+# silently going missing from it; TD_NATIVE_PREVIEW=0 leaves it out on purpose.
+if [[ "${TD_NATIVE_PREVIEW:-1}" != "0" ]]; then
+    step "Terminal Deck Native (Preview)"
+    NATIVE_ARGS=(--identity "$IDENTITY" --keychain "$KEYCHAIN" --require-developer-id)
+    [[ "$SIGNED_ONLY" -eq 0 ]] && NATIVE_ARGS+=(--notarize)
+    ASC_KEY_PATH="$ASC_KEY_PATH" ASC_KEY_ID="$ASC_KEY_ID" ASC_ISSUER="$ASC_ISSUER" NOTARIZE_TIMEOUT="$NOTARIZE_TIMEOUT" \
+        "$REPO/scripts/mac-native-preview.sh" "${NATIVE_ARGS[@]}" \
+        || die "Terminal Deck Native (Preview) did not build, sign or verify — see above." \
+               "To release without it, on purpose: TD_NATIVE_PREVIEW=0 scripts/mac-release-signed.sh …"
+    ls -lh "release/terminaldeck-native-preview-$VERSION-arm64.zip" | awk '{print "  " $9 "  " $5}'
+else
+    step "Terminal Deck Native (Preview) skipped (TD_NATIVE_PREVIEW=0)"
 fi
 
 if [[ "$SIGNED_ONLY" -eq 1 ]]; then

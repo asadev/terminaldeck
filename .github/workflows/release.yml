@@ -161,6 +161,10 @@ jobs:
           Settings › Privacy & Security** and click **Open Anyway**. Once, per
           install.
           NOTE
+            # Terminal Deck Native (Preview): scripts/mac-native-preview.sh wrote its
+            # paragraph during the signing run above, and the `cat >` just replaced the
+            # note it had appended to — so add it back here, after the base note.
+            if [ -f release/native-preview-note.md ]; then cat release/native-preview-note.md >> release/mac-install-note.md; fi
             exit 0
           fi
 
@@ -173,6 +177,10 @@ jobs:
           disk image — so it opens on a double-click, with no Gatekeeper detour and
           no network. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
           NOTE
+            # Terminal Deck Native (Preview): scripts/mac-native-preview.sh wrote its
+            # paragraph during the signing run above, and the `cat >` just replaced the
+            # note it had appended to — so add it back here, after the base note.
+            if [ -f release/native-preview-note.md ]; then cat release/native-preview-note.md >> release/mac-install-note.md; fi
             exit 0
           fi
 

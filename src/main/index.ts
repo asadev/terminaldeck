@@ -292,7 +292,7 @@ import { registerNotificationIpc } from './os-notifications'
 import { registerLidAwakeIpc } from './lid-awake'
 import { logger } from './app-log'
 import { registerLogIpc } from './app-log-ipc'
-import { SESSION_REMOVED_CHANNEL, SESSION_RENAMED_CHANNEL } from './live-push'
+import { PREFS_CHANGED_CHANNEL, SESSION_REMOVED_CHANNEL, SESSION_RENAMED_CHANNEL } from './live-push'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu, hidesMenuBar } from './menu'
 import { overlayFor, resolveAppearance, titleBarChrome, type Appearance } from './title-bar'
@@ -305,6 +305,19 @@ import { linuxPathFromUnc, registerWslIpc } from './wsl'
 import { createRoutines, registerRoutinesIpc } from './routines'
 import { DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR } from './routines/engine'
 import type { SessionStatus } from '../shared/types'
+// The native shell's engine mode: no window, the React screens served over a loopback bridge. See `native-shell/index.ts`.
+import {
+  installNativeShell,
+  isNativeShell,
+  isNativeShellSender,
+  nativeShellAttended,
+  nativeShellBroadcast,
+  nativeShellBrowserTools,
+  nativeShellFailed,
+  nativeShellPageWindow,
+  startNativeShell,
+} from './native-shell'
+import { NATIVE_REFUSAL } from './native-shell/mode'
 
 /*
  * Say which shell this is, and pin the directory — both before any other line of
@@ -329,6 +342,8 @@ import type { SessionStatus } from '../shared/types'
  */
 installPaths(electronPaths(app))
 pinUserData(app)
+// Native shell: tap `ipcMain` before anything registers a handler. A no-op without `--native-shell`.
+installNativeShell()
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -446,6 +461,8 @@ function send(channel: string, ...args: unknown[]): boolean {
   if (!quitting) popouts?.forward(channel, args)
   // And Hoot's menu bar item, which shows the sessions' state from every app.
   if (!quitting) hootMenuBar?.forward(channel, args)
+  // Native shell: there is no window; the bridge's event stream is the renderer.
+  if (isNativeShell()) return !quitting && nativeShellBroadcast(channel, args)
   if (quitting || !rendererAlive) return false
   const window = mainWindow
   if (!window || window.isDestroyed()) return false
@@ -1420,6 +1437,8 @@ function showMainWindow(command?: string): void {
  * and the window's own "bring this to the front" (`ui.do`).
  */
 function wireMenuBar(): HootMenuBar | null {
+  // Native shell: no menu-bar island — the installed app owns that spot.
+  if (isNativeShell()) return null
   const deps = copilotRuntimeDeps
   if (deps === null) return null
   return wireHootMenuBar({
@@ -1479,6 +1498,8 @@ function syncNativeAppearance(): void {
 }
 
 function createWindow(): void {
+  // Native shell: never an Electron window — the native window is the app's window.
+  if (isNativeShell()) return
   /*
    * A window is back, so the background presence is not the app any more.
    *
@@ -1740,7 +1761,7 @@ function announceHeld(): void {
   send(SESSIONS_HELD_CHANNEL, ledger.held.list())
 }
 
-async function hydrateRenderer(): Promise<void> {
+async function hydrateRenderer(reannounce = true): Promise<void> {
   if (!restored) {
     // Set before the await, not after. `did-finish-load` can fire again while
     // the first restore is still spawning — a reload in dev does it routinely —
@@ -1886,7 +1907,8 @@ async function hydrateRenderer(): Promise<void> {
     }
   }
 
-  for (const meta of ptys.list()) send(SESSION_CREATED_CHANNEL, meta)
+  // Native shell: skipped — every page lists the sessions itself on mount, and a re-announce reads as new output (an unread dot on every session).
+  if (reannounce) for (const meta of ptys.list()) send(SESSION_CREATED_CHANNEL, meta)
   // The sessions that were in windows of their own, back where they were — after
   // a restart, or when the window comes back from the background. A no-op for a
   // window that is already open, so a reload of the main window changes nothing.
@@ -2359,6 +2381,8 @@ function nameOfPane(tabId: string, w: number): string {
  */
 function browserDriveTools(): ReturnType<typeof browserTools> {
   const drive = browserDrive()
+  // Native shell: the six verbs drive the native window's browser (`native-shell/native-browser.ts`); no harvesting tool.
+  if (isNativeShell() && drive !== null) return nativeShellBrowserTools(browserTools(drive))
   // `browser.network` is contributed here rather than from `browserTools()` so
   // that the harvesting capability lives in its own file — see
   // `deck-control/browser-network-tool.ts`. It closes over the same drive and is
@@ -2730,8 +2754,10 @@ function registerIpc(): void {
   ipcMain.handle('brand:get', () => ({ name: BRAND.name, tagline: BRAND.tagline }))
 
   ipcMain.handle('project:pick', async () => {
-    if (!mainWindow) return null
-    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    // Native shell: no window to hang the panel from, so it is a free-standing panel, brought to the front.
+    if (!mainWindow && !isNativeShell()) return null
+    if (isNativeShell()) app.focus({ steal: true })
+    const pickOptions: Electron.OpenDialogOptions = {
       properties: ['openDirectory', 'createDirectory'],
       title: 'Open project',
       buttonLabel: 'Open',
@@ -2748,7 +2774,10 @@ function registerIpc(): void {
        * the one directory that cannot be empty.
        */
       defaultPath: pickerStartDirectory(store().getProjects(), app.getPath('home')),
-    })
+    }
+    const { canceled, filePaths } = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, pickOptions)
+      : await dialog.showOpenDialog(pickOptions)
     if (canceled || filePaths.length === 0) return null
     /*
      * A folder picked inside a distro is stored as the Linux path it really is.
@@ -2859,6 +2888,14 @@ function registerIpc(): void {
     // see `syncNativeAppearance`. A native menu had no way to know the app had
     // gone light.
     syncNativeAppearance()
+    /*
+     * And every window is told, the one that saved included. A window that did
+     * not make the change — another page of the native shell, a native Settings
+     * screen, a session in its own window — holds the old values in memory and
+     * would write them back with its next save. The saver takes its own echo as
+     * a no-op (`mergePushed` in the renderer).
+     */
+    send(PREFS_CHANGED_CHANNEL, preferences)
     return preferences
   })
 
@@ -2873,7 +2910,8 @@ function registerIpc(): void {
   registerWorkspacesIpc(ipcMain, {
     openFolder: (path) => shell.openPath(path),
     liveFolders: () => ptys.list().filter((meta) => meta.exitCode === null).map((meta) => meta.cwd),
-    isApprover: (sender) => mainWindow !== null && sender === mainWindow.webContents,
+    // Native shell: the bridge's sender is the app's own window.
+    isApprover: (sender) => isNativeShellSender(sender) || (mainWindow !== null && sender === mainWindow.webContents),
   })
   registerFsIpc(ipcMain)
   // Restricting search to known projects stops any folder that merely looks
@@ -2983,7 +3021,8 @@ function registerIpc(): void {
         : undefined,
     environment: {
       platform: process.platform,
-      isPackaged: app.isPackaged,
+      // Native shell: never updates itself — the installed app owns updating. Reads as an unpackaged build.
+      isPackaged: app.isPackaged && !isNativeShell(),
       execPath: process.execPath,
       feedConfigPath: app.isPackaged
         ? join(process.resourcesPath, 'app-update.yml')
@@ -3267,7 +3306,8 @@ function registerIpc(): void {
           // decides is whether a confirmation can be raised and waited on, and
           // on macOS an app with every window closed is still running.
           attended: () =>
-            !quitting && rendererAlive && mainWindow !== null && !mainWindow.isDestroyed(),
+            // Native shell: attended while the native window is connected.
+            !quitting && (nativeShellAttended() || (rendererAlive && mainWindow !== null && !mainWindow.isDestroyed())),
         },
         deviceId,
         call,
@@ -3663,7 +3703,8 @@ function registerIpc(): void {
            * exactly the state that argument does not cover.
            */
           attended: () =>
-            !quitting && rendererAlive && mainWindow !== null && !mainWindow.isDestroyed(),
+            // Native shell: attended while the native window is connected.
+            !quitting && (nativeShellAttended() || (rendererAlive && mainWindow !== null && !mainWindow.isDestroyed())),
         },
         machineId,
         call,
@@ -3842,13 +3883,17 @@ function registerIpc(): void {
      * live in would be a control that cannot do its one job.
      */
     pickKeyFile: async () => {
-      if (!mainWindow) return null
-      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      // Native shell: no window to hang it from, so a free-standing panel (`native-shell/dialogs.ts`).
+      if (!mainWindow && !isNativeShell()) return null
+      const keyOptions: Electron.OpenDialogOptions = {
         properties: ['openFile', 'showHiddenFiles'],
         title: 'Choose a key file',
         buttonLabel: 'Use this key',
         defaultPath: app.getPath('downloads'),
-      })
+      }
+      const { canceled, filePaths } = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, keyOptions)
+        : await dialog.showOpenDialog(keyOptions)
       return canceled || filePaths[0] === undefined ? null : filePaths[0]
     },
     /*
@@ -4153,7 +4198,8 @@ function registerIpc(): void {
        * a folder chosen with no window open would have nowhere to report back
        * to, and the copilot's folder is not a thing to change from a menu bar.
        */
-      if (!mainWindow) return null
+      // Native shell: the native window stands in for the main window, so the panel may open.
+      if (!mainWindow && !isNativeShell()) return null
       const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ['openDirectory'],
         title: `Choose ${BRAND.assistant}’s folder`,
@@ -4374,6 +4420,8 @@ function registerIpc(): void {
     showMain: showMainWindow,
     sessions: popoutSessions,
     refusal: (id) =>
+      // Native shell: no session windows — there is no Chromium window to put one in.
+      isNativeShell() ? NATIVE_REFUSAL.popout :
       copilotRuntimeDeps !== null && copilotState(copilotRuntimeDeps).sessionId === id
         ? `${BRAND.assistant} stays in the main window.`
         : null,
@@ -4468,7 +4516,8 @@ function registerIpc(): void {
   registerSetupIpc(ipcMain)
   registerCookieImportIpc(ipcMain)
   registerBrowserIsolationIpc(ipcMain)
-  registerSettingsIpc(ipcMain)
+  // Every save is told to every window — see the parameter's note.
+  registerSettingsIpc(ipcMain, (channel, payload) => send(channel, payload))
   // Profiles first: everything below asks which one is switched on, and
   // `registerBrowserSessionIpc` hardens that profile's session as its first act.
   registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
@@ -4867,6 +4916,8 @@ if (startedAsWslBridge(process.argv)) {
   )
   app.exit(0)
 } else if (!app.requestSingleInstanceLock()) {
+  // Native shell: say why on the line the parent reads.
+  if (isNativeShell()) nativeShellFailed('another copy of the app is already using this data folder')
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -5319,7 +5370,8 @@ app.whenReady().then(async () => {
             devServerOpener: openDevServerSession,
             stageDir: () => join(app.getPath('downloads'), BRAND.name),
             home: () => wsl.home() ?? app.getPath('home'),
-            window: () => mainWindow,
+            // Native shell: Hoot's window readers reach the native page by name (`native-shell/page-call.ts`).
+            window: () => mainWindow ?? nativeShellPageWindow(),
             deckControl: () => deckControl,
           })),
       /*
@@ -5375,7 +5427,8 @@ app.whenReady().then(async () => {
      * `DeckControlDeps` precisely so the question is answered here, where the
      * answer is known.
      */
-    isApprover: (contents) => mainWindow !== null && contents === mainWindow.webContents,
+    // Native shell: the bridge's sender is the app's own window.
+    isApprover: (contents) => isNativeShellSender(contents) || (mainWindow !== null && contents === mainWindow.webContents),
     /*
      * The second surface a confirmation can appear on, and be answered from.
      *
@@ -5406,11 +5459,15 @@ app.whenReady().then(async () => {
     },
     // A task reminder clicked: the app in front, on the Tasks page, the task open.
     showTask: (taskId) => {
-      if (mainWindow === null) return
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-      send(TASKS_OPEN_CHANNEL, taskId)
+      if (mainWindow !== null) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.show()
+        mainWindow.focus()
+        send(TASKS_OPEN_CHANNEL, taskId)
+        return
+      }
+      // Native shell: the page opens the task; bringing the native window forward is the native app's.
+      if (isNativeShell()) send(TASKS_OPEN_CHANNEL, taskId)
     },
   })
     .then((handle) => {
@@ -5443,6 +5500,8 @@ app.whenReady().then(async () => {
    */
   routines.engine.start()
   createWindow()
+  // Native shell: serve the bridge instead; a page opening its event stream is the window's `did-finish-load`.
+  void startNativeShell({ outDir: join(__dirname, '..'), onFirstClient: () => void hydrateRenderer(false), drain: () => ptys.drain(3000) })
   buildMenu(() => mainWindow, undefined, (command) => popouts?.routeMenu(command) ?? false)
   hootMenuBar = wireMenuBar()
 
@@ -5688,7 +5747,8 @@ app.on('before-quit', (event) => {
    * "keep" there would make Quit do nothing, over and over, with no way out
    * except the tray. An app that cannot be quit is worse than one that asks.
    */
-  if (!stopping) {
+  // Native shell: the parent decided; never ask, never stay behind in the background.
+  if (!stopping && !isNativeShell()) {
     const plan = plannedQuit(liveSessions().length, store().getQuitBehavior())
     if (plan === 'ask') {
       event.preventDefault()

@@ -379,6 +379,22 @@ describe('launching', () => {
     expect(rig().links).toEqual([])
   })
 
+  // The native shell has its own data folder and so its own pairings; it dials
+  // them exactly as the installed app dials its own. See `native-shell/mode.ts`.
+  it('dials paired machines in the native shell too', () => {
+    process.argv.push('--native-shell')
+    try {
+      const dir = tempDir()
+      const hostId = paired(dir)
+      const app = rig({ dir })
+      expect(app.links).toHaveLength(1)
+      expect(app.links[0].options.id).toBe(hostId)
+      expect(app.links[0].connected).toBe(1)
+    } finally {
+      process.argv.splice(process.argv.lastIndexOf('--native-shell'), 1)
+    }
+  })
+
   it('registers every channel the preload calls', () => {
     // The other half of `src/preload/contract.test.ts`, from this side: that one
     // proves the preload's channels are handled somewhere in `src/main`, this

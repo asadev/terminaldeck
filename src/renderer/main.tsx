@@ -8,6 +8,12 @@ import { DriveHost } from './copilot/driving/DriveHost'
 import { PopoutWindow } from './popout/PopoutWindow'
 import { HootPanel } from './hoot-panel/HootPanel'
 import { bindCatcher } from '../shared/hoot-catcher'
+import { SettingsPage } from './settings/SettingsPage'
+import { isSettingsPage, settingsIntentFromUrl, settingsSectionFromUrl } from './settings/native-settings'
+import { ScreenPage } from './screens/ScreenPage'
+import { screenRoute } from './screens/screen-route'
+import { IslandPage } from './island/IslandPage'
+import { isIslandPage } from './island/native-island'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
@@ -55,6 +61,21 @@ const popout = new URLSearchParams(location.search).get('popout')
 const hootPanel = new URLSearchParams(location.search).get('hootpanel') === '1'
 
 const hootCatcher = new URLSearchParams(location.search).get('hootcatcher') === '1'
+/*
+ * The native macOS window's Settings window loads it with `?settings=1`
+ * (`settings/native-settings.ts`), and gets Settings and nothing of the
+ * application. Electron never loads this; its Settings is a sheet in the window.
+ */
+const settingsPage = isSettingsPage(location.search)
+/*
+ * And the native window's other pages, each one screen and nothing of the
+ * application around it: a view or a session in a window of its own
+ * (`?screen=panel&id=…`, `?screen=session&id=…` — `screens/screen-route.ts`),
+ * and what Hoot's island holds when it opens (`?island=1`). Electron loads
+ * neither.
+ */
+const screen = screenRoute(location.search)
+const islandPage = isIslandPage(location.search)
 if (hootCatcher) {
   // A faint painted pixel is required for AppKit's transparent-window hit test.
   document.documentElement.style.cssText = 'height:100%;background:rgba(0,0,0,0.004)'
@@ -64,6 +85,21 @@ if (hootCatcher) {
   hootPanel ? (
     <StrictMode>
       <HootPanel />
+    </StrictMode>
+  ) : islandPage ? (
+    <StrictMode>
+      <IslandPage />
+    </StrictMode>
+  ) : screen !== null ? (
+    <StrictMode>
+      <ScreenPage route={screen} />
+    </StrictMode>
+  ) : settingsPage ? (
+    <StrictMode>
+      <SettingsPage
+        initialSection={settingsSectionFromUrl(location.search)}
+        intent={settingsIntentFromUrl(location.search)}
+      />
     </StrictMode>
   ) : popout ? (
     <StrictMode>

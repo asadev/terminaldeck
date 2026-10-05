@@ -1,6 +1,6 @@
 {
   "name": "terminaldeck",
-  "version": "0.18.6",
+  "version": "0.18.7",
   "description": "Run your coding agents on one deck — Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
@@ -14,6 +14,7 @@
     "build": "electron-vite build",
     "build:pwa": "npm --prefix pwa ci && npm --prefix pwa run build",
     "build:headless": "vite build --config vite.headless.config.ts",
+    "build:native-web": "vite build --config vite.native-web.config.ts",
     "dist:headless": "node scripts/build-headless.mjs",
     "preview": "electron-vite preview",
     "test": "vitest run && npm run test:electron",
@@ -22,7 +23,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "postinstall": "electron-builder install-app-deps",
     "art": "node build/art/icon.mjs && iconutil -c icns build/icon.iconset -o build/icon.icns && node build/art/dmg-background.mjs",
-    "dist:mac": "npm run build && npm run build:pwa && npm run dist:headless && electron-builder --mac --publish never",
+    "dist:mac": "npm run build && npm run build:native-web && npm run build:pwa && npm run dist:headless && electron-builder --mac --publish never",
     "dist:win": "npm run build && npm run build:pwa && npm run dist:headless && npm run build:win-confine && electron-builder --win --publish never",
     "pack:mac": "npm run build && npm run build:pwa && electron-builder --mac dir:arm64 --publish never",
     "release:check": "node scripts/check-release.mjs",

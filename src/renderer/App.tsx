@@ -71,7 +71,7 @@ import { useCopilot } from './copilot/useCopilot'
 import { useCopilotSetup } from './copilot/useCopilotSetup'
 import { partitionByOrigin, startedByCopilot, turnOf } from './copilot/session-origin'
 import { useHeldSessions } from './held-sessions'
-import { useKnownSignIns } from './accounts'
+import { takeAddAccountRequest, useKnownSignIns } from './accounts'
 import { switchNames, useSwitchAccount } from './session-switch'
 import { SwitchAccountConfirm } from './components/SwitchAccountConfirm'
 import { Sidebar } from './shell/Sidebar'
@@ -139,6 +139,7 @@ import {
   removeWindowFromStrip,
   replaceWindowInStrip,
   stripIsPresent,
+  usePromotedOrder,
 } from './browser/workspace-strip'
 import { sessionAnchor } from './browser/strip-arrangement'
 import { ErrorBoundary } from './shell/ErrorBoundary'
@@ -150,6 +151,33 @@ import { useSessionNotifier } from './useSessionNotifier'
 import { useAppSettings } from './settings/useAppSettings'
 import { booleanSetting, numberSetting, sectionsFor, stringSetting } from './settings/settings-schema'
 import { publishUi, type UiHandlers } from './driving/ui-bridge'
+// The native macOS window — see the effects beside `publishUi` below.
+import {
+  createTitlePublisher,
+  nativeTitle,
+  publishNativeCommands,
+  type NativeHandlers,
+  type NativeTitleMessage,
+} from './native-commands'
+import {
+  buildNativeSidebar,
+  createCoalescedPublisher,
+  createSidebarPublisher,
+  EMPTY_NATIVE_RAIL,
+  type NativeSidebarInput,
+} from './shell/native-sidebar'
+import { buildNativeTabs, EMPTY_NATIVE_TABS, type NativeTabsInput, type NativeTabsState } from './shell/native-tabs'
+import {
+  createIslandPublisher,
+  islandSessions,
+  openIslandRelay,
+  type IslandSnapshot,
+} from './island/native-island'
+import { openSettingsMessage, openSettingsRelay, type SettingsRelayMessage } from './settings/native-settings'
+import { openWindowMessage } from './screens/screen-route'
+import { isNativeShell, postToNative } from '../shared/native-shell'
+import { folderName, sameFolder } from './session-title'
+import { useNativeScreens } from './native-screens'
 import { detectPlatform } from './platform'
 import { readLastFolder, writeLastFolder } from './session-start'
 import { chordFor, resolveCommand, scopeForTarget } from './keymap'
@@ -1633,8 +1661,21 @@ function Workspace() {
     const timer = setTimeout(() => setPopOutProblem(null), 4000)
     return () => clearTimeout(timer)
   }, [popOutProblem])
+  // Each session's name, as the rail and the strip call it — read when a
+  // window is opened for one, so the callback below does not change every render.
+  const sessionTitle = useRef<(id: string) => string>(() => 'Session')
+  sessionTitle.current = (id) => {
+    const tab = tabs.find((entry) => entry.id === id)
+    return tab ? labelOf(tab) : 'Session'
+  }
   const popOutSession = useCallback(
     (id: string, at?: { x: number; y: number } | null) => {
+      // Inside the native macOS window a window of its own is a native window
+      // (`macos/`, on `/?screen=session&id=`); the session stays here too.
+      if (isNativeShell()) {
+        postToNative(openWindowMessage('session', id, sessionTitle.current(id)))
+        return
+      }
       void sessionWindows.popOut(id, at).then((problem) => setPopOutProblem(problem))
     },
     [sessionWindows.popOut],
@@ -3756,6 +3797,21 @@ function Workspace() {
   /** Settings, at a section. Plain routes land on General rather than wherever
       an alert last sent someone. */
   const openSettings = useCallback((section: SectionId = 'general') => {
+    // Inside the native macOS window Settings is a native window of its own,
+    // loading this app's Settings page — see `settings/native-settings.ts`.
+    if (isNativeShell()) {
+      // And what it was opened to do: "Add account" from the account chip asks
+      // Accounts for its popup before opening Settings (`askForAddAccount`); the
+      // request lives in this page, so it travels with the message.
+      const adding = takeAddAccountRequest()
+      postToNative(
+        openSettingsMessage(
+          section,
+          adding === undefined ? undefined : { action: 'add-account', ...(adding === null ? {} : { provider: adding }) },
+        ),
+      )
+      return
+    }
     setPrefsSection(section)
     setPrefsOpen(true)
   }, [])
@@ -4703,6 +4759,111 @@ function Workspace() {
   }
   useEffect(() => publishUi(() => uiHandlers.current), [])
 
+  /*
+   * The native macOS window (`native-commands.ts`): its toolbar and side panel
+   * land on this window's own `run` — the dispatcher every chord, menu item and
+   * palette row shares — and on the very functions handed to the rail, which
+   * are filled in beside the rail's other inputs just before the render below.
+   * Everything here is inert in Electron: nothing is published, nothing posted.
+   */
+  const nativeShell = isNativeShell()
+  const nativeHandlers = useRef<NativeHandlers | null>(null)
+  const railInput = useRef<NativeSidebarInput | null>(null)
+  // The native panel's folded headings. The hidden web rail keeps its own.
+  const [nativeFolded, setNativeFolded] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleNativeGroup = useCallback((id: string) => {
+    setNativeFolded((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }, [])
+  useEffect(() => publishNativeCommands(() => nativeHandlers.current), [])
+
+  // The side panel's state, posted whenever what it would draw changes.
+  const sidebarPublisher = useRef<ReturnType<typeof createSidebarPublisher> | null>(null)
+  useEffect(() => {
+    if (!nativeShell) return
+    sidebarPublisher.current ??= createSidebarPublisher((message) => postToNative(message))
+    sidebarPublisher.current.update(() => buildNativeSidebar(railInput.current ?? EMPTY_NATIVE_RAIL))
+  })
+
+  // The screens the native window draws itself; not mounted again underneath.
+  const drawnNatively = useNativeScreens()
+
+  // The tab strip, in the native top bar: the strip's own order store, read
+  // here too so a ✕ pressed up there moves the same list the strip does.
+  const [stripOrder, setStripOrder] = usePromotedOrder()
+  const stripInput = useRef<NativeTabsInput | null>(null)
+  const tabsPublisher = useRef<ReturnType<typeof createCoalescedPublisher<NativeTabsState>> | null>(null)
+  useEffect(() => {
+    if (!nativeShell) return
+    tabsPublisher.current ??= createCoalescedPublisher((state) => postToNative({ type: 'tabs', state }))
+    tabsPublisher.current.update(() => buildNativeTabs(stripInput.current ?? EMPTY_NATIVE_TABS))
+  })
+
+  // Hoot's island, drawn natively: its resting shape, posted when it changes,
+  // and the session list handed to the island's own page.
+  const islandPublisher = useRef<ReturnType<typeof createIslandPublisher> | null>(null)
+  const islandSnapshot = useRef<IslandSnapshot | null>(null)
+  const islandRelay = useRef<ReturnType<typeof openIslandRelay> | null>(null)
+  const islandShowSession = useRef<(id: string) => void>(() => {})
+  useEffect(() => {
+    if (!nativeShell) return
+    islandPublisher.current ??= createIslandPublisher({
+      post: (message) => postToNative(message),
+      assistant: BRAND.assistant,
+    })
+    const sessionsView = islandSessions(tabs, labelOf)
+    const state = islandPublisher.current.update(sessionsView, copilot.stage)
+    const next: IslandSnapshot = { assistant: BRAND.assistant, stage: copilot.stage, sessions: sessionsView, line: state.line }
+    if (JSON.stringify(next) === JSON.stringify(islandSnapshot.current)) return
+    islandSnapshot.current = next
+    islandRelay.current?.post({ type: 'snapshot', snapshot: next })
+  })
+  useEffect(() => {
+    if (!nativeShell) return
+    const relay = openIslandRelay()
+    islandRelay.current = relay
+    const stop = relay.listen((message) => {
+      if (message.type === 'hello' && islandSnapshot.current !== null) {
+        relay.post({ type: 'snapshot', snapshot: islandSnapshot.current })
+      } else if (message.type === 'show-session') islandShowSession.current(message.id)
+    })
+    return () => {
+      stop()
+      relay.close()
+      islandRelay.current = null
+    }
+  }, [nativeShell])
+
+  // The window's title, posted when it changes. Set beside the heading below.
+  const titleInput = useRef<NativeTitleMessage | null>(null)
+  const titlePublisher = useRef<ReturnType<typeof createTitlePublisher> | null>(null)
+  useEffect(() => {
+    if (!nativeShell || titleInput.current === null) return
+    titlePublisher.current ??= createTitlePublisher((message) => postToNative(message))
+    titlePublisher.current.update(titleInput.current)
+  })
+
+  // Settings is a native window there; what its page hands back lands here,
+  // exactly where the sheet's callbacks land (see `<SettingsWindow>` below).
+  const settingsHandBack = useRef<(message: SettingsRelayMessage) => void>(() => {})
+  settingsHandBack.current = (message) => {
+    if (message.type === 'changed') applySettings(message.values)
+    else if (message.type === 'start-session') newSession(undefined, false, message.profileId, message.provider)
+    else setCopilotSetupOpen(true)
+  }
+  useEffect(() => {
+    if (!nativeShell) return
+    const relay = openSettingsRelay()
+    const stop = relay.listen((message) => settingsHandBack.current(message))
+    return () => {
+      stop()
+      relay.close()
+    }
+  }, [nativeShell])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const scope = scopeForTarget(e.target, { modalOpen: anyModalOpen })
@@ -5018,6 +5179,8 @@ function Workspace() {
      */
     if (!splitting && openMachineSession !== null && machines.bridge !== null) return null
     if (showingPanel && panel) {
+      // Drawn natively: the selection stands, the page underneath is not mounted.
+      if (drawnNatively.has(panel)) return <div className="native-screen" data-screen={panel} />
       return (
         <PanelView
           panel={panel}
@@ -5481,6 +5644,10 @@ function Workspace() {
           const active = session.id === activeTab.id
           // Out in its own window: the card, not a second terminal on its pty.
           if (sessionWindows.popped.has(session.id)) return poppedCard(session.id, active)
+          // A session's terminal drawn natively is not mounted a second time here.
+          if (drawnNatively.has('session')) {
+            return active ? <div key={session.id} className="native-screen" data-screen="session" /> : null
+          }
           return (
             <Fragment key={session.id}>
               <TerminalView
@@ -6163,6 +6330,96 @@ function Workspace() {
       ? remoteOnScreen(tabId) && paneSlots[tabId] !== undefined
       : tabId === visiblePageId
 
+  /*
+   * What the rail is handed, named once so the native window's side panel
+   * (`shell/native-sidebar.ts`) is built from the very same values. The notes on
+   * each are where the rail is mounted below.
+   */
+  const railPanels = PANELS.filter((entry) => features.panelOn(entry.id))
+  const railCopilotActive = !showingPanel && (copilotPending || (activeTab?.isCopilot ?? false))
+  const railMachines = machines.machines
+    .filter((row) => !machineIsClosed(closedMachines, row.machine.id, row.link?.sessions ?? []))
+    .map((row) => ({
+      machineId: row.machine.id,
+      name: row.machine.name,
+      sessions: machineTabs.filter((tab) => tab.machine?.id === row.machine.id),
+      canClose: row.link?.capabilities.includes('close') === true,
+    }))
+  const railServers = serverSessionGroups(serverSessions).map((group) => ({
+    serverId: group.serverId,
+    name: group.name,
+    sessions: serverSessionTabs.filter((tab) => tab.server?.id === group.serverId),
+  }))
+  const newServerSession = (serverId: string): void => {
+    const group = serverSessionsRef.current.find((entry) => entry.serverId === serverId)
+    if (group) openServerShell(serverId, group.serverName)
+  }
+  // The heading's own words for the native title, and the project it is about —
+  // none for Hoot's window, whose folder is its home rather than a project.
+  const titleFolder = headingTab?.isCopilot ? null : (heading.folder ?? (showingPanel ? activeProjectPath : null))
+  titleInput.current = nativeTitle(
+    heading.title,
+    titleFolder === null
+      ? null
+      : (projects.find((entry) => sameFolder(entry.path, titleFolder))?.name ?? folderName(titleFolder)),
+  )
+  railInput.current = {
+    hoot: { name: copilotSetup.name, stage: copilot.stage, active: railCopilotActive },
+    panels: railPanels,
+    activePanel: panel,
+    projects,
+    tabs,
+    activeTabId: railActiveTabId,
+    unread: unreadIds,
+    held: held.rows,
+    heldRetrying: held.retrying,
+    machines: railMachines,
+    servers: railServers,
+    folded: nativeFolded,
+    // The bell on the rail's Settings line, and its count.
+    alerts: { shown: features.controlOn('sidebar.alerts'), count: alertCount },
+    // The rule every view from the rail is handed as its `projectPath`.
+    project: activeProjectPath,
+  }
+  stripInput.current = {
+    order: stripOrder,
+    tabs: openTabs,
+    activeTabId: railActiveTabId,
+    covered: showingPanel,
+    unread: unreadIds,
+    // Always: there must be a way to open a browser. `newBrowserTab` installs
+    // the browser pane first when it is not installed, as the strip's globe does.
+    canNewBrowser: true,
+  }
+  // A session pressed in the island's list opens as a press on its rail row does.
+  islandShowSession.current = (id) => openTabWindow(id)
+  nativeHandlers.current = {
+    run,
+    showPanel,
+    rail: () => railInput.current ?? EMPTY_NATIVE_RAIL,
+    openHoot: () => openCopilot(),
+    openTab: openTabWindow,
+    closeTab,
+    retryHeld: openHeld,
+    forgetHeld: held.forget,
+    newSessionIn: (path) => openNewSessionDialog(path),
+    newMachineSession: (machineId) => openNewSessionDialog(null, machineId),
+    newServerSession,
+    openProject: () => void openProject(),
+    closeProject,
+    closeMachine,
+    closeServer,
+    toggleGroup: toggleNativeGroup,
+    openAlerts: () => setAlertsOpen(true),
+    strip: () => stripInput.current ?? EMPTY_NATIVE_TABS,
+    selectTab,
+    setStripOrder,
+    showInstead,
+    closeWindow: closeTab,
+    newTerminalTab: () => openNewSessionDialog(),
+    newBrowserTab: () => newBrowserTab(),
+  }
+
   return (
     /*
       The window's list of terminals open on servers, offered to whatever inside
@@ -6233,7 +6490,7 @@ function Workspace() {
           // no row at all rather than a disabled one — and the palette offers
           // it back by name, which is where somebody looks for a thing they
           // cannot see.
-          panels={PANELS.filter((entry) => features.panelOn(entry.id))}
+          panels={railPanels}
           browser={features.on('browser')}
           browserOffer={browserOffer?.title ?? null}
           /*
@@ -6287,7 +6544,7 @@ function Workspace() {
           copilot={{
             stage: copilot.stage,
             state: copilot.state,
-            active: !showingPanel && (copilotPending || (activeTab?.isCopilot ?? false)),
+            active: railCopilotActive,
             // What it was named, or this app's own word for one nobody has named.
             name: copilotSetup.name,
           }}
@@ -6352,19 +6609,10 @@ function Workspace() {
             A group whose Close has been pressed is not in `machineTabs` at all,
             so it is not here either; see `closedMachines`.
           */
-          machines={machines.machines
-            .filter(
-              (row) => !machineIsClosed(closedMachines, row.machine.id, row.link?.sessions ?? []),
-            )
-            .map((row) => ({
-              machineId: row.machine.id,
-              name: row.machine.name,
-              sessions: machineTabs.filter((tab) => tab.machine?.id === row.machine.id),
-              // The far machine's own answer, not this build's hope. A PC on an
-              // older build advertises everything except this, and Close there
-              // says why it cannot act rather than sending a frame into silence.
-              canClose: row.link?.capabilities.includes('close') === true,
-            }))}
+          // `canClose` is the far machine's own answer, not this build's hope. A
+          // PC on an older build advertises everything except this, and Close
+          // there says why it cannot act rather than sending a frame into silence.
+          machines={railMachines}
           /*
             The same dialog, with the machine already chosen.
 
@@ -6395,11 +6643,7 @@ function Workspace() {
             about, so a heading per stored server would be a permanent row saying
             nothing in the list whose entire job is to answer what you have open.
           */
-          servers={serverSessionGroups(serverSessions).map((group) => ({
-            serverId: group.serverId,
-            name: group.name,
-            sessions: serverSessionTabs.filter((tab) => tab.server?.id === group.serverId),
-          }))}
+          servers={railServers}
           /*
             No dialog behind this one, and that is the difference from the ＋
             above rather than an omission. The New session dialog asks which
@@ -6407,10 +6651,7 @@ function Workspace() {
             those about somebody else's server. So the press opens a shell, which
             is the honest floor.
           */
-          onNewServerSession={(serverId) => {
-            const group = serverSessionsRef.current.find((entry) => entry.serverId === serverId)
-            if (group) openServerShell(serverId, group.serverName)
-          }}
+          onNewServerSession={newServerSession}
           onCloseServer={closeServer}
           onToggleCollapsed={sidebar.toggleCollapsed}
           onPeekStart={sidebar.beginPeek}
@@ -7094,7 +7335,8 @@ function Workspace() {
             rectangle — see `layout/pane-slots.ts`, and the `box` prop below.
           */}
           {tabs
-            .filter((tab) => tab.kind === 'browser')
+            // Pages the native window's browser draws are not mounted here too.
+            .filter((tab) => tab.kind === 'browser' && !drawnNatively.has('browser'))
             .map((tab) => (
               <BrowserWorkspace
                 key={tab.id}
@@ -7677,8 +7919,8 @@ function Workspace() {
               // Setup is the section that lists what is installed and what is
               // missing; landing on General would be a page about something
               // else (rule 1.5).
-              setPrefsSection('setup')
-              setPrefsOpen(true)
+              // Through `openSettings`, like every other way into Settings.
+              openSettings('setup')
               return
           }
         }}
