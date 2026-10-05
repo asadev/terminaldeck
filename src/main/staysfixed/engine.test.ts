@@ -180,9 +180,17 @@ describe.skipIf(!posix)('running it for real', () => {
     const project = join(dir, 'bare')
     mkdirSync(project, { recursive: true })
     const events: string[] = []
+    /*
+     * A real check loads every one of the engine's adapters, the browser library
+     * among them, and on a loaded machine that is the slow part — not the answer.
+     * Measured on the 3-core CI runner with the whole suite in parallel: the same
+     * call took 0.3 s, 15 s, 47.5 s and over 60 s on identical code, depending on
+     * which other heavy files ran beside it (1.5 s on a desk Mac). The test is about
+     * the answer, so the limit covers that spread with room, and a miss says why.
+     */
     const result = await runner().script(CHECK_SCRIPT, [project, 'stored'], {
       cwd: project,
-      timeoutMs: 60_000,
+      timeoutMs: 180_000,
       onEvent: (event) => events.push(event.type),
     })
     const answer = lastJson(result.stdout) as Record<string, unknown> | null
@@ -191,7 +199,7 @@ describe.skipIf(!posix)('running it for real', () => {
     expect(answer?.unsupported).toBeUndefined()
     // Either the engine's refusal object or a blocked verdict — both are an answer with a reason.
     expect(Boolean(answer?.error) || answer?.blocked === true).toBe(true)
-  }, 90_000)
+  }, 240_000)
 
   it('can be stopped, and says so', async () => {
     const controller = new AbortController()
