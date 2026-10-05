@@ -129,3 +129,52 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* A picker's choices so far: one pill each, with its own remove button. */
+.tasks-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tasks-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-1) 1px var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+/* Saved before, not found on this Mac now: kept, and said so. */
+.tasks-chip[data-missing] {
+  color: var(--text-secondary);
+}
+
+.tasks-chip-remove {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tasks-chip-remove:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* A picker's menu: as wide as a field, with its arrow inside it, wherever it sits. */
+.tasks-picker-select {
+  align-self: flex-start;
+  width: min(100%, 420px);
+}
+
+.tasks-picker-select .settings-select {
+  width: 100%;
+}

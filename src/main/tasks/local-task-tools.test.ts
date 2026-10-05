@@ -284,6 +284,14 @@ describe('what each verb does', () => {
     expect(island.enabled).toBe(false)
   })
 
+  it('never lets Hoot or an app add or lift a block the owner set', async () => {
+    config.saveAgent({ ...config.agent('builder')!, provider: 'claude', blockedTools: ['WebFetch'], skillsOff: true })
+    await call('tasks.agents', { do: 'save', agent: { id: 'builder', blockedTools: [], skillsOff: false, model: 'opus' } })
+    expect(config.agent('builder')).toMatchObject({ model: 'opus', blockedTools: ['WebFetch'], skillsOff: true })
+    await call('tasks.agents', { do: 'save', agent: { name: 'Fresh', blockedTools: ['Bash'], skillsOff: true } })
+    expect(config.agents().find((a) => a.name === 'Fresh')).toMatchObject({ blockedTools: [], skillsOff: false })
+  })
+
   it('refuses a verb that is not on the list, before anything runs', async () => {
     expect(await refused('tasks.local_change', { do: 'purge', task: 'x' }, HOOT)).toMatch(/do must be one of/)
     expect(Refused).toBeDefined()

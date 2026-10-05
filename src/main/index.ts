@@ -40,6 +40,7 @@ import {
  */
 import { savedFrom, SESSIONS_HELD_CHANNEL, type HeldSession } from './session-held'
 import {
+  limitsOf,
   personalSessions,
   restoreOpenSessions,
   type RestoreDecision,
@@ -2472,6 +2473,7 @@ async function retryHeld(key: unknown): Promise<HeldSession[]> {
         resume: decision.outcome === 'resume',
         ...(held.agentSessionId ? { resumeConversationId: held.agentSessionId } : {}),
         ...(held.model ? { model: held.model } : {}),
+        ...limitsOf(held),
         ...(held.homeProfileId !== undefined ? { homeProfileId: held.homeProfileId } : {}),
         // As the same tab it was before it failed, not as a new one on the end
         // of the bar. See `SavedSession.tabKey`.

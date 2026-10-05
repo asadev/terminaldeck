@@ -133,7 +133,8 @@ export class AccessKeyDoor implements KeyDoor, RelayMcpAnswerer {
     const keys = this.options.keys
     if (via === 'internet' && !keys.internet()) return null
     const found = keys.match(credential)
-    if (!found) return null
+    // A CRM's own key sends tasks to `/tasks` and nothing else.
+    if (!found || found.crmOnly) return null
 
     keys.noteUsed(found.id, VIA[via], found.lastApp === null ? agentLabel(meta.userAgent) : null)
 

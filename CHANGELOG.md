@@ -10,6 +10,18 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0. 0.18.4 was tagged but never published — one check ran past its time limit on the release machine — so its two fixes below reach you in this release.
+
+### Added
+
+- **A CRM connection has a name of its own, and can have a key of its own.** Settings → Tasks asks for the CRM's name and shows which key it signs in with. "A new key just for this CRM" is the recommended choice: you confirm before it is made, it is shown once, and it can send tasks and nothing else — the AI-app tools refuse it. Picking an existing key says plainly that it belongs to an AI app. A connection made before names shows as "Unnamed CRM" until you name it.
+- **Task agents pick tools and skills from what is installed.** The tool and skill lists are menus of Claude Code's tools, the MCP servers configured for the agent's account and projects, and the skills in its skill folders. A saved name that is not found is kept and marked. These stay requests in the agent's brief.
+- **Blocked tools and "turn all skills off", enforced by Claude Code.** Both are empty and off for every agent until you pick them; nothing you asked for before is turned into one. Claude Code refuses a blocked tool whatever the brief says, and the limits come back with the session after a restart, a retry or an account switch. Any other coding agent is refused rather than started without them. Nothing is ever allowed from here, and Hoot or an AI app cannot add or lift a block.
+
+### Fixed
+
+- **A restart brings back the same conversations, and the Hoot island opens in the installed app** — the two fixes from 0.18.4, described there.
+
 ## [0.18.4] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.

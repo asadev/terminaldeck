@@ -417,6 +417,20 @@ describe('starting a session', () => {
     expect(rows()[0]).toMatchObject({ tier: 'act', outcome: 'ok', action: 'tool.sessions.start' })
   })
 
+  it('starts with the enforced limits only the app\'s own task engine passes, as a call option', async () => {
+    const { control, state } = build()
+    const limits = { deniedTools: ['WebFetch', 'WebFetch', 'mcp__deck-control'], noSkills: true }
+    expect((await control.call('sessions_start', { cwd: '/work/api', provider: 'claude' }, { sessionLimits: limits })).ok).toBe(true)
+    expect(state.started[0]).toMatchObject({ deniedTools: ['WebFetch', 'mcp__deck-control'], noSkills: true })
+    // An outside caller cannot send them as arguments: the schema it was given has no such field.
+    const sent = await control.call('sessions_start', { cwd: '/work/api', provider: 'claude', blockTools: ['Bash'] })
+    expect(sent.ok).toBe(false)
+    expect(state.started).toHaveLength(1)
+    // And a name that is not a tool never reaches a command line.
+    expect((await control.call('sessions_start', { cwd: '/work/api' }, { sessionLimits: { deniedTools: ['Bash(rm *)'] } })).ok).toBe(false)
+    expect(state.started).toHaveLength(1)
+  })
+
   it('refuses a folder this app does not have open', async () => {
     const { control, state } = build()
     const result = await control.call('sessions_start', { cwd: '/tmp/anything' })

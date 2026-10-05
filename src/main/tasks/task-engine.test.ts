@@ -61,7 +61,7 @@ let outbox: TaskOutbox
 let engine: TaskEngine
 let api: TaskApi
 let sessions: SessionMeta[]
-let calls: Array<{ tool: string; args: Record<string, unknown> }>
+let calls: Array<{ tool: string; args: Record<string, unknown>; options?: unknown }>
 let posts: TaskEvent[]
 let told: Array<[string, string]>
 let answers: Map<string, { at: number; text: string }>
@@ -87,8 +87,8 @@ function build(): void {
       readTranscriptFrom: async () => [],
       copilotRoot: () => dir,
     },
-    call: async (tool, args) => {
-      calls.push({ tool, args })
+    call: async (tool, args, options) => {
+      calls.push({ tool, args, ...(options === undefined ? {} : { options }) })
       if (tool === 'sessions.start') {
         started += 1
         const id = `s-${started}`
@@ -512,6 +512,23 @@ describe('an agent’s own settings, applied every time it starts', () => {
       { sessionId: 's-1', control: 'model', value: 'opus' },
       { sessionId: 's-1', control: 'effort', value: 'high' },
     ])
+  })
+
+  it('starts the agent with no enforced limits unless the owner picked them — advice never becomes one', async () => {
+    await give('u-builder')
+    const start = calls.find((call) => call.tool === 'sessions.start')
+    // `toolsAvoided: ['WebFetch']` above is a request: it is in the brief, never a block.
+    expect(start).not.toHaveProperty('options')
+  })
+
+  it('starts the agent with the tools the owner blocked and skills off, and says so in the brief', async () => {
+    config.saveAgent({ ...config.agent('builder')!, blockedTools: ['WebFetch', 'mcp__deck-control'], skillsOff: true })
+    await give('u-builder')
+    const start = calls.find((call) => call.tool === 'sessions.start')
+    expect(start?.options).toEqual({ sessionLimits: { deniedTools: ['WebFetch', 'mcp__deck-control'], noSkills: true } })
+    expect(start?.args).not.toHaveProperty('blockTools')
+    expect(String(start?.args.brief)).toContain('These tools are switched off for you: WebFetch, mcp__deck-control.')
+    expect(String(start?.args.brief)).toContain('Skills are switched off for you.')
   })
 
   it('applies the settings as they are now when it resumes its own conversation', async () => {

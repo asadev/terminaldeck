@@ -66,3 +66,23 @@ describe('starting a session as a chosen account', () => {
     )
   })
 })
+
+describe('limits a start can carry', () => {
+  it('passes blocked tools and skills off from the call options, and nothing when none are given', async () => {
+    const { started, surface } = withAccounts()
+    const tool = toolNamed(buildCatalogue(), 'sessions.start')
+    await tool.run({ cwd: '/work/web', provider: 'claude' }, { ...contextFor(surface), sessionLimits: { deniedTools: ['WebFetch', 'WebFetch'], noSkills: true } })
+    await tool.run({ cwd: '/work/api', provider: 'claude' }, contextFor(surface))
+    expect(started[0]).toMatchObject({ deniedTools: ['WebFetch'], noSkills: true })
+    expect(started[1]).not.toHaveProperty('deniedTools')
+    expect(started[1]).not.toHaveProperty('noSkills')
+  })
+
+  it('never reads them from the arguments, and refuses anything that is not a tool name', async () => {
+    const { started, surface } = withAccounts()
+    const tool = toolNamed(buildCatalogue(), 'sessions.start')
+    expect(Object.keys((tool.inputSchema as { properties: object }).properties)).not.toContain('blockTools')
+    await expect(tool.run({ cwd: '/work/web' }, { ...contextFor(surface), sessionLimits: { deniedTools: ['--allowedTools'] } })).rejects.toThrow(/not a tool name/)
+    expect(started).toEqual([])
+  })
+})

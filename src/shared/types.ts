@@ -302,6 +302,10 @@ export interface CreateSessionInput {
   resumeConversationId?: string
   /** Confirmed per-tab model, retained when recovering a conversation. */
   model?: string
+  /** Tools Claude Code must refuse (`--disallowedTools`). Any other agent is refused rather than started without them. */
+  deniedTools?: string[]
+  /** Start Claude Code with every skill off. Refused, like `deniedTools`, for an agent that cannot. */
+  noSkills?: boolean
   /**
    * The session this one replaces, when it is a replacement rather than a
    * second session.

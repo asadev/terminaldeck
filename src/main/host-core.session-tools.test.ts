@@ -693,3 +693,61 @@ describe('a session on a host that holds the windows itself', () => {
     CASE_MS,
   )
 })
+
+describe('enforced limits from a task agent', () => {
+  it(
+    'reach Claude Code on a fresh start and on a resume, and are remembered for the next start',
+    async () => {
+      const limits = { deniedTools: ['WebFetch', 'mcp__deck-control'], noSkills: true }
+      // Outside the app's own data folder: a session in there is never remembered as a tab.
+      const project = mkdtempSync(join(tmpdir(), 'td-limits-'))
+      const fresh = await core.startSession({ cwd: project, cols: 80, rows: 24, provider: 'claude', ...limits }, undefined, undefined, recorder)
+      const first = spawned.at(-1) ?? []
+      expect(first).toContain('--session-id')
+      expect(first[first.indexOf('--disallowedTools') + 1]).toBe('WebFetch,mcp__deck-control')
+      expect(first).toContain('--disable-slash-commands')
+      // What a restart, a held retry or an account switch starts it with again. Started
+      // without the recording fence, because a fenced launch is the app's own and never a tab.
+      const tab = await core.startSession({ cwd: project, cols: 80, rows: 24, provider: 'claude', ...limits })
+      expect(core.ledger.get(tab.id)).toMatchObject(limits)
+      core.ptys.kill(tab.id)
+
+      core.ptys.kill(fresh.id)
+      await core.startSession(
+        { cwd: project, cols: 80, rows: 24, provider: 'claude', resume: true, resumeConversationId: fresh.agentSessionId ?? 'x', ...limits },
+        undefined,
+        undefined,
+        recorder,
+      )
+      const resumed = spawned.at(-1) ?? []
+      expect(resumed).toContain('--resume')
+      expect(resumed[resumed.indexOf('--disallowedTools') + 1]).toBe('WebFetch,mcp__deck-control')
+      expect(resumed).toContain('--disable-slash-commands')
+      for (const live of core.ptys.list()) if (live.cwd === project) core.ptys.kill(live.id)
+      await core.ptys.drain()
+      rmSync(project, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 })
+    },
+    CASE_MS,
+  )
+
+  it(
+    'are never added to a session that did not ask, and refuse an agent that cannot keep them',
+    async () => {
+      await core.startSession({ cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude' }, undefined, undefined, recorder)
+      const plain = spawned.at(-1) ?? []
+      expect(plain).not.toContain('--disallowedTools')
+      expect(plain).not.toContain('--disable-slash-commands')
+      expect(plain).not.toContain('--allowedTools')
+
+      const before = spawned.length
+      await expect(
+        core.startSession({ cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'shell', deniedTools: ['Bash'] }, undefined, undefined, recorder),
+      ).rejects.toThrow(/Only Claude Code/)
+      await expect(
+        core.startSession({ cwd: join(dir, 'work'), cols: 80, rows: 24, provider: 'claude', deniedTools: ['Bash(rm *)'] }, undefined, undefined, recorder),
+      ).rejects.toThrow(/not a tool name/)
+      expect(spawned.length, 'nothing was spawned for a refused start').toBe(before)
+    },
+    CASE_MS,
+  )
+})

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../../shared/brand'
 import { connectionDraftOf, connectionPatch, toTasksState, type AgentProfile, type CrmConnection } from '../../tasks/tasks-model'
-import { AgentForm, ConnectionEditor, TasksSection, agentStackSummary, agentSummary, connectionSummary } from './TasksSection'
+import { AgentForm, ConnectionEditor, TasksSection, agentStackSummary, agentSummary, connectionSummary, keyHelp, keyLine, keyOption } from './TasksSection'
 
 /**
  * Settings → Tasks, rendered to a string the way every settings test here is.
@@ -30,6 +30,8 @@ const AGENT: AgentProfile = {
   toolsPreferred: [],
   toolsAvoided: [],
   skills: [],
+  blockedTools: [],
+  skillsOff: false,
   maxConcurrent: 1,
   maxRunMinutes: 0,
   keepAliveMinutes: 30,
@@ -209,12 +211,50 @@ describe('a CRM connection', () => {
       expect(html).toContain(`>${label}<`)
     }
     expect(html).toContain('Work on a branch.')
-    expect(html).toContain('Read\nGrep')
+    // Picked, as pills: Claude Code's own tools are known even before anything is read.
+    expect(html).toMatch(/<li class="tasks-chip" title="Read — Read files">Read<button/)
+    expect(html).toMatch(/<li class="tasks-chip" title="Grep — Search inside files">Grep<button/)
+    // A saved skill not found on this Mac is kept and marked, never dropped.
+    expect(html).toContain('frontend-design (not in a skill folder)')
     expect(html).toMatch(/<option value="high" selected="">High<\/option>/)
-    expect(html).toContain('not enforced: its own permission settings still decide what it can run')
-    expect(html).toContain('nothing is installed')
+    expect(html).toContain('Asked of the agent in its brief, not enforced.')
+    expect(html).toContain('Nothing is installed.')
+    // The enforced half is its own, and starts empty: requests never become blocks.
+    expect(html).toContain('>Enforced by Claude Code<')
+    expect(html).toContain('>Block these tools<')
+    expect(html).toContain('>Turn all skills off<')
+    expect(html).not.toMatch(/aria-label="Block these tools: chosen"/)
+    expect(html).not.toContain('allowedTools')
     expect(agentSummary(stacked)).toBe('Default coding agent (opus, high effort) · 1 at once · no time limit · stays open 30 min')
     expect(agentStackSummary(stacked)).toBe('Told: instructions · 2 preferred tools · 1 tool to avoid · 1 skill')
+    expect(agentStackSummary({ ...stacked, blockedTools: ['WebFetch'], skillsOff: true })).toBe(
+      'Told: instructions · 2 preferred tools · 1 tool to avoid · 1 skill — Enforced: 1 tool blocked · skills off',
+    )
     expect(agentStackSummary(AGENT)).toBeNull()
+  })
+
+  it('says plainly when the chosen agent cannot keep enforced limits', () => {
+    const html = renderToStaticMarkup(<AgentForm agent={{ ...AGENT, provider: 'codex' }} busy={false} problem={null} onSave={noop} onCancel={noop} />)
+    expect(html).toContain('Codex CLI cannot enforce these. Choose Claude Code, or leave them empty.')
+    expect(html).toMatch(/<select id="[^"]*-tools-block" class="settings-select" disabled="">/)
+  })
+})
+
+describe('which key a CRM signs in with', () => {
+  const dot = { id: 'k1', name: 'Dot', crmOnly: false, lastApp: 'ChatGPT' }
+  const own = { id: 'k2', name: 'Sales CRM (CRM)', crmOnly: true, lastApp: null }
+
+  it('names an AI app’s key as one, so a CRM never borrows it by surprise', () => {
+    expect(keyOption(dot)).toBe('Dot — an AI-app key, used by ChatGPT')
+    expect(keyOption({ ...dot, lastApp: null })).toBe('Dot — an AI-app key')
+    expect(keyOption(own)).toBe('Sales CRM (CRM) — a CRM key')
+    expect(keyHelp(dot)).toMatch(/sign in as that app/)
+    expect(keyHelp(null)).toMatch(/Recommended.*nothing else.*confirm before it is made/)
+  })
+
+  it('says under each connection which key it uses', () => {
+    expect(keyLine(dot, 'Dot')).toBe('Signs in with Dot, an AI app’s key')
+    expect(keyLine(own, own.name)).toBe('Signs in with its own key, Sales CRM (CRM)')
+    expect(keyLine(undefined, 'a removed key')).toBe('Signs in with a removed key')
   })
 })

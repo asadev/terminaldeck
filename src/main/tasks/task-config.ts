@@ -35,6 +35,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { writeSecretFile } from '../remote/secret-file'
 import { newWebhookSecret, webhookUrlProblem } from '../deck-control/notify-webhook'
 import { EFFORT_LEVELS } from '../agent-controls'
+import { TOOL_NAME } from '../../shared/agent-tools'
 
 export const TASK_CONFIG_FILE = 'task-config.json'
 
@@ -81,6 +82,14 @@ export interface AgentProfile {
   toolsAvoided: string[]
   /** Skills the agent is asked to use, by name. Nothing is installed; Claude Code finds its own by name. */
   skills: string[]
+  /**
+   * Tools Claude Code refuses for this agent (`--disallowedTools`): enforced by
+   * the CLI, unlike the lists above. Empty unless the owner picked them; never
+   * filled from the advice lists. Another coding agent is not started with any.
+   */
+  blockedTools: string[]
+  /** Start Claude Code with every skill off (`--disable-slash-commands`). Enforced, owner-chosen. */
+  skillsOff: boolean
   /** Tasks it may run at once. */
   maxConcurrent: number
   /** Longest a run may take before it is stopped and the task is Stuck. 0: no limit. */
@@ -126,6 +135,8 @@ export const LOCAL_STATUSES: StatusConfig = DEFAULT_CRM_STATUSES
 export interface CrmConnection {
   /** The access key the CRM authenticates with. */
   keyId: string
+  /** The owner's own name for this CRM. Null on a connection made before names: shown by its key. */
+  name: string | null
   enabled: boolean
   /** Where status changes, comments and delegation requests are posted. */
   eventsUrl: string | null
@@ -194,11 +205,17 @@ export function cleanAgent(raw: unknown, others: readonly AgentProfile[]): Agent
   if (others.some((other) => other.id !== id && other.name.toLowerCase() === name.toLowerCase())) {
     throw new TaskConfigProblem(`Another agent is already called ${name}.`)
   }
+  const provider = optionalText(input.provider, 'The coding agent', 40)
+  const blockedTools = blockedToolsOf(input.blockedTools)
+  const skillsOff = input.skillsOff === true
+  if (provider !== null && provider !== 'claude' && (blockedTools.length > 0 || skillsOff)) {
+    throw new TaskConfigProblem('Only Claude Code can block tools or turn skills off. Clear them, or choose Claude Code.')
+  }
   return {
     id,
     name,
     role: optionalText(input.role, 'The role', 60) ?? 'general',
-    provider: optionalText(input.provider, 'The coding agent', 40),
+    provider,
     account: optionalText(input.account, 'The account', 80),
     model: optionalText(input.model, 'The model', 80),
     effort: effortOf(input.effort),
@@ -206,11 +223,20 @@ export function cleanAgent(raw: unknown, others: readonly AgentProfile[]): Agent
     toolsPreferred: textList(input.toolsPreferred, 'Tools to prefer', MAX_TOOL_NAMES, 80),
     toolsAvoided: textList(input.toolsAvoided, 'Tools to avoid', MAX_TOOL_NAMES, 80),
     skills: textList(input.skills, 'The skills', MAX_SKILLS, 80),
+    blockedTools,
+    skillsOff,
     maxConcurrent: whole(input.maxConcurrent, 'Tasks at once', 1, MAX_AGENT_CONCURRENT, 1),
     maxRunMinutes: whole(input.maxRunMinutes, 'Longest run', 0, MAX_MINUTES, DEFAULT_RUN_MINUTES),
     keepAliveMinutes: whole(input.keepAliveMinutes, 'Keep open', 0, MAX_MINUTES, DEFAULT_KEEP_ALIVE_MINUTES),
     verifyCommand: optionalText(input.verifyCommand, 'The check command', 500),
   }
+}
+
+function blockedToolsOf(value: unknown): string[] {
+  const names = textList(value, 'Blocked tools', MAX_TOOL_NAMES, 140)
+  const odd = names.find((name) => !TOOL_NAME.test(name))
+  if (odd !== undefined) throw new TaskConfigProblem(`${odd} is not a tool name that can be blocked.`)
+  return names
 }
 
 function effortOf(value: unknown): string | null {
@@ -344,6 +370,7 @@ export class TaskConfig {
       ? structuredClone(existing)
       : {
           keyId,
+          name: null,
           enabled: false,
           eventsUrl: null,
           eventsSecret: null,
@@ -354,6 +381,7 @@ export class TaskConfig {
           folders: [],
           maxHops: DEFAULT_MAX_HOPS,
         }
+    if ('name' in input) base.name = optionalText(input.name, 'The CRM name', 60)
     if ('enabled' in input) base.enabled = input.enabled === true
     if ('eventsUrl' in input) {
       const url = optionalText(input.eventsUrl, 'The events address', 2048)
@@ -448,7 +476,9 @@ export class TaskConfig {
         }
       }
       this.agentsList = agents
-      this.connectionsList = (Array.isArray(raw.connections) ? raw.connections : []).filter(isConnection)
+      this.connectionsList = (Array.isArray(raw.connections) ? raw.connections : [])
+        .filter(isConnection)
+        .map((connection) => ({ ...connection, name: typeof connection.name === 'string' ? connection.name : null }))
     } catch (error) {
       console.error('[tasks] could not read the task settings; starting empty:', error)
     }

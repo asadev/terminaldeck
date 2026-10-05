@@ -163,6 +163,9 @@ import { localTaskTools, type IslandControl } from '../tasks/local-task-tools'
 import { taskHttpHandler } from '../tasks/task-http'
 import { TaskOutbox } from '../tasks/task-outbox'
 import { TaskStore } from '../tasks/task-store'
+import { agentInventory } from '../tasks/agent-inventory'
+import { getState as getProfilesState, listProfilesForProvider, resolveProfile } from '../profiles'
+import { store } from '../store'
 import { taskTools } from '../tasks/task-tools'
 import { registerTasksIpc, TASKS_CHANGED_CHANNEL } from '../tasks/tasks-ipc'
 
@@ -802,7 +805,7 @@ export async function registerDeckControlIpc(
     store: taskStore,
     outbox: taskOutbox,
     surface,
-    call: (tool, args) => control.call(tool, args),
+    call: (tool, args, options) => control.call(tool, args, options),
     hoot: async () => (deps.hoot === undefined ? null : await deps.hoot()),
     onChange: () => tasksChanged(),
     onLocalStatus: (taskId) => taskDetail?.noteStatus(taskId),
@@ -1015,6 +1018,21 @@ export async function registerDeckControlIpc(
     closeSession: (taskId) => taskEngine?.closeSession(taskId) ?? false,
     local: localTasks,
     detail: taskDetail,
+    inventory: (agent) => {
+      // Claude Code's account by the agent's name or id for it; its default when none matches.
+      const state = getProfilesState()
+      const wanted = agent.account?.toLowerCase() ?? ''
+      const profile =
+        (wanted === '' ? undefined : listProfilesForProvider('claude', state).find((one) => one.id.toLowerCase() === wanted || one.name.toLowerCase() === wanted)) ??
+        resolveProfile(state, { provider: 'claude' })
+      const projects = store().getProjects().map((project) => project.path).slice(0, 40)
+      return { ...agentInventory({ configDir: profile.configDir, system: profile.system === true, projects }), account: profile.name }
+    },
+    // Lowest level and asking first, though the AI-app tools refuse it outright: it only sends tasks.
+    makeCrmKey: (name) => {
+      const made = keys.create({ name: `${name} (CRM)`, level: 'look', askFirst: true, crmOnly: true })
+      return { id: made.view.id, key: made.key }
+    },
   })
 
   /** Past tours, newest first. What the recap card and the Settings list read. */

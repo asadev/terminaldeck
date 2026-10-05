@@ -221,5 +221,6 @@ describe('no object literal both spreads an environment and writes PATH', () => 
     // Named rather than counted, so the failure tells whoever hit it where to
     // look and what to reach for instead.
     expect(offences, 'use withPath(env, value, platform) from platform/host.ts').toEqual([])
-  })
+    // It reads every source file: 6.1 s on the release runner (v0.18.4), past the 5 s default.
+  }, 30_000)
 })

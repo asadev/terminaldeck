@@ -42,6 +42,7 @@
  * who asked.
  */
 
+import { TOOL_NAME } from '../../shared/agent-tools'
 import { sep } from 'node:path'
 import type { CreateSessionInput, ProviderId } from '../../shared/types'
 import { describeWindow, slotName, windowsOf } from '../browser-binding'
@@ -457,6 +458,8 @@ export interface ToolContext {
    * second boundary to keep in step with the first.
    */
   granted?: ReadonlySet<string>
+  /** Enforced limits for a session this call starts, from `CallOptions.sessionLimits`. Only ever narrows. */
+  sessionLimits?: { deniedTools?: string[]; noSkills?: boolean }
   /**
    * Aborted when the caller hangs up, or its key is revoked.
    *
@@ -675,6 +678,22 @@ export function optBool(args: Record<string, unknown>, key: string, fallback: bo
   if (value === undefined || value === null) return fallback
   if (typeof value !== 'boolean') throw new BadArgument(`${key} must be true or false`)
   return value
+}
+
+/**
+ * The enforced limits a session starts with, from the call's options — never
+ * from its arguments: only the app's own task engine sets them
+ * (`tasks/task-engine.ts`), and the tool's schema is unchanged. They only ever
+ * narrow a session. Checked here as well as at the spawn.
+ */
+function limitsFrom(limits: ToolContext['sessionLimits']): { deniedTools?: string[]; noSkills?: boolean } {
+  const denied = [...new Set(limits?.deniedTools ?? [])]
+  const odd = denied.find((name) => typeof name !== 'string' || !TOOL_NAME.test(name))
+  if (odd !== undefined) throw new BadArgument(`${String(odd)} is not a tool name that can be blocked`)
+  return {
+    ...(denied.length > 0 ? { deniedTools: denied } : {}),
+    ...(limits?.noSkills === true ? { noSkills: true } : {}),
+  }
 }
 
 export function optInt(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
@@ -1535,6 +1554,7 @@ export function buildCatalogue(): ToolSpec[] {
           ...(conversation === null ? {} : { resumeConversationId: conversation }),
           ...(provider === null ? {} : { provider: provider as ProviderId }),
           ...(account === null ? {} : { profileId: account.id }),
+          ...limitsFrom(context.sessionLimits),
           /*
            * Who wanted this session, written onto the session itself.
            *

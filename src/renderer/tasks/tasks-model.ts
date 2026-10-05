@@ -36,6 +36,10 @@ export interface AgentProfile {
   toolsAvoided: string[]
   /** Asked for by name; nothing is installed. */
   skills: string[]
+  /** Refused by Claude Code itself (`--disallowedTools`). Owner-chosen; never filled from the requests above. */
+  blockedTools: string[]
+  /** Claude Code started with every skill off. */
+  skillsOff: boolean
   maxConcurrent: number
   /** 0: no limit. */
   maxRunMinutes: number
@@ -56,6 +60,8 @@ export interface StatusConfig {
 
 export interface CrmConnection {
   keyId: string
+  /** The owner's name for this CRM; null on one made before names. */
+  name: string | null
   enabled: boolean
   eventsUrl: string | null
   hasEventsSecret: boolean
@@ -121,7 +127,7 @@ export interface TaskNote {
 export interface TasksState {
   agents: AgentProfile[]
   connections: CrmConnection[]
-  keys: Array<{ id: string; name: string }>
+  keys: TasksKey[]
   tasks: TaskRow[]
   /** Your deleted tasks, newest first — kept whole until restored. */
   trash: TaskRow[]
@@ -136,6 +142,44 @@ export interface TasksResult {
   state: TasksState | null
   /** A new signing secret, on the one answer that made it. Shown once. */
   secret: string | null
+  /** A new CRM's own access key, on the one answer that made it. Shown once. */
+  key?: string | null
+}
+
+/** An access key as the CRM picker sees it. */
+export interface TasksKey {
+  id: string
+  name: string
+  /** Made for a CRM: it only sends tasks. */
+  crmOnly: boolean
+  /** The AI app last seen using it, if any. */
+  lastApp: string | null
+}
+
+/** One thing a picker offers. */
+export interface InventoryChoice {
+  value: string
+  label: string
+  where: string
+}
+
+/** What is installed for an agent's Claude Code account. */
+export interface AgentInventory {
+  account: string
+  tools: InventoryChoice[]
+  skills: InventoryChoice[]
+}
+
+export function toInventory(raw: unknown): AgentInventory | null {
+  const r = record(raw)
+  if (!r || !Array.isArray(r.tools) || !Array.isArray(r.skills)) return null
+  const choices = (list: unknown[]): InventoryChoice[] =>
+    list.flatMap((entry) => {
+      const e = record(entry)
+      const value = text(e?.value)
+      return value === null ? [] : [{ value, label: text(e?.label) ?? value, where: text(e?.where) ?? '' }]
+    })
+  return { account: text(r.account) ?? 'Default', tools: choices(r.tools), skills: choices(r.skills) }
 }
 
 /* ---------------------------------------------------------------- limits -- */
@@ -184,6 +228,8 @@ export interface TasksBridge {
   tasksAgentRemove(id: string): Promise<unknown>
   tasksConnectionSave(keyId: string, patch: unknown): Promise<unknown>
   tasksConnectionRemove(keyId: string): Promise<unknown>
+  tasksConnectionCreate(input: { name: string; confirmed: boolean }): Promise<unknown>
+  tasksInventory(agent: { provider: string | null; account: string | null }): Promise<unknown>
   tasksCloseSession(taskId: string): Promise<unknown>
   tasksLocalCreate(input: unknown): Promise<unknown>
   tasksLocalUpdate(id: string, patch: unknown): Promise<unknown>
@@ -201,6 +247,8 @@ const BRIDGE_METHODS: ReadonlyArray<keyof TasksBridge> = [
   'tasksAgentRemove',
   'tasksConnectionSave',
   'tasksConnectionRemove',
+  'tasksConnectionCreate',
+  'tasksInventory',
   'tasksCloseSession',
   'tasksLocalCreate',
   'tasksLocalUpdate',
@@ -263,6 +311,8 @@ function toAgent(raw: unknown): AgentProfile | null {
     toolsPreferred: strings(r.toolsPreferred),
     toolsAvoided: strings(r.toolsAvoided),
     skills: strings(r.skills),
+    blockedTools: strings(r.blockedTools),
+    skillsOff: r.skillsOff === true,
     maxConcurrent: count(r.maxConcurrent, 1),
     maxRunMinutes: count(r.maxRunMinutes, LIMITS.defaultRunMinutes),
     keepAliveMinutes: count(r.keepAliveMinutes, LIMITS.defaultKeepAliveMinutes),
@@ -294,6 +344,7 @@ function toConnection(raw: unknown): CrmConnection | null {
   }
   return {
     keyId,
+    name: text(r.name),
     // Only a literal true draws it on: a connection that decides who can run
     // agents here must never be guessed into being switched on.
     enabled: r.enabled === true,
@@ -367,7 +418,7 @@ export function toTasksState(raw: unknown): TasksState | null {
     keys: (Array.isArray(r.keys) ? r.keys : []).flatMap((key) => {
       const k = record(key)
       const id = text(k?.id)
-      return id === null ? [] : [{ id, name: text(k?.name) ?? id }]
+      return id === null ? [] : [{ id, name: text(k?.name) ?? id, crmOnly: k?.crmOnly === true, lastApp: text(k?.lastApp) }]
     }),
     tasks: (Array.isArray(r.tasks) ? r.tasks : []).map(toTask).filter((task): task is TaskRow => task !== null),
     trash: (Array.isArray(r.trash) ? r.trash : []).map(toTask).filter((task): task is TaskRow => task !== null),
@@ -384,6 +435,7 @@ export function toTasksResult(raw: unknown): TasksResult {
     message: text(r?.message) ?? (ok ? null : 'That did not go through, and the app did not say why.'),
     state: toTasksState(r?.state),
     secret: ok ? text(r?.secret) : null,
+    key: ok ? text(r?.key) : null,
   }
 }
 
@@ -462,10 +514,13 @@ export interface AgentDraft {
   /** Empty for the agent's own. */
   effort: string
   instructions: string
-  /** One per line. */
-  toolsPreferred: string
-  toolsAvoided: string
-  skills: string
+  /** Picked from what is installed; a saved name not found here is kept. Requests, not enforced. */
+  toolsPreferred: string[]
+  toolsAvoided: string[]
+  skills: string[]
+  /** Enforced by Claude Code. Empty and off unless the owner picks them. */
+  blockedTools: string[]
+  skillsOff: boolean
   maxConcurrent: string
   maxRunMinutes: string
   keepAliveMinutes: string
@@ -482,9 +537,11 @@ export function draftOf(agent: AgentProfile | null): AgentDraft {
     model: agent?.model ?? '',
     effort: agent?.effort ?? '',
     instructions: agent?.instructions ?? '',
-    toolsPreferred: (agent?.toolsPreferred ?? []).join('\n'),
-    toolsAvoided: (agent?.toolsAvoided ?? []).join('\n'),
-    skills: (agent?.skills ?? []).join('\n'),
+    toolsPreferred: [...(agent?.toolsPreferred ?? [])],
+    toolsAvoided: [...(agent?.toolsAvoided ?? [])],
+    skills: [...(agent?.skills ?? [])],
+    blockedTools: [...(agent?.blockedTools ?? [])],
+    skillsOff: agent?.skillsOff === true,
     maxConcurrent: String(agent?.maxConcurrent ?? 1),
     maxRunMinutes: String(agent?.maxRunMinutes ?? LIMITS.defaultRunMinutes),
     keepAliveMinutes: String(agent?.keepAliveMinutes ?? LIMITS.defaultKeepAliveMinutes),
@@ -519,6 +576,12 @@ export function wholeFrom(raw: string, field: string, min: number, max: number, 
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim())
 
+/** Said wherever an enforced limit meets an agent that cannot keep it. */
+export const ENFORCE_ONLY_CLAUDE = 'Only Claude Code can block tools or turn skills off. Clear them, or choose Claude Code.'
+
+/** Trimmed, blanks dropped, first of each kept. */
+const unique = (values: readonly string[]): string[] => [...new Set(values.map((value) => value.trim()).filter((value) => value !== ''))]
+
 /** What `tasks:agent-save` is sent, or the sentence that says what to fix first. */
 export function agentPayload(
   draft: AgentDraft,
@@ -532,6 +595,9 @@ export function agentPayload(
   for (const value of [maxConcurrent, maxRunMinutes, keepAliveMinutes]) {
     if (typeof value === 'string') return { ok: false, message: value }
   }
+  if (draft.provider !== '' && draft.provider !== 'claude' && (unique(draft.blockedTools).length > 0 || draft.skillsOff)) {
+    return { ok: false, message: ENFORCE_ONLY_CLAUDE }
+  }
   const id = draft.id !== '' ? draft.id : slugFor(name, agents.map((agent) => agent.id))
   return {
     ok: true,
@@ -544,9 +610,11 @@ export function agentPayload(
       model: orNull(draft.model),
       effort: EFFORT_CHOICES.some((choice) => choice.id === draft.effort) ? draft.effort : null,
       instructions: draft.instructions.trim() === '' ? null : draft.instructions.trim(),
-      toolsPreferred: linesOf(draft.toolsPreferred),
-      toolsAvoided: linesOf(draft.toolsAvoided),
-      skills: linesOf(draft.skills),
+      toolsPreferred: unique(draft.toolsPreferred),
+      toolsAvoided: unique(draft.toolsAvoided),
+      skills: unique(draft.skills),
+      blockedTools: unique(draft.blockedTools),
+      skillsOff: draft.skillsOff,
       maxConcurrent: maxConcurrent as number,
       maxRunMinutes: maxRunMinutes as number,
       keepAliveMinutes: keepAliveMinutes as number,
@@ -575,6 +643,8 @@ export async function saveAgent(
 
 /** A connection while it is being typed. Lists are one entry per line. */
 export interface ConnectionDraft {
+  /** The owner's name for this CRM. Empty: unnamed. */
+  name: string
   eventsUrl: string
   hootIdentity: string
   allowedSenders: string
@@ -593,6 +663,7 @@ export interface ConnectionDraft {
 export function connectionDraftOf(connection: CrmConnection): ConnectionDraft {
   const s = connection.statuses
   return {
+    name: connection.name ?? '',
     eventsUrl: connection.eventsUrl ?? '',
     hootIdentity: connection.hootIdentity ?? '',
     allowedSenders: connection.allowedSenders.join('\n'),
@@ -637,6 +708,7 @@ export function connectionPatch(draft: ConnectionDraft): { ok: true; patch: Reco
   return {
     ok: true,
     patch: {
+      name: orNull(draft.name),
       eventsUrl: orNull(draft.eventsUrl),
       hootIdentity: orNull(draft.hootIdentity),
       allowedSenders: linesOf(draft.allowedSenders),

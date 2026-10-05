@@ -25,12 +25,23 @@ import { isLinuxPath } from './wsl'
 /* What is remembered                                                          */
 /* -------------------------------------------------------------------------- */
 
+/** The enforced limits a session carries into its next start, spread onto a `CreateSessionInput`. */
+export function limitsOf(saved: Pick<SavedSession, 'deniedTools' | 'noSkills'>): Pick<SavedSession, 'deniedTools' | 'noSkills'> {
+  return {
+    ...(saved.deniedTools && saved.deniedTools.length > 0 ? { deniedTools: [...saved.deniedTools] } : {}),
+    ...(saved.noSkills === true ? { noSkills: true } : {}),
+  }
+}
+
 /** A tab's durable identity and the inputs needed to recover its conversation. */
 export interface SavedSession {
   /** Exact CLI conversation identity, retained independently of the new process id. */
   agentSessionId?: string
   /** A confirmed model selection for this tab, rather than the account's latest default. */
   model?: string
+  /** Enforced limits it was started with; a restart, retry or switch starts it with them again. */
+  deniedTools?: string[]
+  noSkills?: boolean
   cwd: string
   provider: ProviderId
   /** The isolated login this ran as, or null for the default. */
@@ -712,6 +723,7 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
           resume: decision.outcome === 'resume',
           ...(decision.session.agentSessionId ? { resumeConversationId: decision.session.agentSessionId } : {}),
           ...(decision.session.model ? { model: decision.session.model } : {}),
+          ...limitsOf(decision.session),
           /*
            * And come back as the *same tab*, not as another one like it.
            *

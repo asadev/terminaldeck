@@ -266,3 +266,34 @@ describe('the task popup’s channel', () => {
     expect(await handler({ sender: WINDOW }, 'listTaskComments', ['local:a'])).toEqual({ ok: false, error: 'Tasks are not running on this computer right now.' })
   })
 })
+
+describe('a CRM with a key of its own', () => {
+  it('is made only on a confirmed press, named, and its key handed back once', () => {
+    const made: string[] = []
+    const local: typeof handlers = new Map()
+    registerTasksIpc(
+      { handle: (channel, listener) => void local.set(channel, listener) },
+      {
+        config,
+        store: new TaskStore({ dir: null }),
+        outbox: new TaskOutbox({ dir: null, target: () => null }),
+        keys: () => made.map((id) => ({ id, name: 'Sales CRM (CRM)', crmOnly: true, lastApp: null }) as unknown as AccessKeyView),
+        isApprover: (sender) => sender === WINDOW,
+        closeSession: () => false,
+        makeCrmKey: (name) => {
+          made.push(`crm-${made.length + 1}`)
+          return { id: made[made.length - 1], key: `ak_secret_for_${name.replace(/ /g, '_')}` }
+        },
+      },
+    )
+    const create = (input: unknown) => local.get('tasks:connection-create')!({ sender: WINDOW }, input) as TasksResult & { key?: string }
+    expect(create({ name: 'Sales CRM' })).toMatchObject({ ok: false })
+    expect(create({ name: '  ', confirmed: true })).toMatchObject({ ok: false })
+    expect(made).toEqual([])
+    const answer = create({ name: 'Sales CRM', confirmed: true })
+    expect(answer).toMatchObject({ ok: true, key: 'ak_secret_for_Sales_CRM' })
+    expect(answer.state.connections.find((one) => one.keyId === 'crm-1')).toMatchObject({ name: 'Sales CRM', enabled: false })
+    expect(() => local.get('tasks:connection-create')!({ sender: {} as Electron.WebContents }, { name: 'X', confirmed: true })).toThrow(/only the app/)
+    expect(made).toEqual(['crm-1'])
+  })
+})

@@ -100,6 +100,20 @@ describe('resolving a key', () => {
     rig = keyRig(dir)
   })
 
+  it('refuses a CRM\'s own key at the AI-app tools, while the task route still knows it', () => {
+    const made = rig.keys.create({ name: 'Sales CRM (CRM)', level: 'look', askFirst: true, crmOnly: true })
+    expect(rig.door.grant(made.key, 'this-mac', { userAgent: null })).toBeNull()
+    rig.keys.setInternet(true)
+    expect(rig.door.grant(made.key, 'internet', { userAgent: null })).toBeNull()
+    // `/tasks` asks `keys.match`, which still answers for it.
+    expect(rig.keys.match(made.key)).toMatchObject({ id: made.view.id, crmOnly: true })
+    // An ordinary key is untouched.
+    const { key } = rig.key('work')
+    const grant = rig.door.grant(key, 'this-mac', { userAgent: null })
+    expect(grant).not.toBeNull()
+    grant?.done()
+  })
+
   it('answers nothing for a key it does not know, or one that was revoked', () => {
     const { key, id } = rig.key('work')
     expect(rig.door.grant('ak_nope', 'this-mac', { userAgent: null })).toBeNull()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
 import { BRAND } from '../../../shared/brand'
+import { CLAUDE_TOOLS } from '../../../shared/agent-tools'
 import { Button, Group, Notice, Row, SectionHead, Switch } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
@@ -11,13 +12,17 @@ import {
   linesOf,
   resolveTasksBridge,
   saveAgent,
+  toInventory,
   toTasksResult,
   toTasksState,
   type AgentDraft,
+  type AgentInventory,
   type AgentProfile,
+  type InventoryChoice,
   type ConnectionDraft,
   type CrmConnection,
   type TasksBridge,
+  type TasksKey,
   type TasksResult,
   type TasksState,
   EFFORT_CHOICES,
@@ -138,7 +143,12 @@ export function agentStackSummary(agent: AgentProfile): string | null {
     agent.toolsAvoided.length === 0 ? null : plural(agent.toolsAvoided.length, 'tool') + ' to avoid',
     agent.skills.length === 0 ? null : plural(agent.skills.length, 'skill'),
   ].filter((part): part is string => part !== null)
-  return parts.length === 0 ? null : `Told: ${parts.join(' · ')}`
+  const enforced = [
+    agent.blockedTools.length === 0 ? null : plural(agent.blockedTools.length, 'tool') + ' blocked',
+    agent.skillsOff ? 'skills off' : null,
+  ].filter((part): part is string => part !== null)
+  const lines = [parts.length === 0 ? null : `Told: ${parts.join(' · ')}`, enforced.length === 0 ? null : `Enforced: ${enforced.join(' · ')}`]
+  return lines.every((line) => line === null) ? null : lines.filter(Boolean).join(' — ')
 }
 
 function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: boolean; bridge: Partial<TasksBridge>; run: Run }) {
@@ -191,7 +201,7 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
             </div>
             {editing === agent.id && (
               <div className="tasks-edit">
-                <AgentForm agent={agent} busy={busy} problem={problem} onSave={save} onCancel={() => open(null)} />
+                <AgentForm agent={agent} busy={busy} problem={problem} inventory={bridge.tasksInventory} onSave={save} onCancel={() => open(null)} />
                 {removing === agent.id ? (
                   <div className="settings-confirm" role="group" aria-label={`Remove ${agent.name}`}>
                     <span>Remove “{agent.name}”? CRM identities that point at it are cleared too.</span>
@@ -215,7 +225,7 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
       {editing === 'new' ? (
         <div className="tasks-edit tasks-new">
           <h5 className="settings-explain-title">New agent</h5>
-          <AgentForm agent={null} busy={busy} problem={problem} onSave={save} onCancel={() => open(null)} />
+          <AgentForm agent={null} busy={busy} problem={problem} inventory={bridge.tasksInventory} onSave={save} onCancel={() => open(null)} />
         </div>
       ) : (
         <div className="settings-actions">
@@ -225,6 +235,69 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
         </div>
       )}
     </Group>
+  )
+}
+
+/**
+ * A list picked from what is installed: the choices so far as pills, and a
+ * menu of the rest. A saved name not found on this Mac is kept and marked.
+ */
+export function ChoicePicker({
+  id,
+  label,
+  help,
+  choices,
+  selected,
+  disabled,
+  missing = 'not found here',
+  onChange,
+}: {
+  id: string
+  label: string
+  help?: string
+  choices: readonly InventoryChoice[]
+  selected: readonly string[]
+  disabled: boolean
+  /** Said beside a saved name that is not among the choices. */
+  missing?: string
+  onChange(values: string[]): void
+}) {
+  const known = new Map(choices.map((choice) => [choice.value, choice]))
+  const left = choices.filter((choice) => !selected.includes(choice.value))
+  return (
+    <Field label={label} help={help} htmlFor={id}>
+      {selected.length > 0 && (
+        <ul className="tasks-chips" aria-label={`${label}: chosen`}>
+          {selected.map((value) => (
+            <li key={value} className="tasks-chip" data-missing={known.has(value) ? undefined : ''} title={known.get(value)?.label ?? `${value}: ${missing}`}>
+              {known.has(value) ? value : `${value} (${missing})`}
+              <button type="button" className="tasks-chip-remove" aria-label={`Remove ${value}`} disabled={disabled} onClick={() => onChange(selected.filter((one) => one !== value))}>
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <span className="settings-select-wrap tasks-picker-select">
+        <select
+          id={id}
+          className="settings-select"
+          value=""
+          disabled={disabled || left.length === 0}
+          onChange={(event) => {
+            if (event.target.value !== '') onChange([...selected, event.target.value])
+          }}
+        >
+          <option value="">{left.length === 0 ? (choices.length === 0 ? 'Nothing found' : 'All chosen') : 'Add…'}</option>
+          {left.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+              {choice.where === '' ? '' : ` (${choice.where})`}
+            </option>
+          ))}
+        </select>
+      </span>
+    </Field>
   )
 }
 
@@ -245,6 +318,7 @@ export function AgentForm({
   agent,
   busy,
   problem,
+  inventory,
   onSave,
   onCancel,
 }: {
@@ -252,11 +326,36 @@ export function AgentForm({
   busy: boolean
   /** A refusal for this form, from the last save. */
   problem: string | null
+  /** What is installed for an account. Absent: the pickers offer only what is saved. */
+  inventory?(agent: { provider: string | null; account: string | null }): Promise<unknown>
   onSave(draft: AgentDraft): void
   onCancel(): void
 }) {
   const [draft, setDraft] = useState<AgentDraft>(() => draftOf(agent))
   const ids = useId()
+  const [found, setFound] = useState<AgentInventory | null>(null)
+  const pick = (field: 'toolsPreferred' | 'toolsAvoided' | 'skills' | 'blockedTools') => (values: string[]) =>
+    setDraft((was) => ({ ...was, [field]: values }))
+  // Read again when the account changes: its skills and MCP servers are its own.
+  const account = draft.account.trim()
+  useEffect(() => {
+    if (!inventory) return
+    let live = true
+    const timer = setTimeout(() => {
+      inventory({ provider: draft.provider === '' ? null : draft.provider, account: account === '' ? null : account })
+        .then((raw) => live && setFound(toInventory(raw)))
+        .catch(() => live && setFound(null))
+    }, 300)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [inventory, draft.provider, account])
+  /** Only Claude Code enforces; the app default may be it, and a start is refused when it is not. */
+  const canEnforce = draft.provider === '' || draft.provider === 'claude'
+  // Claude Code's own tools are known without reading anything; the rest is what was found.
+  const tools: readonly InventoryChoice[] = found?.tools ?? CLAUDE_TOOLS.map((tool) => ({ value: tool.name, label: `${tool.name} — ${tool.label}`, where: 'Claude Code' }))
+  const where = found === null ? 'Nothing was read from this Mac, so only what is saved is listed.' : `Found for ${found.account}.`
   const set = (field: keyof AgentDraft) => (event: { target: { value: string } }) =>
     setDraft((was) => ({ ...was, [field]: event.target.value }))
   // A provider this build does not list (an agent added on this machine) stays choosable.
@@ -366,24 +465,65 @@ export function AgentForm({
         />
       </Field>
       <div className="tasks-grid">
-        <Field
+        <ChoicePicker
+          id={`${ids}-tools-prefer`}
           label="Tools to prefer"
-          htmlFor={`${ids}-tools-prefer`}
-          help="One per line. Asked of the agent in its brief, not enforced: its own permission settings still decide what it can run."
-        >
-          <textarea id={`${ids}-tools-prefer`} className="settings-input tasks-lines" placeholder="e.g. Read" value={draft.toolsPreferred} spellCheck={false} disabled={busy} onChange={set('toolsPreferred')} />
-        </Field>
-        <Field label="Tools to avoid" htmlFor={`${ids}-tools-avoid`} help="One per line. Also a request, not a lock.">
-          <textarea id={`${ids}-tools-avoid`} className="settings-input tasks-lines" placeholder="e.g. WebFetch" value={draft.toolsAvoided} spellCheck={false} disabled={busy} onChange={set('toolsAvoided')} />
-        </Field>
+          help="Asked of the agent in its brief, not enforced."
+          choices={tools}
+          selected={draft.toolsPreferred}
+          disabled={busy}
+          onChange={pick('toolsPreferred')}
+        />
+        <ChoicePicker
+          id={`${ids}-tools-avoid`}
+          label="Tools to avoid"
+          help="Also a request, not a lock. To stop a tool, block it below."
+          choices={tools}
+          selected={draft.toolsAvoided}
+          disabled={busy}
+          onChange={pick('toolsAvoided')}
+        />
       </div>
-      <Field
+      <ChoicePicker
+        id={`${ids}-skills`}
         label="Skills"
-        htmlFor={`${ids}-skills`}
-        help="One per line, by name. Claude Code uses a skill it already has; nothing is installed, and other coding agents only see the names."
-      >
-        <textarea id={`${ids}-skills`} className="settings-input tasks-lines" placeholder="Optional" value={draft.skills} spellCheck={false} disabled={busy} onChange={set('skills')} />
-      </Field>
+        help={`Skills in this account's and your projects' skill folders, named in its brief when they fit. Claude Code's built-in skills are not listed. Nothing is installed. ${where}`}
+        choices={found?.skills ?? []}
+        selected={draft.skills}
+        disabled={busy}
+        missing="not in a skill folder"
+        onChange={pick('skills')}
+      />
+      <h5 className="settings-explain-title">Enforced by Claude Code</h5>
+      <p className="tasks-quiet">
+        {canEnforce
+          ? 'Claude Code itself refuses these, whatever the brief says. Another coding agent is not started with them set.'
+          : `${providerName(draft.provider)} cannot enforce these. Choose Claude Code, or leave them empty.`}
+      </p>
+      <ChoicePicker
+        id={`${ids}-tools-block`}
+        label="Block these tools"
+        help="Off unless you pick some. Nothing is ever allowed from here."
+        choices={tools}
+        selected={draft.blockedTools}
+        disabled={busy || (!canEnforce && draft.blockedTools.length === 0)}
+        onChange={pick('blockedTools')}
+      />
+      <Row
+        label="Turn all skills off"
+        help="Starts Claude Code with no skills at all."
+        labelId={`${ids}-skills-off-label`}
+        helpId={`${ids}-skills-off-help`}
+        control={
+          <Switch
+            checked={draft.skillsOff}
+            disabled={busy || (!canEnforce && !draft.skillsOff)}
+            labelledBy={`${ids}-skills-off-label`}
+            describedBy={`${ids}-skills-off-help`}
+            onChange={(on) => setDraft((was) => ({ ...was, skillsOff: on }))}
+          />
+        }
+      />
       <Field
         label="Check command"
         htmlFor={`${ids}-verify`}
@@ -426,14 +566,24 @@ function ConnectionsGroup({
   run: Run
   goTo?(section: string): void
 }) {
+  const ids = useId()
   const [open, setOpen] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   /** A secret the main process just made, for one connection. Gone once copied or closed. */
   const [shown, setShown] = useState<{ keyId: string; secret: string } | null>(null)
   const free = state.keys.filter((key) => !state.connections.some((connection) => connection.keyId === key.id))
-  const [picked, setPicked] = useState<string>('')
-  const chosen = free.some((key) => key.id === picked) ? picked : (free[0]?.id ?? '')
-  const nameOf = (keyId: string): string => state.keys.find((key) => key.id === keyId)?.name ?? 'A removed key'
+  /** `new`: a key made just for this CRM. Otherwise one of the existing keys, by id. */
+  const [picked, setPicked] = useState<string>(NEW_KEY)
+  const chosen = picked === NEW_KEY || free.some((key) => key.id === picked) ? picked : NEW_KEY
+  const [crmName, setCrmName] = useState('')
+  /** The press that makes a key waits for a second, explicit one. */
+  const [confirming, setConfirming] = useState(false)
+  /** A CRM's new access key, shown once. */
+  const [madeKey, setMadeKey] = useState<{ keyId: string; key: string } | null>(null)
+  const { copied, copy } = useCopy()
+  const keyName = (keyId: string): string => state.keys.find((key) => key.id === keyId)?.name ?? 'a removed key'
+  // Never the key's name: a key is how it signs in, not what it is.
+  const nameOf = (connection: CrmConnection): string => connection.name ?? 'Unnamed CRM'
 
   const toggle = (which: string | null): void => {
     setOpen(which)
@@ -450,11 +600,29 @@ function ConnectionsGroup({
   }
 
   const connect = async (): Promise<void> => {
-    if (chosen === '') return
+    const name = crmName.trim()
+    if (name === '') return setProblem('Give the CRM a name first.')
     setProblem(null)
-    // An empty patch makes the connection: switched off, nobody allowed, and a
-    // fresh signing secret that comes back on this one answer.
-    if (await save(chosen, {})) setOpen(chosen)
+    if (chosen === NEW_KEY) return setConfirming(true)
+    // The connection is made switched off, with nobody allowed, and a fresh
+    // signing secret that comes back on this one answer.
+    if (await save(chosen, { name })) {
+      setCrmName('')
+      setOpen(chosen)
+    }
+  }
+
+  /** The owner's second press: make the CRM's own key, and the connection with it. */
+  const connectWithNewKey = async (): Promise<void> => {
+    setConfirming(false)
+    const before = new Set(state.connections.map((connection) => connection.keyId))
+    const result = await run(() => bridge.tasksConnectionCreate?.({ name: crmName.trim(), confirmed: true }))
+    const made = result?.state?.connections.find((connection) => !before.has(connection.keyId))
+    if (!result?.ok || made === undefined) return setProblem(result?.message ?? 'That did not go through.')
+    setCrmName('')
+    if (result.key) setMadeKey({ keyId: made.keyId, key: result.key })
+    if (result.secret) setShown({ keyId: made.keyId, secret: result.secret })
+    setOpen(made.keyId)
   }
 
   const remove = async (keyId: string): Promise<void> => {
@@ -466,17 +634,18 @@ function ConnectionsGroup({
   return (
     <Group title="CRM connections">
       {state.connections.length === 0 && (
-        <p className="tasks-quiet">A CRM sends work here through one of your access keys. Nothing runs until you switch its connection on.</p>
+        <p className="tasks-quiet">A CRM sends work here with an access key. Nothing runs until you switch its connection on.</p>
       )}
       <ul className="settings-profiles">
         {state.connections.map((connection) => (
           <li key={connection.keyId} className="settings-profile tasks-item" data-open={open === connection.keyId ? '' : undefined}>
             <div className="settings-profile-main">
               <span className="settings-profile-name">
-                {nameOf(connection.keyId)}
+                {nameOf(connection)}
                 <span className={connection.enabled ? 'settings-badge' : 'settings-badge quiet'}>{connection.enabled ? 'On' : 'Off'}</span>
               </span>
               <span className="settings-tool-note">{connectionSummary(connection)}</span>
+              <span className="settings-tool-note">{keyLine(state.keys.find((key) => key.id === connection.keyId), keyName(connection.keyId))}</span>
             </div>
             <div className="settings-profile-actions">
               <Button onClick={() => toggle(open === connection.keyId ? null : connection.keyId)} disabled={busy}>
@@ -485,6 +654,16 @@ function ConnectionsGroup({
             </div>
             {open === connection.keyId && (
               <div className="tasks-edit">
+                {madeKey?.keyId === connection.keyId && (
+                  <>
+                    <Notice tone="warn">Copy this CRM’s access key now. It is shown only this once. The CRM sends it with each task; it cannot use anything else on this Mac.</Notice>
+                    <div className="tasks-secret">
+                      <code className="tasks-secret-value">{madeKey.key}</code>
+                      <CopyButton id={`tasks-key-${connection.keyId}`} value={madeKey.key} copied={copied} onCopy={copy} />
+                      <Button onClick={() => setMadeKey(null)}>I’ve copied it</Button>
+                    </div>
+                  </>
+                )}
                 <ConnectionEditor
                   connection={connection}
                   agents={state.agents}
@@ -500,30 +679,87 @@ function ConnectionsGroup({
           </li>
         ))}
       </ul>
-      {state.keys.length === 0 ? (
-        <div className="settings-actions">
-          <span className="settings-help">Make an access key in Connect an AI app first. The CRM uses it to send work.</span>
-          {goTo && <Button onClick={() => goTo('ai-apps')}>Open Connect an AI app</Button>}
+      <div className="tasks-form">
+        <div className="tasks-grid">
+          <Field label="CRM name" htmlFor={`${ids}-crm-name`} help="Your own name for it, shown here and on its tasks.">
+            <input
+              id={`${ids}-crm-name`}
+              className="settings-input"
+              placeholder="e.g. Sales CRM"
+              value={crmName}
+              maxLength={50}
+              disabled={busy}
+              onChange={(event) => {
+                setConfirming(false)
+                setCrmName(event.target.value)
+              }}
+            />
+          </Field>
+          <Field label="Signs in with" htmlFor={`${ids}-crm-key`} help={keyHelp(chosen === NEW_KEY ? null : free.find((key) => key.id === chosen))}>
+            <span className="settings-select-wrap">
+              <select
+                id={`${ids}-crm-key`}
+                className="settings-select"
+                value={chosen}
+                disabled={busy}
+                onChange={(event) => {
+                  setConfirming(false)
+                  setPicked(event.target.value)
+                }}
+              >
+                <option value={NEW_KEY}>A new key just for this CRM</option>
+                {free.map((key) => (
+                  <option key={key.id} value={key.id}>
+                    {keyOption(key)}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </Field>
         </div>
-      ) : free.length > 0 ? (
-        <div className="settings-actions">
-          <span className="settings-select-wrap">
-            <select className="settings-select" aria-label="Access key the CRM uses" value={chosen} disabled={busy} onChange={(event) => setPicked(event.target.value)}>
-              {free.map((key) => (
-                <option key={key.id} value={key.id}>
-                  {key.name}
-                </option>
-              ))}
-            </select>
-          </span>
-          <Button tone="primary" disabled={busy || chosen === ''} onClick={() => void connect()}>
-            Connect a CRM
-          </Button>
-        </div>
-      ) : null}
+        {confirming ? (
+          <div className="settings-confirm" role="group" aria-label="Make a key for this CRM">
+            <span>
+              Make a new access key named “{crmName.trim()} (CRM)”? It is shown once, it can only send tasks, and it can be revoked in Connect an AI app.
+            </span>
+            <Button tone="primary" disabled={busy || !bridge.tasksConnectionCreate} onClick={() => void connectWithNewKey()}>
+              Make the key and connect
+            </Button>
+            <Button onClick={() => setConfirming(false)}>Cancel</Button>
+          </div>
+        ) : (
+          <div className="settings-actions">
+            <Button tone="primary" disabled={busy || crmName.trim() === ''} title={crmName.trim() === '' ? 'Give the CRM a name first' : undefined} onClick={() => void connect()}>
+              Connect a CRM
+            </Button>
+            {state.keys.length === 0 && goTo && <Button onClick={() => goTo('ai-apps')}>Open Connect an AI app</Button>}
+          </div>
+        )}
+      </div>
       {open === null && problem && <Notice tone="error">{problem}</Notice>}
     </Group>
   )
+}
+
+/** The picker's value for "make a key just for this CRM". Never an id: ids are UUIDs. */
+const NEW_KEY = 'new'
+
+/** An existing key, as the CRM picker names it: whose it is, so sharing an AI app's is never a surprise. */
+export function keyOption(key: TasksKey): string {
+  if (key.crmOnly) return `${key.name} — a CRM key`
+  return key.lastApp === null ? `${key.name} — an AI-app key` : `${key.name} — an AI-app key, used by ${key.lastApp}`
+}
+
+export function keyHelp(key: TasksKey | null | undefined): string {
+  if (key === null || key === undefined) return 'Recommended. It can send tasks and nothing else, and you confirm before it is made.'
+  if (key.crmOnly) return 'A key made for a CRM: it can send tasks and nothing else.'
+  return 'An AI app’s key. The CRM would sign in as that app, and anyone with the key could send tasks.'
+}
+
+/** Which key a connection signs in with, in words. */
+export function keyLine(key: TasksKey | undefined, name: string): string {
+  if (key === undefined) return `Signs in with ${name}`
+  return key.crmOnly ? `Signs in with its own key, ${key.name}` : `Signs in with ${key.name}, an AI app’s key`
 }
 
 export function connectionSummary(connection: CrmConnection): string {
@@ -643,6 +879,10 @@ export function ConnectionEditor({
           </span>
         )}
       </div>
+
+      <Field label="CRM name" htmlFor={`${ids}-name`} help="Your own name for it, shown here and on its tasks.">
+        <input id={`${ids}-name`} className="settings-input" placeholder="e.g. Sales CRM" value={draft.name} maxLength={60} disabled={busy} onChange={set('name')} />
+      </Field>
 
       <Field label="Events address" htmlFor={`${ids}-url`} help="Where status changes and comments are sent. It has to start with https://.">
         <input

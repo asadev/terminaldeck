@@ -113,6 +113,24 @@ describe('settings', () => {
     expect(config.saveAgent({ id: 'plain', name: 'Plain' })).toMatchObject({ effort: null, instructions: null, toolsPreferred: [], skills: [] })
   })
 
+  it('keeps enforced limits only as the owner picked them, for Claude Code, by real tool names', () => {
+    const config = new TaskConfig({ dir })
+    expect(config.saveAgent({ id: 'old', name: 'Old', toolsAvoided: ['Bash'] })).toMatchObject({ blockedTools: [], skillsOff: false })
+    const locked = config.saveAgent({ id: 'locked', name: 'Locked', provider: 'claude', blockedTools: ['WebFetch', 'mcp__deck-control__browser_open'], skillsOff: true })
+    expect(new TaskConfig({ dir }).agent('locked')).toMatchObject({ blockedTools: locked.blockedTools, skillsOff: true })
+    expect(() => config.saveAgent({ id: 'x', name: 'X', blockedTools: ['Bash(rm *)'] })).toThrow(/not a tool name/)
+    expect(() => config.saveAgent({ id: 'x', name: 'X', blockedTools: ['--allowedTools'] })).toThrow(/not a tool name/)
+    expect(() => config.saveAgent({ id: 'x', name: 'X', provider: 'codex', skillsOff: true })).toThrow(/Only Claude Code/)
+  })
+
+  it('names a CRM connection, and reads one made before names by its key', () => {
+    const config = new TaskConfig({ dir })
+    config.saveConnection('key-named', { name: '  Sales CRM ' })
+    expect(new TaskConfig({ dir }).connection('key-named')).toMatchObject({ name: 'Sales CRM' })
+    config.saveConnection('key-old', {})
+    expect(new TaskConfig({ dir }).connection('key-old')).toMatchObject({ name: null })
+  })
+
   it('allows a folder or what is inside it, never a sibling sharing a prefix or a way out', () => {
     const connection = { folders: ['/work/app'] }
     expect(folderAllowed(connection, '/work/app')).toBe(true)

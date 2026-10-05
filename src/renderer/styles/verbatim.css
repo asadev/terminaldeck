@@ -468,6 +468,7 @@
 .ai-secret-value,
 .tasks-mono,
 .tasks-lines,
+.tasks-chip,
 .tasks-secret-value,
 /* Stays Fixed. A value before and after a change is the program's own output,
    compared character by character — `->` drawn as one arrow would hide the very

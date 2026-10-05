@@ -798,7 +798,8 @@ function agentsTool(deps: LocalTaskToolDeps): ToolSpec {
           const existing = typeof input.id === 'string' ? config.agent(input.id) : null
           // A new agent is given an id from its name, as Settings gives one (`slugFor` in `renderer/tasks/tasks-model.ts`).
           const id = existing?.id ?? (typeof input.id === 'string' && input.id !== '' ? input.id : slugFor(typeof input.name === 'string' ? input.name : '', config.agents().map((a) => a.id)))
-          const saved = config.saveAgent({ ...(existing ?? {}), ...input, id })
+          // Blocks are the owner's, set in Settings: an app or Hoot can never lift or add one.
+          const saved = config.saveAgent({ ...(existing ?? {}), ...input, id, blockedTools: existing?.blockedTools ?? [], skillsOff: existing?.skillsOff ?? false })
           return { value: { saved }, summary: { agent: saved.id } }
         }
         const agentId = text(args, 'id')

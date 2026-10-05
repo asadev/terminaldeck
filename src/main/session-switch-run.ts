@@ -69,6 +69,7 @@ import {
   conversationScope,
   conversationStore,
   folderExists,
+  limitsOf,
   planRestore,
   type RestoreDecision,
   type SavedSession,
@@ -654,6 +655,8 @@ export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks 
          */
         replaces: plan.sessionId,
         ...(wantId === null ? {} : { resumeConversationId: wantId }),
+        // The enforced limits go across with it: a switch must not lift a block.
+        ...limitsOf(saved),
       })
 
       /*

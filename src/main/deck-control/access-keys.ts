@@ -153,6 +153,8 @@ interface StoredKey {
    * asking and its folders still apply to every task call.
    */
   tasks: boolean
+  /** Made for one CRM: it sends tasks to `/tasks` and nothing else — the AI-app tools refuse it (`key-door.ts`). */
+  crmOnly?: boolean
   hash: string
   createdAt: number
   lastUsedAt: number | null
@@ -189,6 +191,8 @@ export interface AccessKeyView {
   folders: string[] | null
   /** May this app use the task tools? Off unless turned on in Settings. */
   tasks: boolean
+  /** A CRM's own key: it can send tasks and cannot use the AI-app tools at all. */
+  crmOnly: boolean
   createdAt: number
   lastUsedAt: number | null
   lastApp: string | null
@@ -283,6 +287,7 @@ function view(key: StoredKey): AccessKeyView {
     askFirst: key.askFirst,
     folders: key.folders === null ? null : [...key.folders],
     tasks: key.tasks === true,
+    crmOnly: key.crmOnly === true,
     createdAt: key.createdAt,
     lastUsedAt: key.lastUsedAt,
     lastApp: key.lastApp,
@@ -329,6 +334,7 @@ function asStoredKey(raw: unknown): StoredKey | null {
     folders,
     // Only a literal true: a key from before the task tools, or a damaged file, has none.
     tasks: r.tasks === true,
+    ...(r.crmOnly === true ? { crmOnly: true } : {}),
     hash: r.hash,
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     lastUsedAt: typeof r.lastUsedAt === 'number' ? r.lastUsedAt : null,
@@ -379,7 +385,7 @@ export class AccessKeys {
    * again, deliberately: a key that can be re-displayed is a key whose secret is
    * sitting somewhere waiting to be re-displayed.
    */
-  create(input: { name: unknown; level: unknown; askFirst?: unknown; folders?: unknown }): {
+  create(input: { name: unknown; level: unknown; askFirst?: unknown; folders?: unknown; crmOnly?: unknown }): {
     key: string
     view: AccessKeyView
   } {
@@ -401,6 +407,7 @@ export class AccessKeys {
       lastApp: null,
       lastVia: null,
       tasks: false,
+      ...(input.crmOnly === true ? { crmOnly: true } : {}),
       notify: { mode: 'wait', url: null, secret: null },
     }
     this.state = { ...this.state, keys: [...this.state.keys, stored] }

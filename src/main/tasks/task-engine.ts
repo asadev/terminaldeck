@@ -95,7 +95,8 @@ export interface TaskEngineDeps {
   outbox: TaskOutbox
   surface: EngineSurface
   /** Run one deck-control tool as the copilot — the same gate Hoot's own calls go through. */
-  call(tool: string, args: Record<string, unknown>): Promise<CallResult>
+  /** `options`: only the owner's enforced limits for a session a start makes. */
+  call(tool: string, args: Record<string, unknown>, options?: { sessionLimits?: { deniedTools?: string[]; noSkills?: boolean } }): Promise<CallResult>
   /** Hoot's session, started if it is not running. Null when it cannot be. */
   hoot(): Promise<string | null>
   /** Run a check command in a folder. */
@@ -126,6 +127,20 @@ export function runCheck(command: string, cwd: string): Promise<CheckResult> {
  * request, said so in the brief itself — what the agent may do is still decided
  * by its own permission prompts.
  */
+/**
+ * The owner's enforced limits, as the start's options. Undefined when there are
+ * none, so an agent without them is started exactly as before.
+ */
+export function limitsOfAgent(agent: AgentProfile): { sessionLimits: { deniedTools?: string[]; noSkills?: boolean } } | undefined {
+  if (agent.blockedTools.length === 0 && !agent.skillsOff) return undefined
+  return {
+    sessionLimits: {
+      ...(agent.blockedTools.length > 0 ? { deniedTools: [...agent.blockedTools] } : {}),
+      ...(agent.skillsOff ? { noSkills: true } : {}),
+    },
+  }
+}
+
 export function stackOf(agent: AgentProfile): string {
   const parts: string[] = []
   if (agent.instructions !== null) parts.push(agent.instructions)
@@ -135,6 +150,8 @@ export function stackOf(agent: AgentProfile): string {
     parts.push('These tool choices are what the owner asked for; your own permission settings still apply.')
   }
   if (agent.skills.length > 0) parts.push(`Use these skills when they fit: ${agent.skills.join(', ')}.`)
+  if (agent.blockedTools.length > 0) parts.push(`These tools are switched off for you: ${agent.blockedTools.join(', ')}.`)
+  if (agent.skillsOff) parts.push('Skills are switched off for you.')
   return parts.length === 0 ? '' : `\n\n## How you work (${agent.name}, ${agent.role})\n\n${parts.join('\n\n')}`
 }
 
@@ -442,7 +459,7 @@ export class TaskEngine {
         ...(reply !== null && task.conversationId !== null ? { conversation: task.conversationId } : {}),
         brief,
         title: `crm-${task.externalTaskId}`,
-      })
+      }, limitsOfAgent(agent))
       const session = (started.value as { session?: { id?: unknown } } | null)?.session
       if (!started.ok || typeof session?.id !== 'string') {
         // A busy folder or a full house waits for the next slot; anything else is a blocker.
@@ -868,6 +885,7 @@ export class TaskEngine {
   private localConnection(): CrmConnection {
     return {
       keyId: LOCAL_KEY,
+      name: null,
       enabled: true,
       eventsUrl: null,
       eventsSecret: null,

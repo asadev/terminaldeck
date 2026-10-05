@@ -1,4 +1,4 @@
-import type { SavedSession } from './session-restore'
+import { limitsOf, type SavedSession } from './session-restore'
 
 /**
  * The sessions that were open, could not be started again, and are being kept
@@ -71,6 +71,8 @@ export interface HeldSession {
   agentSessionId?: string
   model?: string
   homeProfileId?: string
+  deniedTools?: string[]
+  noSkills?: boolean
   /**
    * Stable for as long as this entry exists, and meaningless afterwards.
    *
@@ -140,6 +142,7 @@ export function savedFrom(held: HeldSession): SavedSession {
     ...(held.agentSessionId ? { agentSessionId: held.agentSessionId } : {}),
     ...(held.model ? { model: held.model } : {}),
     ...(held.homeProfileId !== undefined ? { homeProfileId: held.homeProfileId } : {}),
+    ...limitsOf(held),
     cwd: held.cwd,
     provider: held.provider,
     profileId: held.profileId,
@@ -192,6 +195,7 @@ export class HeldSessions {
       ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
       ...(session.model ? { model: session.model } : {}),
       ...(session.homeProfileId !== undefined ? { homeProfileId: session.homeProfileId } : {}),
+      ...limitsOf(session),
       key: `held-${this.counter}`,
       cwd: session.cwd,
       provider: session.provider,

@@ -15,6 +15,7 @@ import { isLocalDetailFn } from '../../shared/crm/detail-contract'
 import { LOCAL_STATUSES, TaskConfigProblem, type AgentProfile, type CrmConnectionView, type TaskConfig } from './task-config'
 import type { LocalTaskDetail } from './task-detail-local'
 import type { LocalTasks } from './task-local'
+import type { AgentInventory } from './agent-inventory'
 import type { TaskOutbox } from './task-outbox'
 import type { ProcessState, TaskNote, TaskRecord, TaskStore } from './task-store'
 
@@ -70,8 +71,8 @@ export interface TaskView {
 export interface TasksState {
   agents: AgentProfile[]
   connections: CrmConnectionView[]
-  /** Access keys a connection can be made for. */
-  keys: Array<Pick<AccessKeyView, 'id' | 'name'>>
+  /** Access keys a connection can be made for. `lastApp`: the AI app last seen using it. */
+  keys: Array<Pick<AccessKeyView, 'id' | 'name' | 'crmOnly' | 'lastApp'>>
   tasks: TaskView[]
   /** Your deleted tasks, newest first — kept whole until restored. */
   trash: TaskView[]
@@ -96,6 +97,10 @@ export interface TasksIpcDeps {
   local?: LocalTasks
   /** The task popup's calls on a local task (the reference CRM's task page). Absent: they refuse. */
   detail?: Pick<LocalTaskDetail, 'call'>
+  /** What is installed for an agent's account, for its pickers. Absent: the pickers show what is saved. */
+  inventory?(agent: { provider: string | null; account: string | null }): AgentInventory & { account: string }
+  /** Make a key that only sends tasks, for one CRM. Called only from the owner's confirmed press. */
+  makeCrmKey?(name: string): { id: string; key: string }
 }
 
 export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox' | 'keys'>): TasksState {
@@ -145,7 +150,7 @@ export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox
   return {
     agents,
     connections: deps.config.connections(),
-    keys: deps.keys().map((key) => ({ id: key.id, name: key.name })),
+    keys: deps.keys().map((key) => ({ id: key.id, name: key.name, crmOnly: key.crmOnly, lastApp: key.lastApp })),
     tasks: deps.store
       .all()
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -207,6 +212,34 @@ export function registerTasksIpc(ipcMain: InvokeRegistrar, deps: TasksIpcDeps): 
       }
       return deps.config.saveConnection(keyId, raw).secret
     })
+  })
+  /**
+   * A new CRM with a key of its own. Only from the app's window, on the owner's
+   * confirmed press: the key is made here, shown once in the answer, and can
+   * send tasks and nothing else.
+   */
+  ipcMain.handle('tasks:connection-create', (event, raw: unknown) => {
+    guard(event)
+    let key: string | null = null
+    const result = change(() => {
+      const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+      if (input.confirmed !== true) throw new TaskConfigProblem('Confirm making a new key for this CRM first.')
+      const name = typeof input.name === 'string' ? input.name.replace(/\s+/g, ' ').trim() : ''
+      if (name === '') throw new TaskConfigProblem('Give the CRM a name first.')
+      if (name.length > 50) throw new TaskConfigProblem('Keep the CRM name under 50 characters.')
+      if (deps.makeCrmKey === undefined) throw new TaskConfigProblem('This build cannot make a key for a CRM.')
+      const made = deps.makeCrmKey(name)
+      key = made.key
+      return deps.config.saveConnection(made.id, { name }).secret
+    })
+    return result.ok ? { ...result, key } : result
+  })
+  ipcMain.handle('tasks:inventory', (event, raw: unknown) => {
+    guard(event)
+    const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null)
+    if (deps.inventory === undefined) return null
+    return deps.inventory({ provider: text(input.provider), account: text(input.account) })
   })
   ipcMain.handle('tasks:connection-remove', (event, keyId: unknown) => {
     guard(event)

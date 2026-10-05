@@ -136,7 +136,8 @@ import { isHiddenSession } from './remote/hidden-sessions'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
 import { HeldSessions } from './session-held'
-import { personalSessions, type SavedSession } from './session-restore'
+import { limitsOf, personalSessions, type SavedSession } from './session-restore'
+import { TOOL_NAME } from '../shared/agent-tools'
 import { copilotPaths } from './copilot-home'
 import { store } from './store'
 import {
@@ -1844,11 +1845,29 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * up for it. Gated like the verbs above on everything that would make the
      * flag a claim rather than a capability; see `projectTools` for each case.
      */
+    /*
+     * Enforced limits, or no session at all. Only Claude Code can refuse a tool
+     * or turn its skills off, so any other agent (including one this fell back
+     * to) is refused here rather than started without the limits it was given.
+     */
+    const denied = input.deniedTools ?? []
+    if (denied.length > 0 || input.noSkills === true) {
+      if (provider !== 'claude') {
+        throw new Error('Only Claude Code can block tools or turn skills off, so this agent was not started.')
+      }
+      const odd = denied.find((name) => typeof name !== 'string' || !TOOL_NAME.test(name))
+      if (odd !== undefined) throw new Error(`${String(odd)} is not a tool name that can be blocked.`)
+    }
+    const limitArgs: readonly string[] = [
+      ...(denied.length > 0 ? ['--disallowedTools', denied.join(',')] : []),
+      ...(input.noSkills === true ? ['--disable-slash-commands'] : []),
+    ]
     const projectLaunch =
       !forDevice && target === null && (extraArgs ?? []).length === 0 && !addedRuns
         ? ((await options.projectTools?.launch(provider, input.cwd).catch(() => null)) ?? null)
         : null
     const composed: readonly string[] = [
+      ...limitArgs,
       ...(provider === 'claude' && input.model ? ['--model', input.model] : []),
       ...(extraArgs ?? []),
       ...(sessionTools === null ? [] : sessionTools.args),
@@ -2568,6 +2587,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       ledger.note(meta.id, {
         ...(meta.agentSessionId ? { agentSessionId: meta.agentSessionId } : {}),
         ...(input.model ? { model: input.model } : {}),
+        ...limitsOf(input),
         cwd: input.cwd,
         provider: requested,
         profileId: rememberedAccount(meta, input),

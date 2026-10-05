@@ -81,6 +81,11 @@ export const agentsCoverage: CoverageMap = {
   'tasks:agent-remove': { tool: 'tasks.agents' },
   'tasks:connection-save': { skip: TASK_SETUP_IS_THE_OWNERS },
   'tasks:connection-remove': { skip: TASK_SETUP_IS_THE_OWNERS },
+  // Makes a key: the owner's press, confirmed, in Settings.
+  'tasks:connection-create': { skip: TASK_SETUP_IS_THE_OWNERS },
+  'tasks:inventory': {
+    skip: 'What is installed for an agent’s account fills the owner’s pickers in Settings; blocks are set there alone, so no tool needs the list.',
+  },
   'tasks:close-session': { tool: 'sessions.stop' },
   'tasks:local-create': { tool: 'tasks.local_change' },
   'tasks:local-update': { tool: 'tasks.local_change' },

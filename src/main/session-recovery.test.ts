@@ -70,6 +70,20 @@ describe('exact conversation recovery', () => {
     expect(decisions[3].reason).toContain('/resume')
   })
 
+  it('restarts a session with the enforced limits it had, and never adds them to one that had none', async () => {
+    const limited = { ...saved('limited', 'conversation-l'), deniedTools: ['WebFetch'], noSkills: true }
+    const plain = saved('plain', 'conversation-p')
+    const spawn = vi.fn(async (input) => ({ id: input.tabKey } as SessionMeta))
+    await restoreOpenSessions({ saved: () => [limited, plain], enabled: () => true, plan: (list) => planRestore(list, probes),
+      spawn, announce: () => undefined, report: () => undefined })
+    const [first, second] = spawn.mock.calls.map(([input]) => input)
+    expect(first).toMatchObject({ deniedTools: ['WebFetch'], noSkills: true })
+    expect(second).not.toHaveProperty('deniedTools')
+    expect(second).not.toHaveProperty('noSkills')
+    // Held and tried again: the same limits.
+    expect(savedFrom(new HeldSessions().hold(limited, 'offline'))).toMatchObject({ deniedTools: ['WebFetch'], noSkills: true })
+  })
+
   it('keeps conversation, model and original account folder through hold and retry', () => {
     const held = new HeldSessions()
     const original = saved('held')
@@ -101,6 +115,16 @@ describe('interrupted and repeated restart with isolated app data', () => {
     expect(disk(root)).toHaveLength(1)
     expect(disk(root)[0].tabKey).toBe(migrated.tabKey)
     expect(disk(root)[0].cwd).toBe(legacy.cwd)
+  }, 15_000)
+
+  it('keeps a tab\'s enforced limits on disk across a restart that has not restored it yet', async () => {
+    const root = join(dir, 'limits-data')
+    mkdirSync(root)
+    const limited = { ...saved('limited'), deniedTools: ['Bash', 'mcp__deck-control'], noSkills: true }
+    writeFileSync(join(root, 'state.json'), JSON.stringify({ openSessions: [limited] }))
+    const ledger = await ledgerAt(root)
+    ledger.flush()
+    expect(disk(root)[0]).toMatchObject({ deniedTools: ['Bash', 'mcp__deck-control'], noSkills: true })
   }, 15_000)
 
   it('stops keeping the previous launch when reopening is switched off', async () => {

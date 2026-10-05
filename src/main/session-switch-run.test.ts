@@ -207,6 +207,9 @@ describe('a switch that can happen: start, prove alive, then stop the old one', 
       cols: 120,
       rows: 40,
       lastSeenAt: 1,
+      // Enforced limits a task agent was started with: a switch must not lift them.
+      deniedTools: ['WebFetch'],
+      noSkills: true,
     }
     const { core, started, killed, records } = fakeCore()
     records.set('old-session', saved)
@@ -246,6 +249,8 @@ describe('a switch that can happen: start, prove alive, then stop the old one', 
       provider: 'claude',
       profileId: work.id,
       replaces: 'old-session',
+      deniedTools: ['WebFetch'],
+      noSkills: true,
     })
     // Start, then stop: the old session was killed as `replaced` — the reason
     // the window's swap listens for — and only after the probe.

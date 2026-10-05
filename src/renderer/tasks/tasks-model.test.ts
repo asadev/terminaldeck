@@ -31,6 +31,8 @@ const BUILDER: AgentProfile = {
   toolsPreferred: [],
   toolsAvoided: [],
   skills: [],
+  blockedTools: [],
+  skillsOff: false,
   maxConcurrent: 2,
   maxRunMinutes: 60,
   keepAliveMinutes: 30,
@@ -130,6 +132,8 @@ describe('the agent form', () => {
         toolsPreferred: [],
         toolsAvoided: [],
         skills: [],
+        blockedTools: [],
+        skillsOff: false,
         maxConcurrent: 1,
         maxRunMinutes: 60,
         keepAliveMinutes: 30,
@@ -216,9 +220,9 @@ describe('the bridge', () => {
       name: 'Reviewer',
       effort: 'xhigh',
       instructions: '  Read the diff first.  ',
-      toolsPreferred: 'Read\n\nGrep\nRead',
-      toolsAvoided: ' Bash ',
-      skills: 'code-review',
+      toolsPreferred: ['Read', '', 'Grep', 'Read'],
+      toolsAvoided: [' Bash '],
+      skills: ['code-review'],
     }
     expect(agentPayload(draft, [])).toMatchObject({
       ok: true,
@@ -229,6 +233,18 @@ describe('the bridge', () => {
     // Read back into the form exactly as it was saved.
     const saved = agentPayload(draft, [])
     if (!saved.ok) throw new Error(saved.message)
-    expect(draftOf(saved.payload)).toMatchObject({ effort: 'xhigh', toolsPreferred: 'Read\nGrep', skills: 'code-review' })
+    expect(draftOf(saved.payload)).toMatchObject({ effort: 'xhigh', toolsPreferred: ['Read', 'Grep'], skills: ['code-review'] })
+  })
+
+  it('never turns requests into enforced limits, and keeps enforced ones for Claude Code only', () => {
+    const asked = agentPayload({ ...draftOf(null), name: 'Careful', toolsAvoided: ['WebFetch'], skills: ['code-review'] }, [])
+    expect(asked).toMatchObject({ ok: true, payload: { toolsAvoided: ['WebFetch'], blockedTools: [], skillsOff: false } })
+    const blocked = agentPayload({ ...draftOf(null), name: 'Locked', provider: 'claude', blockedTools: ['WebFetch', 'WebFetch'], skillsOff: true }, [])
+    expect(blocked).toMatchObject({ ok: true, payload: { blockedTools: ['WebFetch'], skillsOff: true } })
+    expect(agentPayload({ ...draftOf(null), name: 'Other', provider: 'codex', blockedTools: ['Bash'] }, [])).toMatchObject({ ok: false })
+    expect(agentPayload({ ...draftOf(null), name: 'Other', provider: 'codex', skillsOff: true }, [])).toMatchObject({ ok: false })
+    // An agent saved before these existed opens with nothing enforced.
+    const { blockedTools: _b, skillsOff: _s, ...old } = BUILDER
+    expect(draftOf(old as AgentProfile)).toMatchObject({ blockedTools: [], skillsOff: false })
   })
 })

@@ -1762,6 +1762,10 @@ const api = {
   tasksConnectionSave: (keyId: string, patch: unknown): Promise<unknown> =>
     ipcRenderer.invoke('tasks:connection-save', keyId, patch),
   tasksConnectionRemove: (keyId: string): Promise<unknown> => ipcRenderer.invoke('tasks:connection-remove', keyId),
+  // A new CRM with a key that only sends tasks; the main process refuses it unconfirmed.
+  tasksConnectionCreate: (input: { name: string; confirmed: boolean }): Promise<unknown> => ipcRenderer.invoke('tasks:connection-create', input),
+  // What is installed for an agent's account: tools, MCP servers, skills. Read from disk only.
+  tasksInventory: (agent: { provider: string | null; account: string | null }): Promise<unknown> => ipcRenderer.invoke('tasks:inventory', agent),
   // Closes a task's kept-open session now; its conversation stays resumable.
   tasksCloseSession: (taskId: string): Promise<unknown> => ipcRenderer.invoke('tasks:close-session', taskId),
   // Tasks made here, with no CRM: create, change (title, details, folder, status, who has it), and reply to an agent.

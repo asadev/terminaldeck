@@ -220,6 +220,18 @@ export interface CallOptions {
    * work" are one switch.
    */
   caller?: Caller
+  /**
+   * Enforced limits for a session this call starts — the app's own task engine
+   * only. An option rather than an argument, so no outside caller can send one
+   * and the tool's advertised schema is unchanged. See `ToolContext.sessionLimits`.
+   */
+  sessionLimits?: SessionLimits
+}
+
+/** Tools Claude Code must refuse, and skills off, for a session a call starts. Only ever narrows. */
+export interface SessionLimits {
+  deniedTools?: string[]
+  noSkills?: boolean
 }
 
 /**
@@ -751,7 +763,10 @@ export class DeckControl {
       })
     }
 
-    const context = this.context(id, caller, attended, options.granted, signal)
+    const context: ToolContext = {
+      ...this.context(id, caller, attended, options.granted, signal),
+      ...(options.sessionLimits === undefined ? {} : { sessionLimits: options.sessionLimits }),
+    }
 
     /*
      * The tool's own redaction, then the key-name pass, in that order.
