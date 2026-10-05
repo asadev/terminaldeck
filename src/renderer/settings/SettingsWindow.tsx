@@ -46,6 +46,7 @@ import { LinuxSection } from './sections/LinuxSection'
 import { CopilotSection } from './sections/CopilotSection'
 import { AiAppsSection } from './sections/AiAppsSection'
 import { TasksSection } from './sections/TasksSection'
+import { PluginsSection } from './sections/PluginsSection'
 import { HelpSection } from './sections/HelpSection'
 import { ShortcutsPopover } from './ShortcutsPopover'
 import { RailFooter } from './RailFooter'
@@ -141,6 +142,9 @@ const AiAppsSectionView: ComponentType<SectionProps> = () => <AiAppsSection />
  */
 const TasksSectionView: ComponentType<SectionProps> = ({ goTo }) => <TasksSection goTo={goTo} />
 
+/** Plugins and what each was allowed live in their own store, read off `window.deck`. */
+const PluginsSectionView: ComponentType<SectionProps> = () => <PluginsSection />
+
 const CopilotSectionView: ComponentType<SectionProps> = ({ setUpCopilot }) => (
   // One prop, and it is a capability of the *window* rather than a setting —
   // see `SectionProps.setUpCopilot` for why the setup flow cannot open from
@@ -184,6 +188,8 @@ const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   // CRM tasks: the agents and the CRMs allowed to send them work. Resolves its
   // own bridge, like the entry above. See `TasksSection.tsx`.
   tasks: TasksSectionView,
+  // Programs the person added, and what each may do. Resolves its own bridge, like Tasks.
+  plugins: PluginsSectionView,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings
   // bridge — and casting RemoteSection to this type handed it that object as
   // its `bridge` prop, so it decided remote access was "not wired into this

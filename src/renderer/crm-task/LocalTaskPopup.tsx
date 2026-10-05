@@ -12,6 +12,7 @@
  * - every read and write through `local-actions.ts` to the main process;
  * - ▲ ▼ walk the list the popup was opened from, in its order;
  * - the "Project folder" row an agent needs (the CRM has none);
+ * - the "Workspace" row, when the task has its own workspace or was refused one;
  * - a file's address opens the file in the Mac's own app, and a task link opens
  *   that task here, instead of navigating the window away.
  */
@@ -19,12 +20,14 @@
 import { useMemo, useState, type MouseEvent, type ReactElement } from 'react'
 import { TaskDetailPanel } from './task-detail-panel'
 import { localDetailActions, localFieldActions, localProjectActions, windowDetailBridge, type DetailBridge } from './local-actions'
+import { WorkspaceToggle } from './workspace-toggle'
 import type { DetailActions } from './detail-actions'
 import type { TaskFieldActions } from './task-fields-section'
 import { parseTaskAttachmentHref } from '../../shared/crm/attachment-rules'
 import { ME_ID, localPeople } from '../../shared/crm/detail-contract'
 import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskStatus } from '../../shared/crm/tasks-data'
 import type { TaskRow } from '../tasks/tasks-model'
+import { showsWorkspace, useTaskWorkspace, windowWorkspaceBridge, WorkspaceCell, type WorkspaceBridge } from './workspace-cell'
 import './crm-task.css'
 
 const NOBODY: Pick<Task, 'assigneeName' | 'assigneeInitials' | 'assigneeColor' | 'assigneeAvatarUrl'> = {
@@ -86,6 +89,8 @@ export interface LocalTaskPopupProps {
   bridge?: DetailBridge | null
   actions?: DetailActions
   fieldActions?: TaskFieldActions
+  /** The task's workspace calls; `window.deck`'s unless a test hands in its own. */
+  workspaceBridge?: WorkspaceBridge | null
 }
 
 export function LocalTaskPopup(props: LocalTaskPopupProps): ReactElement {
@@ -93,6 +98,8 @@ export function LocalTaskPopup(props: LocalTaskPopupProps): ReactElement {
   const actions = useMemo(() => props.actions ?? localDetailActions(bridge), [props.actions, bridge])
   const fieldActions = useMemo(() => props.fieldActions ?? localFieldActions(bridge), [props.fieldActions, bridge])
   const team = useMemo(() => localPeople(props.agents), [props.agents])
+  const workspaceBridge = useMemo(() => (props.workspaceBridge === undefined ? windowWorkspaceBridge() : props.workspaceBridge), [props.workspaceBridge])
+  const workspace = useTaskWorkspace(props.task.id, props.task.updatedAt, workspaceBridge)
   // What the popup changed, shown at once; the main process's next state replaces it.
   const [patches, setPatches] = useState<{ id: string; at: number; patch: Partial<Task> } | null>(null)
   const base = crmTaskOf(props.task, team)
@@ -150,6 +157,18 @@ export function LocalTaskPopup(props: LocalTaskPopupProps): ReactElement {
         fieldActions={fieldActions}
         boards={boards}
         projectField={<ProjectCell key={props.task.id} task={props.task} bridge={bridge} />}
+        workspaceField={
+          // One row for the choice and what came of it: the "Own workspace" box, then the
+          // workspace itself once there is one. Only for a task with a folder to copy.
+          props.task.project ? (
+            <span className="flex min-w-0 flex-1 flex-col gap-1 py-2">
+              <WorkspaceToggle task={props.task} />
+              {showsWorkspace(workspace.view) && (
+                <WorkspaceCell view={workspace.view} busy={workspace.busy} note={workspace.note} onOpen={workspace.open} onRemove={workspace.remove} />
+              )}
+            </span>
+          ) : undefined
+        }
       />
     </div>
   )

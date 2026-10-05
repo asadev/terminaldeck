@@ -175,6 +175,8 @@ export type TaskDetailPanelProps = {
    * before Hoot or an agent can take it.
    */
   projectField?: React.ReactNode;
+  /** Local: the task's own workspace (a git worktree), when it has one or was refused one. */
+  workspaceField?: React.ReactNode;
   /** What a create did not save, carried here by "Create and open" (inc8 H2) — at the top until dismissed. */
   notice?: string | null;
   onDismissNotice?: () => void;
@@ -252,6 +254,7 @@ export function TaskDetailBody({
   fieldActions,
   boards,
   projectField,
+  workspaceField,
   full,
   onToggleFull,
   notice = null,
@@ -1385,8 +1388,13 @@ export function TaskDetailBody({
                 </Property>
                 {/* Local: the CRM's AI-agent row is a CRM integration; here the row is the folder an agent works in. */}
                 {projectField && (
-                  <Property icon={FolderOpen} label="Project folder">
+                  <Property icon={FolderOpen} label="Project folder" wide>
                     {projectField}
+                  </Property>
+                )}
+                {workspaceField && (
+                  <Property icon={GitBranch} label="Workspace" testId="task-workspace" wide>
+                    {workspaceField}
                   </Property>
                 )}
                 {!(hideEmpty && empty.dates) && (

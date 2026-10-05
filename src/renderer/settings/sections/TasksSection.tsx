@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from
 import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
 import { BRAND } from '../../../shared/brand'
 import { CLAUDE_TOOLS } from '../../../shared/agent-tools'
+import { capabilityFor, enforces, familyOf, SUPPORT_TAG, type AgentSetting } from '../../../shared/agent-capabilities'
 import { Button, Group, Notice, Row, SectionHead, Switch } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
@@ -11,10 +12,13 @@ import {
   draftOf,
   linesOf,
   resolveTasksBridge,
+  pickableAgents,
   saveAgent,
+  setAgentStatus,
   toInventory,
   toTasksResult,
   toTasksState,
+  type AgentAction,
   type AgentDraft,
   type AgentInventory,
   type AgentProfile,
@@ -26,6 +30,7 @@ import {
   type TasksResult,
   type TasksState,
   EFFORT_CHOICES,
+  MAX_INSTRUCTIONS_CHARS,
 } from '../../tasks/tasks-model'
 import { CopyButton, useCopy } from './AiAppsSection'
 import './TasksSection.css'
@@ -137,13 +142,16 @@ export function agentSummary(agent: AgentProfile): string {
 /** The second line: what the agent is told besides the task, or nothing. */
 export function agentStackSummary(agent: AgentProfile): string | null {
   const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
+  // Given at the start where the coding agent takes a file; otherwise only told.
+  const atStart = agent.instructionsFile !== null && enforces(agent.provider, 'instructions')
   const parts = [
-    agent.instructions === null ? null : 'instructions',
+    agent.instructions === null || atStart ? null : 'instructions',
     agent.toolsPreferred.length === 0 ? null : plural(agent.toolsPreferred.length, 'preferred tool'),
     agent.toolsAvoided.length === 0 ? null : plural(agent.toolsAvoided.length, 'tool') + ' to avoid',
     agent.skills.length === 0 ? null : plural(agent.skills.length, 'skill'),
   ].filter((part): part is string => part !== null)
   const enforced = [
+    atStart ? 'standing instructions' : null,
     agent.blockedTools.length === 0 ? null : plural(agent.blockedTools.length, 'tool') + ' blocked',
     agent.skillsOff ? 'skills off' : null,
   ].filter((part): part is string => part !== null)
@@ -151,7 +159,20 @@ export function agentStackSummary(agent: AgentProfile): string | null {
   return lines.every((line) => line === null) ? null : lines.filter(Boolean).join(' — ')
 }
 
-function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: boolean; bridge: Partial<TasksBridge>; run: Run }) {
+/** The badge beside a paused or archived agent's name; null for one taking work. */
+export function agentStatusBadge(agent: Pick<AgentProfile, 'status'>): string | null {
+  return agent.status === 'paused' ? 'Paused' : agent.status === 'archived' ? 'Archived' : null
+}
+
+/** The line under a paused or archived agent, saying what that means for its work. */
+export function agentStatusLine(agent: Pick<AgentProfile, 'status' | 'statusAt'>): string | null {
+  const since = agent.statusAt === null ? '' : ` since ${new Date(agent.statusAt).toLocaleDateString()}`
+  if (agent.status === 'paused') return `Paused${since}: takes no new work. What it is running carries on.`
+  if (agent.status === 'archived') return `Archived${since}: kept, and offered nowhere until it is restored.`
+  return null
+}
+
+export function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: boolean; bridge: Partial<TasksBridge>; run: Run }) {
   /** Which form is open: an agent's id, `new`, or none. */
   const [editing, setEditing] = useState<string | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
@@ -175,21 +196,35 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
     else setProblem(result?.message ?? 'That did not go through.')
   }
 
+  /** Pause, resume, archive or restore. The form stays open on a refusal, which is said beside it. */
+  const lifecycle = async (id: string, action: AgentAction): Promise<void> => {
+    const result = await run(() => setAgentStatus(bridge, id, action))
+    if (result?.ok) {
+      if (action === 'archive') open(null)
+      else setProblem(null)
+    } else setProblem(result?.message ?? 'That did not go through.')
+  }
+
+  const current = pickableAgents(state.agents)
+  const archived = state.agents.filter((agent) => agent.status === 'archived')
+
   return (
     <Group title="Task agents">
-      {state.agents.length === 0 && editing !== 'new' && (
+      {current.length === 0 && editing !== 'new' && (
         <p className="tasks-quiet">No agents yet. Add one for each kind of work, such as building or reviewing.</p>
       )}
       <ul className="settings-profiles">
-        {state.agents.map((agent) => (
+        {current.map((agent) => (
           <li key={agent.id} className="settings-profile tasks-item" data-open={editing === agent.id ? '' : undefined}>
             <div className="settings-profile-main">
               <span className="settings-profile-name">
                 {agent.name}
                 <span className="settings-badge quiet">{agent.role}</span>
+                {agentStatusBadge(agent) !== null && <span className="settings-badge quiet">{agentStatusBadge(agent)}</span>}
               </span>
               <span className="settings-tool-note">{agentSummary(agent)}</span>
               {agentStackSummary(agent) !== null && <span className="settings-tool-note">{agentStackSummary(agent)}</span>}
+              {agentStatusLine(agent) !== null && <span className="settings-tool-note">{agentStatusLine(agent)}</span>}
               <span className="settings-tool-note">
                 {agent.verifyCommand === null ? `${BRAND.assistant} checks the result` : `Checked by: ${agent.verifyCommand}`}
               </span>
@@ -202,6 +237,20 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
             {editing === agent.id && (
               <div className="tasks-edit">
                 <AgentForm agent={agent} busy={busy} problem={problem} inventory={bridge.tasksInventory} onSave={save} onCancel={() => open(null)} />
+                <div className="settings-actions" role="group" aria-label={`Whether ${agent.name} takes work`}>
+                  {agent.status === 'paused' ? (
+                    <Button disabled={busy || !bridge.tasksAgentStatus} onClick={() => void lifecycle(agent.id, 'resume')} title="Takes new work again">
+                      Resume
+                    </Button>
+                  ) : (
+                    <Button disabled={busy || !bridge.tasksAgentStatus} onClick={() => void lifecycle(agent.id, 'pause')} title="Takes no new work; what it is running carries on">
+                      Pause
+                    </Button>
+                  )}
+                  <Button disabled={busy || !bridge.tasksAgentStatus} onClick={() => void lifecycle(agent.id, 'archive')} title="Kept, and offered nowhere until restored">
+                    Archive
+                  </Button>
+                </div>
                 {removing === agent.id ? (
                   <div className="settings-confirm" role="group" aria-label={`Remove ${agent.name}`}>
                     <span>Remove “{agent.name}”? CRM identities that point at it are cleared too.</span>
@@ -222,6 +271,30 @@ function AgentsGroup({ state, busy, bridge, run }: { state: TasksState; busy: bo
           </li>
         ))}
       </ul>
+      {archived.length > 0 && (
+        <>
+          <h5 className="settings-explain-title tasks-archived-title">Archived</h5>
+          <ul className="settings-profiles" aria-label="Archived agents">
+            {archived.map((agent) => (
+              <li key={agent.id} className="settings-profile tasks-item">
+                <div className="settings-profile-main">
+                  <span className="settings-profile-name">
+                    {agent.name}
+                    <span className="settings-badge quiet">{agent.role}</span>
+                  </span>
+                  <span className="settings-tool-note">{agentStatusLine(agent)}</span>
+                </div>
+                <div className="settings-profile-actions">
+                  <Button disabled={busy || !bridge.tasksAgentStatus} onClick={() => void lifecycle(agent.id, 'restore')}>
+                    Restore
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {editing === null && problem && <Notice tone="error">{problem}</Notice>}
+        </>
+      )}
       {editing === 'new' ? (
         <div className="tasks-edit tasks-new">
           <h5 className="settings-explain-title">New agent</h5>
@@ -250,11 +323,14 @@ export function ChoicePicker({
   selected,
   disabled,
   missing = 'not found here',
+  tag,
   onChange,
 }: {
   id: string
   label: string
   help?: string
+  /** What keeps it, beside the name. */
+  tag?: ReactNode
   choices: readonly InventoryChoice[]
   selected: readonly string[]
   disabled: boolean
@@ -265,7 +341,7 @@ export function ChoicePicker({
   const known = new Map(choices.map((choice) => [choice.value, choice]))
   const left = choices.filter((choice) => !selected.includes(choice.value))
   return (
-    <Field label={label} help={help} htmlFor={id}>
+    <Field label={label} help={help} htmlFor={id} tag={tag}>
       {selected.length > 0 && (
         <ul className="tasks-chips" aria-label={`${label}: chosen`}>
           {selected.map((value) => (
@@ -301,16 +377,50 @@ export function ChoicePicker({
   )
 }
 
-/** One labelled box, its control, and the line under it. */
-function Field({ label, help, htmlFor, children }: { label: string; help?: string; htmlFor?: string; children: ReactNode }) {
+/** One labelled box, its control, and the line under it — with, beside the name, what keeps it. */
+function Field({ label, help, htmlFor, tag, children }: { label: string; help?: string; htmlFor?: string; tag?: ReactNode; children: ReactNode }) {
   return (
     <div className="tasks-field">
       <label className="settings-label" htmlFor={htmlFor}>
         {label}
+        {tag}
       </label>
       {children}
       {help && <span className="settings-help">{help}</span>}
     </div>
+  )
+}
+
+/** Where the skills on offer were found, for the agent that will run them. */
+function skillsHelp(provider: string | null): string {
+  if (provider === 'codex') return 'Skills in this Codex account’s, your home’s and your projects’ skill folders, named in its brief when they fit.'
+  if (provider !== null && provider !== 'claude') return 'Named in its brief when they fit.'
+  return 'Skills in this account’s and your projects’ skill folders, named in its brief when they fit. Claude Code’s built-in skills are not listed.'
+}
+
+/** Under the instructions box: how they reach the agent, and where the file is. */
+export function instructionsHelp(provider: string | null, file: string | null): string {
+  const capability = capabilityFor(provider, 'instructions')
+  const how =
+    capability.support === 'enforced'
+      ? capability.how
+      : capability.support === 'advisory'
+        ? `Given to this agent at the start of every task, and again when it picks a task back up. ${capability.how}`
+        : capability.how
+  return file === null ? `${how} Saved as a file of its own.` : `${how} Kept in ${file}; an edit made there is read back here.`
+}
+
+/**
+ * Beside a field: whether the chosen coding agent's own program applies it,
+ * only reads it in the brief, or cannot take it — from
+ * `shared/agent-capabilities.ts`, never worked out here.
+ */
+export function SupportTag({ provider, setting }: { provider: string | null; setting: AgentSetting }) {
+  const capability = capabilityFor(provider, setting)
+  return (
+    <span className={capability.support === 'enforced' ? 'settings-badge' : 'settings-badge quiet'} title={capability.how}>
+      {SUPPORT_TAG[capability.support]}
+    </span>
   )
 }
 
@@ -351,10 +461,17 @@ export function AgentForm({
       clearTimeout(timer)
     }
   }, [inventory, draft.provider, account])
-  /** Only Claude Code enforces; the app default may be it, and a start is refused when it is not. */
-  const canEnforce = draft.provider === '' || draft.provider === 'claude'
+  const provider = draft.provider === '' ? null : draft.provider
+  /** Only Claude Code enforces these; the app default may be it, and a start is refused when it is not. */
+  const canEnforce = enforces(provider, 'blockedTools')
+  const tag = (setting: AgentSetting): ReactNode => <SupportTag provider={provider} setting={setting} />
+  const can = (setting: AgentSetting): boolean => capabilityFor(provider, setting).support !== 'unsupported'
+  /** The help line, or what the agent cannot do instead of it. */
+  const helpFor = (setting: AgentSetting, help: string): string => (can(setting) ? help : capabilityFor(provider, setting).how)
   // Claude Code's own tools are known without reading anything; the rest is what was found.
-  const tools: readonly InventoryChoice[] = found?.tools ?? CLAUDE_TOOLS.map((tool) => ({ value: tool.name, label: `${tool.name} — ${tool.label}`, where: 'Claude Code' }))
+  // Another agent's are not Claude Code's, so nothing is offered for it until they are read.
+  const tools: readonly InventoryChoice[] =
+    found?.tools ?? (familyOf(provider) === 'claude' ? CLAUDE_TOOLS.map((tool) => ({ value: tool.name, label: `${tool.name} — ${tool.label}`, where: 'Claude Code' })) : [])
   const where = found === null ? 'Nothing was read from this Mac, so only what is saved is listed.' : `Found for ${found.account}.`
   const set = (field: keyof AgentDraft) => (event: { target: { value: string } }) =>
     setDraft((was) => ({ ...was, [field]: event.target.value }))
@@ -410,12 +527,26 @@ export function AgentForm({
             onChange={set('account')}
           />
         </Field>
-        <Field label="Model" htmlFor={`${ids}-model`}>
-          <input id={`${ids}-model`} className="settings-input" placeholder="Default" value={draft.model} maxLength={80} disabled={busy} onChange={set('model')} />
+        <Field label="Model" htmlFor={`${ids}-model`} tag={tag('model')} help={can('model') ? undefined : capabilityFor(provider, 'model').how}>
+          {/* Off where it cannot be kept, unless something is saved in it to clear. */}
+          <input
+            id={`${ids}-model`}
+            className="settings-input"
+            placeholder="Default"
+            value={draft.model}
+            maxLength={80}
+            disabled={busy || (!can('model') && draft.model === '')}
+            onChange={set('model')}
+          />
         </Field>
-        <Field label="Effort" htmlFor={`${ids}-effort`} help="Set when the session starts, like the model. If the coding agent has no such setting, the task says so.">
+        <Field
+          label="Effort"
+          htmlFor={`${ids}-effort`}
+          tag={tag('effort')}
+          help={helpFor('effort', 'Set when the session starts, like the model. If the coding agent refuses it, the task says so.')}
+        >
           <span className="settings-select-wrap">
-            <select id={`${ids}-effort`} className="settings-select" value={draft.effort} disabled={busy} onChange={set('effort')}>
+            <select id={`${ids}-effort`} className="settings-select" value={draft.effort} disabled={busy || (!can('effort') && draft.effort === '')} onChange={set('effort')}>
               <option value="">Agent default</option>
               {EFFORT_CHOICES.map((choice) => (
                 <option key={choice.id} value={choice.id}>
@@ -449,18 +580,14 @@ export function AgentForm({
           />
         </Field>
       </div>
-      <Field
-        label="Instructions"
-        htmlFor={`${ids}-instructions`}
-        help="Given to this agent at the start of every task, and again when it picks a task back up."
-      >
+      <Field label="Instructions" htmlFor={`${ids}-instructions`} tag={tag('instructions')} help={instructionsHelp(provider, draft.instructionsFile)}>
         <textarea
           id={`${ids}-instructions`}
           className="settings-input tasks-lines"
           placeholder="Optional, e.g. Work on a branch. Run the tests before you finish."
           value={draft.instructions}
-          maxLength={8000}
-          disabled={busy}
+          maxLength={MAX_INSTRUCTIONS_CHARS}
+          disabled={busy || (!can('instructions') && draft.instructions === '')}
           onChange={set('instructions')}
         />
       </Field>
@@ -468,29 +595,37 @@ export function AgentForm({
         <ChoicePicker
           id={`${ids}-tools-prefer`}
           label="Tools to prefer"
-          help="Asked of the agent in its brief, not enforced."
+          help={helpFor('toolAdvice', 'Asked of the agent in its brief, not enforced.')}
+          tag={tag('toolAdvice')}
           choices={tools}
           selected={draft.toolsPreferred}
-          disabled={busy}
+          disabled={busy || (!can('toolAdvice') && draft.toolsPreferred.length === 0)}
           onChange={pick('toolsPreferred')}
         />
         <ChoicePicker
           id={`${ids}-tools-avoid`}
           label="Tools to avoid"
-          help="Also a request, not a lock. To stop a tool, block it below."
+          help={helpFor('toolAdvice', canEnforce ? 'Also a request, not a lock. To stop a tool, block it below.' : 'Also a request, not a lock.')}
+          tag={tag('toolAdvice')}
           choices={tools}
           selected={draft.toolsAvoided}
-          disabled={busy}
+          disabled={busy || (!can('toolAdvice') && draft.toolsAvoided.length === 0)}
           onChange={pick('toolsAvoided')}
         />
       </div>
       <ChoicePicker
         id={`${ids}-skills`}
         label="Skills"
-        help={`Skills in this account's and your projects' skill folders, named in its brief when they fit. Claude Code's built-in skills are not listed. Nothing is installed. ${where}`}
+        help={helpFor(
+          'skillSelection',
+          draft.skillsOff
+            ? 'All skills are switched off below, so none are named in its brief.'
+            : `${skillsHelp(provider)} A request: the agent cannot be limited to only these. Nothing is installed. ${where}`,
+        )}
+        tag={tag('skillSelection')}
         choices={found?.skills ?? []}
         selected={draft.skills}
-        disabled={busy}
+        disabled={busy || ((!can('skillSelection') || draft.skillsOff) && draft.skills.length === 0)}
         missing="not in a skill folder"
         onChange={pick('skills')}
       />
@@ -504,6 +639,7 @@ export function AgentForm({
         id={`${ids}-tools-block`}
         label="Block these tools"
         help="Off unless you pick some. Nothing is ever allowed from here."
+        tag={tag('blockedTools')}
         choices={tools}
         selected={draft.blockedTools}
         disabled={busy || (!canEnforce && draft.blockedTools.length === 0)}
@@ -511,7 +647,8 @@ export function AgentForm({
       />
       <Row
         label="Turn all skills off"
-        help="Starts Claude Code with no skills at all."
+        help={`${SUPPORT_TAG[capabilityFor(provider, 'skillsOff').support]}: starts Claude Code with no skills at all.`}
+        more={capabilityFor(provider, 'skillsOff').how}
         labelId={`${ids}-skills-off-label`}
         helpId={`${ids}-skills-off-help`}
         control={
@@ -939,11 +1076,14 @@ export function ConnectionEditor({
                     onChange={(event) => setIdentity(index, { agentId: event.target.value })}
                   >
                     <option value="">Choose an agent…</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </option>
-                    ))}
+                    {/* Archived agents are offered nowhere — except as the one this row already names. */}
+                    {agents
+                      .filter((agent) => agent.status !== 'archived' || agent.id === row.agentId)
+                      .map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agentStatusBadge(agent) === null ? agent.name : `${agent.name} (${agentStatusBadge(agent)?.toLowerCase()})`}
+                        </option>
+                      ))}
                   </select>
                 </span>
                 <Button

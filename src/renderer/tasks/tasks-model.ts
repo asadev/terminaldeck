@@ -13,11 +13,20 @@
  */
 
 import { BRAND } from '../../shared/brand'
+import { agentLabel, enforces } from '../../shared/agent-capabilities'
 
 /* ---------------------------------------------------------------- shapes -- */
 
 /** Terminal Deck's own states, never a CRM status. */
 export type ProcessState = 'queued' | 'running' | 'exited' | 'idle'
+
+/** Taking work, paused (no new work), or archived (kept, offered nowhere). */
+export type AgentStatus = 'active' | 'paused' | 'archived'
+
+export const AGENT_STATUSES: readonly AgentStatus[] = ['active', 'paused', 'archived']
+
+/** What the lifecycle buttons send. */
+export type AgentAction = 'pause' | 'resume' | 'archive' | 'restore'
 
 export interface AgentProfile {
   id: string
@@ -29,8 +38,10 @@ export interface AgentProfile {
   model: string | null
   /** One of {@link EFFORT_CHOICES}; null leaves the agent's own. */
   effort: string | null
-  /** Put at the top of every brief this agent is given. */
+  /** Standing instructions, read from the agent's own file. */
   instructions: string | null
+  /** Where that file is; null while there is none. */
+  instructionsFile: string | null
   /** Asked of the agent in its brief — a preference, not an enforcement. */
   toolsPreferred: string[]
   toolsAvoided: string[]
@@ -47,6 +58,9 @@ export interface AgentProfile {
   keepAliveMinutes: number
   /** Null: Hoot checks the result. */
   verifyCommand: string | null
+  status: AgentStatus
+  /** When the status last changed; null when it has only ever been active. */
+  statusAt: number | null
 }
 
 export interface StatusConfig {
@@ -113,7 +127,45 @@ export interface TaskRow {
   position: number | null
   /** How often it comes back, the CRM's coarse frequency; null = one-off. */
   recurrence: string | null
+  /*
+   * The agent stack's fields. Optional only so a row written by hand (a test's)
+   * need not name them; `toTasksState` always fills them.
+   */
+  /** The goal it serves; null for none. */
+  goalId?: string | null
+  /** Asked to run in a workspace of its own. */
+  useWorkspace?: boolean
+  /** Its worker went quiet, or ended, without finishing; null while it has not. */
+  stalled?: TaskStall | null
+  /** The open tasks it waits for before an agent can start it, by title. */
+  waitingOn?: string[]
   createdAt: number
+}
+
+export interface TaskStall {
+  at: number
+  reason: 'quiet' | 'exited'
+  text: string
+}
+
+export type GoalStatus = 'planned' | 'active' | 'achieved' | 'cancelled'
+
+export const GOAL_STATUSES: ReadonlyArray<{ id: GoalStatus; label: string }> = [
+  { id: 'planned', label: 'Planned' },
+  { id: 'active', label: 'Active' },
+  { id: 'achieved', label: 'Achieved' },
+  { id: 'cancelled', label: 'Cancelled' },
+]
+
+/** One goal, and how far its tasks — its sub-goals' included — have got. */
+export interface GoalRow {
+  id: string
+  title: string
+  description: string
+  status: GoalStatus
+  parentId: string | null
+  project: string | null
+  progress: { total: number; done: number; verified: number; unverified: number; stalled: number; blocked: number }
 }
 
 /** One line of a local task's own record. */
@@ -134,6 +186,8 @@ export interface TasksState {
   outbox: { pending: number; undelivered: number }
   /** The statuses a local task can have. */
   localStatuses: string[]
+  /** Your goals, oldest first. Optional for a state written by hand; `toTasksState` fills it. */
+  goals?: GoalRow[]
 }
 
 export interface TasksResult {
@@ -194,6 +248,9 @@ export const LIMITS = {
   defaultHops: 3,
 } as const
 
+/** The longest instructions file the main process saves (`agents/agent-instructions.ts`). */
+export const MAX_INSTRUCTIONS_CHARS = 32_000
+
 /** The effort levels a session's own control takes (`agent-controls.ts`), and the label each shows. */
 export const EFFORT_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'low', label: 'Low' },
@@ -226,6 +283,8 @@ export interface TasksBridge {
   tasksState(): Promise<unknown>
   tasksAgentSave(agent: unknown): Promise<unknown>
   tasksAgentRemove(id: string): Promise<unknown>
+  /** Pause, resume, archive or restore one agent. */
+  tasksAgentStatus(id: string, action: AgentAction): Promise<unknown>
   tasksConnectionSave(keyId: string, patch: unknown): Promise<unknown>
   tasksConnectionRemove(keyId: string): Promise<unknown>
   tasksConnectionCreate(input: { name: string; confirmed: boolean }): Promise<unknown>
@@ -238,6 +297,9 @@ export interface TasksBridge {
   tasksLocalRestore(id: string): Promise<unknown>
   /** One call of the task popup's (`src/shared/crm/detail-contract.ts`): a name and its arguments. */
   tasksLocalDetail(fn: string, args: unknown[]): Promise<unknown>
+  /** Make a goal (no `id`) or change one. */
+  tasksGoalSave(input: unknown): Promise<unknown>
+  tasksGoalRemove(id: string): Promise<unknown>
   onTasksChanged(callback: () => void): () => void
 }
 
@@ -245,6 +307,7 @@ const BRIDGE_METHODS: ReadonlyArray<keyof TasksBridge> = [
   'tasksState',
   'tasksAgentSave',
   'tasksAgentRemove',
+  'tasksAgentStatus',
   'tasksConnectionSave',
   'tasksConnectionRemove',
   'tasksConnectionCreate',
@@ -256,6 +319,8 @@ const BRIDGE_METHODS: ReadonlyArray<keyof TasksBridge> = [
   'tasksLocalDelete',
   'tasksLocalRestore',
   'tasksLocalDetail',
+  'tasksGoalSave',
+  'tasksGoalRemove',
   'onTasksChanged',
 ]
 
@@ -308,6 +373,7 @@ function toAgent(raw: unknown): AgentProfile | null {
     model: text(r.model),
     effort: text(r.effort),
     instructions: text(r.instructions),
+    instructionsFile: text(r.instructionsFile),
     toolsPreferred: strings(r.toolsPreferred),
     toolsAvoided: strings(r.toolsAvoided),
     skills: strings(r.skills),
@@ -317,6 +383,9 @@ function toAgent(raw: unknown): AgentProfile | null {
     maxRunMinutes: count(r.maxRunMinutes, LIMITS.defaultRunMinutes),
     keepAliveMinutes: count(r.keepAliveMinutes, LIMITS.defaultKeepAliveMinutes),
     verifyCommand: text(r.verifyCommand),
+    // Never guessed into taking work: a status this build does not know reads as paused.
+    status: r.status === undefined ? 'active' : AGENT_STATUSES.includes(r.status as AgentStatus) ? (r.status as AgentStatus) : 'paused',
+    statusAt: typeof r.statusAt === 'number' ? r.statusAt : null,
   }
 }
 
@@ -404,7 +473,40 @@ function toTask(raw: unknown): TaskRow | null {
     completedAt: typeof r.completedAt === 'number' ? r.completedAt : null,
     position: typeof r.position === 'number' ? r.position : null,
     recurrence: text(r.recurrence),
+    goalId: text(r.goalId),
+    useWorkspace: r.useWorkspace === true,
+    stalled: toStall(r.stalled),
+    waitingOn: strings(r.waitingOn),
     createdAt: count(r.createdAt, 0),
+  }
+}
+
+function toStall(raw: unknown): TaskStall | null {
+  const r = record(raw)
+  if (!r || typeof r.text !== 'string') return null
+  return { at: count(r.at, 0), reason: r.reason === 'exited' ? 'exited' : 'quiet', text: r.text }
+}
+
+function toGoal(raw: unknown): GoalRow | null {
+  const r = record(raw)
+  const id = text(r?.id)
+  if (!r || id === null) return null
+  const p = record(r.progress) ?? {}
+  return {
+    id,
+    title: text(r.title) ?? 'Untitled goal',
+    description: typeof r.description === 'string' ? r.description : '',
+    status: GOAL_STATUSES.some((one) => one.id === r.status) ? (r.status as GoalStatus) : 'active',
+    parentId: text(r.parentId),
+    project: text(r.project),
+    progress: {
+      total: count(p.total, 0),
+      done: count(p.done, 0),
+      verified: count(p.verified, 0),
+      unverified: count(p.unverified, 0),
+      stalled: count(p.stalled, 0),
+      blocked: count(p.blocked, 0),
+    },
   }
 }
 
@@ -424,7 +526,66 @@ export function toTasksState(raw: unknown): TasksState | null {
     trash: (Array.isArray(r.trash) ? r.trash : []).map(toTask).filter((task): task is TaskRow => task !== null),
     outbox: { pending: count(outbox.pending, 0), undelivered: count(outbox.undelivered, 0) },
     localStatuses: strings(r.localStatuses).length > 0 ? strings(r.localStatuses) : [...DEFAULT_CRM_STATUSES.statuses],
+    goals: (Array.isArray(r.goals) ? r.goals : []).map(toGoal).filter((goal): goal is GoalRow => goal !== null),
   }
+}
+
+/* ------------------------------------------------------------------ goals -- */
+
+/** A goal while it is being typed. */
+export interface GoalDraft {
+  title: string
+  description: string
+  status: GoalStatus
+  /** Empty for a top-level goal. */
+  parentId: string
+}
+
+export function goalDraftOf(goal: GoalRow | null, parentId = ''): GoalDraft {
+  return { title: goal?.title ?? '', description: goal?.description ?? '', status: goal?.status ?? 'active', parentId: goal?.parentId ?? parentId }
+}
+
+/** What `tasks:goal-save` is sent, or what to fix first. */
+export function goalPayload(draft: GoalDraft, id: string | null): { ok: true; payload: Record<string, unknown> } | { ok: false; message: string } {
+  const title = draft.title.trim()
+  if (title === '') return { ok: false, message: 'Give the goal a title.' }
+  return {
+    ok: true,
+    payload: { ...(id === null ? {} : { id }), title, description: draft.description.trim(), status: draft.status, parentId: draft.parentId === '' ? null : draft.parentId },
+  }
+}
+
+/** Goals in tree order — each followed by the ones under it — with how deep each sits. */
+export function goalTree(goals: readonly GoalRow[]): Array<{ goal: GoalRow; depth: number }> {
+  const out: Array<{ goal: GoalRow; depth: number }> = []
+  const ids = new Set(goals.map((goal) => goal.id))
+  const visit = (parentId: string | null, depth: number): void => {
+    for (const goal of goals) {
+      const parent = goal.parentId !== null && ids.has(goal.parentId) ? goal.parentId : null
+      if (parent !== parentId || out.some((one) => one.goal.id === goal.id)) continue
+      out.push({ goal, depth })
+      visit(goal.id, depth + 1)
+    }
+  }
+  visit(null, 0)
+  return out
+}
+
+/** The goals a goal may be put under: any but itself and those under it. */
+export function parentChoices(goals: readonly GoalRow[], id: string | null): GoalRow[] {
+  if (id === null) return [...goals]
+  const below = new Set([id])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const goal of goals) {
+      if (goal.parentId !== null && below.has(goal.parentId) && !below.has(goal.id)) {
+        below.add(goal.id)
+        grew = true
+      }
+    }
+  }
+  return goals.filter((goal) => !below.has(goal.id))
 }
 
 export function toTasksResult(raw: unknown): TasksResult {
@@ -461,6 +622,8 @@ export interface LocalDraft {
   /** `none`, `me`, `hoot`, or an agent's id. */
   assignee: string
   status: string
+  /** The goal it serves; empty or absent for none. */
+  goalId?: string
 }
 
 export function localDraftOf(task: TaskRow | null, statuses: readonly string[]): LocalDraft {
@@ -483,14 +646,23 @@ export function localPayload(draft: LocalDraft): { ok: true; payload: LocalDraft
   return { ok: true, payload: { ...draft, title, instructions: draft.instructions.trim(), project } }
 }
 
-/** The choices for who has a task: nobody, you, Hoot, then every task agent. */
+/**
+ * The choices for who has a task: nobody, you, Hoot, then every task agent but
+ * the archived — a paused one is offered and says so, and takes the task once
+ * it is resumed.
+ */
 export function assigneeChoices(agents: readonly AgentProfile[]): Array<{ id: string; label: string }> {
   return [
     { id: 'none', label: 'Unassigned' },
     { id: 'me', label: 'Me' },
     { id: 'hoot', label: BRAND.assistant },
-    ...agents.map((agent) => ({ id: agent.id, label: agent.name })),
+    ...pickableAgents(agents).map((agent) => ({ id: agent.id, label: agent.status === 'paused' ? `${agent.name} (paused)` : agent.name })),
   ]
+}
+
+/** The agents a picker offers: every one but the archived. */
+export function pickableAgents<T extends Pick<AgentProfile, 'status'>>(agents: readonly T[]): T[] {
+  return agents.filter((agent) => agent.status !== 'archived')
 }
 
 /** Whole minutes left on a kept-open session, at least 1 while any is left; null when none. */
@@ -514,6 +686,10 @@ export interface AgentDraft {
   /** Empty for the agent's own. */
   effort: string
   instructions: string
+  /** Shown, never edited: where the instructions file is, and the agent's status. */
+  instructionsFile: string | null
+  status: AgentStatus
+  statusAt: number | null
   /** Picked from what is installed; a saved name not found here is kept. Requests, not enforced. */
   toolsPreferred: string[]
   toolsAvoided: string[]
@@ -537,6 +713,9 @@ export function draftOf(agent: AgentProfile | null): AgentDraft {
     model: agent?.model ?? '',
     effort: agent?.effort ?? '',
     instructions: agent?.instructions ?? '',
+    instructionsFile: agent?.instructionsFile ?? null,
+    status: agent?.status ?? 'active',
+    statusAt: agent?.statusAt ?? null,
     toolsPreferred: [...(agent?.toolsPreferred ?? [])],
     toolsAvoided: [...(agent?.toolsAvoided ?? [])],
     skills: [...(agent?.skills ?? [])],
@@ -595,8 +774,16 @@ export function agentPayload(
   for (const value of [maxConcurrent, maxRunMinutes, keepAliveMinutes]) {
     if (typeof value === 'string') return { ok: false, message: value }
   }
-  if (draft.provider !== '' && draft.provider !== 'claude' && (unique(draft.blockedTools).length > 0 || draft.skillsOff)) {
+  const provider = orNull(draft.provider)
+  if ((unique(draft.blockedTools).length > 0 && !enforces(provider, 'blockedTools')) || (draft.skillsOff && !enforces(provider, 'skillsOff'))) {
     return { ok: false, message: ENFORCE_ONLY_CLAUDE }
+  }
+  // A setting the chosen agent cannot be given is refused, never saved to be dropped.
+  if (orNull(draft.model) !== null && !enforces(provider, 'model')) {
+    return { ok: false, message: `${agentLabel(provider)} cannot be given a model by this app. Clear it, or choose Claude Code.` }
+  }
+  if (EFFORT_CHOICES.some((choice) => choice.id === draft.effort) && !enforces(provider, 'effort')) {
+    return { ok: false, message: `${agentLabel(provider)} cannot be given an effort level by this app. Clear it, or choose Claude Code.` }
   }
   const id = draft.id !== '' ? draft.id : slugFor(name, agents.map((agent) => agent.id))
   return {
@@ -610,6 +797,7 @@ export function agentPayload(
       model: orNull(draft.model),
       effort: EFFORT_CHOICES.some((choice) => choice.id === draft.effort) ? draft.effort : null,
       instructions: draft.instructions.trim() === '' ? null : draft.instructions.trim(),
+      instructionsFile: draft.instructionsFile,
       toolsPreferred: unique(draft.toolsPreferred),
       toolsAvoided: unique(draft.toolsAvoided),
       skills: unique(draft.skills),
@@ -619,8 +807,17 @@ export function agentPayload(
       maxRunMinutes: maxRunMinutes as number,
       keepAliveMinutes: keepAliveMinutes as number,
       verifyCommand: orNull(draft.verifyCommand),
+      // Sent as it is; the main process keeps an agent's status whatever a save carries.
+      status: draft.status,
+      statusAt: draft.statusAt,
     },
   }
+}
+
+/** Pause, resume, archive or restore one agent, answered like a save. */
+export async function setAgentStatus(bridge: Partial<TasksBridge>, id: string, action: AgentAction): Promise<TasksResult> {
+  if (!bridge.tasksAgentStatus) return { ok: false, message: 'This build cannot pause or archive agents.', state: null, secret: null }
+  return toTasksResult(await bridge.tasksAgentStatus(id, action))
 }
 
 /**

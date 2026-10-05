@@ -26,10 +26,13 @@ import { isLinuxPath } from './wsl'
 /* -------------------------------------------------------------------------- */
 
 /** The enforced limits a session carries into its next start, spread onto a `CreateSessionInput`. */
-export function limitsOf(saved: Pick<SavedSession, 'deniedTools' | 'noSkills'>): Pick<SavedSession, 'deniedTools' | 'noSkills'> {
+export function limitsOf(
+  saved: Pick<SavedSession, 'deniedTools' | 'noSkills' | 'agentInstructions'>,
+): Pick<SavedSession, 'deniedTools' | 'noSkills' | 'agentInstructions'> {
   return {
     ...(saved.deniedTools && saved.deniedTools.length > 0 ? { deniedTools: [...saved.deniedTools] } : {}),
     ...(saved.noSkills === true ? { noSkills: true } : {}),
+    ...(typeof saved.agentInstructions === 'string' && saved.agentInstructions !== '' ? { agentInstructions: saved.agentInstructions } : {}),
   }
 }
 
@@ -42,6 +45,8 @@ export interface SavedSession {
   /** Enforced limits it was started with; a restart, retry or switch starts it with them again. */
   deniedTools?: string[]
   noSkills?: boolean
+  /** The task agent whose instructions file it was started with; it starts with it again. */
+  agentInstructions?: string
   cwd: string
   provider: ProviderId
   /** The isolated login this ran as, or null for the default. */

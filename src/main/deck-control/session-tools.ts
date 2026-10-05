@@ -298,6 +298,18 @@ const DEVICE_SESSION_TOOLS: readonly string[] = [
   'devices_annotations',
 ]
 
+/**
+ * A session's own memory, read-only — `memory-tools.ts`.
+ *
+ * Scoped by the session's own token, not by an argument: a Claude session
+ * reads its account's memory for the folder it runs in, a Codex session its
+ * Codex home's, and neither can name another project. Searching and reading
+ * what its own agent already keeps reaches nothing it could not open with a
+ * shell in the same folder, and the answer goes to the session's own provider
+ * as tool output, which is where that agent's memory goes anyway.
+ */
+const MEMORY_SESSION_TOOLS: readonly string[] = ['memory.search', 'memory_search', 'memory.read', 'memory_read']
+
 export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.open',
   'browser_open',
@@ -366,6 +378,14 @@ export const SESSION_TOOLS: ReadonlySet<string> = new Set([
   'browser.extensions',
   'browser_extensions',
   ...DEVICE_SESSION_TOOLS,
+  ...MEMORY_SESSION_TOOLS,
+  /*
+   * A worker's note about the project it is working in, kept as project
+   * knowledge for the next agent. Always a claim, always its own project — the
+   * project is the session's, never an argument (`knowledge/knowledge-tools.ts`).
+   */
+  'knowledge.note',
+  'knowledge_note',
   /*
    * The meta-tool, and it has to be on the list rather than exempt from it.
    *
@@ -397,6 +417,8 @@ const FILES_ON_THIS_MACHINE: ReadonlySet<string> = new Set([
   ...ASSET_TOOL_NAMES,
   'browser.network',
   'browser_network',
+  // Notes in a memory folder on this machine; a session elsewhere keeps its own there.
+  ...MEMORY_SESSION_TOOLS,
 ])
 
 /**
@@ -413,6 +435,9 @@ const FILES_ON_THIS_MACHINE: ReadonlySet<string> = new Set([
  * so not found — the same property the files family has.
  */
 const DEVICES_HERE: ReadonlySet<string> = new Set(DEVICE_SESSION_TOOLS)
+
+/** Project knowledge is kept per folder on this computer; a session on another one has no folder here. */
+const KNOWLEDGE_HERE: ReadonlySet<string> = new Set(['knowledge.note', 'knowledge_note'])
 
 /**
  * What a session on **another computer** may see and call.
@@ -449,7 +474,7 @@ const DEVICES_HERE: ReadonlySet<string> = new Set(DEVICE_SESSION_TOOLS)
  * *narrowing*, which is the part that is specific to being on another computer.
  */
 export const ELSEWHERE_TOOLS: ReadonlySet<string> = new Set(
-  [...SESSION_TOOLS].filter((name) => !FILES_ON_THIS_MACHINE.has(name) && !DEVICES_HERE.has(name)),
+  [...SESSION_TOOLS].filter((name) => !FILES_ON_THIS_MACHINE.has(name) && !DEVICES_HERE.has(name) && !KNOWLEDGE_HERE.has(name)),
 )
 
 /**

@@ -507,6 +507,19 @@ export const SECTIONS = [
     blurb: 'The agents that take work from your CRM, and the CRMs allowed to send it.',
   },
   /*
+   * Programs other people wrote, which the person put in the plugins folder by
+   * hand: what each asks for, what it was allowed, and its on switch. Like the
+   * two entries above it, it stores nothing in the settings file — what a
+   * plugin was allowed lives in `plugin-grants.json`, keyed to its code, and is
+   * written only after a question the operating system draws
+   * (`src/main/plugins/`). `nothing-dropped.test.tsx` carries the ledger entry.
+   */
+  {
+    id: 'plugins',
+    label: 'Plugins',
+    blurb: 'Programs you add yourself, each allowed only what you choose.',
+  },
+  /*
    * There is no GitHub section here, and that is a decision rather than a gap.
    *
    * One existed for exactly one row — "Use classic GitHub sign-in", the switch

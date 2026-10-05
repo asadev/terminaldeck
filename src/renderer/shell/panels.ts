@@ -142,6 +142,7 @@ export type PanelId =
   | 'git'
   | 'simulators'
   | 'tasks'
+  | 'memory'
   | 'staysfixed'
   | 'github'
   | 'readiness'
@@ -349,6 +350,19 @@ export const PANELS: PanelSpec[] = [
     label: 'Tasks',
     group: 'project',
     icon: 'M9.5 6.5h10M9.5 12h10M9.5 17.5h10M4.5 6.5l1 1 2-2M4.5 12l1 1 2-2M4.5 17.5l1 1 2-2',
+  },
+  {
+    /*
+     * What the agents remember — Claude Code's memory for each project, Codex's,
+     * Hoot's and each project's knowledge — as notes to read, follow, search,
+     * correct and delete. Beside Tasks, because it is the other half of what
+     * agents carry from one piece of work to the next. Not per-folder: it opens
+     * on the open project's memory when there is one. No `command`, like Tasks.
+     */
+    id: 'memory',
+    label: 'Memory',
+    group: 'project',
+    icon: 'M9.1 7.6l5.8.6M8.2 9.1l2 5.8M15.8 10.1l-3.6 5M7 9.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM17 10.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4zM11 19.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',
   },
   {
     /*

@@ -220,6 +220,19 @@ export interface RecordsFencePaths {
    * secret in it to read.
    */
   accessKeys: string
+  /**
+   * `<userData>/plugin-grants.json` — what each plugin the person added may do,
+   * keyed to the hash of its files (`plugins/grants.ts`).
+   *
+   * Fenced for the access-key reason, turned inward. The copilot is the only
+   * agent a plugin's tools are offered to, so a copilot that could write this
+   * file would be granting its own tools: hash a plugin's folder, write the
+   * hash beside `tools.contribute`, and it is "allowed" with no question asked
+   * and no row in the log — and the Plugins pane would say the person allowed
+   * it. Write is refused; reading stays allowed, because the copilot is told
+   * what its plugin tools are anyway and there is no secret in it.
+   */
+  pluginGrants: string
 }
 
 /**
@@ -277,12 +290,23 @@ export function recordsFencePaths(
     // `deck-control/access-keys.ts` owns this spelling; `recordsFenceAgrees`
     // pins the two together from that module's own test.
     accessKeys: resolver.real(join(remote, 'access-keys.json')),
+    // `shared/plugins.ts` owns this spelling (`PLUGIN_GRANTS_FILE`), and
+    // `plugins/host.test.ts` pins the two together through `recordsFenceAgrees`.
+    pluginGrants: resolver.real(join(root, 'plugin-grants.json')),
   }
 }
 
 /** Every fenced path, in one list, for anything that needs to show them. */
 export function recordsFenceList(paths: RecordsFencePaths): string[] {
-  return [paths.routines, paths.routineState, paths.log, paths.remoteCopilot, paths.remoteAuth, paths.accessKeys]
+  return [
+    paths.routines,
+    paths.routineState,
+    paths.log,
+    paths.remoteCopilot,
+    paths.remoteAuth,
+    paths.accessKeys,
+    paths.pluginGrants,
+  ]
 }
 
 /**
@@ -420,6 +444,11 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; hold a way in from the internet with no tool call and no log row. Or',
     '; raise a key that exists, or switch its "ask me first" off.',
     `(deny file-write* (literal ${seatbeltString(paths.accessKeys)}))`,
+    '',
+    `; What each plugin may do. ${BRAND.assistant} is the only agent a plugin’s tools`,
+    '; are offered to, so an edit here would be it granting its own tools —',
+    '; no question, no log row, and a Settings pane saying the person allowed it.',
+    `(deny file-write* (literal ${seatbeltString(paths.pluginGrants)}))`,
     '',
   ].join('\n')
 }
@@ -640,6 +669,7 @@ export function recordsFenceAgrees(
     remoteCopilot?: string
     remoteAuth?: string
     accessKeys?: string
+    pluginGrants?: string
   },
   resolver: PathResolver = realFsResolver,
 ): boolean {
@@ -651,7 +681,8 @@ export function recordsFenceAgrees(
     paths.log === resolver.real(actual.log) &&
     agrees(paths.remoteCopilot, actual.remoteCopilot) &&
     agrees(paths.remoteAuth, actual.remoteAuth) &&
-    agrees(paths.accessKeys, actual.accessKeys)
+    agrees(paths.accessKeys, actual.accessKeys) &&
+    agrees(paths.pluginGrants, actual.pluginGrants)
   )
 }
 

@@ -152,6 +152,11 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // vocabulary on screen is the same object the manifest parser refuses against
   // rather than a second copy of the same words. Every one of those entries
   // named the import that would delete it, and these are those imports.
+  'src/main/memory/share.ts':
+    'unreachable on purpose, for now: sharing one project’s Claude memory with another makes a link on ' +
+    'disk, and the brief for it was code only — a consent-guarded function, tested with a fake consent, ' +
+    'that nothing calls on its own. It joins the app when a screen puts the question to a person; until ' +
+    'then no button offers it, so nothing claims it works.',
   'src/main/store-archive.fixture.ts':
     'unreachable on purpose: it builds the tar.gz archives `store-archive.test.ts` and ' +
     '`store-install.test.ts` read, including the ones no honest tool will write — a name that ' +

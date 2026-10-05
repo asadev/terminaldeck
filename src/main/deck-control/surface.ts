@@ -682,6 +682,13 @@ export interface DeckSurface {
    * reachable from there.
    */
   appStateRoot(): string
+  /**
+   * The task workspaces that exist (`workspaces/task-workspaces.ts`): checkouts
+   * of open projects, kept under `<userData>/workspaces/`. A session may start
+   * in one, though it is under {@link appStateRoot}. Optional: a surface with no
+   * workspaces behind it has none.
+   */
+  taskWorkspaceFolders?(): string[]
   /** `<copilot>` — the copilot's own folder, where briefs are written. */
   copilotRoot(): string
 

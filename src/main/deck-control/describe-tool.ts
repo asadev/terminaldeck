@@ -223,6 +223,18 @@ export const TOOL_AREAS: readonly ToolArea[] = [
   },
   {
     /*
+     * Its own area, because a worker session holds one tool here and none in
+     * `agents`: folded in there, a session's index would name an area it can
+     * reach nothing else in.
+     */
+    id: 'knowledge',
+    covers:
+      'what is known about a project and how sure: verified results, claims, decisions, constraints, architecture, ' +
+      'what is stale or in conflict — and recording or replacing it',
+    prefixes: ['knowledge'],
+  },
+  {
+    /*
      * Its own area rather than a corner of `machines`, added in 0.16.0. A
      * simulator is not another computer and nothing about reaching it is like
      * reaching one; what a model looking for "tap the app" needs is one word
@@ -233,6 +245,16 @@ export const TOOL_AREAS: readonly ToolArea[] = [
       'iOS Simulators, Android emulators and USB Android phones on this Mac: list, start, see, tap, swipe, type, ' +
       'buttons, the elements on screen, and what a person marked with Annotate',
     prefixes: ['devices'],
+  },
+  {
+    /*
+     * Its own area, and the one area a session holds beside its browser and
+     * devices: the memory its own agent keeps. Under `agents` it would show a
+     * session the word for a whole area it cannot reach to find two tools it can.
+     */
+    id: 'memory',
+    covers: 'your own memory notes — the ones your agent keeps and reads at the start — searched and read, with their links',
+    prefixes: ['memory'],
   },
   {
     id: 'app',

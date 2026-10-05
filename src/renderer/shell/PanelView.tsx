@@ -10,6 +10,7 @@ import { McpInspector } from '../components/McpInspector'
 import { StorePage } from '../store/StorePage'
 import { DevicesPage } from '../devices/DevicesPage'
 import { TasksPage } from '../tasks/TasksPage'
+import { MemoryPage } from '../memory/MemoryPage'
 import { StaysFixedPage } from '../staysfixed/StaysFixedPage'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
@@ -370,6 +371,12 @@ export function PanelView({
        */
       case 'tasks':
         return <TasksPage openTask={focus?.startsWith('task:') ? focus.slice('task:'.length) : null} onOpenSettings={onOpenSettings ? () => onOpenSettings('tasks') : undefined} />
+      /*
+       * Above the project gate too: memory spans projects — Hoot's and Codex's
+       * belong to none — and the page opens on the open project's when there is one.
+       */
+      case 'memory':
+        return <MemoryPage projectPath={projectPath} />
       /*
        * Above the project gate, deliberately — like `hooks` and `mcp`.
        *

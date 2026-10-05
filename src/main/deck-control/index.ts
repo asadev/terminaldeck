@@ -167,7 +167,15 @@ import { agentInventory } from '../tasks/agent-inventory'
 import { getState as getProfilesState, listProfilesForProvider, resolveProfile } from '../profiles'
 import { store } from '../store'
 import { taskTools } from '../tasks/task-tools'
-import { registerTasksIpc, TASKS_CHANGED_CHANNEL } from '../tasks/tasks-ipc'
+import { registerTasksIpc, tasksState, TASKS_CHANGED_CHANNEL } from '../tasks/tasks-ipc'
+import { createKnowledge } from '../knowledge'
+import { knowledgeTools, taskScopeOf } from '../knowledge/knowledge-tools'
+import { startPlugins, type PluginsHandle } from '../plugins'
+import { GoalStore } from '../tasks/goal-store'
+import { goalTools } from '../tasks/goal-tools'
+import { registerGoalsIpc } from '../tasks/goals-ipc'
+import type { KnowledgeProvider, WorkspaceProvider } from '../../shared/agent-stack'
+import { workspaceProvider } from '../workspaces/task-workspaces'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -431,6 +439,21 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
   keysDir?: string
   /** Hoot's session, started if it is not running; null when it cannot be. For CRM tasks given to Hoot. */
   hoot?(): Promise<string | null>
+  /**
+   * Run the person's plugins from `<userData>/plugins/` (`src/main/plugins/`).
+   * Absent — every test — and nothing is scanned, started or registered.
+   */
+  plugins?: { userData: string }
+  /** Project knowledge for workers' briefs, and the task flow's events. Absent: briefs carry none. */
+  knowledge?: KnowledgeProvider
+  /** Workspaces of their own for tasks that ask for one. Absent: every task runs in its project folder. */
+  workspaces?: WorkspaceProvider
+  /**
+   * The app's own agent stack: its project knowledge in workers' briefs, and a
+   * workspace of their own for tasks that ask for one, unless `knowledge` /
+   * `workspaces` above name others. Absent — every test — tasks run as before.
+   */
+  stack?: true
 }
 
 export interface DeckControlHandle {
@@ -696,6 +719,8 @@ export async function registerDeckControlIpc(
   const tasksDir = deps.keysDir ?? accessKeysDir()
   const taskConfig = new TaskConfig({ dir: tasksDir })
   const taskStore = new TaskStore({ dir: tasksDir })
+  // What your tasks are for: kept beside them, read into every worker's brief.
+  const goalStore = new GoalStore({ dir: tasksDir })
   /*
    * Every change to tasks: the window redraws, and the task clock aims again at
    * whatever is due next (a reminder just set, a routine just saved).
@@ -704,6 +729,8 @@ export async function registerDeckControlIpc(
   const tasksChanged = (): void => {
     deps.broadcast(TASKS_CHANGED_CHANNEL)
     taskClock?.poke()
+    // A task Done, a link removed: queued work waiting on it may start now.
+    taskEngine?.nudge()
   }
   const taskOutbox = new TaskOutbox({
     dir: tasksDir,
@@ -719,7 +746,10 @@ export async function registerDeckControlIpc(
   })
   let taskEngine: TaskEngine | null = null
   let taskApi: TaskApi | null = null
+  // Durable project knowledge. Made inert: no folder, file or share until a call needs one.
+  const knowledge = createKnowledge({ userData: deps.keysDir ?? userDataDir() })
   const unwatchTaskConfig = taskConfig.onChange(() => tasksChanged())
+  const unwatchGoals = goalStore.onChange(() => tasksChanged())
 
   const notifyDetector = new NotifyDetector({
     surface,
@@ -731,6 +761,9 @@ export async function registerDeckControlIpc(
     },
     clock: REAL_CLOCK,
   })
+
+  // Built once the task store exists, below; the dispatcher reads its tools through this.
+  let plugins: PluginsHandle | null = null
 
   const control = new DeckControl({
     surface,
@@ -784,8 +817,22 @@ export async function registerDeckControlIpc(
         config: () => taskConfig,
         island: () => deps.island?.() ?? null,
       }),
+      // Project knowledge: Hoot's four, and a worker session's note into its own task's project.
+      ...knowledgeTools({ knowledge: () => knowledge, taskOfSession: (sessionId) => taskScopeOf(taskStore.bySession(sessionId)) }),
+      // Hoot's orchestration: goals, plans, progress, retry, reassign, review.
+      ...goalTools({
+        goals: () => goalStore,
+        store: () => taskStore,
+        config: () => taskConfig,
+        local: () => localTasksRef,
+        detail: () => taskDetail,
+        engine: () => taskEngine,
+        knowledge: () => knowledge,
+      }),
       ...(deps.extraTools ?? []),
     ],
+    // A plugin's tools, while it is on and allowed: Hoot's alone. See `plugins/tools.ts`.
+    liveTools: () => plugins?.tools() ?? [],
     driving: () => tours.driving(),
     ...(deps.budgets === undefined ? {} : { budgets: deps.budgets }),
     onRow: (row: ActionRow) => {
@@ -809,6 +856,15 @@ export async function registerDeckControlIpc(
     hoot: async () => (deps.hoot === undefined ? null : await deps.hoot()),
     onChange: () => tasksChanged(),
     onLocalStatus: (taskId) => taskDetail?.noteStatus(taskId),
+    goals: goalStore,
+    ...(deps.knowledge !== undefined ? { knowledge: deps.knowledge } : deps.stack === true ? { knowledge } : {}),
+    ...(deps.workspaces !== undefined
+      ? { workspaces: deps.workspaces }
+      : deps.stack === true
+        ? { workspaces: workspaceProvider((id) => taskStore.byId(id)?.title ?? null) }
+        : {}),
+    // A stall deadline is one more moment the task clock is aimed at.
+    onDueChange: () => taskClock?.poke(),
   })
   taskApi = new TaskApi({
     config: taskConfig,
@@ -989,6 +1045,7 @@ export async function registerDeckControlIpc(
     store: taskStore,
     config: taskConfig,
     engine: taskEngine,
+    goals: goalStore,
     onChange: () => tasksChanged(),
     onUpdated: (task, changes, notes) => taskDetail?.noteUpdate(task, changes, notes),
   })
@@ -1007,7 +1064,19 @@ export async function registerDeckControlIpc(
   })
   // Due work — a routine on a schedule, a reminder, a scheduled comment — at its moment.
   const detail = taskDetail
-  taskClock = new TaskClock({ nextDueAt: () => detail.nextDueAt(), runDue: () => detail.runDue() })
+  const engine = taskEngine
+  taskClock = new TaskClock({
+    nextDueAt: () => {
+      const due = detail.nextDueAt()
+      const stall = engine.stallDueAt()
+      return due === null ? stall : stall === null ? due : Math.min(due, stall)
+    },
+    // Stalls first: they are this moment's news, and the routines' work may take a while.
+    runDue: async () => {
+      engine.checkStalls()
+      await detail.runDue()
+    },
+  })
   taskClock.start()
   registerTasksIpc(ipcMain, {
     config: taskConfig,
@@ -1019,21 +1088,72 @@ export async function registerDeckControlIpc(
     local: localTasks,
     detail: taskDetail,
     inventory: (agent) => {
-      // Claude Code's account by the agent's name or id for it; its default when none matches.
+      // The coding agent's own account by the agent's name or id for it; its default when none matches.
+      // Codex has its own folder and skills; anything but Codex or Claude Code lists nothing to pick.
+      const provider = agent.provider === 'codex' ? 'codex' : 'claude'
       const state = getProfilesState()
       const wanted = agent.account?.toLowerCase() ?? ''
       const profile =
-        (wanted === '' ? undefined : listProfilesForProvider('claude', state).find((one) => one.id.toLowerCase() === wanted || one.name.toLowerCase() === wanted)) ??
-        resolveProfile(state, { provider: 'claude' })
+        (wanted === '' ? undefined : listProfilesForProvider(provider, state).find((one) => one.id.toLowerCase() === wanted || one.name.toLowerCase() === wanted)) ??
+        resolveProfile(state, { provider })
       const projects = store().getProjects().map((project) => project.path).slice(0, 40)
-      return { ...agentInventory({ configDir: profile.configDir, system: profile.system === true, projects }), account: profile.name }
+      return {
+        ...agentInventory({ provider: agent.provider, configDir: profile.configDir, system: profile.system === true, projects }),
+        account: profile.name,
+      }
     },
     // Lowest level and asking first, though the AI-app tools refuse it outright: it only sends tasks.
     makeCrmKey: (name) => {
       const made = keys.create({ name: `${name} (CRM)`, level: 'look', askFirst: true, crmOnly: true })
       return { id: made.view.id, key: made.key }
     },
+    goals: goalStore,
   })
+  registerGoalsIpc(ipcMain, {
+    goals: goalStore,
+    store: taskStore,
+    isApprover: deps.isApprover,
+    state: () => tasksState({ config: taskConfig, store: taskStore, outbox: taskOutbox, keys: () => keys.list(), goals: goalStore }),
+  })
+
+  /*
+   * Plugins: built here because this is where the three things they need meet —
+   * the dispatcher their tools go through, the approver window their question
+   * is shown over, and the task store `tasks.read` reads. Goals and project
+   * records are not in this build yet, so those two capabilities answer that
+   * they are unavailable rather than inventing an empty list.
+   */
+  plugins =
+    deps.plugins === undefined
+      ? null
+      : startPlugins(ipcMain, {
+          userData: deps.plugins.userData,
+          isApprover: deps.isApprover,
+          approver: () => approver,
+          broadcast: (channel) => deps.broadcast(channel),
+          services: {
+            tasks: () =>
+              taskStore.all().map((task) => ({
+                id: task.id,
+                title: task.title,
+                project: task.project,
+                status: task.local === true ? task.crmStatus : `${task.crmStatus} (${task.process})`,
+                updatedAt: task.updatedAt,
+              })),
+            notify: async ({ plugin, title, body }) => {
+              const { Notification } = await import('electron')
+              if (!Notification.isSupported()) return false
+              new Notification({ title: `${plugin}: ${title}`, body }).show()
+              return true
+            },
+            projects: () => store().getProjects().map((project) => project.path),
+            // The same project records a worker's brief is given, for a plugin
+            // allowed `knowledge.read` on that one project.
+            knowledge: (input) => knowledge.forBrief(input),
+            // The goals Hoot plans with, for a plugin allowed `goals.read`.
+            goals: (project) => goalStore.all().filter((goal) => project === null || goal.project === project),
+          },
+        })
 
   /** Past tours, newest first. What the recap card and the Settings list read. */
   ipcMain.handle('deck-control:tours', (_event, count?: unknown) => {
@@ -1079,6 +1199,8 @@ export async function registerDeckControlIpc(
       taskEngine?.stop()
       taskOutbox.stop()
       taskStore.flush()
+      goalStore.flush()
+      unwatchGoals()
       unwatchTaskConfig()
       unwatchAiApps()
       try {
@@ -1093,6 +1215,7 @@ export async function registerDeckControlIpc(
       // leaving one whose `endedAt` is null for ever — which would read, months
       // later, as a tour that is somehow still playing.
       tours.stop()
+      await plugins?.stop()
       await stopDeckControlServer()
       // Both tokens are dead the moment the server stops, but a file full of a
       // dead token invites somebody to wonder whether it still works.

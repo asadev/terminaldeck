@@ -25,7 +25,7 @@ describe('tools.coverage', () => {
     const value = output.value as { counts: Record<string, { actions: number; withTool: number }>; rows?: unknown }
     // `devices` is the Simulators page's channels, added with Annotate in 0.16.0;
     // `fixed` is a project's Stays Fixed page, added in 0.16.5.
-    expect(Object.keys(value.counts)).toEqual(['sessions', 'machines', 'agents', 'browser', 'devices', 'fixed', 'window'])
+    expect(Object.keys(value.counts)).toEqual(['sessions', 'machines', 'agents', 'browser', 'devices', 'fixed', 'memory', 'window'])
     expect(value.counts.sessions.actions).toBe(Object.keys(COVERAGE_AREAS.sessions).length)
     expect(value.rows).toBeUndefined()
   })

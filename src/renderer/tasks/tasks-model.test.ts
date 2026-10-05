@@ -9,6 +9,9 @@ import {
   processLabel,
   resolveTasksBridge,
   saveAgent,
+  setAgentStatus,
+  pickableAgents,
+  assigneeChoices,
   showMirror,
   slugFor,
   toTasksResult,
@@ -28,6 +31,7 @@ const BUILDER: AgentProfile = {
   model: null,
   effort: null,
   instructions: null,
+  instructionsFile: null,
   toolsPreferred: [],
   toolsAvoided: [],
   skills: [],
@@ -37,11 +41,13 @@ const BUILDER: AgentProfile = {
   maxRunMinutes: 60,
   keepAliveMinutes: 30,
   verifyCommand: 'npm test',
+  status: 'active',
+  statusAt: null,
 }
 
 describe('reading what main answers', () => {
   it('reads a state and refuses something that is not one', () => {
-    expect(toTasksState(EMPTY)).toEqual(EMPTY)
+    expect(toTasksState(EMPTY)).toEqual({ ...EMPTY, goals: [] })
     expect(toTasksState(null)).toBeNull()
     expect(toTasksState({ agents: [] })).toBeNull()
   })
@@ -129,6 +135,7 @@ describe('the agent form', () => {
         model: null,
         effort: null,
         instructions: null,
+        instructionsFile: null,
         toolsPreferred: [],
         toolsAvoided: [],
         skills: [],
@@ -138,6 +145,9 @@ describe('the agent form', () => {
         maxRunMinutes: 60,
         keepAliveMinutes: 30,
         verifyCommand: null,
+        // Sent as the form holds it; the main process keeps the status it has.
+        status: 'active',
+        statusAt: null,
       },
     ])
     expect(result).toMatchObject({ ok: false, message: 'Another agent is already called Builder.' })
@@ -248,3 +258,47 @@ describe('the bridge', () => {
     expect(draftOf(old as AgentProfile)).toMatchObject({ blockedTools: [], skillsOff: false })
   })
 })
+
+describe('an agent’s status and what its coding agent can keep', () => {
+  it('reads a status, and never guesses an unknown one into taking work', () => {
+    const read = (status: unknown) => toTasksState({ ...EMPTY, agents: [{ ...BUILDER, status, statusAt: 5 }] })?.agents[0]
+    expect(read('archived')).toMatchObject({ status: 'archived', statusAt: 5 })
+    expect(read(undefined)?.status).toBe('active')
+    expect(read('sleeping')?.status).toBe('paused')
+  })
+
+  it('offers no archived agent to pick, and says when one is paused', () => {
+    const agents: AgentProfile[] = [
+      { ...BUILDER, id: 'a', name: 'Active' },
+      { ...BUILDER, id: 'p', name: 'Resting', status: 'paused', statusAt: 1 },
+      { ...BUILDER, id: 'x', name: 'Gone', status: 'archived', statusAt: 1 },
+    ]
+    const choices = assigneeChoices(agents)
+    expect(choices.map((choice) => choice.id)).toEqual(['none', 'me', 'hoot', 'a', 'p'])
+    expect(choices.find((choice) => choice.id === 'p')?.label).toBe('Resting (paused)')
+    expect(pickableAgents(agents).map((agent) => agent.id)).toEqual(['a', 'p'])
+  })
+
+  it('pauses, archives and restores through the preload call, and says when this build cannot', async () => {
+    const sent: unknown[][] = []
+    const bridge = {
+      tasksAgentStatus: (id: string, action: string) => {
+        sent.push([id, action])
+        return Promise.resolve({ ok: true, state: EMPTY })
+      },
+    }
+    expect(await setAgentStatus(bridge, 'builder', 'archive')).toMatchObject({ ok: true })
+    expect(sent).toEqual([['builder', 'archive']])
+    expect(await setAgentStatus({}, 'builder', 'pause')).toMatchObject({ ok: false, message: 'This build cannot pause or archive agents.' })
+  })
+
+  it('refuses a model or effort the chosen agent cannot be given, before the bridge', () => {
+    expect(agentPayload({ ...draftOf(null), name: 'C', provider: 'codex', model: 'gpt-5' }, [])).toEqual({
+      ok: false,
+      message: 'Codex CLI cannot be given a model by this app. Clear it, or choose Claude Code.',
+    })
+    expect(agentPayload({ ...draftOf(null), name: 'G', provider: 'gemini', effort: 'high' }, [])).toMatchObject({ ok: false })
+    expect(agentPayload({ ...draftOf(null), name: 'D', model: 'opus', effort: 'high' }, [])).toMatchObject({ ok: true })
+  })
+})
+

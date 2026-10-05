@@ -4,7 +4,20 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../../shared/brand'
 import { connectionDraftOf, connectionPatch, toTasksState, type AgentProfile, type CrmConnection } from '../../tasks/tasks-model'
-import { AgentForm, ConnectionEditor, TasksSection, agentStackSummary, agentSummary, connectionSummary, keyHelp, keyLine, keyOption } from './TasksSection'
+import {
+  AgentForm,
+  AgentsGroup,
+  ConnectionEditor,
+  TasksSection,
+  agentStackSummary,
+  agentStatusLine,
+  agentSummary,
+  connectionSummary,
+  instructionsHelp,
+  keyHelp,
+  keyLine,
+  keyOption,
+} from './TasksSection'
 
 /**
  * Settings → Tasks, rendered to a string the way every settings test here is.
@@ -27,6 +40,7 @@ const AGENT: AgentProfile = {
   model: null,
   effort: null,
   instructions: null,
+  instructionsFile: null,
   toolsPreferred: [],
   toolsAvoided: [],
   skills: [],
@@ -36,6 +50,8 @@ const AGENT: AgentProfile = {
   maxRunMinutes: 0,
   keepAliveMinutes: 30,
   verifyCommand: null,
+  status: 'active',
+  statusAt: null,
 }
 
 function connection(over: Partial<CrmConnection> = {}): CrmConnection {
@@ -258,3 +274,114 @@ describe('which key a CRM signs in with', () => {
     expect(keyLine(undefined, 'a removed key')).toBe('Signs in with a removed key')
   })
 })
+
+describe('what the chosen coding agent can keep, beside each field', () => {
+  const form = (agent: AgentProfile): string =>
+    renderToStaticMarkup(<AgentForm agent={agent} busy={false} problem={null} onSave={noop} onCancel={noop} />)
+  /** The small label inside a field's name, read back by the name. */
+  const tagOf = (html: string, label: string): string | null =>
+    new RegExp(`>${label}<span class="settings-badge(?: quiet)?" title="[^"]*">([^<]+)</span>`).exec(html)?.[1] ?? null
+
+  it('Claude Code: model, effort, instructions and blocks enforced; tool and skill choices advice only', () => {
+    const html = form({ ...AGENT, provider: 'claude' })
+    expect(tagOf(html, 'Model')).toBe('Enforced')
+    expect(tagOf(html, 'Effort')).toBe('Enforced')
+    expect(tagOf(html, 'Instructions')).toBe('Enforced')
+    expect(tagOf(html, 'Block these tools')).toBe('Enforced')
+    expect(tagOf(html, 'Tools to prefer')).toBe('Advice only')
+    expect(tagOf(html, 'Skills')).toBe('Advice only')
+    expect(html).toContain('A request: the agent cannot be limited to only these.')
+    expect(html).toContain('Enforced: starts Claude Code with no skills at all.')
+  })
+
+  it('Codex: instructions enforced, model and effort off and saying why, blocks off', () => {
+    const html = form({ ...AGENT, provider: 'codex' })
+    expect(tagOf(html, 'Instructions')).toBe('Enforced')
+    expect(tagOf(html, 'Model')).toBe('Not available')
+    expect(html).toMatch(/<input id="[^"]*-model" class="settings-input" placeholder="Default" maxLength="80" disabled="" value=""\/>/)
+    expect(html).toContain('Not set for Codex by this app yet')
+    expect(html).toMatch(/<select id="[^"]*-effort" class="settings-select" disabled="">/)
+    expect(tagOf(html, 'Block these tools')).toBe('Not available')
+    expect(html).toContain('Not available: starts Claude Code with no skills at all.')
+  })
+
+  it('a saved value an agent cannot keep stays open, so it can be cleared', () => {
+    const html = form({ ...AGENT, provider: 'codex', model: 'gpt-5' })
+    expect(html).not.toMatch(/<input id="[^"]*-model"[^>]*disabled/)
+  })
+
+  it('Gemini and the app default: instructions are advice, and the box says how to have them given at the start', () => {
+    expect(tagOf(form({ ...AGENT, provider: 'gemini' }), 'Instructions')).toBe('Advice only')
+    const fallback = form(AGENT)
+    expect(tagOf(fallback, 'Instructions')).toBe('Advice only')
+    expect(fallback).toContain('Choose Claude Code or Codex to have them given at the start as standing instructions.')
+    // Limits stay enforced for the app default: a start on another agent is refused.
+    expect(tagOf(fallback, 'Block these tools')).toBe('Enforced')
+  })
+
+  it('names the instructions file once there is one, and says an outside edit is read back', () => {
+    const file = '/Users/me/Library/Application Support/app/remote/agent-instructions/builder.md'
+    const html = form({ ...AGENT, provider: 'claude', instructions: 'Work on a branch.', instructionsFile: file })
+    expect(html).toContain(`Kept in ${file}; an edit made there is read back here.`)
+    expect(html).toContain('Work on a branch.')
+    expect(instructionsHelp('claude', null)).toContain('Saved as a file of its own.')
+    expect(agentStackSummary({ ...AGENT, provider: 'claude', instructions: 'x', instructionsFile: file })).toBe('Enforced: standing instructions')
+    // No file, or an agent that only reads its brief: told, not given.
+    expect(agentStackSummary({ ...AGENT, provider: 'gemini', instructions: 'x', instructionsFile: file })).toBe('Told: instructions')
+  })
+
+  it('offers Claude Code’s own tools to pick only for Claude Code', () => {
+    expect(form({ ...AGENT, provider: 'claude' })).toContain('Read — Read files')
+    expect(form({ ...AGENT, provider: 'codex' })).not.toContain('Read — Read files')
+  })
+})
+
+describe('pausing, archiving and restoring an agent', () => {
+  const state = (agents: AgentProfile[]) => toTasksState({ agents, connections: [] })!
+  const group = (agents: AgentProfile[]): string =>
+    renderToStaticMarkup(<AgentsGroup state={state(agents)} busy={false} bridge={{ tasksAgentStatus: () => Promise.resolve({}) }} run={async () => null} />)
+
+  it('lists an archived agent apart, with Restore, and not among the agents at work', () => {
+    const html = group([
+      { ...AGENT, id: 'builder', name: 'Builder' },
+      { ...AGENT, id: 'old', name: 'Old Hand', status: 'archived', statusAt: Date.UTC(2026, 9, 1) },
+    ])
+    const [atWork, archived] = html.split('>Archived<')
+    expect(atWork).toContain('Builder')
+    expect(atWork).not.toContain('Old Hand')
+    expect(archived).toContain('Old Hand')
+    expect(archived).toContain('>Restore<')
+    expect(archived).toContain('kept, and offered nowhere until it is restored')
+  })
+
+  it('marks a paused agent and says what pausing does', () => {
+    const html = group([{ ...AGENT, status: 'paused', statusAt: Date.UTC(2026, 9, 1) }])
+    expect(html).toContain('<span class="settings-badge quiet">Paused</span>')
+    expect(html).toContain('takes no new work. What it is running carries on.')
+    expect(html).not.toContain('>Archived<')
+    expect(agentStatusLine({ status: 'active', statusAt: null })).toBeNull()
+  })
+
+  it('offers no archived agent for a new CRM identity, but keeps naming the one a row already has', () => {
+    const gone: AgentProfile = { ...AGENT, id: 'gone', name: 'Gone', status: 'archived', statusAt: 1 }
+    const resting: AgentProfile = { ...AGENT, id: 'resting', name: 'Resting', status: 'paused', statusAt: 1 }
+    const editor = (identities: Record<string, string>) =>
+      renderToStaticMarkup(
+        <ConnectionEditor
+          connection={connection({ identities })}
+          agents={[AGENT, gone, resting]}
+          busy={false}
+          problem={null}
+          secret={null}
+          onSecretSeen={noop}
+          onSave={noop}
+          onRemove={noop}
+        />,
+      )
+    const fresh = editor({ 'u-builder': 'builder' })
+    expect(fresh).not.toContain('>Gone')
+    expect(fresh).toContain('>Resting (paused)</option>')
+    expect(editor({ 'u-gone': 'gone' })).toMatch(/<option value="gone" selected="">Gone \(archived\)<\/option>/)
+  })
+})
+

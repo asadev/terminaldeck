@@ -293,7 +293,25 @@ describe('every section id still resolves to a pane', () => {
      * where somebody stops finding them. It sits right after it, because every
      * CRM connection is built on one of that pane's keys.
      */
-    expect(sectionsFor('mac').length).toBe(13)
+    /*
+     * ## The fourteenth is **Plugins**, 2026-10-05, and this is what it paid
+     *
+     * The first screen its subject has had, because the subject is new: a
+     * plugin is a program somebody else wrote, put in `<userData>/plugins/` by
+     * hand, which runs only with what the person allowed for its exact code.
+     * `FEATURE-STORE.md` once said "call it Features, not Plugins" because no
+     * third-party code ran; this is the third-party code, and the word is now
+     * honest. The pane is what each plugin asks for, what it was allowed, its on
+     * switch and Remove — none of which exists anywhere else.
+     *
+     * Folding it into Tools (`features`) was considered and loses on this
+     * table's rule that a section is a subject: that pane is features that ship
+     * inside the app, and putting strangers' programs beside them would blur
+     * exactly the line that page exists to draw. Folding it into Copilot loses
+     * the same way — a plugin may give Hoot tools, and may also only read tasks
+     * or send a notification, and none of that is Hoot's files or memory.
+     */
+    expect(sectionsFor('mac').length).toBe(14)
     /*
      * Windows derived rather than restated, so the two platforms cannot be raised
      * apart — and so this file holds one number instead of two. Linux is the only

@@ -178,3 +178,8 @@
 .tasks-picker-select .settings-select {
   width: 100%;
 }
+
+/* The archived list is its own group, not the last active agent's tail. */
+.tasks-archived-title {
+  margin-top: var(--sp-5);
+}

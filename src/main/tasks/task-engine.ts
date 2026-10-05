@@ -47,25 +47,66 @@
  * A task whose session is gone is let go, keeps its conversation, and — if it
  * had not finished — is told to the CRM as Stuck with a line saying a reply
  * continues it. Nothing is left showing as running.
+ *
+ * ## What a worker is told
+ *
+ * A fresh brief carries the task and, around it, the goals it serves (root
+ * first), what is already on it — subtasks, linked tasks, the latest comments
+ * and notes — a note when it is being tried again, and what the project's
+ * knowledge says about it (`task-brief.ts`, each part bounded). Knowledge and a
+ * workspace of its own are optional seams ({@link TaskEngineDeps.knowledge},
+ * {@link TaskEngineDeps.workspaces}); without them a task runs exactly as it did.
+ * The task flow's moments — handed to a worker, finished, verified, rejected,
+ * reassigned, stalled — are told to the knowledge seam as they happen.
+ *
+ * A local task blocked by another that is not Done waits in the queue, and is
+ * started by the first pump after that one is.
+ *
+ * ## Stalled
+ *
+ * A worker's session that sits quiet — not working, with no finished turn and
+ * no question — for {@link STALL_AFTER_MS} has stalled, and so has one that
+ * ended before the work was finished. Quiet is read off the session's own status
+ * changes; the deadline is one moment the task clock is aimed at
+ * ({@link TaskEngine.stallDueAt}), so nothing here polls. A stalled task says so
+ * on its record and in its status, is told to Hoot when Hoot is coordinating it,
+ * and clears itself the moment its worker works again.
  */
 
 import { exec } from 'node:child_process'
+import type { Goal, KnowledgeProvider, TaskKnowledgeEvent, WorkspaceProvider } from '../../shared/agent-stack'
+import { HOOT_ID } from '../../shared/crm/detail-contract'
 import type { SessionMeta, SessionStatus } from '../../shared/types'
 import { deliverBrief, specsDir, writeSpec } from '../deck-control/brief'
 import { MAX_SEND_CHARS } from '../deck-control/catalogue'
 import type { ActionRow } from '../deck-control/action-log'
-import type { CallResult } from '../deck-control/control'
+import type { CallResult, SessionLimits } from '../deck-control/control'
+import { limitsFor, stackText } from '../agents/agent-briefing'
+import { delegationRefusal } from '../agents/agent-lifecycle'
 import { REAL_CLOCK, type HubClock, type NotificationEvent } from '../deck-control/notify-hub'
 import { NotifyDetector } from '../deck-control/notify-detect'
 import type { Answer } from '../deck-control/session-more-tools'
 import type { DeckSurface } from '../deck-control/surface'
+import { actorNow } from './task-actor'
+import { blockersOf, isDone } from './goal-progress'
+import { contextSection, goalSection, retrySection } from './task-brief'
 import { DEFAULT_MAX_HOPS, folderAllowed, LOCAL_STATUSES, type AgentProfile, type CrmConnection, type TaskConfig } from './task-config'
 import { newLocalTask } from './task-local'
 import type { CommentKind, TaskEventBody, TaskOutbox } from './task-outbox'
-import { LOCAL_KEY, ME, TO_ME, type TaskRecord, type TaskStore } from './task-store'
+import { LOCAL_KEY, ME, TO_ME, type TaskRecord, type TaskStall, type TaskStore } from './task-store'
 
 /** How long a check command may take. */
 export const CHECK_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
+ * How long a worker's session may sit quiet — not working, not finished, not
+ * asking anything — before its task counts as stalled. Quiet, not busy: an
+ * agent working flat out for an hour is the longest-run limit's business.
+ */
+export const STALL_AFTER_MS = 15 * 60_000
+
+/** How much project knowledge a brief carries. */
+export const KNOWLEDGE_BRIEF_CHARS = 4_000
 
 /** How much of a check's output a blocker comment carries. */
 export const CHECK_OUTPUT_CHARS = 1_500
@@ -109,6 +150,14 @@ export interface TaskEngineDeps {
   onChange?(): void
   /** A local task's status was set here (an agent finished it): its routine may make the next one. */
   onLocalStatus?(taskId: string): void
+  /** The goal chain for a `goalId`, that goal first (`GoalStore.chain`). Absent: briefs carry no goals. */
+  goals?: { chain(goalId: string): Goal[] }
+  /** Knowledge for a fresh brief, and where the task flow's events go. Absent: neither happens. */
+  knowledge?: KnowledgeProvider
+  /** The folder a worker runs in. Absent, or answering null: the task's project folder. */
+  workspaces?: WorkspaceProvider
+  /** A stall deadline moved: the task clock aims again ({@link TaskEngine.stallDueAt}). */
+  onDueChange?(): void
 }
 
 /** The real check: a shell, in the project, with a hard limit. */
@@ -122,37 +171,23 @@ export function runCheck(command: string, cwd: string): Promise<CheckResult> {
 }
 
 /**
- * The agent's own settings, as a section of its brief: standing instructions,
- * the tools it is asked to prefer or avoid, and the skills to use. Tools are a
- * request, said so in the brief itself — what the agent may do is still decided
- * by its own permission prompts.
+ * The owner's enforced settings, as the start's options — blocked tools, skills
+ * off, and the instructions file where the coding agent takes one. Undefined
+ * when there are none, so an agent without them is started exactly as before.
+ * What each provider can keep is `shared/agent-capabilities.ts`'s to say.
  */
-/**
- * The owner's enforced limits, as the start's options. Undefined when there are
- * none, so an agent without them is started exactly as before.
- */
-export function limitsOfAgent(agent: AgentProfile): { sessionLimits: { deniedTools?: string[]; noSkills?: boolean } } | undefined {
-  if (agent.blockedTools.length === 0 && !agent.skillsOff) return undefined
-  return {
-    sessionLimits: {
-      ...(agent.blockedTools.length > 0 ? { deniedTools: [...agent.blockedTools] } : {}),
-      ...(agent.skillsOff ? { noSkills: true } : {}),
-    },
-  }
+export function limitsOfAgent(agent: AgentProfile): { sessionLimits: SessionLimits } | undefined {
+  return limitsFor(agent)
 }
 
+/**
+ * The agent's own settings, as a section of its brief: standing instructions,
+ * the tools it is asked to prefer or avoid, and the skills to use. Requests are
+ * said to be requests in the brief itself — what the agent may do is still
+ * decided by its own permission prompts.
+ */
 export function stackOf(agent: AgentProfile): string {
-  const parts: string[] = []
-  if (agent.instructions !== null) parts.push(agent.instructions)
-  if (agent.toolsPreferred.length > 0) parts.push(`Prefer these tools: ${agent.toolsPreferred.join(', ')}.`)
-  if (agent.toolsAvoided.length > 0) parts.push(`Do not use these tools: ${agent.toolsAvoided.join(', ')}.`)
-  if (agent.toolsPreferred.length > 0 || agent.toolsAvoided.length > 0) {
-    parts.push('These tool choices are what the owner asked for; your own permission settings still apply.')
-  }
-  if (agent.skills.length > 0) parts.push(`Use these skills when they fit: ${agent.skills.join(', ')}.`)
-  if (agent.blockedTools.length > 0) parts.push(`These tools are switched off for you: ${agent.blockedTools.join(', ')}.`)
-  if (agent.skillsOff) parts.push('Skills are switched off for you.')
-  return parts.length === 0 ? '' : `\n\n## How you work (${agent.name}, ${agent.role})\n\n${parts.join('\n\n')}`
+  return stackText(agent)
 }
 
 function tail(text: string, max: number): string {
@@ -174,6 +209,8 @@ export class TaskEngine {
   private readonly closing = new Set<string>()
   /** Exits already handled here, whose news from the detector is dropped. */
   private readonly quietExits = new Set<string>()
+  /** A worker's session, and since when it has not been working. Absent while it works. */
+  private readonly quietSince = new Map<string, number>()
   private timer: unknown = null
   private timerAt: number | null = null
   private stopped = false
@@ -209,11 +246,13 @@ export class TaskEngine {
       this.deps.store.update(task, { keepOpenUntil: null, runStartedAt: this.clock.now() })
       this.arm()
     }
+    this.noteActivity(task, sessionId, status)
     this.detector.noteStatus(sessionId, status)
   }
 
   noteExit(sessionId: string, exitCode: number): void {
     if (this.stopped) return
+    if (this.quietSince.delete(sessionId)) this.deps.onDueChange?.()
     const task = this.deps.store.bySession(sessionId)
     if (task === null) {
       // Any session ending may free the slot a queued task is waiting for.
@@ -259,8 +298,11 @@ export class TaskEngine {
       .all()
       .filter((task) => task.process === 'queued' && !task.stopped && task.assignee.kind === 'agent')
       .sort((a, b) => a.createdAt - b.createdAt)
+    const all = this.deps.store.all()
     for (const task of queued) {
       if (this.starting.has(task.id)) continue
+      // Waiting for a task it is blocked by: started by the first pump after that one is Done.
+      if (blockersOf(task, all).length > 0) continue
       const agent = this.deps.config.agent(task.assignee.agentId)
       if (agent === null) {
         this.block(task, 'The agent this task was assigned to no longer exists in Terminal Deck.')
@@ -270,6 +312,16 @@ export class TaskEngine {
       if (!this.makeRoom(task.project)) continue
       await this.start(task, agent, null)
     }
+  }
+
+  /**
+   * Something changed somewhere in the tasks — a status, a link, a task gone to
+   * the Trash: queued work may be free to start. Costs one scan when nothing is
+   * queued, and starts nothing twice (`pump` holds its own guard).
+   */
+  nudge(): void {
+    if (this.stopped || !this.hasQueued()) return
+    queueMicrotask(() => void this.pump())
   }
 
   /** A reply on the CRM task from an allowed sender: continue, in the same conversation. */
@@ -291,7 +343,10 @@ export class TaskEngine {
       const sent = await this.deps.call('sessions.send', { sessionId: task.sessionId, text: this.flatten(task, text) })
       if (sent.ok) {
         this.turnFor(task, task.sessionId)
-        this.deps.store.update(task, { keepOpenUntil: null, runStartedAt: this.clock.now(), result: null })
+        this.deps.store.update(task, { keepOpenUntil: null, runStartedAt: this.clock.now(), result: null, stalled: null })
+        // Its quiet clock starts with this turn, not with the calm after the last one.
+        this.quietSince.set(task.sessionId, this.clock.now())
+        this.deps.onDueChange?.()
         this.setStatus(task, this.connectionOf(task)?.statuses.onStarted ?? null)
         this.arm()
         this.changed()
@@ -304,7 +359,7 @@ export class TaskEngine {
       this.block(task, 'The agent this task was assigned to no longer exists in Terminal Deck.')
       return
     }
-    this.deps.store.update(task, { process: 'queued', result: null })
+    this.deps.store.update(task, { process: 'queued', result: null, stalled: null })
     if (this.working(agent.id) >= agent.maxConcurrent || !this.makeRoom(task.project)) {
       this.changed()
       return
@@ -324,6 +379,9 @@ export class TaskEngine {
 
   /** Assigned to another of ours: whatever runs stops, and the new agent gets it from the start. */
   async reassign(task: TaskRecord, assignee: TaskRecord['assignee']): Promise<void> {
+    // From one worker to another — not a first hand-out, and not to you or nobody.
+    const before = this.agentIdOf(task) ?? (task.assignee.kind === 'hoot' ? 'hoot' : null)
+    const worker = assignee.kind === 'agent' || assignee.kind === 'hoot'
     if (task.sessionId !== null && this.alive(task.sessionId)) await this.close(task)
     this.deps.store.update(task, {
       assignee,
@@ -334,7 +392,12 @@ export class TaskEngine {
       lastTurn: null,
       stopped: false,
       keepOpenUntil: null,
+      stalled: null,
+      retry: null,
     })
+    if (worker && before !== null && before !== assignee.agentId) {
+      this.event(task, 'reassigned', { summary: `From ${this.workerName(before)} to ${this.workerName(assignee.agentId)}.` })
+    }
     await this.accept(task)
   }
 
@@ -376,8 +439,12 @@ export class TaskEngine {
     return { ok: true }
   }
 
-  /** Hoot's verdict on a finished task: verified sets the completed status, otherwise it is blocked. */
-  verify(task: TaskRecord, verified: boolean, note: string): void {
+  /**
+   * Hoot's verdict on a finished task: verified sets the completed status,
+   * otherwise it is blocked. `evidence`, when the verdict names it, goes to the
+   * knowledge seam with the event.
+   */
+  verify(task: TaskRecord, verified: boolean, note: string, evidence: string[] = []): void {
     const connection = this.connectionOf(task)
     const result = task.result ?? { at: this.clock.now(), verified: false, answer: null, check: null }
     this.deps.store.update(task, { result: { ...result, verified } })
@@ -389,7 +456,78 @@ export class TaskEngine {
     } else {
       this.block(task, note === '' ? 'Checked: not complete yet.' : note, hoot)
     }
+    this.event(task, verified ? 'verified' : 'rejected', { summary: note, evidence })
     this.changed()
+  }
+
+  /**
+   * Try a local task again: the same agent, the same brief, and a note saying
+   * why — after a stall, an exit or a failed check. Whatever still runs on it
+   * stops first, and it starts fresh rather than in the conversation that did
+   * not get there.
+   */
+  async retry(task: TaskRecord, note: string): Promise<{ ok: true } | { ok: false; why: string }> {
+    if (task.local !== true) return { ok: false, why: 'That is a CRM task: the CRM decides who runs it again.' }
+    const agentId = this.agentIdOf(task)
+    const agent = agentId === null ? null : this.deps.config.agent(agentId)
+    if (agent === null) return { ok: false, why: 'No task agent has worked on this task yet. Give it to one with tasks_reassign.' }
+    if (task.sessionId !== null && this.alive(task.sessionId)) await this.close(task)
+    this.deps.store.update(task, {
+      assignee: { kind: 'agent', agentId: agent.id, identity: agent.id },
+      mainAssignee: agent.id,
+      handedFrom: null,
+      sessionId: null,
+      result: null,
+      lastTurn: null,
+      stopped: false,
+      keepOpenUntil: null,
+      questionOpen: false,
+      stalled: null,
+      retry: { note: note.trim(), at: this.clock.now(), count: (task.retry?.count ?? 0) + 1 },
+    })
+    this.deps.store.note(task, { by: actorNow(), kind: 'progress', text: `Tried again with ${agent.name}${note.trim() === '' ? '.' : `: ${note.trim()}`}` })
+    await this.accept(task)
+    return { ok: true }
+  }
+
+  /**
+   * A review of a finished local task. A pass has to name its evidence — files,
+   * commands, output — and marks it verified and Done. A fail says what is wrong
+   * and reopens it: back to the agent that did it, in its own conversation, with
+   * the reasons; with no such agent, back to To-Do for somebody to pick up.
+   */
+  async review(
+    task: TaskRecord,
+    verdict: { pass: boolean; evidence: string[]; reasons: string },
+  ): Promise<{ ok: true } | { ok: false; why: string }> {
+    if (task.local !== true) return { ok: false, why: 'That is a CRM task: use tasks_verify for it.' }
+    if (task.result === null && !isDone(task)) return { ok: false, why: 'It has not finished yet. Review it once its worker says it is done.' }
+    const evidence = verdict.evidence.map((item) => item.trim()).filter((item) => item !== '')
+    const reasons = verdict.reasons.trim()
+    if (verdict.pass) {
+      if (evidence.length === 0) return { ok: false, why: 'A pass has to name its evidence: the files, commands or output that show it is done.' }
+      this.verify(task, true, `Reviewed and verified. Evidence: ${evidence.join('; ')}`, evidence)
+      return { ok: true }
+    }
+    if (reasons === '') return { ok: false, why: 'A fail has to say what is wrong, so the worker can fix it.' }
+    const result = task.result ?? { at: this.clock.now(), verified: false, answer: null, check: null }
+    this.deps.store.update(task, { result: { ...result, verified: false } })
+    this.comment(task, 'blocker', `Reviewed: not done yet. ${reasons}`, this.connectionOf(task)?.hootIdentity ?? undefined)
+    this.event(task, 'rejected', { summary: reasons, evidence })
+    const agentId = this.agentIdOf(task)
+    const agent = agentId === null ? null : this.deps.config.agent(agentId)
+    if (agent === null) {
+      this.deps.store.update(task, { result: null })
+      this.setStatus(task, LOCAL_STATUSES.initial)
+      this.changed()
+      return { ok: true }
+    }
+    // Back to its agent first, so the reply below continues its conversation rather than handing it to you.
+    this.deps.store.update(task, { assignee: { kind: 'agent', agentId: agent.id, identity: agent.id }, mainAssignee: agent.id, handedFrom: null })
+    const seen = evidence.length === 0 ? '' : ` What was looked at: ${evidence.join('; ')}.`
+    await this.reply(task, `A review found this is not done yet: ${reasons}${seen} Fix it, then finish with a short summary of what changed.`)
+    this.changed()
+    return { ok: true }
   }
 
   /** Hoot or the person sets one of the CRM's own statuses. */
@@ -445,15 +583,28 @@ export class TaskEngine {
 
   private async start(task: TaskRecord, agent: AgentProfile, reply: string | null): Promise<void> {
     if (this.starting.has(task.id)) return
+    // A paused or archived agent takes no new work; a reply on work it already has still reaches it.
+    const refused = reply === null ? delegationRefusal(agent) : null
+    if (refused !== null) {
+      this.block(task, refused)
+      return
+    }
     this.starting.add(task.id)
     try {
-      const brief =
-        reply === null || task.conversationId === null
-          ? `${this.agentBrief(task, agent)}${reply === null ? '' : `\n\n## Reply on the task\n\n${reply}`}`
-          : // Resumed in its own conversation: the reply, and the agent's settings as they are now.
-            `A reply came in on CRM task ${task.externalTaskId} ("${task.title}"):\n\n${reply}${stackOf(agent)}`
+      const fresh = reply === null || task.conversationId === null
+      const brief = fresh
+        ? `${this.agentBrief(task, agent, await this.knowledgeFor(task))}${reply === null ? '' : `\n\n## Reply on the task\n\n${reply}`}`
+        : // Resumed in its own conversation: the reply, and the agent's settings as they are now.
+          `A reply came in on CRM task ${task.externalTaskId} ("${task.title}"):\n\n${reply}${stackOf(agent)}`
+      let cwd: string
+      try {
+        cwd = await this.folderFor(task)
+      } catch (error) {
+        this.block(task, `Could not prepare the folder ${agent.name} works in: ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
       const started = await this.deps.call('sessions.start', {
-        cwd: task.project,
+        cwd,
         ...(agent.provider === null ? {} : { provider: agent.provider }),
         ...(agent.account === null ? {} : { account: agent.account }),
         ...(reply !== null && task.conversationId !== null ? { conversation: task.conversationId } : {}),
@@ -487,8 +638,12 @@ export class TaskEngine {
         runStartedAt: this.clock.now(),
         keepOpenUntil: null,
         questionOpen: false,
+        stalled: null,
         conversationId: this.conversationOf(sessionId) ?? task.conversationId,
       })
+      // Quiet until it first works: a brief that never lands is a stall like any other.
+      this.quietSince.set(sessionId, this.clock.now())
+      this.deps.onDueChange?.()
       this.turnFor(task, sessionId)
       // A model and an effort belong to the process, so they are set on every start — a resumed one too.
       for (const [control, value] of [
@@ -501,6 +656,7 @@ export class TaskEngine {
       }
       this.setStatus(task, this.connectionOf(task)?.statuses.onStarted ?? null)
       this.comment(task, 'progress', reply === null ? `${agent.name} started on this.` : `${agent.name} is continuing with the reply.`)
+      if (reply === null) this.event(task, 'delegated', { summary: head(task.instructions, 500) })
       this.arm()
       this.changed()
     } finally {
@@ -525,7 +681,11 @@ export class TaskEngine {
       if (this.quietExits.delete(event.sessionId)) return
       const finished = task.result !== null
       this.deps.store.release(task)
-      if (!finished) this.block(task, `The session ended${event.crashed === true ? ` with exit code ${event.exitCode}` : ''} before the work was finished. Reply on this task to continue.`)
+      if (!finished) {
+        const why = `The session ended${event.crashed === true ? ` with exit code ${event.exitCode}` : ''} before the work was finished.`
+        this.block(task, `${why} Reply on this task to continue.`)
+        this.stall(task, 'exited', why, false)
+      }
       this.changed()
       void this.pump()
       return
@@ -541,8 +701,10 @@ export class TaskEngine {
     })
     const agent = this.deps.config.agent(this.agentIdOf(task) ?? '')
     const connection = this.connectionOf(task)
+    this.event(task, 'finished', { summary: head(answer, COMMENT_ANSWER_CHARS) })
     if (agent?.verifyCommand) {
-      const check = await (this.deps.check ?? runCheck)(agent.verifyCommand, task.project)
+      // In the folder the work was done in — its own workspace, when it had one.
+      const check = await (this.deps.check ?? runCheck)(agent.verifyCommand, this.folderOfSession(task) ?? task.project)
       this.deps.store.update(task, { result: { at: this.clock.now(), verified: check.ok, answer, check: check.ok ? null : check.output } })
       if (check.ok) {
         this.comment(task, 'completion', `Finished, and the check passed.\n\n${head(answer, COMMENT_ANSWER_CHARS)}`)
@@ -550,6 +712,19 @@ export class TaskEngine {
       } else {
         this.block(task, `Finished, but the check failed:\n\n${check.output}`)
       }
+      this.event(task, check.ok ? 'verified' : 'rejected', {
+        summary: check.ok ? `The check passed: ${agent.verifyCommand}` : check.output,
+        evidence: [`check: ${agent.verifyCommand}`],
+      })
+    } else if (task.local === true && task.requestedBy === HOOT_ID) {
+      // Hoot planned it, so Hoot reviews it: the work stays with its agent until the verdict.
+      this.deps.store.update(task, { result: { at: this.clock.now(), verified: false, answer, check: null } })
+      this.comment(task, 'completion', `Finished. Hoot is reviewing it.\n\n${head(answer, COMMENT_ANSWER_CHARS)}`)
+      await this.tellHoot(
+        task,
+        `${agent?.name ?? 'An agent'} finished task ${task.id} ("${head(task.title, 80)}"). Look at what it did, then call ` +
+          `tasks_review with pass and the evidence you checked, or fail with what is wrong.`,
+      )
     } else if (task.local === true) {
       // No check to run and no CRM: the person who made the task checks it.
       this.deps.store.update(task, { result: { at: this.clock.now(), verified: false, answer, check: null } })
@@ -727,10 +902,10 @@ export class TaskEngine {
   }
 
   private hootBrief(task: TaskRecord): string {
-    const agents = this.deps.config.agents().map((agent) => `${agent.name} (${agent.role})`)
+    const agents = this.deps.config.pickableAgents().map((agent) => `${agent.name} (${agent.role}${agent.status === 'paused' ? ', paused' : ''})`)
     const spec = writeSpec(specsDir(this.deps.surface.copilotRoot()), {
       title: `crm-${task.externalTaskId}`,
-      brief: `# ${task.title}\n\nCRM task ${task.externalTaskId}, in ${task.project}.\n\n${task.instructions}`,
+      brief: `# ${task.title}\n\nCRM task ${task.externalTaskId}, in ${task.project}.${this.goalsOf(task)}\n\n${task.instructions}`,
       cwd: task.project,
       provider: null,
       callId: task.id,
@@ -743,13 +918,175 @@ export class TaskEngine {
     )
   }
 
-  private agentBrief(task: TaskRecord, agent: AgentProfile): string {
+  /**
+   * A fresh brief: the task, the agent's own settings, the goals it serves, what
+   * is already on it, a note when it is tried again, and `knowledge` — the
+   * project knowledge section, already bounded, or empty.
+   */
+  private agentBrief(task: TaskRecord, agent: AgentProfile, knowledge = ''): string {
     return (
       `# ${task.title}\n\n` +
       `This is CRM task ${task.externalTaskId}. Terminal Deck reports your progress and your final answer back to ` +
-      `the CRM for you. End with a short summary of what you did and anything left.${stackOf(agent)}\n\n` +
-      `## The task\n\n${task.instructions}`
+      `the CRM for you. End with a short summary of what you did and anything left.${stackOf(agent)}` +
+      `${this.goalsOf(task)}\n\n` +
+      `## The task\n\n${task.instructions}` +
+      `${contextSection(task, this.deps.store.all(), (id) => this.workerName(id))}${retrySection(task)}${knowledge}`
     )
+  }
+
+  /** The goal chain section for a task's goal; empty with no goal or no goal source. */
+  private goalsOf(task: TaskRecord): string {
+    if (typeof task.goalId !== 'string' || this.deps.goals === undefined) return ''
+    return goalSection(this.deps.goals.chain(task.goalId))
+  }
+
+  /** What the project's knowledge says about this task, as a bounded section; empty when there is none or it fails. */
+  private async knowledgeFor(task: TaskRecord): Promise<string> {
+    const knowledge = this.deps.knowledge
+    if (knowledge === undefined || task.project === '') return ''
+    try {
+      const found = await knowledge.forBrief({
+        project: task.project,
+        query: `${task.title}\n${task.instructions}`,
+        ...(typeof task.goalId === 'string' ? { goalId: task.goalId } : {}),
+      })
+      const text = found.text.trim()
+      return text === '' ? '' : `\n\n## What is known about this project\n\n${head(text, KNOWLEDGE_BRIEF_CHARS)}`
+    } catch (error) {
+      // A brief without knowledge is still a brief; the work is not held up for it.
+      console.error('[tasks] project knowledge could not be read for a brief:', error)
+      return ''
+    }
+  }
+
+  /** The folder a worker runs in: its workspace when the workspace part gives one, else the project. */
+  private async folderFor(task: TaskRecord): Promise<string> {
+    const workspaces = this.deps.workspaces
+    if (workspaces === undefined) return task.project
+    const folder = await workspaces.folderFor({
+      id: task.id,
+      project: task.project,
+      useWorkspace: task.useWorkspace === true,
+    })
+    return folder ?? task.project
+  }
+
+  /** Where a task's session actually runs, while it has one. */
+  private folderOfSession(task: TaskRecord): string | null {
+    if (task.sessionId === null) return null
+    return this.deps.surface.listSessions().find((session) => session.id === task.sessionId)?.cwd ?? null
+  }
+
+  /* ------------------------------------------------------------ stalls -- */
+
+  /** The next moment a quiet worker counts as stalled; null when none can. What the task clock is aimed at. */
+  stallDueAt(): number | null {
+    let next: number | null = null
+    for (const task of this.deps.store.all()) {
+      const since = this.quietOf(task)
+      if (since !== null && (next === null || since + STALL_AFTER_MS < next)) next = since + STALL_AFTER_MS
+    }
+    return next
+  }
+
+  /** Called by the task clock: every worker quiet past {@link STALL_AFTER_MS} has stalled. */
+  checkStalls(): void {
+    if (this.stopped) return
+    const now = this.clock.now()
+    for (const task of this.deps.store.all()) {
+      const since = this.quietOf(task)
+      if (since === null || since + STALL_AFTER_MS > now) continue
+      const minutes = Math.round(STALL_AFTER_MS / 60_000)
+      this.stall(task, 'quiet', `No sign of work for ${minutes} minutes, and it has neither finished nor asked anything.`, true)
+    }
+  }
+
+  /** Since when a running worker has been quiet; null for a task that is not a worker mid-run. */
+  private quietOf(task: TaskRecord): number | null {
+    if (task.sessionId === null || (task.stalled ?? null) !== null || task.assignee.kind !== 'agent') return null
+    if (task.stopped || task.questionOpen || task.result !== null || task.keepOpenUntil !== null) return null
+    if (!this.alive(task.sessionId)) return null
+    return this.quietSince.get(task.sessionId) ?? null
+  }
+
+  /** A status from a task's session: working clears the quiet clock (and a quiet stall), anything calm starts it. */
+  private noteActivity(task: TaskRecord, sessionId: string, status: SessionStatus): void {
+    if (status === 'working') {
+      const was = this.quietSince.delete(sessionId)
+      if (task.stalled?.reason === 'quiet') {
+        this.deps.store.update(task, { stalled: null })
+        this.deps.store.note(task, { by: task.assignee.agentId, kind: 'progress', text: 'Working again.' })
+        this.setStatus(task, this.connectionOf(task)?.statuses.onStarted ?? null)
+        this.changed()
+      }
+      if (was) this.deps.onDueChange?.()
+      return
+    }
+    if (status === 'exited' || this.quietSince.has(sessionId)) return
+    this.quietSince.set(sessionId, this.clock.now())
+    this.deps.onDueChange?.()
+  }
+
+  /**
+   * A task's worker has stalled: kept on its record, told as an event, and told
+   * to Hoot when Hoot is coordinating it. `say`: also comment and set the
+   * blocked status — false when the caller has already said why.
+   */
+  private stall(task: TaskRecord, reason: TaskStall['reason'], text: string, say: boolean): void {
+    this.deps.store.update(task, { stalled: { at: this.clock.now(), reason, text } })
+    if (say) {
+      this.comment(task, 'blocker', `Stalled: ${text}`)
+      this.setStatus(task, this.connectionOf(task)?.statuses.onBlocked ?? null)
+    }
+    this.event(task, 'stalled', { summary: text })
+    if (this.coordinatedByHoot(task)) {
+      const next =
+        task.local === true
+          ? 'Look at it with tasks_progress, then try it again with tasks_retry or give it to another agent with tasks_reassign.'
+          : 'Its CRM task is marked as stuck; post what happens next with tasks_comment.'
+      void this.tellHoot(task, `Task ${task.id} ("${head(task.title, 80)}") has stalled: ${text} ${next}`)
+    }
+    this.changed()
+  }
+
+  /** Hoot planned it, or it is part of a task Hoot holds. */
+  private coordinatedByHoot(task: TaskRecord): boolean {
+    if (task.requestedBy === HOOT_ID) return true
+    if (task.parentExternalTaskId === null) return false
+    return this.deps.store.get(task.keyId, task.parentExternalTaskId)?.assignee.kind === 'hoot'
+  }
+
+  /** Tell the knowledge seam, when there is one, without ever holding the task flow up on it. */
+  private event(task: TaskRecord, kind: TaskKnowledgeEvent['kind'], extra: { summary?: string; evidence?: string[] } = {}): void {
+    const knowledge = this.deps.knowledge
+    if (knowledge === undefined || task.project === '') return
+    const agentId = this.agentIdOf(task)
+    const summary = extra.summary?.trim() ?? ''
+    const event: TaskKnowledgeEvent = {
+      kind,
+      project: task.project,
+      taskId: task.id,
+      title: task.title,
+      ...(typeof task.goalId === 'string' ? { goalId: task.goalId } : {}),
+      ...(agentId === null ? {} : { agentId }),
+      ...(task.sessionId === null ? {} : { sessionId: task.sessionId }),
+      ...(summary === '' ? {} : { summary: head(summary, COMMENT_ANSWER_CHARS) }),
+      ...(extra.evidence !== undefined && extra.evidence.length > 0 ? { evidence: [...extra.evidence] } : {}),
+      at: this.clock.now(),
+    }
+    try {
+      void knowledge.noteTaskEvent(event).catch((error: unknown) => console.error('[tasks] the knowledge seam refused an event:', error))
+    } catch (error) {
+      console.error('[tasks] the knowledge seam refused an event:', error)
+    }
+  }
+
+  /** `hoot`, `me`, `none` or an agent's id, as a name. */
+  private workerName(id: string): string {
+    if (id === HOOT_ID) return 'Hoot'
+    if (id === ME) return 'You'
+    if (id === 'none') return 'Nobody'
+    return this.deps.config.agent(id)?.name ?? id
   }
 
   /** A reply as one printable line; a long one goes to a file the agent is told to read. */
@@ -857,6 +1194,8 @@ export class TaskEngine {
         },
         this.clock.now(),
       )
+      // A part of a task serves the goal the whole of it serves.
+      if (typeof task.goalId === 'string') child.goalId = task.goalId
       this.deps.store.put(child)
       void this.accept(child)
     }

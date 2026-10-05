@@ -16,8 +16,10 @@ import { LOCAL_STATUSES, TaskConfigProblem, type AgentProfile, type CrmConnectio
 import type { LocalTaskDetail } from './task-detail-local'
 import type { LocalTasks } from './task-local'
 import type { AgentInventory } from './agent-inventory'
+import type { GoalStore } from './goal-store'
+import { blockersOf, goalProgress, type GoalProgress } from './goal-progress'
 import type { TaskOutbox } from './task-outbox'
-import type { ProcessState, TaskNote, TaskRecord, TaskStore } from './task-store'
+import type { ProcessState, TaskNote, TaskRecord, TaskStall, TaskStore } from './task-store'
 
 export const TASKS_CHANGED_CHANNEL = 'tasks:changed'
 /** Main → window: open this task (a reminder was clicked). */
@@ -65,7 +67,26 @@ export interface TaskView {
   position: number | null
   /** How often it comes back — the reference CRM's frequency word; null: a one-off. */
   recurrence: string | null
+  /** The goal it serves; null for none. */
+  goalId: string | null
+  /** Asked to run in a workspace of its own. */
+  useWorkspace: boolean
+  /** Its worker went quiet or ended without finishing; null while it has not. */
+  stalled: TaskStall | null
+  /** The titles of the open tasks it waits for before an agent can start it. */
+  waitingOn: string[]
   createdAt: number
+}
+
+/** One goal as the Tasks page lists it: the goal and where its tasks stand. */
+export interface GoalView {
+  id: string
+  title: string
+  description: string
+  status: string
+  parentId: string | null
+  project: string | null
+  progress: Pick<GoalProgress, 'total' | 'done' | 'verified' | 'unverified' | 'stalled' | 'blocked'>
 }
 
 export interface TasksState {
@@ -79,6 +100,8 @@ export interface TasksState {
   outbox: { pending: number; undelivered: number }
   /** The statuses a local task can have. */
   localStatuses: string[]
+  /** Your goals, oldest first, each with how far its tasks have got. */
+  goals: GoalView[]
 }
 
 export type TasksResult =
@@ -101,9 +124,11 @@ export interface TasksIpcDeps {
   inventory?(agent: { provider: string | null; account: string | null }): AgentInventory & { account: string }
   /** Make a key that only sends tasks, for one CRM. Called only from the owner's confirmed press. */
   makeCrmKey?(name: string): { id: string; key: string }
+  /** Your goals. Absent: none are listed. */
+  goals?: GoalStore
 }
 
-export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox' | 'keys'>): TasksState {
+export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox' | 'keys' | 'goals'>): TasksState {
   const agents = deps.config.agents()
   const nameOf = (agentId: string): string =>
     agentId === 'hoot'
@@ -114,6 +139,7 @@ export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox
           ? 'Unassigned'
           : (agents.find((agent) => agent.id === agentId)?.name ?? agentId)
   const outbox = deps.outbox.list()
+  const all = deps.store.all()
   const view = (task: TaskRecord): TaskView => ({
     id: task.id,
     keyId: task.keyId,
@@ -145,14 +171,18 @@ export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox
     completedAt: task.completedAt ?? null,
     position: task.position ?? null,
     recurrence: task.recurrence ?? null,
+    goalId: task.goalId ?? null,
+    useWorkspace: task.useWorkspace === true,
+    stalled: task.stalled ?? null,
+    waitingOn: task.process === 'queued' ? blockersOf(task, all).map((other) => other.title) : [],
     createdAt: task.createdAt,
   })
+  const goals = deps.goals?.all() ?? []
   return {
     agents,
     connections: deps.config.connections(),
     keys: deps.keys().map((key) => ({ id: key.id, name: key.name, crmOnly: key.crmOnly, lastApp: key.lastApp })),
-    tasks: deps.store
-      .all()
+    tasks: [...all]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map(view),
     trash: deps.store
@@ -165,6 +195,10 @@ export function tasksState(deps: Pick<TasksIpcDeps, 'config' | 'store' | 'outbox
       undelivered: outbox.filter((item) => item.state === 'undelivered').length,
     },
     localStatuses: [...LOCAL_STATUSES.statuses],
+    goals: goals.map((goal) => {
+      const { total, done, verified, unverified, stalled, blocked } = goalProgress(goal, goals, all)
+      return { ...goal, progress: { total, done, verified, unverified, stalled, blocked } }
+    }),
   }
 }
 
@@ -196,6 +230,14 @@ export function registerTasksIpc(ipcMain: InvokeRegistrar, deps: TasksIpcDeps): 
     guard(event)
     return change(() => {
       deps.config.saveAgent(raw)
+    })
+  })
+  /** Pause, resume, archive or restore one agent: `action` is one of those four words. */
+  ipcMain.handle('tasks:agent-status', (event, id: unknown, action: unknown) => {
+    guard(event)
+    return change(() => {
+      if (typeof id !== 'string') throw new TaskConfigProblem('That agent no longer exists.')
+      deps.config.setAgentStatus(id, action)
     })
   })
   ipcMain.handle('tasks:agent-remove', (event, id: unknown) => {

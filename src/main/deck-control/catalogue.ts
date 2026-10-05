@@ -43,6 +43,7 @@
  */
 
 import { TOOL_NAME } from '../../shared/agent-tools'
+import { isAgentId } from '../agents/agent-instructions'
 import { sep } from 'node:path'
 import type { CreateSessionInput, ProviderId } from '../../shared/types'
 import { describeWindow, slotName, windowsOf } from '../browser-binding'
@@ -459,7 +460,7 @@ export interface ToolContext {
    */
   granted?: ReadonlySet<string>
   /** Enforced limits for a session this call starts, from `CallOptions.sessionLimits`. Only ever narrows. */
-  sessionLimits?: { deniedTools?: string[]; noSkills?: boolean }
+  sessionLimits?: { deniedTools?: string[]; noSkills?: boolean; agentInstructions?: string }
   /**
    * Aborted when the caller hangs up, or its key is revoked.
    *
@@ -686,13 +687,17 @@ export function optBool(args: Record<string, unknown>, key: string, fallback: bo
  * (`tasks/task-engine.ts`), and the tool's schema is unchanged. They only ever
  * narrow a session. Checked here as well as at the spawn.
  */
-function limitsFrom(limits: ToolContext['sessionLimits']): { deniedTools?: string[]; noSkills?: boolean } {
+function limitsFrom(limits: ToolContext['sessionLimits']): { deniedTools?: string[]; noSkills?: boolean; agentInstructions?: string } {
   const denied = [...new Set(limits?.deniedTools ?? [])]
   const odd = denied.find((name) => typeof name !== 'string' || !TOOL_NAME.test(name))
   if (odd !== undefined) throw new BadArgument(`${String(odd)} is not a tool name that can be blocked`)
+  // A task agent's id, never a path: the launch finds its file (`agents/agent-launch.ts`).
+  const agent = limits?.agentInstructions
+  if (agent !== undefined && !isAgentId(agent)) throw new BadArgument(`${String(agent)} is not a task agent id`)
   return {
     ...(denied.length > 0 ? { deniedTools: denied } : {}),
     ...(limits?.noSkills === true ? { noSkills: true } : {}),
+    ...(agent === undefined ? {} : { agentInstructions: agent }),
   }
 }
 
@@ -819,6 +824,8 @@ export function knownFolders(surface: DeckSurface): Set<string> {
   const folders = new Set<string>()
   for (const project of surface.listProjects()) folders.add(project.path)
   for (const session of surface.listSessions()) folders.add(session.cwd)
+  // A task's own workspace: a checkout of an open project, made by this app.
+  for (const folder of surface.taskWorkspaceFolders?.() ?? []) folders.add(folder)
   return folders
 }
 
@@ -921,6 +928,9 @@ function refuseStateDirectory(context: ToolContext, cwd: string): void {
   const root = context.surface.appStateRoot()
   const relative = relativePath(root, cwd)
   if (relative === null) return
+  // A task workspace is kept here but holds the person's code, not the app's
+  // state: exactly the folders recorded as one, nothing else under `workspaces/`.
+  if (context.surface.taskWorkspaceFolders?.().includes(cwd) === true) return
   throw new Refused(
     'not-permitted',
     `${cwd} is inside this app's own storage (${root}). A session started there would be editing the app's ` +
@@ -929,15 +939,16 @@ function refuseStateDirectory(context: ToolContext, cwd: string): void {
 }
 
 /**
- * One copilot-started session per folder, until worktrees exist.
+ * One copilot-started session per folder.
  *
- * The honest interim for the gate `COPILOT-CAPABILITIES.md` §2.2 names. Two
- * agents editing one working tree produce merge conflicts nobody created and a
- * diff nobody can attribute — `fleet-diff.ts` says the same thing from the
- * other end, that two sessions in one worktree genuinely cannot be told apart.
- * The real answer is a worktree per session (§2.11), which is a subsystem this
- * app does not have. This is the two-line version that refuses rather than
- * pretending.
+ * The gate `COPILOT-CAPABILITIES.md` §2.2 names. Two agents editing one working
+ * tree produce merge conflicts nobody created and a diff nobody can attribute —
+ * `fleet-diff.ts` says the same thing from the other end, that two sessions in
+ * one worktree genuinely cannot be told apart. A task that asks for its own
+ * workspace gets a separate worktree (`workspaces/task-workspaces.ts`), and a
+ * separate worktree is a separate folder here, so tasks in their own workspaces
+ * of one repository never clash with each other or with the project folder.
+ * Anything else started in one folder is refused rather than shared.
  *
  * It counts only sessions **this copilot run started**, on purpose. A person
  * working in a folder is not something the copilot gets to veto, and refusing

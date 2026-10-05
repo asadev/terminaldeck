@@ -507,8 +507,12 @@ describe('the records fence', () => {
      * Six since 0.16.0: the access-key store (`remote/access-keys.json`) joined
      * for the same reason the grant and trust stores did — a key the copilot
      * could write is reach it hands itself.
+     *
+     * Seven since the plugin grants (`plugin-grants.json`): the copilot is the
+     * only agent a plugin's tools are offered to, so writing them would be
+     * granting its own tools.
      */
-    expect(copilotState(deps).records.paths).toHaveLength(6)
+    expect(copilotState(deps).records.paths).toHaveLength(7)
   })
 })
 

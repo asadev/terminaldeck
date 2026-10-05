@@ -39,6 +39,7 @@ import { listProfiles } from '../profiles'
 import { store } from '../store'
 import { readToolTrail } from '../tool-trail'
 import { listTranscripts, readTranscript, transcriptDirs } from '../transcript'
+import { taskWorkspaces } from '../workspaces/task-workspaces'
 import type { CreateSessionInput, SessionMeta, SessionStatus } from '../../shared/types'
 import type {
   ChangedFile,
@@ -195,6 +196,8 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
     // helper in this app gives: `pinUserData` can move the directory before the
     // window opens, and a value captured at construction would be the old one.
     appStateRoot: () => userDataDir(),
+
+    taskWorkspaceFolders: () => taskWorkspaces().liveFolders(),
 
     copilotRoot: () => copilotPaths(userDataDir()).root,
 

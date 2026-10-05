@@ -1759,6 +1759,8 @@ const api = {
   tasksState: (): Promise<unknown> => ipcRenderer.invoke('tasks:state'),
   tasksAgentSave: (agent: unknown): Promise<unknown> => ipcRenderer.invoke('tasks:agent-save', agent),
   tasksAgentRemove: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:agent-remove', id),
+  // Pause, resume, archive or restore one agent.
+  tasksAgentStatus: (id: string, action: string): Promise<unknown> => ipcRenderer.invoke('tasks:agent-status', id, action),
   tasksConnectionSave: (keyId: string, patch: unknown): Promise<unknown> =>
     ipcRenderer.invoke('tasks:connection-save', keyId, patch),
   tasksConnectionRemove: (keyId: string): Promise<unknown> => ipcRenderer.invoke('tasks:connection-remove', keyId),
@@ -1777,6 +1779,13 @@ const api = {
   tasksLocalRestore: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:local-restore', id),
   // The task popup: one of the reference CRM's task-page calls by name, answered with its own result.
   tasksLocalDetail: (fn: string, args: unknown[]): Promise<unknown> => ipcRenderer.invoke('tasks:local-detail', fn, args),
+  // A task's own workspace (a git worktree): what it is, open its folder, remove it when clean. By task id only.
+  taskWorkspace: (taskId: string): Promise<unknown> => ipcRenderer.invoke('tasks:workspace', taskId),
+  taskWorkspaceOpen: (taskId: string): Promise<unknown> => ipcRenderer.invoke('tasks:workspace-open', taskId),
+  taskWorkspaceRemove: (taskId: string): Promise<unknown> => ipcRenderer.invoke('tasks:workspace-remove', taskId),
+  // Goals: make one (no id) or change one (with its id); remove one — its sub-goals and tasks move up to its parent.
+  tasksGoalSave: (input: unknown): Promise<unknown> => ipcRenderer.invoke('tasks:goal-save', input),
+  tasksGoalRemove: (id: string): Promise<unknown> => ipcRenderer.invoke('tasks:goal-remove', id),
   onTasksChanged: (cb: () => void): (() => void) => {
     const handler = (): void => cb()
     ipcRenderer.on('tasks:changed', handler)
@@ -1789,6 +1798,22 @@ const api = {
     }
     ipcRenderer.on('tasks:open', handler)
     return () => ipcRenderer.off('tasks:open', handler)
+  },
+
+  /* --------------------------------------------------------- plugins -- */
+  // Settings → Plugins: programs the person put in `<userData>/plugins/`. Main
+  // refuses every channel unless the sender is the app's own window. Allowing
+  // (or widening) shows a question drawn by the operating system, not the page.
+  pluginsState: (): Promise<unknown> => ipcRenderer.invoke('plugins:state'),
+  pluginsAllow: (id: string, input: unknown): Promise<unknown> => ipcRenderer.invoke('plugins:allow', id, input),
+  pluginsEnable: (id: string, enabled: boolean): Promise<unknown> => ipcRenderer.invoke('plugins:enable', id, enabled),
+  /** Its folder goes to the Trash; its data and what it was allowed are forgotten. */
+  pluginsRemove: (id: string): Promise<unknown> => ipcRenderer.invoke('plugins:remove', id),
+  pluginsOpenFolder: (): Promise<unknown> => ipcRenderer.invoke('plugins:open-folder'),
+  onPluginsChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('plugins:changed', handler)
+    return () => ipcRenderer.off('plugins:changed', handler)
   },
 
   /* --------------------------------------------------------- driving -- */
@@ -2012,6 +2037,30 @@ const api = {
     const handler = (_e: IpcRendererEvent, projectPath: string) => cb(projectPath)
     ipcRenderer.on('staysfixed:changed', handler)
     return () => ipcRenderer.off('staysfixed:changed', handler)
+  },
+
+  /* ------------------------------------------------------------ memory -- */
+
+  /**
+   * The Memory page — `src/main/memory/ipc.ts` has every channel. A save
+   * carries the version the note was read at, and is refused when the file has
+   * changed since. `memory:changed` carries only the space; the page asks again.
+   */
+  memorySpaces: (refresh: boolean): Promise<unknown> => ipcRenderer.invoke('memory:spaces', refresh),
+  memoryNotes: (spaceId: string): Promise<unknown> => ipcRenderer.invoke('memory:notes', spaceId),
+  memoryRead: (spaceId: string, path: string): Promise<unknown> => ipcRenderer.invoke('memory:read', spaceId, path),
+  memorySearch: (query: string, spaceIds: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('memory:search', query, spaceIds),
+  memorySave: (spaceId: string, path: string, text: string, version: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('memory:save', spaceId, path, text, version),
+  memoryDelete: (spaceId: string, path: string, indexLine: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('memory:delete', spaceId, path, indexLine),
+  memoryProvenance: (spaceId: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke('memory:provenance', spaceId, path),
+  onMemoryChanged: (cb: (spaceId: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, spaceId: string) => cb(spaceId)
+    ipcRenderer.on('memory:changed', handler)
+    return () => ipcRenderer.off('memory:changed', handler)
   },
 
   /* ------------------------------------------------------------ links -- */

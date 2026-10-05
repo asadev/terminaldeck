@@ -140,6 +140,7 @@ import { PickedConversations } from './picked-conversation'
 import { onHookEvent } from './hook-server'
 import { limitsOf, personalSessions, type SavedSession } from './session-restore'
 import { TOOL_NAME } from '../shared/agent-tools'
+import { instructionLaunchArgs } from './agents/agent-launch'
 import { copilotPaths } from './copilot-home'
 import { store } from './store'
 import {
@@ -1868,6 +1869,16 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     const limitArgs: readonly string[] = [
       ...(denied.length > 0 ? ['--disallowedTools', denied.join(',')] : []),
       ...(input.noSkills === true ? ['--disable-slash-commands'] : []),
+      // A task agent's standing instructions, for the agent this actually became; refused otherwise.
+      ...(input.agentInstructions === undefined
+        ? []
+        : instructionLaunchArgs({
+            provider,
+            agentId: input.agentInstructions,
+            storageDir: options.storageDir,
+            platform,
+            insideWsl: target !== null,
+          })),
     ]
     const projectLaunch =
       !forDevice && target === null && (extraArgs ?? []).length === 0 && !addedRuns

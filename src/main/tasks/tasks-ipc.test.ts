@@ -174,6 +174,25 @@ describe('saving a CRM connection from the form', () => {
   })
 })
 
+describe('pausing, archiving and restoring an agent from the window', () => {
+  it('moves an agent along its status and sends back the state, refusing what makes no sense', () => {
+    const paused = call<TasksResult>('tasks:agent-status', 'builder', 'pause')
+    expect(paused.ok).toBe(true)
+    expect(paused.state.agents.find((agent) => agent.id === 'builder')).toMatchObject({ status: 'paused' })
+    expect(call<TasksResult>('tasks:agent-status', 'builder', 'pause')).toMatchObject({ ok: false, message: 'Builder is already paused.' })
+    expect(call<TasksResult>('tasks:agent-status', 'builder', 'archive').state.agents.find((agent) => agent.id === 'builder')?.status).toBe('archived')
+    expect(call<TasksResult>('tasks:agent-status', 'builder', 'restore').state.agents.find((agent) => agent.id === 'builder')?.status).toBe('active')
+    expect(call<TasksResult>('tasks:agent-status', 'ghost', 'pause')).toMatchObject({ ok: false, message: 'That agent no longer exists.' })
+    expect(call<TasksResult>('tasks:agent-status', 7, 'pause')).toMatchObject({ ok: false })
+  })
+
+  it('takes changes only from the app’s own window', () => {
+    const handler = handlers.get('tasks:agent-status')!
+    expect(() => handler({ sender: STRANGER }, 'builder', 'pause')).toThrow(/only the app/)
+    expect(config.agent('builder')?.status).toBe('active')
+  })
+})
+
 describe('your own tasks, from the window', () => {
   it('creates, changes and refuses through the three channels, and the state shows them as editable', async () => {
     const made = await call<Promise<TasksResult>>('tasks:local-create', { title: 'Write the notes', assignee: 'me', status: 'To-Do' })

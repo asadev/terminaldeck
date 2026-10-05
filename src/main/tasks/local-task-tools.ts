@@ -302,7 +302,7 @@ function readTool(deps: LocalTaskToolDeps): ToolSpec {
             tasks: tasks.slice(0, limit).map((t) => view(t, config)),
             more: Math.max(0, tasks.length - limit),
             statuses: [...LOCAL_STATUSES.statuses],
-            agents: (config?.agents() ?? []).map((a) => ({ id: a.id, name: a.name, role: a.role })),
+            agents: (config?.pickableAgents() ?? []).map((a) => ({ id: a.id, name: a.name, role: a.role, status: a.status })),
           },
           summary: { tasks: Math.min(tasks.length, limit) },
         }
@@ -757,7 +757,7 @@ function slugFor(name: string, taken: readonly string[]): string {
   for (let n = 2; ; n++) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`
 }
 
-const AGENT_VERBS = ['list', 'save', 'remove'] as const
+const AGENT_VERBS = ['list', 'save', 'remove', 'pause', 'resume', 'archive', 'restore'] as const
 
 function agentsTool(deps: LocalTaskToolDeps): ToolSpec {
   const id = 'tasks.agents'
@@ -769,13 +769,13 @@ function agentsTool(deps: LocalTaskToolDeps): ToolSpec {
     title: 'Task agents',
     index: 'List, create, change or remove the task agents your tasks can be given to: their role, coding agent, model, instructions, tools and skills.',
     description:
-      'The task agents — named profiles a task can be assigned to. do: list, save (agent: { id?, name, role?, provider?, account?, model?, effort?, instructions?, toolsPreferred?, toolsAvoided?, skills? }; an id that exists is changed, fields left out stay), remove (id). Tool and skill lists say what an agent prefers; they are not a sandbox. Saving or removing is put to the owner first wherever big changes are.',
+      'The task agents — named profiles a task can be assigned to. do: list, save (agent: { id?, name, role?, provider?, account?, model?, effort?, instructions?, toolsPreferred?, toolsAvoided?, skills? }; an id that exists is changed, fields left out stay), remove (id), pause / resume (id: a paused agent takes no new work), archive / restore (id: an archived agent is kept but offered nowhere). Tool and skill lists say what an agent prefers; they are not a sandbox. Saving or removing is put to the owner first wherever big changes are.',
     inputSchema: {
       type: 'object',
       properties: {
         do: { type: 'string', enum: [...AGENT_VERBS] },
         agent: { type: 'object', description: 'save: the profile' },
-        id: { type: 'string', description: 'remove: the agent id' },
+        id: { type: 'string', description: 'remove, pause, resume, archive, restore: the agent id' },
       },
       required: ['do'],
       additionalProperties: false,
@@ -785,7 +785,12 @@ function agentsTool(deps: LocalTaskToolDeps): ToolSpec {
       gate(context, id)
       verb(args, AGENT_VERBS)
     },
-    summary: (args) => (args.do === 'list' ? 'List the task agents' : args.do === 'remove' ? `Remove the task agent ${String(args.id ?? '?')}` : 'Save a task agent'),
+    summary: (args) =>
+      args.do === 'list'
+        ? 'List the task agents'
+        : args.do === 'save'
+          ? 'Save a task agent'
+          : `${String(args.do).replace(/^./, (first) => first.toUpperCase())} the task agent ${String(args.id ?? '?')}`,
     run: async (args, context) => {
       gate(context, id)
       const config = need(deps.config(), 'Tasks')
@@ -803,6 +808,10 @@ function agentsTool(deps: LocalTaskToolDeps): ToolSpec {
           return { value: { saved }, summary: { agent: saved.id } }
         }
         const agentId = text(args, 'id')
+        if (what !== 'remove') {
+          const changed = config.setAgentStatus(agentId, what)
+          return { value: { agent: changed.id, status: changed.status }, summary: { agent: changed.id } }
+        }
         if (!config.removeAgent(agentId)) throw new BadArgument(`there is no task agent ${agentId}`)
         return { value: { removed: agentId }, summary: { agent: agentId } }
       } catch (error) {

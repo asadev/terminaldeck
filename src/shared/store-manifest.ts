@@ -832,6 +832,31 @@ export function readInstallBlock(
 }
 
 /**
+ * The grammar's own pieces, for the one other file that reads a `terminaldeck.json`.
+ *
+ * A local plugin (`src/main/plugins/manifest.ts`) is not a store kind — its
+ * code *is* what running it means, which is the one thing this grammar exists
+ * to refuse — but it is described in the same file, with the same header and
+ * the same rules: an id is {@link SAFE_ID}, a version is three numbers, a path
+ * stays inside the item, and a key this build does not know is a refusal with
+ * the key named. Handed over rather than copied, for the reason
+ * {@link readInstallBlock} gives: a second, looser copy of a rule is the copy
+ * that drifts. `fail` throws what `isRefusal` recognises.
+ */
+export const MANIFEST_GRAMMAR = Object.freeze({
+  SAFE_ID,
+  VERSION,
+  isRecord,
+  onlyKeys,
+  text,
+  oneOf,
+  list,
+  insidePath,
+  fail,
+  isRefusal: (error: unknown): error is Error => error instanceof Bad,
+})
+
+/**
  * Turn the bytes of a manifest into a manifest, or say exactly why not.
  *
  * `expected` is what the *catalogue* holds, and a manifest whose own publisher

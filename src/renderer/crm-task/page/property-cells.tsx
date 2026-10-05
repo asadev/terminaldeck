@@ -37,15 +37,25 @@ export function Property({
   label,
   children,
   testId,
+  wide = false,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   children: React.ReactNode;
   testId?: string;
+  /**
+   * Across both columns, for a row whose value needs the width (a folder, a branch,
+   * its actions); its label sits beside the value's first line.
+   */
+  wide?: boolean;
 }) {
   return (
-    <div className="grid min-h-9 grid-cols-[152px_minmax(0,1fr)] items-center" data-testid={testId}>
-      <dt className="inline-flex items-center gap-2 text-sm text-slate-500">
+    <div
+      className="grid min-h-9 grid-cols-[152px_minmax(0,1fr)] items-center"
+      data-testid={testId}
+      style={wide ? { gridColumn: "1 / -1", alignItems: "start" } : undefined}
+    >
+      <dt className={`inline-flex items-center gap-2 text-sm text-slate-500${wide ? " min-h-9" : ""}`}>
         <Icon className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
         {label}
       </dt>

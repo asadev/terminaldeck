@@ -668,7 +668,8 @@ export class LocalTaskDetail {
   }
 
   private people(): TaskAssignee[] {
-    return localPeople(this.deps.config.agents())
+    // Archived agents are not offered; one already on a task is still named by its record.
+    return localPeople(this.deps.config.pickableAgents())
   }
 
   private person(id: string | null | undefined): TaskAssignee | null {

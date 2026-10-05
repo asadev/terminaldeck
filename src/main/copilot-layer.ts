@@ -95,6 +95,7 @@ import { BRAND } from '../shared/brand'
 import { withCurrentDefaultName } from '../shared/copilot-identity'
 import type { Platform } from './platform/host'
 import { recordsFenceKind, recordsFencePaths, recordsFenceUnavailable } from './confine/records'
+import { hootRoleSection } from './copilot-role'
 
 /* ----------------------------------------------------------------- layout -- */
 
@@ -294,6 +295,7 @@ They are all ${BRAND.name}'s records of what *you* did:
   - \`${fenced.remoteCopilot}\` — which devices may reach you.
   - \`${fenced.remoteAuth}\` — which devices are trusted at all.
   - \`${fenced.accessKeys}\` — which AI apps outside ${BRAND.name} may reach your tools.
+  - \`${fenced.pluginGrants}\` — what each plugin may do, including the tools it gives you.
 ${
   enforced
     ? `
@@ -304,6 +306,8 @@ a rule, and it is one you keep for the reason it exists: a record its subject ca
 compose is worth nothing, and an agent that can write its own next trigger is an
 automation loop with no human in it.`
 }
+
+${hootRoleSection()}
 
 ## Your action log
 

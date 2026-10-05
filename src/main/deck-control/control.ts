@@ -228,10 +228,16 @@ export interface CallOptions {
   sessionLimits?: SessionLimits
 }
 
-/** Tools Claude Code must refuse, and skills off, for a session a call starts. Only ever narrows. */
+/**
+ * Tools Claude Code must refuse, and skills off, for a session a call starts.
+ * Only ever narrows — and the task agent whose instructions file it starts
+ * with, which adds the owner's own words and nothing else: an agent id, never
+ * a path or text (`agents/agent-launch.ts`).
+ */
 export interface SessionLimits {
   deniedTools?: string[]
   noSkills?: boolean
+  agentInstructions?: string
 }
 
 /**
@@ -289,6 +295,18 @@ export interface DeckControlOptions {
    * the copilot through here rather than beside it.
    */
   extraTools?: readonly ToolSpec[]
+  /**
+   * Tools that come and go while the app runs: a plugin's, today
+   * (`src/main/plugins/`), listed only while the person has it on and allowed.
+   *
+   * Asked per listing and per call rather than handed over once, because the
+   * answer changes when a plugin is turned off or its files change, and a stale
+   * copy would keep a revoked tool callable. Held to every rule `extraTools`
+   * is; the one difference is a clash, which here cannot fail construction — so
+   * a live tool whose name is already taken is left out instead, and the
+   * built-in keeps it.
+   */
+  liveTools?(): readonly ToolSpec[]
   budgets?: Partial<Budgets>
   now?: () => number
   /**
@@ -500,7 +518,31 @@ export class DeckControl {
 
   /** The catalogue, for `tools/list`. */
   tools(): readonly ToolSpec[] {
-    return this.catalogue
+    const live = this.live()
+    return live.length === 0 ? this.catalogue : [...this.catalogue, ...live]
+  }
+
+  /** The live tools that do not clash with a built-in. See `DeckControlOptions.liveTools`. */
+  private live(): ToolSpec[] {
+    let offered: readonly ToolSpec[] = []
+    try {
+      offered = this.options.liveTools?.() ?? []
+    } catch (error) {
+      console.error('[deck-control] the live tools could not be read:', error)
+      return []
+    }
+    const taken = new Set<string>()
+    return offered.filter((spec) => {
+      if (this.specs.has(spec.id) || this.specs.has(spec.wire) || taken.has(spec.id) || taken.has(spec.wire)) return false
+      taken.add(spec.id)
+      taken.add(spec.wire)
+      return true
+    })
+  }
+
+  /** A tool by either spelling: a built-in, an old name, or a live one. */
+  private find(name: string): ToolSpec | undefined {
+    return this.specs.get(name) ?? this.live().find((spec) => spec.id === name || spec.wire === name)
   }
 
   /** Sessions this run's copilot started. Exposed for the status channel. */
@@ -595,7 +637,7 @@ export class DeckControl {
      * Ungranted, because this is the copilot's own listing and the copilot's
      * grant is everything; a session's listing is smaller still.
      */
-    return catalogueCost(advertisedCatalogue(this.catalogue))
+    return catalogueCost(advertisedCatalogue(this.tools()))
   }
 
   /**
@@ -710,7 +752,7 @@ export class DeckControl {
       }
     }
 
-    const spec = this.specs.get(name)
+    const spec = this.find(name)
 
     /*
      * `tools.run`: re-enter with the tool it names, or refuse without saying
@@ -726,7 +768,7 @@ export class DeckControl {
      */
     if (spec?.id === RUN_ID) {
       const target = runTarget(args)
-      const inner = target.ok ? this.specs.get(target.name) : undefined
+      const inner = target.ok ? this.find(target.name) : undefined
       if (target.ok && inner !== undefined && inner.id !== RUN_ID && visibleTo(options.granted, inner) && keyGrantOk(inner, options.caller)) {
         return this.call(inner.id, target.args, options)
       }

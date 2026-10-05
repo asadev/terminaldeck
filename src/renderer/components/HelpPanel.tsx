@@ -93,6 +93,8 @@ export const PANEL_HELP: Record<PanelId, string> = {
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
   simulators: 'The iOS Simulators, Android emulators and Android phones on this Mac, live. Click to tap, drag to swipe, type to type. Annotate freezes the screen: click the things you mean, say what should change in one note, and send it to a session with a marked picture. Needs Xcode or Android Studio.',
   tasks: 'The work your CRM gives Hoot and your task agents: who has each task, its status in the CRM, and whether it is queued, running, kept open or finished and checked. Set up agents and CRM connections in Settings → Tasks.',
+  memory:
+    `What your agents remember: Claude Code’s memory for each project, Codex’s, ${BRAND.assistant}’s and each project’s knowledge. Read a note, follow its links, search, correct it or move it to the Trash; the graph shows how the notes link, and links that reach no note are listed under it. A memory shared by several folders through a link on disk says so.`,
   staysfixed:
     `${STAYS_FIXED} checks that nothing that already worked has changed after you or an agent edit the project, and shows only the differences nobody asked for — with before and after. Set it up once, run a check after a change, and mark a build as good when you are happy with it; agents you start here can run the same check themselves.`,
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',

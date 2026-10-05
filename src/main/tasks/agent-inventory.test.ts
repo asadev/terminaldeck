@@ -60,3 +60,36 @@ describe('what a task agent can be pointed at', () => {
     expect(frontMatter('---\nname: x\n---', 'description')).toBeNull()
   })
 })
+
+describe('for the coding agent that runs it', () => {
+  it('Codex: its own MCP servers and the skill folders it reads, never Claude Code’s tools', () => {
+    const codexHome = join(dir, 'codex-home')
+    const home = join(dir, 'home')
+    const project = join(dir, 'project')
+    mkdirSync(codexHome, { recursive: true })
+    writeFileSync(join(codexHome, 'config.toml'), 'model = "x"\n[mcp_servers.github]\ncommand = "gh"\n[mcp_servers."db tools"]\ncommand = "db"\n[mcp_servers.github.env]\nA = "1"\n')
+    skill(join(codexHome, 'skills'), 'alpha', '---\nname: alpha\ndescription: From the account\n---')
+    skill(join(codexHome, 'skills', '.system'), 'imagegen', '---\nname: imagegen\n---')
+    skill(join(home, '.agents', 'skills'), 'delta', '---\nname: delta\n---')
+    skill(join(project, '.agents', 'skills'), 'gamma', '---\nname: gamma\n---')
+    // Claude Code's folders are not Codex's.
+    skill(join(project, '.claude', 'skills'), 'claude-only', '---\nname: claude-only\n---')
+
+    const found = agentInventory({ provider: 'codex', configDir: codexHome, system: true, projects: [project], home, env: {} })
+    expect(found.tools.map((tool) => tool.value)).toEqual(['mcp__github', 'mcp__db_tools'])
+    expect(found.tools.some((tool) => CLAUDE_TOOLS.some((claude) => claude.name === tool.value))).toBe(false)
+    expect(found.skills.map((one) => [one.value, one.where])).toEqual([
+      ['alpha', 'account'],
+      ['delta', 'home'],
+      ['gamma', 'project'],
+      ['imagegen', 'built in'],
+    ])
+  })
+
+  it('Gemini or an added agent: nothing this app can read, so only what is saved is offered', () => {
+    for (const provider of ['gemini', 'custom:aider']) {
+      expect(agentInventory({ provider, configDir: join(dir, 'x'), system: true, projects: [], env: {} })).toEqual({ tools: [], skills: [] })
+    }
+  })
+})
+

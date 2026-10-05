@@ -44,6 +44,7 @@ import {
   type ListGroupBy,
 } from './list-view'
 import { assigneeChoices, type TaskRow, type TasksResult, type TasksState } from './tasks-model'
+import { goalOptions } from './Goals'
 import './MyWork.css'
 
 export const PRIORITIES = ['Critical', 'High', 'Medium', 'Low'] as const
@@ -57,14 +58,15 @@ export interface MyWorkActions {
   restore(id: string): Promise<TasksResult>
 }
 
-export type Columns = { assignee: boolean; due: boolean; priority: boolean; created: boolean; project: boolean }
-const ALL_COLUMNS: Columns = { assignee: true, due: true, priority: true, created: false, project: true }
+export type Columns = { assignee: boolean; due: boolean; priority: boolean; created: boolean; project: boolean; goal: boolean }
+const ALL_COLUMNS: Columns = { assignee: true, due: true, priority: true, created: false, project: true, goal: true }
 const COLUMN_LABEL: Record<keyof Columns, string> = {
   assignee: 'Assignee',
   due: 'Due date',
   priority: 'Priority',
   created: 'Date created',
   project: 'Project',
+  goal: 'Goal',
 }
 
 export interface ViewState {
@@ -160,7 +162,9 @@ export function MyWork({
   const nowHm = nowHmOf(now)
   const local = useMemo(() => state.tasks.filter((task) => task.local), [state.tasks])
   const choices = useMemo(() => assigneeChoices(state.agents), [state.agents])
-  const nameOf = (id: string): string => choices.find((choice) => choice.id === id)?.label ?? id
+  const goalChoices = useMemo(() => goalOptions(state.goals ?? []), [state.goals])
+  // An archived agent is not offered, but a task it has is still named by it.
+  const nameOf = (id: string): string => choices.find((choice) => choice.id === id)?.label ?? state.agents.find((agent) => agent.id === id)?.name ?? id
 
   useEffect(() => writeView(view), [view])
   const change = (patch: Partial<ViewState>): void => setView((was) => ({ ...was, ...patch }))
@@ -379,6 +383,7 @@ export function MyWork({
                         busy={busy}
                         columns={view.columns}
                         choices={choices}
+                        goalChoices={goalChoices}
                         assigneeName={nameOf(task.assignee)}
                         selected={selected.has(task.id)}
                         open={open === task.id}
@@ -452,6 +457,7 @@ export function TaskRowView({
   busy,
   columns,
   choices,
+  goalChoices = [],
   assigneeName,
   selected,
   open,
@@ -468,6 +474,8 @@ export function TaskRowView({
   busy: boolean
   columns: Columns
   choices: Array<{ id: string; label: string }>
+  /** The goals a task can serve, in tree order; none, and the Goal cell is not drawn. */
+  goalChoices?: Array<{ id: string; label: string }>
   assigneeName: string
   selected: boolean
   open: boolean
@@ -535,6 +543,17 @@ export function TaskRowView({
               from {task.handedFrom}
             </span>
           )}
+          {task.stalled != null && (
+            <span className="mw-badge" data-tone="attention" title={task.stalled.text}>
+              {task.stalled.reason === 'exited' ? 'stopped early' : 'stalled'}
+            </span>
+          )}
+          {(task.waitingOn ?? []).length > 0 && (
+            <span className="mw-badge" title={`Its agent starts when these are Done: ${(task.waitingOn ?? []).join(', ')}`}>
+              waits for {(task.waitingOn ?? [])[0]}
+              {(task.waitingOn ?? []).length > 1 ? ` +${(task.waitingOn ?? []).length - 1}` : ''}
+            </span>
+          )}
           {tags.map((tag) => (
             <span key={tag} className="mw-tag">
               {tag}
@@ -545,6 +564,7 @@ export function TaskRowView({
         <span className="mw-cells">
           {columns.assignee && (
             <select className="mw-cell-select" aria-label={`Who has ${task.title}`} value={task.assignee} disabled={busy} onChange={(event) => onUpdate({ assignee: event.target.value })} title={assigneeName}>
+              {!choices.some((choice) => choice.id === task.assignee) && <option value={task.assignee}>{assigneeName}</option>}
               {choices.map((choice) => (
                 <option key={choice.id} value={choice.id}>
                   {choice.label}
@@ -564,6 +584,22 @@ export function TaskRowView({
               {PRIORITIES.map((priority) => (
                 <option key={priority} value={priority}>
                   ⚑ {priority}
+                </option>
+              ))}
+            </select>
+          )}
+          {columns.goal && goalChoices.length > 0 && (
+            <select
+              className="mw-cell-select"
+              aria-label={`Goal of ${task.title}`}
+              value={task.goalId ?? ''}
+              disabled={busy}
+              onChange={(event) => onUpdate({ goalId: event.target.value === '' ? null : event.target.value })}
+            >
+              <option value="">No goal</option>
+              {goalChoices.map((choice) => (
+                <option key={choice.id} value={choice.id}>
+                  {choice.label}
                 </option>
               ))}
             </select>

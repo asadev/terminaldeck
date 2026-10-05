@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ROUTINE_TIERS } from '../routines/ipc'
+import { goalTools } from '../tasks/goal-tools'
 import { localTaskTools } from '../tasks/local-task-tools'
 import { agentsCoverage } from './actions/agents'
 import { agentsAreaTools, type AgentsAreaDeps } from './agents-area'
@@ -151,7 +152,10 @@ describe('the agents area', () => {
 
   it('points every entry in the agents table at a tool that exists', () => {
     // Your own tasks' tools are contributed beside the catalogue, like the CRM's; the table points at them too.
-    const taskToolIds = localTaskTools({ local: () => null, detail: () => null, store: () => null, config: () => null, island: () => null }).map((tool) => tool.id)
+    const taskToolIds = [
+      ...localTaskTools({ local: () => null, detail: () => null, store: () => null, config: () => null, island: () => null }),
+      ...goalTools({ goals: () => null, store: () => null, config: () => null, local: () => null, detail: () => null, engine: () => null }),
+    ].map((tool) => tool.id)
     const known = new Set([...ids, ...buildCatalogue().map((tool) => tool.id), ...taskToolIds])
     const dangling = Object.entries(agentsCoverage).flatMap(([channel, entry]) => {
       if (entry === null || 'skip' in entry) return []

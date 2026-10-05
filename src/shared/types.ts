@@ -318,6 +318,14 @@ export interface CreateSessionInput {
   /** Start Claude Code with every skill off. Refused, like `deniedTools`, for an agent that cannot. */
   noSkills?: boolean
   /**
+   * A task agent's id: start with that agent's instructions file, which the
+   * app keeps in its own data folder (`main/agents/agent-launch.ts`). An id and
+   * never a path or text, so nothing that sends this can name a file or put
+   * words on a command line. Refused, like `deniedTools`, for an agent that
+   * cannot be given standing instructions.
+   */
+  agentInstructions?: string
+  /**
    * The session this one replaces, when it is a replacement rather than a
    * second session.
    *

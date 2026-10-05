@@ -66,6 +66,10 @@ describe('Machines in the rail', () => {
       // agents, asked for by the owner beside Simulators — *"i want to have it
       // in side panel just like simulators"*. Its set-up stays in Settings.
       'tasks',
+      // `memory` is a new place too: what the agents remember, as notes. Nothing
+      // in the app showed an agent's memory before except Hoot's, in Settings,
+      // which stays there as the copilot's own pane.
+      'memory',
       // `staysfixed` is a new place too, in 0.16.5 — Stays Fixed, the owner's own
       // regression check, built in: *"make it part of Terminal Deck as well."*
       // Nothing in the app checked a project for regressions before, so it is

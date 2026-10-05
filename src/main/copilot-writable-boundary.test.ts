@@ -329,15 +329,20 @@ describe.skipIf(!onMac)('the copilot, inside the fence it really runs in', () =>
      * justification, sharper — an edit there is not a permission raised, it is
      * a way in minted from nothing, because the copilot can choose a key and
      * write its hash.
+     *
+     * Seven since plugins. The seventh is `plugin-grants.json`: the copilot is
+     * the only agent a plugin's tools are offered to, so a grant it could write
+     * would be a tool it gave itself, under a pane saying the person allowed it.
      */
     expect(profile).toContain('(allow default)')
-    expect(profile.match(/^\(deny /gm)).toHaveLength(6)
+    expect(profile.match(/^\(deny /gm)).toHaveLength(7)
     expect(profile).toContain(fenced.routines)
     expect(profile).toContain(fenced.routineState)
     expect(profile).toContain(fenced.log)
     expect(profile).toContain(fenced.remoteCopilot)
     expect(profile).toContain(fenced.remoteAuth)
     expect(profile).toContain(fenced.accessKeys)
+    expect(profile).toContain(fenced.pluginGrants)
     // And the copilot's own folder is not in it: that is where it works.
     expect(profile).not.toContain(`(subpath "${paths.root}")`)
   })

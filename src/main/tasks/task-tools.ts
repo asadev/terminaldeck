@@ -157,7 +157,7 @@ function hootTools(deps: TaskToolDeps): ToolSpec[] {
             verified: task.result?.verified ?? null,
             parent: task.parentExternalTaskId,
           }))
-        return { value: { tasks, agents: config.agents().map((agent) => ({ name: agent.name, role: agent.role })) }, summary: { tasks: tasks.length } }
+        return { value: { tasks, agents: config.pickableAgents().map((agent) => ({ name: agent.name, role: agent.role, status: agent.status })) }, summary: { tasks: tasks.length } }
       },
     },
     {

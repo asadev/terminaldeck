@@ -25,6 +25,8 @@
 
 import type { BrowserDrive } from '../browser-driver'
 import { serverTools, type ServerToolsDeps } from '../servers/tools'
+import { knowledgeTools } from '../knowledge/knowledge-tools'
+import { goalTools } from '../tasks/goal-tools'
 import { localTaskTools } from '../tasks/local-task-tools'
 import { taskTools } from '../tasks/task-tools'
 import { agentsAreaTools, type AgentsAreaDeps } from './agents-area'
@@ -48,6 +50,7 @@ import { extensionTools } from './extension-tools'
 import { filesTools, type FilesToolDeps } from './files-tools'
 import { fixedTools, type FixedToolDeps } from './fixed-tools'
 import { createMachineArea } from './machine-area'
+import { memoryTools } from './memory-tools'
 import { notifyTools } from './notify-tools'
 import { projectTools, type ProjectToolDeps } from './project-tools'
 import { sessionMoreTools, type SessionMoreDeps } from './session-more-tools'
@@ -79,6 +82,8 @@ export function assembledExtraTools(): ToolSpec[] {
     // Tasks: the CRM's and Hoot's CRM task tools, and your own tasks with the task agents.
     ...taskTools({ api: () => null, engine: () => null, store: () => null, config: () => null }),
     ...localTaskTools({ local: () => null, detail: () => null, store: () => null, config: () => null, island: () => null }),
+    ...knowledgeTools({ knowledge: () => null }),
+    ...goalTools({ goals: () => null, store: () => null, config: () => null, local: () => null, detail: () => null, engine: () => null }),
     // `src/main/index.ts`, in its order.
     ...sessionWindowTools({
       view: () => ({ windows: [], displays: [] }),
@@ -134,6 +139,8 @@ export function assembledExtraTools(): ToolSpec[] {
     // A project's Stays Fixed page, after the sessions lane's — where
     // `WIRING-staysfixed.md` puts it in `src/main/index.ts`.
     ...fixedTools({} as FixedToolDeps),
+    // The agents' own memory, after Stays Fixed — where `src/main/index.ts` lists it.
+    ...memoryTools({ memory: () => null, storeOf: () => null }),
   ]
 }
 

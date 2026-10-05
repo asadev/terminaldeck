@@ -36,6 +36,9 @@ import { writeSecretFile } from '../remote/secret-file'
 import { newWebhookSecret, webhookUrlProblem } from '../deck-control/notify-webhook'
 import { EFFORT_LEVELS } from '../agent-controls'
 import { TOOL_NAME } from '../../shared/agent-tools'
+import { agentLabel, capabilityFor, enforces } from '../../shared/agent-capabilities'
+import { InstructionsFiles, instructionsDir, MAX_INSTRUCTIONS_FILE_CHARS } from '../agents/agent-instructions'
+import { ACTIVE, applyLifecycle, isPickable, lifecycleOf, type AgentStatus } from '../agents/agent-lifecycle'
 
 export const TASK_CONFIG_FILE = 'task-config.json'
 
@@ -49,7 +52,7 @@ export const MAX_FOLDERS = 20
 export const MAX_STATUSES = 20
 export const DEFAULT_MAX_HOPS = 3
 export const MAX_HOPS = 5
-export const MAX_INSTRUCTIONS_CHARS = 8_000
+export const MAX_INSTRUCTIONS_CHARS = MAX_INSTRUCTIONS_FILE_CHARS
 export const MAX_TOOL_NAMES = 30
 export const MAX_SKILLS = 20
 
@@ -71,8 +74,18 @@ export interface AgentProfile {
   model: string | null
   /** Effort level, set the same way as the model. Null leaves the agent's own. */
   effort: string | null
-  /** Standing instructions, put at the top of every brief this agent is given. */
+  /**
+   * Standing instructions. Kept in a file of the agent's own
+   * (`agents/agent-instructions.ts`) and read back from it, so an edit made in
+   * another editor is what the agent gets. Given at the start where the coding
+   * agent takes them (`shared/agent-capabilities.ts`), and put in every brief.
+   */
   instructions: string | null
+  /**
+   * Where that file is. Worked out, never stored: null while the instructions
+   * are not in a file — none set, or a settings store kept in memory.
+   */
+  instructionsFile: string | null
   /**
    * Tools the agent is asked to prefer, and to avoid. A preference written into
    * its brief, never an enforcement: what the agent may actually do is still
@@ -98,6 +111,10 @@ export interface AgentProfile {
   keepAliveMinutes: number
   /** Run in the project after a finished turn; exit 0 is a verified completion. Null: Hoot verifies. */
   verifyCommand: string | null
+  /** Taking work, paused, or archived (`agents/agent-lifecycle.ts`). Changed only by `setAgentStatus`. */
+  status: AgentStatus
+  /** When the status last changed; null for an agent that has only ever been active. */
+  statusAt: number | null
 }
 
 /** The CRM's statuses, and which each thing that happens here sets. */
@@ -208,9 +225,12 @@ export function cleanAgent(raw: unknown, others: readonly AgentProfile[]): Agent
   const provider = optionalText(input.provider, 'The coding agent', 40)
   const blockedTools = blockedToolsOf(input.blockedTools)
   const skillsOff = input.skillsOff === true
-  if (provider !== null && provider !== 'claude' && (blockedTools.length > 0 || skillsOff)) {
+  // The app default may be Claude Code; a start on an agent that is not is refused.
+  if ((blockedTools.length > 0 && !enforces(provider, 'blockedTools')) || (skillsOff && !enforces(provider, 'skillsOff'))) {
     throw new TaskConfigProblem('Only Claude Code can block tools or turn skills off. Clear them, or choose Claude Code.')
   }
+  const lifecycle = lifecycleOf(input)
+  if (typeof lifecycle === 'string') throw new TaskConfigProblem(lifecycle)
   return {
     id,
     name,
@@ -220,6 +240,7 @@ export function cleanAgent(raw: unknown, others: readonly AgentProfile[]): Agent
     model: optionalText(input.model, 'The model', 80),
     effort: effortOf(input.effort),
     instructions: optionalText(input.instructions, 'The instructions', MAX_INSTRUCTIONS_CHARS),
+    instructionsFile: null,
     toolsPreferred: textList(input.toolsPreferred, 'Tools to prefer', MAX_TOOL_NAMES, 80),
     toolsAvoided: textList(input.toolsAvoided, 'Tools to avoid', MAX_TOOL_NAMES, 80),
     skills: textList(input.skills, 'The skills', MAX_SKILLS, 80),
@@ -229,6 +250,34 @@ export function cleanAgent(raw: unknown, others: readonly AgentProfile[]): Agent
     maxRunMinutes: whole(input.maxRunMinutes, 'Longest run', 0, MAX_MINUTES, DEFAULT_RUN_MINUTES),
     keepAliveMinutes: whole(input.keepAliveMinutes, 'Keep open', 0, MAX_MINUTES, DEFAULT_KEEP_ALIVE_MINUTES),
     verifyCommand: optionalText(input.verifyCommand, 'The check command', 500),
+    ...lifecycle,
+  }
+}
+
+/**
+ * A setting the chosen coding agent cannot be made to keep, refused when the
+ * agent is saved rather than dropped when it starts. Only on a save: an agent
+ * stored before the check existed still loads, and says so the next time it
+ * is changed.
+ */
+export function checkSupported(agent: AgentProfile): void {
+  for (const [setting, value, what] of [
+    ['model', agent.model, 'a model'],
+    ['effort', agent.effort, 'an effort level'],
+  ] as const) {
+    if (value !== null && !enforces(agent.provider, setting)) {
+      throw new TaskConfigProblem(`${agentLabel(agent.provider)} cannot be given ${what} by this app. Clear it, or choose Claude Code.`)
+    }
+  }
+  // What only a brief can carry, for an agent that reads none.
+  for (const [setting, set, what] of [
+    ['instructions', agent.instructions !== null, 'instructions'],
+    ['toolAdvice', agent.toolsPreferred.length > 0 || agent.toolsAvoided.length > 0, 'tools to prefer or avoid'],
+    ['skillSelection', agent.skills.length > 0, 'skills'],
+  ] as const) {
+    if (set && capabilityFor(agent.provider, setting).support === 'unsupported') {
+      throw new TaskConfigProblem(`${agentLabel(agent.provider)} cannot be given ${what}. Clear them, or choose a coding agent.`)
+    }
   }
 }
 
@@ -280,9 +329,11 @@ function cleanFolders(value: unknown): string[] {
 
 /* ------------------------------------------------------------------ store -- */
 
+type StoredAgent = Omit<AgentProfile, 'instructionsFile'>
+
 interface StoredFile {
   v: 1
-  agents: AgentProfile[]
+  agents: StoredAgent[]
   connections: CrmConnection[]
 }
 
@@ -292,48 +343,105 @@ export interface TaskConfigOptions {
 }
 
 export class TaskConfig {
+  /**
+   * The agents as stored. `instructions` here is only ever text that has no
+   * file yet — an agent saved before instructions moved to files, whose file
+   * could not be written; {@link view} reads everything else from the file.
+   */
   private agentsList: AgentProfile[] = []
   private connectionsList: CrmConnection[] = []
   private readonly listeners = new Set<() => void>()
+  /** `<dir>/agent-instructions`; null when the settings are kept in memory. */
+  private readonly files: InstructionsFiles | null
 
   constructor(private readonly options: TaskConfigOptions) {
+    this.files = options.dir === null ? null : new InstructionsFiles(instructionsDir(options.dir))
     this.load()
   }
 
   /* ---------------------------------------------------------- agents -- */
 
+  /** An agent as everyone else sees it: its instructions as its file says now. */
+  private view(agent: AgentProfile): AgentProfile {
+    if (this.files === null) return { ...agent, instructionsFile: null }
+    const text = this.files.read(agent.id)?.trim() ?? null
+    if (text === null || text === '') return { ...agent, instructionsFile: null }
+    return { ...agent, instructions: text, instructionsFile: this.files.path(agent.id) }
+  }
+
   agents(): AgentProfile[] {
-    return this.agentsList.map((agent) => ({ ...agent }))
+    return this.agentsList.map((agent) => this.view(agent))
+  }
+
+  /** The agents a picker offers: every one but the archived. */
+  pickableAgents(): AgentProfile[] {
+    return this.agents().filter(isPickable)
   }
 
   agent(id: string): AgentProfile | null {
     const found = this.agentsList.find((agent) => agent.id === id)
-    return found ? { ...found } : null
+    return found ? this.view(found) : null
   }
 
   /** By id or by name, ignoring case — how Hoot names one. */
   findAgent(nameOrId: string): AgentProfile | null {
     const wanted = nameOrId.trim().toLowerCase()
     const found = this.agentsList.find((agent) => agent.id === wanted || agent.name.toLowerCase() === wanted)
-    return found ? { ...found } : null
+    return found ? this.view(found) : null
   }
 
+  /**
+   * Create or change one agent. Its status is kept as it is — a new one is
+   * active — whatever the form sent; see `agents/agent-lifecycle.ts`.
+   */
   saveAgent(raw: unknown): AgentProfile {
-    const agent = cleanAgent(raw, this.agentsList)
-    const at = this.agentsList.findIndex((other) => other.id === agent.id)
+    // What a save carries about status is not read at all: it is kept below.
+    const input = typeof raw === 'object' && raw !== null ? { ...(raw as Record<string, unknown>), status: undefined, statusAt: undefined } : raw
+    const cleaned = cleanAgent(input, this.agentsList)
+    const at = this.agentsList.findIndex((other) => other.id === cleaned.id)
     if (at < 0 && this.agentsList.length >= MAX_AGENTS) {
       throw new TaskConfigProblem(`There can be at most ${MAX_AGENTS} agents.`)
+    }
+    const existing = at < 0 ? null : this.agentsList[at]
+    const agent: AgentProfile = {
+      ...cleaned,
+      status: existing?.status ?? ACTIVE.status,
+      statusAt: existing?.statusAt ?? ACTIVE.statusAt,
+    }
+    checkSupported(agent)
+    if (this.files !== null) {
+      // The file first: a save that cannot write it changes nothing.
+      try {
+        this.files.write(agent.id, agent.instructions)
+      } catch (error) {
+        throw new TaskConfigProblem(`The instructions file could not be written: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      agent.instructions = null
     }
     if (at < 0) this.agentsList.push(agent)
     else this.agentsList[at] = agent
     this.changed()
-    return { ...agent }
+    return this.view(agent)
+  }
+
+  /** Pause, resume, archive or restore one agent. */
+  setAgentStatus(id: string, action: unknown, now: number = Date.now()): AgentProfile {
+    const at = this.agentsList.findIndex((agent) => agent.id === id)
+    if (at < 0) throw new TaskConfigProblem('That agent no longer exists.')
+    const agent = this.agentsList[at]
+    const next = applyLifecycle(agent, action, now, agent.name)
+    if (typeof next === 'string') throw new TaskConfigProblem(next)
+    this.agentsList[at] = { ...agent, ...next }
+    this.changed()
+    return this.view(this.agentsList[at])
   }
 
   removeAgent(id: string): boolean {
     const before = this.agentsList.length
     this.agentsList = this.agentsList.filter((agent) => agent.id !== id)
     if (this.agentsList.length === before) return false
+    // Final, unlike archiving: an agent made later with this id starts blank.
+    this.files?.remove(id)
     // An identity pointing at a removed agent would route work to nobody.
     for (const connection of this.connectionsList) {
       for (const [identity, agentId] of Object.entries(connection.identities)) {
@@ -439,6 +547,27 @@ export class TaskConfig {
 
   /* --------------------------------------------------------- keeping -- */
 
+  /**
+   * Instructions saved before they had files, written into them. A file that
+   * already exists wins. One that cannot be written leaves the text where it
+   * was, still read, rather than losing it. True when anything moved.
+   */
+  private moveInstructionsToFiles(): boolean {
+    if (this.files === null) return false
+    let moved = false
+    for (const agent of this.agentsList) {
+      if (agent.instructions === null) continue
+      try {
+        if (!this.files.has(agent.id)) this.files.write(agent.id, agent.instructions)
+        agent.instructions = null
+        moved = true
+      } catch (error) {
+        console.error(`[tasks] could not move ${agent.id}'s instructions into a file; keeping them in the settings:`, error)
+      }
+    }
+    return moved
+  }
+
   private changed(): void {
     this.flush()
     for (const listener of [...this.listeners]) {
@@ -457,7 +586,13 @@ export class TaskConfig {
   private flush(): void {
     const file = this.file()
     if (file === null || this.options.dir === null) return
-    const state: StoredFile = { v: 1, agents: this.agentsList, connections: this.connectionsList }
+    // `instructionsFile` is worked out on every read, so it is never written down.
+    const agents = this.agentsList.map((agent) => {
+      const stored: Partial<AgentProfile> = { ...agent }
+      delete stored.instructionsFile
+      return stored as StoredAgent
+    })
+    const state: StoredFile = { v: 1, agents, connections: this.connectionsList }
     writeSecretFile(this.options.dir, file, `${JSON.stringify(state)}\n`)
   }
 
@@ -470,7 +605,9 @@ export class TaskConfig {
       const agents: AgentProfile[] = []
       for (const entry of Array.isArray(raw.agents) ? raw.agents : []) {
         try {
-          agents.push(cleanAgent(entry, agents))
+          // A status that no longer reads costs the agent its status, not the agent.
+          const lifecycle = typeof entry === 'object' && entry !== null ? lifecycleOf(entry) : null
+          agents.push(cleanAgent(typeof lifecycle === 'string' ? { ...entry, status: undefined, statusAt: undefined } : entry, agents))
         } catch (error) {
           console.error('[tasks] skipped an agent that no longer reads:', error)
         }
@@ -479,6 +616,8 @@ export class TaskConfig {
       this.connectionsList = (Array.isArray(raw.connections) ? raw.connections : [])
         .filter(isConnection)
         .map((connection) => ({ ...connection, name: typeof connection.name === 'string' ? connection.name : null }))
+      // After the connections, so the rewrite carries them too.
+      if (this.moveInstructionsToFiles()) this.flush()
     } catch (error) {
       console.error('[tasks] could not read the task settings; starting empty:', error)
     }

@@ -37,6 +37,7 @@ import {
   type TasksState,
 } from './tasks-model'
 import { MyWork } from './MyWork'
+import { goalActions, goalOptions, GoalsSection, type GoalActions } from './Goals'
 import { LocalTaskPopup } from '../crm-task/LocalTaskPopup'
 import './TasksPage.css'
 
@@ -113,6 +114,7 @@ export function tasksActions(bridge: Partial<TasksBridge>): TasksActions {
 export function TasksPage(props: TasksPageProps): ReactElement {
   const bridge = useMemo(() => props.bridge ?? resolveTasksBridge(), [props.bridge])
   const actions = useMemo(() => tasksActions(bridge), [bridge])
+  const goals = useMemo(() => goalActions(bridge), [bridge])
   const supplied = props.state !== undefined
   // Undefined until the first read answers.
   const [loaded, setLoaded] = useState<TasksState | null | undefined>(undefined)
@@ -129,6 +131,7 @@ export function TasksPage(props: TasksPageProps): ReactElement {
       state={state}
       now={props.now ?? clock}
       actions={actions}
+      goalActions={goals}
       onState={setLoaded}
       onOpenSettings={props.onOpenSettings}
       openTask={props.openTask ?? null}
@@ -165,6 +168,7 @@ export function TasksPageBody({
   state,
   now,
   actions,
+  goalActions,
   onState,
   onOpenSettings,
   openTask = null,
@@ -173,12 +177,15 @@ export function TasksPageBody({
   state: TasksState | null | undefined
   now: number
   actions?: TasksActions
+  /** Make, change and remove goals. Absent: the goals are listed, not changed. */
+  goalActions?: GoalActions
   onState?(state: TasksState): void
   onOpenSettings?(): void
   /** A task to open, as `<id>@<when asked>` — a reminder for it was clicked. */
   openTask?: string | null
 }): ReactElement {
   const [creating, setCreating] = useState(false)
+  const [creatingGoal, setCreatingGoal] = useState(false)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
 
@@ -230,6 +237,11 @@ export function TasksPageBody({
               New task
             </button>
           )}
+          {goalActions && !creatingGoal && (
+            <button type="button" className="dashboard-btn" onClick={() => setCreatingGoal(true)}>
+              New goal
+            </button>
+          )}
           {onOpenSettings && (
             <button type="button" className="dashboard-btn" onClick={onOpenSettings}>
               Agents and connections
@@ -256,6 +268,18 @@ export function TasksPageBody({
           }}
         />
       )}
+
+      <GoalsSection
+        goals={state.goals ?? []}
+        busy={busy}
+        actions={goalActions}
+        run={run}
+        creating={creatingGoal}
+        onCreating={(open) => {
+          setCreatingGoal(open)
+          if (!open) setProblem(null)
+        }}
+      />
 
       <section className="tasks-page-section" aria-label="Your tasks">
         <h2 className="tasks-page-heading">Your tasks</h2>
@@ -327,7 +351,8 @@ export function LocalTaskForm({
   onSave(draft: LocalDraft): void
   onCancel(): void
 }) {
-  const [draft, setDraft] = useState<LocalDraft>(() => localDraftOf(task, state.localStatuses))
+  const [draft, setDraft] = useState<LocalDraft>(() => ({ ...localDraftOf(task, state.localStatuses), goalId: task?.goalId ?? '' }))
+  const goals = goalOptions(state.goals ?? [])
   const set = (field: keyof LocalDraft) => (event: { target: { value: string } }) => setDraft((was) => ({ ...was, [field]: event.target.value }))
   const fresh = task === null
   return (
@@ -381,6 +406,19 @@ export function LocalTaskForm({
             </select>
           </label>
         </div>
+      )}
+      {fresh && goals.length > 0 && (
+        <label className="tasks-local-field">
+          <span>Goal</span>
+          <select value={draft.goalId ?? ''} disabled={busy} onChange={set('goalId')}>
+            <option value="">No goal</option>
+            {goals.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       <div className="tasks-local-buttons">
         <button type="submit" className="dashboard-btn tasks-page-new" disabled={busy || draft.title.trim() === ''}>

@@ -1,0 +1,78 @@
+/* ============================================================================
+   Goals on the Tasks page: one tinted card of rows, a goal's sub-goals stepped
+   in under it, and a thin meter of its done tasks. Colour comes only from
+   tokens.css; a goal's status takes the app's status colours.
+   ============================================================================ */
+
+.goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-2);
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.goals-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2);
+  padding-left: calc(var(--sp-2) + var(--depth, 0) * var(--sp-5));
+}
+
+.goals-main {
+  display: flex;
+  flex: 1 1 280px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.goals-title {
+  font-weight: var(--w-medium);
+}
+
+.goals-title[data-status='achieved'] { color: var(--status-completed); }
+.goals-title[data-status='cancelled'] { color: var(--text-muted); text-decoration: line-through; }
+.goals-title[data-status='planned'] { color: var(--text-secondary); }
+
+.goals-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  white-space: pre-wrap;
+}
+
+.goals-counts {
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.goals-counts[data-stalled] { color: var(--status-input); }
+
+.goals-meter {
+  flex: 0 0 120px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+}
+
+.goals-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--status-completed);
+  transition: width var(--dur) var(--ease);
+}
+
+.goals-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}

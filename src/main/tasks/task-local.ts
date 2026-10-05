@@ -174,7 +174,7 @@ export function newLocalTask(
 
 /** One field an update changed, before and after — what the task's Activity column tells. */
 export interface LocalChange {
-  field: 'title' | 'instructions' | 'project' | 'status' | 'archived' | 'assignee' | Exclude<keyof CrmFields, 'position'>
+  field: 'title' | 'instructions' | 'project' | 'status' | 'archived' | 'assignee' | 'goal' | 'workspace' | Exclude<keyof CrmFields, 'position'>
   from: unknown
   to: unknown
 }
@@ -183,6 +183,8 @@ export interface LocalTasksDeps {
   store: TaskStore
   config: TaskConfig
   engine: Pick<TaskEngine, 'accept' | 'reassign' | 'reply' | 'cancel'>
+  /** The goals a task may serve (`goal-store.ts`). Absent: a task can be linked to none. */
+  goals?: { has(id: string): boolean; byId(id: string): { title: string } | null }
   now?: () => number
   onChange?(): void
   /**
@@ -201,6 +203,8 @@ const TRACKED: ReadonlyArray<LocalChange['field']> = [
   'status',
   'archived',
   'assignee',
+  'goal',
+  'workspace',
   'priority',
   'startDate',
   'dueDate',
@@ -216,6 +220,8 @@ function trackedValue(task: TaskRecord, field: LocalChange['field']): unknown {
   if (field === 'status') return task.crmStatus
   if (field === 'archived') return task.archivedAt != null
   if (field === 'assignee') return task.assignee.identity
+  if (field === 'goal') return task.goalId ?? null
+  if (field === 'workspace') return task.useWorkspace === true
   if (field === 'labels') return [...(task.labels ?? [])]
   if (field === 'taskType') return task.taskType ?? 'task'
   return task[field] ?? null
@@ -279,8 +285,16 @@ export class LocalTasks {
     const status = this.statusOf(field(input, 'status')) ?? LOCAL_STATUSES.initial
     this.checkProject(project, assignee)
     const fields = crmFieldsOf(input)
+    const goalId = this.goalOf(field(input, 'goalId'))
     const task = newLocalTask({ title, instructions, project, assignee, status }, this.now())
-    Object.assign(task, { labels: [], taskType: 'task', ...fields, completedAt: status === LOCAL_STATUSES.completed ? this.now() : null })
+    Object.assign(task, {
+      labels: [],
+      taskType: 'task',
+      ...fields,
+      ...(goalId === undefined ? {} : { goalId }),
+      ...('useWorkspace' in input ? { useWorkspace: this.flagOf(input.useWorkspace, 'Running in its own workspace') } : {}),
+      completedAt: status === LOCAL_STATUSES.completed ? this.now() : null,
+    })
     this.deps.store.put(task)
     this.deps.store.note(task, { by: actorNow(), kind: 'edited', text: `Created, assigned to ${this.nameOf(assignee)}.` })
     await this.deps.engine.accept(task)
@@ -299,6 +313,8 @@ export class LocalTasks {
     const assignee = 'assignee' in input ? this.assigneeOf(field(input, 'assignee')) : null
     this.checkProject(project ?? task.project, assignee ?? task.assignee)
     const fields = crmFieldsOf(input)
+    const goalId = this.goalOf(field(input, 'goalId'))
+    const useWorkspace = 'useWorkspace' in input ? this.flagOf(input.useWorkspace, 'Running in its own workspace') : undefined
     const archive = 'archived' in input ? input.archived === true : null
     const before = new Map(TRACKED.map((key) => [key, trackedValue(task, key)] as const))
     let written = 0
@@ -327,6 +343,14 @@ export class LocalTasks {
       // Done alone is completed, and stamps when; every other status clears it (the CRM's rule).
       this.deps.store.update(task, { crmStatus: status, completedAt: status === LOCAL_STATUSES.completed ? this.now() : null })
       note({ by: actorNow(), kind: 'status', text: `Status: ${status}` })
+    }
+    if (goalId !== undefined && goalId !== (task.goalId ?? null)) {
+      this.deps.store.update(task, { goalId })
+      note({ by: actorNow(), kind: 'edited', text: goalId === null ? 'No longer part of a goal.' : `Part of the goal “${this.deps.goals?.byId(goalId)?.title ?? goalId}”.` })
+    }
+    if (useWorkspace !== undefined && useWorkspace !== (task.useWorkspace === true)) {
+      this.deps.store.update(task, { useWorkspace })
+      note({ by: actorNow(), kind: 'edited', text: useWorkspace ? 'Runs in a workspace of its own from its next start.' : 'Runs in its project folder from its next start, unless it already has a workspace.' })
     }
     if (archive !== null && archive !== (task.archivedAt != null)) {
       this.deps.store.update(task, { archivedAt: archive ? this.now() : null })
@@ -398,6 +422,21 @@ export class LocalTasks {
     const task = typeof id === 'string' ? this.deps.store.byId(id) : null
     if (task === null || task.local !== true) throw new TaskConfigProblem('That task no longer exists.')
     return task
+  }
+
+  /** A goal to serve: undefined when not named, null for none, else one that exists. */
+  private goalOf(raw: unknown): string | null | undefined {
+    if (raw === undefined) return undefined
+    if (raw === null || raw === '') return null
+    if (typeof raw !== 'string' || this.deps.goals === undefined || !this.deps.goals.has(raw)) {
+      throw new TaskConfigProblem('That goal no longer exists.')
+    }
+    return raw
+  }
+
+  private flagOf(raw: unknown, what: string): boolean {
+    if (typeof raw !== 'boolean') throw new TaskConfigProblem(`${what} is on or off.`)
+    return raw
   }
 
   private statusOf(raw: unknown): string | undefined {

@@ -73,6 +73,7 @@ export interface HeldSession {
   homeProfileId?: string
   deniedTools?: string[]
   noSkills?: boolean
+  agentInstructions?: string
   /**
    * Stable for as long as this entry exists, and meaningless afterwards.
    *

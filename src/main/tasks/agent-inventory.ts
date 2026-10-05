@@ -1,6 +1,9 @@
 /**
  * What a task agent could be pointed at on this Mac: the tools it can be asked
- * about or blocked from, and the skills installed for its account.
+ * about or blocked from, and the skills installed for its account — for the
+ * coding agent it runs on. Codex reads its own skill folders (below); Gemini
+ * and an added agent have none this app knows how to find, so their pickers
+ * offer only what is saved.
  *
  * Read from disk only — no agent is started to ask. Claude Code's own tools come
  * from `shared/agent-tools.ts`, because the CLI lists them only when it runs; its
@@ -12,7 +15,9 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { familyOf } from '../../shared/agent-capabilities'
 import { CLAUDE_TOOLS, mcpServerTool } from '../../shared/agent-tools'
 import { loadServers } from '../mcp-client'
 
@@ -30,13 +35,17 @@ export interface AgentInventory {
 }
 
 export interface InventoryInput {
-  /** The account's Claude Code folder. */
+  /** Which coding agent; null or absent for the app's default, read as Claude Code. */
+  provider?: string | null
+  /** The account's folder: Claude Code's, or Codex's `CODEX_HOME`. */
   configDir: string
   /** The agent's own install: Claude Code then reads `~/.claude.json`, not one inside `configDir`. */
   system: boolean
   /** Project folders whose `.mcp.json` and `.claude/skills` count too. */
   projects: readonly string[]
   env?: NodeJS.ProcessEnv
+  /** The home folder, for Codex's `~/.agents/skills`. */
+  home?: string
 }
 
 /** `deck-control/server.ts`'s `SERVER_NAME`, the app's own tools in every session; a test keeps the two equal. */
@@ -47,6 +56,9 @@ const MAX_LISTED = 300
 const HEAD_BYTES = 4096
 
 export function agentInventory(input: InventoryInput): AgentInventory {
+  const family = familyOf(input.provider ?? null)
+  if (family === 'codex') return codexInventory(input)
+  if (family !== 'claude') return { tools: [], skills: [] }
   const base = { ...(input.env ?? process.env) }
   delete base.CLAUDE_CONFIG_DIR
   const env = input.system ? base : { ...base, CLAUDE_CONFIG_DIR: input.configDir }
@@ -88,6 +100,53 @@ export function agentInventory(input: InventoryInput): AgentInventory {
   for (const plugin of pluginsIn(input.configDir)) addSkills(join(plugin.path, 'skills'), `plugin ${plugin.name}`, `${plugin.name}:`)
 
   return { tools, skills }
+}
+
+/**
+ * Codex's own: the MCP servers in its `config.toml`, and the skills in the
+ * folders it was measured reading (0.159.3, `codex debug prompt-input` with an
+ * empty CODEX_HOME and HOME) — `$CODEX_HOME/skills` with its bundled
+ * `.system`, `~/.agents/skills`, and each project's `.agents/skills`. Its
+ * built-in tools are not listed: Codex prints no list of them to read.
+ */
+function codexInventory(input: InventoryInput): AgentInventory {
+  const tools: InventoryChoice[] = []
+  for (const name of codexServers(join(input.configDir, 'config.toml'))) {
+    const value = mcpServerTool(name)
+    if (value !== null && !tools.some((tool) => tool.value === value) && tools.length < MAX_LISTED) {
+      tools.push({ value, label: `${name} — every tool of this MCP server`, where: 'Codex config' })
+    }
+  }
+  const skills: InventoryChoice[] = []
+  const named = new Set<string>()
+  const add = (dir: string, where: string): void => {
+    for (const found of skillsIn(dir)) {
+      if (named.has(found.name) || skills.length >= MAX_LISTED) continue
+      named.add(found.name)
+      skills.push({ value: found.name, label: found.description === null ? found.name : `${found.name} — ${found.description}`, where })
+    }
+  }
+  add(join(input.configDir, 'skills'), 'account')
+  add(join(input.home ?? homedir(), '.agents', 'skills'), 'home')
+  for (const project of input.projects) add(join(project, '.agents', 'skills'), 'project')
+  add(join(input.configDir, 'skills', '.system'), 'built in')
+  return { tools, skills }
+}
+
+/** `[mcp_servers.<name>]` table names from a Codex `config.toml`; a line read, never the whole TOML. */
+function codexServers(file: string): string[] {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return []
+  }
+  const names: string[] = []
+  for (const match of text.matchAll(/^\s*\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]\s*$/gm)) {
+    const name = match[1] ?? match[2]
+    if (name !== undefined && !names.includes(name)) names.push(name)
+  }
+  return names
 }
 
 function skillsIn(dir: string): Array<{ name: string; description: string | null }> {

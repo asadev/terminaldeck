@@ -57,6 +57,8 @@ export function fakeContext(options: { caller?: Caller; mine?: string[] } = {}):
         return { ...record.settings }
       },
       applyToWindow: () => true,
+      // No task has a workspace of its own here.
+      taskWorkspaceFolders: () => [],
       startSession: async (input: CreateSessionInput, device?: string) => {
         record.started.push({ input, device })
         const meta: SessionMeta = {

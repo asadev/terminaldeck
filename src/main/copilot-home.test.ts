@@ -386,8 +386,11 @@ describe('the instructions — the half that is the person’s', () => {
      * instruction and is the person's to change.
      */
     const body = text()
-    expect(body).toMatch(/prefer giving it to a session/i)
-    expect(body).toMatch(/Ask before you write, move or delete anything of theirs/i)
+    // An assistant that works when asked, asks when the idea is its own, and
+    // gives real work to an agent through a task.
+    expect(body).toMatch(/When they ask for a change, make it/i)
+    expect(body).toMatch(/When the idea is yours, ask first/i)
+    expect(body).toMatch(/give it to an agent through a task/i)
     expect(body).not.toMatch(/read, and never write/i)
     expect(body).not.toMatch(/that is a session's job, not yours/i)
   })

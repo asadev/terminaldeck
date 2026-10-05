@@ -32,6 +32,9 @@ const PUSH_PLUMBING =
 const TASK_SETUP_IS_THE_OWNERS =
   'Which agents exist and which CRM users may give them work is the owner’s setting; an AI must not be able to grant itself agents or senders.'
 
+const PLUGINS_ARE_THE_OWNERS =
+  'Allowing, starting or removing a plugin decides what another program may do on this computer, so only the owner does it, in Settings; an AI that could allow one could give itself what the plugin can do.'
+
 const KEYS_ARE_THE_OWNERS =
   'Access keys decide which outside AI apps may reach this computer, so they are changed only by the owner in Settings, never by a tool an AI could call.'
 
@@ -79,6 +82,7 @@ export const agentsCoverage: CoverageMap = {
   },
   'tasks:agent-save': { tool: 'tasks.agents' },
   'tasks:agent-remove': { tool: 'tasks.agents' },
+  'tasks:agent-status': { tool: 'tasks.agents' },
   'tasks:connection-save': { skip: TASK_SETUP_IS_THE_OWNERS },
   'tasks:connection-remove': { skip: TASK_SETUP_IS_THE_OWNERS },
   // Makes a key: the owner's press, confirmed, in Settings.
@@ -93,6 +97,16 @@ export const agentsCoverage: CoverageMap = {
   'tasks:local-detail': { tool: 'tasks.local_parts' },
   'tasks:local-delete': { tool: 'tasks.local_change' },
   'tasks:local-restore': { tool: 'tasks.local_change' },
+  // A task's own working folder (`workspaces/task-workspaces.ts`).
+  'tasks:workspace': {
+    skip: 'Which folder a task’s worker runs in is shown on the task’s own row; Hoot sees it through the task and the session it delegated.',
+  },
+  'tasks:workspace-open': { skip: 'Opens the folder in Finder on this Mac, for the person looking at the task.' },
+  'tasks:workspace-remove': {
+    skip: 'Removing a task’s working folder is the owner’s press, and is refused while it holds unsaved work.',
+  },
+  'tasks:goal-save': { tool: 'tasks.goals' },
+  'tasks:goal-remove': { tool: 'tasks.goals' },
   'ai-apps:state': {
     skip: 'The list of which outside AI apps hold keys is the owner’s audit screen; an app holding one has no business listing the others.',
   },
@@ -132,6 +146,16 @@ export const agentsCoverage: CoverageMap = {
   'mcp:remove': { tool: 'mcp.remove' },
   'mcp:store': { tool: 'mcp.store' },
   'mcp:store-install': { tool: 'mcp.install' },
+  // Settings → Plugins: whether another program may run here, and with what, is the owner's alone.
+  'plugins:allow': { skip: PLUGINS_ARE_THE_OWNERS },
+  'plugins:enable': { skip: PLUGINS_ARE_THE_OWNERS },
+  'plugins:open-folder': {
+    skip: 'Showing the plugins folder in Finder is for a person putting a plugin there by hand; no tool installs one.',
+  },
+  'plugins:remove': { skip: PLUGINS_ARE_THE_OWNERS },
+  'plugins:state': {
+    skip: 'The list of plugins and what each was allowed is the owner’s screen; Hoot sees a plugin only as the tools it was allowed to give.',
+  },
   'prefs:get': { tool: 'settings.read' },
   'prefs:set': { tool: 'settings.write' },
   'prereq:check': { tool: 'setup.status' },

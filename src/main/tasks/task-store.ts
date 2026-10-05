@@ -90,6 +90,14 @@ export interface TaskNote {
 /** Most notes kept on one task; the oldest go first. */
 export const MAX_NOTES = 100
 
+/** Why a task's worker stopped moving: it went quiet, or its session ended before the work was done. */
+export interface TaskStall {
+  at: number
+  reason: 'quiet' | 'exited'
+  /** One sentence, as the task's record and Hoot were told it. */
+  text: string
+}
+
 export interface TaskResult {
   at: number
   /** Passed its check command, or Hoot said so. Only a verified result sets the completed status. */
@@ -173,6 +181,22 @@ export interface TaskRecord {
   recurrence?: string | null
   /** What the task popup adds to a local task: subtasks, checklists, files, fields, comments, time and more. */
   detail?: LocalTaskDetailData
+  /** The goal a local task serves (`goal-store.ts`); null or absent: none. */
+  goalId?: string | null
+  /**
+   * A local task asked to run in a workspace of its own (a git worktree), so
+   * agents on one project do not share a checkout. Read by the workspace part
+   * when an agent starts; once a task has a workspace it keeps using it.
+   */
+  useWorkspace?: boolean
+  /**
+   * Set when its worker went quiet without finishing, or ended without
+   * finishing (`TaskEngine`'s stall check). Cleared when the worker works again
+   * or the task is started again.
+   */
+  stalled?: TaskStall | null
+  /** The last time it was tried again with the same agent and brief, and what that try was told. */
+  retry?: { note: string; at: number; count: number } | null
   createdAt: number
   updatedAt: number
 }

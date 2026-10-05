@@ -284,6 +284,16 @@ describe('what each verb does', () => {
     expect(island.enabled).toBe(false)
   })
 
+  it('pauses, archives and restores a task agent, and offers no archived one for a task', async () => {
+    expect(await call('tasks.agents', { do: 'pause', id: 'builder' })).toEqual({ agent: 'builder', status: 'paused' })
+    expect(await call('tasks.agents', { do: 'archive', id: 'builder' })).toEqual({ agent: 'builder', status: 'archived' })
+    expect(config.pickableAgents()).toEqual([])
+    // Listed for whoever manages agents, with its status; never offered to give work to.
+    expect(((await call('tasks.agents', { do: 'list' })).agents as Array<{ status: string }>)[0].status).toBe('archived')
+    expect(await call('tasks.agents', { do: 'restore', id: 'builder' })).toEqual({ agent: 'builder', status: 'active' })
+    expect(tierOf('tasks.agents', { do: 'archive', id: 'builder' })).toBe('alter')
+  })
+
   it('never lets Hoot or an app add or lift a block the owner set', async () => {
     config.saveAgent({ ...config.agent('builder')!, provider: 'claude', blockedTools: ['WebFetch'], skillsOff: true })
     await call('tasks.agents', { do: 'save', agent: { id: 'builder', blockedTools: [], skillsOff: false, model: 'opus' } })

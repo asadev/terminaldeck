@@ -50,6 +50,7 @@ import { pickerStartDirectory } from './project-picker'
 import { pinUserData } from './user-data'
 import { refreshCostWatchers, registerCostIpc } from './cost-ipc'
 import { registerGitIpc, stopAllGitWatches } from './git'
+import { registerWorkspacesIpc } from './workspaces/workspaces-ipc'
 import { registerFsIpc } from './fs-tree'
 import { registerSearchIpc } from './file-search'
 import { registerInsightsIpc } from './session-insights'
@@ -235,6 +236,9 @@ import { extensionTools } from './deck-control/extension-tools'
 import { deviceTools } from './deck-control/device-tools'
 import { fixedTools } from './deck-control/fixed-tools'
 import { createStaysFixed, fixedToolDeps, registerStaysFixedIpc } from './staysfixed/ipc'
+import { currentMemory, registerMemoryIpc, storeOfSession } from './memory/ipc'
+import { memoryTools } from './deck-control/memory-tools'
+import { pathsOf } from './copilot-inspect'
 import { deviceToolDeps } from './devices/tool-deps'
 import { deviceManager, registerDevicesIpc } from './devices/ipc'
 import { registerBrowserAnnotateIpc } from './browser-annotate'
@@ -2865,6 +2869,12 @@ function registerIpc(): void {
   registerCustomAgentsIpc(ipcMain, core.agents)
   registerCostIpc(ipcMain)
   registerGitIpc(ipcMain)
+  // A task's own workspace: shown, opened and removed when clean from its detail.
+  registerWorkspacesIpc(ipcMain, {
+    openFolder: (path) => shell.openPath(path),
+    liveFolders: () => ptys.list().filter((meta) => meta.exitCode === null).map((meta) => meta.cwd),
+    isApprover: (sender) => mainWindow !== null && sender === mainWindow.webContents,
+  })
   registerFsIpc(ipcMain)
   // Restricting search to known projects stops any folder that merely looks
   // like a project from being enumerated over IPC.
@@ -4197,6 +4207,18 @@ function registerIpc(): void {
     },
   }
   registerCopilotInspectIpc(ipcMain, copilotInspectDeps)
+  /*
+   * The Memory page: every agent's memory on this machine, read, linked and
+   * correctable, and the service the memory tools read through. Hoot's folder
+   * is found by the inspect module's own rule. See `memory/ipc.ts`.
+   */
+  const memoryHootDeps = copilotInspectDeps
+  registerMemoryIpc(ipcMain, {
+    userData: () => app.getPath('userData'),
+    hoot: () => pathsOf(memoryHootDeps).paths,
+    trash: (path) => shell.trashItem(path),
+    send: (channel, ...args) => send(channel, ...args),
+  })
   registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
@@ -5108,6 +5130,10 @@ app.whenReady().then(async () => {
   void registerDeckControlIpc(ipcMain, {
     // CRM tasks given to Hoot are put to it in its own session, started if need be.
     hoot: async () => (copilotRuntimeDeps === null ? null : (await ensureCopilot(copilotRuntimeDeps)).sessionId),
+    // The person's own plugins, from `<userData>/plugins/`. See `src/main/plugins/`.
+    plugins: { userData: app.getPath('userData') },
+    // Project knowledge in workers' briefs, and task workspaces. See `deck-control/index.ts`.
+    stack: true,
     /*
      * The live terminals, with one difference: typing goes through
      * `typeIntoSession`, the road a person's keystrokes take, rather than straight
@@ -5301,6 +5327,8 @@ app.whenReady().then(async () => {
        * stop, mark good (always asks the owner), and the agents' switch.
        */
       ...fixedTools(fixedToolDeps(staysFixed)),
+      // An agent reading its own memory, scoped by who is calling. `deck-control/memory-tools.ts`.
+      ...memoryTools({ memory: currentMemory, storeOf: storeOfSession }),
     ],
     /*
      * The one session starter, shared with the window and with a paired phone —
