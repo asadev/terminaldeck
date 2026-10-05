@@ -21,32 +21,34 @@ struct NativeBrowserAnnotateView: View {
     @State private var roundID = "round-\(UUID().uuidString)"
     @State private var createdAt = Date().timeIntervalSince1970 * 1000
 
+    /// The web's "over" layout: the frozen picture is the page's own rectangle,
+    /// opaque, with the notes card floating over its right-hand edge.
     var body: some View {
-        HStack(spacing: 0) {
-            GeometryReader { geometry in
-                let fit = NativeBrowserFit.size(shot.image.size, into: geometry.size)
-                ZStack(alignment: .topLeading) {
-                    Image(nsImage: shot.image)
-                        .resizable()
-                        .frame(width: fit.width, height: fit.height)
-                    ForEach(annotations) { entry in
-                        NativeBrowserMarker(entry: entry, size: fit, on: entry.id == focused)
-                            .onTapGesture { focused = entry.id }
-                    }
+        GeometryReader { geometry in
+            let fit = NativeBrowserFit.size(shot.image.size, into: geometry.size)
+            ZStack(alignment: .topLeading) {
+                Image(nsImage: shot.image)
+                    .resizable()
+                    .frame(width: fit.width, height: fit.height)
+                ForEach(annotations) { entry in
+                    NativeBrowserMarker(entry: entry, size: fit, on: entry.id == focused)
+                        .onTapGesture { focused = entry.id }
                 }
-                .frame(width: fit.width, height: fit.height)
-                .contentShape(.rect)
-                .onTapGesture(coordinateSpace: .local) { location in
-                    add(x: location.x / fit.width, y: location.y / fit.height)
-                }
-                .overlay { if picking { ProgressView().controlSize(.small) } }
-                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
             }
-            .background(.quaternary.opacity(0.35))
-
-            Divider()
+            .frame(width: fit.width, height: fit.height)
+            .contentShape(.rect)
+            .onTapGesture(coordinateSpace: .local) { location in
+                add(x: location.x / fit.width, y: location.y / fit.height)
+            }
+            .overlay { if picking { ProgressView().controlSize(.small) } }
+            .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+        }
+        .background(NativeBrowserFit.opaqueGround)
+        .overlay(alignment: .topTrailing) {
             panel
-                .frame(width: 300)
+                .frame(width: 320)
+                .padding(12)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
         .onExitCommand(perform: leave)
     }
@@ -103,8 +105,8 @@ struct NativeBrowserAnnotateView: View {
                         }
                     }
                 }
+                .frame(maxHeight: min(280, CGFloat(annotations.count) * 46))
             }
-            Spacer(minLength: 0)
             NativeBrowserSendRow(placeholder: "What should change?", needsText: true, multiline: true,
                                  notReady: annotations.isEmpty ? "Mark something on the page first." : "",
                                  makeLine: send) { session in
@@ -114,7 +116,8 @@ struct NativeBrowserAnnotateView: View {
             }
         }
         .padding(12)
-        .background(.bar)
+        .background(.regularMaterial, in: .rect(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
     }
 
     private func add(x: Double, y: Double) {
@@ -292,8 +295,9 @@ struct NativeBrowserDrawView: View {
                     })
                 .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
             }
-            .background(.quaternary.opacity(0.35))
+            .background(NativeBrowserFit.opaqueGround)
         }
+        .background(NativeBrowserFit.opaqueGround)
     }
 
     private func commitText() {
@@ -429,6 +433,9 @@ struct NativeBrowserSuggestions: View {
 // MARK: - Drawing helpers
 
 enum NativeBrowserFit {
+    /// What sits under a frozen picture: solid, so the live page never shows through.
+    static let opaqueGround = Color(nsColor: .windowBackgroundColor)
+
     /// `size` scaled to fit inside `room`, never larger than it is.
     static func size(_ size: CGSize, into room: CGSize) -> CGSize {
         guard size.width > 0, size.height > 0, room.width > 0, room.height > 0 else { return .zero }

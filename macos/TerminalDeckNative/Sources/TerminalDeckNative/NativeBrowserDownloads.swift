@@ -6,7 +6,9 @@ import TerminalDeckNativeCore
 /// The browser's downloads: saved straight to ~/Downloads under a safe, free
 /// name (`BrowserDownloadNaming`, shared with the web browser's rules), with a
 /// list the toolbar shows. Finished files are marked as downloaded from the web,
-/// so Gatekeeper checks them like anything Safari saves.
+/// so Gatekeeper checks them like anything Safari saves. The list is kept across
+/// relaunch like the web browser's (`BrowserDownloadLedger`), so the toolbar's
+/// Downloads button is there exactly when the web browser's would be.
 @MainActor
 @Observable
 final class NativeBrowserDownloads {
@@ -38,8 +40,67 @@ final class NativeBrowserDownloads {
     @ObservationIgnored private var running: [ObjectIdentifier: (id: UUID, download: WKDownload, watch: NSKeyValueObservation)] = [:]
     @ObservationIgnored private var userCancelled: Set<UUID> = []
 
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var loaded = false
+
     init() {
         delegate.owner = self
+        // Read a beat later, not here: this is made while the app model is still
+        // being made, and the list's file lives under that model's data folder.
+        Task { @MainActor [weak self] in self?.load() }
+    }
+
+    /// The toolbar button's word (count, "!") — nil means no button, as on the web.
+    var badge: (label: String, tone: String)? { BrowserDownloadLedger.badge(items.map(Self.row)) }
+
+    private var file: URL {
+        AppModel.shared.engine.configuration.dataRoot.appendingPathComponent("browser-downloads.json")
+    }
+
+    private func load() {
+        guard !loaded else { return }
+        loaded = true
+        let kept = BrowserDownloadLedger.decode(try? Data(contentsOf: file)).map(Self.item)
+        let current = Set(items.map(\.id))
+        items += kept.filter { !current.contains($0.id) }
+    }
+
+    private func persist() {
+        guard loaded else { return }
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            let data = BrowserDownloadLedger.encode(self.items.map(Self.row))
+            try? FileManager.default.createDirectory(at: self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: self.file, options: .atomic)
+        }
+    }
+
+    static func row(_ item: Item) -> BrowserDownloadRow {
+        let state: String, message: String
+        switch item.state {
+        case .running: (state, message) = ("downloading", "")
+        case .finished: (state, message) = ("done", "")
+        case .failed(let why): (state, message) = ("failed", why)
+        case .cancelled: (state, message) = ("cancelled", "")
+        }
+        return BrowserDownloadRow(id: item.id.uuidString, name: item.name, path: item.destination?.path ?? "",
+                                  url: item.source?.absoluteString ?? "", state: state, received: item.received,
+                                  bytes: item.expected, message: message)
+    }
+
+    static func item(_ row: BrowserDownloadRow) -> Item {
+        let state: Item.State
+        switch row.state {
+        case "done": state = .finished
+        case "cancelled": state = .cancelled
+        case "downloading", "delivering": state = .running
+        default: state = .failed(row.message.isEmpty ? "It did not finish." : row.message)
+        }
+        return Item(id: UUID(uuidString: row.id) ?? UUID(), name: row.name,
+                    destination: row.path.isEmpty ? nil : URL(fileURLWithPath: row.path),
+                    source: URL(string: row.url), received: row.received, expected: row.bytes, state: state)
     }
 
     var runningCount: Int { items.filter { $0.state == .running }.count }
@@ -65,6 +126,8 @@ final class NativeBrowserDownloads {
         }
         running[ObjectIdentifier(download)] = (id, download, watch)
         items.insert(Item(id: id, name: source?.lastPathComponent ?? "download", source: source), at: 0)
+        items = Array(items.prefix(BrowserDownloadLedger.maxRows))
+        persist()
         NativeBrowserTabs.shared.downloadsShown = true
     }
 
@@ -86,6 +149,7 @@ final class NativeBrowserDownloads {
 
     func clearFinished() {
         items.removeAll { $0.state != .running }
+        persist()
     }
 
     func openDownloadsFolder() {
@@ -110,6 +174,7 @@ final class NativeBrowserDownloads {
             $0.destination = url
             $0.name = url.lastPathComponent
         }
+        persist()
         return url
     }
 
@@ -120,6 +185,7 @@ final class NativeBrowserDownloads {
             $0.state = .finished
             if $0.expected > 0 { $0.received = $0.expected }
         }
+        persist()
         if let item = item(entry.id), let file = item.destination {
             Self.markDownloaded(file, from: item.source)
             // Bounces the Downloads stack in the Dock, as Safari's downloads do.
@@ -133,6 +199,7 @@ final class NativeBrowserDownloads {
         let cancelled = userCancelled.remove(entry.id) != nil
             || ((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled)
         mutate(entry.id) { $0.state = cancelled ? .cancelled : .failed(error.localizedDescription) }
+        persist()
         // Never leave half a file behind under the name the person would look for.
         if let file = item(entry.id)?.destination, FileManager.default.fileExists(atPath: file.path) {
             try? FileManager.default.removeItem(at: file)

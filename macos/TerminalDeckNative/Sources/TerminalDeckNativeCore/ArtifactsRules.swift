@@ -162,10 +162,19 @@ public enum ArtifactRules {
     // MARK: Sentences
 
     /// The empty page when nothing was written — every fact the scan has, in one line.
+    ///
+    /// It names which sessions were read, from the scope the answer itself
+    /// carries, so the sentence always agrees with the selected scope: "40
+    /// sessions read" under *Every session* read like this folder's own forty.
     public static func nothingFound(_ list: ArtifactList) -> String {
-        let place = "Nothing written or edited in \(list.root)"
-        if list.sessionsScanned == 0 { return "\(place) — no sessions have been recorded for it yet." }
-        let read = "\(list.sessionsScanned) session\(list.sessionsScanned == 1 ? "" : "s") read"
+        let every = list.scope == .all
+        if list.sessionsScanned == 0 {
+            return every
+                ? "Nothing written or edited in \(list.root) — no sessions have been recorded on this Mac yet."
+                : "Nothing written or edited in \(list.root) — no sessions have been recorded for it yet."
+        }
+        let place = "Nothing written or edited in \(list.root) by \(every ? "any session" : "its own sessions")"
+        let read = every ? "\(list.sessionsScanned) read across every project" : "\(list.sessionsScanned) read"
         let elsewhere = list.outsideProject > 0
             ? ", \(list.outsideProject) change\(list.outsideProject == 1 ? "" : "s") to files outside it"
             : ""

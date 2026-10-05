@@ -110,3 +110,34 @@ public enum TabStripMetrics {
         return tabWidth * Double(count) + spacing * Double(count - 1)
     }
 }
+
+/// What a session's status word means, exactly as the web's StatusDot says it
+/// (src/renderer/components/StatusDot.tsx): `idle` and `waiting` are one calm
+/// "Ready" — a shell at its prompt is not asking for anything — and only `input`
+/// is "Needs input".
+public enum StatusMeaning: Equatable, Sendable {
+    case ready, working, needsInput, completed, exited, failed
+
+    public init(_ word: String?) {
+        switch word?.lowercased() {
+        case "working", "running", "busy", "thinking", "loading": self = .working
+        case "input", "needs-input", "attention", "blocked", "approval": self = .needsInput
+        case "completed", "done", "finished": self = .completed
+        case "exited", "ended": self = .exited
+        case "error", "failed", "fail", "crashed": self = .failed
+        default: self = .ready // idle, waiting, held, nil, anything new
+        }
+    }
+
+    /// The web's own words, for tooltips and VoiceOver.
+    public var label: String {
+        switch self {
+        case .ready: "Ready"
+        case .working: "Working"
+        case .needsInput: "Needs input"
+        case .completed: "Completed"
+        case .exited: "Exited"
+        case .failed: "Error"
+        }
+    }
+}

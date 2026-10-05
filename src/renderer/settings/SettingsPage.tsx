@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { postToNative } from '../../shared/native-shell'
+import { publishNativeAppearance } from '../native-appearance'
 import { FeaturesProvider } from '../features/FeaturesProvider'
 import { resolveSection, type LiveSectionId, type Section, type SectionId } from './settings-schema'
 import { askForAddAccount } from '../accounts'
@@ -59,6 +60,9 @@ export function SettingsPage({ initialSection, intent }: { initialSection?: Sect
     const timer = window.setTimeout(() => setState({ kind: 'idle' }), 1600)
     return () => window.clearTimeout(timer)
   }, [state])
+
+  // The native Settings window's chrome follows the theme picked here.
+  useEffect(() => publishNativeAppearance(), [])
 
   const nav = useRef<{ sections: readonly Section[]; select(id: string): void } | null>(null)
   const onSections = useCallback(

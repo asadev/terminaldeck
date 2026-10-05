@@ -145,3 +145,26 @@ public enum BrowserHistory {
         var entries: [BrowserVisit]
     }
 }
+
+extension BrowserHistory {
+    /// The address field's inline completion (`completionFor` in history-view.ts):
+    /// what was typed, finished from a visited address — or nil. Never for a
+    /// search (spaces) and never when nothing would be added.
+    public static func completion(typed: String, url: String) -> String? {
+        if typed.trimmingCharacters(in: .whitespaces).isEmpty || typed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            return nil
+        }
+        let bare = url.replacingOccurrences(of: #"^https?://"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let noWww = bare.replacingOccurrences(of: #"^www\."#, with: "", options: [.regularExpression, .caseInsensitive])
+        let lower = typed.lowercased()
+        for candidate in [noWww, bare, url] {
+            // `example.com/` reads as `example.com`: a bare host's own slash is not part of what anyone types.
+            let trimmed = candidate.hasSuffix("/") && candidate.firstIndex(of: "/") == candidate.index(before: candidate.endIndex)
+                ? String(candidate.dropLast()) : candidate
+            if trimmed.lowercased().hasPrefix(lower) && trimmed.count > typed.count {
+                return typed + trimmed.dropFirst(typed.count)
+            }
+        }
+        return nil
+    }
+}

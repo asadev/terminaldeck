@@ -49,3 +49,75 @@ public enum BrowserDownloadNaming {
         return (String(name[..<dot]), String(name[dot...]))
     }
 }
+
+/// One row of the downloads list, as kept across relaunch — the web browser's
+/// ledger (`browser-downloads-store.ts`): at most 100 rows, newest first, and a
+/// row that was still moving when the app closed comes back as failed, saying so.
+public struct BrowserDownloadRow: Equatable, Sendable, Codable {
+    /// "downloading", "done", "failed" or "cancelled" — the web ledger's words.
+    public var id: String
+    public var name: String
+    public var path: String
+    public var url: String
+    public var state: String
+    public var received: Int64
+    public var bytes: Int64
+    public var message: String
+    public var startedAt: Double
+
+    public init(id: String, name: String, path: String = "", url: String = "", state: String,
+                received: Int64 = 0, bytes: Int64 = 0, message: String = "", startedAt: Double = 0) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.url = url
+        self.state = state
+        self.received = received
+        self.bytes = bytes
+        self.message = message
+        self.startedAt = startedAt
+    }
+}
+
+public enum BrowserDownloadLedger {
+    public static let maxRows = 100
+    static let states: Set<String> = ["downloading", "delivering", "done", "cancelled", "failed"]
+
+    public static func encode(_ rows: [BrowserDownloadRow]) -> Data {
+        (try? JSONEncoder().encode(["items": Array(rows.prefix(maxRows))])) ?? Data()
+    }
+
+    public static func decode(_ data: Data?) -> [BrowserDownloadRow] {
+        guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = object["items"] as? [Any] else { return [] }
+        var out: [BrowserDownloadRow] = []
+        for entry in list {
+            guard let fields = entry as? [String: Any], let id = fields["id"] as? String, !id.isEmpty else { continue }
+            let stored = (fields["state"] as? String).flatMap { states.contains($0) ? $0 : nil } ?? "failed"
+            let wasMoving = stored == "downloading" || stored == "delivering"
+            out.append(BrowserDownloadRow(
+                id: id,
+                name: (fields["name"] as? String) ?? "",
+                path: (fields["path"] as? String) ?? "",
+                url: (fields["url"] as? String) ?? "",
+                state: wasMoving ? "failed" : stored,
+                received: (fields["received"] as? NSNumber)?.int64Value ?? 0,
+                bytes: (fields["bytes"] as? NSNumber)?.int64Value ?? 0,
+                message: wasMoving ? "Terminal Deck closed while this was moving." : ((fields["message"] as? String) ?? ""),
+                startedAt: (fields["startedAt"] as? NSNumber)?.doubleValue ?? 0))
+            if out.count >= maxRows { break }
+        }
+        return out
+    }
+
+    /// What the toolbar's Downloads button says, or nil for no button at all —
+    /// the web browser's `downloadsBadge`: absent until there is a download; the
+    /// number still moving; "!" when the newest failed; else how many there are.
+    public static func badge(_ rows: [BrowserDownloadRow]) -> (label: String, tone: String)? {
+        let moving = rows.filter { $0.state == "downloading" || $0.state == "delivering" }.count
+        if moving > 0 { return (String(moving), "busy") }
+        guard let newest = rows.first else { return nil }
+        if newest.state == "failed" { return ("!", "bad") }
+        return (String(rows.count), "done")
+    }
+}

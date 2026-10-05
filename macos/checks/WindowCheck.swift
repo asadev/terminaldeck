@@ -277,7 +277,22 @@ final class CheckDelegate: NSObject, NSApplicationDelegate {
         //    here: ("session","t1"), ("panel","browser") and Settings "general".
         await nativeScreens(main: main, strip: strip?.1)
 
-        // 8. Closing a screen window drops only that window; the engine keeps running.
+        // 8. The native chrome follows the app's theme, as the page says it.
+        func scheme(_ window: NSWindow) -> String {
+            window.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        }
+        pagePosts("{type:'appearance', preference:'dark', resolved:'dark'}")
+        check(await waitFor(3) { NSApplication.shared.appearance?.name == .darkAqua && scheme(main) == "dark" },
+              "theme: 'dark' paints the native chrome dark")
+        pagePosts("{type:'appearance', preference:'light', resolved:'light'}")
+        check(await waitFor(3) { NSApplication.shared.appearance?.name == .aqua && scheme(main) == "light" },
+              "theme: 'light' paints it light")
+        pagePosts("{type:'appearance', preference:'system', resolved:'dark'}")
+        check(await waitFor(3) { NSApplication.shared.appearance == nil },
+              "theme: 'system' follows the Mac (nothing pinned, so the page keeps seeing the Mac change)")
+        check(UserDefaults.standard.string(forKey: "appAppearance") == "followMac", "theme: remembered for the next launch")
+
+        // 9. Closing a screen window drops only that window; the engine keeps running.
         windows(titled: "screen=panel id=tasks").first?.close()
         try? await Task.sleep(for: .milliseconds(500))
         check(windows(titled: "screen=panel id=tasks").isEmpty && model.engine.isRunning,

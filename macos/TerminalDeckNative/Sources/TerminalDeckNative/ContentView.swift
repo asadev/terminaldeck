@@ -52,7 +52,8 @@ struct ContentView: View {
         .frame(minWidth: 820, minHeight: 500)
         .navigationTitle(model.windowTitle)
         .navigationSubtitle(model.windowSubtitle)
-        .toolbar(removing: tabs != nil ? .title : nil)
+        // The tabs name what is on show; with none (only the new-tab buttons) the title does.
+        .toolbar(removing: tabs?.tabs.isEmpty == false ? .title : nil)
         .onChange(of: model.settingsWindowRequest) {
             openWindow(id: SettingsWindow.sceneID)
         }

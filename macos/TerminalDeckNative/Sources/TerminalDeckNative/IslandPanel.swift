@@ -52,33 +52,6 @@ final class IslandPanel: NSPanel {
     }
 }
 
-/// The panel's content: hosts the SwiftUI island and watches the pointer over the
-/// shape itself (not the shadow around it), even while another app is in front.
-@MainActor
-final class IslandContainerView: NSView {
-    /// The shape's box in this view's coordinates, for the current state.
-    var trackingBox: (NSRect) -> NSRect = { $0 }
-    var onEnter: (() -> Void)?
-    var onExit: (() -> Void)?
-    private var area: NSTrackingArea?
-
-    func refreshTracking() {
-        if let area { removeTrackingArea(area) }
-        let next = NSTrackingArea(rect: trackingBox(bounds), options: [.mouseEnteredAndExited, .activeAlways],
-                                  owner: self, userInfo: nil)
-        addTrackingArea(next)
-        area = next
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        refreshTracking()
-    }
-
-    override func mouseEntered(with event: NSEvent) { onEnter?() }
-    override func mouseExited(with event: NSEvent) { onExit?() }
-}
-
 /// Terminal Deck's island at the top centre of the screen — the native one.
 ///
 /// One black shape in the menu bar, centred on the notch (or the menu bar's middle
@@ -190,9 +163,10 @@ final class IslandController: NSObject, NSWindowDelegate {
         container.autoresizingMask = [.width, .height]
         let hosting = NSHostingView(rootView: IslandView(model: model, webView: web.webView))
         hosting.sizingOptions = [] // the window's size is ours, never the content's
-        hosting.frame = container.bounds
-        hosting.autoresizingMask = [.width, .height]
-        container.addSubview(hosting)
+        container.canvasFrame = { [weak self] size in
+            self?.model.layout.canvasFrame(inWindowOfSize: size) ?? NSRect(origin: .zero, size: size)
+        }
+        container.host(hosting)
         panel.contentView = container
         panel.delegate = self
 
@@ -229,6 +203,7 @@ final class IslandController: NSObject, NSWindowDelegate {
         let layout = IslandGeometry.layout(for: Self.islandScreen())
         if layout != model.layout { model.layout = layout }
         panel?.setFrame(layout.frame(expanded: model.expanded), display: true)
+        container?.placeCanvas() // the canvas itself may have changed size
         container?.refreshTracking()
     }
 

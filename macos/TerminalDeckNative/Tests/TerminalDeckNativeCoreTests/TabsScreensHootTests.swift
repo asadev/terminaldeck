@@ -274,3 +274,58 @@ struct RoundFourTests {
         #expect(state.item(id: "s")?.kind == .session)
     }
 }
+
+@Suite("Status words, as the web says them")
+struct StatusMeaningTests {
+    @Test func aShellAtItsPromptIsReadyNotNeedsYou() {
+        // src/renderer/components/StatusDot.tsx: idle and waiting are both "Ready".
+        #expect(StatusMeaning("waiting") == .ready)
+        #expect(StatusMeaning("idle") == .ready)
+        #expect(StatusMeaning(nil) == .ready)
+        #expect(StatusMeaning("held") == .ready)
+        #expect(StatusMeaning("waiting").label == "Ready")
+    }
+
+    @Test func onlyInputNeedsYou() {
+        #expect(StatusMeaning("input") == .needsInput)
+        #expect(StatusMeaning("input").label == "Needs input")
+        #expect(StatusMeaning("working") == .working)
+        #expect(StatusMeaning("loading") == .working, "a browser tab loading")
+        #expect(StatusMeaning("completed") == .completed)
+        #expect(StatusMeaning("exited") == .exited)
+        #expect(StatusMeaning("error") == .failed)
+        #expect(StatusMeaning("Working") == .working, "case doesn't matter")
+    }
+}
+
+@Suite("The app's theme, from the page")
+struct AppearanceMessageTests {
+    func body(_ json: String) -> Any { try! JSONSerialization.jsonObject(with: Data(json.utf8)) }
+
+    @Test func explicitThemesPin() {
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"dark","resolved":"dark"}"#)) == .appearance(.dark))
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"light","resolved":"light"}"#)) == .appearance(.light))
+    }
+
+    @Test func systemFollowsTheMacWhateverItResolvedTo() {
+        // Pinning what 'system' resolved to would freeze the page's own media query.
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"system","resolved":"dark"}"#)) == .appearance(.followMac))
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"system","resolved":"light"}"#)) == .appearance(.followMac))
+    }
+
+    @Test func unknownPreferenceFallsBackToTheResolvedScheme() {
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"sepia","resolved":"light"}"#)) == .appearance(.light))
+        #expect(PageMessage.parse(body(#"{"type":"appearance","resolved":"dark"}"#)) == .appearance(.dark))
+    }
+
+    @Test func nothingUsableIsIgnored() {
+        #expect(PageMessage.parse(body(#"{"type":"appearance"}"#)) == nil)
+        #expect(PageMessage.parse(body(#"{"type":"appearance","preference":"sepia","resolved":"blue"}"#)) == nil)
+    }
+
+    @Test func remembersByName() {
+        for appearance in [AppAppearance.followMac, .dark, .light] {
+            #expect(AppAppearance(rawValue: appearance.rawValue) == appearance)
+        }
+    }
+}

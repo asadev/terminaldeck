@@ -40,6 +40,14 @@ public struct IslandShapeSize: Equatable, Sendable {
     public var height: CGFloat
     public var radius: CGFloat
     public var shoulder: CGFloat
+
+    public init(width: CGFloat, height: CGFloat, radius: CGFloat, shoulder: CGFloat) {
+        self.width = width
+        self.height = height
+        self.radius = radius
+        self.shoulder = shoulder
+    }
+
     /// The body plus both shoulders: the box a pointer counts as "on it".
     public var outerWidth: CGFloat { width + shoulder * 2 }
 }
@@ -113,6 +121,59 @@ public struct IslandLayout: Equatable, Sendable {
         let shape = expanded ? panel : pill
         return CGRect(x: (size.width - shape.outerWidth) / 2, y: size.height - shape.height,
                       width: shape.outerWidth, height: shape.height)
+    }
+
+    /// The island is drawn on one fixed canvas, the size of the grown window.
+    public var canvasSize: CGSize { expandedFrame.size }
+
+    /// Where that canvas sits in a window of `size` (the window's own bottom-left
+    /// coordinates): its top on the window's top, its middle on the window's middle,
+    /// overflowing equally left and right and off the bottom.
+    ///
+    /// Placed explicitly rather than left to SwiftUI: a root view bigger than its
+    /// hosting view is centred in it *vertically* too, which put the resting pill
+    /// 144 points above its 30-point window — the island drew nothing at rest
+    /// (2026-10-06, found by an offscreen render).
+    public func canvasFrame(inWindowOfSize size: CGSize) -> CGRect {
+        CGRect(x: ((size.width - canvasSize.width) / 2).rounded(.down), y: size.height - canvasSize.height,
+               width: canvasSize.width, height: canvasSize.height)
+    }
+}
+
+extension IslandGeometry {
+    /// The island's outline, top-centre at (`centreX`, `top`) in a y-down space (SwiftUI's,
+    /// and the canvas's): a concave shoulder flaring out into the menu bar at each top
+    /// corner, straight sides, round bottom corners. One path, so the pill and the panel
+    /// are one shape. The view fills exactly this path.
+    public static func outline(_ shape: IslandShapeSize, centreX: CGFloat, top: CGFloat) -> CGPath {
+        let w = max(0, shape.width)
+        let h = max(0, shape.height)
+        let r = max(0, min(shape.radius, h, w / 2))
+        let s = max(0, min(shape.shoulder, h - r))
+        let left = centreX - w / 2
+        let right = centreX + w / 2
+        let bottom = top + h
+        let k: CGFloat = 0.5523 // a quarter circle as a cubic
+
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: left - s, y: top))
+        path.addCurve(to: CGPoint(x: left, y: top + s),
+                      control1: CGPoint(x: left - s + s * k, y: top),
+                      control2: CGPoint(x: left, y: top + s - s * k))
+        path.addLine(to: CGPoint(x: left, y: bottom - r))
+        path.addCurve(to: CGPoint(x: left + r, y: bottom),
+                      control1: CGPoint(x: left, y: bottom - r + r * k),
+                      control2: CGPoint(x: left + r - r * k, y: bottom))
+        path.addLine(to: CGPoint(x: right - r, y: bottom))
+        path.addCurve(to: CGPoint(x: right, y: bottom - r),
+                      control1: CGPoint(x: right - r + r * k, y: bottom),
+                      control2: CGPoint(x: right, y: bottom - r + r * k))
+        path.addLine(to: CGPoint(x: right, y: top + s))
+        path.addCurve(to: CGPoint(x: right + s, y: top),
+                      control1: CGPoint(x: right, y: top + s - s * k),
+                      control2: CGPoint(x: right + s - s * k, y: top))
+        path.closeSubpath()
+        return path
     }
 }
 

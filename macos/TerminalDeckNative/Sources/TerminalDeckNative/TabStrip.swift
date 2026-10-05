@@ -130,7 +130,10 @@ struct TabStrip: View {
             }
             Spacer(minLength: 0)
         }
-        .frame(width: width, height: TabStripLayout.height)
+        // No tabs: just the two buttons, so the window title (shown then) and the
+        // glass buttons keep their room — a full-width empty strip pushed them into
+        // the toolbar's overflow menu.
+        .frame(width: state.tabs.isEmpty ? buttonsWidth + 8 : width, height: TabStripLayout.height)
         .background(StripAnchor(box: anchor))
     }
 }
@@ -236,7 +239,7 @@ struct TabChip: View {
             }
         }
         .onHover { hovering = $0 }
-        .help([tab.title, tab.status].compactMap { $0 }.joined(separator: " — "))
+        .help([tab.title, tab.status.map { StatusMeaning($0).label }].compactMap { $0 }.joined(separator: " — "))
         .contextMenu {
             Button("Open in New Window", action: openInNewWindow)
             if tab.closable {

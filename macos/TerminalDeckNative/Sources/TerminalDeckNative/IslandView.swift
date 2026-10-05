@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 import TerminalDeckNativeCore
@@ -7,7 +8,9 @@ import TerminalDeckNativeCore
 ///
 /// Everything is drawn top-centre on a fixed canvas the size of the grown window,
 /// so the window can change size (it does, at the start of a grow and the end of a
-/// settle) without the shape moving a point.
+/// settle) without the shape moving a point. The canvas is exactly this view's size:
+/// `IslandContainerView` sizes and places the hosting view (`canvasFrame`), so no
+/// SwiftUI alignment rule decides where the pill lands.
 struct IslandView: View {
     let model: IslandViewModel
     let webView: WKWebView
@@ -36,9 +39,58 @@ struct IslandView: View {
                 .allowsHitTesting(expanded)
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
     }
+}
+
+/// The panel's content: hosts the SwiftUI island on its canvas — sized and placed
+/// here, top-centre, whatever size the window is — and watches the pointer over the
+/// shape itself (not the shadow around it), even while another app is in front.
+@MainActor
+final class IslandContainerView: NSView {
+    /// The shape's box in this view's coordinates, for the current state.
+    var trackingBox: (NSRect) -> NSRect = { $0 }
+    /// Where the canvas goes in a view of this size (`IslandLayout.canvasFrame`).
+    var canvasFrame: (NSSize) -> NSRect = { NSRect(origin: .zero, size: $0) }
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+    private var area: NSTrackingArea?
+    private var canvas: NSView?
+
+    /// Hosts `content` on the canvas.
+    func host(_ content: NSView) {
+        canvas?.removeFromSuperview()
+        content.autoresizingMask = []
+        addSubview(content)
+        canvas = content
+        placeCanvas()
+    }
+
+    /// After a size change of this view or of the canvas (a display change).
+    func placeCanvas() {
+        canvas?.frame = canvasFrame(bounds.size)
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        placeCanvas()
+    }
+
+    func refreshTracking() {
+        if let area { removeTrackingArea(area) }
+        let next = NSTrackingArea(rect: trackingBox(bounds), options: [.mouseEnteredAndExited, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(next)
+        area = next
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        refreshTracking()
+    }
+
+    override func mouseEntered(with event: NSEvent) { onEnter?() }
+    override func mouseExited(with event: NSEvent) { onExit?() }
 }
 
 /// Beside a notch: the status in the left ear, the badge in the right one. Without
@@ -122,36 +174,8 @@ struct IslandOutline: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
-        let w = max(0, width)
-        let h = max(0, height)
-        let r = max(0, min(radius, h, w / 2))
-        let s = max(0, min(shoulder, h - r))
-        let left = rect.midX - w / 2
-        let right = rect.midX + w / 2
-        let top = rect.minY
-        let bottom = top + h
-        // A quarter circle as a cubic.
-        let k: CGFloat = 0.5523
-
-        var path = Path()
-        path.move(to: CGPoint(x: left - s, y: top))
-        path.addCurve(to: CGPoint(x: left, y: top + s),
-                      control1: CGPoint(x: left - s + s * k, y: top),
-                      control2: CGPoint(x: left, y: top + s - s * k))
-        path.addLine(to: CGPoint(x: left, y: bottom - r))
-        path.addCurve(to: CGPoint(x: left + r, y: bottom),
-                      control1: CGPoint(x: left, y: bottom - r + r * k),
-                      control2: CGPoint(x: left + r - r * k, y: bottom))
-        path.addLine(to: CGPoint(x: right - r, y: bottom))
-        path.addCurve(to: CGPoint(x: right, y: bottom - r),
-                      control1: CGPoint(x: right - r + r * k, y: bottom),
-                      control2: CGPoint(x: right, y: bottom - r + r * k))
-        path.addLine(to: CGPoint(x: right, y: top + s))
-        path.addCurve(to: CGPoint(x: right + s, y: top),
-                      control1: CGPoint(x: right, y: top + s - s * k),
-                      control2: CGPoint(x: right + s - s * k, y: top))
-        path.closeSubpath()
-        return path
+        let shape = IslandShapeSize(width: width, height: height, radius: radius, shoulder: shoulder)
+        return Path(IslandGeometry.outline(shape, centreX: rect.midX, top: rect.minY))
     }
 }
 

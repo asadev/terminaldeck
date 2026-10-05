@@ -159,6 +159,7 @@ import {
   type NativeHandlers,
   type NativeTitleMessage,
 } from './native-commands'
+import { publishNativeAppearance } from './native-appearance'
 import {
   buildNativeSidebar,
   createCoalescedPublisher,
@@ -4779,6 +4780,8 @@ function Workspace() {
     })
   }, [])
   useEffect(() => publishNativeCommands(() => nativeHandlers.current), [])
+  // The native window paints its own chrome in the app's theme (`native-appearance.ts`).
+  useEffect(() => publishNativeAppearance(), [])
 
   // The side panel's state, posted whenever what it would draw changes.
   const sidebarPublisher = useRef<ReturnType<typeof createSidebarPublisher> | null>(null)

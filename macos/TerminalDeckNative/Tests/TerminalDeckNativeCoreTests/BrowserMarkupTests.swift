@@ -238,3 +238,62 @@ struct BrowserHistoryTests {
         #expect(BrowserHistory.clear(list, profileID: "other") == list)
     }
 }
+
+@Suite("Browser address and downloads, as the web toolbar has them")
+struct BrowserWebParityTests {
+    /// The web omnibox (`omnibox.test.ts`): a bare host is http:// — the right
+    /// default for a dev server. https comes only from a visited address.
+    @Test func aBareHostIsHttpLikeTheWebOmnibox() {
+        #expect(BrowserAddress.resolve("example.com").target?.absoluteString == "http://example.com/")
+        #expect(BrowserAddress.resolve("example.com/a/b?c=1").target?.absoluteString == "http://example.com/a/b?c=1")
+        #expect(BrowserAddress.resolve("https://example.com").target?.absoluteString == "https://example.com/")
+    }
+
+    /// `completionFor`: typing finishes from a visited address; Enter then goes
+    /// to that stored address, https and all.
+    @Test func inlineCompletionFromVisitedAddresses() {
+        #expect(BrowserHistory.completion(typed: "exa", url: "https://example.com/") == "example.com")
+        #expect(BrowserHistory.completion(typed: "EXA", url: "https://example.com/") == "EXAmple.com", "what was typed is kept as typed")
+        #expect(BrowserHistory.completion(typed: "www.ex", url: "https://www.example.com/") == "www.example.com")
+        #expect(BrowserHistory.completion(typed: "ex", url: "https://www.example.com/x") == "example.com/x")
+        #expect(BrowserHistory.completion(typed: "https://ex", url: "https://example.com/") == "https://example.com/")
+        #expect(BrowserHistory.completion(typed: "example.com", url: "https://example.com/") == nil, "nothing to add")
+        #expect(BrowserHistory.completion(typed: "ex ", url: "https://example.com/") == nil, "a search is never completed")
+        #expect(BrowserHistory.completion(typed: "", url: "https://example.com/") == nil)
+        #expect(BrowserHistory.completion(typed: "zz", url: "https://example.com/") == nil)
+    }
+
+    /// `downloadsBadge`: no button until there is a download; then the number
+    /// moving, "!" when the newest failed, else how many.
+    @Test func theDownloadsButtonFollowsTheList() {
+        #expect(BrowserDownloadLedger.badge([]) == nil)
+        let done = BrowserDownloadRow(id: "a", name: "a.zip", state: "done")
+        let failed = BrowserDownloadRow(id: "b", name: "b.zip", state: "failed")
+        let moving = BrowserDownloadRow(id: "c", name: "c.zip", state: "downloading")
+        #expect(BrowserDownloadLedger.badge([done, failed])! == ("2", "done"))
+        #expect(BrowserDownloadLedger.badge([failed, done])! == ("!", "bad"))
+        #expect(BrowserDownloadLedger.badge([done, moving, moving])! == ("2", "busy"))
+    }
+
+    /// Kept across relaunch, like the web ledger: still there after a restart,
+    /// and a row cut off by quitting comes back as failed, saying why.
+    @Test func theDownloadsListIsKept() {
+        let rows = [
+            BrowserDownloadRow(id: "1", name: "r.pdf", path: "/d/r.pdf", url: "https://a.test/r.pdf", state: "done",
+                               received: 10, bytes: 10, startedAt: 5),
+            BrowserDownloadRow(id: "2", name: "big.iso", state: "downloading", received: 3, bytes: 99),
+        ]
+        let back = BrowserDownloadLedger.decode(BrowserDownloadLedger.encode(rows))
+        #expect(back.count == 2)
+        #expect(back[0] == rows[0])
+        #expect(back[1].state == "failed")
+        #expect(back[1].message == "Terminal Deck closed while this was moving.")
+        #expect(BrowserDownloadLedger.badge(back)! == ("2", "done"), "the button is still there after a relaunch")
+
+        let junk = #"{"items":[{"name":"no id"},{"id":"x","state":"weird"}]}"#
+        #expect(BrowserDownloadLedger.decode(Data(junk.utf8)).map(\.state) == ["failed"])
+        #expect(BrowserDownloadLedger.decode(nil).isEmpty)
+        let many = (0..<150).map { BrowserDownloadRow(id: "\($0)", name: "f", state: "done") }
+        #expect(BrowserDownloadLedger.decode(BrowserDownloadLedger.encode(many)).count == 100)
+    }
+}

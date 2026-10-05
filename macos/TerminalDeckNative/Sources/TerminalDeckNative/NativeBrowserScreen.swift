@@ -57,7 +57,10 @@ struct NativeBrowserTabView: View {
                 Divider()
             }
             ZStack {
+                // Parked while the page is frozen for Annotate or Draw, as the web browser parks its view.
                 NativeBrowserContent(tab: tab)
+                    .opacity(tab.markup == nil ? 1 : 0)
+                    .allowsHitTesting(tab.markup == nil)
                 switch tab.markup {
                 case .annotate(let shot): NativeBrowserAnnotateView(tab: tab, shot: shot)
                 case .draw(let shot): NativeBrowserDrawView(tab: tab, shot: shot)
@@ -88,6 +91,14 @@ struct NativeBrowserToolbarRow: View {
     @Bindable var tab: NativeBrowserTab
     @State private var address = ""
     @FocusState private var addressFocused: Bool
+    @State private var selection: TextSelection?
+    /// What the person typed themselves, without the completion's added tail.
+    @State private var typedByHand = ""
+    /// The completion standing in the field, and the visited address it came
+    /// from: Enter on it goes to exactly that address (its https included), not
+    /// back through the address rules, which make a bare host http://.
+    @State private var completed: (text: String, url: String)?
+    @State private var applyingCompletion = false
 
     private var hasPage: Bool { tab.url != nil && !tab.showsStartView }
     private var isAnnotating: Bool { if case .annotate = tab.markup { true } else { false } }
@@ -113,6 +124,8 @@ struct NativeBrowserToolbarRow: View {
         }
         .onChange(of: tab.focusAddressRequest) { addressFocused = true }
         .onChange(of: addressFocused) { _, focused in
+            if focused { typedByHand = address }
+            if !focused { completed = nil }
             if !focused, tab.url != nil { address = BrowserAddress.display(tab.url) }
             if !focused {
                 // A beat later, so a click on a suggestion lands before the list goes.
@@ -145,14 +158,12 @@ struct NativeBrowserToolbarRow: View {
 
     private var addressField: some View {
         HStack(spacing: 6) {
-            TextField("Enter a URL, or search", text: $address)
+            TextField("Enter a URL, or search", text: $address, selection: $selection)
                 .textFieldStyle(.plain)
                 .focused($addressFocused)
                 .autocorrectionDisabled()
                 .onSubmit(go)
-                .onChange(of: address) {
-                    if addressFocused { tab.updateSuggestions(for: address) }
-                }
+                .onChange(of: address) { _, now in edited(now) }
                 .onExitCommand {
                     address = BrowserAddress.display(tab.url)
                     addressFocused = false
@@ -180,7 +191,7 @@ struct NativeBrowserToolbarRow: View {
         .padding(.horizontal, 4)
     }
 
-    // Shared/Isolated · Shot · Size · Devtools · Downloads · Profile · ⋮
+    // Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools · Downloads · Profile · ⋮
     private var tools: some View {
         HStack(spacing: 2) {
             NativeBrowserIcon(tab.isolated ? "Isolated" : "Shared",
@@ -229,7 +240,9 @@ struct NativeBrowserToolbarRow: View {
             }
             .disabled(!hasPage)
 
-            if !store.downloads.items.isEmpty {
+            // Exactly the web toolbar's rule: there while the list has a row (kept
+            // across relaunch), gone when it is empty; ⋮ ▸ Downloads always reaches it.
+            if store.downloads.badge != nil {
                 NativeBrowserDownloadsButton(store: store)
             }
 
@@ -239,23 +252,64 @@ struct NativeBrowserToolbarRow: View {
         }
     }
 
+    /// The web toolbar's inline completion: on an insertion, the top suggestion
+    /// finishes what was typed and the added part is selected, so the next key
+    /// replaces it. Never on a deletion — Backspace must be able to delete.
+    private func edited(_ now: String) {
+        if applyingCompletion {
+            applyingCompletion = false
+            return
+        }
+        guard addressFocused else { return }
+        let inserting = now.count > typedByHand.count
+        typedByHand = now
+        completed = nil
+        tab.updateSuggestions(for: now)
+        guard inserting, let top = tab.suggestions.first,
+              let filled = BrowserHistory.completion(typed: now, url: top.url) else { return }
+        completed = (filled, top.url)
+        applyingCompletion = true
+        address = filled
+        let from = filled.index(filled.startIndex, offsetBy: now.count)
+        selection = TextSelection(range: from..<filled.endIndex)
+    }
+
     private func open(_ suggested: String) {
-        address = suggested
         tab.dismissSuggestions()
-        go()
+        load(visited: suggested)
+    }
+
+    /// A visited address goes straight to the tab — it is already a URL.
+    private func load(visited: String) {
+        guard let url = URL(string: visited) else { return }
+        tab.load(url)
+        finishEditing()
+    }
+
+    private func finishEditing() {
+        completed = nil
+        typedByHand = ""
+        address = BrowserAddress.display(tab.url)
+        addressFocused = false
+        if let webView = tab.webView { webView.window?.makeFirstResponder(webView) }
     }
 
     private func go() {
         if tab.suggestionCursor >= 0, tab.suggestionCursor < tab.suggestions.count {
-            address = tab.suggestions[tab.suggestionCursor].url
+            let chosen = tab.suggestions[tab.suggestionCursor].url
+            tab.dismissSuggestions()
+            load(visited: chosen)
+            return
         }
         tab.dismissSuggestions()
+        if let completed, completed.text == address {
+            load(visited: completed.url)
+            return
+        }
         let typed = address
         guard BrowserAddress.resolve(typed).target != nil else { return }
         tab.navigate(typed)
-        address = BrowserAddress.display(tab.url)
-        addressFocused = false
-        if let webView = tab.webView { webView.window?.makeFirstResponder(webView) }
+        finishEditing()
     }
 
     @ViewBuilder private func historyMenu(_ items: [WKBackForwardListItem]) -> some View {
@@ -341,8 +395,15 @@ struct NativeBrowserSizeMenu: View {
 
 /// ⋮ — the page in front of you, and what this browser remembers about it.
 struct NativeBrowserMoreMenu: View {
-    let store: NativeBrowserTabs
+    @Bindable var store: NativeBrowserTabs
     let tab: NativeBrowserTab
+
+    /// With no Downloads button on the bar, the list opens from here instead
+    /// (the web browser's "standing door").
+    private var listFromHere: Binding<Bool> {
+        Binding(get: { store.downloadsShown && store.downloads.badge == nil },
+                set: { if !$0 { store.downloadsShown = false } })
+    }
 
     var body: some View {
         Menu {
@@ -350,7 +411,6 @@ struct NativeBrowserMoreMenu: View {
             Button("New Isolated Tab") { store.create(after: tab.id, isolated: true, profile: tab.profile) }
             Divider()
             Button("Downloads") { store.downloadsShown = true }
-                .disabled(store.downloads.items.isEmpty)
             Button("Open Downloads Folder") { store.downloads.openDownloadsFolder() }
             Button("Set as Start Page") { tab.setAsStartPage() }
                 .disabled(tab.url == nil)
@@ -375,6 +435,9 @@ struct NativeBrowserMoreMenu: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("More")
+        .popover(isPresented: listFromHere, arrowEdge: .bottom) {
+            NativeBrowserDownloadsList(downloads: store.downloads)
+        }
     }
 }
 

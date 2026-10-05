@@ -24,8 +24,10 @@ struct SettingsWindow: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 215, max: 300)
+            // This order matters: `toolbar(removing:)` AFTER the width makes SwiftUI
+            // ignore the width (measured: 144 pt, labels cut off); before it, 215.
             .toolbar(removing: .sidebarToggle)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 215, max: 300)
         } detail: {
             SettingsDetailView(model: model)
         }

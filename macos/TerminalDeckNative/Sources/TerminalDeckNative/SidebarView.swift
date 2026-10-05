@@ -117,34 +117,35 @@ struct SidebarRow: View {
     }
 
     private var helpText: String {
-        [item.title, item.subtitle, item.status].compactMap { $0 }.joined(separator: " — ")
+        [item.title, item.subtitle, item.status.map { StatusMeaning($0).label }].compactMap { $0 }.joined(separator: " — ")
     }
 }
 
-/// A small mark for the states that need attention; nothing for calm ones.
-/// The raw status is always in the row's (or tab's) tooltip.
+/// A small mark for the states worth a glance; nothing for "Ready" (idle / waiting),
+/// matching the web's StatusDot. The web's word is in the tooltip and for VoiceOver.
 struct StatusMark: View {
     let status: String?
 
     var body: some View {
-        switch status?.lowercased() {
-        case "working", "running", "busy", "thinking", "loading":
-            ProgressView()
-                .controlSize(.mini)
-                .accessibilityLabel("Working")
-        case "input", "waiting", "needs-input", "attention", "blocked", "approval":
-            Image(systemName: "hand.raised.fill")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .accessibilityLabel("Needs you")
-        case "error", "failed", "fail", "crashed":
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
-                .accessibilityLabel("Error")
-        default:
-            EmptyView()
+        let meaning = StatusMeaning(status)
+        Group {
+            switch meaning {
+            case .working:
+                ProgressView().controlSize(.mini)
+            case .needsInput:
+                Image(systemName: "hand.raised.fill").font(.caption).foregroundStyle(.orange)
+            case .completed:
+                Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+            case .exited:
+                Image(systemName: "stop.circle").font(.caption).foregroundStyle(.secondary)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.red)
+            case .ready:
+                EmptyView()
+            }
         }
+        .help(meaning == .ready && status == nil ? "" : meaning.label)
+        .accessibilityLabel(meaning.label)
     }
 }
 

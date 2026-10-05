@@ -233,10 +233,23 @@ struct ArtifactsSentenceTests {
         let none = ArtifactList(root: "/Users/me/Templates", sessionsScanned: 0)
         #expect(ArtifactRules.nothingFound(none) == "Nothing written or edited in /Users/me/Templates — no sessions have been recorded for it yet.")
         let read = ArtifactList(root: "/p", sessionsScanned: 15, outsideProject: 40)
-        #expect(ArtifactRules.nothingFound(read) == "Nothing written or edited in /p — 15 sessions read, 40 changes to files outside it.")
+        #expect(ArtifactRules.nothingFound(read) == "Nothing written or edited in /p by its own sessions — 15 read, 40 changes to files outside it.")
         let one = ArtifactList(root: "/p", sessionsScanned: 1, outsideProject: 0)
-        #expect(ArtifactRules.nothingFound(one) == "Nothing written or edited in /p — 1 session read.")
+        #expect(ArtifactRules.nothingFound(one) == "Nothing written or edited in /p by its own sessions — 1 read.")
         #expect(ArtifactRules.summarize(one, shown: 0, kind: .made) == ArtifactRules.nothingFound(one))
+    }
+
+    /// The sentence names the sessions the selected scope read — "40 sessions read" under
+    /// Every session read as if this folder had forty of its own (on-screen check, 2026-10-06).
+    @Test func theSentenceAgreesWithTheScope() {
+        let every = ArtifactList(root: "/p", scope: .all, sessionsScanned: 40, outsideProject: 528)
+        #expect(ArtifactRules.nothingFound(every)
+            == "Nothing written or edited in /p by any session — 40 read across every project, 528 changes to files outside it.")
+        let nothingOnThisMac = ArtifactList(root: "/p", scope: .all, sessionsScanned: 0)
+        #expect(ArtifactRules.nothingFound(nothingOnThisMac) == "Nothing written or edited in /p — no sessions have been recorded on this Mac yet.")
+        let own = ArtifactList(root: "/p", scope: .project, sessionsScanned: 2)
+        #expect(ArtifactRules.nothingFound(own).contains("by its own sessions"))
+        #expect(!ArtifactRules.nothingFound(own).contains("every project"))
     }
 
     @Test func aPageEmptiedByTheRuleSaysSo() {

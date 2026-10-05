@@ -385,9 +385,25 @@ struct NativeBrowserDownloadsButton: View {
             .frame(width: 26, height: 26)
             .contentShape(.rect)
         }
+        .overlay(alignment: .topTrailing) {
+            // The web button's badge: how many are moving, "!" when the newest
+            // failed, else how many there are.
+            if let badge = downloads.badge {
+                Text(badge.label)
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3.5)
+                    .frame(minWidth: 14, minHeight: 14)
+                    .background(badge.tone == "bad" ? Color.red : badge.tone == "busy" ? Color.accentColor : Color.secondary,
+                                in: .capsule)
+                    .offset(x: 3, y: -2)
+                    .allowsHitTesting(false)
+            }
+        }
         .help("Downloads")
         .accessibilityLabel("Downloads")
-        .popover(isPresented: $store.downloadsShown, arrowEdge: .bottom) {
+        .popover(isPresented: Binding(get: { store.downloadsShown && downloads.badge != nil },
+                                      set: { store.downloadsShown = $0 }), arrowEdge: .bottom) {
             NativeBrowserDownloadsList(downloads: downloads)
         }
     }

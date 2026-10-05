@@ -453,3 +453,98 @@ struct IslandHoverTests {
         #expect(hover.expanded)
     }
 }
+
+// MARK: Drawing — the pill must actually be there
+
+/// A plain display whose menu bar is 30 points (the monitor the screen check found
+/// the island invisible on): a 76 × 30 resting window under a 740 × 318 canvas.
+private func thirtyPointBar() -> IslandScreen {
+    IslandScreen(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                 visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1050))
+}
+
+@Suite("Island drawing")
+struct IslandDrawingTests {
+    struct Coverage {
+        /// Share of the window's pixels that are opaque black.
+        var black: Double
+        var centreOpaque: Bool
+    }
+
+    /// Draws the island the way the panel does — the outline the view fills
+    /// (`IslandGeometry.outline`) on the canvas, the canvas placed in the window by
+    /// `place` — into a bitmap the size of the window (2× pixels), and measures it.
+    private func render(_ layout: IslandLayout, expanded: Bool,
+                        place: (CGSize) -> CGRect) throws -> Coverage {
+        let window = layout.frame(expanded: expanded).size
+        let scale: CGFloat = 2
+        let width = Int(window.width * scale), height = Int(window.height * scale)
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                             bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.scaleBy(x: scale, y: scale)
+        // Window coordinates are bottom-left; the canvas draws y-down from its own top-left.
+        let canvas = place(window)
+        context.translateBy(x: canvas.minX, y: canvas.maxY)
+        context.scaleBy(x: 1, y: -1)
+        context.addPath(IslandGeometry.outline(expanded ? layout.panel : layout.pill,
+                                               centreX: canvas.width / 2, top: 0))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        context.fillPath()
+
+        let pixels = try #require(context.data).bindMemory(to: UInt8.self, capacity: width * height * 4)
+        var black = 0
+        for i in 0..<(width * height) where pixels[i * 4 + 3] > 230 && pixels[i * 4] < 25 { black += 1 }
+        let centre = (height / 2 * width + width / 2) * 4
+        return Coverage(black: Double(black) / Double(width * height), centreOpaque: pixels[centre + 3] > 230)
+    }
+
+    private func panelPlacement(_ layout: IslandLayout) -> (CGSize) -> CGRect {
+        { layout.canvasFrame(inWindowOfSize: $0) }
+    }
+
+    @Test func restingPillIsOpaqueBlackInItsWindow() throws {
+        for screen in [thirtyPointBar(), plainDisplay(), macBook(), plainDisplay(originX: 1512, originY: -98)] {
+            let layout = IslandGeometry.layout(for: screen)
+            let drawn = try render(layout, expanded: false, place: panelPlacement(layout))
+            #expect(drawn.centreOpaque, "the resting pill is transparent at its centre on \(screen.frame)")
+            #expect(drawn.black > 0.7, "only \(drawn.black) of the resting window is black on \(screen.frame)")
+        }
+    }
+
+    @Test func grownPanelIsDrawnToo() throws {
+        for screen in [thirtyPointBar(), macBook()] {
+            let layout = IslandGeometry.layout(for: screen)
+            let drawn = try render(layout, expanded: true, place: panelPlacement(layout))
+            #expect(drawn.centreOpaque)
+            #expect(drawn.black > 0.5)
+        }
+    }
+
+    /// The bug this guards: the canvas centred in the small window, as SwiftUI does with
+    /// a root view bigger than its hosting view. The check above must catch it.
+    @Test func aCentredCanvasIsCaughtAsATransparentPill() throws {
+        let layout = IslandGeometry.layout(for: thirtyPointBar())
+        let centred: (CGSize) -> CGRect = { size in
+            CGRect(x: (size.width - layout.canvasSize.width) / 2, y: (size.height - layout.canvasSize.height) / 2,
+                   width: layout.canvasSize.width, height: layout.canvasSize.height)
+        }
+        let drawn = try render(layout, expanded: false, place: centred)
+        #expect(!drawn.centreOpaque)
+        #expect(drawn.black == 0)
+    }
+
+    @Test func canvasHangsFromTheWindowsTopCentre() {
+        for screen in [thirtyPointBar(), macBook()] {
+            let layout = IslandGeometry.layout(for: screen)
+            for size in [layout.collapsedFrame.size, layout.expandedFrame.size] {
+                let canvas = layout.canvasFrame(inWindowOfSize: size)
+                #expect(canvas.maxY == size.height)
+                #expect(canvas.midX == size.width / 2)
+                #expect(canvas.size == layout.canvasSize)
+            }
+            #expect(layout.canvasFrame(inWindowOfSize: layout.expandedFrame.size)
+                    == CGRect(origin: .zero, size: layout.expandedFrame.size))
+        }
+    }
+}

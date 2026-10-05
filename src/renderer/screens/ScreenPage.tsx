@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { SessionMeta } from '../../shared/types'
 import { postToNative } from '../../shared/native-shell'
+import { publishNativeAppearance } from '../native-appearance'
 import { TerminalView } from '../components/TerminalView'
 import { FeaturesProvider, useFeatures } from '../features/FeaturesProvider'
 import { nativeTitle } from '../native-commands'
@@ -26,6 +27,7 @@ export function ScreenPage({ route }: { route: ScreenRoute }) {
   // The app's theme and density, applied to this page as to the main window.
   useAppSettings()
   useEffect(() => postToNative({ type: 'ready' }), [])
+  useEffect(() => publishNativeAppearance(), [])
   if (route.kind === 'unknown') return <ScreenMessage text={route.message} />
   if (route.kind === 'panel') {
     return (

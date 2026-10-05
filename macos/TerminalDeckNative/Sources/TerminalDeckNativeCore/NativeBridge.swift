@@ -94,6 +94,8 @@ public enum PageMessage: Equatable, Sendable {
     /// The page opened (or closed) a dialog: while open, the page comes in front of
     /// any native screen in that window.
     case pageModal(open: Bool)
+    /// The app's theme, as the page resolves it: the native chrome is painted to match.
+    case appearance(AppAppearance)
 
     public static let handlerName = "tdNative"
     public static let maxTitleLength = 200
@@ -123,6 +125,11 @@ public enum PageMessage: Equatable, Sendable {
         case "open-settings":
             guard let url = (dict["url"] as? String)?.nonEmpty else { return nil }
             return .openSettings(url: url, section: (dict["section"] as? String)?.nonEmpty)
+
+        case "appearance":
+            guard let appearance = AppAppearance(preference: dict["preference"] as? String,
+                                                 resolved: dict["resolved"] as? String) else { return nil }
+            return .appearance(appearance)
 
         case "page-modal":
             guard let open = dict["open"] as? Bool else { return nil }
@@ -180,5 +187,29 @@ public enum SettingsLocation {
               origin.contains(url)
         else { return nil }
         return url
+    }
+}
+
+/// The app's own appearance setting, for the native chrome (sidebar, toolbar,
+/// Settings). 'system' follows the Mac rather than pinning what the page resolved:
+/// pinning would make the page's own `prefers-color-scheme` echo the pinned value,
+/// and the app would never see the Mac switch again.
+public enum AppAppearance: String, Equatable, Sendable {
+    case followMac, dark, light
+
+    /// From `{type:'appearance', preference, resolved}`. A preference this build does
+    /// not know falls back to the resolved scheme; nothing usable → nil.
+    public init?(preference: String?, resolved: String?) {
+        switch preference {
+        case "system": self = .followMac
+        case "dark": self = .dark
+        case "light": self = .light
+        default:
+            switch resolved {
+            case "dark": self = .dark
+            case "light": self = .light
+            default: return nil
+            }
+        }
     }
 }

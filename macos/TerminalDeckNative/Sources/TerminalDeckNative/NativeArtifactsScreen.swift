@@ -53,6 +53,9 @@ private struct ArtifactsContent: View {
     let model: ArtifactsScreenModel
 
     var body: some View {
+        // The controls sit at the top, as on the web page; the body takes the
+        // rest. Without both frames an empty state that does not stretch leaves
+        // the whole page centred, with a blank band above the filter bar.
         VStack(spacing: 0) {
             ArtifactsControls(model: model)
                 .padding(.horizontal, 16)
@@ -60,7 +63,9 @@ private struct ArtifactsContent: View {
                 .padding(.bottom, 8)
             Divider()
             ArtifactsBody(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 

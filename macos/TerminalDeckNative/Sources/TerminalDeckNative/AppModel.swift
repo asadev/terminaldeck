@@ -58,6 +58,8 @@ final class AppModel {
     private static let openScreensKey = "openScreenWindows"
 
     private init() {
+        // Last launch's theme, before any window is drawn (the page confirms it shortly).
+        defer { restoreAppearance() }
         // The installed Terminal Deck (or a checkout, with TD_REPO) runs as the engine.
         engine = EngineController(configuration: InstalledTerminalDeck.configuration())
         BrowserTabsHook.connect()
@@ -129,6 +131,8 @@ final class AppModel {
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
             openScreenWindow(ref, title: title)
+        case .appearance(let appearance):
+            applyAppearance(appearance)
         case .pageModal(let open):
             pageModalOpen = open
         case .ready, .settingsSections:
@@ -145,6 +149,8 @@ final class AppModel {
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
             openScreenWindow(ref, title: title)
+        case .appearance(let appearance):
+            applyAppearance(appearance)
         case .pageModal(let open):
             settingsModalOpen = open
         case .ready, .title, .sidebar, .tabs:
@@ -161,10 +167,36 @@ final class AppModel {
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
             openScreenWindow(ref, title: title)
+        case .appearance(let appearance):
+            applyAppearance(appearance)
         case .pageModal(let open):
             screen.modalOpen = open
         case .ready, .sidebar, .tabs, .settingsSections:
             break
+        }
+    }
+
+    // MARK: Appearance
+
+    private static let appearanceKey = "appAppearance"
+
+    /// Paint every native window in the app's theme, and remember it so the next
+    /// launch starts in it rather than flashing the Mac's scheme first.
+    func applyAppearance(_ appearance: AppAppearance) {
+        UserDefaults.standard.set(appearance.rawValue, forKey: Self.appearanceKey)
+        let target: NSAppearance? = switch appearance {
+        case .followMac: nil
+        case .dark: NSAppearance(named: .darkAqua)
+        case .light: NSAppearance(named: .aqua)
+        }
+        if NSApplication.shared.appearance?.name != target?.name {
+            NSApplication.shared.appearance = target
+        }
+    }
+
+    private func restoreAppearance() {
+        if let raw = UserDefaults.standard.string(forKey: Self.appearanceKey), let saved = AppAppearance(rawValue: raw) {
+            applyAppearance(saved)
         }
     }
 
