@@ -1795,6 +1795,9 @@ async function hydrateRenderer(): Promise<void> {
           known.add(session.cwd)
         }
       }
+    } else {
+      // Nothing is coming back, so the previous launch's tabs are not kept either.
+      ledger.dropPending()
     }
 
     try {
@@ -2467,6 +2470,9 @@ async function retryHeld(key: unknown): Promise<HeldSession[]> {
         provider: held.provider,
         profileId: held.profileId,
         resume: decision.outcome === 'resume',
+        ...(held.agentSessionId ? { resumeConversationId: held.agentSessionId } : {}),
+        ...(held.model ? { model: held.model } : {}),
+        ...(held.homeProfileId !== undefined ? { homeProfileId: held.homeProfileId } : {}),
         // As the same tab it was before it failed, not as a new one on the end
         // of the bar. See `SavedSession.tabKey`.
         ...(held.tabKey !== undefined ? { tabKey: held.tabKey } : {}),

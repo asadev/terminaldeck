@@ -136,7 +136,8 @@ import { isHiddenSession } from './remote/hidden-sessions'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
 import { HeldSessions } from './session-held'
-import type { SavedSession } from './session-restore'
+import { personalSessions, type SavedSession } from './session-restore'
+import { copilotPaths } from './copilot-home'
 import { store } from './store'
 import {
   WslLink,
@@ -239,7 +240,22 @@ function agentLabel(provider: ProviderId, added: CustomAgent | null): string {
  */
 export class OpenSessionLedger {
   private readonly records = new Map<string, SavedSession>()
+  // Preserve the whole previous launch before any new session (including Hoot)
+  // can flush. Each recovered or held tab replaces its pending record atomically.
+  private pending: SavedSession[]
+  private readonly recoveryOrder: Map<string, number>
   private frozen = false
+
+  constructor(saved: readonly SavedSession[] = store().getOpenSessions()) {
+    // Migrate anonymous old tabs once, before another launch can mint duplicates.
+    this.pending = saved.map((session) => ({ ...session, tabKey: session.tabKey ?? randomUUID() }))
+    this.recoveryOrder = new Map(this.pending.map((session, index) => [this.key(session), index]))
+    this.flush()
+  }
+
+  private key(saved: SavedSession): string {
+    return saved.tabKey ?? JSON.stringify(saved)
+  }
 
   /**
    * The sessions that were open, could not be started again, and are being kept
@@ -252,15 +268,32 @@ export class OpenSessionLedger {
    * only writer, so anything that was not a running session was erased by the
    * first tab that opened. See `session-held.ts` for the whole account.
    */
-  readonly held = new HeldSessions(() => this.flush())
+  readonly held = new HeldSessions(() => {
+    const heldKeys = new Set(this.held.saved().map((saved) => this.key(saved)))
+    this.pending = this.pending.filter((saved) => !heldKeys.has(this.key(saved)))
+    this.flush()
+  })
 
   note(id: string, saved: SavedSession): void {
+    this.pending = this.pending.filter((previous) => this.key(previous) !== this.key(saved))
     this.records.set(id, saved)
     this.flush()
   }
 
+  update(id: string, patch: Partial<SavedSession>): void {
+    const saved = this.records.get(id)
+    if (saved) this.note(id, { ...saved, ...patch })
+  }
+
   forget(id: string): void {
     this.records.delete(id)
+    this.flush()
+  }
+
+  /** Reopening is switched off: the previous launch's tabs are not coming back, so stop keeping them. */
+  dropPending(): void {
+    if (this.pending.length === 0) return
+    this.pending = []
     this.flush()
   }
 
@@ -364,7 +397,10 @@ export class OpenSessionLedger {
      * reshuffle somebody's tabs a little more every time the app could not start
      * one.
      */
-    store().setOpenSessions([...this.held.saved(), ...this.records.values()])
+    const sessions = new Map<string, SavedSession>()
+    for (const saved of [...this.pending, ...this.held.saved(), ...this.records.values()]) sessions.set(this.key(saved), saved)
+    store().setOpenSessions([...sessions.values()].sort((a, b) =>
+      (this.recoveryOrder.get(this.key(a)) ?? Infinity) - (this.recoveryOrder.get(this.key(b)) ?? Infinity)))
   }
 
   /** Stop writing. Called once, immediately after the last honest flush. */
@@ -1108,7 +1144,7 @@ export async function spawnReconfined(
 
 export function createHostCore(options: HostCoreOptions): HostCore {
   const platform = options.platform ?? currentPlatform()
-  const ledger = new OpenSessionLedger()
+  const ledger = new OpenSessionLedger(personalSessions(store().getOpenSessions(), [copilotPaths(options.userData).root]))
 
   /**
    * WSL, as far as this app is concerned: what is installed, which distribution
@@ -1813,6 +1849,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         ? ((await options.projectTools?.launch(provider, input.cwd).catch(() => null)) ?? null)
         : null
     const composed: readonly string[] = [
+      ...(provider === 'claude' && input.model ? ['--model', input.model] : []),
       ...(extraArgs ?? []),
       ...(sessionTools === null ? [] : sessionTools.args),
       ...(projectLaunch === null ? [] : projectLaunch.args),
@@ -2142,6 +2179,9 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // transcript under the name it actually runs as.
       provider,
     })
+    if (named && chosen !== resumeArgs) {
+      throw new Error('That exact conversation is already open; the saved tab was kept instead of starting a new conversation.')
+    }
 
     /*
      * Name the conversation, so its transcript can be found rather than guessed.
@@ -2526,6 +2566,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      */
     if (tabKey !== null) {
       ledger.note(meta.id, {
+        ...(meta.agentSessionId ? { agentSessionId: meta.agentSessionId } : {}),
+        ...(input.model ? { model: input.model } : {}),
         cwd: input.cwd,
         provider: requested,
         profileId: rememberedAccount(meta, input),
@@ -2576,6 +2618,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * exactly where it was, so a not-yet-known account never becomes a wrong one.
    */
   const controlAccess: SessionAccess = {
+    rememberModel: (id, model) => ledger.update(id, { model }),
     write: (id, data) => ptys.write(id, data),
     screen: (id) => ptys.screen(id),
     configDir: (id) => establishedConfigDir(id),
@@ -2993,7 +3036,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       options.onData?.(id, data)
     },
     (id, exitCode) => {
-      ledger.forget(id)
+      // An exited process leaves a readable tab. Only removing the tab forgets it.
+      ledger.flush()
       // The boundary outlives nothing. A dead session cannot be attached to, and
       // an entry left behind would answer a question about an id that will never
       // be asked again — see `session-boundary.ts`.
@@ -3059,7 +3103,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * `list()`, so a window still drawing it is drawing something this process
      * can no longer answer for.
      */
-    (id, reason) => options.onSessionRemoved?.(id, reason),
+    (id, reason) => {
+      ledger.forget(id)
+      options.onSessionRemoved?.(id, reason)
+    },
   )
 
   /**

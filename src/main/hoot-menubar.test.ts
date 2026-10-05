@@ -1,3 +1,4 @@
+import { bindCatcher, CATCHER_REPEAT_MS } from '../shared/hoot-catcher'
 import type { IpcMain } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -8,8 +9,6 @@ vi.mock('electron', () => ({
 }))
 
 const {
-  CATCHER_PAGE,
-  CATCHER_REPEAT_MS,
   createHootMenuBar,
   FOCUS_GRACE_MS,
   MENUBAR_KEY,
@@ -798,15 +797,14 @@ describe('the channels', () => {
  * makes, minus the windows.
  */
 function catcherPage(say: (kind: 'enter' | 'leave' | 'press') => void) {
-  const script = /<script>([\s\S]*)<\/script>/.exec(CATCHER_PAGE)?.[1] ?? ''
   const on: Record<string, (event?: { button?: number; preventDefault?: () => void }) => void> = {}
   let now = 1_000_000
   const document = {
     addEventListener: (type: string, listener: () => void) => void (on[type] = listener),
-    documentElement: { addEventListener: (type: string, listener: () => void) => void (on[`root:${type}`] = listener) },
+    removeEventListener: () => undefined,
+    documentElement: { addEventListener: (type: string, listener: () => void) => void (on[`root:${type}`] = listener), removeEventListener: () => undefined },
   }
-  const window = { deck: { hootPanelCatch: say, hootPanelMenu: () => undefined } }
-  new Function('window', 'document', 'Date', script)(window, document, { now: () => now })
+  bindCatcher(document, say, () => undefined, () => now)
   return {
     move: () => on.mousemove?.(),
     leave: () => on['root:mouseleave']?.(),
@@ -884,4 +882,3 @@ describe('it opens every time — on hover and on a click', () => {
     expect(r.islands[0].focused).toBe(0)
   })
 })
-

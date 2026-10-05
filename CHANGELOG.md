@@ -10,6 +10,13 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Fixed
+
+- **A restart brings back the same conversations.** Each Claude tab now remembers its exact conversation, its account folder and the model you chose, and a restart continues that conversation by its id. A tab whose conversation cannot be found is kept in the sidebar to try again — never swapped for a new conversation or a guess — and tabs that had not come back yet are no longer lost when another tab opens. Claude tabs saved by 0.18.3 or earlier did not record their conversation, so after this update they show as kept rows: open Claude in that folder and type `/resume` to pick it. A program that was stopped, and anything typed but not sent, cannot be brought back.
+- **The Hoot island opens on hover and on a click in the installed app.** Its invisible hover catcher was blocked by the app's own security policy in release builds; it now runs from the app's bundled code.
+
 ## [0.18.3] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.

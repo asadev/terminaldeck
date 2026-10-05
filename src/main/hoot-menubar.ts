@@ -942,35 +942,6 @@ function islandDisplay(): Electron.Display {
   return screen.getPrimaryDisplay()
 }
 
-/**
- * How long the catcher waits before saying "enter" again for a pointer it
- * already announced. Once the island takes the pointer the catcher is told to
- * ignore it, so it never hears it leave and would otherwise stay sure the
- * pointer is still on it — and say nothing the next time it arrives, which is
- * the island that "sometimes opens and sometimes does not". The main process
- * treats a repeat as nothing new.
- */
-export const CATCHER_REPEAT_MS = 100
-
-/**
- * The catcher's page: nothing to see, and three things to say.
- *
- * Painted at the faintest alpha there is (1 in 255) rather than not at all,
- * because macOS may pass the pointer straight through pixels that are wholly
- * transparent — and then the catcher would catch nothing. One step of alpha
- * over the island's own colour is invisible.
- */
-export const CATCHER_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;background:rgba(0,0,0,0.004);cursor:default}
-</style></head><body><script>
-var d=window.deck||{};var inside=false;var said=0;
-function say(k){if(d.hootPanelCatch)d.hootPanelCatch(k)}
-document.addEventListener('mousemove',function(){var t=Date.now();if(!inside||t-said>=${CATCHER_REPEAT_MS}){inside=true;said=t;say('enter')}});
-document.documentElement.addEventListener('mouseleave',function(){if(inside){inside=false;say('leave')}});
-document.addEventListener('mousedown',function(e){if(e.button===0)say('press')});
-document.addEventListener('contextmenu',function(e){e.preventDefault();if(d.hootPanelMenu)d.hootPanelMenu()});
-</script></body></html>`
-
 /** The menu bar's height when the work area does not say (a menu bar set to hide itself). */
 const FALLBACK_BAR = 24
 
@@ -1102,7 +1073,15 @@ export function wireHootMenuBar(options: WireHootMenuBarOptions): HootMenuBar {
       window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
       window.setHiddenInMissionControl(true)
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(CATCHER_PAGE)}`)
+      // The regular bundled renderer runs under the production script-src 'self'.
+      // A data: page with an inline listener is blocked in installed builds.
+      if (options.rendererUrl) {
+        const url = new URL(options.rendererUrl)
+        url.searchParams.set('hootcatcher', '1')
+        void window.loadURL(url.toString())
+      } else {
+        void window.loadFile(options.rendererFile, { query: { hootcatcher: '1' } })
+      }
       return {
         webContents: window.webContents,
         isDestroyed: () => window.isDestroyed(),

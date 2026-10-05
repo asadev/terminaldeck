@@ -68,6 +68,9 @@ export const SESSIONS_HELD_CHANNEL = 'sessions:held'
 
 /** One session that did not start, and why. */
 export interface HeldSession {
+  agentSessionId?: string
+  model?: string
+  homeProfileId?: string
   /**
    * Stable for as long as this entry exists, and meaningless afterwards.
    *
@@ -134,6 +137,9 @@ export interface HeldSession {
  */
 export function savedFrom(held: HeldSession): SavedSession {
   return {
+    ...(held.agentSessionId ? { agentSessionId: held.agentSessionId } : {}),
+    ...(held.model ? { model: held.model } : {}),
+    ...(held.homeProfileId !== undefined ? { homeProfileId: held.homeProfileId } : {}),
     cwd: held.cwd,
     provider: held.provider,
     profileId: held.profileId,
@@ -183,6 +189,9 @@ export class HeldSessions {
   hold(session: SavedSession, reason: string): HeldSession {
     this.counter += 1
     const entry: HeldSession = {
+      ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
+      ...(session.model ? { model: session.model } : {}),
+      ...(session.homeProfileId !== undefined ? { homeProfileId: session.homeProfileId } : {}),
       key: `held-${this.counter}`,
       cwd: session.cwd,
       provider: session.provider,

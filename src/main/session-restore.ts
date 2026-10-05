@@ -1,139 +1,36 @@
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
 import { isWithinRoot } from './fs-tree'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
-import { newestConversation, transcriptDir } from './transcript'
+import { newestConversation, projectPathSpellings, transcriptDir, transcriptDirs } from './transcript'
 import { isLinuxPath } from './wsl'
 
 /**
- * Putting the sessions you had open back, continued rather than started over.
+ * Recover the conversation and its tab after a restart. The CLI starts as a new
+ * process, with the saved conversation id and account folder; it reconstructs
+ * its own conversation UI. A killed process, unsaved input and in-flight work
+ * cannot be resumed as execution state.
  *
- * ## Why this file exists at all
+ * Launch recovery requires an exact id. Missing history, an ambiguous legacy
+ * record or a duplicate claim is kept for recovery, never replaced with a new
+ * conversation. The older folder-latest planner remains for explicit account
+ * switches; those callers opt out of exact launch recovery.
  *
- * `src/reachable.test.ts` opens with a list of five features that shipped as
- * Done with no way for a user to reach them, and "restore-on-launch" is one of
- * the five. The switch in Settings has existed the whole time; until now it
- * reopened *projects* and its own help text said, in as many words, that
- * sessions are not reopened. This module is the part that was missing, and the
- * label had to change with it or the app would be lying in the other direction.
- *
- * ## What "continued" is allowed to mean
- *
- * Claude Code writes every conversation to a JSONL transcript under
- * `~/.claude/projects/<encoded-cwd>/`, so the history survives the process, the
- * app and the machine. `claude --continue` re-reads it. That is the entire
- * mechanism, it belongs to the CLI, and this module's job is to decide *when*
- * handing it `--continue` is honest — not to reimplement it.
- *
- * Three facts constrain that decision, and each one is a case below:
- *
- *  1. **`--continue` is per conversation store, not per tab.** It picks the most
- *     recently written conversation in the working directory. Two tabs pointed
- *     at the *same* store therefore cannot both be continued: they would attach
- *     to the same transcript and the user would be looking at one conversation
- *     twice. So the most recently used tab in a store continues and its siblings
- *     start clean. The alternative — `claude --resume <session-id>` with an id
- *     this app picked — is worse than it looks: the app cannot prove which
- *     conversation a terminal was driving (`src/renderer/session-transcript.ts`
- *     is four paragraphs on exactly that), so it would be a guess, and a guess
- *     that lands on the wrong conversation is far worse than a clean start.
- *     It would also be a second resume implementation living beside
- *     `providers.ts`'s `resumeArgs`, which is the thing this deliberately is
- *     not.
- *
- *     "Store" and "folder" are not the same thing, and reading them as the same
- *     thing silently threw away conversations. A folder is one third of the
- *     answer; see `conversationScope` for the other two and for the two tabs
- *     that each lost a conversation to that confusion.
- *
- *  2. **A conversation can be gone.** The user can clear `~/.claude`, the
- *     folder can be on a volume that is no longer mounted, the transcript can
- *     be deleted. `claude --continue` with nothing to continue does not open an
- *     empty session — it errors and the tab dies with a message nobody asked
- *     for. So the transcript is looked for *first*, and a session with no
- *     conversation on disk is started clean and is reported as started clean.
- *     `SessionMeta.resumed` stays false, which is what every downstream view
- *     reads to decide whether an older transcript may be attributed to this
- *     tab.
- *
- *  3. **Not every store can be read.** `codex resume --last` keeps its own,
- *     which this app does not read, so "is there a conversation?" has a third
- *     answer here: unknown. Unknown resumes — the tab was open when the app
- *     closed, so a conversation almost certainly exists, and if it does not the
- *     CLI says so in its own words, which is the tool speaking plainly rather
- *     than this app pretending. Providers with no resume flag at all (a plain
- *     shell, and gemini until its flag is confirmed) are never asked; there is
- *     nothing to continue and starting one is not a failure.
- *
- *     A **session that ran inside WSL** is the second member of that case and
- *     was for a long time the reason this feature worked on the Mac and not on
- *     Windows. Its agent is a Linux process writing Linux paths under a Linux
- *     home, and the Windows side of the machine can neither name that directory
- *     nor encode the folder the way the agent did. See `ranInsideWsl`, which
- *     has the whole reproduction.
- *
- * ## The picture, which is a separate thing from the context
- *
- * All of the above restores the *conversation* and none of it restores the
- * *screen*: scrollback lives in `PtyManager`'s in-memory buffer and dies with
- * the process, so a restored tab was an empty terminal attached to a live,
- * fully-contexted session. It worked and it looked like everything had been
- * lost, which for a person is the same thing.
- *
- * So a continued session is now painted with the tail of the conversation it is
- * continuing, read out of the same transcript by `session-replay.ts` and put in
- * front of the session's own output. Three rules constrain it and each is
- * enforced here rather than there:
- *
- *  - **Only a session that is actually continuing.** A tab starting clean must
- *    not be painted with a conversation it is not attached to — most obviously
- *    the sibling tab that lost the claim, which is sitting in the same folder
- *    looking at the same transcript and continuing none of it.
- *  - **Read before the process exists.** The transcript is read *before* the
- *    spawn, so nothing has to reason about what the CLI has written to the file
- *    in the meantime.
- *  - **Painted before the tab exists.** The buffer is seeded before `announce`,
- *    because announcing is what makes the window build a terminal and the first
- *    thing that terminal does is ask for the scrollback. Painting afterwards is
- *    a race the renderer loses silently, and only sometimes.
- *
- * ## What this module never does
- *
- * It never writes a byte to a session's *process*, and it never announces
- * itself. Restoring is painting text that already happened; it must not send
- * anything to the CLI and it must not re-execute a command. Coming back to a
- * restarted machine should look like the session was simply still there, so
- * anything explaining the mechanism — a banner, a "resumed" chip, a synthetic
- * first line — is the app narrating its own plumbing, which is the thing this
- * was asked not to do. The one place it speaks is the app log, and that only
- * when a session could *not* come back.
+ * This module never writes commands or replay text into a process.
  */
 
 /* -------------------------------------------------------------------------- */
 /* What is remembered                                                          */
 /* -------------------------------------------------------------------------- */
 
-/**
- * One tab, as much of it as the main process is entitled to remember.
- *
- * Deliberately not the session id: a restored session is a new process with a
- * new id, and nothing outside this launch has any use for the old one. The
- * identity that survives a restart is "an agent of this kind, in this folder,
- * as this profile" — which is precisely what is needed to start it again.
- *
- * Also deliberately not the title. Titles are the renderer's: it derives them
- * from the session's own output (`session-title.ts`) and the main process only
- * ever sets the folder's basename. Persisting one here would freeze a name the
- * renderer is about to recompute anyway.
- *
- * That is the identity of a *session*: everything needed to start this one
- * again. It is deliberately not the identity of a **tab**, and the difference is
- * {@link SavedSession.tabKey}, which is the field beside it and the only one
- * here that says nothing about how to launch anything.
- */
+/** A tab's durable identity and the inputs needed to recover its conversation. */
 export interface SavedSession {
+  /** Exact CLI conversation identity, retained independently of the new process id. */
+  agentSessionId?: string
+  /** A confirmed model selection for this tab, rather than the account's latest default. */
+  model?: string
   cwd: string
   provider: ProviderId
   /** The isolated login this ran as, or null for the default. */
@@ -351,6 +248,8 @@ export interface RestoreDecision {
 }
 
 export interface PlanProbes {
+  /** Launch recovery must never guess a conversation or silently start over. */
+  requireExactConversation?: boolean
   /** Is the folder still there? A volume can be unmounted between runs. */
   folderExists(cwd: string): Promise<boolean>
   /** Does this provider have a way to continue at all? */
@@ -468,6 +367,49 @@ export async function planRestore(
   saved: readonly SavedSession[],
   probes: PlanProbes,
 ): Promise<RestoreDecision[]> {
+  if (probes.requireExactConversation) {
+    // Only Claude tabs record their conversation id (and Codex when a switch
+    // carried one by id). Every other tab is planned as before: a shell, Gemini
+    // or an added agent starts again in its folder, and Codex continues its own
+    // latest. Holding them for an id this app never records would hold them forever.
+    const loose = await planRestore(
+      saved.filter((session) => session.provider !== 'claude' && !session.agentSessionId),
+      { ...probes, requireExactConversation: false },
+    )
+    const looseFor = new Map(loose.map((decision) => [decision.session, decision]))
+    const claimed = new Set<string>()
+    const decisions: RestoreDecision[] = []
+    for (const session of saved) {
+      const planned = looseFor.get(session)
+      if (planned) {
+        decisions.push(planned)
+        continue
+      }
+      if (!(await probes.folderExists(session.cwd))) {
+        decisions.push({ session, outcome: 'skip', reason: 'the folder it ran in is no longer on this machine' })
+        continue
+      }
+      if (!session.agentSessionId) {
+        decisions.push({ session, outcome: 'skip', reason: 'kept: an older version did not save which conversation this was, so none was guessed. Open Claude in this folder and type /resume to pick it.' })
+        continue
+      }
+      if (!probes.canContinue(session.provider) || (session.provider !== 'claude' && session.provider !== 'codex')) {
+        decisions.push({ session, outcome: 'skip', reason: 'the exact conversation was not recorded; kept for recovery instead of starting a new one' })
+        continue
+      }
+      const configDir = probes.configDir(session)
+      const key = `${session.provider}\u0000${conversationStore(configDir)}\u0000${session.agentSessionId}`
+      const conversation = await probes.conversation(session, configDir)
+      if (conversation === 'none' || claimed.has(key)) {
+        decisions.push({ session, outcome: 'skip', configDir, conversation,
+          reason: conversation === 'none' ? 'the saved conversation is not available; kept for recovery' : 'another tab is already on this exact conversation; kept for recovery' })
+        continue
+      }
+      claimed.add(key)
+      decisions.push({ session, outcome: 'resume', configDir, conversation, reason: 'continuing the saved conversation by its exact id' })
+    }
+    return decisions
+  }
   /*
    * The tab that gets to continue, per conversation store. `lastSeenAt`
    * descending, with the earlier tab winning a tie so the answer does not
@@ -599,6 +541,14 @@ export async function conversationOnDisk(
 ): Promise<Conversation> {
   if (session.provider !== 'claude') return 'unknown'
   if (ranInsideWsl(session, platform)) return 'unknown'
+  if (session.agentSessionId) {
+    // Never substitute a newer transcript when the named one is missing.
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.agentSessionId)) return 'none'
+    return projectPathSpellings(session.cwd).flatMap((cwd) => transcriptDirs(cwd, { configDir })).some((dir) => {
+      try { return statSync(join(dir, `${session.agentSessionId}.jsonl`)).size > 0 }
+      catch { return false }
+    }) ? 'found' : 'none'
+  }
   // The same call the replay makes, on purpose: "is there a conversation" and
   // "which file is it" have to be one lookup, or the tab can be continued
   // against one transcript and painted from another.
@@ -760,6 +710,8 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
             ? { homeProfileId: decision.session.homeProfileId }
             : {}),
           resume: decision.outcome === 'resume',
+          ...(decision.session.agentSessionId ? { resumeConversationId: decision.session.agentSessionId } : {}),
+          ...(decision.session.model ? { model: decision.session.model } : {}),
           /*
            * And come back as the *same tab*, not as another one like it.
            *

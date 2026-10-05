@@ -326,6 +326,8 @@ export interface ApplyResult {
 
 /** What this module needs from the session layer. Kept tiny so it is trivially faked. */
 export interface SessionAccess {
+  /** Remember a model only after the CLI confirmed the person's selection. */
+  rememberModel?(id: string, model: string): void
   /** Type into the session's terminal, exactly as a person would. */
   write(id: string, data: string): void
   /**
@@ -2514,6 +2516,7 @@ export async function applyControl(
         reading: await currentModel(access, sessionId, onThisMachine ? cwd : undefined, store),
       }
     }
+    if (onThisMachine) access.rememberModel?.(sessionId, value)
     return {
       ok: true,
       // The scope is quoted from the CLI, not asserted: it decides per call

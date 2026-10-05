@@ -7,6 +7,7 @@ import { App } from './App'
 import { DriveHost } from './copilot/driving/DriveHost'
 import { PopoutWindow } from './popout/PopoutWindow'
 import { HootPanel } from './hoot-panel/HootPanel'
+import { bindCatcher } from '../shared/hoot-catcher'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
@@ -53,7 +54,13 @@ const popout = new URLSearchParams(location.search).get('popout')
  */
 const hootPanel = new URLSearchParams(location.search).get('hootpanel') === '1'
 
-createRoot(container).render(
+const hootCatcher = new URLSearchParams(location.search).get('hootcatcher') === '1'
+if (hootCatcher) {
+  // A faint painted pixel is required for AppKit's transparent-window hit test.
+  document.documentElement.style.cssText = 'height:100%;background:rgba(0,0,0,0.004)'
+  document.body.style.cssText = 'margin:0;height:100%;background:transparent;cursor:default'
+  bindCatcher(document, (kind) => window.deck.hootPanelCatch(kind), () => window.deck.hootPanelMenu())
+} else createRoot(container).render(
   hootPanel ? (
     <StrictMode>
       <HootPanel />

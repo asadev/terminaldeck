@@ -1874,6 +1874,9 @@ export async function createHeadlessHost(
           known.add(session.cwd)
         }
       }
+    } else {
+      // Nothing is coming back, so the previous launch's tabs are not kept either.
+      core.ledger.dropPending()
     }
 
     try {
@@ -1882,6 +1885,7 @@ export async function createHeadlessHost(
         enabled: () => store().getPreferences().restoreSessions,
         plan: (sessions) =>
           planRestore(sessions, {
+            requireExactConversation: true,
             folderExists: (cwd) => folderExists(core.statablePath(cwd)),
             // The core's, so a session on an added agent is planned the same
             // way here as in the window — and so an id the shipped table has
@@ -1916,7 +1920,12 @@ export async function createHeadlessHost(
         // Nobody to announce to. Attached devices learn about the session from
         // the fanout's own list the moment they ask for one.
         announce: () => undefined,
-        report: reportRestore,
+        report: (decisions) => {
+          for (const decision of decisions) {
+            if (decision.outcome === 'skip' || decision.outcome === 'failed') core.ledger.held.hold(decision.session, decision.reason)
+          }
+          reportRestore(decisions)
+        },
       })
     } catch (error) {
       logger.error('headless', 'restoring the previous sessions failed outright', {

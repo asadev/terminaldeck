@@ -227,9 +227,11 @@ function liveInPlace(): InPlaceDeps {
  */
 export function savedPlanner(
   core: Pick<HostCore, 'statablePath' | 'canContinue'>,
+  requireExactConversation = true,
 ): (sessions: readonly SavedSession[]) => Promise<RestoreDecision[]> {
   return (sessions) =>
     planRestore(sessions, {
+      requireExactConversation,
       // Asked about the folder as Windows can see it. Without the translation
       // every session that was running inside a distro is planned as "its folder
       // is gone" and dropped, which is the app losing a day's tabs and explaining
@@ -269,7 +271,7 @@ export function savedPlanner(
  * read per call rather than at construction.
  */
 export function createSessionSwitch(core: SwitchCore, hooks: SessionSwitchHooks = {}): SessionSwitch {
-  const planSaved = savedPlanner(core)
+  const planSaved = savedPlanner(core, false)
 
   const subject = async (
     sessionId: unknown,

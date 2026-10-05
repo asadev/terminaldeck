@@ -300,6 +300,8 @@ export interface CreateSessionInput {
    * are the same thing right up until they are not.
    */
   resumeConversationId?: string
+  /** Confirmed per-tab model, retained when recovering a conversation. */
+  model?: string
   /**
    * The session this one replaces, when it is a replacement rather than a
    * second session.
@@ -370,6 +372,9 @@ export interface PersistedProject {
 }
 
 export interface DeckApi {
+  /** Private island catcher listeners; main validates their webContents identity. */
+  hootPanelCatch(kind: 'enter' | 'leave' | 'press'): void
+  hootPanelMenu(): void
   getBrand(): Promise<BrandInfo>
   /**
    * Which agents can actually be started here, keyed by id.
