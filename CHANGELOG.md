@@ -10,6 +10,24 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.6] — 2026-10-05
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Added
+
+- **Goals.** Tasks can sit under a goal, and goals under other goals. The Tasks page shows each goal's progress — done, verified, waiting, stalled — and a task's goal travels into the brief its agent receives, along with the task's notes, subtasks and what it waits for.
+- **Each project remembers what it has decided and proven.** Decisions, constraints, task history and checked results are kept per project, each with where it came from and when. An agent's brief and Hoot's plans include the relevant part, marked as verified, an unchecked claim, out of date, or in conflict with another record. Nothing crosses from one project to another.
+- **A Memory page.** See the memory your agents actually keep — Claude Code's notes, Codex's memories and Hoot's own — with search, links in both directions, a graph of the real links, and editing and deleting (to the Trash). Folders that already share memory say so. Agents can search their own memory, and only their own.
+- **Task agents have their own instructions file, and can be paused or archived.** Every setting says whether the agent's CLI enforces it or only reads it as advice.
+- **A task can run in a working folder of its own** — a separate git copy of the project on its own branch — and is removed only when it has nothing unsaved.
+- **Plugins.** Put a plugin's folder in the app's plugins folder and allow what it may do in Settings. Nothing runs until you allow it, a changed plugin has to be allowed again, and on the Mac each one runs in a sandbox with no network.
+
+### Changed
+
+- **Hoot organises the work and checks it.** It plans goals into tasks, gives them to agents, notices when one stalls, retries or hands it to another agent, and reviews what comes back with evidence before calling it done. It still does small things itself and keeps every tool.
+- **A session that did not come back after a restart is one compact row.** Pressing it opens it — by its saved conversation, or, for an older tab that never saved one, on Claude Code's own list of conversations so you choose. Nothing is guessed and nothing new is started for you.
+
 ## [0.18.5] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0. 0.18.4 was tagged but never published — one check ran past its time limit on the release machine — so its two fixes below reach you in this release.
@@ -2359,7 +2377,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.18.5...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.18.6...HEAD
+[0.18.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.6
 [0.18.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.5
 [0.18.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.4
 [0.17.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.17.0
