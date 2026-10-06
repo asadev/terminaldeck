@@ -10,6 +10,20 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.18.8] — 2026-10-06
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Changed
+
+- **Terminal Deck Native (Preview) now draws every screen in Swift.** Each screen is ported one-to-one from the normal app, with the same sections, wording, menus and shortcuts. That covers sessions (including ones on other machines and servers), split and swarm, New session, Overview, Files, Source control, GitHub, Tasks and the task popup, Machines, MCP servers, the Store, Memory, Stays Fixed, Simulators, Hoot (its screen, chat panel, setup and driving) and every Settings section. The engine underneath is unchanged. The preview needs Terminal Deck 0.18.8 installed.
+
+### Fixed
+
+- **Help › About shows the Chromium and V8 versions, and no longer says "(development build)" on a release.**
+- **Settings › Scraping no longer blanks its other sections after a worker is added or removed.**
+- **Hoot's setup questions have a close button.**
+
 ## [0.18.7] — 2026-10-05
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
