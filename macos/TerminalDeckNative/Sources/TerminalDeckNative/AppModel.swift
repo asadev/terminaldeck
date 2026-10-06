@@ -455,8 +455,28 @@ final class AppModel {
     }
 
     var windowTitle: String {
-        guard canRun, let pageTitle, !pageTitle.isEmpty else { return "Terminal Deck" }
+        guard canRun else { return "Terminal Deck" }
+        if let heading = nativeHeading { return heading.title }
+        guard let pageTitle, !pageTitle.isEmpty else { return "Terminal Deck" }
         return pageTitle
+    }
+
+    /// A sidebar view drawn natively names itself. The page's heading is the page's own
+    /// view, and it does not always follow the native selection — Hoot not set up yet
+    /// leaves the page on whatever it showed before ("Simulators" over the Hoot screen).
+    /// Tabs (sessions, browsers) keep the page's heading: the page owns that selection.
+    private var nativeHeading: (title: String, subtitle: String)? {
+        guard let screen = currentScreen, screen.kind != "session", screen.kind != "browser",
+              let item = sidebar?.item(id: screen.id), !item.title.isEmpty,
+              NativeScreens.detail(kind: screen.kind, id: screen.id) != nil else { return nil }
+        // The page agrees: its subtitle is the right one.
+        if item.title == pageTitle { return (item.title, pageSubtitle ?? "") }
+        // Hoot is not about a project (the page sends no folder for the copilot).
+        if item.isHoot { return (item.title, "") }
+        // A view is about the project the page's views are about (`activeProjectPath`).
+        guard let path = sidebar?.project else { return (item.title, "") }
+        let name = sidebar?.projects.first { $0.id == path }?.title ?? URL(fileURLWithPath: path).lastPathComponent
+        return (item.title, name == item.title ? "" : name)
     }
 
     /// Real state only: engine progress, else the page's own subtitle (or nothing).
@@ -464,7 +484,7 @@ final class AppModel {
         if failure != nil { return "Not running" }
         switch engine.phase {
         case .idle, .starting: return "Starting…"
-        case .ready: return pageReady ? (pageSubtitle ?? "") : "Loading…"
+        case .ready: return pageReady ? (nativeHeading?.subtitle ?? pageSubtitle ?? "") : "Loading…"
         case .failed: return "Not running"
         }
     }
