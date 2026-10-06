@@ -140,10 +140,10 @@ struct ConfigurationTests {
     }
 
     @Test func installedTerminalDeckIsTheEngine() throws {
-        let config = EngineConfiguration.resolve(environment: [:], applicationSupport: support, home: home, installed: installed("0.18.7"))
+        let config = EngineConfiguration.resolve(environment: [:], applicationSupport: support, home: home, installed: installed("0.18.8"))
         guard case .installedApp(let app, _, let version) = config.source else { Issue.record("expected the installed app"); return }
         #expect(app.path == "/Applications/Terminal Deck.app")
-        #expect(version == "0.18.7")
+        #expect(version == "0.18.8")
         #expect(config.executable?.path == "/Applications/Terminal Deck.app/Contents/MacOS/Terminal Deck")
         #expect(config.arguments == ["--native-shell",
                                      "--user-data-dir=/Users/someone/Library/Application Support/Terminal Deck Native Proof/engine"])
@@ -153,7 +153,7 @@ struct ConfigurationTests {
     }
 
     @Test func newerReleasesAreFine() {
-        for v in ["0.18.8", "0.19.0", "1.0", "0.18.7.1"] {
+        for v in ["0.18.8", "0.18.9", "0.19.0", "1.0", "0.18.8.1"] {
             let config = EngineConfiguration.resolve(environment: [:], applicationSupport: support, home: home, installed: installed(v))
             guard case .installedApp = config.source else { Issue.record("\(v) should be accepted"); continue }
         }
@@ -166,7 +166,7 @@ struct ConfigurationTests {
     }
 
     @Test func tooOldTerminalDeckIsSaidPlainly() {
-        for v in ["0.18.6", "0.18.5", "0.17.0", "0.18.7-beta.1"] {
+        for v in ["0.18.7", "0.18.6", "0.17.0", "0.18.8-beta.1"] {
             let config = EngineConfiguration.resolve(environment: [:], applicationSupport: support, home: home, installed: installed(v))
             #expect(config.source == .unavailable(.tooOld(found: v)), "\(v)")
         }
@@ -177,11 +177,11 @@ struct ConfigurationTests {
     @Test func messagesSayExactlyWhatIsWrongAndOfferTheDownload() {
         let missing = EngineFailure.needsTerminalDeck(.notInstalled)
         #expect(missing.title == "Terminal Deck isn't installed")
-        #expect(missing.message.contains("0.18.7"))
+        #expect(missing.message.contains("0.18.8"))
         #expect(missing.downloadURL?.absoluteString == "https://terminaldeck.dev/download.html")
         let old = EngineFailure.needsTerminalDeck(.tooOld(found: "0.18.5"))
         #expect(old.title == "Terminal Deck needs an update")
-        #expect(old.message.contains("0.18.5") && old.message.contains("0.18.7"))
+        #expect(old.message.contains("0.18.5") && old.message.contains("0.18.8"))
         #expect(old.downloadURL != nil)
     }
 
@@ -193,13 +193,13 @@ struct ConfigurationTests {
         #expect(config.arguments.first == "/Users/someone/code/td")
         #expect(config.workingDirectory?.path == "/Users/someone/code/td")
         // Blank TD_REPO is no override.
-        let blank = EngineConfiguration.resolve(environment: ["TD_REPO": "  "], applicationSupport: support, home: home, installed: installed("0.18.7"))
+        let blank = EngineConfiguration.resolve(environment: ["TD_REPO": "  "], applicationSupport: support, home: home, installed: installed("0.18.8"))
         guard case .installedApp = blank.source else { Issue.record("blank TD_REPO should fall through"); return }
     }
 
     @Test func customExecutableName() {
         let config = EngineConfiguration.resolve(environment: [:], applicationSupport: support, home: home,
-                                                 installed: installed("0.18.7", at: "/Users/someone/Applications/Terminal Deck.app", executable: "TD"))
+                                                 installed: installed("0.18.8", at: "/Users/someone/Applications/Terminal Deck.app", executable: "TD"))
         #expect(config.executable?.path == "/Users/someone/Applications/Terminal Deck.app/Contents/MacOS/TD")
     }
 
@@ -212,7 +212,7 @@ struct ConfigurationTests {
 
     @Test func newestCopyWinsAndTheTrashNever() {
         let best = EngineConfiguration.bestInstalled([
-            installed("0.18.7", at: "/Applications/Terminal Deck.app"),
+            installed("0.18.8", at: "/Applications/Terminal Deck.app"),
             installed("0.19.2", at: "/Users/someone/.Trash/Terminal Deck.app"),
             installed("0.18.9", at: "/Users/someone/Applications/Terminal Deck.app"),
             installed(nil, at: "/Volumes/TD/Terminal Deck.app"),
@@ -256,7 +256,7 @@ struct AppVersionTests {
     }
 
     @Test func minimumIsTheFirstNativeShellRelease() {
-        #expect(EngineConfiguration.minimumVersion == v("0.18.7"))
+        #expect(EngineConfiguration.minimumVersion == v("0.18.8"))
         #expect(EngineConfiguration.appBundleID == "dev.terminaldeck.app")
     }
 }

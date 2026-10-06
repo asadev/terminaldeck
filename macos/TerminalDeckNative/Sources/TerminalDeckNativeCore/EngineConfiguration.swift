@@ -17,8 +17,9 @@ public struct EngineConfiguration: Equatable, Sendable {
 
     public static let appBundleID = "dev.terminaldeck.app"
     public static let fallbackAppPath = "/Applications/Terminal Deck.app"
-    /// The first Terminal Deck release that can run as the engine.
-    public static let minimumVersion = AppVersion("0.18.7")!
+    /// The first Terminal Deck release that can run as the engine. 0.18.8: every screen
+    /// is native and leans on page commands and engine channels that 0.18.7 doesn't have.
+    public static let minimumVersion = AppVersion("0.18.8")!
     public static let downloadURL = URL(string: "https://terminaldeck.dev/download.html")!
 
     public enum Source: Equatable, Sendable {
