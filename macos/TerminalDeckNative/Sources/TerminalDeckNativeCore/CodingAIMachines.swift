@@ -66,6 +66,8 @@ public struct CodingAIDevice: Equatable, Sendable, Identifiable {
     public var name: String
     public var online: Bool
     public var sessions: [CodingAIRemoteSession]
+    /// What that machine's link says it can do (`host.control`, `github`, …).
+    public var capabilities: [String] = []
 }
 
 public struct CodingAIMachinesView: Equatable, Sendable {
@@ -78,20 +80,21 @@ public struct CodingAIMachinesView: Equatable, Sendable {
     /// `asView` + `reachableMachines`.
     public static func parse(_ value: CodingAIJSON) -> CodingAIMachinesView {
         guard value.isObject else { return .empty }
-        var links: [String: (state: String, sessions: [CodingAIRemoteSession])] = [:]
+        var links: [String: (state: String, sessions: [CodingAIRemoteSession], capabilities: [String])] = [:]
         for link in value["links"].array ?? [] {
             guard link.isObject, let id = link["id"].text else { continue }
             let sessions: [CodingAIRemoteSession] = (link["sessions"].array ?? []).compactMap { session in
                 guard session.isObject, let sid = session["id"].text else { return nil }
                 return CodingAIRemoteSession(id: sid, title: session["title"].string ?? "")
             }
-            links[id] = (link["state"].string ?? "offline", sessions)
+            links[id] = (link["state"].string ?? "offline", sessions, (link["capabilities"].array ?? []).compactMap(\.text))
         }
         var devices: [CodingAIDevice] = []
         for machine in value["machines"].array ?? [] {
             guard machine.isObject, let id = machine["id"].text else { continue }
             guard let link = links[id], link.state == "online" else { continue }
-            devices.append(CodingAIDevice(id: id, name: machine["name"].string ?? "", online: true, sessions: link.sessions))
+            devices.append(CodingAIDevice(id: id, name: machine["name"].string ?? "", online: true, sessions: link.sessions,
+                                          capabilities: link.capabilities))
         }
         return CodingAIMachinesView(devices: devices, here: value["here"].string ?? "")
     }
@@ -200,5 +203,103 @@ public enum CodingAISessions {
             out[profile, default: []].append(session["title"].string ?? "")
         }
         return out
+    }
+}
+
+// MARK: - Hoot on other machines (`useCopilotMachines.ts`, `remote-copilot-model.ts`)
+
+/// One machine whose Hoot this computer could talk to: this one (id "") first,
+/// then every linked machine with a name.
+public struct CopilotMachineRow: Equatable, Sendable, Identifiable {
+    public enum Reach: String, Sendable { case ready, refused, unreachable }
+    public var id: String
+    public var name: String
+    public var reach: Reach
+    /// The link has said hello for Hoot on the current connection.
+    public var open: Bool
+
+    public init(id: String, name: String, reach: Reach, open: Bool) {
+        self.id = id
+        self.name = name
+        self.reach = reach
+        self.open = open
+    }
+
+    /// `useCopilotMachines`: here, then each link whose machine has a name.
+    public static func rows(_ view: CodingAIJSON) -> [CopilotMachineRow] {
+        let here = CopilotMachineRow(id: "", name: CodingAIScopes.hereName(view["here"].string ?? ""), reach: .ready, open: true)
+        var names: [String: String] = [:]
+        for machine in view["machines"].array ?? [] {
+            if let id = machine["id"].text { names[id] = machine["name"].string ?? "" }
+        }
+        var rest: [CopilotMachineRow] = []
+        for link in view["links"].array ?? [] {
+            guard let id = link["id"].text, let name = names[id], !name.isEmpty else { continue }
+            let copilot = link["copilot"]
+            let grant = copilot["grant"]
+            // `asCopilotLink`: all five booleans, or there is no Hoot there for us.
+            let valid = copilot.isObject && grant.isObject && grant["read"].bool != nil && grant["act"].bool != nil
+                && grant["alter"].bool != nil && copilot["linked"].bool != nil && copilot["open"].bool != nil
+            let reach: Reach = link["state"].string != "online" ? .unreachable : (valid && copilot["linked"].isTrue ? .ready : .refused)
+            rest.append(CopilotMachineRow(id: id, name: name, reach: reach, open: valid && copilot["open"].isTrue))
+        }
+        return [here] + rest
+    }
+}
+
+/// Hoot's conversation on another machine, as that machine reports it.
+public struct RemoteCopilotBubble: Equatable, Sendable, Identifiable {
+    public enum Role: String, Sendable { case you, agent }
+    public var id: String
+    public var role: Role
+    public var text: String
+    public var at: Double
+
+    public init(id: String, role: Role, text: String, at: Double = 0) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.at = at
+    }
+}
+
+public enum RemoteCopilotModel {
+    public struct Report: Equatable, Sendable {
+        public enum Desk: String, Sendable { case stopped, starting, running }
+        public var desk: Desk
+        public var run: String?
+        public var profile: String?
+    }
+
+    /// `readChatFrame`: the messages, and whether they replace what is shown.
+    public static func chat(_ value: CodingAIJSON) -> (messages: [RemoteCopilotBubble], reset: Bool)? {
+        guard value.isObject, let raw = value["messages"].array else { return nil }
+        let messages: [RemoteCopilotBubble] = raw.compactMap { row in
+            guard row.isObject, let id = row["id"].text, let text = row["text"].string else { return nil }
+            return RemoteCopilotBubble(id: id, role: row["role"].string == "agent" ? .agent : .you, text: text, at: row["at"].number ?? 0)
+        }
+        return (messages, value["reset"].isTrue)
+    }
+
+    /// `readStateReport`.
+    public static func report(_ value: CodingAIJSON) -> Report? {
+        guard value.isObject, let desk = value["desk"].string.flatMap(Report.Desk.init(rawValue:)) else { return nil }
+        return Report(desk: desk, run: value["run"].text, profile: value["profile"].text)
+    }
+
+    /// `applyChat`: a reset replaces; otherwise each message updates in place or is added.
+    public static func apply(_ current: [RemoteCopilotBubble], _ chat: (messages: [RemoteCopilotBubble], reset: Bool)) -> [RemoteCopilotBubble] {
+        if chat.reset { return chat.messages }
+        var next = current
+        for message in chat.messages {
+            if let at = next.firstIndex(where: { $0.id == message.id }) { next[at] = message } else { next.append(message) }
+        }
+        return next
+    }
+
+    /// `{ ok, message }` from attach / start / say.
+    public static func outcome(_ value: CodingAIJSON) -> (ok: Bool, message: String) {
+        guard value.isObject else { return (false, "") }
+        return (value["ok"].isTrue, value["message"].string ?? "")
     }
 }

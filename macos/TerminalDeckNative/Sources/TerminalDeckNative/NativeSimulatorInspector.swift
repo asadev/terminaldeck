@@ -2,37 +2,59 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// The inspector beside the live screen: what the pointer is on, the whole
-/// element outline, the quick checks, and the marked elements with one note
-/// and a session to send them to.
-struct InspectorPanel: View {
+/// Annotate's card beside the frozen screen, in the page's order
+/// (`AnnotateSurface.tsx`): the head with Done, the discard question, the notice,
+/// the numbered markers, then — inside it, as asked for in the last round — the
+/// inspector (what the pointer is on, the element outline, the quick checks),
+/// and at the foot the one note and the session it goes to.
+struct AnnotatePanel: View {
     @Bindable var model: NativeSimulatorModel
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             header
-            Picker("Section", selection: $model.section) {
-                ForEach(NativeSimulatorModel.InspectorSection.allCases) { section in
-                    Text(title(section)).tag(section)
+            if model.confirmingDiscard {
+                HStack(spacing: 8) {
+                    Text("Discard \(model.markers.count) marker\(model.markers.count == 1 ? "" : "s")?")
+                    Spacer(minLength: 4)
+                    Button("Keep") { model.confirmingDiscard = false }
+                        .buttonStyle(.borderless)
+                    Button("Discard", role: .destructive) { model.stopAnnotating() }
                 }
+                .font(.callout)
+                .accessibilityAddTraits(.isModal)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-
-            Group {
-                switch model.section {
-                case .element: ElementDetails(model: model)
-                case .outline: ElementOutline(model: model)
-                case .checks: ChecksList(model: model)
+            if model.snapshot?.frozen.tree == nil {
+                Text("This screen did not describe its elements, so markers are placed by position.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            MarkerList(model: model)
+            VStack(spacing: 8) {
+                Picker("Section", selection: $model.section) {
+                    ForEach(NativeSimulatorModel.InspectorSection.allCases) { section in
+                        Text(title(section)).tag(section)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Group {
+                    switch model.section {
+                    case .element: ElementDetails(model: model)
+                    case .outline: ElementOutline(model: model)
+                    case .checks: ChecksList(model: model)
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
             .frame(maxHeight: .infinity)
-
-            Divider()
-            SendSection(model: model)
+            SendBox(model: model)
         }
+        .padding(12)
+        .background(.regularMaterial, in: .rect(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Annotate")
     }
 
     private func title(_ section: NativeSimulatorModel.InspectorSection) -> String {
@@ -44,11 +66,15 @@ struct InspectorPanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Inspector").font(.headline)
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
+            Text("Annotate").font(.headline)
+            let place = model.snapshot?.frozen.where_.short ?? ""
+            Text(place)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(place)
+            Spacer(minLength: 4)
             if model.reading {
                 ProgressView().controlSize(.small)
             }
@@ -60,23 +86,54 @@ struct InspectorPanel: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             .disabled(model.reading || !model.markers.isEmpty)
-            .help(model.markers.isEmpty ? "Read the screen's elements again" : "Clear the markers to read the screen again")
-            Button("Done") { model.leaveInspect() }
-                .keyboardShortcut(.cancelAction)
+            .help(model.markers.isEmpty ? "Freeze the screen again and read its elements" : "Delete the markers to freeze the screen again")
+            Button("Done") { model.leaveAnnotate() }
         }
-        .padding(12)
     }
+}
 
-    private var status: String {
-        guard let snapshot = model.snapshot else { return model.reading ? "Reading the screen…" : "" }
-        guard let tree = snapshot.frozen.tree else { return "No elements — markers go by position" }
-        let source: String = switch tree.source {
-        case "react-native-fiber": "React Native tree"
-        case let other where other.contains("xctest"): "XCTest tree"
-        default: "Accessibility tree"
+/// The numbered markers, or the one line that says how to make one.
+private struct MarkerList: View {
+    let model: NativeSimulatorModel
+
+    var body: some View {
+        if model.markers.isEmpty {
+            Text("Click anything on the screen to mark it.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.markers) { entry in
+                        let on = entry.nodeRef != nil && entry.nodeRef == model.focusRef
+                        HStack(spacing: 8) {
+                            MarkerBadge(n: entry.n)
+                            Text(Handoff.describeElement(entry.element))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(Handoff.describeElement(entry.element))
+                            Spacer(minLength: 4)
+                            Button {
+                                model.unmark(entry.id)
+                            } label: {
+                                Label("Delete marker \(entry.n)", systemImage: "trash")
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .help("Delete")
+                        }
+                        .font(.callout)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(on ? Color.accentColor.opacity(0.14) : .clear, in: .rect(cornerRadius: 6))
+                        .contentShape(.rect)
+                        .onTapGesture { if let ref = entry.nodeRef { model.focus(ref, reveal: true) } }
+                    }
+                }
+            }
+            .frame(maxHeight: 140)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        let app = snapshot.frozen.where_.app.map { " · \($0)" } ?? ""
-        return "\(source)\(app)"
     }
 }
 
@@ -149,9 +206,6 @@ private struct ElementDetails: View {
         HStack {
             let marked = model.marker(for: node.ref)
             Button(marked == nil ? "Mark" : "Unmark #\(marked!.n)") { model.toggleMark(node.ref) }
-            Button("Tap") { model.tap(node.ref) }
-                .disabled(model.isFrozen || DeviceTreeQuery.centre(of: node) == nil)
-                .help(model.isFrozen ? "Clear the markers to use the screen again" : "Tap the middle of this element on the device")
         }
         .controlSize(.small)
     }
@@ -270,8 +324,6 @@ private struct OutlineRowView: View {
         }
         .contextMenu {
             Button(model.marker(for: node.ref) == nil ? "Mark" : "Unmark") { model.toggleMark(node.ref) }
-            Button("Tap") { model.tap(node.ref) }
-                .disabled(model.isFrozen || DeviceTreeQuery.centre(of: node) == nil)
         }
     }
 }
@@ -341,64 +393,35 @@ private struct ChecksList: View {
 
 // MARK: - Sending
 
-private struct SendSection: View {
+/// The page's `SendToAgent` at the foot of the card: To, the one note, Send.
+private struct SendBox: View {
     @Bindable var model: NativeSimulatorModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if model.markers.isEmpty {
-                Text("Click anything on the screen to mark it.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(model.markers) { entry in
-                            HStack(spacing: 8) {
-                                MarkerBadge(n: entry.n)
-                                Text(Handoff.describeElement(entry.element))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .help(Handoff.describeElement(entry.element))
-                                Spacer(minLength: 4)
-                                Button {
-                                    model.unmark(entry.id)
-                                } label: {
-                                    Label("Delete marker \(entry.n)", systemImage: "trash")
-                                }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.borderless)
-                                .help("Delete")
-                            }
-                            .font(.callout)
-                            .contentShape(.rect)
-                            .onTapGesture { if let ref = entry.nodeRef { model.focus(ref, reveal: true) } }
-                        }
-                    }
-                }
-                .frame(maxHeight: 110)
-            }
-
             SessionPicker(model: model)
-
             TextField("What should change?", text: $model.note, axis: .vertical)
-                .lineLimit(2...5)
+                .lineLimit(2...6)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { Task { await model.sendRound() } }
-
-            HStack {
-                let line = !model.sendProblem.isEmpty ? model.sendProblem : model.sessionReason
+                .accessibilityLabel("Message for the agent")
+                // Return sends; Shift-Return is a new line.
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    Task { await model.sendRound() }
+                    return .handled
+                }
+            HStack(alignment: .firstTextBaseline) {
+                let line = !model.sendProblem.isEmpty ? model.sendProblem : (model.target == nil ? model.sessionReason : "")
                 if !line.isEmpty {
                     Text(line).font(.caption).foregroundStyle(model.sendProblem.isEmpty ? Color.secondary : Color.red)
                 }
                 Spacer()
                 Button(model.sending ? "Sending…" : "Send") { Task { await model.sendRound() } }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!model.roundNotReady.isEmpty || model.sending)
-                    .help(model.roundNotReady)
+                    .disabled(!model.canSendRound || model.sending)
+                    .help(model.sendRoundHint)
             }
         }
-        .padding(12)
     }
 }
 

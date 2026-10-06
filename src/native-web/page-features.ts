@@ -42,6 +42,21 @@ export interface PageHost extends NativeHost {
   }
 }
 
+/** `NATIVE_SCREENS_GLOBAL` / `NATIVE_SCREENS_EVENT` in `renderer/native-screens.ts`. */
+export const NATIVE_SCREENS_GLOBAL = '__tdNativeScreens'
+export const NATIVE_SCREENS_EVENT = 'td:native-screens'
+
+/** Leave the list for the page, and tell it. False for anything that is not a list of ids. */
+export function leaveNativeScreens(host: PageHost, value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) return false
+  const record = host as unknown as Record<string, unknown>
+  record[NATIVE_SCREENS_GLOBAL] = [...value]
+  const Event = record.Event as (new (type: string) => object) | undefined
+  const dispatch = record.dispatchEvent as ((event: object) => boolean) | undefined
+  if (typeof Event === 'function' && typeof dispatch === 'function') dispatch.call(host, new Event(NATIVE_SCREENS_EVENT))
+  return true
+}
+
 /** Copy text, the page's own way; a web view may refuse it when no key or click is in progress. */
 function copyText(host: PageHost, text: string): void {
   void host.navigator?.clipboard?.writeText(text).catch(() => undefined)
@@ -66,6 +81,9 @@ export function installPageFeatures(
   const menus = createMenus((message) => postToNative(message, host), () => pointer)
   registerShimCommand(host, 'context-menu-result', (arg) => menus.settle(arg))
   registerShimCommand(host, 'drop-paths', (arg) => drops.deliver(arg))
+  // Which screens the native window draws, for whichever page this is — left on
+  // the window with an event, for `renderer/native-screens.ts` (another bundle).
+  registerShimCommand(host, 'native-screens', (arg) => leaveNativeScreens(host, arg))
 
   const openLink = createLinkOpener((message) => postToNative(message, host))
   installPageLinks(host as unknown as Parameters<typeof installPageLinks>[0], (url) => openLink(url))

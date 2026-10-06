@@ -89,8 +89,22 @@ final class ScreenCheckDriver {
     }
     private var tick = 0
 
+    /// Every window the app opens is put at the very back the first time it is
+    /// seen: on screen (so it renders and can be captured) but behind everything
+    /// the person has open. This app can never come to the front anyway.
+    private var placed = Set<ObjectIdentifier>()
+    private func keepWindowsBehind() {
+        for window in NSApplication.shared.windows where String(describing: Swift.type(of: window)) == "AppKitWindow" {
+            let id = ObjectIdentifier(window)
+            guard !placed.contains(id), window.contentView != nil else { continue }
+            placed.insert(id)
+            window.orderBack(nil)
+        }
+    }
+
     private func poll() {
         tick += 1
+        keepWindowsBehind()
         if tick % 5 == 0 { keepPagesPainting() }
         guard !busy, let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
         guard let next = names.filter({ $0.hasSuffix(".cmd") }).sorted().first else { return }
@@ -116,12 +130,41 @@ final class ScreenCheckDriver {
         let model = AppModel.shared
         switch verb {
         case "windows": return windowsReport()
+        case "open":
+            return await open(rest)
+        case "winid":
+            guard let window = window(rest) else { return "error: no window \(rest)" }
+            return "\(window.windowNumber)"
+        case "family":
+            // A window and what is drawn in its own windows on top of it (sheets,
+            // popovers, child windows), with frames, for a composite shot.
+            guard let window = window(rest) else { return "error: no window \(rest)" }
+            var family = [window]
+            var queue = [window]
+            while let next = queue.popLast() {
+                let more = (next.sheets + (next.childWindows ?? [])).filter { $0.isVisible && !family.contains($0) }
+                family += more
+                queue += more
+            }
+            return family.map { w in
+                let f = w.frame
+                return "\(w.windowNumber) \(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height)) \(w.backingScaleFactor)"
+            }.joined(separator: "\n")
         case "allwindows":
             return NSApplication.shared.windows.map { w in
                 "\(w.windowNumber)\t\(String(describing: Swift.type(of: w)))\t\"\(w.title)\"\tvisible=\(w.isVisible)\tonActiveSpace=\(w.isOnActiveSpace)\toccluded=\(!w.occlusionState.contains(.visible))\t\(w.frame)"
             }.joined(separator: "\n")
         case "screens": return screensReport()
         case "state": return stateReport()
+        case "drawn": // who draws what is on show: the main screen, the Settings section, page modals
+            let m = AppModel.shared
+            let main = m.currentScreen.map { NativeScreens.detail(kind: $0.kind, id: $0.id) != nil ? "native(\($0.kind)/\($0.id))" : "PAGE(\($0.kind)/\($0.id))" } ?? "empty-state(native)"
+            let section = m.settingsSelection.map { NativeScreens.settings(sectionId: $0) != nil ? "native(\($0))" : "PAGE(\($0))" } ?? "-"
+            return "main=\(main) settings=\(section) pageModal=\(m.pageModalOpen) dialogs=\(m.dialogs.keys.sorted().joined(separator: ","))"
+        case "wait": // wait <seconds> (at most 10): let the page and its hand-overs settle
+            let seconds = min(10, max(0, Double(args.first ?? "") ?? 1))
+            try? await Task.sleep(for: .seconds(seconds))
+            return "ok"
         case "browser": return browserReport()
         case "click", "rclick", "hover", "dclick":
             guard args.count >= 3, let window = window(args[0]), let x = Double(args[1]), let y = Double(args[2]) else { return "error: \(verb) <win> <x> <y>" }
@@ -283,6 +326,100 @@ final class ScreenCheckDriver {
         }
     }
 
+    /// open <target> — open a screen and answer "<window number>" once it is on show.
+    ///   <sidebar id>              a sidebar item: overview, files, artifacts, git, simulators,
+    ///                             tasks, memory, staysfixed, store, github, readiness, mcp,
+    ///                             remote, hooks, alerts, hoot …     → the main window
+    ///   settings:<section id>     general, appearance, notifications, agents, features, browser,
+    ///                             scraping, copilot, ai-apps, tasks, plugins, power, advanced, help …
+    ///   window:<panel|session|browser>:<id>   a screen in a window of its own
+    ///   session                   a fresh local shell session, selected (its tab in the strip)
+    private func open(_ target: String) async -> String {
+        let model = AppModel.shared
+        guard await until(30, { model.pageReady && model.visibleSidebar != nil }) else { return "error: the page never became ready" }
+        if target == "session" {
+            let folder = (ProcessInfo.processInfo.environment["SC_ROOT"] ?? NSTemporaryDirectory()) + "/project"
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            let made = try? await model.web.webView.callAsyncJavaScript(
+                "const m = await window.deck.createSession({cwd: dir, cols: 100, rows: 30, provider: 'shell'}); return m.id",
+                arguments: ["dir": folder], in: nil, contentWorld: .page)
+            guard let id = made as? String else { return "error: no session was made" }
+            // The page lists sessions it adopts at load: reload it, then pick the new one.
+            model.web.webView.reload()
+            guard await until(30, { model.pageReady && model.stripTabs?.tabs.contains { $0.id == id } == true }) else {
+                return "error: the page did not pick up session \(id)"
+            }
+            model.selectTab(id)
+            _ = await until(10, { model.currentScreen?.id == id })
+            try? await Task.sleep(for: .seconds(1))
+            return mainNumber() + " session=\(id)"
+        }
+        if target.hasPrefix("settings:") {
+            let section = String(target.dropFirst("settings:".count))
+            model.requestSettings()
+            guard await until(20, { model.settingsReady && !model.settingsSections.isEmpty }) else { return "error: Settings did not open" }
+            guard model.settingsSections.contains(where: { $0.id == section }) else {
+                return "error: no section \(section) (there are: \(model.settingsSections.map(\.id).joined(separator: " ")))"
+            }
+            // The page answers its first load with its own selection, which can land after
+            // ours: ask both sides, then hold until the section has stayed put for 2 s.
+            let ask = "window.tdNative && window.tdNative.run('settings-section', \"\(section)\")"
+            model.selectSettingsSection(section)
+            _ = try? await model.settingsWeb.webView.evaluateJavaScript(ask)
+            var steady = 0
+            for _ in 0..<48 where steady < 8 {
+                try? await Task.sleep(for: .milliseconds(250))
+                if model.settingsSelection == section { steady += 1; continue }
+                steady = 0
+                model.selectSettingsSection(section)
+                _ = try? await model.settingsWeb.webView.evaluateJavaScript(ask)
+            }
+            guard model.settingsSelection == section else { return "error: Settings kept showing \(model.settingsSelection ?? "nothing")" }
+            guard let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.identifier?.rawValue.hasPrefix(SettingsWindow.sceneID) == true })
+                ?? NSApplication.shared.windows.first(where: { $0.isVisible && $0.title == model.settingsTitle }) else { return "error: no Settings window" }
+            return "\(window.windowNumber)"
+        }
+        if target.hasPrefix("window:") {
+            let parts = target.split(separator: ":").map(String.init)
+            guard parts.count >= 3, let kind = ScreenRef.Kind(rawValue: parts[1]) else { return "error: window:<panel|session|browser>:<id>" }
+            let id = parts[2...].joined(separator: ":")
+            let before = Set(NSApplication.shared.windows.map(\.windowNumber))
+            model.openScreenWindow(ScreenRef(kind: kind, id: id, isHoot: id == "hoot"))
+            guard await until(15, { NSApplication.shared.windows.contains { $0.isVisible && !before.contains($0.windowNumber) && String(describing: Swift.type(of: $0)) == "AppKitWindow" } }) else {
+                return "error: no window opened"
+            }
+            try? await Task.sleep(for: .seconds(3))
+            let opened = NSApplication.shared.windows.first { $0.isVisible && !before.contains($0.windowNumber) && String(describing: Swift.type(of: $0)) == "AppKitWindow" }
+            return opened.map { "\($0.windowNumber)" } ?? "error: no window"
+        }
+        // A sidebar item.
+        guard model.visibleSidebar?.item(id: target) != nil else {
+            let ids = model.visibleSidebar?.allItems.map(\.id).joined(separator: " ") ?? "-"
+            return "error: no sidebar item \(target) (there are: \(ids))"
+        }
+        model.select(target)
+        if target == "alerts" { // the bell opens the Alerts sheet over what is on show; it is not a place
+            guard await until(15, { model.dialogs["alerts-sheet"] != nil }) else { return "error: the Alerts sheet never opened" }
+            return mainNumber()
+        }
+        guard await until(15, { model.currentScreen?.id == target }) else { return "error: \(target) never came on show" }
+        try? await Task.sleep(for: .seconds(2)) // let it load and draw
+        return mainNumber()
+    }
+
+    private func mainNumber() -> String {
+        window("main").map { "\($0.windowNumber)" } ?? "error: no main window"
+    }
+
+    private func until(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return condition()
+    }
+
     private func doAction(_ args: [String]) -> String {
         let model = AppModel.shared
         guard let action = args.first else { return "error: do <action>" }
@@ -324,7 +461,7 @@ final class ScreenCheckDriver {
         let m = AppModel.shared
         var out: [String] = []
         out.append("engine=\(m.engine.phase) pageReady=\(m.pageReady) canRun=\(m.canRun) title=\"\(m.windowTitle)\" subtitle=\"\(m.windowSubtitle)\"")
-        out.append("current=\(m.currentScreen.map { "\($0.kind)/\($0.id)" } ?? "-") listSelection=\(m.listSelection ?? "-") pageModal=\(m.pageModalOpen)")
+        out.append("current=\(m.currentScreen.map { "\($0.kind)/\($0.id)" } ?? "-") listSelection=\(m.listSelection ?? "-") pageModal=\(m.pageModalOpen) dialogs=\(m.dialogs.keys.sorted().joined(separator: ","))")
         if let tabs = m.stripTabs {
             out.append("strip: " + tabs.tabs.map { "\($0.active ? "*" : "")\($0.kind):\($0.id)=\"\($0.title)\"" }.joined(separator: "  ") + "  newTerminal=\(tabs.canNewTerminal) newBrowser=\(tabs.canNewBrowser)")
         } else {
@@ -351,6 +488,8 @@ final class ScreenCheckDriver {
     private func window(_ ref: String, includeHidden: Bool = false) -> NSWindow? {
         let visible = NSApplication.shared.windows.filter { includeHidden || $0.isVisible }
         if ref == "main" { return visible.first { $0.identifier?.rawValue.hasPrefix("main") == true } ?? visible.first { $0.title == AppModel.shared.windowTitle } }
+        if ref == "settings" { return visible.first { $0.identifier?.rawValue.hasPrefix(SettingsWindow.sceneID) == true } ?? visible.first { $0.title == AppModel.shared.settingsTitle } }
+        if ref == "island" { return visible.first { String(describing: Swift.type(of: $0)) == "IslandPanel" } }
         if let number = Int(ref) { return visible.first { $0.windowNumber == number } }
         return visible.first { $0.title == ref }
     }
@@ -469,6 +608,9 @@ final class ScreenCheckDriver {
         if flags.contains(.command) {
             // Key equivalents: the window's views first, then the menus, as AppKit does.
             if !window.performKeyEquivalent(with: down) { _ = NSApplication.shared.mainMenu?.performKeyEquivalent(with: down) }
+        } else if window.performKeyEquivalent(with: down) {
+            // NSApplication offers every key-down as a key equivalent first: that is how
+            // Return reaches a default button and Esc a cancel button in a sheet.
         } else {
             window.sendEvent(down)
             window.sendEvent(up)

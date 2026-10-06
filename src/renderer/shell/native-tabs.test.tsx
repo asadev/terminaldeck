@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { WorkspaceTabStrip } from '../browser/WorkspaceTabStrip'
@@ -53,6 +55,15 @@ const INPUT: NativeTabsInput = {
   covered: false,
   unread: ['s3'],
   canNewBrowser: false,
+  serverSessions: [],
+  serverShellIds: {},
+  mode: 'terminal',
+  swarm: false,
+  panes: { root: null, focusedPaneId: null },
+  modeSwitch: false,
+  splitOffer: false,
+  swarmSessions: [],
+  accountSwitch: null,
 }
 
 describe('the tabs state', () => {
@@ -101,7 +112,22 @@ describe('the tabs state', () => {
     const text = JSON.stringify(state)
     expect(JSON.parse(text)).toEqual(state)
     expect(text).not.toContain('undefined')
-    expect(buildNativeTabs(EMPTY_NATIVE_TABS)).toEqual({ tabs: [], canNewTerminal: true, canNewBrowser: false })
+    expect(buildNativeTabs(EMPTY_NATIVE_TABS)).toEqual({
+      tabs: [],
+      canNewTerminal: true,
+      canNewBrowser: false,
+      accountSwitch: null,
+      layout: {
+        mode: 'terminal',
+        swarm: false,
+        root: null,
+        focusedPaneId: null,
+        primaryPaneId: null,
+        modeSwitch: false,
+        splitOffer: false,
+        swarmSessions: [],
+      },
+    })
   })
 })
 
@@ -147,5 +173,85 @@ describe('a tab’s ✕, as the strip does it', () => {
     expect(stripClose(INPUT, 'nope')).toBeNull()
     expect(stripHas(INPUT, 's3')).toBe(true)
     expect(stripHas(INPUT, 's4')).toBe(false)
+  })
+})
+
+describe('a terminal on a server', () => {
+  const box = {
+    tabId: 's3',
+    serverId: 'box',
+    serverName: 'Box',
+    shellKey: 'k1',
+    status: 'idle' as const,
+    startIn: '/srv/app',
+    run: 'claude',
+  }
+
+  it('carries what it takes to open its shell, and the shell id once one is open', () => {
+    const closed = buildNativeTabs({ ...INPUT, serverSessions: [box] }).tabs.find((tab) => tab.id === 's3')
+    expect(closed?.server).toEqual({ serverId: 'box', serverName: 'Box', shellKey: 'k1', startIn: '/srv/app', run: 'claude', shellId: null })
+    const open = buildNativeTabs({ ...INPUT, serverSessions: [box], serverShellIds: { s3: 'sh-1' } }).tabs.find((tab) => tab.id === 's3')
+    expect(open?.server?.shellId).toBe('sh-1')
+  })
+
+  it('leaves every other tab without it', () => {
+    const tabs = buildNativeTabs({ ...INPUT, serverSessions: [box] }).tabs.filter((tab) => tab.id !== 's3')
+    expect(tabs.every((tab) => !('server' in tab))).toBe(true)
+  })
+})
+
+describe('the window\'s arrangement (split and swarm)', () => {
+  it('carries the pane tree as it is, the focused and primary pane, and ModeSwitch\'s facts', () => {
+    const root = {
+      type: 'split' as const,
+      id: 'sp1',
+      direction: 'horizontal' as const,
+      ratio: 0.4,
+      children: [
+        { type: 'leaf' as const, id: 'p1', tabId: 's1' },
+        { type: 'leaf' as const, id: 'p2', tabId: 's2' },
+      ] as const,
+    }
+    const layout = buildNativeTabs({
+      ...INPUT,
+      mode: 'split',
+      panes: { root, focusedPaneId: 'p2' },
+      modeSwitch: true,
+      splitOffer: true,
+    }).layout
+    expect(layout.mode).toBe('split')
+    expect(layout.root).toEqual(root)
+    expect(layout.focusedPaneId).toBe('p2')
+    expect(layout.primaryPaneId).toBe('p1')
+    expect(layout.modeSwitch).toBe(true)
+    expect(layout.splitOffer).toBe(true)
+    expect(JSON.parse(JSON.stringify(layout))).toEqual(layout)
+  })
+
+  it('lists swarm\'s sessions with their titles', () => {
+    const layout = buildNativeTabs({
+      ...INPUT,
+      swarm: true,
+      swarmSessions: [{ id: 's1', title: 'api', status: 'idle' }],
+    }).layout
+    expect(layout.swarm).toBe(true)
+    expect(layout.swarmSessions).toEqual([{ id: 's1', title: 'api', status: 'idle' }])
+  })
+})
+
+describe('the account-switch note', () => {
+  it('carries the session, whether it is still going, and its words', () => {
+    const working = { sessionId: 's1', state: 'working' as const, text: 'Switching to Work…' }
+    expect(buildNativeTabs({ ...INPUT, accountSwitch: working }).accountSwitch).toEqual(working)
+    const done = { sessionId: 's1', state: 'done' as const, text: 'Switched to Work' }
+    expect(buildNativeTabs({ ...INPUT, accountSwitch: done }).accountSwitch).toEqual(done)
+    expect(buildNativeTabs(INPUT).accountSwitch).toBeNull()
+  })
+
+  it('is built in App from switchingNote first, then accountSwitchNote', () => {
+    const app = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8')
+    const strip = app.slice(app.indexOf('stripInput.current = {'))
+    expect(strip).toContain("? { sessionId: switcher.working.sessionId, state: 'working', text: switchingNote }")
+    expect(strip).toContain("? { sessionId: accountSwitchNote.sessionId, state: 'done', text: accountSwitchNote.text }")
   })
 })

@@ -106,6 +106,17 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    /// The answer to one of the page's dialogs (NativeDialogs.swift).
+    func run(_ command: DialogCommand) {
+        let log = self.log
+        let name = command.name
+        webView.evaluateJavaScript(command.script) { _, error in
+            guard let error = error as NSError? else { return }
+            if error.domain == WKErrorDomain, error.code == WKError.Code.javaScriptResultTypeIsUnsupported.rawValue { return }
+            log.note("dialog \(name) answer failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: Messages from the page
 
     fileprivate func receive(_ message: WKScriptMessage) {
@@ -117,7 +128,9 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         // The island's state goes to the native island (IslandPanel.swift), not to this window.
         if IslandRelay.shared.accept(message.body) { return }
+        if NativeIslandFeed.shared.accept(message.body) { return } // lane B: the island's session list (NativeIslandContent.swift)
         if PageRequests.accept(message.body, from: self) { return } // lane I: context-menu, open-link (PageLinks.swift)
+        if NativeNewSession.accept(message.body, from: self) { return } // lane B: the New session dialog (NativeNewSessionDialog.swift; page side native-new-session.ts)
         NativeCodingAIStore.noteSettingsRequest(message.body) // lane G: open-settings `action: 'add-account'` → native Add-account sheet (NativeCodingAIStore.swift)
         switch PageMessage.parse(message.body) {
         case .ready:
@@ -162,6 +175,16 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.cancel)
             if let url { log.note("blocked navigation to \(EngineLineParser.redacted(url))") }
         }
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A reload this bridge didn't start (the page's own location.reload(), or
+        // webView.reload()) is a new page: it must say `ready` again, so it gets told
+        // everything again (`native-screens` first). Same-page navigations never commit.
+        guard origin != nil, pageIsReady else { return }
+        readyFallback?.cancel()
+        pageIsReady = false
+        onReloading?()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -131,24 +131,19 @@ private struct DeviceOpenView: View {
             if !model.problem.isEmpty || !model.said.isEmpty {
                 StatusLine(problem: model.problem, said: model.said)
             }
-            HStack(spacing: 0) {
+            // Annotate, as the page lays it out: the frozen picture on the left, the
+            // notes on the right as a card beside it.
+            HStack(spacing: 16) {
                 DeviceStage(model: model)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.inspecting {
-                    Divider()
-                    InspectorPanel(model: model)
-                        .frame(width: 350)
+                if model.isFrozen {
+                    AnnotatePanel(model: model)
+                        .frame(minWidth: 272, idealWidth: 336, maxWidth: 336)
+                        .padding([.vertical, .trailing], 16)
                 }
             }
         }
-        .alert(discardTitle, isPresented: $model.confirmingDiscard) {
-            Button("Keep", role: .cancel) {}
-            Button("Discard", role: .destructive) { model.stopInspecting() }
-        }
-    }
-
-    private var discardTitle: String {
-        "Discard \(model.markers.count) marker\(model.markers.count == 1 ? "" : "s")?"
+        .onExitCommand { model.escapeAnnotate() }
     }
 }
 
@@ -218,12 +213,15 @@ private struct DeviceToolbar: View {
                     ShotPopover(model: model, shown: $shotShown)
                 }
 
-                Toggle(isOn: Binding(get: { model.inspecting }, set: { _ in model.toggleInspect() })) {
-                    Label("Inspect", systemImage: "scope")
-                        .labelStyle(.titleAndIcon)
+                // The same name and glyph as the browser's: one Annotate.
+                Toggle(isOn: Binding(get: { model.isFrozen }, set: { _ in model.toggleAnnotate() })) {
+                    Label("Annotate", systemImage: "text.bubble")
                 }
                 .toggleStyle(.button)
-                .help("Inspect: point at elements, check them, and send them to a session")
+                .buttonStyle(.borderless)
+                .disabled(model.freezing)
+                .help("Annotate")
+                .accessibilityLabel("Annotate")
 
                 if !device.isPhysical {
                     tool("Shut down", "power") { Task { await model.shutDown() } }
@@ -267,7 +265,7 @@ private struct DeviceStage: View {
                         .allowsHitTesting(false)
                 }
 
-                if model.inspecting {
+                if model.isFrozen {
                     InspectorOverlay(model: model, fitted: fitted)
                         .allowsHitTesting(false)
                 }
@@ -280,9 +278,14 @@ private struct DeviceStage: View {
                         .allowsHitTesting(false)
                 }
 
-                if model.inspecting {
-                    InspectBadge(model: model)
-                        .padding(10)
+                if model.freezing {
+                    Text("Freezing the screen…")
+                        .font(.callout)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassEffect(.regular, in: .capsule)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .allowsHitTesting(false)
                 }
 
                 if !model.diagnosticLines.isEmpty {
@@ -301,33 +304,6 @@ private struct DeviceStage: View {
         .padding(12)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(model.device?.name ?? "Device") screen. Click to tap, drag to swipe, type to type.")
-    }
-}
-
-/// What the stage says while inspecting: reading, frozen, or a problem.
-private struct InspectBadge: View {
-    let model: NativeSimulatorModel
-
-    var body: some View {
-        let words: String? = {
-            if model.isFrozen { return "Frozen while marking" }
-            if model.reading && model.snapshot == nil { return "Reading the screen's elements…" }
-            if !model.readProblem.isEmpty { return model.readProblem }
-            return nil
-        }()
-        if let words {
-            HStack(spacing: 8) {
-                Text(words).font(.caption.weight(.medium))
-                if model.isFrozen {
-                    Button("Clear") { model.clearMarkers() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .glassEffect(.regular, in: .capsule)
-        }
     }
 }
 

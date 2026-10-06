@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The live screen's packets, as `devices:frame` carries them (`session.ts`):
@@ -86,4 +87,66 @@ public struct AVCConfiguration: Equatable, Sendable {
 
     /// `avc1.PPCCLL`, as the web page's `codecOf` writes it.
     public var codec: String { String(format: "avc1.%02x%02x%02x", profile, compatibility, level) }
+}
+
+// MARK: - The hidden diagnostics readout (Option-click the device's name)
+
+/// What the readout shows, counted from the player's start. Mirrors `PlayerStats` in `screen-player.ts`.
+public struct PlayerStats: Equatable, Sendable {
+    /// Coded pictures that arrived.
+    public var received = 0
+    /// Pictures the decoder handed back.
+    public var decoded = 0
+    /// Pictures painted — fewer than decoded when two arrived within one refresh.
+    public var painted = 0
+    /// Decoded pictures replaced by a newer one before they could be painted.
+    public var dropped = 0
+    /// Times the decoder fell behind and started again from a keyframe.
+    public var resets = 0
+    /// Recent decode times, in ms.
+    public var decodeMs: [Double] = []
+    /// Recent times from a touch, key or wheel to the next picture painted, in ms.
+    public var inputToPictureMs: [Double] = []
+    public var stream: CGSize?
+    public var canvas: CGSize = .zero
+    /// `yes`, `no` or `unknown`.
+    public var hardware = "unknown"
+    public var codec: String?
+
+    public init() {}
+
+    /// Keep the newest sixty timings, to a tenth of a millisecond.
+    public static func remember(_ list: inout [Double], _ value: Double) {
+        list.append((value * 10).rounded() / 10)
+        if list.count > 60 { list.removeFirst(list.count - 60) }
+    }
+}
+
+public enum DeviceDiagnostics {
+    static func median(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : values.sorted()[values.count / 2]
+    }
+
+    static func p95(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.sorted()[min(values.count - 1, Int(Double(values.count) * 0.95))]
+    }
+
+    /// The readout's lines, from two looks at the numbers `seconds` apart — `diagnosticLines`.
+    public static func lines(before: PlayerStats?, now: PlayerStats, seconds: Double, scale: Double, paused: Bool) -> [String] {
+        func rate(_ key: KeyPath<PlayerStats, Int>) -> String {
+            guard let before, seconds > 0 else { return "–" }
+            return String(format: "%.1f", Double(now[keyPath: key] - before[keyPath: key]) / seconds)
+        }
+        func ms(_ value: Double?) -> String { value.map { "\(Int($0.rounded())) ms" } ?? "–" }
+        func size(_ box: CGSize?) -> String { box.map { "\(Int($0.width))×\(Int($0.height))" } ?? "–" }
+        let density = scale == scale.rounded() ? String(Int(scale)) : String(scale)
+        return [
+            paused ? "paused — window hidden" : "shown \(rate(\.painted)) fps · arriving \(rate(\.received)) fps",
+            "decode \(ms(median(now.decodeMs))) (p95 \(ms(p95(now.decodeMs)))) · hardware \(now.hardware)",
+            "touch → picture \(ms(median(now.inputToPictureMs))) (last \(ms(now.inputToPictureMs.last)))",
+            "dropped \(now.dropped) · restarts \(now.resets)",
+            "stream \(size(now.stream)) → canvas \(size(now.canvas)) @\(density)x\(now.codec.map { " · \($0)" } ?? "")",
+        ]
+    }
 }

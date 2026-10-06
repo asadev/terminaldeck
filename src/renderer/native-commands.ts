@@ -96,6 +96,84 @@ export const NATIVE_SIDEBAR_COMMANDS = [
  */
 export const MENU_COMMAND = 'menu-command'
 
+/**
+ * Doors between views, for screens the native window draws (lanes A and V):
+ * each does what the web view's own prop does, so a native door and a web door
+ * land in the same place.
+ *
+ *   open-file      (relPath)          `showFile`: the Files view, with that file open
+ *   show-panel     ([panelId, focus]) `showPanel(id, focus)`: Git on a group
+ *                                     ('staged'…), GitHub on 'issues' or 'pulls'
+ *   open-inspector                    the session inspector (`setInspectorOpen(true)`)
+ *   show-sessions                     swarm view (`onShowSessions`); false while
+ *                                     swarm is not installed, as the widget has no door then
+ *
+ * What they leave behind is published in the `sidebar` state: `openFile` and `focus`.
+ */
+export const NATIVE_DOOR_COMMANDS = ['open-file', 'show-panel', 'open-inspector', 'show-sessions'] as const
+
+/**
+ * Sessions drawn by the native window (lanes T and V), each `[tabId, …]`:
+ *
+ *   rename-session      [tabId, name]    a local session's name, as the rail's own rename:
+ *                                        rail and title at once, and the engine told
+ *   server-shell-write  [tabId, text]    `writeToServerShell(serverShellIds[tabId], text)`;
+ *                                        false when that tab has no shell open
+ *   server-shell-opened [tabId, shellId] a server shell the native window opened itself
+ *   server-shell-ended  [tabId]          …and its end, as `ServerSessionPane`'s `onEnded`
+ *
+ * What a native window needs to open a server shell is in the `tabs` state (`server`).
+ */
+export const NATIVE_SESSION_COMMANDS = [
+  'rename-session',
+  'server-shell-write',
+  'server-shell-opened',
+  'server-shell-ended',
+] as const
+
+/**
+ * The servers screens drawn natively (lane G), as `ServerSessions` does for the web ones:
+ *
+ *   open-server-session [serverId, serverName, startIn|""]  ServerPage's "Open a terminal", in that folder
+ *   server-renamed      [serverId, name]                    the rename, so open tabs carry the new name
+ */
+export const NATIVE_SERVER_COMMANDS = ['open-server-session', 'server-renamed'] as const
+
+/**
+ * The session header's account chips, drawn natively (lane T): each does what
+ * the web chip's own prop does.
+ *
+ *   new-session-as    [projectPath|"", accountId, provider|""]  AccountChip `onPick`:
+ *                                        `newSession(path, false, accountId, provider)`
+ *   switch-account    [sessionId, accountId]  AccountChip `onSwitchAccount`: `switcher.ask`
+ *                                        (the confirm that follows is the native one)
+ *   open-server-shell [serverId, agentId|""]  ServerAccountChip `onStartAgent`: a new
+ *                                        terminal on that server with `agentCommand(agentId)` running
+ *   add-account                          the chip's "Add account": `askForAddAccount()` then
+ *                                        Settings → Accounts
+ *   manage-accounts                      the chips' `onManage`: Settings → Accounts
+ */
+/**
+ * Split and swarm drawn natively (lane T), as the page's own controls act:
+ *
+ *   set-mode     [mode]           ModeSwitch `onChange` ('terminal' | 'split'; split installs itself first)
+ *   focus-pane   [paneId]         SplitView's focus (`focusPane`)
+ *   resize-split [splitId, ratio] SplitView's divider (`resizeSplit`; ratio as text, 0 < ratio < 1)
+ *   close-pane   [paneId]         `closePaneAt`
+ *
+ * The arrangement itself is in the `tabs` state (`layout`). Swarm's cells use
+ * `select-tab` and its + uses `new-terminal-tab`.
+ */
+export const NATIVE_LAYOUT_COMMANDS = ['set-mode', 'focus-pane', 'resize-split', 'close-pane'] as const
+
+export const NATIVE_ACCOUNT_COMMANDS = [
+  'new-session-as',
+  'switch-account',
+  'open-server-shell',
+  'add-account',
+  'manage-accounts',
+] as const
+
 /** The tab strip's commands. */
 export const NATIVE_TAB_COMMANDS = ['select-tab', 'close-tab', 'new-terminal-tab', 'new-browser-tab'] as const
 
@@ -105,8 +183,39 @@ export const NATIVE_TAB_COMMANDS = ['select-tab', 'close-tab', 'new-terminal-tab
  */
 export interface NativeHandlers {
   run(id: string): boolean
-  /** `onSelectPanel`. */
-  showPanel(id: PanelId): void
+  /** `onSelectPanel`; with a focus, `onNavigate(id, focus)` — the view opened on one part of it. */
+  showPanel(id: PanelId, focus?: string | null): void
+  /** `onOpenFile` (`showFile`): the Files view, with this file open. */
+  showFile(relPath: string): void
+  /** `onOpenInspector`: the session inspector. */
+  openInspector(): void
+  /** `onShowSessions`: swarm view. False when swarm is not installed (the widget offers no door then). */
+  showSessions(): boolean
+  /** `useSessionRename().rename`: false for a blank name or a session that is not a local one here. */
+  renameSession(tabId: string, typed: string): boolean
+  /** The tab's server shell, written to; false when it has none open. */
+  writeServerShell(tabId: string, text: string): boolean
+  /** `ServerSessionPane`'s `onOpened` / `onEnded`, for a shell the native window holds; false for an unknown tab. */
+  serverShellOpened(tabId: string, shellId: string): boolean
+  serverShellEnded(tabId: string): boolean
+  /** AccountChip `onPick`. False for a provider this build does not know. */
+  newSessionAs(projectPath: string | null, accountId: string, provider: string | null): boolean
+  /** AccountChip `onSwitchAccount`; false for a session that is not a local one here. */
+  switchAccount(sessionId: string, accountId: string): boolean
+  /** ServerAccountChip `onStartAgent` (agent null: a plain shell); false for a server with no terminal here. */
+  openServerShellWith(serverId: string, agentId: string | null): boolean
+  /** Settings → Accounts; `add` first asks Accounts for its add popup (`askForAddAccount`). */
+  manageAccounts(add: boolean): void
+  /** `serverSessionOpener.open(serverId, serverName, startIn)`. */
+  openServerSession(serverId: string, serverName: string, startIn: string | null): void
+  /** `serverSessionOpener.renamed(serverId, name)`. */
+  serverRenamed(serverId: string, name: string): void
+  /** ModeSwitch `onChange`. */
+  setLayoutMode(mode: 'terminal' | 'split'): void
+  /** SplitView's focus / divider, and `closePaneAt`; false for a pane or split that is not there. */
+  focusPaneById(paneId: string): boolean
+  resizeSplitTo(splitId: string, ratio: number): boolean
+  closePaneById(paneId: string): boolean
   /** What the rail is drawing right now — the input the published state is built from. */
   rail(): NativeSidebarInput
   /** `onOpenCopilot`, as the pinned row calls it. */
@@ -258,6 +367,101 @@ function sidebarCommand(handlers: NativeHandlers, name: string, arg: unknown): b
   }
 }
 
+function doorCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
+  if (name === 'open-inspector') {
+    handlers.openInspector()
+    return true
+  }
+  if (name === 'show-sessions') return handlers.showSessions()
+  if (name === 'open-file') {
+    if (typeof arg !== 'string' || arg === '') return false
+    handlers.showFile(arg)
+    return true
+  }
+  // show-panel: [panelId, focus]. Only a view the rail is drawing, as `select`.
+  if (!Array.isArray(arg) || !isPanelId(arg[0])) return false
+  const id: PanelId = arg[0]
+  const focus = typeof arg[1] === 'string' && arg[1] !== '' ? arg[1] : null
+  if (!handlers.rail().panels.some((panel) => panel.id === id)) return false
+  handlers.showPanel(id, focus)
+  return true
+}
+
+function sessionCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
+  if (!Array.isArray(arg) || typeof arg[0] !== 'string' || arg[0] === '') return false
+  const tabId: string = arg[0]
+  const value: unknown = arg[1]
+  if (name === 'server-shell-ended') return handlers.serverShellEnded(tabId)
+  if (typeof value !== 'string') return false
+  switch (name) {
+    case 'rename-session':
+      return handlers.renameSession(tabId, value)
+    case 'server-shell-write':
+      return handlers.writeServerShell(tabId, value)
+    case 'server-shell-opened':
+      return value !== '' && handlers.serverShellOpened(tabId, value)
+    default:
+      return false
+  }
+}
+
+function accountCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
+  if (name === 'add-account' || name === 'manage-accounts') {
+    handlers.manageAccounts(name === 'add-account')
+    return true
+  }
+  if (!Array.isArray(arg) || !arg.every((part) => typeof part === 'string')) return false
+  const parts = arg as string[]
+  const orNull = (text: string | undefined): string | null => (text === undefined || text === '' ? null : text)
+  switch (name) {
+    case 'new-session-as':
+      if (!parts[1]) return false
+      return handlers.newSessionAs(orNull(parts[0]), parts[1], orNull(parts[2]))
+    case 'switch-account':
+      if (!parts[0] || !parts[1]) return false
+      return handlers.switchAccount(parts[0], parts[1])
+    case 'open-server-shell':
+      if (!parts[0]) return false
+      return handlers.openServerShellWith(parts[0], orNull(parts[1]))
+    default:
+      return false
+  }
+}
+
+function serverCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
+  if (!Array.isArray(arg) || !arg.every((part) => typeof part === 'string')) return false
+  const [serverId, second, third] = arg as string[]
+  if (!serverId || !second) return false
+  if (name === 'open-server-session') {
+    handlers.openServerSession(serverId, second, third ? third : null)
+    return true
+  }
+  handlers.serverRenamed(serverId, second)
+  return true
+}
+
+function layoutCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
+  if (!Array.isArray(arg) || typeof arg[0] !== 'string' || arg[0] === '') return false
+  const first: string = arg[0]
+  switch (name) {
+    case 'set-mode':
+      if (first !== 'terminal' && first !== 'split') return false
+      handlers.setLayoutMode(first)
+      return true
+    case 'focus-pane':
+      return handlers.focusPaneById(first)
+    case 'close-pane':
+      return handlers.closePaneById(first)
+    case 'resize-split': {
+      const ratio = typeof arg[1] === 'string' && arg[1].trim() !== '' ? Number(arg[1]) : Number.NaN
+      if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return false
+      return handlers.resizeSplitTo(first, ratio)
+    }
+    default:
+      return false
+  }
+}
+
 function tabCommand(handlers: NativeHandlers, name: string, arg: unknown): boolean {
   if (name === 'new-terminal-tab') {
     handlers.newTerminalTab()
@@ -298,10 +502,20 @@ export function nativeCommands(current: () => NativeHandlers | null): NativeComm
       const sidebar = (NATIVE_SIDEBAR_COMMANDS as readonly string[]).includes(name)
       const tabs = (NATIVE_TAB_COMMANDS as readonly string[]).includes(name)
       const menu = name === MENU_COMMAND
-      if (!toolbar && !sidebar && !tabs && !menu) return false
+      const door = (NATIVE_DOOR_COMMANDS as readonly string[]).includes(name)
+      const session = (NATIVE_SESSION_COMMANDS as readonly string[]).includes(name)
+      const account = (NATIVE_ACCOUNT_COMMANDS as readonly string[]).includes(name)
+      const layout = (NATIVE_LAYOUT_COMMANDS as readonly string[]).includes(name)
+      const server = (NATIVE_SERVER_COMMANDS as readonly string[]).includes(name)
+      if (!toolbar && !sidebar && !tabs && !menu && !door && !session && !account && !layout && !server) return false
       const handlers = current()
       if (handlers === null) return false
       if (menu) return typeof arg === 'string' && arg !== '' && handlers.run(arg)
+      if (door) return doorCommand(handlers, name, arg)
+      if (session) return sessionCommand(handlers, name, arg)
+      if (account) return accountCommand(handlers, name, arg)
+      if (layout) return layoutCommand(handlers, name, arg)
+      if (server) return serverCommand(handlers, name, arg)
       if (sidebar) return sidebarCommand(handlers, name, arg)
       if (tabs) return tabCommand(handlers, name, arg)
       const action = NATIVE_COMMANDS[name as NativeCommandName]

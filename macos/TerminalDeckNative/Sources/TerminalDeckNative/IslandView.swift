@@ -28,7 +28,10 @@ struct IslandView: View {
 
             IslandIndicators(state: model.state, layout: layout)
 
-            IslandWebContent(webView: webView)
+            Group {
+                if NativeIslandContent.isNative { NativeIslandContent(expanded: expanded) } // lane B: drawn in Swift
+                else { IslandWebContent(webView: webView) }
+            }
                 .frame(width: layout.contentSize.width, height: layout.contentSize.height)
                 .clipShape(RoundedRectangle(cornerRadius: IslandMetrics.panelRadius - IslandMetrics.contentInset,
                                             style: .continuous))

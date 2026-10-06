@@ -5,6 +5,7 @@ import { publishNativeAppearance } from '../native-appearance'
 import { TerminalView } from '../components/TerminalView'
 import { FeaturesProvider, useFeatures } from '../features/FeaturesProvider'
 import { nativeTitle } from '../native-commands'
+import { useNativeScreens } from '../native-screens'
 import { folderName } from '../session-title'
 import { openSettingsMessage } from '../settings/native-settings'
 import { booleanSetting, numberSetting, stringSetting, type SectionId } from '../settings/settings-schema'
@@ -28,7 +29,13 @@ export function ScreenPage({ route }: { route: ScreenRoute }) {
   useAppSettings()
   useEffect(() => postToNative({ type: 'ready' }), [])
   useEffect(() => publishNativeAppearance(), [])
+  const drawnNatively = useNativeScreens()
   if (route.kind === 'unknown') return <ScreenMessage text={route.message} />
+  // The window draws this screen itself: nothing mounted under it (the title
+  // and `ready` above still come from here).
+  if (drawnNatively.has(route.kind === 'panel' ? route.id : 'session')) {
+    return <div className="native-screen" data-screen={route.kind === 'panel' ? route.id : 'session'} />
+  }
   if (route.kind === 'panel') {
     return (
       <FeaturesProvider>

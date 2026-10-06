@@ -97,15 +97,15 @@ public enum TerminalPastePlan: Equatable, Sendable {
     /// `pastedFiles` + the plain-text path, decided from what is on the pasteboard.
     ///
     /// Files win, because a Finder copy also carries the file's name as text and
-    /// its icon as an image. An image is staged only when there is no text with
-    /// it: a plain text paste must stay exactly a text paste ("a paste of a diff
-    /// into an agent is not a file transfer"), and apps that put text *and* a
-    /// rendering of it on the pasteboard (spreadsheets) mean the text.
+    /// its icon as an image. Then, as the page's paste handler: any image on the
+    /// clipboard is a file item there (`pastedFiles` reads `items`), so an image
+    /// wins over text that came with it — a spreadsheet copy pastes its picture.
+    /// Only a paste with no file and no image is a text paste.
     public static func decide(filePaths: [String], hasImage: Bool, imageType: String?, text: String?, now: Date) -> TerminalPastePlan {
         let paths = filePaths.filter { !$0.isEmpty }
         if !paths.isEmpty { return .paths(paths) }
-        if let text, !text.isEmpty { return .text(text) }
         if hasImage { return .stageImage(name: pastedName(type: imageType, now: now)) }
+        if let text, !text.isEmpty { return .text(text) }
         return .nothing
     }
 
@@ -172,18 +172,25 @@ public enum TerminalLinks {
 }
 
 /// The session's own chords (`TERMINAL_COMMANDS`): find, clear, copy.
-/// ⌘ only — on a Mac, Control belongs to the program (⌃F is "forward a character").
+/// As the page's `terminalChord`: ⌘ or ⌃ for those three (⌘F / ⌃F, ⌘⇧K / ⌃⇧K,
+/// ⌘⇧C / ⌃⇧C), never with ⌥. The Mac's own edit chords (find next, copy, paste,
+/// select all) stay ⌘ only, as the page's menu has them.
 public enum TerminalChord: Equatable, Sendable {
     case find, findNext, findPrevious, clear, copy, paste, selectAll
 
     public static func from(key: String, command: Bool, shift: Bool, option: Bool, control: Bool) -> TerminalChord? {
-        guard command, !option, !control else { return nil }
-        switch (key.lowercased(), shift) {
+        guard !option, command || control else { return nil }
+        let key = key.lowercased()
+        switch (key, shift) {
         case ("f", false): return .find
-        case ("g", false): return .findNext
-        case ("g", true): return .findPrevious
         case ("k", true): return .clear
         case ("c", true): return .copy
+        default: break
+        }
+        guard command, !control else { return nil }
+        switch (key, shift) {
+        case ("g", false): return .findNext
+        case ("g", true): return .findPrevious
         case ("c", false): return .copy
         case ("v", false): return .paste
         case ("a", false): return .selectAll

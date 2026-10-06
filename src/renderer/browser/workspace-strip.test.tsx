@@ -1587,9 +1587,15 @@ describe('every route that opens a window keeps it', () => {
     // session on another machine to that machine and returns before any of the
     // local bookkeeping — which is exactly what this test is guarding, one
     // branch further down.
-    const onStart = /onStart=\{async \(request, machineId\) => \{[\s\S]*?\n {8}\}\}/.exec(app)?.[0] ?? ''
+    //
+    // The handler is `startNewSession` since the native window got its own New
+    // session dialog (lane B): both dialogs call this one function, and the
+    // page's dialog is handed it as `onStart`. Same body, one caller more.
+    const onStart =
+      /const startNewSession = async \(request: SpawnRequest, machineId: string \| null\): Promise<void> => \{[\s\S]*?\n {12}\}\n/.exec(app)?.[0] ?? ''
     expect(onStart, 'the dialog’s onStart has changed shape').not.toBe('')
     expect(onStart).toContain('keepNewWindowInStrip(meta.id)')
+    expect(app, 'the page’s dialog no longer starts through startNewSession').toContain('onStart={startNewSession}')
   })
 
   it('keeps a session started without the dialog — continue-last, and first launch', () => {

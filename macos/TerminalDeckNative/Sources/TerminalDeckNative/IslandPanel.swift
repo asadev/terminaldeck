@@ -266,6 +266,11 @@ final class IslandController: NSObject, NSWindowDelegate {
         Task { @MainActor [weak self] in self?.syncPointer() }
     }
 
+    /// Settle now — a session was opened from the panel (lane B, NativeIslandContent).
+    func collapse() {
+        if model.expanded { update { $0.dismiss() } }
+    }
+
     /// The shape has landed: shrink the window back to the pill.
     private func finishSettle(_ generation: Int) {
         guard generation == settleGeneration, !model.expanded, let panel else { return }
@@ -358,17 +363,22 @@ final class IslandController: NSObject, NSWindowDelegate {
         let app = AppModel.shared
         var engineURL: URL?
         if case .ready(let url) = app.engine.phase, app.pageReady { engineURL = url }
-        if let engineURL { web.load(engineURL: engineURL) }
+        if let engineURL {
+            // lane B: with the content drawn in Swift there is no page to load or wait for.
+            if NativeIslandContent.isNative { pageLoaded(true) } else { web.load(engineURL: engineURL) }
+        }
         let up = engineURL != nil
         guard up != model.engineUp else { return }
         model.engineUp = up
         if !up {
             IslandRelay.shared.reset()
             web.unload()
+            if NativeIslandContent.isNative { pageLoaded(false) } // lane B
         }
     }
 
     private func pageLoaded(_ loaded: Bool) {
+        guard loaded != model.pageLoaded || !NativeIslandContent.isNative else { return } // lane B: told on every engine change
         model.pageLoaded = loaded
         update { $0.setAvailable(loaded) }
         if loaded, model.expanded { web.run(IslandCommand.expanded(true)) }

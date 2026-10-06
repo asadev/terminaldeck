@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installSignalHandlers()
         AppModel.shared.startEngine()
         IslandController.shared.start()
+        DriveHost.shared.start() // Hoot driving the app (lane A, NativeDriveHost.swift); inert until "drive" is registered
         IntentsLaunch.start() // Siri / Shortcuts (lane R): keeps Siri's project names current — IntentsShortcuts.swift
     }
 

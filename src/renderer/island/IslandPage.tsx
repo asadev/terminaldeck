@@ -5,6 +5,7 @@ import { postToNative } from '../../shared/native-shell'
 import { sendToTerminal } from '../chat/attach/mentions'
 import { HootMark } from '../copilot/HootMark'
 import { useCopilot } from '../copilot/useCopilot'
+import { useNativeScreens } from '../native-screens'
 import { AllSessions } from '../hoot-panel/HootPanel'
 import {
   hootRunsIn,
@@ -175,10 +176,13 @@ export function IslandPage() {
     void ask()
   }
 
+  // The island's content drawn natively: commands and the relay stay, nothing drawn.
+  const drawnNatively = useNativeScreens().has('island')
   const name = snapshot?.assistant ?? BRAND.assistant
   const line = snapshot?.line ?? name
   const stopped = copilot.stage === 'stopped' && !copilot.loading
 
+  if (drawnNatively) return null
   return (
     <div className="island" data-expanded={expanded || undefined}>
       <header className="island-head">

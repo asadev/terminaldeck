@@ -45,8 +45,17 @@ public struct SidebarItem: Equatable, Identifiable, Sendable, Decodable {
     public let unread: Bool
     public let status: String?
     public let subtitle: String?
+    /// The row's whole tooltip, when the page sends one (a held session's reason).
+    public let help: String?
+    /// The row menu: the copilot turn that started this session,
+    public let turn: String?
+    /// whether it is in the top strip,
+    public let promoted: Bool
+    /// and why it cannot go there.
+    public let promoteBlocked: String?
 
-    public init(id: String, title: String, symbol: String? = nil, kind: Kind, unread: Bool = false, status: String? = nil, subtitle: String? = nil) {
+    public init(id: String, title: String, symbol: String? = nil, kind: Kind, unread: Bool = false, status: String? = nil, subtitle: String? = nil, help: String? = nil,
+                turn: String? = nil, promoted: Bool = false, promoteBlocked: String? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
@@ -54,9 +63,16 @@ public struct SidebarItem: Equatable, Identifiable, Sendable, Decodable {
         self.unread = unread
         self.status = status.flatMap(\.nonEmpty)
         self.subtitle = subtitle.flatMap(\.nonEmpty)
+        self.help = help.flatMap(\.nonEmpty)
+        self.turn = turn.flatMap(\.nonEmpty)
+        self.promoted = promoted
+        self.promoteBlocked = promoteBlocked.flatMap(\.nonEmpty)
     }
 
-    enum CodingKeys: String, CodingKey { case id, title, symbol, kind, unread, status, subtitle }
+    /// A held session (not reopened) is not a tab: no strip, no window, no copilot turn.
+    public var isHeld: Bool { id.hasPrefix("held:") }
+
+    enum CodingKeys: String, CodingKey { case id, title, symbol, kind, unread, status, subtitle, help, turn, promoted, promoteBlocked }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -70,7 +86,11 @@ public struct SidebarItem: Equatable, Identifiable, Sendable, Decodable {
             kind: Kind(c.lossyString(.kind)),
             unread: c.lossyFlag(.unread) ?? false,
             status: c.lossyString(.status),
-            subtitle: c.lossyString(.subtitle))
+            subtitle: c.lossyString(.subtitle),
+            help: c.lossyString(.help),
+            turn: c.lossyString(.turn),
+            promoted: c.lossyFlag(.promoted) ?? false,
+            promoteBlocked: c.lossyString(.promoteBlocked))
     }
 }
 
@@ -131,18 +151,29 @@ public struct SidebarState: Equatable, Sendable, Decodable {
     public var groups: [SidebarGroup]
     public var projects: [SidebarProject]
     public var selectedId: String?
+    /// `activeProjectPath`: the project the page's views are about.
+    public var project: String?
+    /// The file the Files view has open (`showFile`).
+    public var openFile: String?
+    /// The part of a view it was opened on (`panelFocus`).
+    public var focus: String?
 
-    public init(groups: [SidebarGroup], projects: [SidebarProject], selectedId: String?) {
+    public init(groups: [SidebarGroup], projects: [SidebarProject], selectedId: String?,
+                project: String? = nil, openFile: String? = nil, focus: String? = nil) {
         self.groups = groups
         self.projects = projects
         self.selectedId = selectedId.flatMap(\.nonEmpty)
+        self.project = project.flatMap(\.nonEmpty)
+        self.openFile = openFile.flatMap(\.nonEmpty)
+        self.focus = focus.flatMap(\.nonEmpty)
     }
 
-    enum CodingKeys: String, CodingKey { case groups, projects, selectedId }
+    enum CodingKeys: String, CodingKey { case groups, projects, selectedId, project, openFile, focus }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(groups: c.lossyArray(.groups), projects: c.lossyArray(.projects), selectedId: c.lossyString(.selectedId))
+        self.init(groups: c.lossyArray(.groups), projects: c.lossyArray(.projects), selectedId: c.lossyString(.selectedId),
+                  project: c.lossyString(.project), openFile: c.lossyString(.openFile), focus: c.lossyString(.focus))
     }
 
     /// Every row the page sent: group items and project sessions.

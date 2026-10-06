@@ -1,4 +1,5 @@
 import type { Copilot } from './useCopilot'
+import { useNativeScreens } from '../native-screens'
 import './copilot.css'
 
 /**
@@ -55,7 +56,9 @@ import './copilot.css'
  * session appearing.
  */
 export function CopilotRestart({ copilot }: { copilot: Copilot }) {
-  if (copilot.state?.status !== 'running') return null
+  // The native window draws Hoot's bar and its Restart itself (`NativeHootScreen`).
+  const native = useNativeScreens().has('hoot')
+  if (native || copilot.state?.status !== 'running') return null
   return (
     <button
       type="button"

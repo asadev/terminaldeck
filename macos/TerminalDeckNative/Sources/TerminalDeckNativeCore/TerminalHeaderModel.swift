@@ -12,14 +12,36 @@ public struct TerminalSessionInfo: Equatable, Sendable {
     public let provider: String
     public let exitCode: Int?
     public let profileName: String?
+    /// The account the session runs as (`profileId`), when the engine named one.
+    public let profileId: String?
+    /// Switched to another account without a restart (`homeProfileId` set).
+    public let switchedInPlace: Bool
+    /// Epoch milliseconds; with `resumed` and `agentSessionId`, what finds its transcript.
+    public let createdAt: Double?
+    public let resumed: Bool
+    public let agentSessionId: String?
 
-    public init(id: String, cwd: String, title: String, provider: String, exitCode: Int?, profileName: String?) {
+    public init(id: String, cwd: String, title: String, provider: String, exitCode: Int?, profileName: String?,
+                profileId: String? = nil, switchedInPlace: Bool = false, createdAt: Double? = nil, resumed: Bool = false,
+                agentSessionId: String? = nil) {
         self.id = id
         self.cwd = cwd
         self.title = title
         self.provider = provider
         self.exitCode = exitCode
         self.profileName = profileName
+        self.profileId = profileId
+        self.switchedInPlace = switchedInPlace
+        self.createdAt = createdAt
+        self.resumed = resumed
+        self.agentSessionId = agentSessionId
+    }
+
+    /// The same session under another name.
+    public func renamed(_ title: String) -> TerminalSessionInfo {
+        TerminalSessionInfo(id: id, cwd: cwd, title: title, provider: provider, exitCode: exitCode, profileName: profileName,
+                            profileId: profileId, switchedInPlace: switchedInPlace, createdAt: createdAt, resumed: resumed,
+                            agentSessionId: agentSessionId)
     }
 
     /// One `SessionMeta`. Nil without an id; everything else is forgiving.
@@ -31,7 +53,12 @@ public struct TerminalSessionInfo: Equatable, Sendable {
             title: record["title"] as? String ?? "",
             provider: TerminalJSON.text(record["provider"]) ?? "shell",
             exitCode: TerminalJSON.int(record["exitCode"]),
-            profileName: (record["profileName"] as? String).flatMap { $0.terminalTrimmed.isEmpty ? nil : $0.terminalTrimmed })
+            profileName: (record["profileName"] as? String).flatMap { $0.terminalTrimmed.isEmpty ? nil : $0.terminalTrimmed },
+            profileId: TerminalJSON.text(record["profileId"]),
+            switchedInPlace: TerminalJSON.text(record["homeProfileId"]) != nil,
+            createdAt: TerminalJSON.number(record["createdAt"]),
+            resumed: TerminalJSON.bool(record["resumed"]) == true,
+            agentSessionId: TerminalJSON.text(record["agentSessionId"]))
     }
 
     /// This session out of a whole `session:list` answer.
@@ -112,60 +139,143 @@ public struct TerminalHeader: Equatable, Sendable {
     }
 }
 
-// MARK: - Model and effort (agent:controls:read / agent:controls:apply)
+// MARK: - Model, effort and fast mode (agent:controls:read / agent:controls:apply)
 
 /// One control's reading (`ControlReading`).
 public struct TerminalControlReading: Equatable, Sendable {
     public let value: String?
     public let label: String?
+    /// Where it was read: "screen", "transcript", "settings" or "env".
+    public let source: String?
     public let unavailableReason: String?
 
-    public init(value: String?, label: String?, unavailableReason: String? = nil) {
+    public init(value: String?, label: String?, source: String? = nil, unavailableReason: String? = nil) {
         self.value = value
         self.label = label
+        self.source = source
         self.unavailableReason = unavailableReason
     }
 
     public static let unread = TerminalControlReading(value: nil, label: nil)
 
+    /// Nothing has been read: the chip says "Unknown".
+    public var isUnread: Bool { label == nil }
+
     static func decode(_ raw: Any?) -> TerminalControlReading {
         guard let record = raw as? [String: Any] else { return .unread }
+        let source = (record["source"] as? String).flatMap { ["screen", "transcript", "settings", "env"].contains($0) ? $0 : nil }
         return TerminalControlReading(value: record["value"] as? String, label: record["label"] as? String,
-                                      unavailableReason: record["unavailableReason"] as? String)
+                                      source: source, unavailableReason: record["unavailableReason"] as? String)
     }
 }
 
-/// What `agent:controls:read` answers (`SessionReadings`), as much as the header uses.
+/// One MCP server, as `mcp:list` (or a paired machine's readings) lists it (`McpRow`).
+public struct McpRow: Equatable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let scope: String?
+    public let transport: String?
+    public let enabled: Bool
+    public let disabledReason: String?
+
+    public init(id: String, name: String, scope: String? = nil, transport: String? = nil, enabled: Bool = true, disabledReason: String? = nil) {
+        self.id = id
+        self.name = name
+        self.scope = scope
+        self.transport = transport
+        self.enabled = enabled
+        self.disabledReason = disabledReason
+    }
+
+    /// `readServers`: nil when the answer is not a list at all.
+    public static func list(_ raw: Any?) -> [McpRow]? {
+        guard let entries = raw as? [Any] else { return nil }
+        return entries.compactMap { entry in
+            guard let server = entry as? [String: Any], let id = server["id"] as? String, let name = server["name"] as? String else { return nil }
+            return McpRow(id: id, name: name, scope: server["scope"] as? String, transport: server["transport"] as? String,
+                          enabled: TerminalJSON.bool(server["enabled"]) != false,
+                          disabledReason: server["disabledReason"] as? String)
+        }
+    }
+
+    /// `rowDetail`: the reason it is off, or what was read of it.
+    public var detail: String {
+        if let disabledReason, !disabledReason.isEmpty { return disabledReason }
+        return [scope, transport].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// What `agent:controls:read` answers (`SessionReadings`).
 public struct TerminalControls: Equatable, Sendable {
     public let model: TerminalControlReading
     public let effort: TerminalControlReading
+    public let fast: TerminalControlReading
+    public let permission: TerminalControlReading
     public let live: Bool
-    /// An agent CLI is in the foreground of the session (`agent.running`).
+    /// An agent CLI is in the foreground of the session (`agent.running`); nil when not said.
     public let agentRunning: Bool
+    public let agentSaid: Bool
     public let canType: Bool
     public let gateReason: String?
+    /// A paired machine's own MCP list, carried on its readings; nil when it sent none.
+    public let connectors: [McpRow]?
 
-    public init(model: TerminalControlReading, effort: TerminalControlReading, live: Bool, agentRunning: Bool,
-                canType: Bool, gateReason: String?) {
+    public init(model: TerminalControlReading, effort: TerminalControlReading, fast: TerminalControlReading = .unread,
+                permission: TerminalControlReading = .unread, live: Bool, agentRunning: Bool, agentSaid: Bool = true,
+                canType: Bool, gateReason: String?, connectors: [McpRow]? = nil) {
         self.model = model
         self.effort = effort
+        self.fast = fast
+        self.permission = permission
         self.live = live
         self.agentRunning = agentRunning
+        self.agentSaid = agentSaid
         self.canType = canType
         self.gateReason = gateReason
+        self.connectors = connectors
     }
 
     public static func decode(_ raw: Any?) -> TerminalControls? {
         guard let record = raw as? [String: Any] else { return nil }
         let gate = record["gate"] as? [String: Any]
         let agent = record["agent"] as? [String: Any]
+        let running = TerminalJSON.bool(agent?["running"])
         return TerminalControls(
             model: .decode(record["model"]),
             effort: .decode(record["effort"]),
+            fast: .decode(record["fast"]),
+            permission: .decode(record["permission"]),
             live: TerminalJSON.bool(record["live"]) == true,
-            agentRunning: TerminalJSON.bool(agent?["running"]) == true,
+            agentRunning: running == true,
+            agentSaid: running != nil,
             canType: TerminalJSON.bool(gate?["canType"]) == true,
-            gateReason: gate?["reason"] as? String)
+            gateReason: gate?["reason"] as? String,
+            connectors: record["connectors"] == nil ? nil : McpRow.list(record["connectors"]))
+    }
+
+    public func reading(_ control: String) -> TerminalControlReading {
+        switch control {
+        case "model": return model
+        case "effort": return effort
+        case "fast": return fast
+        default: return permission
+        }
+    }
+
+    /// The same readings with one control's replaced — what an apply answers with.
+    public func with(_ control: String, _ reading: TerminalControlReading) -> TerminalControls {
+        TerminalControls(model: control == "model" ? reading : model, effort: control == "effort" ? reading : effort,
+                         fast: control == "fast" ? reading : fast, permission: control == "permission" ? reading : permission,
+                         live: live, agentRunning: agentRunning, agentSaid: agentSaid, canType: canType,
+                         gateReason: gateReason, connectors: connectors)
+    }
+
+    /// Why a control cannot be changed right now, or nil when it can (`blockedFor`,
+    /// after the wiring and foreign-agent checks).
+    public func blocked(_ reading: TerminalControlReading) -> String? {
+        if let reason = reading.unavailableReason, !reason.isEmpty { return reason }
+        if !canType { return gateReason ?? "This session cannot be typed into right now, so nothing was sent." }
+        return nil
     }
 
     /// Whether the header offers model and effort at all: an agent is running in
@@ -173,13 +283,6 @@ public struct TerminalControls: Equatable, Sendable {
     /// as `SessionControls` draws nothing for `running === 'shell'`.
     public func shown(provider: String?) -> Bool {
         agentRunning || provider == "claude"
-    }
-
-    /// Why a control cannot be changed right now, or nil when it can (`blockedFor`).
-    public func blocked(_ reading: TerminalControlReading) -> String? {
-        if let reason = reading.unavailableReason, !reason.isEmpty { return reason }
-        if !canType { return gateReason ?? "This session cannot be typed into right now, so nothing was sent." }
-        return nil
     }
 }
 
@@ -204,16 +307,17 @@ public struct TerminalControlOption: Equatable, Sendable, Identifiable {
     public let id: String
     public let label: String
     public let hint: String?
+    /// A caption drawn above this row (`ControlOption.group`).
+    public let group: String?
 
-    public init(id: String, label: String, hint: String? = nil) {
+    public init(id: String, label: String, hint: String? = nil, group: String? = nil) {
         self.id = id
         self.label = label
         self.hint = hint
+        self.group = group
     }
 }
 
-/// The rows the web header offers before a session has been asked for its own list
-/// (`EFFORT_OPTIONS`, `modelOptions(FALLBACK_MODELS)`, `previousModelOptions`).
 public enum TerminalControlCatalog {
     public static let effort: [TerminalControlOption] = [
         .init(id: "xhigh", label: "Extra high", hint: "the default here"),
@@ -235,7 +339,7 @@ public enum TerminalControlCatalog {
     ]
 
     public static let earlierModels: [TerminalControlOption] = [
-        .init(id: "claude-opus-4-8", label: "Opus 4.8"),
+        .init(id: "claude-opus-4-8", label: "Opus 4.8", group: "Earlier models"),
         .init(id: "claude-opus-4-5", label: "Opus 4.5"),
         .init(id: "claude-sonnet-4-6", label: "Sonnet 4.6"),
     ]

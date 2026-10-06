@@ -39,23 +39,31 @@ vi.mock('electron', () => ({
  */
 const HERE = hostname().replace(/\.local$/i, '').trim() || 'This computer'
 
-const { bindMenuItems, connectMenuItems, registerBrowserBindingIpc, forgetKnownWindows } =
+const { bindMenuItems, bindMenuRows, connectMenuItems, registerBrowserBindingIpc, forgetKnownWindows } =
   await import('./browser-binding-ipc')
 const { attach, bindingFor, ownerOf, resetForTests } = await import('./browser-binding')
 
 /** Just enough of `IpcMain` to capture the handlers under test. */
-function fakeIpc(): { ipc: IpcMain; send(channel: string, payload: unknown): void } {
+function fakeIpc(): {
+  ipc: IpcMain
+  send(channel: string, payload: unknown): void
+  invoke(channel: string, payload: unknown): unknown
+} {
   const listeners = new Map<string, (event: unknown, payload: unknown) => void>()
+  const handlers = new Map<string, (event: unknown, payload: unknown) => unknown>()
   const ipc = {
     on: (channel: string, fn: (event: unknown, payload: unknown) => void) => {
       listeners.set(channel, fn)
     },
-    handle: () => undefined,
+    handle: (channel: string, fn: (event: unknown, payload: unknown) => unknown) => {
+      handlers.set(channel, fn)
+    },
     removeHandler: () => undefined,
   } as unknown as IpcMain
   return {
     ipc,
     send: (channel, payload) => listeners.get(channel)?.({}, payload),
+    invoke: (channel, payload) => handlers.get(channel)?.({}, payload),
   }
 }
 
@@ -639,5 +647,69 @@ describe('disconnecting, which is the whole truth of the connection', () => {
 
     expect(ownerOf('browser:1:1')).toBeNull()
     expect(drivesEnded).toEqual(['browser:1:1'])
+  })
+})
+
+describe('the same menu as data, for a window that draws its own (browser:bind-menu-items)', () => {
+  type Row = ReturnType<typeof bindMenuRows>[number]
+  const rowLabels = (rows: Row[]): string[] => rows.map((row) => (row.type === 'separator' ? '—' : row.label))
+
+  it('is the Electron menu row for row: same words, order, checks and what is pressable', () => {
+    openWindow('browser:1:1', { title: 'Docs' })
+    openWindow('browser:1:2', { title: 'Mail' })
+    attach({
+      sessionId: 's1',
+      machineId: '',
+      browserTabId: 'browser:1:2',
+      viewId: 'view:browser:1:2',
+      url: '',
+      title: 'Mail',
+      hostMachineId: '',
+      hostMachineName: '',
+    })
+
+    const items = bindMenuItems(deps, { sessionId: 's1' })
+    const rows = ipc.invoke('browser:bind-menu-items', { sessionId: 's1' }) as Row[]
+
+    expect(rowLabels(rows)).toEqual(labels(items))
+    expect(rows.map((row) => row.checked)).toEqual(items.map((item) => item.checked === true))
+    expect(rows.map((row) => row.type === 'separator' || !row.enabled)).toEqual(
+      items.map((item) => item.type === 'separator' || item.enabled === false),
+    )
+    expect(rows.map((row) => row.type)).toEqual(
+      items.map((item) => (item.type === 'separator' ? 'separator' : item.type === 'checkbox' ? 'checkbox' : 'item')),
+    )
+    // What a press does: attach the free one, detach the attached one, open a new one.
+    expect(rows.map((row) => row.act)).toEqual([
+      { kind: 'bind', tabId: 'browser:1:1' },
+      { kind: 'unbind', tabId: 'browser:1:2' },
+      null,
+      { kind: 'new-window' },
+    ])
+  })
+
+  it('says no windows are open, as a row nobody can press, and still offers a new one', () => {
+    const rows = ipc.invoke('browser:bind-menu-items', { sessionId: 's1' }) as Row[]
+    expect(rowLabels(rows)).toEqual(['No browser windows are open.', '—', 'New window, attached'])
+    expect(rows[0]?.enabled).toBe(false)
+    expect(rows[0]?.act).toBeNull()
+  })
+
+  it('answers nothing without a session, rather than a menu for nobody', () => {
+    expect(ipc.invoke('browser:bind-menu-items', {})).toBeNull()
+    expect(ipc.invoke('browser:bind-menu-items', null)).toBeNull()
+  })
+
+  it('carries a press back through the channels that already exist', () => {
+    openWindow('browser:1:1', { title: 'Docs' })
+    const [row] = ipc.invoke('browser:bind-menu-items', { sessionId: 's1' }) as Row[]
+    expect(row?.act).toEqual({ kind: 'bind', tabId: 'browser:1:1' })
+    ipc.send('browser:bind', { tabId: 'browser:1:1', sessionId: 's1', machineId: '' })
+    expect(ownerOf('browser:1:1')?.sessionId).toBe('s1')
+    const [after] = ipc.invoke('browser:bind-menu-items', { sessionId: 's1' }) as Row[]
+    expect(after?.checked).toBe(true)
+    expect(after?.act).toEqual({ kind: 'unbind', tabId: 'browser:1:1' })
+    ipc.send('browser:unbind', 'browser:1:1')
+    expect(ownerOf('browser:1:1')).toBeNull()
   })
 })

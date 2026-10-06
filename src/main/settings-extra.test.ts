@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installPaths, nodePaths, resetPaths, userDataDir } from './platform/paths'
 import {
+  aboutInfo,
   BROWSER_PERSIST_KEY,
   clearBrowserDataIfNotPersisting,
   configPaths,
@@ -210,5 +211,20 @@ describe('every UpdateEnvironment this app builds', () => {
       .filter((file) => file !== 'updates/updater.ts')
       .sort()
     expect(builders).toEqual(['index.ts', 'settings-extra.ts'])
+  })
+})
+
+describe('aboutInfo', () => {
+  it('answers in the names the About card reads, and keeps the old one', () => {
+    const about = aboutInfo()
+    // HelpPanel's AboutInfo: chrome, v8 and packaged. An empty Chromium or V8 row,
+    // or "(development build)" on a packaged app, was these three missing.
+    expect(about.chrome).toBe(process.versions.chrome ?? '')
+    expect(about.v8).toBe(process.versions.v8 ?? '')
+    expect(about.v8).not.toBe('')
+    expect(about.packaged).toBe(false)
+    expect(about.chromium).toBe(about.chrome)
+    expect(about.version).toBe('0.0.0-test')
+    expect(about.node).toBe(process.versions.node)
   })
 })

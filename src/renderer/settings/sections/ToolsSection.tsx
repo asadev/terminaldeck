@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Explain, Group, SectionHead } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import { useFeatures } from '../../features/FeaturesProvider'
@@ -71,7 +71,6 @@ import { VoiceKeyRow } from './VoiceKeyRow'
 
 export function ToolsSection() {
   const meta = sectionMeta('features')
-  const features = useFeatures()
   const voice = feature('voice')
 
   /*
@@ -86,15 +85,7 @@ export function ToolsSection() {
    * the switch, and this keeps the flag honest for every consumer that has no
    * idea a key exists.
    */
-  useEffect(() => {
-    const deck = (globalThis as { deck?: { voiceStatus?(): Promise<unknown> } }).deck
-    if (typeof deck?.voiceStatus !== 'function') return
-    void deck.voiceStatus().then((answer) => {
-      const hasKey =
-        typeof answer === 'object' && answer !== null && (answer as { hasKey?: unknown }).hasKey === true
-      if (features.on('voice') !== hasKey) features.setEnabled('voice', hasKey)
-    })
-  })
+  useVoiceFeatureSync()
 
   return (
     <>
@@ -115,4 +106,38 @@ export function ToolsSection() {
       </Group>
     </>
   )
+}
+
+/**
+ * The voice feature follows whether a key is stored: on when there is one.
+ *
+ * Run on every render, as it always was here; and, when the native window draws
+ * this section (lane E2), from `VoiceFeatureSync` in the Settings page, which the
+ * native section pokes with {@link VOICE_CHANGED_EVENT} after it saves or removes a key.
+ */
+export const VOICE_CHANGED_EVENT = 'td:voice-changed'
+
+export function useVoiceFeatureSync(): void {
+  const features = useFeatures()
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const poke = (): void => setTick((n) => n + 1)
+    window.addEventListener(VOICE_CHANGED_EVENT, poke)
+    return () => window.removeEventListener(VOICE_CHANGED_EVENT, poke)
+  }, [])
+  useEffect(() => {
+    const deck = (globalThis as { deck?: { voiceStatus?(): Promise<unknown> } }).deck
+    if (typeof deck?.voiceStatus !== 'function') return
+    void deck.voiceStatus().then((answer) => {
+      const hasKey =
+        typeof answer === 'object' && answer !== null && (answer as { hasKey?: unknown }).hasKey === true
+      if (features.on('voice') !== hasKey) features.setEnabled('voice', hasKey)
+    })
+  })
+}
+
+/** The sync alone, for the Settings page while the native window draws Tools. */
+export function VoiceFeatureSync(): null {
+  useVoiceFeatureSync()
+  return null
 }

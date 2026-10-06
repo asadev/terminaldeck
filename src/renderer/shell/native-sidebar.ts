@@ -15,7 +15,10 @@
  *   { groups:   [{ id, title|null, items: [Item] }],
  *     projects: [{ id, title, expanded, sessions: [Item] }],
  *     selectedId: string|null,
- *     project: string|null }       the project the page's views are about
+ *     project: string|null,        the project the page's views are about
+ *     openFile: string|null,       the file the Files view has open (`showFile`)
+ *     focus: string|null }         the part of a view it was opened on (`panelFocus`:
+ *                                  a Git group, GitHub's 'issues', 'task:<id>@<time>')
  *   Item = { id, title, symbol, kind: 'hoot'|'panel'|'session', unread?, status?, subtitle? }
  *
  * `groups` is the top of the rail: Hoot, then the Project and Integrations
@@ -29,7 +32,8 @@
 
 import { BRAND } from '../../shared/brand'
 import { entryDot, type CopilotStage } from '../copilot/copilot-model'
-import { partitionByOrigin } from '../copilot/session-origin'
+import { partitionByOrigin, turnOf } from '../copilot/session-origin'
+import { MAX_PROMOTED } from '../browser/workspace-strip'
 import { heldAgentName, type HeldSessionView } from '../held-sessions'
 import { folderName, sameFolder } from '../session-title'
 import { PANEL_GROUPS, type PanelId, type PanelSpec } from './panels'
@@ -47,6 +51,14 @@ export interface NativeSidebarItem {
   unread?: boolean
   status?: string
   subtitle?: string
+  /** The row's whole tooltip, when it says more than the title (a held session's reason). */
+  help?: string
+  /** The row menu (session-row-menu.ts): the copilot turn that started it, */
+  turn?: string
+  /** whether it is in the top strip, */
+  promoted?: boolean
+  /** and why it cannot go there (the strip is full). */
+  promoteBlocked?: string
 }
 
 export interface NativeSidebarGroup {
@@ -68,6 +80,10 @@ export interface NativeSidebarState {
   selectedId: string | null
   /** The project the page considers current — what the web Artifacts, Files and Overview pages are about. */
   project: string | null
+  /** The Files view's open file (relative path), as `showFile` / `open-file` set it. */
+  openFile: string | null
+  /** `panelFocus`: what the view was opened on — a Git group, GitHub's first tab, a task. */
+  focus: string | null
 }
 
 /* ------------------------------------------------------------- symbols -- */
@@ -137,6 +153,12 @@ export interface NativeSidebarInput {
   alerts: { shown: boolean; count: number }
   /** `activeProjectPath` — the project the window's views are about. */
   project: string | null
+  /** `openFile`, the Files view's selection. */
+  openFile: string | null
+  /** `panelFocus`. */
+  focus: string | null
+  /** The top strip's order (`usePromotedOrder`), for the row menu's Show at the top. */
+  promoted?: readonly string[]
 }
 
 /** Before the window's first full render: nothing open, nothing selected. */
@@ -155,6 +177,8 @@ export const EMPTY_NATIVE_RAIL: NativeSidebarInput = {
   folded: new Set(),
   alerts: { shown: false, count: 0 },
   project: null,
+  openFile: null,
+  focus: null,
 }
 
 export function buildNativeSidebar(input: NativeSidebarInput): NativeSidebarState {
@@ -202,6 +226,18 @@ export function buildNativeSidebar(input: NativeSidebarInput): NativeSidebarStat
   }
   if (foot.length > 0) groups.push({ id: 'foot', title: null, items: foot })
 
+  /* What the row menu needs that the row does not show (Sidebar.tsx's showSessionRowMenu request). */
+  const strip = input.promoted ?? []
+  const rowMenuFacts = (tab: WorkspaceTab): Partial<NativeSidebarItem> => {
+    const turn = turnOf(tab)
+    const promoted = strip.includes(tab.id)
+    return {
+      ...(turn !== null ? { turn } : {}),
+      ...(promoted ? { promoted: true } : {}),
+      ...(!promoted && strip.length >= MAX_PROMOTED ? { promoteBlocked: `The top strip is full (${MAX_PROMOTED})` } : {}),
+    }
+  }
+
   /* The rail's `rowsFor`: the same label and the same qualifier per row. */
   const rows = (
     run: readonly WorkspaceTab[],
@@ -223,6 +259,7 @@ export function buildNativeSidebar(input: NativeSidebarInput): NativeSidebarStat
         ...(unread.has(tab.id) ? { unread: true } : {}),
         ...(tab.kind === 'session' ? { status: tab.status ?? 'idle' } : {}),
         ...(qualifier ? { subtitle: qualifier } : {}),
+        ...rowMenuFacts(tab),
       }
     })
   }
@@ -237,6 +274,14 @@ export function buildNativeSidebar(input: NativeSidebarInput): NativeSidebarStat
       kind: 'session',
       status: 'held',
       subtitle: input.heldRetrying.includes(row.key) ? 'Opening…' : 'Not reopened',
+      /* The rail's own tooltip, word for word (Sidebar.tsx heldRow). */
+      help: `${nameFolder ? `${folderName(row.cwd)} · ${agent}` : agent} — ${
+        input.heldRetrying.includes(row.key)
+          ? 'Opening…'
+          : row.pick
+            ? 'Not reopened — open it to choose the conversation'
+            : `Not reopened: ${row.reason}`
+      }`,
     }
   }
 
@@ -278,7 +323,7 @@ export function buildNativeSidebar(input: NativeSidebarInput): NativeSidebarStat
   // The rail's rule for what is drawn as current: a view when one fills the
   // window, Hoot when its window does, and otherwise the session in front.
   const selectedId = input.activePanel ?? (input.hoot.active ? 'hoot' : input.activeTabId)
-  return { groups, projects, selectedId, project: input.project }
+  return { groups, projects, selectedId, project: input.project, openFile: input.openFile, focus: input.focus }
 }
 
 /** Every session row's tab id, held rows aside — what `select` and `close-session` may name. */

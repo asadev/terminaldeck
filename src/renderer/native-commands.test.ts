@@ -64,6 +64,15 @@ const STRIP: NativeTabsInput = {
   covered: false,
   unread: [],
   canNewBrowser: false,
+  serverSessions: [],
+  serverShellIds: {},
+  mode: 'terminal',
+  swarm: false,
+  panes: { root: null, focusedPaneId: null },
+  modeSwitch: false,
+  splitOffer: false,
+  swarmSessions: [],
+  accountSwitch: null,
 }
 
 function recording(answer = true, rail: NativeSidebarInput = RAIL, strip: NativeTabsInput = STRIP) {
@@ -76,7 +85,57 @@ function recording(answer = true, rail: NativeSidebarInput = RAIL, strip: Native
       note(`run ${id}`)
       return answer
     },
-    showPanel: (id: PanelId) => note(`panel ${id}`),
+    showPanel: (id: PanelId, focus?: string | null) => note(focus ? `panel ${id} ${focus}` : `panel ${id}`),
+    showFile: (path) => note(`file ${path}`),
+    openInspector: () => note('inspector'),
+    showSessions: () => {
+      note('sessions')
+      return answer
+    },
+    renameSession: (id, name) => {
+      note(`rename ${id} ${name}`)
+      return answer
+    },
+    writeServerShell: (id, text) => {
+      note(`write ${id} ${JSON.stringify(text)}`)
+      return answer
+    },
+    serverShellOpened: (id, shellId) => {
+      note(`opened ${id} ${shellId}`)
+      return answer
+    },
+    serverShellEnded: (id) => {
+      note(`ended ${id}`)
+      return answer
+    },
+    newSessionAs: (path, account, provider) => {
+      note(`new as ${String(path)} ${account} ${String(provider)}`)
+      return answer
+    },
+    switchAccount: (id, account) => {
+      note(`switch ${id} ${account}`)
+      return answer
+    },
+    openServerShellWith: (id, agent) => {
+      note(`server shell ${id} ${String(agent)}`)
+      return answer
+    },
+    manageAccounts: (add) => note(add ? 'add account' : 'accounts'),
+    setLayoutMode: (mode) => note(`mode ${mode}`),
+    focusPaneById: (id) => {
+      note(`focus ${id}`)
+      return answer
+    },
+    resizeSplitTo: (id, ratio) => {
+      note(`resize ${id} ${ratio}`)
+      return answer
+    },
+    closePaneById: (id) => {
+      note(`close pane ${id}`)
+      return answer
+    },
+    openServerSession: (id, name, startIn) => note(`server session ${id} ${name} ${String(startIn)}`),
+    serverRenamed: (id, name) => note(`server renamed ${id} ${name}`),
     rail: () => rail,
     openHoot: () => note('hoot'),
     openTab: (id) => note(`tab ${id}`),
@@ -528,5 +587,194 @@ describe('Settings, from the main window', () => {
     expect(APP).toContain('else setCopilotSetupOpen(true)')
     expect(APP).toContain('onChange={applySettings}')
     expect(APP).toContain('newSession(undefined, false, profileId, provider)')
+  })
+})
+
+describe('doors between views (lanes A and V)', () => {
+  it('open-file opens the Files view on that file', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('open-file', 'src/a.ts')).toBe(true)
+    expect(run('open-file', '')).toBe(false)
+    expect(run('open-file')).toBe(false)
+    expect(log).toEqual(['file src/a.ts'])
+  })
+
+  it('show-panel opens a view on one part of it, only a view the rail draws', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('show-panel', ['git', 'staged'])).toBe(true)
+    expect(run('show-panel', ['tasks'])).toBe(true)
+    expect(run('show-panel', ['github', 'issues'])).toBe(false) // not on this rail
+    expect(run('show-panel', ['nonsense', 'x'])).toBe(false)
+    expect(run('show-panel', 'git')).toBe(false)
+    expect(log).toEqual(['panel git staged', 'panel tasks'])
+  })
+
+  it('open-inspector and show-sessions; show-sessions says when swarm is not there', () => {
+    const { log, handlers } = recording()
+    expect(nativeCommands(() => handlers).run('open-inspector')).toBe(true)
+    expect(nativeCommands(() => handlers).run('show-sessions')).toBe(true)
+    expect(log).toEqual(['inspector', 'sessions'])
+    const off = recording(false)
+    expect(nativeCommands(() => off.handlers).run('show-sessions')).toBe(false)
+  })
+
+  it('App hands over the dashboard\'s own doors and publishes what they leave', () => {
+    const handlersBlock = APP.slice(APP.indexOf('const nativeDoorHandlers'))
+    expect(handlersBlock).toContain('showFile,')
+    expect(handlersBlock).toContain('openInspector: () => setInspectorOpen(true)')
+    expect(handlersBlock).toContain("if (!features.on('swarm')) return false")
+    expect(APP.slice(APP.indexOf('nativeHandlers.current = {'))).toContain('...nativeDoorHandlers,')
+    const railBlock = APP.slice(APP.indexOf('railInput.current = {'))
+    expect(railBlock).toContain('openFile,')
+    expect(railBlock).toContain('focus: panelFocus,')
+  })
+})
+
+describe('sessions drawn natively (lanes T and V)', () => {
+  it('each takes [tabId, value] and reaches its handler', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('rename-session', ['s1', 'API work'])).toBe(true)
+    expect(run('server-shell-write', ['server:box:1', 'ls\r'])).toBe(true)
+    expect(run('server-shell-opened', ['server:box:1', 'sh-7'])).toBe(true)
+    expect(run('server-shell-ended', ['server:box:1'])).toBe(true)
+    expect(log).toEqual(['rename s1 API work', 'write server:box:1 "ls\\r"', 'opened server:box:1 sh-7', 'ended server:box:1'])
+  })
+
+  it('refuses a missing tab id, a missing value or an empty shell id', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('rename-session', 's1')).toBe(false)
+    expect(run('rename-session', ['', 'x'])).toBe(false)
+    expect(run('rename-session', ['s1'])).toBe(false)
+    expect(run('server-shell-write', ['server:box:1', 3])).toBe(false)
+    expect(run('server-shell-opened', ['server:box:1', ''])).toBe(false)
+    expect(log).toEqual([])
+  })
+
+  it('passes the page\'s own answer back (no shell open, blank name)', () => {
+    const off = recording(false)
+    expect(nativeCommands(() => off.handlers).run('server-shell-write', ['server:box:1', 'x'])).toBe(false)
+    expect(nativeCommands(() => off.handlers).run('rename-session', ['s1', ' '])).toBe(false)
+  })
+
+  it('App renames as the rail does and writes through the tab\'s shell id', () => {
+    const block = APP.slice(APP.indexOf('const nativeDoorHandlers'))
+    expect(block).toContain('const name = userSessionTitle(typed)')
+    expect(block).toContain('setSessionTitle(tabId, name, { fromUser: true })')
+    expect(block).toContain('void window.deck.renameSession?.(tabId, name)')
+    expect(block).toContain('const shellId = serverShellIds[tabId]')
+    expect(block).toContain('void serversBridge.writeToServerShell(shellId, text)')
+    const strip = APP.slice(APP.indexOf('stripInput.current = {'))
+    expect(strip).toContain('serverSessions,')
+    expect(strip).toContain('serverShellIds,')
+  })
+})
+
+describe('the account chips drawn natively (lane T)', () => {
+  it('each reaches the chip\'s own handler, blanks read as none', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('new-session-as', ['/work/api', 'acc-1', 'codex'])).toBe(true)
+    expect(run('new-session-as', ['', 'acc-1', ''])).toBe(true)
+    expect(run('switch-account', ['s1', 'acc-2'])).toBe(true)
+    expect(run('open-server-shell', ['box', 'claude'])).toBe(true)
+    expect(run('open-server-shell', ['box', ''])).toBe(true)
+    expect(run('add-account')).toBe(true)
+    expect(run('manage-accounts')).toBe(true)
+    expect(log).toEqual([
+      'new as /work/api acc-1 codex',
+      'new as null acc-1 null',
+      'switch s1 acc-2',
+      'server shell box claude',
+      'server shell box null',
+      'add account',
+      'accounts',
+    ])
+  })
+
+  it('refuses a missing account, session or server', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('new-session-as', ['/work/api', ''])).toBe(false)
+    expect(run('switch-account', ['s1'])).toBe(false)
+    expect(run('switch-account', ['s1', 4])).toBe(false)
+    expect(run('open-server-shell', [''])).toBe(false)
+    expect(run('open-server-shell', 'box')).toBe(false)
+    expect(log).toEqual([])
+  })
+
+  it('App hands over the chips\' own acts', () => {
+    const block = APP.slice(APP.indexOf('const nativeDoorHandlers'))
+    expect(block).toContain('newSession(projectPath ?? undefined, false, accountId, runAs)')
+    expect(block).toContain('switcher.ask({ sessionId, profileId: accountId })')
+    expect(block).toContain('openServerShell(serverId, group.serverName, null, agentId === null ? null : agentCommand(agentId))')
+    expect(block).toContain('if (add) askForAddAccount()')
+    expect(block).toContain("openSettings('profiles')")
+  })
+})
+
+describe('split and swarm drawn natively (lane T)', () => {
+  it('each reaches the page\'s own act', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('set-mode', ['split'])).toBe(true)
+    expect(run('set-mode', ['terminal'])).toBe(true)
+    expect(run('focus-pane', ['p2'])).toBe(true)
+    expect(run('resize-split', ['sp1', '0.35'])).toBe(true)
+    expect(run('close-pane', ['p1'])).toBe(true)
+    expect(log).toEqual(['mode split', 'mode terminal', 'focus p2', 'resize sp1 0.35', 'close pane p1'])
+  })
+
+  it('refuses a mode, ratio or id it cannot use', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('set-mode', ['chat'])).toBe(false)
+    expect(run('set-mode', 'split')).toBe(false)
+    expect(run('resize-split', ['sp1', '1'])).toBe(false)
+    expect(run('resize-split', ['sp1', 'wide'])).toBe(false)
+    expect(run('resize-split', ['sp1', ''])).toBe(false)
+    expect(run('focus-pane', [''])).toBe(false)
+    expect(log).toEqual([])
+  })
+
+  it('App hands over ModeSwitch\'s and SplitView\'s own acts, and publishes the arrangement', () => {
+    const block = APP.slice(APP.indexOf('const nativeDoorHandlers'))
+    expect(block).toContain('setLayoutMode: setMode,')
+    expect(block).toContain('setPanes((current) => focusPane(current, paneId))')
+    expect(block).toContain('setPanes((current) => resizeSplit(current, splitId, ratio))')
+    expect(block).toContain('closePaneAt(paneId)')
+    const strip = APP.slice(APP.indexOf('stripInput.current = {'))
+    expect(strip).toContain("splitOffer: !features.on('split'),")
+    expect(strip).toContain('!(headingTab?.isCopilot && copilotMachine !== null) &&')
+  })
+})
+
+describe('the servers screens drawn natively (lane G)', () => {
+  it('opens a terminal on a server, in a folder or not, and passes a rename on', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('open-server-session', ['box', 'Box', '/srv/app'])).toBe(true)
+    expect(run('open-server-session', ['box', 'Box', ''])).toBe(true)
+    expect(run('server-renamed', ['box', 'Big box'])).toBe(true)
+    expect(log).toEqual(['server session box Box /srv/app', 'server session box Box null', 'server renamed box Big box'])
+  })
+
+  it('refuses a missing server, name, or a non-text part', () => {
+    const { log, handlers } = recording()
+    const run = nativeCommands(() => handlers).run
+    expect(run('open-server-session', ['', 'Box'])).toBe(false)
+    expect(run('open-server-session', ['box'])).toBe(false)
+    expect(run('server-renamed', ['box', 3])).toBe(false)
+    expect(run('server-renamed', 'box')).toBe(false)
+    expect(log).toEqual([])
+  })
+
+  it('App hands over ServerSessions\' own acts', () => {
+    const block = APP.slice(APP.indexOf('const nativeDoorHandlers'))
+    expect(block).toContain('serverSessionOpener.open(serverId, serverName, startIn)')
+    expect(block).toContain('serverSessionOpener.renamed(serverId, name)')
   })
 })

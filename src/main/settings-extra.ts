@@ -194,8 +194,14 @@ export interface AboutInfo {
   tagline: string
   version: string
   electron: string
+  /** The Chromium version, under the name the About card reads (`HelpPanel.tsx`). */
+  chrome: string
+  /** The same value, for readers older than `chrome`. */
   chromium: string
   node: string
+  v8: string
+  /** False for a development build; the About card says "(development build)". */
+  packaged: boolean
   platform: string
   arch: string
   license: string | null
@@ -335,8 +341,11 @@ export function aboutInfo(): AboutInfo {
     tagline: BRAND.tagline,
     version: app.getVersion(),
     electron: process.versions.electron ?? '',
+    chrome: process.versions.chrome ?? '',
     chromium: process.versions.chrome ?? '',
     node: process.versions.node ?? '',
+    v8: process.versions.v8 ?? '',
+    packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
     license: typeof pkg.license === 'string' ? pkg.license : null,

@@ -42,9 +42,21 @@ final class EngineBridge {
     }
 
     /// Call a handler the engine registered with `ipcMain.handle`, and wait for its answer.
-    func invoke(_ channel: String, _ args: [Any?] = []) async throws -> Any {
-        let data = try await post("/__td/invoke", channel: channel, args: args)
+    /// `timeout` (seconds) replaces the 30 s a request may sit silent, for a call that is
+    /// slow by nature — starting an MCP server can take 45 s (lane E2).
+    func invoke(_ channel: String, _ args: [Any?] = [], timeout: TimeInterval? = nil) async throws -> Any {
+        let data = try await post("/__td/invoke", channel: channel, args: args, timeout: timeout)
         switch EngineWire.invokeResult(data) {
+        case .success(let value): return value
+        case .failure(let error): throw error
+        }
+    }
+
+    /// The same call, with the answer read in the order it was written (`OrderedJSON`),
+    /// for screens that lay out or print what came back — lane E2, the MCP page.
+    func invokeOrdered(_ channel: String, _ args: [Any?] = [], timeout: TimeInterval? = nil) async throws -> OrderedJSON {
+        let data = try await post("/__td/invoke", channel: channel, args: args, timeout: timeout)
+        switch OrderedJSON.invokeResult(data) {
         case .success(let value): return value
         case .failure(let error): throw error
         }
@@ -73,9 +85,10 @@ final class EngineBridge {
 
     // MARK: - inside
 
-    private func post(_ path: String, channel: String, args: [Any?]) async throws -> Data {
+    private func post(_ path: String, channel: String, args: [Any?], timeout: TimeInterval? = nil) async throws -> Data {
         guard let base, let token else { throw EngineWireError.notReady }
         var request = URLRequest(url: base.appendingPathComponent(path))
+        if let timeout { request.timeoutInterval = timeout }
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "X-TD-Token")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

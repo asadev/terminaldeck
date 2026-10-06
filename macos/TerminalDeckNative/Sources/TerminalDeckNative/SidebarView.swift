@@ -9,12 +9,53 @@ struct SidebarView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        List(selection: Binding(get: { model.listSelection }, set: { model.select($0) })) {
+        rail
+            // The rail's foot, as the page drew it: the session-updates offer (lane V),
+            // then the update banner (lane S). It stays put while Hoot's panel shows.
+            .safeAreaInset(edge: .bottom, spacing: 0) { foot }
+    }
+
+    /// While Hoot drives a page, its panel takes the list's place (Sidebar.tsx's
+    /// `railPanel.state === 'panel'`), drawn instead of the list, not over it (lane T).
+    @ViewBuilder private var rail: some View {
+        if NativeCopilotRailPanel.shown {
+            NativeCopilotRailPanel()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            sidebarList
+                .listStyle(.sidebar)
+        }
+    }
+
+    @ViewBuilder private var foot: some View {
+        if model.visibleSidebar != nil {
+            VStack(spacing: 8) {
+                NativeHooksOffer()
+                NativeUpdateBanner(model: model)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private var sidebarList: some View {
+        List(selection: Binding(get: { model.listSelection }, set: { id in
+            // lane B: the Hoot row brings its folded panel back instead (NativeCopilotEntry.swift).
+            if id == "hoot" { NativeCopilotEntry.press { model.select(id) } } else { model.select(id) }
+        })) {
             if let state = model.visibleSidebar {
+                groups(state)
+                projects(state)
+            }
+        }
+    }
+
+    private func groups(_ state: SidebarState) -> some View {
                 ForEach(state.groups) { group in
                     Section {
                         ForEach(group.items) { item in
                             SidebarRow(item: item)
+                                .modifier(SessionRowAnchor(item: item))
                                 .tag(item.id as String?)
                                 .modifier(ItemMenu(item: item, model: model, projectPath: nil, openWindow: openWindow))
                         }
@@ -22,7 +63,9 @@ struct SidebarView: View {
                         if let title = group.title { Text(title) }
                     }
                 }
+    }
 
+    private func projects(_ state: SidebarState) -> some View {
                 Section("Open") {
                     ForEach(state.projects) { project in
                         DisclosureGroup(isExpanded: Binding(
@@ -31,6 +74,7 @@ struct SidebarView: View {
                         ) {
                             ForEach(project.sessions) { session in
                                 SidebarRow(item: session)
+                                    .modifier(SessionRowAnchor(item: session))
                                     .tag(session.id as String?)
                                     .modifier(ItemMenu(item: session, model: model, projectPath: project.id, openWindow: openWindow))
                             }
@@ -53,9 +97,6 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .help("Open a project folder (⌘O)")
                 }
-            }
-        }
-        .listStyle(.sidebar)
     }
 }
 
@@ -67,16 +108,61 @@ private struct ItemMenu: ViewModifier {
     let projectPath: String?
     let openWindow: OpenWindowAction
 
+    /// Session rows: the web row menu (session-row-menu.ts), in its order and words —
+    /// Show at the top / Fold back into the sidebar, Move to New Window, Started by
+    /// Hoot — open that turn, Delete — plus New Session Here inside a project.
     func body(content: Content) -> some View {
-        content.contextMenu {
-            Button("Open in New Window") { openWindow(value: ScreenRef.forSidebarItem(item)) }
+        content.task { NativeBindMenuStore.shared.start() } // lane E2: Connect browser's rows, ready before the menu opens
+        .contextMenu {
+            if item.isHeld {
+                // A held row has only its ✕ on the rail: "Stop keeping this session".
+                Button("Stop keeping this session") { model.closeSession(item.id) }
+            } else {
+                menu
+            }
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
+            if item.kind == .session {
+                Button(item.promoted ? "Fold back into the sidebar" : "Show at the top") {
+                    model.answerDialog("session-row", "promote", argument: ["id": item.id], closes: false)
+                }
+                .disabled(!item.promoted && item.promoteBlocked != nil)
+                .help(item.promoted ? "" : item.promoteBlocked ?? "")
+                if !item.promoted, let blocked = item.promoteBlocked {
+                    Text(blocked)
+                }
+            }
+            Button(item.kind == .session ? "Move to New Window" : "Open in New Window") {
+                openWindow(value: ScreenRef.forSidebarItem(item))
+            }
+            if let turn = item.turn {
+                Button("Started by Hoot — open that turn") { NativeHootModel.shared.show(turn: turn) }
+            }
             if item.kind == .session {
                 Divider()
-                Button("Close Session") { model.closeSession(item.id) }
+                NativeConnectBrowserMenu(tabId: item.id) // lane E2: Connect browser ▸ (the engine's bind menu)
+            }
+            if item.kind == .session {
+                Divider()
+                Button("Delete") { model.closeSession(item.id) }
                 if let projectPath {
                     Button("New Session Here") { model.newSession(in: projectPath) }
                 }
             }
+    }
+}
+
+/// Session rows are where Hoot's tours point (lane A's drive anchors).
+private struct SessionRowAnchor: ViewModifier {
+    let item: SidebarItem
+
+    func body(content: Content) -> some View {
+        if case .session = item.kind {
+            content.driveAnchor(DriveAnchor.sessionRow(sessionId: item.id).id)
+        } else {
+            content
         }
     }
 }
@@ -98,6 +184,7 @@ struct SidebarRow: View {
                     }
                 }
                 Spacer(minLength: 4)
+                if item.isHoot { NativeCopilotEntryChevron() } // lane B
                 StatusMark(status: item.status)
                 if item.unread {
                     Circle()
@@ -117,7 +204,9 @@ struct SidebarRow: View {
     }
 
     private var helpText: String {
-        [item.title, item.subtitle, item.status.map { StatusMeaning($0).label }].compactMap { $0 }.joined(separator: " — ")
+        if item.isHoot { return NativeCopilotEntry.help(name: item.title) } // lane B: CopilotEntry's hover sentence
+        if let help = item.help { return help }
+        return [item.title, item.subtitle, item.status.map { StatusMeaning($0).label }].compactMap { $0 }.joined(separator: " — ")
     }
 }
 

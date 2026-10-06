@@ -716,8 +716,11 @@ describe('the copilot is a window, not a view', () => {
     expect(open).toContain('showCopilot(turn)')
     expect(open).toContain('setCopilotSetupOpen(true)')
     expect(open, 'the flow must gate the spawn, not race it').not.toContain('copilot.ensure()')
-    // And the flow is mounted, or the flag would open nothing at all.
-    expect(openingTag(app, 'CopilotSetup') ?? '').toContain('open={copilotSetupOpen}')
+    // And the flow is mounted, or the flag would open nothing at all. In the
+    // native window the same flag opens the native sheet instead (lane B), so
+    // the page's copy steps aside only there.
+    expect(openingTag(app, 'CopilotSetup') ?? '').toMatch(/open=\{copilotSetupOpen( && !nativeCopilotSetup)?\}/)
+    expect(app).toMatch(/if \(copilotSetupOpen\) showNativeDialog\(NATIVE_DIALOGS\.copilotSetup/)
   })
 
   it('feeds the bar’s controls from a list the copilot is in', () => {
@@ -920,8 +923,15 @@ describe('Alerts is a pop-up, and there is no page left to reach', () => {
     // handlers were written to fix: something happens out of sight and the
     // surface in front of you does not move.
     const tag = openingTag(app, 'AlertsWindow') ?? ''
-    const action = propExpression(tag, 'onAction') ?? ''
-    expect(action, '<AlertsWindow> has no onAction={...}').not.toBe('')
+    const prop = propExpression(tag, 'onAction') ?? ''
+    expect(prop, '<AlertsWindow> has no onAction={...}').not.toBe('')
+    // A named handler (`runAlertAction`, which the native Alerts sheet runs too) is
+    // read from its own declaration: the same order has to hold there.
+    const named = /^[A-Za-z_$][\w$]*$/.test(prop.trim())
+      ? app.slice(app.indexOf(`const ${prop.trim()} = `), app.indexOf(`const ${prop.trim()} = `) + 4000)
+      : ''
+    expect(!named || app.includes(`const ${prop.trim()} = `), `no declaration of ${prop}`).toBe(true)
+    const action = named || prop
     expect(action.indexOf('setAlertsOpen(false)')).toBeGreaterThanOrEqual(0)
     expect(action.indexOf('setAlertsOpen(false)')).toBeLessThan(action.indexOf('switch (action.kind)'))
   })

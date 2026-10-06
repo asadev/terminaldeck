@@ -563,6 +563,7 @@ struct NativeBrowserContent: View {
             if tab.recording && !tab.showsStartView { NativeBrowserRecordingBadge() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .driveAnchor(DriveAnchors.pageId) // Hoot's tour can box the page (the web's `.bw-stage`)
     }
 }
 

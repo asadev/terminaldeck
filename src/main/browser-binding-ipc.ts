@@ -647,57 +647,53 @@ export function showBindMenu(
  * attached" is how the pane bar and the rail come to disagree about the same
  * window.
  */
-export function bindMenuItems(
+/**
+ * One row of the bind menu as data, for a window that draws its own menus (the
+ * native macOS window, whose engine has no window to pop an Electron menu into).
+ *
+ * The same rows, order and words as {@link bindMenuItems} — both are made by
+ * {@link bindMenuModel} in one pass. What choosing a row does travels as `act`
+ * and goes back through the channels that already exist: `browser:bind`
+ * ({ tabId, sessionId, machineId }), `browser:unbind` (tabId), and, for the new
+ * window, `browser:bind-new-window` ({ sessionId, machineId }).
+ */
+export interface BindMenuRow {
+  type: 'item' | 'checkbox' | 'separator'
+  label: string
+  enabled: boolean
+  checked: boolean
+  act: { kind: 'bind'; tabId: string } | { kind: 'unbind'; tabId: string } | { kind: 'new-window' } | null
+}
+
+export function bindMenuModel(
   deps: BindingIpcDeps,
   request: { sessionId: string; machineId?: string },
-): MenuItemConstructorOptions[] {
+): { template: MenuItemConstructorOptions[]; rows: BindMenuRow[] } {
   const machineId = request.machineId ?? ''
   const binding = bindingFor(request.sessionId, machineId)
-  const items: MenuItemConstructorOptions[] = []
+  const template: MenuItemConstructorOptions[] = []
+  const rows: BindMenuRow[] = []
 
-  /*
-   * A checklist, not two lists with two verbs.
-   *
-   * It used to be attached windows over here with `Detach B1 from this session.
-   * The page stays open.` written under each, and unattachable ones over there
-   * with a second sentence under those. Both of those sentences are the prose
-   * he ruled out this round — *"don't put any single statement in anywhere…
-   * smart people knows how it works"* — and neither of them was the thing that
-   * was missing. What was missing was being able to tell one window from the
-   * next.
-   *
-   * A ticked row means "attached to this session" and clicking it toggles.
-   * That is a shape everybody already knows, it needs no words at all, and it
-   * puts every window in **one** list, in machine order, so a window this
-   * session does not hold is still visible and still one click away.
-   */
   const windows = [...known.values()]
 
   if (windows.length === 0) {
-    // Never an empty menu. One line and an offer reads as a state; nothing at
-    // all reads as a broken control.
-    items.push({ label: 'No browser windows are open.', enabled: false })
+    template.push({ label: 'No browser windows are open.', enabled: false })
+    rows.push({ type: 'item', label: 'No browser windows are open.', enabled: false, checked: false, act: null })
   }
 
-  // The session's own machine leads, so the windows that belong with it are the
-  // first thing on the menu. See {@link machineOrder}.
   const groups = byMachine(windows, machineId)
   for (const group of groups) {
-    if (groups.length > 1) items.push({ label: group.label, enabled: false })
+    if (groups.length > 1) {
+      template.push({ label: group.label, enabled: false })
+      rows.push({ type: 'item', label: group.label, enabled: false, checked: false, act: null })
+    }
     for (const entry of group.windows) {
       const bound = binding?.windows.find((window) => window.browserTabId === entry.tabId)
-      items.push({
+      const label = menuRow(bound ? slotName(bound.n) : windowNumber(entry), windowSays(entry))
+      template.push({
         type: 'checkbox',
         checked: bound !== undefined,
-        /*
-         * The slot number leads when this session holds the window, because
-         * `B2` is the word he says out loud and the word the agent was told.
-         * A window it does not hold has no slot *for this session* and wears
-         * its own `W` number instead — inventing a `B` here would print a name
-         * the agent has never been given, and printing nothing is what left him
-         * looking at two rows reading `New tab`. See {@link windowNumber}.
-         */
-        label: menuRow(bound ? slotName(bound.n) : windowNumber(entry), windowSays(entry)),
+        label,
         click: () => {
           if (bound) disconnect(entry.tabId)
           else
@@ -713,33 +709,47 @@ export function bindMenuItems(
             })
         },
       })
+      rows.push({
+        type: 'checkbox',
+        label,
+        enabled: true,
+        checked: bound !== undefined,
+        act: bound ? { kind: 'unbind', tabId: entry.tabId } : { kind: 'bind', tabId: entry.tabId },
+      })
     }
   }
 
-  items.push({ type: 'separator' })
-  items.push({
+  template.push({ type: 'separator' })
+  rows.push({ type: 'separator', label: '', enabled: false, checked: false, act: null })
+  template.push({
     label: 'New window, attached',
-    click: () => {
-      void openForSession(deps, {
-        url: '',
-        sessionId: request.sessionId,
-        machineId,
-        newWindow: true,
-      })
-    },
+    click: () => openNewBoundWindow(deps, request.sessionId, machineId),
   })
+  rows.push({ type: 'item', label: 'New window, attached', enabled: true, checked: false, act: { kind: 'new-window' } })
 
-  return items
+  return { template, rows }
 }
 
-/**
- * One session, as the window that draws it knows it.
- *
- * The names arrive from the renderer for the reason `session-row-menu.ts`
- * already gives at length: main has ids and no idea what any of them are
- * called, and re-deriving the rail's numbering here would be a second copy of it
- * that keeps the old spelling after the rail changes.
- */
+/** "New window, attached": a browser window, opened already attached to the session. */
+function openNewBoundWindow(deps: BindingIpcDeps, sessionId: string, machineId: string): void {
+  void openForSession(deps, { url: '', sessionId, machineId, newWindow: true })
+}
+
+export function bindMenuItems(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): MenuItemConstructorOptions[] {
+  return bindMenuModel(deps, request).template
+}
+
+/** {@link bindMenuItems} as data: the `browser:bind-menu-items` answer. */
+export function bindMenuRows(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): BindMenuRow[] {
+  return bindMenuModel(deps, request).rows
+}
+
 export interface SessionChoice {
   sessionId: string
   /** Empty for a session on this computer. */
@@ -1092,6 +1102,26 @@ export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps
     const sessionId = str(input.sessionId)
     if (!sessionId) return false
     return showBindMenu(deps, { sessionId, machineId: str(input.machineId) })
+  })
+
+  /*
+   * The same menu as data, for the native window (its engine has no window to pop
+   * a menu into, so `browser:bind-menu` answers false there). Null for no session.
+   */
+  ipcMain.removeHandler('browser:bind-menu-items')
+  ipcMain.handle('browser:bind-menu-items', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const sessionId = str(input.sessionId)
+    if (!sessionId) return null
+    return bindMenuRows(deps, { sessionId, machineId: str(input.machineId) })
+  })
+
+  /* "New window, attached", chosen from the data menu above. */
+  ipcMain.on('browser:bind-new-window', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const sessionId = str(input.sessionId)
+    if (!sessionId) return
+    openNewBoundWindow(deps, sessionId, str(input.machineId))
   })
 
   /*

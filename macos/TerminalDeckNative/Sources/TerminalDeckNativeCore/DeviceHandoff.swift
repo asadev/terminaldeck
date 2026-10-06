@@ -284,14 +284,40 @@ public enum Handoff {
 
 // MARK: - The sessions a send can go to
 
-/// One session on this computer, as the picker shows it. Mirrors `AgentSession` for the local rows.
+/// One session a send can reach, as the picker shows it. Mirrors `AgentSession`
+/// for this Mac's sessions and the ones on paired machines.
 public struct AgentSessionRow: Equatable, Hashable, Sendable, Identifiable {
     public var id: String
     public var cwd: String
     public var provider: String
     public var ended: Bool
-    /// `folder · Session 2`, or the name the session was given.
+    /// `folder · Session 2`, or the name the session was given; `PC · …` on another machine.
     public var label: String
+    /// The paired machine it runs on, or empty for this Mac — which route a send takes.
+    public var machineId: String
+    /// The paired machine's name, or the server's for a terminal on one.
+    public var machineName: String
+    /// A terminal on a server this window opened: `id` is its tab id.
+    public var onServer: Bool
+
+    public init(id: String, cwd: String, provider: String, ended: Bool, label: String,
+                machineId: String = "", machineName: String = "", onServer: Bool = false) {
+        self.id = id
+        self.cwd = cwd
+        self.provider = provider
+        self.ended = ended
+        self.label = label
+        self.machineId = machineId
+        self.machineName = machineName
+        self.onServer = onServer
+    }
+
+    /// The tab id a send is addressed by (`SessionTarget`): the pty's id here,
+    /// `machine <machineId> <sessionId>` on a paired machine, the server tab's own id.
+    public var tabId: String {
+        if onServer { return id }
+        return machineId.isEmpty ? id : "machine \(machineId) \(id)"
+    }
 }
 
 public enum AgentSessions {
@@ -299,36 +325,124 @@ public enum AgentSessions {
         path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
     }
 
-    /// `session:list`'s answer as picker rows, numbered per folder in list order —
-    /// the rail's own numbering — with a title that has moved on from the folder used as the name.
-    public static func read(_ value: Any?) -> [AgentSessionRow] {
+    static func labelFor(cwd: String, index: Int, name: String) -> String {
+        if !name.isEmpty { return name }
+        let folder = cwd.isEmpty ? "" : folderName(cwd)
+        return folder.isEmpty ? "Session \(index)" : "\(folder) · Session \(index)"
+    }
+
+    /// The window's own name for a session wins; otherwise a title that has moved on from the folder.
+    static func nameOf(_ id: String, cwd: String, title: String, names: [String: String]) -> String {
+        if let typed = names[id], !typed.isEmpty { return typed }
+        let folder = cwd.isEmpty ? "" : folderName(cwd)
+        return !title.isEmpty && title != folder ? title : ""
+    }
+
+    /// The names the rail is showing for sessions, from the page's published side panel
+    /// (`id`, `title`). A row the rail only numbers (`Session 2`) has no name.
+    public static func railNames(_ rows: [(id: String, title: String)]) -> [String: String] {
+        var names: [String: String] = [:]
+        for row in rows {
+            let title = row.title.trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty, title.range(of: #"^Session \d+$"#, options: .regularExpression) == nil else { continue }
+            names[row.id] = title
+        }
+        return names
+    }
+
+    /// Every session a send can go to: this Mac's (`session:list`), then the ones on
+    /// paired machines (`machines:list`), numbered per folder in list order — the rail's
+    /// own numbering — with two rows that would read the same told apart.
+    public static func read(_ value: Any?, names: [String: String] = [:], machines: Any? = nil,
+                            servers: [(name: String, shells: [(tabId: String, title: String)])] = []) -> [AgentSessionRow] {
+        distinct(here(value, names: names) + elsewhere(machines, names: names) + onServers(servers))
+    }
+
+    /// The terminals this window holds open on servers, last, by server — as the rail lists them.
+    static func onServers(_ servers: [(name: String, shells: [(tabId: String, title: String)])]) -> [AgentSessionRow] {
+        servers.flatMap { server in
+            server.shells.filter { $0.tabId.hasPrefix("server ") }.map { shell in
+                AgentSessionRow(id: shell.tabId, cwd: "", provider: "", ended: false, label: "\(server.name) · \(shell.title)",
+                                machineName: server.name, onServer: true)
+            }
+        }
+    }
+
+    static func here(_ value: Any?, names: [String: String]) -> [AgentSessionRow] {
         guard let list = value as? [Any] else { return [] }
         var counts: [String: Int] = [:]
         var rows: [AgentSessionRow] = []
         for entry in list {
             guard let row = entry as? [String: Any], let id = row["id"] as? String, !id.isEmpty else { continue }
             let cwd = row["cwd"] as? String ?? ""
-            let title = row["title"] as? String ?? ""
             let index = (counts[cwd] ?? 0) + 1
             counts[cwd] = index
-            let folder = cwd.isEmpty ? "" : folderName(cwd)
-            let name = !title.isEmpty && title != folder ? title : ""
-            let label = !name.isEmpty ? name : (folder.isEmpty ? "Session \(index)" : "\(folder) · Session \(index)")
+            let name = nameOf(id, cwd: cwd, title: row["title"] as? String ?? "", names: names)
             // `exitCode` is null while the process lives and a number once it has gone.
-            let ended = row["exitCode"] is NSNumber
-            rows.append(AgentSessionRow(id: id, cwd: cwd, provider: row["provider"] as? String ?? "", ended: ended, label: label))
+            rows.append(AgentSessionRow(id: id, cwd: cwd, provider: row["provider"] as? String ?? "",
+                                        ended: row["exitCode"] is NSNumber, label: labelFor(cwd: cwd, index: index, name: name)))
         }
-        // Two rows that read the same get their folder and number after the name.
+        return rows
+    }
+
+    /// `PC`, `Mac`, `machine` — never guessed (`machineNoun`).
+    static func machineNoun(_ platform: String) -> String {
+        switch platform {
+        case "darwin": "Mac"
+        case "win32": "PC"
+        case "linux": "machine"
+        default: "desktop"
+        }
+    }
+
+    /// The sessions on the machines this Mac dialled, by the name the app gives each
+    /// machine (`machineChoices`). A link whose machine is not listed cannot be named, so it is left out.
+    static func elsewhere(_ value: Any?, names: [String: String]) -> [AgentSessionRow] {
+        guard let view = value as? [String: Any] else { return [] }
+        let machines = (view["machines"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+        let links = (view["links"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+        func linkOf(_ id: String) -> [String: Any]? { links.first { $0["id"] as? String == id } }
+        var machineNames: [String: String] = [:]
+        for machine in machines {
+            guard let id = machine["id"] as? String, !id.isEmpty else { continue }
+            let host = linkOf(id)?["hostPlatform"] as? String ?? ""
+            let noun = machineNoun(host.isEmpty ? machine["platform"] as? String ?? "" : host)
+            let name = machine["name"] as? String ?? ""
+            machineNames[id] = name.isEmpty ? "That \(noun)" : name
+        }
+        var counts: [String: Int] = [:]
+        var rows: [AgentSessionRow] = []
+        for link in links {
+            guard let machineId = link["id"] as? String, let machineName = machineNames[machineId] else { continue }
+            for case let session as [String: Any] in link["sessions"] as? [Any] ?? [] {
+                guard let id = session["id"] as? String, !id.isEmpty else { continue }
+                let cwd = session["cwd"] as? String ?? ""
+                let key = "\(machineId)\u{0}\(cwd)"
+                let index = (counts[key] ?? 0) + 1
+                counts[key] = index
+                let name = nameOf(id, cwd: cwd, title: session["title"] as? String ?? "", names: [:])
+                rows.append(AgentSessionRow(id: id, cwd: cwd, provider: session["provider"] as? String ?? "",
+                                            ended: session["exitCode"] is NSNumber,
+                                            label: "\(machineName) · \(labelFor(cwd: cwd, index: index, name: name))",
+                                            machineId: machineId, machineName: machineName))
+            }
+        }
+        return rows
+    }
+
+    /// Two rows that read the same get their machine, folder and number after the name.
+    static func distinct(_ rows: [AgentSessionRow]) -> [AgentSessionRow] {
         var seen: [String: Int] = [:]
         for row in rows { seen[row.label, default: 0] += 1 }
         var again: [String: Int] = [:]
         return rows.map { row in
             guard (seen[row.label] ?? 0) > 1 else { return row }
-            let index = (again[row.cwd] ?? 0) + 1
-            again[row.cwd] = index
+            let key = "\(row.machineId)\u{0}\(row.cwd)"
+            let index = (again[key] ?? 0) + 1
+            again[key] = index
             var copy = row
-            let folder = folderName(row.cwd)
-            copy.label = "\(row.label) — \(folder.isEmpty ? "Session \(index)" : "\(folder) · Session \(index)")"
+            let place = row.machineName.isEmpty ? "" : "\(row.machineName) · "
+            copy.label = "\(row.label) — \(place)\(labelFor(cwd: row.cwd, index: index, name: ""))"
             return copy
         }
     }
@@ -347,5 +461,13 @@ public enum AgentSessions {
         guard let found = rows.first(where: { $0.id == chosenId }) else { return "That session is gone. Choose another one." }
         if found.ended { return "\(found.label) has exited. Choose another one." }
         return ""
+    }
+
+    /// What a paired machine answered to `machines:send`: nil when it landed, else its own words.
+    public static func machineRefusal(_ answer: Any?, machineName: String) -> String? {
+        guard let row = answer as? [String: Any] else { return "\(machineName) did not answer." }
+        if row["ok"] as? Bool == true { return nil }
+        let message = row["message"] as? String ?? ""
+        return message.isEmpty ? "\(machineName) refused it." : message
     }
 }

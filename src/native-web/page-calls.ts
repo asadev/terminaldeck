@@ -28,6 +28,22 @@ interface UiGlobal {
   list?(): unknown
 }
 
+/**
+ * The screens the native window draws itself — `NATIVE_SCREENS_GLOBAL` in
+ * `page-features.ts`, spelled here so this file imports nothing.
+ */
+const NATIVE_SCREENS = '__tdNativeScreens'
+
+/**
+ * Whether the native window drives the app itself (lane A's NativeDriveHost):
+ * then it answers `where` from what is really on screen — native terminals the
+ * page cannot see — and the page stays quiet rather than answering first.
+ */
+function drivenNatively(host: Record<string, unknown>): boolean {
+  const screens = host[NATIVE_SCREENS]
+  return Array.isArray(screens) && screens.includes('drive')
+}
+
 /** The answer to one call, or null when this page is not the one to give it. */
 export function answerPageCall(call: unknown, host: Record<string, unknown>): { id: string; value: unknown } | null {
   if (typeof call !== 'object' || call === null) return null
@@ -37,6 +53,7 @@ export function answerPageCall(call: unknown, host: Record<string, unknown>): { 
   if (fn === 'ui.do') return typeof ui?.do === 'function' ? { id, value: ui.do(arg) ?? null } : null
   if (fn === 'ui.list') return typeof ui?.list === 'function' ? { id, value: ui.list() ?? null } : null
   if (fn === 'where') {
+    if (drivenNatively(host)) return null
     const where = host[WHERE_GLOBAL]
     return typeof where === 'function' ? { id, value: (where as () => unknown)() ?? null } : null
   }

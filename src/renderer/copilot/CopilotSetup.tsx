@@ -638,7 +638,7 @@ export function CopilotSetup({ open, onClose, onDone, bridge: injected }: Props)
             {accounts.loading && <p className="cs-quiet">Reading your accounts…</p>}
             {!accounts.loading && claudeAccounts.length === 0 && (
               <p className="cs-quiet">
-                No accounts to choose from yet. Settings → Accounts is where they are added, and
+                No accounts to choose from yet. Settings → Accounts is where they are added, and{' '}
                 {BRAND.assistant} will use your own install until then.
               </p>
             )}

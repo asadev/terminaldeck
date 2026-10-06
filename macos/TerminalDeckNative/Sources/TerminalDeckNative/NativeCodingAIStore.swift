@@ -16,20 +16,6 @@ import TerminalDeckNativeCore
 final class NativeCodingAIStore {
     static let shared = NativeCodingAIStore()
 
-    enum SaveState: Equatable {
-        case idle, saving, saved
-        case failed(String)
-
-        var line: String {
-            switch self {
-            case .idle: return "Changes save as you make them."
-            case .saving: return "Saving…"
-            case .saved: return "Saved."
-            case .failed(let message): return message
-            }
-        }
-    }
-
     // Where the agents run
     var scope: CodingAIScope = .thisMachine
     private(set) var machines = CodingAIMachinesView.empty
@@ -45,8 +31,6 @@ final class NativeCodingAIStore {
     // Default coding tool
     private(set) var defaultTool: String = CodingAIDefaultTool.fallback
     private(set) var defaultToolLoaded = false
-    private(set) var saveState: SaveState = .idle
-    @ObservationIgnored private var saveClear: Task<Void, Never>?
 
     // Accounts
     private(set) var snapshot = CodingAIAccountsSnapshot.empty
@@ -305,7 +289,7 @@ final class NativeCodingAIStore {
             async let settings = try? call("settings:get")
             async let preferences = try? call("prefs:get")
             let (settingsValue, preferencesValue) = await (settings, preferences)
-            guard saveState != .saving else { return }
+            guard NativeSettingsValues.shared.saveState != .saving else { return }
             defaultTool = CodingAIDefaultTool.current(settings: settingsValue ?? .null, preferences: preferencesValue ?? .null)
             defaultToolLoaded = true
         }
@@ -343,6 +327,14 @@ final class NativeCodingAIStore {
         }
     }
 
+    /// Read the agent CLIs that are too old to sign in, again — for any screen that
+    /// shows `NativeCodingAIStaleAgents(store: .shared)` (Readiness, as well as here).
+    func refreshStaleAgents() {
+        guard engineReady else { return }
+        readStaleAgents()
+        readDismissed()
+    }
+
     private func readStaleAgents() {
         Task {
             guard let raw = try? await call("browser-signin:agents") else { return }
@@ -358,29 +350,13 @@ final class NativeCodingAIStore {
 
     // MARK: - Default coding tool
 
-    /// Saved to the preferences store, then handed to the main window the way the
-    /// Settings page hands every save back — so its next session uses it.
+    /// Saved through the Settings values like every other row — to the preferences
+    /// store, then handed to the main window the way the Settings page hands every
+    /// save back — so its next session uses it.
     func setDefaultTool(_ value: String) {
         guard value != defaultTool else { return }
         defaultTool = value
-        saveState = .saving
-        saveClear?.cancel()
-        Task {
-            do {
-                let preferences = try await call("prefs:set", [[CodingAIDefaultTool.prefsKey: value]])
-                let settings = (try? await call("settings:get")) ?? .null
-                let values = CodingAISettingsValues.merged(settings: settings, preferences: preferences)
-                NativeCodingAIPages.evaluate(CodingAIPageScripts.relay(CodingAISettingsValues.changedMessage(values)), in: .settings)
-                saveState = .saved
-                saveClear = Task {
-                    try? await Task.sleep(for: .milliseconds(1600))
-                    if !Task.isCancelled, saveState == .saved { saveState = .idle }
-                }
-            } catch {
-                saveState = .failed(CodingAIErrorText.from(error, fallback: "Could not save that change — it may not survive a restart."))
-                readDefaultTool()
-            }
-        }
+        NativeSettingsValues.shared.save([CodingAIDefaultTool.settingId: .string(value)])
     }
 
     // MARK: - Primary account

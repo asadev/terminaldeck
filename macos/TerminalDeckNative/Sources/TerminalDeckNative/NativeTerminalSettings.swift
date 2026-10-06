@@ -25,8 +25,18 @@ final class NativeTerminalSettings {
         didSet { if systemIsDark != oldValue { notify() } }
     }
 
-    /// What the terminal paints right now.
-    var scheme: TerminalScheme { preferences.scheme(systemIsDark: systemIsDark) }
+    /// What the terminal paints right now: a scheme being edited, or the chosen one.
+    var scheme: TerminalScheme { previewing ?? preferences.scheme(systemIsDark: systemIsDark) }
+
+    /// A scheme shown while a colour is being dragged, stored nowhere (`previewTerminalScheme`);
+    /// the next save or reload replaces it.
+    private(set) var previewing: TerminalScheme? {
+        didSet { if previewing != oldValue { notify() } }
+    }
+
+    func preview(_ scheme: TerminalScheme?) {
+        previewing = scheme
+    }
 
     @ObservationIgnored private var storedSettings: Any?
     @ObservationIgnored private var storedPrefs: Any?
@@ -75,7 +85,19 @@ final class NativeTerminalSettings {
         appearanceObservation = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
             Task { @MainActor in self?.systemIsDark = Self.readSystemIsDark() }
         }
+        followSettingsWindow()
         reload()
+    }
+
+    /// The native Settings window saves through its own store and the engine does not
+    /// push a window's own writes back; read again whenever that store changes.
+    private func followSettingsWindow() {
+        withObservationTracking { _ = NativeSettingsValues.shared.values } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.reload()
+                self?.followSettingsWindow()
+            }
+        }
     }
 
     /// Read both stores again. A read that fails keeps what was last read.

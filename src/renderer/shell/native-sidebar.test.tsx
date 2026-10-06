@@ -87,6 +87,8 @@ const INPUT: NativeSidebarInput = {
   folded: new Set(['/work/web']),
   alerts: { shown: false, count: 0 },
   project: '/work/api',
+  openFile: 'src/index.ts',
+  focus: 'staged',
 }
 
 describe('the state', () => {
@@ -150,6 +152,13 @@ describe('the state', () => {
     expect(state.project).toBe('/work/api')
     expect(buildNativeSidebar({ ...INPUT, project: null }).project).toBeNull()
     expect(buildNativeSidebar(EMPTY_NATIVE_RAIL).project).toBeNull()
+  })
+
+  it('names the Files view\'s open file and what a view was opened on, for the native doors', () => {
+    expect(state.openFile).toBe('src/index.ts')
+    expect(state.focus).toBe('staged')
+    expect(buildNativeSidebar(EMPTY_NATIVE_RAIL).openFile).toBeNull()
+    expect(buildNativeSidebar(EMPTY_NATIVE_RAIL).focus).toBeNull()
   })
 
   it('selects what the rail draws as current', () => {

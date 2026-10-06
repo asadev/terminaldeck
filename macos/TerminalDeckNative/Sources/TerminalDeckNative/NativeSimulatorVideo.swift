@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import CoreMedia
+import VideoToolbox
 import SwiftUI
 import TerminalDeckNativeCore
 
@@ -8,11 +9,11 @@ import TerminalDeckNativeCore
 ///
 /// The engine's H.264 stream arrives on `devices:frame` exactly as the web
 /// page gets it (`ScreenPacket`): the decoder configuration, then one coded
-/// picture per packet. Here the configuration becomes a `CMVideoFormatDescription`,
-/// each picture a `CMSampleBuffer`, and an `AVSampleBufferDisplayLayer` decodes
-/// them in hardware and composites the newest one at the display's own density
-/// — the same thing `screen-player.ts` does with WebCodecs and a canvas, with
-/// one less copy.
+/// picture per packet. A `VTDecompressionSession` decodes each in hardware, and
+/// only the newest decoded picture is handed to an `AVSampleBufferDisplayLayer`,
+/// which composites it at the display's own density — what `screen-player.ts`
+/// does with WebCodecs and a canvas, with the same counts behind the hidden
+/// diagnostics readout.
 ///
 /// Falling behind is handled the way the page handles it: what has not been
 /// decoded is dropped, and the next keyframe is waited for and asked for.
@@ -25,21 +26,29 @@ final class DeviceScreenPlayer {
     var onPictureSize: ((CGSize) -> Void)?
     /// The decoder needs a fresh keyframe; watching again asks the engine for one.
     var needKeyframe: (() -> Void)?
-    /// Any picture arrived. Called per frame, so it must not touch observed state.
+    /// Any picture was painted. Called per frame, so it must not touch observed state.
     var onPicture: (() -> Void)?
+    /// The display's density, told by the view, for the readout.
+    var backingScale = 1.0
+    /// The picture's drawn size in pixels, told by the view.
+    var canvas = CGSize.zero
 
     private(set) var pictureSize: CGSize?
     private var format: CMVideoFormatDescription?
     private var lastConfig: Data?
+    private var decoder: VTDecompressionSession?
+    /// Bumped whenever the decoder is replaced, so a late picture from the old one is let go.
+    private var generation = 0
+    private var inFlight = 0
     private var waitingForKey = true
     private var lastAsk = Date.distantPast
+    private var pending: CVImageBuffer?
+    private var paintScheduled = false
+    private var inputAt: CFTimeInterval?
+    private var counts = PlayerStats()
 
-    // What the hidden diagnostics readout shows.
-    private(set) var received = 0
-    private(set) var enqueued = 0
-    private(set) var resets = 0
-    private(set) var codec: String?
-    private(set) var hardware = "unknown"
+    /// More coded pictures than this waiting to decode means this screen is behind.
+    private static let maxBacklog = 12
 
     init() {
         displayLayer.videoGravity = .resizeAspect
@@ -62,83 +71,170 @@ final class DeviceScreenPlayer {
         }
     }
 
+    /// A touch, key or wheel just went to the device: the next picture painted is timed from here.
+    func markInput() {
+        if inputAt == nil { inputAt = CACurrentMediaTime() }
+    }
+
+    /// A copy of the numbers, for the readout.
+    func stats() -> PlayerStats {
+        var copy = counts
+        copy.stream = pictureSize
+        copy.canvas = canvas
+        return copy
+    }
+
     /// Forget the stream — a new device, or the screen closing.
     func reset() {
+        dropDecoder()
         renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         format = nil
         lastConfig = nil
         waitingForKey = true
+        pending = nil
         stillLayer.contents = nil
         stillLayer.isHidden = true
         pictureSize = nil
-        received = 0
-        enqueued = 0
-        resets = 0
+        inputAt = nil
+        counts = PlayerStats()
+    }
+
+    private func dropDecoder() {
+        if let decoder { VTDecompressionSessionInvalidate(decoder) }
+        decoder = nil
+        generation += 1
+        inFlight = 0
     }
 
     private func configure(_ avcC: Data) {
         guard let config = AVCConfiguration(avcC: avcC) else { return }
-        codec = config.codec
-        if avcC == lastConfig, format != nil {
-            // The same stream again (a window watching again): a keyframe follows.
+        counts.codec = config.codec
+        if avcC == lastConfig, decoder != nil {
+            // The same stream again (a screen watching again): a keyframe follows.
             waitingForKey = true
             return
         }
-        do {
-            let next = try CMVideoFormatDescription(h264ParameterSets: config.parameterSets,
-                                                    nalUnitHeaderLength: config.nalLengthSize)
-            format = next
-            lastConfig = avcC
-            waitingForKey = true
-            if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
-                renderer.flush(removingDisplayedImage: false, completionHandler: nil)
-            }
-            let dims = next.presentationDimensions(usePixelAspectRatio: false, useCleanAperture: true)
-            setPictureSize(CGSize(width: dims.width, height: dims.height))
-        } catch {
-            format = nil
+        guard let next = try? CMVideoFormatDescription(h264ParameterSets: config.parameterSets,
+                                                       nalUnitHeaderLength: config.nalLengthSize) else {
             askForKeyframe()
+            return
+        }
+        format = next
+        lastConfig = avcC
+        waitingForKey = true
+        makeDecoder()
+        let dims = next.presentationDimensions(usePixelAspectRatio: false, useCleanAperture: true)
+        setPictureSize(CGSize(width: dims.width, height: dims.height))
+    }
+
+    private func makeDecoder() {
+        dropDecoder()
+        guard let format else { return }
+        let spec = [kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: kCFBooleanTrue] as CFDictionary
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [String: Any]()] as CFDictionary
+        var made: VTDecompressionSession?
+        guard VTDecompressionSessionCreate(allocator: nil, formatDescription: format, decoderSpecification: spec,
+                                           imageBufferAttributes: attributes, outputCallback: nil,
+                                           decompressionSessionOut: &made) == noErr, let made else {
+            counts.hardware = "no"
+            return
+        }
+        decoder = made
+        var usingHardware: CFTypeRef?
+        if VTSessionCopyProperty(made, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                                 allocator: nil, valueOut: &usingHardware) == noErr {
+            counts.hardware = (usingHardware as? Bool) == true ? "yes" : "no"
         }
     }
 
     private func decode(timestamp: UInt64, key: Bool, bytes: Data) {
-        received += 1
-        guard let format else {
+        counts.received += 1
+        guard let format, decoder != nil else {
             // A picture with nothing to decode it: this screen joined after the
             // configuration went past. Watching again sends it.
             askForKeyframe()
             return
         }
-        if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
-            renderer.flush(removingDisplayedImage: false, completionHandler: nil)
-            hardware = renderer.status == .failed ? "failed" : hardware
-            waitingForKey = true
-            resets += 1
-            askForKeyframe()
-        }
         if waitingForKey && !key { return }
-        if !renderer.isReadyForMoreMediaData {
-            // Behind. Drop what has not been decoded and start again from a keyframe.
-            renderer.flush(removingDisplayedImage: false, completionHandler: nil)
-            resets += 1
+        if inFlight > Self.maxBacklog {
+            // Behind. Drop everything not yet decoded and start again from a keyframe,
+            // rather than paint a minute-old screen in slow motion.
+            makeDecoder()
+            counts.resets += 1
             waitingForKey = true
             askForKeyframe()
             if !key { return }
         }
-        guard let sample = Self.sample(bytes: bytes, format: format, timestamp: timestamp, key: key) else {
-            waitingForKey = true
-            askForKeyframe()
+        guard let decoder, let sample = Self.sample(bytes: bytes, format: format, timestamp: timestamp) else {
+            recover()
             return
         }
         waitingForKey = false
+        inFlight += 1
+        let started = CACurrentMediaTime()
+        let generation = self.generation
+        let status = VTDecompressionSessionDecodeFrame(decoder, sampleBuffer: sample,
+                                                       flags: [._EnableAsynchronousDecompression, ._1xRealTimePlayback],
+                                                       infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
+            let decoded = DecodedPicture(image: status == noErr ? image : nil)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.decoded(decoded, generation: generation, started: started) }
+            }
+        }
+        if status != noErr {
+            inFlight -= 1
+            recover()
+        }
+    }
+
+    private func decoded(_ picture: DecodedPicture, generation: Int, started: CFTimeInterval) {
+        guard generation == self.generation else { return }
+        inFlight = max(0, inFlight - 1)
+        guard let image = picture.image else {
+            recover()
+            return
+        }
+        counts.decoded += 1
+        PlayerStats.remember(&counts.decodeMs, (CACurrentMediaTime() - started) * 1000)
+        // Only the newest is painted; one waiting before it was never shown and is let go.
+        if pending != nil { counts.dropped += 1 }
+        pending = image
+        guard !paintScheduled else { return }
+        paintScheduled = true
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.paint() } }
+    }
+
+    private func paint() {
+        paintScheduled = false
+        guard let image = pending else { return }
+        pending = nil
+        guard let description = try? CMVideoFormatDescription(imageBuffer: image),
+              let sample = try? CMSampleBuffer(imageBuffer: image, formatDescription: description,
+                                               sampleTiming: CMSampleTimingInfo(duration: .invalid,
+                                                                                presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+                                                                                decodeTimeStamp: .invalid))
+        else { return }
+        Self.showImmediately(sample)
+        if renderer.status == .failed || renderer.requiresFlushToResumeDecoding {
+            renderer.flush(removingDisplayedImage: false, completionHandler: nil)
+        }
         renderer.enqueue(sample)
-        enqueued += 1
-        if hardware == "unknown" { hardware = "VideoToolbox" }
+        counts.painted += 1
+        if let inputAt {
+            PlayerStats.remember(&counts.inputToPictureMs, (CACurrentMediaTime() - inputAt) * 1000)
+            self.inputAt = nil
+        }
         if !stillLayer.isHidden {
             stillLayer.isHidden = true
             stillLayer.contents = nil
         }
         onPicture?()
+    }
+
+    private func recover() {
+        waitingForKey = true
+        makeDecoder()
+        askForKeyframe()
     }
 
     private func still(_ bytes: Data) {
@@ -147,6 +243,7 @@ final class DeviceScreenPlayer {
         stillLayer.contents = cgImage
         stillLayer.isHidden = false
         setPictureSize(CGSize(width: cgImage.width, height: cgImage.height))
+        counts.painted += 1
         onPicture?()
     }
 
@@ -163,8 +260,8 @@ final class DeviceScreenPlayer {
         needKeyframe?()
     }
 
-    /// One coded picture as a sample shown the moment it is decoded.
-    private static func sample(bytes: Data, format: CMVideoFormatDescription, timestamp: UInt64, key: Bool) -> CMSampleBuffer? {
+    /// One coded picture, as the decoder takes it.
+    private static func sample(bytes: Data, format: CMVideoFormatDescription, timestamp: UInt64) -> CMSampleBuffer? {
         guard !bytes.isEmpty else { return nil }
         do {
             let block = try CMBlockBuffer(length: bytes.count, flags: .assureMemoryNow)
@@ -172,24 +269,26 @@ final class DeviceScreenPlayer {
             let timing = CMSampleTimingInfo(duration: .invalid,
                                             presentationTimeStamp: CMTime(value: CMTimeValue(timestamp & 0x7FFF_FFFF_FFFF_FFFF), timescale: 1_000_000),
                                             decodeTimeStamp: .invalid)
-            let sample = try CMSampleBuffer(dataBuffer: block, formatDescription: format, numSamples: 1,
-                                            sampleTimings: [timing], sampleSizes: [bytes.count])
-            // Shown the moment it is decoded — no clock to wait for — and marked as
-            // depending on the pictures before it unless it is a keyframe.
-            if let array = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true), CFArrayGetCount(array) > 0 {
-                let attachments = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFMutableDictionary.self)
-                func set(_ key: CFString) {
-                    CFDictionarySetValue(attachments, Unmanaged.passUnretained(key).toOpaque(),
-                                         Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
-                }
-                set(kCMSampleAttachmentKey_DisplayImmediately)
-                if !key { set(kCMSampleAttachmentKey_NotSync) }
-            }
-            return sample
+            return try CMSampleBuffer(dataBuffer: block, formatDescription: format, numSamples: 1,
+                                      sampleTimings: [timing], sampleSizes: [bytes.count])
         } catch {
             return nil
         }
     }
+
+    /// Shown the moment it is enqueued — no clock to wait for.
+    private static func showImmediately(_ sample: CMSampleBuffer) {
+        guard let array = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true), CFArrayGetCount(array) > 0 else { return }
+        let attachments = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFMutableDictionary.self)
+        CFDictionarySetValue(attachments, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                             Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+    }
+}
+
+/// A decoded picture crossing from the decoder's thread to the main one. The buffer
+/// is not touched on the way, only handed over.
+private struct DecodedPicture: @unchecked Sendable {
+    let image: CVImageBuffer?
 }
 
 // MARK: - The view that shows it and takes the mouse and the keyboard
@@ -288,6 +387,9 @@ final class DeviceScreenNSView: NSView {
         player.displayLayer.frame = rect
         player.stillLayer.frame = rect
         CATransaction.commit()
+        let scale = window?.backingScaleFactor ?? 2
+        player.backingScale = Double(scale)
+        player.canvas = CGSize(width: (rect.width * scale).rounded(), height: (rect.height * scale).rounded())
     }
 
     // MARK: Visibility
@@ -494,7 +596,7 @@ struct DeviceScreenSurface: NSViewRepresentable {
     private func apply(to view: DeviceScreenNSView) {
         view.fitSize = model.fitSize
         view.details = model.device
-        view.live = model.device != nil && !model.isFrozen
-        view.inspecting = model.inspecting
+        view.live = model.device != nil && !model.annotating
+        view.inspecting = model.annotating
     }
 }

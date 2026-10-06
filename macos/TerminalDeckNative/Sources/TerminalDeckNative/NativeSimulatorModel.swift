@@ -74,7 +74,8 @@ final class NativeSimulatorModel {
 
     // MARK: Inspector
 
-    private(set) var inspecting = false
+    /// Annotate is on: the screen is frozen, pointed at, and sent from.
+    private(set) var annotating = false
     private(set) var snapshot: Snapshot?
     private(set) var reading = false
     private(set) var readProblem = ""
@@ -107,7 +108,6 @@ final class NativeSimulatorModel {
 
     @ObservationIgnored private var subscriptions: [EngineSubscription] = []
     @ObservationIgnored private var listTask: Task<Void, Never>?
-    @ObservationIgnored private var inspectTask: Task<Void, Never>?
     @ObservationIgnored private var diagnosticsTask: Task<Void, Never>?
     @ObservationIgnored private var saidTask: Task<Void, Never>?
     @ObservationIgnored private var watchChain: Task<Void, Never>?
@@ -117,10 +117,7 @@ final class NativeSimulatorModel {
     @ObservationIgnored private var visible = true
     @ObservationIgnored private var appeared = false
     @ObservationIgnored private var lastPictureAt = Date.distantPast
-    @ObservationIgnored private var lastRequestAt = Date.distantPast
     @ObservationIgnored private var lastInputAt = Date.distantPast
-    @ObservationIgnored private var receivedBefore = 0
-    @ObservationIgnored private var enqueuedBefore = 0
 
     private static let lastKey = "simulators.last"
     private var bridge: EngineBridge { EngineBridge.shared }
@@ -129,19 +126,19 @@ final class NativeSimulatorModel {
         player.onPictureSize = { [weak self] size in self?.videoSize = size }
         player.onPicture = { [weak self] in self?.lastPictureAt = Date() }
         player.needKeyframe = { [weak self] in
-            guard let self, self.visible, self.device != nil else { return }
+            guard let self, self.visible, self.device != nil, !self.annotating else { return }
             self.watch(true)
         }
     }
 
     /// The picture the screen is fitted to: the reading's while frozen, the live one otherwise.
     var fitSize: CGSize? {
-        if isFrozen, let snapshot { return snapshot.size }
+        if annotating, let snapshot { return snapshot.size }
         return videoSize ?? snapshot?.size
     }
 
-    /// Marked elements hold the picture still, so the markers can never drift off what they mark.
-    var isFrozen: Bool { inspecting && !markers.isEmpty && snapshot != nil }
+    /// The frozen picture is up: everything that would move the device waits.
+    var isFrozen: Bool { annotating && snapshot != nil }
 
     // MARK: - Appearing
 
@@ -166,7 +163,7 @@ final class NativeSimulatorModel {
         ]
         startListLoop()
         Task { await loadSessions() }
-        if device != nil { watch(visible ? true : nil) }
+        if device != nil && !annotating { watch(visible ? true : nil) }
     }
 
     func disappear() {
@@ -175,7 +172,6 @@ final class NativeSimulatorModel {
         for subscription in subscriptions { subscription.cancel() }
         subscriptions = []
         listTask?.cancel()
-        inspectTask?.cancel()
         diagnosticsTask?.cancel()
         if device != nil { watch(false) }
     }
@@ -194,7 +190,8 @@ final class NativeSimulatorModel {
             var first = true
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.device == nil, self.windowsCanBeSeen() {
+                // The first list is read whatever the window's state; after that, only while it can be seen.
+                if self.device == nil, first || self.windowsCanBeSeen() {
                     let next = await self.refresh()
                     if first, let next {
                         first = false
@@ -289,7 +286,7 @@ final class NativeSimulatorModel {
 
     private func closeDevice(remember: Bool) {
         if device != nil { watch(false) }
-        stopInspecting()
+        stopAnnotating(resume: false)
         device = nil
         videoSize = nil
         shot = nil
@@ -316,7 +313,7 @@ final class NativeSimulatorModel {
     func setVisible(_ now: Bool) {
         guard now != visible else { return }
         visible = now
-        guard device != nil, appeared else { return }
+        guard device != nil, appeared, !annotating else { return }
         watch(now ? true : nil)
         if now { expectPicture(since: Date()) }
     }
@@ -324,8 +321,9 @@ final class NativeSimulatorModel {
     // MARK: - Input
 
     func sendInput(_ input: DeviceInput) {
-        guard let id = device?.id, !isFrozen else { return }
+        guard let id = device?.id, !annotating else { return }
         inputQueue.push(input)
+        player.markInput()
         lastInputAt = Date()
         expectPicture(since: lastInputAt)
         guard !pumping else { return }
@@ -351,7 +349,7 @@ final class NativeSimulatorModel {
             try? await Task.sleep(for: .seconds(1.5))
             guard let self else { return }
             self.inputCheck = nil
-            guard self.device != nil, self.visible, self.lastPictureAt < sent else { return }
+            guard self.device != nil, self.visible, !self.annotating, self.lastPictureAt < sent else { return }
             self.watch(true)
         }
     }
@@ -380,31 +378,51 @@ final class NativeSimulatorModel {
 
     // MARK: - Inspector
 
-    func toggleInspect() {
-        if inspecting {
-            leaveInspect()
-        } else {
-            inspecting = true
-            readProblem = ""
-            Task { await loadSessions() }
-            Task { await readScreen() }
-            startInspectLoop()
+    /// Annotate, as the page has it: on freezes the screen at once (the live picture
+    /// stops while the frozen one is pointed at); off asks first when markers would be lost.
+    func toggleAnnotate() {
+        if annotating {
+            leaveAnnotate()
+            return
+        }
+        guard device != nil, !freezing else { return }
+        annotating = true
+        freezing = true
+        problem = ""
+        said = ""
+        readProblem = ""
+        watch(false)
+        Task { await loadSessions() }
+        Task {
+            await readScreen()
+            freezing = false
+            guard annotating, snapshot == nil else { return }
+            let why = readProblem
+            stopAnnotating()
+            problem = why.isEmpty ? "The screen could not be frozen." : why
         }
     }
 
-    /// Done: asks first when there are markers that would be lost.
-    func leaveInspect() {
-        if !markers.isEmpty {
+    /// Done: asks first when there are markers that would be lost; a second Done discards.
+    func leaveAnnotate() {
+        if !markers.isEmpty && !confirmingDiscard {
             confirmingDiscard = true
             return
         }
-        stopInspecting()
+        stopAnnotating()
     }
 
-    func stopInspecting() {
-        inspectTask?.cancel()
-        inspectTask = nil
-        inspecting = false
+    /// Escape: closes the question if one is open, otherwise it is Done.
+    func escapeAnnotate() {
+        guard annotating else { return }
+        if confirmingDiscard { confirmingDiscard = false } else { leaveAnnotate() }
+    }
+
+    /// Leave Annotate and, unless the device is going away, bring the live picture back.
+    func stopAnnotating(resume: Bool = true) {
+        let was = annotating
+        annotating = false
+        freezing = false
         markers = []
         note = ""
         snapshot = nil
@@ -413,36 +431,22 @@ final class NativeSimulatorModel {
         focusRef = nil
         listHoverRef = nil
         sendProblem = ""
+        readProblem = ""
         confirmingDiscard = false
-    }
-
-    /// Read the screen again once it settles: a picture has arrived since the last reading,
-    /// none for 0.6 s, and the last reading was 2 s ago or more. Never while something is marked.
-    private func startInspectLoop() {
-        inspectTask?.cancel()
-        inspectTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
-                guard let self, self.inspecting else { return }
-                let now = Date()
-                if self.markers.isEmpty, !self.reading, self.lastPictureAt > self.lastRequestAt,
-                   now.timeIntervalSince(self.lastPictureAt) >= 0.6, now.timeIntervalSince(self.lastRequestAt) >= 2 {
-                    await self.readScreen()
-                }
-            }
-        }
+        guard was, resume, device != nil, appeared else { return }
+        watch(visible ? true : nil)
+        if visible { expectPicture(since: Date()) }
     }
 
     /// `devices:freeze`: the exact picture and the tree read against it.
     func readScreen() async {
         guard let device, !reading, markers.isEmpty else { return }
         reading = true
-        lastRequestAt = Date()
         defer { reading = false }
         do {
             let answer = try await bridge.invoke("devices:freeze", [device.id])
             // Something was marked on the last reading meanwhile: it stays the reading.
-            guard inspecting, markers.isEmpty, self.device?.id == device.id else { return }
+            guard annotating, markers.isEmpty, self.device?.id == device.id else { return }
             guard let frozen = FrozenScreen(json: answer), let image = NSImage(data: frozen.png) else {
                 readProblem = "The screen could not be read."
                 return
@@ -473,7 +477,7 @@ final class NativeSimulatorModel {
 
     /// The element under the pointer, from the latest reading. Only changes what is observed when it changes.
     func hover(at point: CGPoint?) {
-        guard inspecting, let point, let nodes = snapshot?.nodes,
+        guard annotating, let point, let nodes = snapshot?.nodes,
               let node = DeviceTreeQuery.elementAt(in: nodes, x: point.x, y: point.y) else {
             if hoverRef != nil { hoverRef = nil }
             return
@@ -481,9 +485,10 @@ final class NativeSimulatorModel {
         if hoverRef != node.ref { hoverRef = node.ref }
     }
 
-    /// A click on the screen while inspecting: choose the element there and mark it.
+    /// A click on the frozen screen: choose the element there and mark it (a click on one
+    /// already marked chooses it rather than marking it twice).
     func pick(at point: CGPoint) {
-        guard inspecting, let snapshot else { return }
+        guard annotating, let snapshot else { return }
         if snapshot.root != nil, let node = DeviceTreeQuery.elementAt(in: snapshot.nodes, x: point.x, y: point.y) {
             focus(node.ref, reveal: true)
             if !markers.contains(where: { $0.nodeRef == node.ref }) { mark(node) }
@@ -537,18 +542,20 @@ final class NativeSimulatorModel {
         sendProblem = ""
     }
 
-    /// Tap the element's centre — an inspector's "activate".
-    func tap(_ ref: String) {
-        guard let node = node(ref), let centre = DeviceTreeQuery.centre(of: node), !isFrozen else { return }
-        sendInput(.tap(x: centre.x, y: centre.y, holdMs: nil))
-    }
-
     // MARK: - Sending
 
+    /// This Mac's sessions and the ones on paired machines, called by the names the rail shows.
     func loadSessions() async {
         guard bridge.isReady else { return }
         do {
-            sessions = AgentSessions.read(try await bridge.invoke("session:list"))
+            let here = try await bridge.invoke("session:list")
+            // A machines half that fails costs the remote rows and nothing else.
+            let machines = try? await bridge.invoke("machines:list")
+            let projects = AppModel.shared.sidebar?.projects ?? []
+            let rail = projects.flatMap(\.sessions).map { (id: $0.id, title: $0.title) }
+            let servers = projects.filter { $0.id.hasPrefix("server:") }
+                .map { (name: $0.title, shells: $0.sessions.map { (tabId: $0.id, title: $0.title) }) }
+            sessions = AgentSessions.read(here, names: AgentSessions.railNames(rail), machines: machines, servers: servers)
             sessionsAvailable = true
         } catch {
             sessionsAvailable = false
@@ -561,18 +568,22 @@ final class NativeSimulatorModel {
 
     var target: AgentSessionRow? { AgentSessions.resolve(chosenSessionId, in: sessions) }
 
-    /// Why the round cannot be sent yet — shown only on Send's own hover.
-    var roundNotReady: String {
-        if markers.isEmpty { return "Mark something on the screen first." }
-        if note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Say what should change." }
-        if target == nil { return "Choose a session first." }
-        return ""
+    /// Send is off until a session is chosen, something is marked, and the box says what to change.
+    var canSendRound: Bool {
+        target != nil && !markers.isEmpty && !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Send's own hover, as the page words it: the reason when it is off, its target when it is on.
+    var sendRoundHint: String {
+        if canSendRound { return "Send to \(target?.label ?? "")" }
+        if target == nil { return sessionReason }
+        return markers.isEmpty ? "Mark something on the screen first." : ""
     }
 
     /// The marked picture saved with `annotate:save`, the round's one line typed into the
     /// session and submitted, and `annotate:sent` — the page's Annotate, end to end.
     func sendRound() async {
-        guard roundNotReady.isEmpty, !sending, let snapshot, let cgImage = snapshot.cgImage else { return }
+        guard canSendRound, !sending, let snapshot, let cgImage = snapshot.cgImage else { return }
         sending = true
         sendProblem = ""
         defer { sending = false }
@@ -593,10 +604,12 @@ final class NativeSimulatorModel {
             sendProblem = "The picture could not be saved, so nothing was sent."
             return
         }
-        await write(Handoff.composeRound(round, picturePath: path), to: target)
+        if let refusal = await write(Handoff.composeRound(round, picturePath: path), to: target) {
+            sendProblem = refusal
+            return
+        }
         _ = try? await bridge.invoke("annotate:sent", [round.id, ["sessionId": target.id, "label": target.label]])
-        markers = []
-        note = ""
+        stopAnnotating()
         say("Sent to \(target.label).")
     }
 
@@ -613,18 +626,28 @@ final class NativeSimulatorModel {
         shot = state
         let line = Handoff.composeScreenshot(path: state.shot.path, width: state.shot.width, height: state.shot.height,
                                              kind: device.kindWords, deviceName: device.name, instruction: state.instruction)
-        await write(line, to: target)
+        if let refusal = await write(line, to: target) {
+            state.sending = false
+            state.problem = refusal
+            shot = state
+            return
+        }
         shot = nil
         say("Sent to \(target.label).")
     }
 
     /// Two writes with a real gap between them: the line, then Return on its own, so the
-    /// agent's CLI reads the Return as a key rather than as part of pasted text.
-    private func write(_ message: String, to target: AgentSessionRow) async {
+    /// agent's CLI reads the Return as a key rather than as part of pasted text. Through the
+    /// window's one send (`NativeSessionInput`): this Mac, a paired machine, or a server's
+    /// terminal; a refusal comes back in the far end's own words.
+    private func write(_ message: String, to target: AgentSessionRow) async -> String? {
         for (index, data) in Handoff.terminalWrites(message).enumerated() {
             if index > 0 { try? await Task.sleep(for: .milliseconds(Handoff.submitGapMilliseconds)) }
-            bridge.send("session:write", [target.id, data])
+            let outcome = await NativeSessionInput.send(tabId: target.tabId, text: data,
+                                                        name: target.machineName.isEmpty ? "that machine" : target.machineName)
+            if !outcome.ok { return outcome.message ?? "\(target.label) did not take it." }
         }
+        return nil
     }
 
     private func say(_ words: String) {
@@ -640,30 +663,24 @@ final class NativeSimulatorModel {
 
     // MARK: - Diagnostics
 
+    /// The readout, twice a second, only while it is on — `diagnosticLines`.
     private func diagnosticsChanged() {
         diagnosticsTask?.cancel()
         guard diagnostics else {
             diagnosticLines = []
             return
         }
-        receivedBefore = player.received
-        enqueuedBefore = player.enqueued
         diagnosticsTask = Task { [weak self] in
+            var before: (stats: PlayerStats, at: Date)?
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
                 guard let self else { return }
-                let received = self.player.received
-                let enqueued = self.player.enqueued
-                let arriving = Double(received - self.receivedBefore) * 2
-                let shown = Double(enqueued - self.enqueuedBefore) * 2
-                self.receivedBefore = received
-                self.enqueuedBefore = enqueued
-                let stream = self.videoSize.map { "\(Int($0.width))×\(Int($0.height))" } ?? "–"
-                self.diagnosticLines = [
-                    self.visible ? String(format: "shown %.1f fps · arriving %.1f fps", shown, arriving) : "paused — window hidden",
-                    "decoder \(self.player.hardware) · restarts \(self.player.resets)",
-                    "stream \(stream)\(self.player.codec.map { " · \($0)" } ?? "")",
-                ]
+                let stats = self.player.stats()
+                let at = Date()
+                self.diagnosticLines = DeviceDiagnostics.lines(before: before?.stats, now: stats,
+                                                               seconds: before.map { at.timeIntervalSince($0.at) } ?? 0,
+                                                               scale: self.player.backingScale, paused: !self.visible)
+                before = (stats, at)
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }

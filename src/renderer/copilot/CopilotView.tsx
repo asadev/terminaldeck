@@ -9,6 +9,7 @@ import { useCopilotMachines } from './useCopilotMachines'
 import type { Copilot } from './useCopilot'
 import './copilot.css'
 import { BRAND } from '../../shared/brand'
+import { useNativeScreens } from '../native-screens'
 
 /**
  * The copilot's **window** — what fills the pane when its tab is the one in
@@ -165,7 +166,17 @@ function when(at: string): string {
   return new Date(ms).toLocaleString()
 }
 
-export function CopilotView({
+/**
+ * Hoot's window, or nothing when the native macOS window draws it
+ * (`NativeHootScreen`, registered as `hoot`): the page stops mounting it and its
+ * terminal underneath, where nobody can see it.
+ */
+export function CopilotView(props: Props) {
+  const native = useNativeScreens().has('hoot')
+  return native ? null : <CopilotPage {...props} />
+}
+
+function CopilotPage({
   copilot,
   visible = true,
   focus = null,

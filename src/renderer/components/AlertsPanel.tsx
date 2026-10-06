@@ -422,6 +422,10 @@ export function AlertsPanel({
 export interface AlertsWindowProps extends AlertsPanelProps {
   open: boolean
   onClose(): void
+  /** Open straight into letting this device in (the native Alerts sheet hands that step here). */
+  startApproving?: string | null
+  /** The device step finished (the native sheet takes over again). */
+  onApprovalDone?(): void
   /**
    * The project the report is about, or null when nothing is open.
    *
@@ -458,7 +462,7 @@ export interface AlertsWindowProps extends AlertsPanelProps {
  * `SettingsPanel`: `Modal` portals into `document.body`, and this project's
  * render tests run with no document at all.
  */
-export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWindowProps) {
+export function AlertsWindow({ open, onClose, projectPath, startApproving = null, onApprovalDone, ...panel }: AlertsWindowProps) {
   /*
    * The device this sheet is currently approving, or null for the alert list.
    *
@@ -473,7 +477,10 @@ export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWin
    * approval leaves the device pending, which is the safe direction and the same
    * one the settings pane's Cancel takes.
    */
-  const [approving, setApproving] = useState<string | null>(null)
+  const [approving, setApproving] = useState<string | null>(startApproving)
+  useEffect(() => {
+    if (startApproving !== null) setApproving(startApproving)
+  }, [startApproving])
   /*
    * A native folder picker is up inside the flow. The dialog steps aside for it
    * — see `Modal`'s `hidden`, and the note there about an `NSOpenPanel` being a
@@ -561,7 +568,10 @@ export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWin
          */
         <PendingApproval
           deviceId={approving}
-          onDone={() => setApproving(null)}
+          onDone={() => {
+            setApproving(null)
+            onApprovalDone?.()
+          }}
           onPicking={setPicking}
         />
       ) : (

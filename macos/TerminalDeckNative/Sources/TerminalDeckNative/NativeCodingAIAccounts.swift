@@ -26,14 +26,6 @@ struct NativeCodingAIAccountsSections: View {
         } header: {
             Text("Accounts")
         }
-        .alert("Remove this account?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
-               presenting: removing) { account in
-            Button("Remove", role: .destructive) { store.remove(account) }
-            Button("Keep it", role: .cancel) {}
-        } message: { account in
-            let model = store.row(account)
-            Text([model.removeConfirm, model.removeCost].compactMap { $0 }.joined(separator: "\n\n"))
-        }
 
         ForEach(store.runs) { run in
             Section {
@@ -74,16 +66,38 @@ struct NativeCodingAIAccountRow: View {
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            NativeCodingAIDot(token: account.color)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                NativeCodingAIDot(token: account.color)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
 
-            if renamingId == account.id {
-                renameForm
-            } else {
-                details
-                Spacer(minLength: 8)
-                actions
+                if renamingId == account.id {
+                    renameForm
+                } else {
+                    details
+                    Spacer(minLength: 8)
+                    actions
+                }
+            }
+            // Remove asks on the row itself, with what it would cost.
+            if removing?.id == account.id {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.removeConfirm).fixedSize(horizontal: false, vertical: true)
+                        if let cost = model.removeCost {
+                            Text(cost).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Button("Remove", role: .destructive) {
+                        removing = nil
+                        store.remove(account)
+                    }
+                    .disabled(store.busy)
+                    Button("Keep it") { removing = nil }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
             }
         }
         .padding(.vertical, 2)
@@ -149,12 +163,12 @@ struct NativeCodingAIAccountRow: View {
                         Button("Use by default") { store.makeDefault(account) }
                     }
                     if model.offersRenameRemove {
-                        Button("Rename…") {
+                        Button("Rename") {
                             renameText = account.name
                             renamingId = account.id
                         }
                         Divider()
-                        Button("Remove…", role: .destructive) { removing = account }
+                        Button("Remove", role: .destructive) { removing = account }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -310,14 +324,15 @@ struct NativeCodingAIStaleAgents: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    // `agent-cli-detail` / `agent-cli-result`: the advice's size, as on the web (lane B, AgentCliUpdate parity).
                     if working {
                         Text("Upgrading. This runs your own package manager and can take a few minutes.")
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                     if let result = store.upgradeResults[row.command] {
                         Text(result.message)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(result.ok ? Color.green : Color.red)
                     }
                 }

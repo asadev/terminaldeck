@@ -97,7 +97,11 @@ final class AppModel {
             self?.pageFailure = EngineFailure(title: "Terminal Deck couldn't load", message: message, detail: nil)
         }
 
-        settingsWeb.onReady = { [weak self] in self?.settingsReady = true }
+        settingsWeb.onReady = { [weak self] in
+            self?.settingsReady = true
+            // The Settings page stops drawing the sections native draws (`settings:<id>`).
+            self?.settingsWeb.run(.nativeScreens(NativeScreens.registered))
+        }
         settingsWeb.onMessage = { [weak self] message in self?.handleSettingsPage(message) }
         settingsWeb.onReloading = { [weak self] in
             self?.settingsReady = false
@@ -133,6 +137,8 @@ final class AppModel {
             openScreenWindow(ref, title: title)
         case .appearance(let appearance):
             applyAppearance(appearance)
+        case .dialog(let request):
+            receiveDialog(request, from: web)
         case .pageModal(let open):
             pageModalOpen = open
         case .ready, .settingsSections:
@@ -151,6 +157,8 @@ final class AppModel {
             openScreenWindow(ref, title: title)
         case .appearance(let appearance):
             applyAppearance(appearance)
+        case .dialog(let request):
+            receiveDialog(request, from: settingsWeb)
         case .pageModal(let open):
             settingsModalOpen = open
         case .ready, .title, .sidebar, .tabs:
@@ -169,12 +177,45 @@ final class AppModel {
             openScreenWindow(ref, title: title)
         case .appearance(let appearance):
             applyAppearance(appearance)
+        case .dialog(let request):
+            receiveDialog(request, from: screen.web)
         case .pageModal(let open):
             screen.modalOpen = open
         case .ready, .sidebar, .tabs, .settingsSections:
             break
         }
     }
+
+    // MARK: The page's dialogs, drawn natively
+
+    /// Open dialogs by name, each with the page that asked (the answer goes back to it).
+    private(set) var dialogs: [String: DialogRequest] = [:]
+    @ObservationIgnored private var dialogSources: [String: WebBridge] = [:]
+
+    private func receiveDialog(_ request: DialogRequest, from source: WebBridge) {
+        if let current = dialogs[request.name], current.seq > request.seq { return } // an older opening, late
+        if request.open {
+            dialogs[request.name] = request
+            dialogSources[request.name] = source
+        } else if dialogs[request.name] != nil {
+            dialogs[request.name] = nil
+            dialogSources[request.name] = nil
+        }
+    }
+
+    /// Answer a dialog: the page runs the same code its own dialog would. Closing
+    /// answers close it here at once (the page confirms with `open: false`).
+    func answerDialog(_ name: String, _ action: String, argument: [String: Any]? = nil, closes: Bool = true) {
+        (dialogSources[name] ?? web).run(DialogCommand(name, action, argument: argument))
+        if closes {
+            dialogs[name] = nil
+            dialogSources[name] = nil
+        }
+    }
+
+    /// The shortcuts sheet over the Settings window (NativeSettingsShortcuts.present).
+    var settingsShortcuts: Set<String>?
+    func showSettingsShortcuts(hidden: Set<String>) { settingsShortcuts = hidden }
 
     // MARK: Appearance
 
@@ -503,6 +544,12 @@ final class AppModel {
 
     func select(_ id: String?) {
         guard let id else { return }
+        // The bell opens the Alerts sheet over whatever is on show; it is not a place
+        // (the web rail's bell is a button), so the selection stays where it was.
+        if id == "alerts" {
+            send(.select(id))
+            return
+        }
         let wasBrowser = shownBrowserTab != nil
         activeBrowserTab = nil
         guard id != sidebarSelection || wasBrowser else { return }
@@ -533,6 +580,8 @@ final class AppModel {
     func tryAgain() {
         pageModalOpen = false
         settingsModalOpen = false
+        dialogs = [:]
+        dialogSources = [:]
         pageReady = false
         pageTitle = nil
         pageSubtitle = nil

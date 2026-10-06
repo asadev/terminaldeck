@@ -33,6 +33,10 @@ struct SettingsWindow: View {
         }
         .frame(minWidth: 680, minHeight: 440)
         .navigationTitle(model.settingsTitle)
+        .sheet(isPresented: Binding(get: { model.settingsShortcuts != nil },
+                                    set: { if !$0 { model.settingsShortcuts = nil } })) {
+            NativeShortcutsSheet(hidden: model.settingsShortcuts ?? [], fromSettings: true) { model.settingsShortcuts = nil }
+        }
     }
 }
 

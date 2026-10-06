@@ -489,3 +489,71 @@ struct DeviceInputTests {
         #expect(FrozenScreen(json: ["image": "not a data url"]) == nil)
     }
 }
+
+@Suite("Sending beyond this Mac, and the readout")
+struct DeviceRoundThreeTests {
+    @Test func sessionsOnPairedMachinesAreNamedByTheirMachine() {
+        let machines: [String: Any] = [
+            "machines": [["id": "m1", "name": "", "platform": "win32"], ["id": "m2", "name": "Studio", "platform": "darwin"]] as [Any],
+            "links": [
+                ["id": "m1", "hostPlatform": "", "sessions": [
+                    ["id": "r1", "cwd": "C:\\work\\shop", "title": "shop", "exitCode": NSNull()],
+                    ["id": "r2", "cwd": "C:\\work\\shop", "title": "Fixer", "exitCode": 1],
+                ] as [Any]],
+                ["id": "m2", "hostPlatform": "darwin", "sessions": [["id": "r3", "cwd": "/u/app", "title": "app", "exitCode": NSNull()]] as [Any]],
+                ["id": "ghost", "sessions": [["id": "r4", "cwd": "/x"]] as [Any]],
+            ] as [Any],
+        ]
+        let rows = AgentSessions.read([["id": "s1", "cwd": "/u/app", "title": "app", "exitCode": NSNull()]] as [Any], machines: machines)
+        #expect(rows.map(\.label) == ["app · Session 1", "That PC · shop · Session 1", "That PC · Fixer", "Studio · app · Session 1"])
+        #expect(rows.map(\.machineId) == ["", "m1", "m1", "m2"])
+        #expect(rows[2].ended)
+        #expect(AgentSessions.machineRefusal(["ok": true], machineName: "Studio") == nil)
+        #expect(AgentSessions.machineRefusal(["ok": false, "message": "Folder not shared."], machineName: "Studio") == "Folder not shared.")
+        #expect(AgentSessions.machineRefusal(nil, machineName: "Studio") == "Studio did not answer.")
+    }
+
+    @Test func theRailsNamesWinAndANumberIsNotAName() {
+        let names = AgentSessions.railNames([(id: "s1", title: "Commander"), (id: "s2", title: "Session 2"), (id: "s3", title: " ")])
+        #expect(names == ["s1": "Commander"])
+        let rows = AgentSessions.read([["id": "s1", "cwd": "/u/app", "title": "app", "exitCode": NSNull()],
+                                       ["id": "s2", "cwd": "/u/app", "title": "app", "exitCode": NSNull()]] as [Any], names: names)
+        #expect(rows.map(\.label) == ["Commander", "app · Session 2"])
+    }
+
+    @Test func theReadoutReadsTheSameAsThePage() {
+        func stats(_ painted: Int, _ received: Int) -> PlayerStats {
+            var s = PlayerStats()
+            s.received = received; s.decoded = received; s.painted = painted; s.dropped = 1
+            s.decodeMs = [2, 3, 9]; s.inputToPictureMs = [120, 80, 95]
+            s.stream = CGSize(width: 1206, height: 2622); s.canvas = CGSize(width: 355, height: 772)
+            s.hardware = "yes"; s.codec = "avc1.640033"
+            return s
+        }
+        #expect(DeviceDiagnostics.lines(before: stats(10, 12), now: stats(40, 42), seconds: 1, scale: 1, paused: false) == [
+            "shown 30.0 fps · arriving 30.0 fps",
+            "decode 3 ms (p95 9 ms) · hardware yes",
+            "touch → picture 95 ms (last 95 ms)",
+            "dropped 1 · restarts 0",
+            "stream 1206×2622 → canvas 355×772 @1x · avc1.640033",
+        ])
+        #expect(DeviceDiagnostics.lines(before: nil, now: stats(0, 0), seconds: 0, scale: 2, paused: true)[0] == "paused — window hidden")
+        #expect(DeviceDiagnostics.lines(before: nil, now: stats(0, 0), seconds: 0, scale: 2, paused: false)[0] == "shown – fps · arriving – fps")
+        var list: [Double] = []
+        for i in 0..<70 { PlayerStats.remember(&list, Double(i) + 0.04) }
+        #expect(list.count == 60 && list.first == 10.0)
+    }
+}
+
+@Suite("Sending to a server's terminal")
+struct DeviceServerSendTests {
+    @Test func serverTerminalsComeLastAndAreAddressedByTheirTab() {
+        let rows = AgentSessions.read([["id": "s1", "cwd": "/u/app", "title": "app", "exitCode": NSNull()]] as [Any],
+                                      servers: [(name: "prod", shells: [(tabId: "server srv1 k1", title: "Shell 1"), (tabId: "bogus", title: "x")])])
+        #expect(rows.map(\.label) == ["app · Session 1", "prod · Shell 1"])
+        #expect(rows.map(\.tabId) == ["s1", "server srv1 k1"])
+        #expect(rows[1].onServer && rows[1].machineName == "prod")
+        let machine = AgentSessionRow(id: "r1", cwd: "", provider: "", ended: false, label: "x", machineId: "m1", machineName: "PC")
+        #expect(machine.tabId == "machine m1 r1")
+    }
+}

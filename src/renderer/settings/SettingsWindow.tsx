@@ -34,8 +34,9 @@ import {
   type SettingsBridge,
 } from './settings-bridge'
 import { useFeatures } from '../features/FeaturesProvider'
+import { settingsScreenId, useNativeScreens } from '../native-screens'
 import { GeneralSection } from './sections/GeneralSection'
-import { ToolsSection } from './sections/ToolsSection'
+import { ToolsSection, VoiceFeatureSync } from './sections/ToolsSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
@@ -616,6 +617,8 @@ export function SettingsPanel({
   )
 
   const View = SECTION_VIEWS[section]
+  // A section the native Settings window draws itself is not mounted again here.
+  const drawnNatively = useNativeScreens().has(settingsScreenId(section))
 
   return (
     <div className="settings" data-loading={loading || undefined}>
@@ -695,7 +698,9 @@ export function SettingsPanel({
             {loadError}
           </p>
         )}
-        <View
+        {/* Tools drawn natively still keeps the voice feature in step with the stored key. */}
+        {drawnNatively && section === 'features' ? <VoiceFeatureSync /> : null}
+        {drawnNatively ? null : <View
           values={values}
           save={save}
           bridge={bridge}
@@ -707,7 +712,7 @@ export function SettingsPanel({
           {...(onStartSession ? { startSession: onStartSession } : {})}
           // Same rule for the copilot's setup questions: no host, no button.
           {...(onSetUpCopilot ? { setUpCopilot: onSetUpCopilot } : {})}
-        />
+        />}
       </div>
     </div>
   )

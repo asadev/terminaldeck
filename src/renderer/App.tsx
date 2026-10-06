@@ -20,7 +20,7 @@ import { NewSessionDialog, type StartServer } from './components/NewSessionDialo
 import { HelpDialog } from './components/HelpPanel'
 import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
-import { AlertsWindow, withInsights } from './components/AlertsPanel'
+import { AlertsWindow, withInsights, type AlertAction } from './components/AlertsPanel'
 import { useProjectAlerts } from './alerts-feed'
 import { openLinkExternally } from './link'
 import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
@@ -30,13 +30,17 @@ import {
   CONFIRM_CLOSE_KEY,
   needsCloseConfirm,
   RISKY_STATUSES,
+  writeConfirmClose,
+  type CloseSubject,
 } from './components/CloseSessionConfirm'
+import { publishHelpContent } from './native-help'
+import { NATIVE_DIALOGS, hideNativeDialog, publishDialogCommands, showNativeDialog, type DialogHandler } from './native-dialogs'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
 import { PageEmpty } from './components/PageEmpty'
 import { BRAND } from '@shared/brand'
-import { setBindings } from './browser/binding-view'
+import { setBindings, useSessionBinding } from './browser/binding-view'
 import { UpdateBanner } from './updates/UpdateBanner'
 import { HooksOffer } from './components/HooksOffer'
 import { ModeSwitch, type WorkspaceMode } from './shell/ModeSwitch'
@@ -47,9 +51,12 @@ import { SLOT_ATTR, slotStyle, usePaneSlots } from './layout/pane-slots'
 import {
   closePane,
   emptyLayout,
+  findPane,
   focusedTabId,
+  focusPane,
   moveFocus,
   primaryPane,
+  resizeSplit,
   tabIds,
   type PaneLayout,
 } from './layout/pane-tree'
@@ -67,12 +74,13 @@ import { CopilotSetup } from './copilot/CopilotSetup'
 import { CopilotRestart } from './copilot/CopilotRestart'
 import { CopilotView } from './copilot/CopilotView'
 import { useConsent } from './copilot/useConsent'
+import { argRows, askerSentence, toolHeading } from './copilot/consent-model' // lane B: native consent sheet
 import { useCopilot } from './copilot/useCopilot'
 import { useCopilotSetup } from './copilot/useCopilotSetup'
 import { partitionByOrigin, startedByCopilot, turnOf } from './copilot/session-origin'
 import { useHeldSessions } from './held-sessions'
-import { takeAddAccountRequest, useKnownSignIns } from './accounts'
-import { switchNames, useSwitchAccount } from './session-switch'
+import { askForAddAccount, takeAddAccountRequest, useKnownSignIns } from './accounts'
+import { SWITCH_KEEPS, switchConversationNote, switchConversationTag, switchNames, useSwitchAccount } from './session-switch'
 import { SwitchAccountConfirm } from './components/SwitchAccountConfirm'
 import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
@@ -94,6 +102,7 @@ import { PANELS, panelSpec, type PanelId } from './shell/panels'
 import { machineIsClosed, type ClosedMachine } from './shell/machine-groups'
 import { registerNavigator } from './copilot/driving/navigator'
 import { FeaturesProvider, useFeatures } from './features/FeaturesProvider'
+import { feature as featureEntry } from './features/registry'
 import { useControlOffer } from './features/offer'
 import { availableFeatures } from './features/state'
 import {
@@ -140,6 +149,8 @@ import {
   replaceWindowInStrip,
   stripIsPresent,
   usePromotedOrder,
+  promote as promoteInOrder,
+  demote as demoteFromOrder,
 } from './browser/workspace-strip'
 import { sessionAnchor } from './browser/strip-arrangement'
 import { ErrorBoundary } from './shell/ErrorBoundary'
@@ -177,11 +188,19 @@ import {
 import { openSettingsMessage, openSettingsRelay, type SettingsRelayMessage } from './settings/native-settings'
 import { openWindowMessage } from './screens/screen-route'
 import { isNativeShell, postToNative } from '../shared/native-shell'
-import { folderName, sameFolder } from './session-title'
+import { folderName, sameFolder, userSessionTitle } from './session-title'
 import { useNativeScreens } from './native-screens'
+import {
+  NATIVE_NEW_SESSION_SCREEN,
+  liveSessionCounts,
+  newSessionMessage,
+  openNativeNewSession,
+  publishNewSessionCommands,
+  type NativeNewSessionHandlers,
+} from './native-new-session'
 import { detectPlatform } from './platform'
-import { readLastFolder, writeLastFolder } from './session-start'
-import { chordFor, resolveCommand, scopeForTarget } from './keymap'
+import { readLastFolder, writeLastFolder, type SpawnRequest } from './session-start'
+import { chordFor, KEYMAP, resolveCommand, scopeForTarget } from './keymap'
 import './shell/shell.css'
 import { HootMark } from './copilot/HootMark'
 
@@ -4794,6 +4813,455 @@ function Workspace() {
   // The screens the native window draws itself; not mounted again underneath.
   const drawnNatively = useNativeScreens()
 
+  // lane B: the New session dialog in the native window (native-new-session.ts).
+  // Its answers come back through `tdNewSession` and run the handlers set below.
+  const newSessionHandlers = useRef<NativeNewSessionHandlers | null>(null)
+  useEffect(() => publishNewSessionCommands(() => newSessionHandlers.current), [])
+
+  /*
+   * Close-session confirm (lane S): the question worked out once, for the page
+   * dialog and for the native one, and the act written once for both.
+   */
+  const closeAsk =
+    pendingClose === null
+      ? null
+      : {
+          title: pendingClose.kind === 'session' ? labelOf(pendingClose.tab) : pendingClose.name,
+          status: pendingClose.kind === 'session' ? (pendingClose.tab.status ?? 'idle') : pendingClose.status,
+          /* How many sessions this press ends — a machine's is the sessions running on it. */
+          count:
+            pendingClose.kind === 'project' || pendingClose.kind === 'machine' || pendingClose.kind === 'server'
+              ? pendingClose.count
+              : 1,
+          /* What a person is told they are closing: a computer is never called a project. */
+          subject: (pendingClose.kind === 'machine' || pendingClose.kind === 'machine-session'
+            ? 'machine'
+            : pendingClose.kind === 'server' || pendingClose.kind === 'server-session'
+              ? 'server'
+              : 'project') as CloseSubject,
+          provider:
+            pendingClose.kind === 'session' ? sessions.find((s) => s.id === pendingClose.tab.id)?.provider : undefined,
+          /* `B1` is a fact about one session's numbering, so only for a single session. */
+          sessionId: pendingClose.kind === 'session' ? pendingClose.tab.id : undefined,
+        }
+  const confirmPendingClose = (): void => {
+    const closing = pendingClose
+    setPendingClose(null)
+    if (!closing) return
+    if (closing.kind === 'session') closeTabNow(closing.tab.id)
+    else if (closing.kind === 'project') closeProjectNow(closing.path)
+    else if (closing.kind === 'machine') closeMachineNow(closing.machineId)
+    else if (closing.kind === 'server') closeServerNow(closing.serverId)
+    else if (closing.kind === 'server-session') closeServerSessionNow(closing.tabId)
+    else closeMachineSessionNow(closing.machineId, closing.sessionId)
+  }
+  const nativeCloseConfirm = drawnNatively.has(NATIVE_DIALOGS.closeConfirm)
+  const closeBinding = useSessionBinding(closeAsk?.sessionId ?? '', '')
+  useEffect(() => {
+    if (!nativeCloseConfirm) return
+    if (closeAsk === null) {
+      hideNativeDialog(NATIVE_DIALOGS.closeConfirm)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.closeConfirm, {
+      title: closeAsk.title,
+      status: closeAsk.status,
+      count: closeAsk.count,
+      subject: closeAsk.subject,
+      canResume: canResumeProvider(closeAsk.provider),
+      attachedWindows: closeAsk.sessionId ? (closeBinding?.windows ?? []).map((window) => window.n) : [],
+    })
+    // Re-asked only when the question itself changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeCloseConfirm, pendingClose, closeBinding])
+  const dialogHandlers = useRef<Partial<Record<string, DialogHandler>>>({})
+  dialogHandlers.current = {
+    [NATIVE_DIALOGS.closeConfirm]: (action, arg) => {
+      if (action === 'cancel') {
+        setPendingClose(null)
+        return true
+      }
+      if (action !== 'confirm') return false
+      const suppress = typeof arg === 'object' && arg !== null && (arg as { suppress?: unknown }).suppress === true
+      // What the page dialog does: the setting first (its failure never stops the close), then the close.
+      void (async () => {
+        if (suppress) {
+          await writeConfirmClose(false)
+          applySettings({ ...settings, [CONFIRM_CLOSE_KEY]: false })
+        }
+        confirmPendingClose()
+      })()
+      return true
+    },
+  }
+  /*
+   * Switch-account confirm (lane S): the native window draws it with the page's own
+   * wording; the page keeps the switch itself (useSwitchAccount) and its answers.
+   */
+  const nativeSwitchConfirm = drawnNatively.has(NATIVE_DIALOGS.switchAccount)
+  useEffect(() => {
+    if (!nativeSwitchConfirm) return
+    if (switcher.asking === null) {
+      hideNativeDialog(NATIVE_DIALOGS.switchAccount)
+      return
+    }
+    const names = switchNames(switcher.plan ?? { from: null, to: null }, knownSignIns)
+    const plan = switcher.plan
+    const tag = plan === null ? null : switchConversationTag(plan)
+    showNativeDialog(NATIVE_DIALOGS.switchAccount, {
+      title: tabs.find((tab) => tab.id === switcher.asking?.sessionId)?.label ?? '',
+      fromName: names.from,
+      toName: names.to,
+      planned: plan !== null,
+      refusal: plan?.refusal ?? null,
+      tag,
+      note:
+        plan === null
+          ? ''
+          : tag === null && plan.conversation !== 'carried'
+            ? SWITCH_KEEPS
+            : `${switchConversationNote(plan, names)} ${SWITCH_KEEPS}`,
+      busy: switcher.busy,
+      problem: switcher.problem,
+      canDefer: switcher.canDefer,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeSwitchConfirm, switcher.asking, switcher.plan, switcher.busy, switcher.problem, switcher.canDefer, knownSignIns])
+  dialogHandlers.current[NATIVE_DIALOGS.switchAccount] = (action) => {
+    if (action === 'cancel') switcher.cancel()
+    else if (action === 'confirm') confirmAccountSwitch()
+    else if (action === 'defer') deferAccountSwitch()
+    else return false
+    return true
+  }
+  /*
+   * Alerts sheet (lane S): drawn natively from the same feed; every press comes back
+   * here. Letting a device in is handed to the page's own window (PendingApproval).
+   */
+  const runAlertAction = (action: AlertAction): void => {
+    /*
+     * The sheet closes first, whatever the action turns out to be.
+     *
+     * All five of them act on the window *behind* this dialog — a panel,
+     * a tab, a terminal, another sheet — and a modal is precisely the
+     * thing that makes those unreachable while it is up. Leaving it open
+     * would have been the same defect the actions were given handlers to
+     * fix: press the button, something happens somewhere you cannot see,
+     * and the surface in front of you is unchanged.
+     */
+    setAlertsOpen(false)
+    /*
+     * A session-targeted alert names Claude's own conversation id, taken
+     * from the transcript — not this window's tab id, which the main
+     * process mints. They coincide only when the app started the session.
+     * So the match is attempted, and where it fails the action lands on
+     * the inspector, which reads the project's transcripts and can
+     * therefore show the very session the alert is about. What it never
+     * does is guess: `/compact` is a write, and a write to the wrong
+     * session is worse than a button that took you somewhere slightly
+     * broader.
+     */
+    const openSession = sessions.find((session) => session.id === action.target)
+    switch (action.kind) {
+      case 'open-git':
+        showPanel('git')
+        return
+      case 'focus-session':
+        if (openSession) selectTab(openSession.id)
+        else setInspectorOpen(true)
+        return
+      case 'open-inspector':
+        setInspectorOpen(true)
+        return
+      case 'compact-session':
+        // The agent's own command, typed into the session it is about —
+        // the same channel chat mode writes through. Focus follows it,
+        // because a command sent to a terminal you cannot see is a
+        // command you cannot tell ran.
+        if (openSession) {
+          selectTab(openSession.id)
+          window.deck.writeToSession(openSession.id, '/compact\r')
+        } else {
+          setInspectorOpen(true)
+        }
+        return
+      case 'install-provider':
+        // Setup is the section that lists what is installed and what is
+        // missing; landing on General would be a page about something
+        // else (rule 1.5).
+        // Through `openSettings`, like every other way into Settings.
+        openSettings('setup')
+        return
+    }
+  }
+  const nativeAlerts = drawnNatively.has(NATIVE_DIALOGS.alerts)
+  const [alertsApproving, setAlertsApproving] = useState<string | null>(null)
+  useEffect(() => {
+    if (!nativeAlerts) return
+    if (!alertsOpen || !features.on('alerts') || alertsApproving !== null) {
+      hideNativeDialog(NATIVE_DIALOGS.alerts)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.alerts, {
+      projectPath: activeProjectPath ?? null,
+      report: alertsFeed.report,
+      busy: alertsFeed.busy,
+      error: alertsFeed.error ?? null,
+      available: alertsFeed.available,
+      showInsights: showInsightAlerts,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeAlerts, alertsOpen, alertsApproving, activeProjectPath, alertsFeed.report, alertsFeed.busy, alertsFeed.error, alertsFeed.available, showInsightAlerts])
+  dialogHandlers.current[NATIVE_DIALOGS.alerts] = (action, arg) => {
+    const field = (name: string): unknown =>
+      typeof arg === 'object' && arg !== null ? (arg as Record<string, unknown>)[name] : undefined
+    if (action === 'close') setAlertsOpen(false)
+    else if (action === 'rescan') alertsFeed.rescan()
+    else if (action === 'action') {
+      const alert = alertsFeed.report?.alerts.find((entry) => entry.id === field('id'))
+      if (alert?.action) runAlertAction(alert.action)
+    } else if (action === 'approve' && typeof field('deviceId') === 'string') setAlertsApproving(field('deviceId') as string)
+    else return false
+    return true
+  }
+  /*
+   * Command palette (lane S): the native window draws it and does the searching on
+   * the page's own channels; running a command or opening a file is still done here.
+   */
+  const nativePalette = drawnNatively.has(NATIVE_DIALOGS.palette)
+  useEffect(() => {
+    if (!nativePalette) return
+    if (paletteMode === null) {
+      hideNativeDialog(NATIVE_DIALOGS.palette)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.palette, {
+      mode: paletteMode,
+      projectRoot: activeProjectPath ?? null,
+      commands: commands
+        .filter((command) => command.enabled !== false)
+        .map(({ id, title, group, shortcut, keywords }) => ({ id, title, group, shortcut, keywords })),
+    })
+  }, [nativePalette, paletteMode, activeProjectPath, commands])
+  dialogHandlers.current[NATIVE_DIALOGS.palette] = (action, arg) => {
+    const field = (name: string): unknown =>
+      typeof arg === 'object' && arg !== null ? (arg as Record<string, unknown>)[name] : undefined
+    if (action === 'close') setPaletteMode(null)
+    else if (action === 'run') {
+      const command = commands.find((entry) => entry.id === field('id'))
+      setPaletteMode(null)
+      // As the page palette: it is closed first, and a command that throws never takes the app with it.
+      try {
+        const running = command?.run()
+        if (running) void running.catch((error: unknown) => console.error('[palette] command failed:', command?.id, error))
+      } catch (error) {
+        console.error('[palette] command failed:', command?.id, error)
+      }
+    } else if (action === 'open-file' && typeof field('path') === 'string') {
+      setPaletteMode(null)
+      showFile(field('path') as string)
+    } else return false
+    return true
+  }
+  /* Keyboard shortcuts sheet (lane S): native draws it; the features say which chords are live. */
+  const nativeShortcuts = drawnNatively.has(NATIVE_DIALOGS.shortcuts)
+  useEffect(() => {
+    if (!nativeShortcuts) return
+    if (!shortcutsOpen) {
+      hideNativeDialog(NATIVE_DIALOGS.shortcuts)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.shortcuts, {
+      hidden: KEYMAP.filter((binding) => !features.commandOn(binding.id)).map((binding) => binding.id),
+    })
+  }, [nativeShortcuts, shortcutsOpen, features])
+  dialogHandlers.current[NATIVE_DIALOGS.shortcuts] = (action) => {
+    if (action !== 'close') return false
+    setShortcutsOpen(false)
+    return true
+  }
+  /* Help (lane S): its words are lent to the native window, which draws the sheet. */
+  useEffect(() => publishHelpContent(), [])
+  const nativeHelp = drawnNatively.has(NATIVE_DIALOGS.help)
+  useEffect(() => {
+    if (!nativeHelp) return
+    if (helpOpen) showNativeDialog(NATIVE_DIALOGS.help, {})
+    else hideNativeDialog(NATIVE_DIALOGS.help)
+  }, [nativeHelp, helpOpen])
+  dialogHandlers.current[NATIVE_DIALOGS.help] = (action) => {
+    if (action !== 'close') return false
+    setHelpOpen(false)
+    return true
+  }
+  /* Join a remote session (lane E1): the native window draws it; Close answers `close`. */
+  const nativeJoin = drawnNatively.has(NATIVE_DIALOGS.joinRemote)
+  useEffect(() => {
+    if (!nativeJoin) return
+    if (joinOpen) showNativeDialog(NATIVE_DIALOGS.joinRemote, {})
+    else hideNativeDialog(NATIVE_DIALOGS.joinRemote)
+  }, [nativeJoin, joinOpen])
+  dialogHandlers.current[NATIVE_DIALOGS.joinRemote] = (action) => {
+    if (action !== 'close') return false
+    setJoinOpen(false)
+    return true
+  }
+  /* Hoot's setup flow (lane B): the native window draws it and writes the answers; the page still decides when and what follows. */
+  const nativeCopilotSetup = drawnNatively.has(NATIVE_DIALOGS.copilotSetup)
+  useEffect(() => {
+    if (!nativeCopilotSetup) return
+    if (copilotSetupOpen) showNativeDialog(NATIVE_DIALOGS.copilotSetup, {})
+    else hideNativeDialog(NATIVE_DIALOGS.copilotSetup)
+  }, [nativeCopilotSetup, copilotSetupOpen])
+  dialogHandlers.current[NATIVE_DIALOGS.copilotSetup] = (action) => {
+    if (action === 'close') {
+      setCopilotSetupOpen(false)
+      return true
+    }
+    if (action !== 'done') return false
+    setCopilotSetupOpen(false)
+    copilotSetup.reload()
+    showCopilot(copilotTurn)
+    return true
+  }
+  /* Hoot's permission question (lane B): the page keeps the queue; the native sheet shows the oldest and answers by id. */
+  const nativeConsent = drawnNatively.has(NATIVE_DIALOGS.copilotConsent)
+  useEffect(() => {
+    if (!nativeConsent) return
+    const question = consent.question
+    if (question === null) {
+      hideNativeDialog(NATIVE_DIALOGS.copilotConsent)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.copilotConsent, {
+      id: question.id,
+      heading: toolHeading(question.tool, consent.titles),
+      asker: askerSentence(question),
+      summary: question.summary,
+      rows: argRows(question.args),
+      tier: question.tier,
+      tool: question.tool,
+      expiresAt: question.expiresAt,
+      waiting: consent.waiting,
+    })
+  }, [nativeConsent, consent.question, consent.titles, consent.waiting])
+  dialogHandlers.current[NATIVE_DIALOGS.copilotConsent] = (action, arg) => {
+    const asked = (arg as { id?: unknown } | null | undefined)?.id
+    const id = typeof asked === 'string' ? asked : consent.question?.id
+    if (id === undefined) return false
+    if (action === 'allow') consent.answer(id, true)
+    else if (action === 'refuse' || action === 'cancel') consent.answer(id, false)
+    else return false
+    return true
+  }
+  /* First run (lane S): the native window draws the welcome screen; the page keeps the check and the acts. */
+  const nativeOnboarding = drawnNatively.has(NATIVE_DIALOGS.onboarding)
+  const onboardingShown = needsOnboarding === true && !onboardingDone
+  useEffect(() => {
+    if (!nativeOnboarding) return
+    if (onboardingShown) showNativeDialog(NATIVE_DIALOGS.onboarding, { appName: BRAND.name })
+    else hideNativeDialog(NATIVE_DIALOGS.onboarding)
+  }, [nativeOnboarding, onboardingShown])
+  dialogHandlers.current[NATIVE_DIALOGS.onboarding] = (action) => {
+    if (action === 'continue') setOnboardingDone(true)
+    else if (action === 'open-project') openProject()
+    else return false
+    return true
+  }
+  /* Feature offer (lane S): a natively drawn panel whose feature is off or not installed gets
+     FeatureOffer's page instead — drawn natively over that screen; the page keeps the act. */
+  const nativeFeatureOffer = drawnNatively.has(NATIVE_DIALOGS.featureOffer)
+  const offerOwner = showingPanel && panel && drawnNatively.has(panel) ? features.featureForPanel(panel) : null
+  const offered = offerOwner && !features.on(offerOwner) ? offerOwner : null
+  const offeredOff = offered ? features.status(offered) === 'off' : false
+  useEffect(() => {
+    if (!nativeFeatureOffer) return
+    if (!offered || !panel) {
+      hideNativeDialog(NATIVE_DIALOGS.featureOffer)
+      return
+    }
+    const entry = featureEntry(offered)
+    showNativeDialog(NATIVE_DIALOGS.featureOffer, {
+      panel,
+      id: offered,
+      name: entry.name,
+      off: offeredOff,
+      where: entry.where,
+      summary: entry.summary,
+    })
+  }, [nativeFeatureOffer, offered, offeredOff, panel])
+  dialogHandlers.current[NATIVE_DIALOGS.featureOffer] = (action) => {
+    if (action !== 'accept' || !offered) return false
+    if (offeredOff) features.setEnabled(offered, true)
+    else features.install(offered)
+    return true
+  }
+  /* The native row menu's Show at the top / Fold back into the sidebar (lane S): Sidebar.tsx's togglePromoted. */
+  dialogHandlers.current['session-row'] = (action, arg) => {
+    const id = typeof arg === 'object' && arg !== null ? (arg as Record<string, unknown>).id : undefined
+    if (action !== 'promote' || typeof id !== 'string' || id === '') return false
+    setStripOrder(stripOrder.includes(id) ? demoteFromOrder(stripOrder, id) : promoteInOrder(stripOrder, id, stripOrder.length))
+    return true
+  }
+  /* Session inspector (lane T draws it; lane S wires it): the same values the page's inspector gets. */
+  const nativeInspector = drawnNatively.has(NATIVE_DIALOGS.sessionInspector)
+  const inspectorCwd = focusedSession?.projectPath ?? activeProjectPath
+  const inspectorTitle = focusedSession?.title
+  const inspectorStartedAt = focusedSession?.createdAt
+  const inspectorResumed = focusedSession?.resumed
+  const inspectorAgentId = focusedSession?.agentSessionId
+  useEffect(() => {
+    if (!nativeInspector) return
+    if (!inspectorOpen) {
+      hideNativeDialog(NATIVE_DIALOGS.sessionInspector)
+      return
+    }
+    showNativeDialog(NATIVE_DIALOGS.sessionInspector, {
+      cwd: inspectorCwd ?? null,
+      title: inspectorTitle ?? null,
+      session:
+        inspectorStartedAt === undefined
+          ? null
+          : {
+              startedAt: inspectorStartedAt,
+              resumed: inspectorResumed,
+              ...(inspectorAgentId === undefined ? {} : { agentSessionId: inspectorAgentId }),
+            },
+    })
+  }, [nativeInspector, inspectorOpen, inspectorCwd, inspectorTitle, inspectorStartedAt, inspectorResumed, inspectorAgentId])
+  dialogHandlers.current[NATIVE_DIALOGS.sessionInspector] = (action) => {
+    if (action !== 'close') return false
+    setInspectorOpen(false)
+    return true
+  }
+  useEffect(() => publishDialogCommands(() => dialogHandlers.current), [])
+  const newSessionSeq = useRef(0)
+  const newSessionWasOpen = useRef(false)
+  useEffect(() => {
+    if (!newSessionOpen) {
+      newSessionWasOpen.current = false
+      return
+    }
+    if (!drawnNatively.has(NATIVE_NEW_SESSION_SCREEN)) return
+    // A new opening gets a new number; the same opening again (the servers list
+    // arriving a moment later) only updates the dialog already up.
+    if (!newSessionWasOpen.current) newSessionSeq.current += 1
+    newSessionWasOpen.current = true
+    openNativeNewSession(
+      newSessionMessage(newSessionSeq.current, {
+        projectPath: newSessionPath ?? activeProjectPath ?? null,
+        machineId: newSessionMachine,
+        machines: machines.machines.map((row) => ({
+          id: row.machine.id,
+          name: row.machine.name,
+          folders: row.link?.folders ?? [],
+        })),
+        hereName: hereName(machines),
+        servers: [...startServers],
+        liveSessions: liveSessionCounts(storedSessions),
+      }),
+    )
+  }, [newSessionOpen, drawnNatively, newSessionPath, activeProjectPath, newSessionMachine, machines, startServers, storedSessions])
+
   // The tab strip, in the native top bar: the strip's own order store, read
   // here too so a ✕ pressed up there moves the same list the strip does.
   const [stripOrder, setStripOrder] = usePromotedOrder()
@@ -4811,6 +5279,7 @@ function Workspace() {
   const islandSnapshot = useRef<IslandSnapshot | null>(null)
   const islandRelay = useRef<ReturnType<typeof openIslandRelay> | null>(null)
   const islandShowSession = useRef<(id: string) => void>(() => {})
+  const islandPostedNative = useRef('') // lane B
   useEffect(() => {
     if (!nativeShell) return
     islandPublisher.current ??= createIslandPublisher({
@@ -4820,6 +5289,14 @@ function Workspace() {
     const sessionsView = islandSessions(tabs, labelOf)
     const state = islandPublisher.current.update(sessionsView, copilot.stage)
     const next: IslandSnapshot = { assistant: BRAND.assistant, stage: copilot.stage, sessions: sessionsView, line: state.line }
+    // lane B: the native island draws its grown content itself and reads the same snapshot.
+    if (drawnNatively.has('island')) {
+      const sent = JSON.stringify(next)
+      if (sent !== islandPostedNative.current) {
+        islandPostedNative.current = sent
+        postToNative({ type: 'island-snapshot', snapshot: next })
+      }
+    }
     if (JSON.stringify(next) === JSON.stringify(islandSnapshot.current)) return
     islandSnapshot.current = next
     islandRelay.current?.post({ type: 'snapshot', snapshot: next })
@@ -4902,7 +5379,7 @@ function Workspace() {
     return (
       <div className="app app-plain">
         <div className="window-drag" />
-        <Onboarding onContinue={() => setOnboardingDone(true)} onOpenProject={openProject} />
+        {!nativeOnboarding && <Onboarding onContinue={() => setOnboardingDone(true)} onOpenProject={openProject} />}
       </div>
     )
   }
@@ -4922,7 +5399,10 @@ function Workspace() {
    * about how to draw itself, and the copilot's own conversation lives where it
    * always did, in the rail (`CopilotRailPanel`).
    */
-  const copilotWindow = (visible: boolean) => (
+  const copilotWindow = (visible: boolean) => drawnNatively.has('hoot') ? (
+    // Hoot's window drawn natively: its room, and nothing mounted in it.
+    visible ? <div key="native-hoot" className="native-screen" data-screen="hoot" /> : null
+  ) : (
     <CopilotView
       copilot={copilot}
       visible={visible}
@@ -5279,6 +5759,7 @@ function Workspace() {
     if (tabs.length === 0) return <EmptyState onOpenProject={openProject} />
 
     if (swarm) {
+      if (drawnNatively.has('swarm')) return <div className="native-screen" data-screen="swarm" />
       return (
         <SwarmGrid
           // Named the way the sidebar names them, so a grid of sessions in one
@@ -5331,6 +5812,7 @@ function Workspace() {
      * rendered twice would attach two input handlers to one pty.
      */
     if (splitting) {
+      if (drawnNatively.has('split')) return <div className="native-screen" data-screen="split" />
       return (
         <SplitView
           layout={panes}
@@ -6383,6 +6865,12 @@ function Workspace() {
     alerts: { shown: features.controlOn('sidebar.alerts'), count: alertCount },
     // The rule every view from the rail is handed as its `projectPath`.
     project: activeProjectPath,
+    // What the Files view has open and what a view was opened on, for the native
+    // screens that draw those views (the `open-file` / `show-panel` doors).
+    openFile,
+    focus: panelFocus,
+    // The row menu's Show at the top / Fold back (lane S).
+    promoted: stripOrder,
   }
   stripInput.current = {
     order: stripOrder,
@@ -6393,12 +6881,138 @@ function Workspace() {
     // Always: there must be a way to open a browser. `newBrowserTab` installs
     // the browser pane first when it is not installed, as the strip's globe does.
     canNewBrowser: true,
+    // What a native window needs to draw a server's terminal itself (lane T).
+    serverSessions,
+    serverShellIds,
+    // And split and swarm (lane T): the arrangement, and ModeSwitch's own condition.
+    mode,
+    swarm,
+    panes,
+    modeSwitch:
+      Boolean(activeSession || splitting || openMachineSession !== null || openServerSession !== null) &&
+      !(headingTab?.isCopilot && copilotMachine !== null) &&
+      !showingPanel &&
+      !swarm,
+    splitOffer: !features.on('split'),
+    swarmSessions: sessions.map((session, index) => ({
+      id: session.id,
+      title: sessionLabel(session.title, index, folderNameOf(session.projectPath)),
+      status: session.status,
+    })),
+    // The note beside the account chip (lane T): switching, then switched.
+    accountSwitch:
+      switchingNote !== null && switcher.working !== null
+        ? { sessionId: switcher.working.sessionId, state: 'working', text: switchingNote }
+        : accountSwitchNote !== null
+          ? { sessionId: accountSwitchNote.sessionId, state: 'done', text: accountSwitchNote.text }
+          : null,
   }
   // A session pressed in the island's list opens as a press on its rail row does.
   islandShowSession.current = (id) => openTabWindow(id)
+  // Native screens' doors between views and the sessions they draw (native-commands.ts):
+  // the dashboard's own doors (PanelView's `dashboard` prop), and what lanes T and V need.
+  const nativeDoorHandlers: Pick<
+    NativeHandlers,
+    | 'showFile'
+    | 'openInspector'
+    | 'showSessions'
+    | 'renameSession'
+    | 'writeServerShell'
+    | 'serverShellOpened'
+    | 'serverShellEnded'
+    | 'newSessionAs'
+    | 'switchAccount'
+    | 'openServerShellWith'
+    | 'manageAccounts'
+    | 'setLayoutMode'
+    | 'focusPaneById'
+    | 'resizeSplitTo'
+    | 'closePaneById'
+    | 'openServerSession'
+    | 'serverRenamed'
+  > = {
+    showFile,
+    openInspector: () => setInspectorOpen(true),
+    showSessions: () => {
+      if (!features.on('swarm')) return false
+      clearPanel()
+      closeSplit()
+      setSwarm(true)
+      return true
+    },
+    // Sessions the native window draws (lanes T and V; native-commands.ts).
+    renameSession: (tabId, typed) => {
+      // `useSessionRename().rename`, for a local session of this window.
+      if (!sessions.some((session) => session.id === tabId)) return false
+      const name = userSessionTitle(typed)
+      if (name === null) return false
+      setSessionTitle(tabId, name, { fromUser: true })
+      void window.deck.renameSession?.(tabId, name)
+      return true
+    },
+    writeServerShell: (tabId, text) => {
+      const shellId = serverShellIds[tabId]
+      if (shellId === undefined || serversBridge === null) return false
+      void serversBridge.writeToServerShell(shellId, text)
+      return true
+    },
+    serverShellOpened: (tabId, shellId) => {
+      if (!serverSessions.some((entry) => entry.tabId === tabId)) return false
+      serverShellOpened(tabId, shellId)
+      return true
+    },
+    serverShellEnded: (tabId) => {
+      if (!serverSessions.some((entry) => entry.tabId === tabId)) return false
+      serverShellEnded(tabId)
+      return true
+    },
+    // The session header's account chips, drawn natively (lane T): their own props.
+    newSessionAs: (projectPath, accountId, provider) => {
+      const runAs = provider === null ? undefined : isProviderId(provider) ? provider : null
+      if (runAs === null) return false
+      newSession(projectPath ?? undefined, false, accountId, runAs)
+      return true
+    },
+    switchAccount: (sessionId, accountId) => {
+      if (!sessions.some((session) => session.id === sessionId)) return false
+      switcher.ask({ sessionId, profileId: accountId })
+      return true
+    },
+    openServerShellWith: (serverId, agentId) => {
+      const group = serverSessions.find((entry) => entry.serverId === serverId)
+      if (!group) return false
+      openServerShell(serverId, group.serverName, null, agentId === null ? null : agentCommand(agentId))
+      return true
+    },
+    manageAccounts: (add) => {
+      if (add) askForAddAccount()
+      openSettings('profiles')
+    },
+    // Split and swarm drawn natively (lane T): SplitView's and ModeSwitch's own acts.
+    setLayoutMode: setMode,
+    focusPaneById: (paneId) => {
+      if (findPane(panes, paneId) === null) return false
+      setPanes((current) => focusPane(current, paneId))
+      return true
+    },
+    resizeSplitTo: (splitId, ratio) => {
+      if (!splitting) return false
+      setPanes((current) => resizeSplit(current, splitId, ratio))
+      return true
+    },
+    closePaneById: (paneId) => {
+      if (findPane(panes, paneId) === null) return false
+      closePaneAt(paneId)
+      return true
+    },
+    // The servers screens drawn natively (lane G): `ServerSessions`' own two acts.
+    openServerSession: (serverId, serverName, startIn) => serverSessionOpener.open(serverId, serverName, startIn),
+    serverRenamed: (serverId, name) => serverSessionOpener.renamed(serverId, name),
+  }
   nativeHandlers.current = {
     run,
     showPanel,
+    ...nativeDoorHandlers,
     rail: () => railInput.current ?? EMPTY_NATIVE_RAIL,
     openHoot: () => openCopilot(),
     openTab: openTabWindow,
@@ -6421,6 +7035,104 @@ function Workspace() {
     closeWindow: closeTab,
     newTerminalTab: () => openNewSessionDialog(),
     newBrowserTab: () => newBrowserTab(),
+  }
+
+  /*
+   * The New session dialog's three answers, in one place both dialogs use — the
+   * page's own and the native window's (`native-new-session.ts`). One act, one
+   * implementation, whichever window asked the question.
+   */
+  const startNewSessionOnServer = (serverId: string, serverName: string, path: string | null): void => {
+              setNewSessionOpen(false)
+              // The same call the server's own page makes, folder and all. A second
+              // implementation here is how two doors to one act start behaving
+              // differently — which is the thing this whole change is closing.
+              openServerShell(serverId, serverName, path)
+            }
+
+  const startNewSession = async (request: SpawnRequest, machineId: string | null): Promise<void> => {
+              setNewSessionOpen(false)
+              /*
+               * A session on another machine, started the same way and landing in
+               * the same place — the rail, beside the local ones.
+               *
+               * It returns before any of the local bookkeeping below, and every line
+               * of that bookkeeping is why: `addProject` would put another
+               * computer's folder in *this* one's project list, `addSession` would
+               * put a session this window does not own into the store that decides
+               * what ⌘W closes, and `keepNewWindowInStrip` would give it a tab with
+               * a ✕ that promises to end something living on a different machine.
+               *
+               * What it does instead is ask the far end to start it and then open
+               * it, which is the whole flow: New session → the machine → its folder
+               * → a terminal.
+               */
+              if (machineId !== null) {
+                // `startSession` waits for the session to actually exist on the far
+                // machine rather than for the request to have been sent — see the
+                // long note on it. Null means it refused or did not appear, and the
+                // rail is the honest place for that: the machine's own heading is
+                // there, and a session that turns up a moment later lands in it.
+                const sessionId = await machines.startSession(machineId, request.cwd, request.provider)
+                machines.reread()
+                if (sessionId === null) return
+                clearPanel()
+                setOpenMachineSession({ machineId, sessionId })
+                return
+              }
+              // Refusals land in the rail as a held row — see `newSessionIn`, which
+              // carries the reasoning. This dialog does not draw the picker's
+              // "could not start" line for it, because by the time the dialog has
+              // closed the answer belongs where the session would have been.
+              const meta = await window.deck.createSession(request).catch(() => null)
+              if (!meta) return
+              /*
+               * The folder joins the rail, exactly as it does on every other route.
+               *
+               * `newSessionIn` has done this since the day it was written — *"a
+               * session in a folder the sidebar is not listing is a session with no
+               * row"* — and this path, which became the *only* path when every
+               * button started opening this dialog, never did. Browse to a folder
+               * the app has not seen, press Start, and the session lands in the
+               * rail's orphan bucket, which means "your project was closed out from
+               * under this" and is not what happened.
+               *
+               * It is what makes the copilot's own folder work as a place to start a
+               * normal session in — *"it will just be a normal another session"* —
+               * because `projects` gives that folder a heading precisely when one of
+               * his sessions is in it, and nothing here would ever have put it in
+               * the list for that test to pass.
+               */
+              addProject(request.cwd)
+              void window.deck.addProject(request.cwd)
+              addSession(meta)
+              showTab(meta.id)
+              /*
+             The bar keeps it — and this is the one that answers what he asked
+             for, because the strip's terminal glyph opens *this* dialog rather
+             than a session (*"we just always wanted this pop-up to come up so we
+             choose which type of terminal we want to open"*).
+
+             Which means the rail's New session button, the ＋ on a project
+             heading and ⌘T all land here too, and all of them keep their window
+             as well. That is deliberate rather than incidental: they are the
+             same act, arrived at from four places, and a session that stays on
+             the bar when it was started from the header and vanishes when it was
+             started from the rail would be the window disagreeing with itself
+             about what a new session is. Restoring a reload's sessions and
+             accepting one started on a paired phone are *not* this act, and
+             neither of them promotes anything.
+          */
+              keepNewWindowInStrip(meta.id)
+            }
+
+  // lane B: the native window draws the New session dialog when it says so.
+  const nativeNewSession = drawnNatively.has(NATIVE_NEW_SESSION_SCREEN)
+  newSessionHandlers.current = {
+    start: (request, machineId) => void startNewSession(request, machineId),
+    startOnServer: startNewSessionOnServer,
+    removeProject,
+    close: () => setNewSessionOpen(false),
   }
 
   return (
@@ -7417,6 +8129,7 @@ function Workspace() {
             row on this list in the first place.
           */}
           {serversBridge !== null &&
+            !drawnNatively.has('server-session') &&
             serverSessions.map((entry) => {
               /*
                * One view of the session, in one rectangle. It used to be two —
@@ -7488,6 +8201,7 @@ function Workspace() {
             preload has no machine channels draws nothing either.
           */}
           {machinesBridge !== null &&
+            !drawnNatively.has('machine-session') &&
             machineSessionPanes.map((pane) => (
               <div
                 key={`${pane.machineId}\u0000${pane.sessionId}`}
@@ -7568,7 +8282,7 @@ function Workspace() {
         thing: the sheet is shut, and nothing is being asked about.
       */}
       <SwitchAccountConfirm
-        open={switcher.asking !== null}
+        open={switcher.asking !== null && !nativeSwitchConfirm}
         title={
           switcher.asking === null
             ? ''
@@ -7584,67 +8298,15 @@ function Workspace() {
         onDefer={deferAccountSwitch}
       />
       <CloseSessionConfirm
-        open={pendingClose !== null}
-        title={
-          pendingClose === null
-            ? ''
-            : pendingClose.kind === 'session'
-              ? labelOf(pendingClose.tab)
-              : pendingClose.name
-        }
-        status={
-          pendingClose === null
-            ? 'idle'
-            : pendingClose.kind === 'session'
-              ? (pendingClose.tab.status ?? 'idle')
-              : pendingClose.status
-        }
-        /*
-          How many sessions this press ends.
-        
-          A machine's count is the sessions running on it, which is what makes
-          *"This deletes 4 sessions on that machine"* a true sentence and
-          the reason there is one dialog rather than four. One session on another
-          machine is one, exactly as a local one is.
-        */
-        count={
-          pendingClose?.kind === 'project' ||
-          pendingClose?.kind === 'machine' ||
-          pendingClose?.kind === 'server'
-            ? pendingClose.count
-            : 1
-        }
-        /* Which nouns the dialog uses. The act is the same in all three cases;
-           what differs is what a person is being told they are closing, and
-           calling a computer a project is how a confirmation stops being read. */
-        subject={
-          pendingClose?.kind === 'machine' || pendingClose?.kind === 'machine-session'
-            ? 'machine'
-            : pendingClose?.kind === 'server' || pendingClose?.kind === 'server-session'
-              ? 'server'
-              : 'project'
-        }
-        provider={
-          pendingClose?.kind === 'session'
-            ? sessions.find((s) => s.id === pendingClose.tab.id)?.provider
-            : undefined
-        }
-        /* So the dialog can name the browser windows this lets go of. Only for
-           a single session: a project's or a machine's dialog is about a set,
-           and `B1` is a fact about one session's numbering. */
-        sessionId={pendingClose?.kind === 'session' ? pendingClose.tab.id : undefined}
+        open={closeAsk !== null && !nativeCloseConfirm}
+        title={closeAsk?.title ?? ''}
+        status={closeAsk?.status ?? 'idle'}
+        count={closeAsk?.count ?? 1}
+        subject={closeAsk?.subject ?? 'project'}
+        provider={closeAsk?.provider}
+        sessionId={closeAsk?.sessionId}
         onCancel={() => setPendingClose(null)}
-        onConfirm={() => {
-          const closing = pendingClose
-          setPendingClose(null)
-          if (!closing) return
-          if (closing.kind === 'session') closeTabNow(closing.tab.id)
-          else if (closing.kind === 'project') closeProjectNow(closing.path)
-          else if (closing.kind === 'machine') closeMachineNow(closing.machineId)
-          else if (closing.kind === 'server') closeServerNow(closing.serverId)
-          else if (closing.kind === 'server-session') closeServerSessionNow(closing.tabId)
-          else closeMachineSessionNow(closing.machineId, closing.sessionId)
-        }}
+        onConfirm={confirmPendingClose}
         // The dialog writes the setting itself; this keeps the copy above in
         // step so the very next close does not ask again.
         onConfirmSettingChange={(enabled) =>
@@ -7652,7 +8314,7 @@ function Workspace() {
         }
       />
       <NewSessionDialog
-        open={newSessionOpen}
+        open={newSessionOpen && !nativeNewSession}
         /* The folder the press named, or the one you are in. The ＋ on a project
            heading is the only caller that names one, and before this dialog
            became the single route it did not have to — it spawned into that
@@ -7690,94 +8352,14 @@ function Workspace() {
         */
             servers={startServers}
             serversBridge={serversBridge}
-            onStartOnServer={(serverId, serverName, path) => {
-              setNewSessionOpen(false)
-              // The same call the server's own page makes, folder and all. A second
-              // implementation here is how two doors to one act start behaving
-              // differently — which is the thing this whole change is closing.
-              openServerShell(serverId, serverName, path)
-            }}
+            onStartOnServer={startNewSessionOnServer}
             onClose={() => setNewSessionOpen(false)}
-            onStart={async (request, machineId) => {
-              setNewSessionOpen(false)
-              /*
-               * A session on another machine, started the same way and landing in
-               * the same place — the rail, beside the local ones.
-               *
-               * It returns before any of the local bookkeeping below, and every line
-               * of that bookkeeping is why: `addProject` would put another
-               * computer's folder in *this* one's project list, `addSession` would
-               * put a session this window does not own into the store that decides
-               * what ⌘W closes, and `keepNewWindowInStrip` would give it a tab with
-               * a ✕ that promises to end something living on a different machine.
-               *
-               * What it does instead is ask the far end to start it and then open
-               * it, which is the whole flow: New session → the machine → its folder
-               * → a terminal.
-               */
-              if (machineId !== null) {
-                // `startSession` waits for the session to actually exist on the far
-                // machine rather than for the request to have been sent — see the
-                // long note on it. Null means it refused or did not appear, and the
-                // rail is the honest place for that: the machine's own heading is
-                // there, and a session that turns up a moment later lands in it.
-                const sessionId = await machines.startSession(machineId, request.cwd, request.provider)
-                machines.reread()
-                if (sessionId === null) return
-                clearPanel()
-                setOpenMachineSession({ machineId, sessionId })
-                return
-              }
-              // Refusals land in the rail as a held row — see `newSessionIn`, which
-              // carries the reasoning. This dialog does not draw the picker's
-              // "could not start" line for it, because by the time the dialog has
-              // closed the answer belongs where the session would have been.
-              const meta = await window.deck.createSession(request).catch(() => null)
-              if (!meta) return
-              /*
-               * The folder joins the rail, exactly as it does on every other route.
-               *
-               * `newSessionIn` has done this since the day it was written — *"a
-               * session in a folder the sidebar is not listing is a session with no
-               * row"* — and this path, which became the *only* path when every
-               * button started opening this dialog, never did. Browse to a folder
-               * the app has not seen, press Start, and the session lands in the
-               * rail's orphan bucket, which means "your project was closed out from
-               * under this" and is not what happened.
-               *
-               * It is what makes the copilot's own folder work as a place to start a
-               * normal session in — *"it will just be a normal another session"* —
-               * because `projects` gives that folder a heading precisely when one of
-               * his sessions is in it, and nothing here would ever have put it in
-               * the list for that test to pass.
-               */
-              addProject(request.cwd)
-              void window.deck.addProject(request.cwd)
-              addSession(meta)
-              showTab(meta.id)
-              /*
-             The bar keeps it — and this is the one that answers what he asked
-             for, because the strip's terminal glyph opens *this* dialog rather
-             than a session (*"we just always wanted this pop-up to come up so we
-             choose which type of terminal we want to open"*).
-
-             Which means the rail's New session button, the ＋ on a project
-             heading and ⌘T all land here too, and all of them keep their window
-             as well. That is deliberate rather than incidental: they are the
-             same act, arrived at from four places, and a session that stays on
-             the bar when it was started from the header and vanishes when it was
-             started from the rail would be the window disagreeing with itself
-             about what a new session is. Restoring a reload's sessions and
-             accepting one started on a paired phone are *not* this act, and
-             neither of them promotes anything.
-          */
-              keepNewWindowInStrip(meta.id)
-            }}
+            onStart={startNewSession}
           />
-          <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-          <JoinRemoteDialog open={joinOpen} onClose={() => setJoinOpen(false)} />
+          <HelpDialog open={helpOpen && !nativeHelp} onClose={() => setHelpOpen(false)} />
+          <JoinRemoteDialog open={joinOpen && !nativeJoin} onClose={() => setJoinOpen(false)} />
           <SessionInspector
-            open={inspectorOpen}
+            open={inspectorOpen && !nativeInspector}
             onClose={() => setInspectorOpen(false)}
             cwd={focusedSession?.projectPath ?? activeProjectPath}
             // The session in front of you, not whatever the store last marked
@@ -7796,7 +8378,7 @@ function Workspace() {
             }
             sessionTitle={focusedSession?.title}
           />
-          <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+          <ShortcutsSheet open={shortcutsOpen && !nativeShortcuts} onClose={() => setShortcutsOpen(false)} />
           {/*
         The copilot's alter-tier confirmation.
 
@@ -7813,7 +8395,7 @@ function Workspace() {
         question is a build where the answer is decided by a timeout.
       */}
       <CopilotConsent
-        question={consent.question}
+        question={nativeConsent ? null : consent.question}
         waiting={consent.waiting}
         titles={consent.titles}
         onAnswer={consent.answer}
@@ -7832,7 +8414,7 @@ function Workspace() {
         would open a window called "Copilot" for a copilot called Nova.
       */}
       <CopilotSetup
-        open={copilotSetupOpen}
+        open={copilotSetupOpen && !nativeCopilotSetup}
         onClose={() => setCopilotSetupOpen(false)}
         onDone={() => {
           setCopilotSetupOpen(false)
@@ -7853,8 +8435,13 @@ function Workspace() {
          * the settings rail gives about its own selected pane: the wrong thing
          * must not be shown for even one frame.
          */
-        open={alertsOpen && features.on('alerts')}
-        onClose={() => setAlertsOpen(false)}
+        open={alertsOpen && features.on('alerts') && (!nativeAlerts || alertsApproving !== null)}
+        onClose={() => {
+          setAlertsOpen(false)
+          setAlertsApproving(null)
+        }}
+        startApproving={nativeAlerts ? alertsApproving : null}
+        onApprovalDone={() => setAlertsApproving(null)}
         projectPath={activeProjectPath}
         /* The raw report and the switch, not the filtered one: the panel applies
            `withInsights` itself, and handing it a report that had already been
@@ -7871,65 +8458,10 @@ function Workspace() {
          * nothing listened, so pressing one re-ran the scan behind it and left
          * you exactly where you were.
          */
-        onAction={(action) => {
-          /*
-           * The sheet closes first, whatever the action turns out to be.
-           *
-           * All five of them act on the window *behind* this dialog — a panel,
-           * a tab, a terminal, another sheet — and a modal is precisely the
-           * thing that makes those unreachable while it is up. Leaving it open
-           * would have been the same defect the actions were given handlers to
-           * fix: press the button, something happens somewhere you cannot see,
-           * and the surface in front of you is unchanged.
-           */
-          setAlertsOpen(false)
-          /*
-           * A session-targeted alert names Claude's own conversation id, taken
-           * from the transcript — not this window's tab id, which the main
-           * process mints. They coincide only when the app started the session.
-           * So the match is attempted, and where it fails the action lands on
-           * the inspector, which reads the project's transcripts and can
-           * therefore show the very session the alert is about. What it never
-           * does is guess: `/compact` is a write, and a write to the wrong
-           * session is worse than a button that took you somewhere slightly
-           * broader.
-           */
-          const openSession = sessions.find((session) => session.id === action.target)
-          switch (action.kind) {
-            case 'open-git':
-              showPanel('git')
-              return
-            case 'focus-session':
-              if (openSession) selectTab(openSession.id)
-              else setInspectorOpen(true)
-              return
-            case 'open-inspector':
-              setInspectorOpen(true)
-              return
-            case 'compact-session':
-              // The agent's own command, typed into the session it is about —
-              // the same channel chat mode writes through. Focus follows it,
-              // because a command sent to a terminal you cannot see is a
-              // command you cannot tell ran.
-              if (openSession) {
-                selectTab(openSession.id)
-                window.deck.writeToSession(openSession.id, '/compact\r')
-              } else {
-                setInspectorOpen(true)
-              }
-              return
-            case 'install-provider':
-              // Setup is the section that lists what is installed and what is
-              // missing; landing on General would be a page about something
-              // else (rule 1.5).
-              // Through `openSettings`, like every other way into Settings.
-              openSettings('setup')
-              return
-          }
-        }}
+        onAction={runAlertAction}
       />
       <CommandPalette
-        open={paletteMode !== null}
+        open={paletteMode !== null && !nativePalette}
         mode={paletteMode ?? 'commands'}
         commands={commands}
         projectRoot={activeProjectPath}

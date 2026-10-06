@@ -26,6 +26,7 @@ struct NativeCodingAISettings: View {
             }
         }
         .onAppear {
+            NativeSettingsValues.shared.start()
             store.refreshAll()
             store.scopeShown(store.scope)
         }
@@ -50,10 +51,8 @@ struct NativeCodingAISettings: View {
             Section {
                 NativeCodingAIScopePicker(store: store)
             } header: {
-                Text("What runs your sessions, the logins it uses, and what is installed.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textCase(nil)
+                NativeSettingsHead(title: SettingsSchema.section("agents")?.label ?? "Coding AI",
+                                   blurb: SettingsSchema.section("agents")?.blurb)
             }
 
             switch store.scope {
@@ -68,6 +67,8 @@ struct NativeCodingAISettings: View {
             }
         }
         .formStyle(.grouped)
+        // The page's foot: whether the last change saved, and Shortcuts.
+        .safeAreaInset(edge: .bottom, spacing: 0) { NativeSettingsFoot() }
     }
 }
 
@@ -128,18 +129,11 @@ struct NativeCodingAIThisMachine: View {
                         NativeCodingAIInfo(label: CodingAIDefaultTool.label, text: CodingAIDefaultTool.more)
                     }
                     Text(CodingAIDefaultTool.help)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
             .disabled(!store.defaultToolLoaded)
-
-            if store.saveState != .idle {
-                Text(store.saveState.line)
-                    .font(.caption)
-                    .foregroundStyle(store.saveState.isFailure ? Color.red : Color.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
         }
     }
 
@@ -168,12 +162,5 @@ struct NativeCodingAIThisMachine: View {
         guard !choices.contains(where: { $0.id == selected }),
               let account = store.snapshot.accounts.first(where: { $0.id == selected }) else { return choices }
         return choices + [account]
-    }
-}
-
-extension NativeCodingAIStore.SaveState {
-    var isFailure: Bool {
-        if case .failed = self { return true }
-        return false
     }
 }

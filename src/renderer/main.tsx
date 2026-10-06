@@ -5,6 +5,7 @@ import './styles/tokens.css'
 import './styles/app.css'
 import { App } from './App'
 import { DriveHost } from './copilot/driving/DriveHost'
+import { useNativeScreens } from './native-screens'
 import { PopoutWindow } from './popout/PopoutWindow'
 import { HootPanel } from './hoot-panel/HootPanel'
 import { bindCatcher } from '../shared/hoot-catcher'
@@ -14,6 +15,15 @@ import { ScreenPage } from './screens/ScreenPage'
 import { screenRoute } from './screens/screen-route'
 import { IslandPage } from './island/IslandPage'
 import { isIslandPage } from './island/native-island'
+
+/**
+ * The tour player, unless the native window drives the app itself (`drive` in
+ * `native-screens`, lane A's NativeDriveHost): two players would each run a tour
+ * and report it twice.
+ */
+function PageDriveHost() {
+  return useNativeScreens().has('drive') ? null : <DriveHost />
+}
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')
@@ -131,7 +141,7 @@ if (hootCatcher) {
 
       It renders nothing until a tour arrives on `deck-control:tour`.
     */}
-    <DriveHost />
+    <PageDriveHost />
   </StrictMode>
   ),
 )

@@ -14,9 +14,11 @@ public struct TabItem: Equatable, Identifiable, Sendable, Decodable {
     public let status: String?
     /// Missing means not closable: closing is never assumed.
     public let closable: Bool
+    /// A terminal on a server: what its pane opens (lane T, `ServerTabInfo`).
+    public let server: ServerTabInfo?
 
     public init(id: String, title: String, symbol: String? = nil, kind: String, active: Bool = false,
-                unread: Bool = false, status: String? = nil, closable: Bool = false) {
+                unread: Bool = false, status: String? = nil, closable: Bool = false, server: ServerTabInfo? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
@@ -25,6 +27,7 @@ public struct TabItem: Equatable, Identifiable, Sendable, Decodable {
         self.unread = unread
         self.status = status.flatMap(\.nonEmpty)
         self.closable = closable
+        self.server = server
     }
 
     public static func defaultSymbol(kind: String) -> String {
@@ -42,10 +45,10 @@ public struct TabItem: Equatable, Identifiable, Sendable, Decodable {
     /// The same tab, shown as selected or not (only one tab in the strip is).
     public func with(active: Bool) -> TabItem {
         TabItem(id: id, title: title, symbol: symbol, kind: kind, active: active,
-                unread: unread, status: status, closable: closable)
+                unread: unread, status: status, closable: closable, server: server)
     }
 
-    enum CodingKeys: String, CodingKey { case id, title, symbol, kind, active, unread, status, closable }
+    enum CodingKeys: String, CodingKey { case id, title, symbol, kind, active, unread, status, closable, server }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -60,7 +63,8 @@ public struct TabItem: Equatable, Identifiable, Sendable, Decodable {
             active: c.lossyFlag(.active) ?? false,
             unread: c.lossyFlag(.unread) ?? false,
             status: c.lossyString(.status),
-            closable: c.lossyFlag(.closable) ?? false)
+            closable: c.lossyFlag(.closable) ?? false,
+            server: try? c.decodeIfPresent(ServerTabInfo.self, forKey: .server))
     }
 }
 
@@ -68,22 +72,31 @@ public struct TabsState: Equatable, Sendable, Decodable {
     public var tabs: [TabItem]
     public var canNewTerminal: Bool
     public var canNewBrowser: Bool
+    /// The window's arrangement: one session, a split, or swarm (lane T, `WindowLayout`).
+    public var layout: WindowLayout?
+    /// The account switch under way or just made, for the account chip's note (lane T).
+    public var accountSwitch: AccountSwitchNote?
 
-    public init(tabs: [TabItem], canNewTerminal: Bool, canNewBrowser: Bool) {
+    public init(tabs: [TabItem], canNewTerminal: Bool, canNewBrowser: Bool, layout: WindowLayout? = nil,
+                accountSwitch: AccountSwitchNote? = nil) {
         self.tabs = tabs
         self.canNewTerminal = canNewTerminal
         self.canNewBrowser = canNewBrowser
+        self.layout = layout
+        self.accountSwitch = accountSwitch
     }
 
     public var activeID: String? { tabs.first(where: \.active)?.id }
 
-    enum CodingKeys: String, CodingKey { case tabs, canNewTerminal, canNewBrowser }
+    enum CodingKeys: String, CodingKey { case tabs, canNewTerminal, canNewBrowser, layout, accountSwitch }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(tabs: c.lossyArray(.tabs),
                   canNewTerminal: c.lossyFlag(.canNewTerminal) ?? false,
-                  canNewBrowser: c.lossyFlag(.canNewBrowser) ?? false)
+                  canNewBrowser: c.lossyFlag(.canNewBrowser) ?? false,
+                  layout: try? c.decodeIfPresent(WindowLayout.self, forKey: .layout),
+                  accountSwitch: try? c.decodeIfPresent(AccountSwitchNote.self, forKey: .accountSwitch))
     }
 }
 

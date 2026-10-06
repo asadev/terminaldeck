@@ -36,7 +36,7 @@ export const NATIVE_REFUSAL = {
   hooks:
     'The native shell does not change agents’ hook settings, so the copy of the app installed on this computer keeps them.',
   direct:
-    'The native shell reaches phones and other computers over the relay only; the direct Tailscale address and its port stay with the installed app.',
+    'This app reaches phones and other computers through the relay. A direct address and its port stay with the normal Terminal Deck app.',
 } as const
 
 /**

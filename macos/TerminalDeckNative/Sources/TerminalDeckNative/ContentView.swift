@@ -54,6 +54,7 @@ struct ContentView: View {
         .navigationSubtitle(model.windowSubtitle)
         // The tabs name what is on show; with none (only the new-tab buttons) the title does.
         .toolbar(removing: tabs?.tabs.isEmpty == false ? .title : nil)
+        .nativeAppDialogs(model) // the page's dialogs, drawn natively (lane S)
         .onChange(of: model.settingsWindowRequest) {
             openWindow(id: SettingsWindow.sceneID)
         }
@@ -61,6 +62,7 @@ struct ContentView: View {
             for ref in model.takePendingScreens() { openWindow(value: ref) }
         }
         .task {
+            NativeKeyRouter.install(model) // keymap.ts shortcuts while a native view has the keyboard (lane S)
             // Screens that had their own windows when the app last quit.
             guard !restored else { return }
             restored = true
@@ -109,7 +111,7 @@ struct PageDetailView: View {
     var body: some View {
         let showsPage = model.pageReady && model.failure == nil
         let screen = model.failure == nil && model.engineIsUp ? model.currentScreen : nil
-        let native = screen.flatMap { NativeScreens.detail(kind: $0.kind, id: $0.id) }
+        let native = screen.flatMap { featureOffer(for: $0) ?? NativeScreens.detail(kind: $0.kind, id: $0.id) } ?? emptyState(screen: screen)
         // A dialog the page opened (e.g. New Session from the native terminal) comes in
         // front of the native screen, which stays mounted underneath until it closes.
         let pageInFront = showsPage && (native == nil || model.pageModalOpen)
@@ -125,9 +127,9 @@ struct PageDetailView: View {
                             showLog: model.showLog)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.background)
-            } else if let native, let screen {
+            } else if let native {
                 native
-                    .id("\(screen.kind)/\(screen.id)") // its own state per screen
+                    .id(screen.map { "\($0.kind)/\($0.id)" } ?? "empty") // its own state per screen; the empty states have none
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.background)
                     .zIndex(1)
@@ -140,6 +142,29 @@ struct PageDetailView: View {
         }
         .animation(.easeOut(duration: 0.2), value: showsPage)
         .onChange(of: native != nil && !pageInFront) { _, shown in model.nativeScreenShown(shown) }
+    }
+}
+
+extension PageDetailView {
+    /// FeatureOffer (lane S): the page says this screen's feature is off or not installed.
+    func featureOffer(for screen: (kind: String, id: String)) -> AnyView? {
+        guard let open = model.dialogs[NativeDialogName.featureOffer],
+              let request = open.decode(FeatureOfferRequest.self), request.panel == screen.id else { return nil }
+        let symbol = model.visibleSidebar?.item(id: screen.id)?.symbol
+        return AnyView(NativeFeatureOffer(request: request, symbol: symbol, model: model))
+    }
+
+    /// Nothing selected: the app's own empty states, drawn natively (EmptyState.tsx when
+    /// nothing is open at all, PageEmpty "Nothing in this pane yet" otherwise).
+    func emptyState(screen: (kind: String, id: String)?) -> AnyView? {
+        guard screen == nil, model.pageReady, model.failure == nil, model.engineIsUp else { return nil }
+        if model.stripTabs?.tabs.isEmpty ?? true {
+            return AnyView(NativeEmptyState(openProject: model.openProject))
+        }
+        return AnyView(NativePageEmpty(title: "Nothing in this pane yet",
+                                       action: PageEmptyAction(label: "New session", perform: model.newSession)) {
+            Text("Pick a session in the sidebar and it opens here.")
+        })
     }
 }
 

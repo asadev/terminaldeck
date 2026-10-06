@@ -26,14 +26,29 @@ final class DeckTerminalView: TerminalView {
         registerForDraggedTypes([.fileURL, .URL, .string])
     }
 
+    /// The scheme's caret and the colour of the text under it, while the session is live.
+    var liveCaret: (colour: NSColor, text: NSColor?) = (.controlAccentColor, nil) {
+        didSet { if !frozen { showCaret() } }
+    }
+
+    /// Frozen: the caret goes (a blinking cursor over a dead composer says the
+    /// keyboard is still connected) and the keyboard is let go. A session on
+    /// another machine can come back with its link, so this is reversible.
     func freeze(_ on: Bool) {
         guard on != frozen else { return }
         frozen = on
         if on {
-            // Hide the caret: a blinking cursor over a dead composer says the keyboard is still connected.
-            feed(text: "\u{1b}[?25l")
+            caretColor = .clear
+            caretTextColor = nil
             if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+        } else {
+            showCaret()
         }
+    }
+
+    private func showCaret() {
+        caretColor = liveCaret.colour
+        caretTextColor = liveCaret.text
     }
 
     // MARK: Focus
@@ -50,6 +65,8 @@ final class DeckTerminalView: TerminalView {
 
     // MARK: Chords
 
+    /// Control chords come through here too (AppKit offers ⌃ keys as key equivalents
+    /// first), so ⌃F, ⌃⇧K and ⌃⇧C are taken before the program sees them, as on the page.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown, window?.firstResponder === self,
               let key = event.charactersIgnoringModifiers else {

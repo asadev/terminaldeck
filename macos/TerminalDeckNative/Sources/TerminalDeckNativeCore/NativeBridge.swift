@@ -33,6 +33,76 @@ public struct PageCommand: Equatable, Sendable {
     // Settings window
     public static func settingsSection(_ id: String) -> PageCommand { PageCommand("settings-section", id) }
 
+    // Doors between views, for native screens (lane E2; page: native-commands.ts
+    // NATIVE_DOOR_COMMANDS). What they leave behind comes back in the `sidebar`
+    // state as `openFile` and `focus`.
+    /// The Files view, with this file (relative to the project) open — `showFile`.
+    public static func openFile(_ relPath: String) -> PageCommand { PageCommand("open-file", relPath) }
+    /// A view opened on one part of it: Git on a group ("staged"…), GitHub on "issues" or "pulls".
+    public static func showPanel(_ panelId: String, focus: String?) -> PageCommand {
+        PageCommand("show-panel", list: [panelId, focus ?? ""])
+    }
+    /// The session inspector.
+    public static let openInspector = PageCommand("open-inspector")
+    /// Swarm view ("show all sessions"); the page does nothing while swarm is not installed.
+    public static let showSessions = PageCommand("show-sessions")
+
+    // Sessions the native window draws (lane E2; page: NATIVE_SESSION_COMMANDS).
+    /// A local session's name, as the rail's rename: rail and title at once, engine told.
+    public static func renameSession(_ tabId: String, _ name: String) -> PageCommand {
+        PageCommand("rename-session", list: [tabId, name])
+    }
+    /// Text into a server terminal's shell (the page holds the shell id).
+    public static func serverShellWrite(_ tabId: String, _ text: String) -> PageCommand {
+        PageCommand("server-shell-write", list: [tabId, text])
+    }
+    /// A server shell the native window opened itself, and its end — so the page's bookkeeping follows.
+    public static func serverShellOpened(_ tabId: String, shellId: String) -> PageCommand {
+        PageCommand("server-shell-opened", list: [tabId, shellId])
+    }
+    public static func serverShellEnded(_ tabId: String) -> PageCommand { PageCommand("server-shell-ended", list: [tabId]) }
+
+    // The session header's account chips (lane E2; page: NATIVE_ACCOUNT_COMMANDS).
+    /// AccountChip's pick: a new session in that folder as that account (nil folder: the page's own choice).
+    public static func newSessionAs(projectPath: String?, accountId: String, provider: String?) -> PageCommand {
+        PageCommand("new-session-as", list: [projectPath ?? "", accountId, provider ?? ""])
+    }
+    /// AccountChip's switch: the page asks, and its confirm is the native one.
+    public static func switchAccount(sessionId: String, accountId: String) -> PageCommand {
+        PageCommand("switch-account", list: [sessionId, accountId])
+    }
+    /// ServerAccountChip's start: a new terminal on that server running that agent (nil: a plain shell).
+    public static func openServerShell(serverId: String, agentId: String?) -> PageCommand {
+        PageCommand("open-server-shell", list: [serverId, agentId ?? ""])
+    }
+    /// The chip's "Add account": Settings → Accounts with its add popup.
+    public static let addAccount = PageCommand("add-account")
+    /// The chips' manage: Settings → Accounts.
+    public static let manageAccounts = PageCommand("manage-accounts")
+
+    // Split and swarm (lane E2; page: NATIVE_LAYOUT_COMMANDS). The arrangement is the
+    // `tabs` state's `layout`; swarm's cells use `selectTab` and its + `newTerminalTab`.
+    /// ModeSwitch: "terminal" or "split" (choosing split installs it first when it is not).
+    public static func setMode(_ mode: String) -> PageCommand { PageCommand("set-mode", list: [mode]) }
+    /// SplitView's focus.
+    public static func focusPane(_ paneId: String) -> PageCommand { PageCommand("focus-pane", list: [paneId]) }
+    /// SplitView's divider: the split's new ratio, 0 < ratio < 1.
+    public static func resizeSplit(_ splitId: String, ratio: Double) -> PageCommand {
+        PageCommand("resize-split", list: [splitId, String(ratio)])
+    }
+    /// A pane's close (`closePaneAt`).
+    public static func closePane(_ paneId: String) -> PageCommand { PageCommand("close-pane", list: [paneId]) }
+
+    // The servers screens (lane E2; page: NATIVE_SERVER_COMMANDS).
+    /// ServerPage's "Open a terminal": a new terminal on that server, in that folder (nil: its home).
+    public static func openServerSession(serverId: String, serverName: String, startIn: String?) -> PageCommand {
+        PageCommand("open-server-session", list: [serverId, serverName, startIn ?? ""])
+    }
+    /// A server renamed: open tabs on it carry the new name.
+    public static func serverRenamed(serverId: String, name: String) -> PageCommand {
+        PageCommand("server-renamed", list: [serverId, name])
+    }
+
     /// Every page: the screens the native window draws itself, so the page stops
     /// mounting them underneath.
     public static func nativeScreens(_ ids: [String]) -> PageCommand { PageCommand("native-screens", list: ids) }
@@ -96,6 +166,8 @@ public enum PageMessage: Equatable, Sendable {
     case pageModal(open: Bool)
     /// The app's theme, as the page resolves it: the native chrome is painted to match.
     case appearance(AppAppearance)
+    /// One of the page's dialogs, drawn natively (NativeDialogs.swift).
+    case dialog(DialogRequest)
 
     public static let handlerName = "tdNative"
     public static let maxTitleLength = 200
@@ -125,6 +197,10 @@ public enum PageMessage: Equatable, Sendable {
         case "open-settings":
             guard let url = (dict["url"] as? String)?.nonEmpty else { return nil }
             return .openSettings(url: url, section: (dict["section"] as? String)?.nonEmpty)
+
+        case "dialog":
+            guard let request = DialogRequest.parse(dict) else { return nil }
+            return .dialog(request)
 
         case "appearance":
             guard let appearance = AppAppearance(preference: dict["preference"] as? String,

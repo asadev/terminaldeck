@@ -144,9 +144,12 @@ struct TerminalPasteTests {
     @Test func plainTextStaysAPlainTextPaste() {
         #expect(TerminalPastePlan.decide(filePaths: [], hasImage: false, imageType: nil, text: "git diff", now: Date())
                 == .text("git diff"))
-        // Text with a rendering of it (a spreadsheet copy) is still the text.
-        #expect(TerminalPastePlan.decide(filePaths: [], hasImage: true, imageType: "image/png", text: "a\tb", now: Date())
-                == .text("a\tb"))
+        // Text with an image beside it (a spreadsheet copy) pastes the image, as the page does.
+        guard case .stageImage = TerminalPastePlan.decide(filePaths: [], hasImage: true, imageType: "image/png",
+                                                          text: "a\tb", now: Date()) else {
+            Issue.record("an image on the clipboard should win over its text")
+            return
+        }
     }
 
     @Test func aScreenshotIsStagedUnderATimestampedName() {
@@ -190,15 +193,22 @@ struct TerminalPasteTests {
         #expect(TerminalLinks.openable("ssh://host") == nil)
     }
 
-    @Test func chordsAreCommandOnly() {
+    @Test func chordsTakeCommandOrControlLikeThePage() {
         #expect(TerminalChord.from(key: "f", command: true, shift: false, option: false, control: false) == .find)
         #expect(TerminalChord.from(key: "F", command: true, shift: false, option: false, control: false) == .find)
         #expect(TerminalChord.from(key: "k", command: true, shift: true, option: false, control: false) == .clear)
         #expect(TerminalChord.from(key: "c", command: true, shift: true, option: false, control: false) == .copy)
         #expect(TerminalChord.from(key: "v", command: true, shift: false, option: false, control: false) == .paste)
         #expect(TerminalChord.from(key: "a", command: true, shift: false, option: false, control: false) == .selectAll)
-        // ⌃F is "forward a character" in every shell; it belongs to the program.
-        #expect(TerminalChord.from(key: "f", command: false, shift: false, option: false, control: true) == nil)
+        // The page's `terminalChord` takes ⌃ for its three: ⌃F, ⌃⇧K, ⌃⇧C.
+        #expect(TerminalChord.from(key: "f", command: false, shift: false, option: false, control: true) == .find)
+        #expect(TerminalChord.from(key: "K", command: false, shift: true, option: false, control: true) == .clear)
+        #expect(TerminalChord.from(key: "c", command: false, shift: true, option: false, control: true) == .copy)
+        // The Mac's edit chords stay ⌘ only: ⌃C, ⌃V and ⌃A belong to the program.
+        #expect(TerminalChord.from(key: "c", command: false, shift: false, option: false, control: true) == nil)
+        #expect(TerminalChord.from(key: "v", command: false, shift: false, option: false, control: true) == nil)
+        #expect(TerminalChord.from(key: "a", command: false, shift: false, option: false, control: true) == nil)
+        #expect(TerminalChord.from(key: "f", command: false, shift: false, option: false, control: false) == nil)
         #expect(TerminalChord.from(key: "f", command: true, shift: false, option: true, control: false) == nil)
         #expect(TerminalChord.from(key: "k", command: true, shift: false, option: false, control: false) == nil)
     }

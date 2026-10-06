@@ -8,7 +8,15 @@ import { NEVER_LEAVES, canOpenOutside, createLinkOpener, installPageLinks, linkD
 import { NO_BROWSER_WINDOWS, answerMenu, createMenus, linkMenuItems, sessionRowMenuItems, type ContextMenuMessage } from './menus'
 import { installNativeShell } from './native-shell'
 import { NOTIFICATION_CLICK_CHANNEL, NOTIFY_CHANNEL, NOTIFY_CLOSE_CHANNEL, createNativeNotification } from './notifications'
-import { LINK_TAB_CHANNEL, installPageFeatures, type BridgeHooks, type PageHost } from './page-features'
+import {
+  LINK_TAB_CHANNEL,
+  NATIVE_SCREENS_EVENT,
+  NATIVE_SCREENS_GLOBAL,
+  installPageFeatures,
+  leaveNativeScreens,
+  type BridgeHooks,
+  type PageHost,
+} from './page-features'
 import { PAGE_CALL_CHANNEL, PAGE_RESULT_CHANNEL, UI_GLOBAL, WHERE_GLOBAL, answerPageCall } from './page-calls'
 
 /**
@@ -76,6 +84,19 @@ describe('Hoot\u2019s window readers', () => {
   it('stay quiet on a page without them, so the main window\u2019s answer is the one taken', () => {
     expect(answerPageCall({ id: 'a', fn: 'where' }, {})).toBeNull()
     expect(answerPageCall({ id: 'a', fn: 'ui.list' }, {})).toBeNull()
+  })
+
+  it('leaves `where` to the native window once it drives the app itself, and keeps ui.*', () => {
+    const host: Record<string, unknown> = {
+      [UI_GLOBAL]: { do: () => ({ ok: true }), list: () => ({ commands: [] }) },
+      [WHERE_GLOBAL]: () => ({ view: 'files' }),
+      __tdNativeScreens: ['session', 'drive'],
+    }
+    expect(answerPageCall({ id: 'w', fn: 'where' }, host)).toBeNull()
+    expect(answerPageCall({ id: 'l', fn: 'ui.list' }, host)).toEqual({ id: 'l', value: { commands: [] } })
+    expect(answerPageCall({ id: 'd', fn: 'ui.do', arg: {} }, host)).toEqual({ id: 'd', value: { ok: true } })
+    host.__tdNativeScreens = ['session']
+    expect(answerPageCall({ id: 'w', fn: 'where' }, host)).toEqual({ id: 'w', value: { view: 'files' } })
   })
 })
 
@@ -391,5 +412,27 @@ describe('a page, wired', () => {
     expect(typeof (host as { Notification?: unknown }).Notification).toBe('function')
     // Nothing under the point here, so the command answers no — but it is the shim's to answer.
     expect((host.tdNative as { run(name: string, arg?: unknown): boolean }).run('drop-paths', { paths: ['/a'], x: 1, y: 1 })).toBe(false)
+  })
+})
+
+describe('which screens are native', () => {
+  it('leaves the list on the window with an event, and refuses anything but a list of names', () => {
+    // The renderer's half (`renderer/native-screens.ts`) reads the same two names;
+    // native-screens.test.ts holds them to this file's text.
+    expect([NATIVE_SCREENS_GLOBAL, NATIVE_SCREENS_EVENT]).toEqual(['__tdNativeScreens', 'td:native-screens'])
+    const fired: string[] = []
+    const host = {
+      Event: class {
+        constructor(readonly type: string) {}
+      },
+      dispatchEvent(event: { type: string }) {
+        fired.push(event.type)
+        return true
+      },
+    } as unknown as Parameters<typeof leaveNativeScreens>[0]
+    expect(leaveNativeScreens(host, ['settings:ai-apps', 'mcp'])).toBe(true)
+    expect((host as unknown as Record<string, unknown>)[NATIVE_SCREENS_GLOBAL]).toEqual(['settings:ai-apps', 'mcp'])
+    expect(fired).toEqual([NATIVE_SCREENS_EVENT])
+    expect(leaveNativeScreens(host, 'mcp')).toBe(false)
   })
 })

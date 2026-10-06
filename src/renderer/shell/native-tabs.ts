@@ -30,6 +30,45 @@
 import { removeFromStrip, shownTabs } from '../browser/workspace-strip'
 import { BROWSER_SYMBOL, HOOT_SYMBOL, SESSION_SYMBOL } from './native-sidebar'
 import { tabIdentities, type WorkspaceTab } from './workspace-tabs'
+import type { ServerSession } from '../machines/servers/server-sessions'
+import { primaryPane, type PaneLayout, type PaneNode } from '../layout/pane-tree'
+
+/**
+ * How the window arranges its terminals, so the native window can draw split
+ * and swarm itself (lane T). `root` is the pane tree's own JSON — a leaf is
+ * `{ type: 'leaf', id, tabId }`, a split `{ type: 'split', id, direction, ratio,
+ * children }`. `modeSwitch` is the page's own condition for drawing ModeSwitch,
+ * `splitOffer` its `splitOffer` prop (split not installed yet: choosing it
+ * installs it), and `swarmSessions` SwarmGrid's rows.
+ */
+export interface NativeLayoutState {
+  mode: 'terminal' | 'split'
+  swarm: boolean
+  root: PaneNode | null
+  focusedPaneId: string | null
+  primaryPaneId: string | null
+  modeSwitch: boolean
+  splitOffer: boolean
+  swarmSessions: { id: string; title: string; status: string }[]
+}
+
+/**
+ * A terminal on a server: what it takes to open its shell — `ServerSessionPane`'s
+ * own props — so the native window can draw server shells too (lane T).
+ *
+ * `shellId` is the far end's id once a shell is open, null before: the page's
+ * `serverShellIds`. A native window that opens the shell itself tells the page
+ * with `server-shell-opened` / `server-shell-ended`, so the bar, the heading and
+ * `server-shell-write` keep addressing the right channel.
+ */
+export interface NativeServerTab {
+  serverId: string
+  serverName: string
+  shellKey: string
+  startIn: string | null
+  run: string | null
+  shellId: string | null
+}
 
 export interface NativeTab {
   id: string
@@ -42,11 +81,27 @@ export interface NativeTab {
   unread?: boolean
   status?: string
   closable: boolean
+  /** Only on a terminal on a server. */
+  server?: NativeServerTab
+}
+
+/**
+ * The "Switching to …" / "Switched to …" note beside the account chip (lane T):
+ * which session it is about, whether the switch is still going, and its words.
+ */
+export interface NativeAccountSwitch {
+  sessionId: string
+  state: 'working' | 'done'
+  text: string
 }
 
 export interface NativeTabsState {
   tabs: NativeTab[]
   canNewTerminal: boolean
+  /** The account-switch note, or null when there is none. */
+  accountSwitch: NativeAccountSwitch | null
+  /** Split and swarm — see {@link NativeLayoutState}. */
+  layout: NativeLayoutState
   canNewBrowser: boolean
 }
 
@@ -63,6 +118,18 @@ export interface NativeTabsInput {
   unread: readonly string[]
   /** Whether a browser window can be opened at all — see `App.tsx`. */
   canNewBrowser: boolean
+  /** The server terminals open in this window (`serverSessions`), and their shells' ids by tab id. */
+  serverSessions: readonly ServerSession[]
+  serverShellIds: Readonly<Record<string, string>>
+  /** The window's arrangement: `mode`, `swarm`, the pane tree, and the ModeSwitch facts. */
+  mode: 'terminal' | 'split'
+  swarm: boolean
+  panes: PaneLayout
+  modeSwitch: boolean
+  splitOffer: boolean
+  swarmSessions: readonly { id: string; title: string; status: string }[]
+  /** App's `switchingNote` / `accountSwitchNote`, as one field. */
+  accountSwitch: NativeAccountSwitch | null
 }
 
 export const EMPTY_NATIVE_TABS: NativeTabsInput = {
@@ -72,6 +139,15 @@ export const EMPTY_NATIVE_TABS: NativeTabsInput = {
   covered: false,
   unread: [],
   canNewBrowser: false,
+  serverSessions: [],
+  serverShellIds: {},
+  mode: 'terminal',
+  swarm: false,
+  panes: { root: null, focusedPaneId: null },
+  modeSwitch: false,
+  splitOffer: false,
+  swarmSessions: [],
+  accountSwitch: null,
 }
 
 export function buildNativeTabs(input: NativeTabsInput): NativeTabsState {
@@ -96,9 +172,21 @@ export function buildNativeTabs(input: NativeTabsInput): NativeTabsState {
         ...(tab.kind === 'session' && tab.status ? { status: tab.status } : {}),
         // The strip draws a ✕ on every tab: off the bar for a session, close for a page.
         closable: true,
+        ...serverTab(input, tab.id),
       }
     }),
     canNewTerminal: true,
+    accountSwitch: input.accountSwitch === null ? null : { ...input.accountSwitch },
+    layout: {
+      mode: input.mode,
+      swarm: input.swarm,
+      root: input.panes.root,
+      focusedPaneId: input.panes.focusedPaneId,
+      primaryPaneId: primaryPane(input.panes)?.id ?? null,
+      modeSwitch: input.modeSwitch,
+      splitOffer: input.splitOffer,
+      swarmSessions: input.swarmSessions.map((row) => ({ id: row.id, title: row.title, status: row.status })),
+    },
     canNewBrowser: input.canNewBrowser,
   }
 }
@@ -108,6 +196,21 @@ export function buildNativeTabs(input: NativeTabsInput): NativeTabsState {
  * order to keep, and the tab to show instead when it was the one in front), or
  * close a browser window. `null` for a tab the strip is not showing.
  */
+function serverTab(input: NativeTabsInput, id: string): { server?: NativeServerTab } {
+  const entry = input.serverSessions.find((row) => row.tabId === id)
+  if (!entry) return {}
+  return {
+    server: {
+      serverId: entry.serverId,
+      serverName: entry.serverName,
+      shellKey: entry.shellKey,
+      startIn: entry.startIn,
+      run: entry.run,
+      shellId: input.serverShellIds[id] ?? null,
+    },
+  }
+}
+
 export function stripClose(
   input: NativeTabsInput,
   id: string,
