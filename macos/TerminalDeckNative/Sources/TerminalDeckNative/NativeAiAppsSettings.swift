@@ -119,7 +119,7 @@ private struct AiSwitchRow: View {
     let onChange: (Bool) -> Void
 
     var body: some View {
-        Toggle(isOn: Binding(get: { isOn }, set: onChange)) {
+        Toggle(isOn: Binding(get: { isOn }, set: { onChange($0) })) {
             AiLabel(label: label, help: help, more: more)
         }
         .toggleStyle(.switch)
@@ -332,7 +332,7 @@ private struct AiNotifyBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Notify this app").font(.callout)
-            Picker("How this app hears about its sessions", selection: Binding(get: { mode }, set: choose)) {
+            Picker("How this app hears about its sessions", selection: Binding(get: { mode }, set: { choose($0) })) {
                 ForEach(AiNotifyMode.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)

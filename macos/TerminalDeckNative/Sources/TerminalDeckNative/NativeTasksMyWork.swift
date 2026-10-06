@@ -532,7 +532,7 @@ struct TaskRowView: View {
         let done = task.crmStatus == "Done"
         let tags = Array(task.labels.prefix(3))
         return HStack(spacing: 8) {
-            Toggle("", isOn: Binding(get: { selected }, set: onSelect))
+            Toggle("", isOn: Binding(get: { selected }, set: { onSelect($0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .accessibilityLabel("Select \(task.title)")

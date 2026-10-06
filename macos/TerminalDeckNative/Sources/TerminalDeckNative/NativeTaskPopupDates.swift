@@ -756,7 +756,7 @@ struct RoutinePanel: View {
     }
 
     private func check(_ label: String, hint: String? = nil, on: Bool, disabled: Bool = false, _ change: @escaping (Bool) -> Void) -> some View {
-        Toggle(isOn: Binding(get: { on }, set: change)) {
+        Toggle(isOn: Binding(get: { on }, set: { change($0) })) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(label)
                 if let hint { Text(hint).font(.caption2).foregroundStyle(.secondary) }

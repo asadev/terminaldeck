@@ -25,7 +25,7 @@ struct NativePowerSettings: View {
             Section {
                 if !unavailable {
                     NativeSettingRow(label: PowerWords.rowLabel(hasLid: hasLid), help: PowerWords.help(hasLid: hasLid)) {
-                        Toggle("", isOn: Binding(get: { on }, set: change))
+                        Toggle("", isOn: Binding(get: { on }, set: { change($0) }))
                             .toggleStyle(.switch)
                             .labelsHidden()
                             .disabled(unwired || loading || changing || !supported || !known)

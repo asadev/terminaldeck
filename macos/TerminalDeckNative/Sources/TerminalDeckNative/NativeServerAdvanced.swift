@@ -59,7 +59,7 @@ struct NativeServerAdvanced: View {
                     ? "On, because you added this server yourself. An agent in a terminal on this server can open browser windows here and act on the ones you attach — nothing else in the browser, and nothing you did not hand it."
                     : "Off, because you turned it off. Terminals on this server cannot open a browser window here or act on one you attach, and nothing on this machine asks them to.")
                 NativeSettingsProse(text: "\(allowed ? "Untick it" : "Tick it") to \(allowed ? "keep" : "let") this server’s terminals \(allowed ? "out of the browser here" : "into the browser here"). It works with Claude Code; Codex and Gemini have no setting this app can add to a command you type yourself.")
-                Toggle("Sessions on \(server.name) may act on browser windows here", isOn: Binding(get: { allowed }, set: onDrivesWindows))
+                Toggle("Sessions on \(server.name) may act on browser windows here", isOn: Binding(get: { allowed }, set: { onDrivesWindows($0) }))
                     .toggleStyle(.checkbox)
 
                 heading("What to call it here")
