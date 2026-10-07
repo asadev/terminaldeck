@@ -10,6 +10,14 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-10-08
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Fixed
+
+- Your phone connects to the Mac again.
+
 ## [0.19.1] — 2026-10-07
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2436,7 +2444,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.2...HEAD
+[0.19.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.2
 [0.19.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.1
 [0.19.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.0
 [0.18.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.6

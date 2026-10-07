@@ -44,7 +44,7 @@ extension NativeCompositionProduction {
         let enrollment = BackendRemoteServeEnrollment(trust: trust,
             verifier: BackendRemoteServeSSHVerifier(transport: BackendNodelessSSHAuthTransport()), environment: configuration.inheritedEnvironment)
         remoteHost = try await root.remoteHostService(endpoint: endpoint,
-            relayURL: state.settingsEnvelope()["values"]["remote.relayUrl"].string,
+            relayURL: BackendRelayAddress.resolve(),
             webRoot: Bundle.main.resourceURL?.appendingPathComponent("web/pwa"),
             hostName: Host.current().localizedName ?? "Mac", preview: Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool != true,
             mcp: { [relay] head, body in await relay.answer(head, body: body) }, afterEndpointStart: { [weak self] in try await self?.startRemoteRegistration() })

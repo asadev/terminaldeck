@@ -26,7 +26,7 @@ extension NativeCompositionProduction {
             receivedHolds: { peer, held, _ in await machineAsks.held(deviceID: peer, sessions: held) },
             receivedResult: { id, ok, body in await machineAsks.answer(id: id, result: .init(ok: ok, body: body)) })
         let coordinator = BackendMachineCoordinator(store: store, registry: root.registry,
-            localName: Host.current().localizedName ?? "Mac", relayURL: state.settingsEnvelope()["values"]["remote.relayUrl"].string ?? "",
+            localName: Host.current().localizedName ?? "Mac", relayURL: BackendRelayAddress.resolve() ?? "",
             uploadAuthorize: { [files] url, context in try await files!.authority.authorize(url.path, context: context) },
             ownPorts: root.ownPorts, windows: browserServices,
             pairingBlocked: { [state] in state.settingsEnvelope()["values"]["remote.enabled"].bool == false ? "Remote access is disabled." : nil },
