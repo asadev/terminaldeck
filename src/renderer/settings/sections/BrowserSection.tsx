@@ -1,3 +1,4 @@
+import { isNativeShell } from '../../../shared/native-shell'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Group, Notice, SectionHead, SettingList } from '../controls'
 import { sectionMeta, stringSetting } from '../settings-schema'
@@ -316,6 +317,7 @@ export function importedSummary(status: CookieImportStatus, now: number): string
  */
 export function keptSummary(stored: BrowserStored): string {
   const { cookieCount, domainCount, cacheBytes } = stored
+  if (cacheBytes === null) return `${cookieCount === 0 ? 'No cookies' : `${cookieCount} cookies from ${domainCount} sites`}. Cache size unavailable.`
   if (cookieCount === 0 && cacheBytes === 0) return 'Nothing kept yet.'
   if (cookieCount === 0) return `No cookies, and ${formatBytes(cacheBytes)} of cached pages.`
   const sites = `${domainCount} site${domainCount === 1 ? '' : 's'}`
@@ -458,6 +460,7 @@ export interface BrowserSectionProps extends SectionProps {
 
 export function BrowserSection({ values, save, bridge, loading, accounts }: BrowserSectionProps) {
   const meta = sectionMeta('browser')
+  const safari = isNativeShell()
   const [browsers, setBrowsers] = useState<DetectedBrowser[] | null>(null)
   const [urls, setUrls] = useState<DevUrl[] | null>(null)
   const [problems, setProblems] = useState<string[]>([])
@@ -510,7 +513,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
   const startUrl = stringSetting(values, 'browser.startUrl')
 
   useEffect(() => {
-    if (!bridge.listBrowsers) return
+    if (safari || !bridge.listBrowsers) return
     void bridge.listBrowsers().then(
       (raw) => setBrowsers(toBrowsers(raw)),
       () => setBrowsers([]),
@@ -542,7 +545,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
 
   /* -- cookies. Reads only; the import itself needs a press. */
   const refreshImports = useCallback(() => {
-    if (!bridge.browserCookieImportStatus) return
+    if (safari || !bridge.browserCookieImportStatus) return
     void bridge.browserCookieImportStatus().then(
       (raw) => setImports(toCookieImportStatus(raw)),
       () => setImports(null),
@@ -550,7 +553,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
   }, [bridge])
 
   useEffect(() => {
-    if (!bridge.browserCookieSources) return
+    if (safari || !bridge.browserCookieSources) return
     void bridge.browserCookieSources().then(
       (raw) => setSources(toCookieSources(raw)),
       () => setSources([]),
@@ -882,6 +885,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
           which the next heading already says). The reader needs one fact
           before pressing a button named after a browser: this only reads.
         */}
+        {safari ? <p className="settings-prose">The browser uses Safari’s WebKit engine.</p> : <>
         <p className="settings-prose">
           Or take one from a browser you already use — its bookmarks, history and open tabs, read
           only.
@@ -953,6 +957,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
             ))}
           </>
         )}
+        </>}
       </Group>
 
       <Group title="Cookies and sign-ins">
@@ -965,6 +970,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
           omit={['browser.startUrl']}
         />
 
+        {!safari && <>
         {/*
           Two paragraphs down to one, and the sentences that survived are the
           ones with a cost behind them.
@@ -1098,6 +1104,7 @@ export function BrowserSection({ values, save, bridge, loading, accounts }: Brow
             )}
           </>
         )}
+        </>}
       </Group>
 
       {/*

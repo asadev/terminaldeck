@@ -10,6 +10,8 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .executable(name: "TerminalDeckNative", targets: ["TerminalDeckNative"]),
+        .executable(name: "TerminalDeckNativeHelper", targets: ["TerminalDeckNativeHelper"]),
+        .executable(name: "TerminalDeckJSCorePluginHelper", targets: ["TerminalDeckJSCorePluginHelper"]),
     ],
     dependencies: [
         // The native session terminal (lane T). MIT.
@@ -18,11 +20,26 @@ let package = Package(
     targets: [
         // Pure Foundation logic (engine protocol, origin policy, commands, paths).
         // No UI, so the test target can exercise it directly.
-        .target(name: "TerminalDeckNativeCore"),
+        .target(name: "TerminalDeckNativeCore", linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "TerminalDeckBackend", dependencies: [
+            "TerminalDeckNativeCore",
+            .product(name: "SwiftTerm", package: "SwiftTerm"),
+        ], linkerSettings: [.linkedFramework("JavaScriptCore")]),
+        .executableTarget(
+            name: "TerminalDeckNativeHelper",
+            dependencies: ["TerminalDeckNativeCore", "TerminalDeckBackend"],
+            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Security"), .linkedFramework("IOKit"), .linkedFramework("SystemConfiguration")]
+        ),
+        .executableTarget(
+            name: "TerminalDeckJSCorePluginHelper",
+            dependencies: ["TerminalDeckBackend"],
+            linkerSettings: [.linkedFramework("JavaScriptCore")]
+        ),
         .executableTarget(
             name: "TerminalDeckNative",
             dependencies: [
                 "TerminalDeckNativeCore",
+                "TerminalDeckBackend",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             linkerSettings: [
@@ -33,6 +50,10 @@ let package = Package(
         .testTarget(
             name: "TerminalDeckNativeCoreTests",
             dependencies: ["TerminalDeckNativeCore"]
+        ),
+        .testTarget(
+            name: "TerminalDeckBackendTests",
+            dependencies: ["TerminalDeckBackend", "TerminalDeckNativeCore"]
         ),
     ]
 )

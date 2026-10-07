@@ -54,7 +54,7 @@ struct TaskFieldsCatalogueTests {
         #expect(TaskFields.normaliseConfig(.progressManual, .object(["start": .number(5), "end": .number(5)])).failure == "Start must be less than end")
         #expect(TaskFields.normaliseConfig(.progressAuto, .object(["subtasks": .bool(false), "checklists": .bool(false)])).failure
             == "Count subtasks, checklists, or both")
-        #expect(TaskFields.normaliseConfig(.relationship, .object(["areas": .array([.string("deal")])])).failure == "Unknown area “deal”")
+        #expect(TaskFields.normaliseConfig(.relationship, .object(["areas": .array([.string("deal")])])).value?.areas == ["deal"])
         #expect(TaskFields.normaliseConfig(.text, .string("x")).failure == "Settings are malformed")
         let button = TaskFields.defaultConfig(.button)
         #expect(button.label == "Button" && button.color == "#2F6BFF" && button.action == .status("Done"))

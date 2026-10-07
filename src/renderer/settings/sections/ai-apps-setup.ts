@@ -516,7 +516,9 @@ export function setupFor(app: AppId, context: SetupContext): Setup {
                   `claude mcp add --scope user ${CHANNEL_SERVER} \\`,
                   `  -e NOTIFY_URL=${url} \\`,
                   `  -e NOTIFY_KEY=${context.key} \\`,
-                  `  -- node "${context.channelBridge}"`,
+                  context.channelBridge.endsWith('/TerminalDeckNativeHelper')
+                    ? `  -- "${context.channelBridge}" --notify-channel`
+                    : `  -- node "${context.channelBridge}"`,
                   `claude --dangerously-load-development-channels server:${CHANNEL_SERVER}`,
                 ].join('\n'),
                 caution:

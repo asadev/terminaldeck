@@ -3,6 +3,7 @@ import Observation
 import UniformTypeIdentifiers
 import WebKit
 import TerminalDeckNativeCore
+import TerminalDeckBackend
 
 /// One browser tab: its page (a WKWebView — Safari's engine) and what the
 /// screen shows about it. A tab restored from the last launch keeps only its
@@ -35,9 +36,22 @@ final class NativeBrowserTab: Identifiable {
     private(set) var focusAddressRequest = 0
     /// The screenshot waiting in the Shot popover.
     var pendingShot: NativeBrowserShot?
+    /// Safe offer metadata only. Password bytes stay in the private adapter.
+    var savedSignInOffer: NativeRPCValue?
+    var savedPasswordOffer: BackendBrowserPasswordOffer?
+    var savedLoginPending = false
+    var savedLoginMessage: String?
+    @ObservationIgnored private(set) var documentEpoch = UUID()
     /// The "Size" frame: a device preset id, or nil to fill the room.
     var deviceID: String?
     var deviceLandscape = false
+    /// "Custom" in Size: the typed width and height (DeviceBar.tsx; 200–4000 each).
+    var customWidth = BRDeviceSize.defaultWidth
+    var customHeight = BRDeviceSize.defaultHeight
+    /// The recorded flow's panel, put away (TS: the flow popup closed; ⋮ ▸ Recorded flow brings it back).
+    var flowHidden = false
+    /// ⋮ ▸ History, open over this tab.
+    var historyShown = false
     /// Present the page as a phone (the web browser's mobile user agent).
     private(set) var mobileUserAgent = false
     /// Home with no start page set: show "Open a page" over whatever was there.
@@ -59,12 +73,18 @@ final class NativeBrowserTab: Identifiable {
         }
     }
     var markup: Markup?
+    /// Annotate's first half (lane BR, TS `inspecting`): the live page outlines what
+    /// is under the pointer and a click freezes it as marker 1.
+    private(set) var inspecting = false
+    /// That click's element, for the Annotate surface to start from.
+    @ObservationIgnored private var annotateStart: BrowserAnnotation?
     /// Record: the steps taken on the page while recording.
     private(set) var recording = false
     private(set) var steps: [BrowserRecordedStep] = []
     /// The address field's suggestions while it is being edited, and the chosen row.
     var suggestions: [BrowserVisit] = []
     var suggestionCursor = -1
+    @ObservationIgnored private var suggestionEpoch = UUID()
 
     struct LoadFailure: Equatable {
         let message: String
@@ -82,6 +102,8 @@ final class NativeBrowserTab: Identifiable {
     @ObservationIgnored private var delegate: NativeBrowserPageDelegate?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var faviconTask: Task<Void, Never>?
+    @ObservationIgnored private var ownedLoad: Task<Void, Never>?
+    @ObservationIgnored private var ownedLoadEpoch = UUID()
 
     init(record: BrowserTabRecord, owner: NativeBrowserTabs, configuration: WKWebViewConfiguration? = nil) {
         id = record.id
@@ -116,6 +138,7 @@ final class NativeBrowserTab: Identifiable {
     func ensurePage() {
         guard webView == nil, let owner else { return }
         let configuration = givenConfiguration ?? owner.makeConfiguration(profile: profile, isolated: isolated)
+        owner.browserComposition?.prepareConfiguration(configuration)
         givenConfiguration = nil
         let view = NativeBrowserWebView(frame: .zero, configuration: configuration)
         view.isInspectable = true // Safari ▸ Develop ▸ <this Mac> lists every tab
@@ -129,14 +152,17 @@ final class NativeBrowserTab: Identifiable {
         self.delegate = delegate
         webView = view
         observe(view)
+        owner.browserComposition?.attached(self)
         if let pendingURL {
             self.pendingURL = nil
-            view.load(URLRequest(url: pendingURL))
+            loadView(view, target: pendingURL)
         }
     }
 
     /// Stop everything and let the page go.
     func tearDown() {
+        owner?.browserComposition?.detached(self)
+        ownedLoadEpoch = UUID(); ownedLoad?.cancel(); ownedLoad = nil
         if handoverPrompt != nil { endHandover("drive-ended") }
         faviconTask?.cancel()
         observations.forEach { $0.invalidate() }
@@ -154,7 +180,31 @@ final class NativeBrowserTab: Identifiable {
         failure = nil
         showingHome = false
         url = target
-        webView?.load(URLRequest(url: target))
+        if let webView { loadView(webView, target: target) }
+    }
+
+    private func loadView(_ view: WKWebView, target: URL) {
+        guard let composition = owner?.browserComposition else { view.load(URLRequest(url: target)); return }
+        ownedLoad?.cancel(); ownedLoadEpoch = UUID()
+        let epoch = ownedLoadEpoch
+        isLoading = true; awaitingWebKitLoad = true
+        ownedLoad = Task { [weak self, weak view] in
+            guard let self, let view else { return }
+            defer { if self.ownedLoadEpoch == epoch { self.ownedLoad = nil } }
+            do {
+                try await composition.prepareNavigation(self, url: target)
+                try Task.checkCancellation()
+                guard self.ownedLoadEpoch == epoch, self.webView === view else { return }
+                view.load(URLRequest(url: target))
+            } catch {
+                guard self.ownedLoadEpoch == epoch else { return }
+                self.awaitingWebKitLoad = false; self.isLoading = false
+                if !(error is CancellationError) {
+                    self.failure = .init(message: error.localizedDescription, url: target)
+                    self.owner?.show(error.localizedDescription)
+                }
+            }
+        }
     }
 
     /// What was typed in the address field: an address, or a search.
@@ -259,7 +309,8 @@ final class NativeBrowserTab: Identifiable {
         Task {
             guard let shot = await snapshot() else { owner?.show("The page could not be captured"); return }
             do {
-                pendingShot = try shot.saved()
+                if let composition = owner?.browserComposition { pendingShot = try await composition.saveShot(shot, tabID: id) }
+                else { pendingShot = try shot.saved() }
             } catch {
                 owner?.show("The screenshot could not be saved")
             }
@@ -277,6 +328,15 @@ final class NativeBrowserTab: Identifiable {
         pendingURL = current
         owner?.tabChanged(self)
         ensurePage()
+    }
+
+    /// Rebuild a restored legacy page so document-start integrations are on
+    /// its real configuration. The selected address stays with the same tab.
+    func reopenForNativeComposition() {
+        let hadPage = webView != nil
+        let current = webView?.url ?? url
+        tearDown(); pendingURL = current
+        if hadPage || owner?.selectedID == id { ensurePage() }
     }
 
     func setMobileUserAgent(_ on: Bool) {
@@ -300,6 +360,19 @@ final class NativeBrowserTab: Identifiable {
         }
         if flags.isEmpty, event.keyCode == 53, case .draw = markup {
             markup = nil
+            return true
+        }
+        // Esc stops Annotate's picker (TS BrowserWorkspace onKeyDown); the frozen surface answers its own Esc.
+        if flags.isEmpty, event.keyCode == 53, inspecting, markup == nil {
+            setInspecting(false)
+            return true
+        }
+        // ⌥← / ⌥→: back and forward from the browser's own chrome (TS onKeyDown) — not
+        // while typing, where they move by word, and not inside the page, which has its own.
+        if flags == .option, event.keyCode == 123 || event.keyCode == 124,
+           let responder = event.window?.firstResponder, !(responder is NSText),
+           !((responder as? NSView).map { view in webView.map { view.isDescendant(of: $0) } ?? false } ?? false) {
+            if event.keyCode == 123 { goBack() } else { goForward() }
             return true
         }
         if flags == .command {
@@ -375,10 +448,14 @@ final class NativeBrowserTab: Identifiable {
     func toggleRecording() {
         if recording {
             recording = false
+            flowHidden = false // the flow opens itself when a recording stops (TS)
             tellRecorder()
             return
         }
         guard let current = webView?.url ?? url else { return }
+        // One mode at a time (modes.ts): Annotate's picker and Draw go off first.
+        if inspecting { setInspecting(false) }
+        if case .draw = markup { markup = nil }
         recording = true
         steps = BrowserFlow.append(steps, BrowserFlow.navigate(current.absoluteString, at: Date().timeIntervalSince1970 * 1000))
         tellRecorder()
@@ -410,12 +487,70 @@ final class NativeBrowserTab: Identifiable {
 
     // MARK: Annotate and Draw
 
+    /// The Annotate button (TS toggleMode('inspect')): the picker goes on in the live
+    /// page — hover outlines, a click freezes the page with that element as marker 1
+    /// (`inspected`). The same button again stops it. Without the native browser
+    /// graph there is no picker, and the page is frozen at once instead.
+    func toggleAnnotate() {
+        if case .annotate = markup {
+            markup = nil
+            if inspecting { setInspecting(false) }
+            return
+        }
+        guard owner?.browserComposition != nil else { startMarkup(annotate: true); return }
+        if inspecting { setInspecting(false); return }
+        // One mode at a time (modes.ts): Record and Draw go off first.
+        if recording { toggleRecording() }
+        markup = nil
+        findVisible = false
+        setInspecting(true)
+    }
+
+    /// `browser:inspect` — the page's picker on or off; the answer is the page's state.
+    func setInspecting(_ on: Bool) {
+        inspecting = on
+        if !on { annotateStart = nil }
+        Task {
+            let answer = try? await EngineBridge.shared.invoke("browser:inspect", [id, on])
+            if let state = answer as? [String: Any], let now = state["inspecting"] as? Bool {
+                inspecting = now
+            } else if on {
+                inspecting = false
+                owner?.show("Annotate could not start on this page")
+            }
+        }
+    }
+
+    /// The page said its picker went off (Esc in the page, a new document).
+    func inspectStateChanged(_ on: Bool) {
+        if inspecting != on { inspecting = on }
+    }
+
+    /// A click on the live page while Annotate is on: the photograph taken at the
+    /// click, with the clicked element as marker 1. No photograph, no round (TS).
+    func inspected(_ capture: BRInspectCapture) {
+        guard inspecting, markup == nil, let data = BRInspectCapture.imageData(capture.pageImage),
+              let image = NSImage(data: data),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let viewport = webView.map { CGSize(width: $0.bounds.width / $0.pageZoom, height: $0.bounds.height / $0.pageZoom) } ?? .zero
+        annotateStart = capture.markerRect(viewport: viewport).map { BrowserAnnotation(rect: $0, element: capture.element) }
+        let pageURL = URL(string: capture.url) ?? webView?.url ?? url
+        markup = .annotate(NativeBrowserShot(image: image, cgImage: cgImage, url: pageURL, title: title))
+    }
+
+    /// Marker 1 for the surface that just opened, once.
+    func takeAnnotateStart() -> BrowserAnnotation? {
+        defer { annotateStart = nil }
+        return annotateStart
+    }
+
     func startMarkup(annotate: Bool) {
         if case .some(let current) = markup {
             // The same button again leaves; the other one switches.
             if case .annotate = current, annotate { markup = nil; return }
             if case .draw = current, !annotate { markup = nil; return }
         }
+        if inspecting { setInspecting(false) } // one mode at a time (modes.ts)
         findVisible = false
         Task {
             guard let shot = await snapshot() else { owner?.show("The page could not be captured"); return }
@@ -425,6 +560,7 @@ final class NativeBrowserTab: Identifiable {
 
     /// What is on the page at a point (fractions of the frozen picture).
     func pick(x: Double, y: Double) async -> (rect: CGRect, element: BrowserAnnotatedElement?)? {
+        if let composition = owner?.browserComposition { return try? await composition.pick(self, x: x, y: y) }
         guard let raw = try? await evaluate(BrowserDriverScripts.with(BrowserDriverScripts.pickAt, args: ["x": x, "y": y])),
               let fields = raw as? [String: Any], fields["found"] as? Bool == true else { return nil }
         let viewport = fields["viewport"] as? [String: Any]
@@ -438,6 +574,13 @@ final class NativeBrowserTab: Identifiable {
     func finishDrawing(_ image: NSImage, cgImage: CGImage, marks: Int, from shot: NativeBrowserShot) {
         var marked = NativeBrowserShot(image: image, cgImage: cgImage, url: shot.url, title: shot.title)
         marked.marks = marks
+        if let composition = owner?.browserComposition {
+            Task {
+                do { pendingShot = try await composition.saveShot(marked, tabID: id); markup = nil }
+                catch { owner?.show(error.localizedDescription) }
+            }
+            return
+        }
         do {
             pendingShot = try marked.saved(suffix: "-marked")
             markup = nil
@@ -449,16 +592,29 @@ final class NativeBrowserTab: Identifiable {
     // MARK: Address suggestions
 
     func updateSuggestions(for typed: String) {
+        suggestionEpoch = UUID()
+        let epoch = suggestionEpoch
         suggestionCursor = -1
         let trimmed = typed.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty || trimmed == BrowserAddress.display(url) {
             suggestions = []
             return
         }
-        suggestions = NativeBrowserHistoryStore.shared.suggest(profile: profile, typed: trimmed)
+        if let composition = owner?.browserComposition {
+            suggestions = []
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let rows = try await composition.suggest(profile: self.profile, typed: trimmed)
+                    guard self.suggestionEpoch == epoch else { return }
+                    self.suggestions = rows
+                } catch { self.owner?.show(error.localizedDescription) }
+            }
+        } else { suggestions = NativeBrowserHistoryStore.shared.suggest(profile: profile, typed: trimmed) }
     }
 
     func dismissSuggestions() {
+        suggestionEpoch = UUID()
         suggestions = []
         suggestionCursor = -1
     }
@@ -520,6 +676,7 @@ final class NativeBrowserTab: Identifiable {
 
     /// The visible page as a picture.
     func snapshot() async -> NativeBrowserShot? {
+        if let composition = owner?.browserComposition { return try? await composition.snapshot(self) }
         guard let webView, !showsStartView, webView.bounds.width > 0, webView.bounds.height > 0 else { return nil }
         guard let image = try? await webView.takeSnapshot(configuration: nil),
               let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
@@ -573,7 +730,8 @@ final class NativeBrowserTab: Identifiable {
         guard newTitle != title else { return }
         title = newTitle
         owner?.tabChanged(self)
-        if !isolated, let url { NativeBrowserHistoryStore.shared.retitle(profile: profile, url: url, title: newTitle) }
+        if let composition = owner?.browserComposition { composition.titleChanged(self) }
+        else if !isolated, let url { NativeBrowserHistoryStore.shared.retitle(profile: profile, url: url, title: newTitle) }
     }
 
     private func pageURLChanged(_ newURL: URL?) {
@@ -587,6 +745,8 @@ final class NativeBrowserTab: Identifiable {
     }
 
     func navigationStarted() {
+        clearSavedLoginOffers()
+        owner?.browserComposition?.navigationStarted(self)
         failure = nil
         showingHome = false
         awaitingWebKitLoad = false
@@ -597,18 +757,46 @@ final class NativeBrowserTab: Identifiable {
         awaitingWebKitLoad = false
         findMissed = false
         if recording { tellRecorder() }
+        owner?.browserComposition?.committed(self)
+    }
+
+    func clearSavedLoginOffers() {
+        documentEpoch = UUID(); savedSignInOffer = nil; savedPasswordOffer = nil
+        savedLoginMessage = nil
+    }
+    func answerSavedPassword(keep: Bool) {
+        guard !savedLoginPending, let composition = owner?.browserComposition else { return }
+        savedLoginPending = true; savedLoginMessage = nil
+        Task {
+            defer { savedLoginPending = false }
+            do { savedLoginMessage = try await composition.answerPassword(self, keep: keep).message }
+            catch { savedLoginMessage = error.localizedDescription }
+        }
+    }
+    func fillSavedLogin(username: String) {
+        guard !savedLoginPending, let composition = owner?.browserComposition else { return }
+        savedLoginPending = true; savedLoginMessage = nil
+        Task {
+            defer { savedLoginPending = false }
+            do {
+                let filled = try await composition.fillSavedLogin(self, username: username)
+                savedLoginMessage = filled ? "Filled the current sign-in form." : "The sign-in form changed. Try again on the current page."
+            } catch { savedLoginMessage = error.localizedDescription }
+        }
     }
 
     func navigationFinished() {
         loadFavicon()
         if recording { tellRecorder() }
         // Isolated tabs keep nothing, history included.
-        if !isolated, let current = webView?.url {
+        if let composition = owner?.browserComposition { composition.settled(self) }
+        else if !isolated, let current = webView?.url {
             NativeBrowserHistoryStore.shared.note(profile: profile, url: current, title: title)
         }
     }
 
     func navigationFailed(_ error: Error, provisional: Bool) {
+        owner?.browserComposition?.settled(self, error: error)
         let error = error as NSError
         // A cancelled load (a new one began, or it became a download) is not a failure.
         if error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled { return }
@@ -708,7 +896,9 @@ final class NativeBrowserTab: Identifiable {
         if let window = webView?.window {
             return await alert.beginSheetModal(for: window)
         }
-        return alert.runModal()
+        // A page with no window on screen asks nobody: an app-modal alert took the front and
+        // blocked quitting (walk 2). The page's dialog is answered Cancel.
+        return .cancel
     }
 
     var owningModel: NativeBrowserTabs? { owner }
@@ -761,6 +951,53 @@ final class NativeBrowserWebView: WKWebView {
             default: break
             }
         }
+        addSystemBrowserRows(menu, event: event)
+    }
+
+    /// Lane BR: the web browser's three rows WebKit's menu has no equivalent of
+    /// (browser-context-menu.ts): Open Link in System Browser after the link's own
+    /// row, then Copy Page Address and Open Page in System Browser before Inspect Element.
+    private func addSystemBrowserRows(_ menu: NSMenu, event: NSEvent) {
+        func row(_ title: String, _ run: @escaping () -> Void) -> NSMenuItem {
+            let handler = BindMenuHandler(run)
+            let item = NSMenuItem(title: title, action: #selector(BindMenuHandler.fire), keyEquivalent: "")
+            item.target = handler
+            item.representedObject = handler
+            return item
+        }
+        let ids = menu.items.map { $0.identifier?.rawValue ?? "" }
+        if let link = ids.firstIndex(of: "WKMenuItemIdentifierOpenLinkInNewWindow") ?? ids.firstIndex(of: "WKMenuItemIdentifierCopyLink") {
+            let local = convert(event.locationInWindow, from: nil)
+            let scale = max(0.01, pageZoom * magnification)
+            let css = CGPoint(x: local.x / scale, y: (isFlipped ? local.y : bounds.height - local.y) / scale)
+            menu.insertItem(row("Open Link in System Browser") { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    let found = try? await self.callAsyncJavaScript(
+                        "var e = document.elementFromPoint(x, y); var a = e && e.closest ? e.closest('a[href]') : null; return a ? String(a.href) : '';",
+                        arguments: ["x": css.x, "y": css.y], in: nil, contentWorld: .defaultClient)
+                    guard let text = found as? String, BRPageMenu.mayOpenOutside(text), let url = URL(string: text) else { NSSound.beep(); return }
+                    NSWorkspace.shared.open(url)
+                }
+            }, at: link + 1)
+        }
+        guard let page = url, BRPageMenu.hasPage(page.absoluteString) else { return }
+        var rows = [row("Copy Page Address") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(page.absoluteString, forType: .string)
+        }]
+        if BRPageMenu.mayOpenOutside(page.absoluteString) {
+            rows.append(row("Open Page in System Browser") { NSWorkspace.shared.open(page) })
+        }
+        let at = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierInspectElement" }
+        if let at {
+            // Inspect Element sits in its own section; the page's rows go just above that section.
+            let start = at > 0 && menu.items[at - 1].isSeparatorItem ? at - 1 : at
+            for (offset, item) in ([NSMenuItem.separator()] + rows).enumerated() { menu.insertItem(item, at: start + offset) }
+        } else {
+            menu.addItem(.separator())
+            for item in rows { menu.addItem(item) }
+        }
     }
 }
 
@@ -794,7 +1031,13 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
             return (.cancel, preferences)
         }
 
-        if Self.pageSchemes.contains(scheme) { return (.allow, preferences) }
+        if Self.pageSchemes.contains(scheme) {
+            if navigationAction.targetFrame?.isMainFrame == true, let tab, let composition = tab.owningModel?.browserComposition {
+                do { try await composition.prepareNavigation(tab, url: url) }
+                catch { tab.owningModel?.show(error.localizedDescription); return (.cancel, preferences) }
+            }
+            return (.allow, preferences)
+        }
 
         // mailto:, tel:, an app's own link — handed to the Mac, only from a click.
         if navigationAction.navigationType == .linkActivated, scheme != "javascript", scheme != "file" {
@@ -804,6 +1047,7 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if navigationResponse.isForMainFrame, let tab { tab.owningModel?.browserComposition?.response(tab, response: navigationResponse.response) }
         if !navigationResponse.canShowMIMEType { return .download }
         if navigationResponse.isForMainFrame,
            let http = navigationResponse.response as? HTTPURLResponse,
@@ -815,11 +1059,11 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        tab?.owningModel?.downloads.adopt(download)
+        tab?.owningModel?.downloads.adopt(download, webView: webView)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        tab?.owningModel?.downloads.adopt(download)
+        tab?.owningModel?.downloads.adopt(download, webView: webView)
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -851,6 +1095,10 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let tab, let owner = tab.owningModel else { return nil }
+        if let composition = owner.browserComposition {
+            return composition.adoptPopup(configuration: configuration, opener: tab,
+                requestedURL: navigationAction.request.url, features: windowFeatures)
+        }
         return owner.adoptWindowRequest(configuration: configuration, from: tab)
     }
 
@@ -899,7 +1147,7 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
             let response = await panel.beginSheetModal(for: window)
             return response == .OK ? panel.urls : nil
         }
-        return panel.runModal() == .OK ? panel.urls : nil
+        return nil // no window to put the chooser on (see presentAlert)
     }
 
     private static func alert(_ message: String, frame: WKFrameInfo) -> NSAlert {

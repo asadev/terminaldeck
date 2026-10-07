@@ -2,12 +2,13 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// Annotate's card beside the frozen screen, in the page's order
+/// Inspect's card beside the live screen, in the order of the page's Annotate
 /// (`AnnotateSurface.tsx`): the head with Done, the discard question, the notice,
-/// the numbered markers, then — inside it, as asked for in the last round — the
-/// inspector (what the pointer is on, the element outline, the quick checks),
-/// and at the foot the one note and the session it goes to.
-struct AnnotatePanel: View {
+/// the numbered markers (ones whose screen has moved on keep a thumbnail of the
+/// frame they were made on), then what the pointer is on, the element outline and
+/// the quick checks — all from the latest live reading — and at the foot the one
+/// note and the session it goes to.
+struct InspectPanel: View {
     @Bindable var model: NativeSimulatorModel
 
     var body: some View {
@@ -19,12 +20,12 @@ struct AnnotatePanel: View {
                     Spacer(minLength: 4)
                     Button("Keep") { model.confirmingDiscard = false }
                         .buttonStyle(.borderless)
-                    Button("Discard", role: .destructive) { model.stopAnnotating() }
+                    Button("Discard", role: .destructive) { model.stopInspecting() }
                 }
                 .font(.callout)
                 .accessibilityAddTraits(.isModal)
             }
-            if model.snapshot?.frozen.tree == nil {
+            if let latest = model.latest, latest.frozen.tree == nil {
                 Text("This screen did not describe its elements, so markers are placed by position.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -54,11 +55,11 @@ struct AnnotatePanel: View {
         .background(.regularMaterial, in: .rect(cornerRadius: 16))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Annotate")
+        .accessibilityLabel("Inspect")
     }
 
     private func title(_ section: NativeSimulatorModel.InspectorSection) -> String {
-        if section == .checks, model.snapshot?.root != nil {
+        if section == .checks, model.latest?.root != nil {
             return model.findings.isEmpty ? "Checks" : "Checks (\(model.findings.count))"
         }
         return section.rawValue
@@ -66,8 +67,8 @@ struct AnnotatePanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Annotate").font(.headline)
-            let place = model.snapshot?.frozen.where_.short ?? ""
+            Text("Inspect").font(.headline)
+            let place = model.latest?.frozen.where_.short ?? model.device?.name ?? ""
             Text(place)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -79,38 +80,48 @@ struct AnnotatePanel: View {
                 ProgressView().controlSize(.small)
             }
             Button {
-                Task { await model.readScreen() }
+                model.readAgain()
             } label: {
                 Label("Read again", systemImage: "arrow.clockwise")
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .disabled(model.reading || !model.markers.isEmpty)
-            .help(model.markers.isEmpty ? "Freeze the screen again and read its elements" : "Delete the markers to freeze the screen again")
-            Button("Done") { model.leaveAnnotate() }
+            .disabled(model.reading)
+            .help("Read the live screen's elements again now")
+            Button("Done") { model.leaveInspect() }
         }
     }
 }
 
-/// The numbered markers, or the one line that says how to make one.
+/// The numbered markers, or the one line that says how to make one. A marker whose
+/// element is not on the screen now stays here with a thumbnail of its frame.
 private struct MarkerList: View {
     let model: NativeSimulatorModel
 
     var body: some View {
-        if model.markers.isEmpty {
-            Text("Click anything on the screen to mark it.")
+        if model.liveMarkers.isEmpty {
+            Text("Click anything on the live screen to mark it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
+            let drawn = Set(model.placements.map(\.marker.id))
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.markers) { entry in
-                        let on = entry.nodeRef != nil && entry.nodeRef == model.focusRef
+                    ForEach(model.liveMarkers) { marker in
+                        let entry = marker.annotation
+                        let ref = model.markerRefs[marker.id]
+                        let on = ref != nil && ref == model.focusRef
+                        let away = !drawn.contains(marker.id)
                         HStack(spacing: 8) {
                             MarkerBadge(n: entry.n)
+                            if away, let thumbnail = model.thumbnail(for: marker) {
+                                MarkerThumbnail(image: thumbnail, rect: entry.rect)
+                                    .help("Marked on an earlier screen")
+                            }
                             Text(Handoff.describeElement(entry.element))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                                .foregroundStyle(away ? Color.secondary : Color.primary)
                                 .help(Handoff.describeElement(entry.element))
                             Spacer(minLength: 4)
                             Button {
@@ -127,13 +138,37 @@ private struct MarkerList: View {
                         .padding(.vertical, 3)
                         .background(on ? Color.accentColor.opacity(0.14) : .clear, in: .rect(cornerRadius: 6))
                         .contentShape(.rect)
-                        .onTapGesture { if let ref = entry.nodeRef { model.focus(ref, reveal: true) } }
+                        .onTapGesture { if let ref { model.focus(ref, reveal: true) } }
                     }
                 }
             }
-            .frame(maxHeight: 140)
+            .frame(maxHeight: 160)
             .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The frame a marker was made on, small, with its box.
+private struct MarkerThumbnail: View {
+    let image: NSImage
+    let rect: NormRect
+
+    var body: some View {
+        let size = image.size
+        let height: CGFloat = 36
+        let width = size.height > 0 ? max(16, min(64, height * size.width / size.height)) : height
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.medium)
+            .frame(width: width, height: height)
+            .overlay(alignment: .topLeading) {
+                Rectangle()
+                    .stroke(Color.accentColor, lineWidth: 1.5)
+                    .frame(width: max(3, CGFloat(rect.width) * width), height: max(3, CGFloat(rect.height) * height))
+                    .offset(x: CGFloat(rect.x) * width, y: CGFloat(rect.y) * height)
+            }
+            .clipShape(.rect(cornerRadius: 3))
+            .accessibilityHidden(true)
     }
 }
 
@@ -145,16 +180,17 @@ private struct ElementDetails: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if let snapshot = model.snapshot, snapshot.frozen.tree == nil {
-                    Text(snapshot.frozen.treeError.isEmpty
+                if let latest = model.latest, latest.frozen.tree == nil {
+                    Text(latest.frozen.treeError.isEmpty
                          ? "This screen did not describe its elements, so markers are placed by position."
-                         : "This screen did not describe its elements (\(snapshot.frozen.treeError)), so markers are placed by position.")
+                         : "This screen did not describe its elements (\(latest.frozen.treeError)), so markers are placed by position.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else if let node = model.detailNode {
                     details(node)
                 } else {
-                    Text(model.snapshot == nil ? "Reading the screen's elements…" : "Point at something on the screen, or choose it in the outline.")
+                    Text(model.latest == nil ? (model.readProblem.isEmpty ? "Reading the live screen's elements…" : model.readProblem)
+                         : "Point at something on the live screen, or choose it in the outline.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -236,7 +272,7 @@ private struct ElementDetails: View {
     private func frame(_ node: DeviceNode) -> String? {
         guard let rect = node.usableFrame else { return nil }
         let percent = String(format: "%.0f%%, %.0f%% · %.0f%% × %.0f%%", rect.x * 100, rect.y * 100, rect.width * 100, rect.height * 100)
-        guard let points = model.snapshot?.points else { return percent }
+        guard let points = model.latest?.points else { return percent }
         let w = Double(points.width), h = Double(points.height)
         return String(format: "x %.0f, y %.0f · %.0f × %.0f %@\n%@", rect.x * w, rect.y * h, rect.width * w, rect.height * h, unit, percent)
     }
@@ -248,7 +284,7 @@ private struct ElementOutline: View {
     @Bindable var model: NativeSimulatorModel
 
     var body: some View {
-        if let root = model.snapshot?.root {
+        if let root = model.latest?.root {
             let rows = DeviceTreeQuery.outlineRows(root, expanded: model.expanded)
             ScrollViewReader { proxy in
                 List(rows, selection: Binding(get: { model.focusRef }, set: { ref in
@@ -267,7 +303,7 @@ private struct ElementOutline: View {
                 }
             }
         } else {
-            Text(model.snapshot == nil ? "Reading the screen's elements…" : "This screen did not describe its elements.")
+            Text(model.latest == nil ? "Reading the live screen's elements…" : "This screen did not describe its elements.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -334,7 +370,7 @@ private struct ChecksList: View {
     let model: NativeSimulatorModel
 
     var body: some View {
-        if let snapshot = model.snapshot, snapshot.root != nil {
+        if let latest = model.latest, latest.root != nil {
             let unit = model.device?.platform == "android" ? "dp" : "pt"
             let minimum = DeviceChecks.minimumTarget(platform: model.device?.platform ?? "ios")
             let labels = model.findings.filter { $0.kind == .missingLabel }.count
@@ -344,7 +380,7 @@ private struct ChecksList: View {
                     Text(summary(labels: labels, sizes: sizes))
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    if snapshot.points == nil {
+                    if latest.points == nil {
                         Text("The tap-size check needs the screen's size in points, which this device did not report.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -373,7 +409,7 @@ private struct ChecksList: View {
             }
             .listStyle(.inset)
         } else {
-            Text(model.snapshot == nil ? "Reading the screen's elements…" : "This screen did not describe its elements, so nothing can be checked.")
+            Text(model.latest == nil ? "Reading the live screen's elements…" : "This screen did not describe its elements, so nothing can be checked.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -515,7 +551,7 @@ struct ShotPopover: View {
 
 // MARK: - The picture an agent receives
 
-/// The frozen screen with the numbered markers burnt in, at the screen's own
+/// A kept live frame with its numbered markers burnt in, at the picture's own
 /// resolution — `marked-picture.ts`, drawn with Core Graphics. The message names
 /// each marker by its number, so the file has to carry the numbers.
 enum MarkedPicture {

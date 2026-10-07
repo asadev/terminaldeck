@@ -47,7 +47,7 @@ final class NativePoppedSessions {
 
     /// "Show window".
     func show(_ sessionId: String) {
-        window(for: sessionId)?.makeKeyAndOrderFront(nil)
+        NativeFront.onlyForPerson("session window") { window(for: sessionId)?.makeKeyAndOrderFront(nil) }
     }
 
     /// "Move back here": its window closes and the session is drawn here again.

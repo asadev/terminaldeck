@@ -92,7 +92,8 @@ enum PageLinks {
         if let window = webView.window {
             alert.beginSheetModal(for: window) { response in done(response) }
         } else {
-            done(alert.runModal())
+            // No window to ask over: not an app-modal alert that takes the front (walk 2).
+            done(.cancel)
         }
     }
 }

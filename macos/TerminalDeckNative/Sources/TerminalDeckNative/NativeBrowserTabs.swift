@@ -37,7 +37,14 @@ final class NativeBrowserTabs {
     /// Order and the chosen tab follow `BrowserTabList` (tested in Core).
     private(set) var list: BrowserTabList
     private var pages: [String: NativeBrowserTab] = [:]
-    let downloads = NativeBrowserDownloads()
+    private var legacyDownloads: NativeBrowserDownloads?
+    private var suppliedDownloads: (any NativeCompositionBrowserDownloadsPresentation)?
+    var downloads: any NativeCompositionBrowserDownloadsPresentation {
+        if let suppliedDownloads { return suppliedDownloads }
+        if let legacyDownloads { return legacyDownloads }
+        let legacy = NativeBrowserDownloads(); legacyDownloads = legacy; return legacy
+    }
+    @ObservationIgnored private(set) weak var browserComposition: NativeCompositionBrowser?
 
     /// The browser asks the window to show this tab.
     @ObservationIgnored var onSelect: ((String) -> Void)?
@@ -51,17 +58,19 @@ final class NativeBrowserTabs {
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     @ObservationIgnored private var favicons: [URL: NSImage] = [:]
     @ObservationIgnored private var stores: [UUID: WKWebsiteDataStore] = [:]
+    @ObservationIgnored private var profileSubscription: EngineSubscription?
     @ObservationIgnored private lazy var recordHandler = NativeBrowserRecordHandler { [weak self] webView, body in
         self?.tabs.first { $0.webView === webView }?.recorded(body)
     }
 
     private init() {
         list = BrowserTabsStore.decode(UserDefaults.standard.data(forKey: BrowserTabsStore.defaultsKey))
+        profileSubscription = EngineBridge.shared.on("browser-profile:state") { [weak self] args in
+            if let value = args.first { self?.applyProfiles(value) }
+        }
         for record in list.tabs {
             pages[record.id] = NativeBrowserTab(record: record, owner: self)
         }
-        // Agents' browser tools and agent-opened links reach the browser from here.
-        NativeBrowserDriver.shared.start()
     }
 
     // MARK: Tabs
@@ -84,7 +93,7 @@ final class NativeBrowserTabs {
         if show || configuration != nil || url != nil { tab.ensurePage() }
         if show && url == nil && configuration == nil { tab.focusAddress() }
         save()
-        NativeBrowserDriver.shared.announce(tab)
+        announce(tab)
         if show { onSelect?(record.id) }
         return tab
     }
@@ -96,8 +105,8 @@ final class NativeBrowserTabs {
             let previous = list.selectedID.flatMap { pages[$0] }
             list.select(id)
             save()
-            if let previous { NativeBrowserDriver.shared.announce(previous) }
-            NativeBrowserDriver.shared.announce(tab)
+            if let previous { announce(previous) }
+            announce(tab)
         }
         tab.ensurePage()
     }
@@ -120,8 +129,8 @@ final class NativeBrowserTabs {
         list.close(id)
         pages[id] = nil
         tab.tearDown()
+        NativeBRMachines.windowClosed(id) // lane BR: its tunnels and its machine go with it (TS browser:window-closed)
         save()
-        NativeBrowserDriver.shared.announceClosed(id)
     }
 
     func move(_ id: String, to index: Int) {
@@ -148,7 +157,7 @@ final class NativeBrowserTabs {
         list.update(tab.id, url: tab.url?.absoluteString ?? "", title: tab.title,
                     profile: tab.profile, isolated: tab.isolated)
         save()
-        NativeBrowserDriver.shared.announce(tab)
+        announce(tab)
     }
 
     private func save() {
@@ -173,18 +182,37 @@ final class NativeBrowserTabs {
         configuration.userContentController.add(recordHandler, contentWorld: .defaultClient,
                                                 name: BrowserDriverScripts.recordHandler)
         Self.enableInspectElement(configuration.preferences)
+        browserComposition?.prepareConfiguration(configuration)
         return configuration
     }
 
     /// One persistent store per profile, apart from the app's own engine pages.
-    private func store(for profile: String) -> WKWebsiteDataStore {
-        let isDefault = profile.isEmpty || profiles.first(where: { $0.id == profile })?.isDefault == true
+    func store(for profile: String) -> WKWebsiteDataStore {
+        let isDefault = profile.isEmpty || profile == "default" || profiles.first(where: { $0.id == profile })?.isDefault == true
         let identifier = BrowserProfile.storeIdentifier(for: isDefault ? "" : profile)
         if let existing = stores[identifier] { return existing }
         let store = WKWebsiteDataStore(forIdentifier: identifier)
         stores[identifier] = store
         return store
     }
+
+    func evictStore(for profile: String) {
+        stores[BrowserProfile.storeIdentifier(for: profile.isEmpty || profile == "default" ? "" : profile)] = nil
+    }
+
+    func retireLegacyBrowserOwners() async {
+        if let legacyDownloads { await legacyDownloads.stop(); self.legacyDownloads = nil }
+        await NativeBrowserHistoryStore.stopExistingWriter()
+    }
+    func installNativeBrowser(_ composition: NativeCompositionBrowser, downloads: NativeSafariDownloads) {
+        browserComposition = composition; suppliedDownloads = downloads
+    }
+    func uninstallNativeBrowser(_ composition: NativeCompositionBrowser) {
+        guard browserComposition === composition else { return }
+        browserComposition = nil; suppliedDownloads = nil
+    }
+    private func announce(_ tab: NativeBrowserTab) { browserComposition?.note(tab) }
+    func applyNativeProfiles(_ value: Any) { applyProfiles(value) }
 
     /// "Version/<Safari> Safari/605.1.15", so sites treat this as the Safari it is
     /// and do not serve a cut-down page to an unknown WebKit browser.
@@ -210,9 +238,18 @@ final class NativeBrowserTabs {
     func refreshProfiles() async {
         guard EngineBridge.shared.isReady,
               let value = try? await EngineBridge.shared.invoke("browser-profile:list") else { return }
+        applyProfiles(value)
+    }
+
+    private func applyProfiles(_ value: Any) {
         let state = BrowserProfile.read(value)
+        let deleted = Set(profiles.map(\.id)).subtracting(state.profiles.map(\.id))
         profiles = state.profiles
         activeProfileID = state.activeID
+        for id in deleted { stores[BrowserProfile.storeIdentifier(for: id)] = nil }
+        for tab in tabs where deleted.contains(tab.profile) {
+            tab.switchStore(profile: "default", isolated: tab.isolated)
+        }
     }
 
     func profile(_ id: String) -> BrowserProfile? {
@@ -272,11 +309,17 @@ final class NativeBrowserRecordHandler: NSObject, WKScriptMessageHandler {
 /// app's other data; written a moment after a change, not on every page.
 @MainActor
 final class NativeBrowserHistoryStore {
-    static let shared = NativeBrowserHistoryStore()
+    private static var instance: NativeBrowserHistoryStore?
+    static var shared: NativeBrowserHistoryStore {
+        if let instance { return instance }
+        let made = NativeBrowserHistoryStore(); instance = made; return made
+    }
+    static func stopExistingWriter() async { await instance?.stop() }
 
     private var visits: [BrowserVisit]
     private var writeTask: Task<Void, Never>?
     private let file: URL
+    private var stopped = false
 
     private init() {
         file = AppModel.shared.engine.configuration.dataRoot.appendingPathComponent("browser-history.json")
@@ -309,6 +352,7 @@ final class NativeBrowserHistoryStore {
     }
 
     private func scheduleWrite() {
+        guard !stopped else { return }
         writeTask?.cancel()
         writeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -317,5 +361,9 @@ final class NativeBrowserHistoryStore {
             try? FileManager.default.createDirectory(at: self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: self.file, options: .atomic)
         }
+    }
+    private func stop() async {
+        stopped = true
+        let pending = writeTask; writeTask = nil; pending?.cancel(); await pending?.value
     }
 }

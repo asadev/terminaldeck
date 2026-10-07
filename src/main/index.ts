@@ -312,9 +312,7 @@ import {
   isNativeShellSender,
   nativeShellAttended,
   nativeShellBroadcast,
-  nativeShellBrowserTools,
   nativeShellFailed,
-  nativeShellPageWindow,
   startNativeShell,
 } from './native-shell'
 import { NATIVE_REFUSAL } from './native-shell/mode'
@@ -2381,8 +2379,8 @@ function nameOfPane(tabId: string, w: number): string {
  */
 function browserDriveTools(): ReturnType<typeof browserTools> {
   const drive = browserDrive()
-  // Native shell: the six verbs drive the native window's browser (`native-shell/native-browser.ts`); no harvesting tool.
-  if (isNativeShell() && drive !== null) return nativeShellBrowserTools(browserTools(drive))
+  // Native shell: no browser lives in this window-less process.
+  if (isNativeShell()) return []
   // `browser.network` is contributed here rather than from `browserTools()` so
   // that the harvesting capability lives in its own file — see
   // `deck-control/browser-network-tool.ts`. It closes over the same drive and is
@@ -4520,7 +4518,7 @@ function registerIpc(): void {
   registerSettingsIpc(ipcMain, (channel, payload) => send(channel, payload))
   // Profiles first: everything below asks which one is switched on, and
   // `registerBrowserSessionIpc` hardens that profile's session as its first act.
-  registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'))
+  registerBrowserProfileIpc(ipcMain, () => app.getPath('userData'), (state) => send('browser-profile:state', state))
   /*
    * Worker profiles and the session lift, immediately after profiles: a
    * worker *is* a profile, and everything below reads the profile store.
@@ -5370,8 +5368,7 @@ app.whenReady().then(async () => {
             devServerOpener: openDevServerSession,
             stageDir: () => join(app.getPath('downloads'), BRAND.name),
             home: () => wsl.home() ?? app.getPath('home'),
-            // Native shell: Hoot's window readers reach the native page by name (`native-shell/page-call.ts`).
-            window: () => mainWindow ?? nativeShellPageWindow(),
+            window: () => mainWindow,
             deckControl: () => deckControl,
           })),
       /*

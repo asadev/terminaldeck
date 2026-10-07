@@ -459,7 +459,9 @@ public enum AiAppsSetup {
                         "claude mcp add --scope user \(AiAppsCopy.channelServer) \\",
                         "  -e NOTIFY_URL=\(url) \\",
                         "  -e NOTIFY_KEY=\(key) \\",
-                        "  -- node \"\(bridge)\"",
+                        bridge.hasSuffix("/TerminalDeckNativeHelper")
+                            ? "  -- \"\(bridge)\" --notify-channel"
+                            : "  -- node \"\(bridge)\"",
                         "claude --dangerously-load-development-channels server:\(AiAppsCopy.channelServer)",
                     ].joined(separator: "\n"),
                     caution: "Channels are a Claude Code preview: it shows a warning when it starts, needs a Claude account login, and a work or school organisation has to allow them. Without it, notifications_wait still works.")

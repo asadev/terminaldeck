@@ -40,11 +40,12 @@ final class IslandViewModel {
     var engineUp = false
     /// The island's own page has loaded and can be shown.
     var pageLoaded = false
+    var nativeState: IslandState?
 
     init(layout: IslandLayout) {
         self.layout = layout
     }
 
     /// Only real state: nothing while the engine is down or before the page has spoken.
-    var state: IslandState? { engineUp ? IslandRelay.shared.state : nil }
+    var state: IslandState? { engineUp ? (nativeState ?? IslandRelay.shared.state) : nil }
 }

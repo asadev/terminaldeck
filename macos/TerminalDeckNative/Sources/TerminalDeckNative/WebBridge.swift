@@ -303,7 +303,10 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
                 completionHandler(response == .OK ? panel.urls : nil)
             }
         } else {
-            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+            // A page with no window (a hidden page) never runs an app-modal panel: that took the
+            // front and blocked quitting (walk 2). TS's hidden pages had no chooser either.
+            AppModel.shared.engine.log.note("page chooser refused: the page has no window")
+            completionHandler(nil)
         }
     }
 
@@ -313,7 +316,8 @@ final class WebBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
         if let window = webView.window {
             alert.beginSheetModal(for: window) { response in done(response) }
         } else {
-            done(alert.runModal())
+            AppModel.shared.engine.log.note("page dialog answered Cancel: the page has no window")
+            done(.cancel)
         }
     }
 

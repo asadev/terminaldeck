@@ -446,18 +446,23 @@ export async function deleteProfile(userData: string, id: unknown): Promise<Prof
  * - `browser-profile:activate` (invoke, id)         → {@link ProfileState}
  * - `browser-profile:delete`   (invoke, id)         → {@link ProfileState}
  */
-export function registerBrowserProfileIpc(ipcMain: IpcMain, userData: () => string): void {
+export function registerBrowserProfileIpc(ipcMain: IpcMain, userData: () => string, broadcast?: (state: ProfileState) => void): void {
+  const changed = async (state: ProfileState | Promise<ProfileState>): Promise<ProfileState> => {
+    const resolved = await state
+    broadcast?.(resolved)
+    return resolved
+  }
   ipcMain.handle('browser-profile:list', () => profileState(userData()))
   ipcMain.handle('browser-profile:create', (_event, name: unknown) => {
     createProfile(userData(), name)
-    return profileState(userData())
+    return changed(profileState(userData()))
   })
   ipcMain.handle('browser-profile:rename', (_event, id: unknown, name: unknown) =>
-    renameProfile(userData(), id, name),
+    changed(renameProfile(userData(), id, name)),
   )
   ipcMain.handle('browser-profile:avatar', (_event, id: unknown, avatar: unknown) =>
-    setProfileAvatar(userData(), id, avatar),
+    changed(setProfileAvatar(userData(), id, avatar)),
   )
-  ipcMain.handle('browser-profile:activate', (_event, id: unknown) => activateProfile(userData(), id))
-  ipcMain.handle('browser-profile:delete', (_event, id: unknown) => deleteProfile(userData(), id))
+  ipcMain.handle('browser-profile:activate', (_event, id: unknown) => changed(activateProfile(userData(), id)))
+  ipcMain.handle('browser-profile:delete', (_event, id: unknown) => changed(deleteProfile(userData(), id)))
 }

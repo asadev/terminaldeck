@@ -40,7 +40,10 @@ struct NativeCodingAISettings: View {
         .onChange(of: store.scope) { _, scope in store.scopeShown(scope) }
         .onChange(of: activeState) { _, state in if state == .key { store.windowCameForward() } }
         // Signing in opened a session in the main window: bring it forward, where the login is.
-        .onChange(of: store.mainWindowRequest) { _, _ in openWindow(id: "main") }
+        .onChange(of: store.mainWindowRequest) { _, _ in
+            let open = openWindow
+            NativeFront.whenPersonActs("main") { open(id: "main") }
+        }
         .sheet(isPresented: $store.addingPresented) {
             NativeCodingAIAddAccountSheet(store: store)
         }

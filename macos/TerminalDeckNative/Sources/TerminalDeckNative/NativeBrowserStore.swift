@@ -28,11 +28,16 @@ struct NativeBrowserStoreDepartment: View {
         Group {
             if !model.loaded {
                 // The view must exist before the first read, or nothing starts it.
-                Color.clear.frame(height: 1)
-            } else if let ext = model.ext.extensions.first(where: { "e:\($0.id)" == detail }) {
-                StoreDetailView(backTo: BrowserStore.categoryNames[ext.category] ?? "the store", onBack: { detail = "" }) {
-                    NativeBrowserExtensionRow(extension: ext, model: model, onOpen: nil)
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Browser tool").font(.headline)
+                            Text("Read and collect information from the page.").font(.callout)
+                        }
+                    }
                 }
+                .redacted(reason: .placeholder)
+                .accessibilityHidden(true)
             } else if let tool = model.tools.tools.first(where: { "t:\($0.id)" == detail }) {
                 StoreDetailView(backTo: BrowserStore.builtInName, onBack: { detail = "" }) {
                     NativeBrowserToolRow(tool: tool, model: model, onOpen: nil)
@@ -48,86 +53,24 @@ struct NativeBrowserStoreDepartment: View {
     }
 
     @ViewBuilder private func page(_ model: NativeBrowserStoreModel) -> some View {
-        let ext = model.ext
-        let kept = ext.extensions.filter { StoreRules.matches(BrowserStore.facets($0), filter) }
-        let installed = kept.filter(\.hasIt)
-        let browsing = kept.filter { !$0.hasIt }
-        let shelves = StoreRules.shelve(browsing, order: BrowserStore.categoryOrder.map { ($0, BrowserStore.categoryNames[$0]!) },
-                                        facetsOf: BrowserStore.facets, rank: { _ in 0 })
-        let controls = StoreRules.facetControls(ext.extensions.map(BrowserStore.facets), filter,
-                                                StoreRules.withoutShelf(BrowserStore.facetVocabularies))
-        let builtIn = BrowserStore.builtIn(model.tools.tools, filter: filter)
-
-        VStack(alignment: .leading, spacing: 16) {
-            if !model.extProblem.isEmpty {
-                Text(model.extProblem).foregroundStyle(.red)
-            } else {
-                DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(ext.limits, id: \.self) { line in note(line) }
-                    }
-                } label: {
-                    note(BrowserStore.limitsSummary(ext.limits.count))
-                }
-                if ext.profiles.count > 1 {
-                    HStack(spacing: 6) {
-                        Text("Extensions are installed into one profile and read every page in it. Showing")
-                            .foregroundStyle(.secondary)
-                        Picker("Showing", selection: Binding(get: { model.showing }, set: { model.show($0) })) {
-                            ForEach(ext.profiles, id: \.id) { profile in Text(profile.name).tag(profile.id) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                }
-                StoreFilterBarView(search: false, filter: $filter, controls: controls, showing: kept.count,
-                                   total: ext.extensions.count, active: filter.active)
-                if !installed.isEmpty {
-                    section("Installed in \(ext.profileName.isEmpty ? "this profile" : ext.profileName)") {
-                        ForEach(installed) { one in extensionRow(one) }
-                    }
-                }
-                if !shelves.isEmpty {
-                    note("Nothing here ships inside this app. Install fetches it from the address on its row and checks it against the fingerprint beside it before a byte is saved. Every row here is one this browser can install and one this app has run: nothing in this store sends you somewhere else to get it.")
-                }
-                if shelves.isEmpty {
-                    Text(BrowserStore.emptyShelvesLine(kept: kept.count, filtering: filter.active)).foregroundStyle(.secondary)
-                } else {
-                    ForEach(shelves) { shelf in
-                        section(shelf.name) { ForEach(shelf.rows) { one in extensionRow(one) } }
-                    }
-                }
-                addYourOwn(ext)
-            }
+        let tools = model.tools.tools.filter { StoreRules.matches(BrowserStore.facets($0), filter) }
+        VStack(alignment: .leading, spacing: 12) {
             if !model.toolsProblem.isEmpty {
                 Text(model.toolsProblem).foregroundStyle(.red)
-            } else if !builtIn.isEmpty {
-                section(BrowserStore.builtInName) {
-                    note("These are not downloads — each is a set of selectors that ships inside this app and runs in its own page-reading engine. Nothing installed from here is ever executed. Installing one switches it on for this browser’s extract verb and fetches nothing; Remove deletes its file.")
-                    ForEach(builtIn) { tool in
-                        NativeBrowserToolRow(tool: tool, model: model, onOpen: { detail = "t:\(tool.id)" })
-                    }
+            } else {
+                if tools.isEmpty { Text("No browser tools match this view.").foregroundStyle(.secondary) }
+                ForEach(tools) { tool in
+                    NativeBrowserToolRow(tool: tool, model: model, onOpen: { detail = "t:\(tool.id)" })
                 }
             }
-            if !ext.orphans.isEmpty || !model.tools.orphans.isEmpty {
+            if !model.tools.orphans.isEmpty {
                 section("No longer offered") {
-                    ForEach(ext.orphans, id: \.self) { id in
-                        orphan(id, key: "e:\(id)", line: "This version of the app no longer offers this extension, so it is not loaded. Its files are still on disk.") {
-                            model.actExtension(id, verb: "remove")
-                        }
-                    }
                     ForEach(model.tools.orphans, id: \.self) { id in
-                        orphan(id, key: "t:\(id)", line: "This version of the app no longer offers this tool, so it cannot be run. Its file is still on disk.") {
+                        orphan(id, key: "t:\(id)", line: "This tool is no longer offered. Its saved file remains on disk.") {
                             model.actTool(id, verb: "remove")
                         }
                     }
                 }
-            }
-            if model.extProblem.isEmpty, !ext.folder.isEmpty {
-                Text("This profile’s extensions are kept in ") + Text(ext.folder).font(.callout.monospaced()) + Text(".")
-            }
-            if model.toolsProblem.isEmpty, !model.tools.folder.isEmpty {
-                Text("Installed built-in tools are kept in ") + Text(model.tools.folder).font(.callout.monospaced()) + Text(".")
             }
         }
     }
@@ -358,7 +301,7 @@ final class NativeBrowserStoreModel {
     var renameDraft = ""
 
     /// What the Store page counts and searches across departments (`onRows`).
-    var facetRows: [StoreFacets] { ext.extensions.map(BrowserStore.facets) + tools.tools.map(BrowserStore.facets) }
+    var facetRows: [StoreFacets] { tools.tools.map(BrowserStore.facets) }
     var rowsKey: [StoreFacets] { facetRows }
 
     private func call(_ channel: String, _ args: [Any?] = []) async throws -> CodingAIJSON {
@@ -379,9 +322,7 @@ final class NativeBrowserStoreModel {
     }
 
     func load() async {
-        async let t: Void = loadTools()
-        async let e: Void = loadExtensions()
-        _ = await (t, e)
+        await loadTools()
         loaded = true
     }
 

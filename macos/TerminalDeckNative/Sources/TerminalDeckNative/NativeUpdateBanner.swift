@@ -11,7 +11,7 @@ import TerminalDeckNativeCore
 /// `update:install`, `update:check`, and `settings:about` for the link.
 struct NativeUpdateBanner: View {
     let model: AppModel
-    @State private var feed = NativeUpdateFeed.shared
+    @State private var feed = NativeUpdateBannerFeed.shared
 
     var body: some View {
         let state = feed.state
@@ -109,8 +109,8 @@ struct NativeUpdateBanner: View {
 /// The banner's state for the whole run. Dismissing lasts until the app is
 /// started again (the page kept it in sessionStorage for the same reason).
 @MainActor @Observable
-final class NativeUpdateFeed {
-    static let shared = NativeUpdateFeed()
+final class NativeUpdateBannerFeed {
+    static let shared = NativeUpdateBannerFeed()
 
     private(set) var state = UpdateState.none
     private(set) var busy: UpdateBusy?

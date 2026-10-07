@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import UniformTypeIdentifiers
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 /// One open task's popup: everything the reference CRM's task page reads and
@@ -165,13 +166,17 @@ final class TaskDetailModel {
     // MARK: Calls
 
     /// One `tasks:local-detail` call; never a throw — a failure is a sentence.
+    /// F3: the same `BackendCrmDetailClient` the shared-parity tests run, over the app's bridge.
+    /// Its sentences are today's; an absent optional argument keeps its explicit null slot.
     func call(_ fn: String, _ args: [Any?]) async -> Result<[String: Any], TasksProblem> {
-        guard EngineBridge.shared.isReady else { return .failure(TasksProblem("This build cannot change tasks.")) }
-        do {
-            return CrmDecode.ok(try await EngineBridge.shared.invoke("tasks:local-detail", [fn, args]))
-        } catch {
-            return .failure(TasksProblem(error.localizedDescription))
+        let arguments: [NativeRPCValue]
+        do { arguments = try args.map { $0 == nil ? NativeRPCValue.null : try NativeRPCValue.fromFoundation($0) } }
+        catch { return .failure(TasksProblem(error.localizedDescription)) }
+        let client = BackendCrmDetailClient(isReady: EngineBridge.shared.isReady) { @MainActor function, values in
+            let answer = try await EngineBridge.shared.invoke("tasks:local-detail", [function, NativeRPCValue.array(values).foundation])
+            return try NativeRPCValue.fromFoundation(answer)
         }
+        return CrmDecode.ok(await client.call(fn, arguments).foundation)
     }
 
     /// A write whose answer is only ok or a refusal.

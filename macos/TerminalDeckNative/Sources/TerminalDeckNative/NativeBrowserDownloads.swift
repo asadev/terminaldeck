@@ -42,6 +42,7 @@ final class NativeBrowserDownloads {
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var loaded = false
+    @ObservationIgnored private var stopped = false
 
     init() {
         delegate.owner = self
@@ -58,7 +59,7 @@ final class NativeBrowserDownloads {
     }
 
     private func load() {
-        guard !loaded else { return }
+        guard !loaded, !stopped else { return }
         loaded = true
         let kept = BrowserDownloadLedger.decode(try? Data(contentsOf: file)).map(Self.item)
         let current = Set(items.map(\.id))
@@ -66,7 +67,7 @@ final class NativeBrowserDownloads {
     }
 
     private func persist() {
-        guard loaded else { return }
+        guard loaded, !stopped else { return }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -74,6 +75,21 @@ final class NativeBrowserDownloads {
             let data = BrowserDownloadLedger.encode(self.items.map(Self.row))
             try? FileManager.default.createDirectory(at: self.file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: self.file, options: .atomic)
+        }
+    }
+
+    /// Exclusive browser cutover: cancel and drain the old owner before the
+    /// new service is allowed to restore browser-downloads.json.
+    func stop() async {
+        stopped = true
+        delegate.owner = nil
+        let writer = saveTask; saveTask = nil; writer?.cancel(); await writer?.value
+        let entries = Array(running.values); running.removeAll()
+        for entry in entries {
+            entry.watch.invalidate(); entry.download.delegate = nil
+            await withCheckedContinuation { continuation in
+                entry.download.cancel { _ in continuation.resume() }
+            }
         }
     }
 

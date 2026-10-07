@@ -23,6 +23,9 @@ public struct IslandSnapshot: Equatable, Sendable {
     public let stage: String?
     public let sessions: [IslandSessionRow]
     public let line: String
+    public init(assistant: String, stage: String?, sessions: [IslandSessionRow], line: String) {
+        self.assistant = assistant; self.stage = stage; self.sessions = sessions; self.line = line
+    }
 }
 
 public enum IslandContent {

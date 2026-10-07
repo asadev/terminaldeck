@@ -144,8 +144,8 @@ final class FakeBrowserHost: BrowserDriverHost {
     func pause(ms: Int) async { clock += Double(ms) }
 }
 
-/// The engine's side of the wire: pushes `native-browser:command` and collects
-/// what comes back on `native-browser:result`.
+/// The caller's side: sends each command through JSON, as a tool call carries
+/// it, and collects the answers.
 @MainActor
 final class FakeEngine {
     let host = FakeBrowserHost()

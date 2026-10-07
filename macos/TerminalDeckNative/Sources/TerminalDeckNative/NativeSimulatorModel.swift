@@ -7,10 +7,13 @@ import TerminalDeckNativeCore
 /// The same channels as the web page (`src/main/devices/ipc.ts`), through
 /// `EngineBridge`: the list, starting and opening a device, watching its screen
 /// (`devices:watch` + the `devices:frame` stream), input, buttons, rotation,
-/// screenshots, and `devices:freeze` — the exact picture with the element tree
-/// read against it, which is what the inspector stands on. A round is saved
-/// with `annotate:save` and typed into a session with `session:write`, the
-/// path the page's Annotate and "Send" take.
+/// screenshots, and Inspect — on the LIVE screen, never paused (Asad, 7 Oct
+/// 2026: freezing is gone). While Inspect is on the element tree is read in the
+/// background (`devices:freeze`, used only for its tree — the engine has no
+/// tree-only channel) whenever the picture settles after a change or input,
+/// and each marker keeps the video frame on show when it was made. A round is
+/// saved with `annotate:save` and typed into a session with `session:write`,
+/// the path the page's Annotate and "Send" take.
 @MainActor
 @Observable
 final class NativeSimulatorModel {
@@ -21,12 +24,12 @@ final class NativeSimulatorModel {
         var id: String { rawValue }
     }
 
-    /// One reading of the screen: the exact picture and the elements on it.
-    struct Snapshot {
+    /// One reading of the live screen's elements. Its picture is never shown —
+    /// the frames are fractions of it, and so of the live picture of the same shape.
+    struct Reading {
         let frozen: FrozenScreen
-        let image: NSImage
-        let cgImage: CGImage?
-        let takenAt: Date
+        /// The screen generation the read started on (`LiveTreeSchedule`).
+        let generation: Int
         /// The screen in points (dp) the way up the picture is, when the device said.
         let points: CGSize?
         /// Every node, flattened once — the pointer asks of it on every move.
@@ -35,16 +38,21 @@ final class NativeSimulatorModel {
         var size: CGSize { CGSize(width: frozen.width, height: frozen.height) }
         var root: DeviceNode? { frozen.tree?.root }
 
-        init(frozen: FrozenScreen, image: NSImage, points: CGSize?) {
+        init(frozen: FrozenScreen, generation: Int, points: CGSize?) {
             self.frozen = frozen
-            self.image = image
-            self.cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            self.takenAt = Date()
+            self.generation = generation
             self.points = points
             let nodes = frozen.tree.map { DeviceTreeQuery.flatten($0.root) } ?? []
             self.nodes = nodes
             self.byRef = Dictionary(nodes.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
         }
+    }
+
+    /// The frame a marker keeps: the live picture as it was when the first marker on that screen was made.
+    struct Capture {
+        let image: CGImage
+        let thumbnail: NSImage
+        let where_: AnnotateWhere
     }
 
     struct ShotState {
@@ -68,16 +76,18 @@ final class NativeSimulatorModel {
     private(set) var device: DeviceDetails?
     @ObservationIgnored let player = DeviceScreenPlayer()
     private(set) var videoSize: CGSize?
-    private(set) var freezing = false
     var diagnostics = false { didSet { diagnosticsChanged() } }
     private(set) var diagnosticLines: [String] = []
 
     // MARK: Inspector
 
-    /// Annotate is on: the screen is frozen, pointed at, and sent from.
-    private(set) var annotating = false
-    private(set) var snapshot: Snapshot?
+    /// Inspect is on: the live screen is pointed at, marked and sent from. Nothing pauses.
+    private(set) var inspecting = false
+    /// The latest reading of the elements, from the background.
+    private(set) var latest: Reading?
     private(set) var reading = false
+    /// The latest reading is of the screen as it is now. While the picture moves, nothing is drawn from the tree.
+    private(set) var treeFresh = false
     private(set) var readProblem = ""
     private(set) var hoverRef: String?
     var focusRef: String?
@@ -85,7 +95,11 @@ final class NativeSimulatorModel {
     var listHoverRef: String?
     var expanded: Set<String> = []
     var section: InspectorSection = .element
-    private(set) var markers: [Annotation] = []
+    private(set) var liveMarkers: [LiveMarker] = []
+    /// Marker id → the element it sits on in the latest tree.
+    private(set) var markerRefs: [String: String] = [:]
+    /// Bumped when a mark by position must disappear because its screen moved on.
+    private(set) var overlayTick = 0
     private(set) var findings: [DeviceFinding] = []
     var note = ""
     var confirmingDiscard = false
@@ -118,27 +132,37 @@ final class NativeSimulatorModel {
     @ObservationIgnored private var appeared = false
     @ObservationIgnored private var lastPictureAt = Date.distantPast
     @ObservationIgnored private var lastInputAt = Date.distantPast
+    @ObservationIgnored private var schedule = LiveTreeSchedule()
+    @ObservationIgnored private var detector = ScreenChangeDetector()
+    @ObservationIgnored private var wakeTask: Task<Void, Never>?
+    /// Screen generation → the frame kept for the markers made on it.
+    @ObservationIgnored private var captures: [Int: Capture] = [:]
+    /// Where the pointer is over the picture, so a new reading highlights what it is on.
+    @ObservationIgnored private var pointer: CGPoint?
 
     private static let lastKey = "simulators.last"
     private var bridge: EngineBridge { EngineBridge.shared }
 
     init() {
-        player.onPictureSize = { [weak self] size in self?.videoSize = size }
+        player.onPictureSize = { [weak self] size in
+            self?.videoSize = size
+            self?.screenMoved()
+        }
         player.onPicture = { [weak self] in self?.lastPictureAt = Date() }
+        player.onSignature = { [weak self] signature in
+            guard let self, self.detector.observe(signature) else { return }
+            self.screenMoved()
+        }
         player.needKeyframe = { [weak self] in
-            guard let self, self.visible, self.device != nil, !self.annotating else { return }
+            guard let self, self.visible, self.device != nil else { return }
             self.watch(true)
         }
     }
 
-    /// The picture the screen is fitted to: the reading's while frozen, the live one otherwise.
-    var fitSize: CGSize? {
-        if annotating, let snapshot { return snapshot.size }
-        return videoSize ?? snapshot?.size
-    }
+    /// The picture the screen is fitted to: the live one, or the reading's before it arrives.
+    var fitSize: CGSize? { videoSize ?? latest?.size }
 
-    /// The frozen picture is up: everything that would move the device waits.
-    var isFrozen: Bool { annotating && snapshot != nil }
+    var markers: [Annotation] { liveMarkers.map(\.annotation) }
 
     // MARK: - Appearing
 
@@ -163,7 +187,7 @@ final class NativeSimulatorModel {
         ]
         startListLoop()
         Task { await loadSessions() }
-        if device != nil && !annotating { watch(visible ? true : nil) }
+        if device != nil { watch(visible ? true : nil) }
     }
 
     func disappear() {
@@ -286,7 +310,7 @@ final class NativeSimulatorModel {
 
     private func closeDevice(remember: Bool) {
         if device != nil { watch(false) }
-        stopAnnotating(resume: false)
+        stopInspecting()
         device = nil
         videoSize = nil
         shot = nil
@@ -313,7 +337,7 @@ final class NativeSimulatorModel {
     func setVisible(_ now: Bool) {
         guard now != visible else { return }
         visible = now
-        guard device != nil, appeared, !annotating else { return }
+        guard device != nil, appeared else { return }
         watch(now ? true : nil)
         if now { expectPicture(since: Date()) }
     }
@@ -321,11 +345,12 @@ final class NativeSimulatorModel {
     // MARK: - Input
 
     func sendInput(_ input: DeviceInput) {
-        guard let id = device?.id, !annotating else { return }
+        guard let id = device?.id else { return }
         inputQueue.push(input)
         player.markInput()
         lastInputAt = Date()
         expectPicture(since: lastInputAt)
+        screenMoved()
         guard !pumping else { return }
         pumping = true
         Task { [weak self] in
@@ -349,7 +374,7 @@ final class NativeSimulatorModel {
             try? await Task.sleep(for: .seconds(1.5))
             guard let self else { return }
             self.inputCheck = nil
-            guard self.device != nil, self.visible, !self.annotating, self.lastPictureAt < sent else { return }
+            guard self.device != nil, self.visible, self.lastPictureAt < sent else { return }
             self.watch(true)
         }
     }
@@ -378,149 +403,267 @@ final class NativeSimulatorModel {
 
     // MARK: - Inspector
 
-    /// Annotate, as the page has it: on freezes the screen at once (the live picture
-    /// stops while the frozen one is pointed at); off asks first when markers would be lost.
-    func toggleAnnotate() {
-        if annotating {
-            leaveAnnotate()
+    /// A steady clock for the read schedule.
+    nonisolated static func now() -> Double { ProcessInfo.processInfo.systemUptime }
+
+    /// Inspect on: the elements are read in the background and kept current while the
+    /// live picture plays on. Off asks first when markers would be lost.
+    func toggleInspect() {
+        if inspecting {
+            leaveInspect()
             return
         }
-        guard device != nil, !freezing else { return }
-        annotating = true
-        freezing = true
+        guard device != nil else { return }
+        inspecting = true
         problem = ""
         said = ""
         readProblem = ""
-        watch(false)
+        detector.reset()
+        player.signing = true
+        schedule.request(at: Self.now())
+        armRead()
         Task { await loadSessions() }
-        Task {
-            await readScreen()
-            freezing = false
-            guard annotating, snapshot == nil else { return }
-            let why = readProblem
-            stopAnnotating()
-            problem = why.isEmpty ? "The screen could not be frozen." : why
-        }
     }
 
     /// Done: asks first when there are markers that would be lost; a second Done discards.
-    func leaveAnnotate() {
-        if !markers.isEmpty && !confirmingDiscard {
+    func leaveInspect() {
+        if !liveMarkers.isEmpty && !confirmingDiscard {
             confirmingDiscard = true
             return
         }
-        stopAnnotating()
+        stopInspecting()
     }
 
     /// Escape: closes the question if one is open, otherwise it is Done.
-    func escapeAnnotate() {
-        guard annotating else { return }
-        if confirmingDiscard { confirmingDiscard = false } else { leaveAnnotate() }
+    func escapeInspect() {
+        guard inspecting else { return }
+        if confirmingDiscard { confirmingDiscard = false } else { leaveInspect() }
     }
 
-    /// Leave Annotate and, unless the device is going away, bring the live picture back.
-    func stopAnnotating(resume: Bool = true) {
-        let was = annotating
-        annotating = false
-        freezing = false
-        markers = []
+    /// Leave Inspect. The live picture never stopped, so there is nothing to bring back.
+    func stopInspecting() {
+        inspecting = false
+        player.signing = false
+        wakeTask?.cancel()
+        wakeTask = nil
+        schedule.reset()
+        detector.reset()
+        liveMarkers = []
+        captures = [:]
+        markerRefs = [:]
         note = ""
-        snapshot = nil
+        latest = nil
+        treeFresh = false
+        reading = false
         findings = []
         hoverRef = nil
         focusRef = nil
         listHoverRef = nil
+        pointer = nil
         sendProblem = ""
         readProblem = ""
         confirmingDiscard = false
-        guard was, resume, device != nil, appeared else { return }
-        watch(visible ? true : nil)
-        if visible { expectPicture(since: Date()) }
     }
 
-    /// `devices:freeze`: the exact picture and the tree read against it.
-    func readScreen() async {
-        guard let device, !reading, markers.isEmpty else { return }
-        reading = true
-        defer { reading = false }
-        do {
-            let answer = try await bridge.invoke("devices:freeze", [device.id])
-            // Something was marked on the last reading meanwhile: it stays the reading.
-            guard annotating, markers.isEmpty, self.device?.id == device.id else { return }
-            guard let frozen = FrozenScreen(json: answer), let image = NSImage(data: frozen.png) else {
-                readProblem = "The screen could not be read."
+    /// The picture changed, or input went to the device: the tree is read again once
+    /// the screen settles, and nothing is drawn from the old one meanwhile.
+    private func screenMoved() {
+        guard inspecting else { return }
+        let before = schedule.generation
+        schedule.change(at: Self.now())
+        if treeFresh { treeFresh = false }
+        // A mark by position belongs to the screen it was made on.
+        if liveMarkers.contains(where: { $0.node == nil && $0.picture == before }) { overlayTick += 1 }
+        armRead()
+    }
+
+    /// Read the elements again now — the panel's button.
+    func readAgain() {
+        guard inspecting else { return }
+        schedule.request(at: Self.now())
+        armRead()
+    }
+
+    /// One wake-up at a time, at the moment the next read is due (it moves later while the picture keeps changing).
+    private func armRead() {
+        guard inspecting, wakeTask == nil, schedule.dueAt != nil else { return }
+        wakeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard self.inspecting, let due = self.schedule.dueAt else {
+                    self.wakeTask = nil
+                    return
+                }
+                let wait = due - Self.now()
+                if wait > 0.001 {
+                    try? await Task.sleep(for: .seconds(wait))
+                    continue
+                }
+                self.wakeTask = nil
+                await self.readTree()
                 return
             }
-            let points = DeviceGeometry.screenPoints(pointWidth: device.pointWidth, pointHeight: device.pointHeight,
-                                                     pictureWidth: Double(frozen.width), pictureHeight: Double(frozen.height))
-            let next = Snapshot(frozen: frozen, image: image, points: points)
-            let firstTree = snapshot?.root == nil
-            snapshot = next
-            readProblem = ""
-            if let root = next.root {
-                findings = DeviceChecks.run(root, points: points,
-                                            minimum: DeviceChecks.minimumTarget(platform: device.platform))
-                let known = Set(next.byRef.keys)
-                // What was open stays open; a screen that changed opens as a new one does.
-                let initial = DeviceTreeQuery.initiallyExpanded(root)
-                expanded = firstTree ? initial : expanded.intersection(known).union(initial)
-                if let focusRef, !known.contains(focusRef) { self.focusRef = nil }
-                if let hoverRef, !known.contains(hoverRef) { self.hoverRef = nil }
-            } else {
-                findings = []
-                focusRef = nil
-            }
-        } catch {
-            readProblem = Self.sentence(error)
         }
+    }
+
+    /// `devices:freeze`, used only for its tree: the stream is never paused and its
+    /// picture is never shown. An answer the screen moved on from is let go.
+    private func readTree() async {
+        guard inspecting, let device, let token = schedule.begin(at: Self.now()) else { return }
+        reading = true
+        defer {
+            reading = schedule.isReading
+            armRead()
+        }
+        let answer: Any?
+        do {
+            answer = try await bridge.invoke("devices:freeze", [device.id])
+        } catch {
+            schedule.fail(token)
+            if inspecting { readProblem = Self.sentence(error) }
+            return
+        }
+        guard inspecting, self.device?.id == device.id else {
+            schedule.fail(token)
+            return
+        }
+        guard let frozen = FrozenScreen(json: answer) else {
+            schedule.fail(token)
+            readProblem = "The screen's elements could not be read."
+            return
+        }
+        // The screen changed while this was read: a newer read follows.
+        guard schedule.finish(token, at: Self.now()) else { return }
+        let points = DeviceGeometry.screenPoints(pointWidth: device.pointWidth, pointHeight: device.pointHeight,
+                                                 pictureWidth: Double(frozen.width), pictureHeight: Double(frozen.height))
+        apply(Reading(frozen: frozen, generation: token.generation, points: points), platform: device.platform)
+    }
+
+    private func apply(_ next: Reading, platform: String) {
+        let firstTree = latest?.root == nil
+        latest = next
+        treeFresh = schedule.isFresh
+        readProblem = ""
+        if let root = next.root {
+            findings = DeviceChecks.run(root, points: next.points, minimum: DeviceChecks.minimumTarget(platform: platform))
+            let known = Set(next.byRef.keys)
+            // What was open stays open; a screen that changed opens as a new one does.
+            let initial = DeviceTreeQuery.initiallyExpanded(root)
+            expanded = firstTree ? initial : expanded.intersection(known).union(initial)
+            if let focusRef, !known.contains(focusRef) { self.focusRef = nil }
+            if let listHoverRef, !known.contains(listHoverRef) { self.listHoverRef = nil }
+        } else {
+            findings = []
+            focusRef = nil
+        }
+        let upgraded = LiveMarkers.upgrading(liveMarkers, nodes: next.nodes, generation: next.generation,
+                                             treePicture: next.size, video: videoSize)
+        if upgraded != liveMarkers { liveMarkers = upgraded }
+        refreshPlacements()
+        hover(at: pointer)
+    }
+
+    /// The tree's frames hold for the live picture: same shape, not turned since.
+    private var shapeMatches: Bool {
+        guard let latest else { return false }
+        guard let videoSize else { return true }
+        return LiveInspect.sameShape(latest.size, videoSize)
+    }
+
+    /// The markers drawn over the live picture now, where their elements are now.
+    var placements: [LivePlacement] {
+        _ = overlayTick
+        return LiveMarkers.placements(liveMarkers, nodes: latest?.nodes, fresh: treeFresh && shapeMatches,
+                                      generation: schedule.generation)
+    }
+
+    /// Highlights are drawn only from a reading of the screen as it is now.
+    var highlightsShown: Bool { treeFresh && shapeMatches }
+
+    private func refreshPlacements() {
+        var refs: [String: String] = [:]
+        if let nodes = latest?.nodes {
+            for marker in liveMarkers {
+                if let node = LiveMarkers.match(marker, in: nodes) { refs[marker.id] = node.ref }
+            }
+        }
+        if refs != markerRefs { markerRefs = refs }
     }
 
     /// The element under the pointer, from the latest reading. Only changes what is observed when it changes.
     func hover(at point: CGPoint?) {
-        guard annotating, let point, let nodes = snapshot?.nodes,
-              let node = DeviceTreeQuery.elementAt(in: nodes, x: point.x, y: point.y) else {
+        pointer = point
+        guard inspecting, let point, let latest,
+              let node = LiveInspect.elementAt(point, in: latest.nodes, treePicture: latest.size, video: videoSize) else {
             if hoverRef != nil { hoverRef = nil }
             return
         }
         if hoverRef != node.ref { hoverRef = node.ref }
     }
 
-    /// A click on the frozen screen: choose the element there and mark it (a click on one
-    /// already marked chooses it rather than marking it twice).
+    /// A click on the live picture: mark the element under it (a click on one already
+    /// marked chooses it), keeping the frame on show now. While the screen is moving it
+    /// is a mark by position, which becomes the element once that screen has been read.
     func pick(at point: CGPoint) {
-        guard annotating, let snapshot else { return }
-        if snapshot.root != nil, let node = DeviceTreeQuery.elementAt(in: snapshot.nodes, x: point.x, y: point.y) {
+        guard inspecting, device != nil else { return }
+        if highlightsShown, let latest, latest.root != nil,
+           let node = LiveInspect.elementAt(point, in: latest.nodes, treePicture: latest.size, video: videoSize) {
             focus(node.ref, reveal: true)
-            if !markers.contains(where: { $0.nodeRef == node.ref }) { mark(node) }
-        } else {
-            // No elements described: a mark by position, as the page's Annotate does.
-            let rect = DeviceGeometry.boxAround(x: point.x, y: point.y)
-            markers = Annotation.adding(markers, id: "a-\(UUID().uuidString)", rect: rect, element: nil)
+            if marker(for: node.ref) == nil { mark(node) }
+            return
         }
+        guard let picture = capture() else { return }
+        liveMarkers = LiveMarkers.adding(liveMarkers, id: "a-\(UUID().uuidString)", node: nil,
+                                         rect: DeviceGeometry.boxAround(x: point.x, y: point.y), picture: picture,
+                                         awaitingElement: !treeFresh)
+        sendProblem = ""
     }
+
+    /// The frame on show now, kept once per screen for every marker made on it.
+    private func capture() -> Int? {
+        let key = schedule.generation
+        if captures[key] != nil { return key }
+        guard let device else { return nil }
+        // The live frame; before the first one is painted, the reading's own picture.
+        let image = player.currentPicture()
+            ?? latest.flatMap { NSImage(data: $0.frozen.png)?.cgImage(forProposedRect: nil, context: nil, hints: nil) }
+        guard let image else {
+            sendProblem = "The live picture has not arrived yet, so nothing was marked."
+            return nil
+        }
+        let where_ = latest?.frozen.where_ ?? AnnotateWhere(place: device.kindWords, name: device.name, deviceId: device.id)
+        captures[key] = Capture(image: image, thumbnail: NSImage(cgImage: image, size: .zero), where_: where_)
+        return key
+    }
+
+    /// The frame a marker keeps, small, for the side list.
+    func thumbnail(for marker: LiveMarker) -> NSImage? { captures[marker.picture]?.thumbnail }
 
     func focus(_ ref: String, reveal: Bool) {
         focusRef = ref
-        guard reveal, let root = snapshot?.root else { return }
+        guard reveal, let root = latest?.root else { return }
         expanded.formUnion(DeviceTreeQuery.ancestors(of: ref, in: root))
         revealTick += 1
     }
 
     func node(_ ref: String?) -> DeviceNode? {
         guard let ref else { return nil }
-        return snapshot?.byRef[ref]
+        return latest?.byRef[ref]
     }
 
     /// What the details show: the element under the pointer, or the one chosen.
     var detailNode: DeviceNode? { node(hoverRef) ?? node(focusRef) }
 
-    func marker(for ref: String) -> Annotation? { markers.first { $0.nodeRef == ref } }
+    /// The marker on this element of the latest tree, if any.
+    func marker(for ref: String) -> Annotation? {
+        liveMarkers.first { markerRefs[$0.id] == ref }?.annotation
+    }
 
     func mark(_ node: DeviceNode) {
-        guard !markers.contains(where: { $0.nodeRef == node.ref }) else { return }
-        let rect = node.usableFrame ?? DeviceGeometry.boxAround(x: 0.5, y: 0.5)
-        markers = Annotation.adding(markers, id: "a-\(UUID().uuidString)", rect: rect,
-                                    element: AnnotatedElement(node: node), nodeRef: node.ref)
+        guard marker(for: node.ref) == nil, let picture = capture() else { return }
+        liveMarkers = LiveMarkers.adding(liveMarkers, id: "a-\(UUID().uuidString)", node: node,
+                                         rect: node.usableFrame ?? DeviceGeometry.boxAround(x: 0.5, y: 0.5), picture: picture)
+        refreshPlacements()
         sendProblem = ""
     }
 
@@ -533,13 +676,22 @@ final class NativeSimulatorModel {
     }
 
     func unmark(_ id: String) {
-        markers = Annotation.removing(markers, id: id)
-        if markers.isEmpty { sendProblem = "" }
+        liveMarkers = LiveMarkers.removing(liveMarkers, id: id)
+        forgetUnusedCaptures()
+        refreshPlacements()
+        if liveMarkers.isEmpty { sendProblem = "" }
     }
 
     func clearMarkers() {
-        markers = []
+        liveMarkers = []
+        captures = [:]
+        markerRefs = [:]
         sendProblem = ""
+    }
+
+    private func forgetUnusedCaptures() {
+        let used = Set(liveMarkers.map(\.picture))
+        captures = captures.filter { used.contains($0.key) }
     }
 
     // MARK: - Sending
@@ -580,10 +732,12 @@ final class NativeSimulatorModel {
         return markers.isEmpty ? "Mark something on the screen first." : ""
     }
 
-    /// The marked picture saved with `annotate:save`, the round's one line typed into the
-    /// session and submitted, and `annotate:sent` — the page's Annotate, end to end.
+    /// The marked pictures saved with `annotate:save`, the round's one line typed into the
+    /// session and submitted, and `annotate:sent` — the page's Annotate, end to end. Markers
+    /// from one screen make one picture, as before; markers from several screens make one
+    /// picture per screen, each with its own markers drawn, all named in the one message.
     func sendRound() async {
-        guard canSendRound, !sending, let snapshot, let cgImage = snapshot.cgImage else { return }
+        guard canSendRound, !sending else { return }
         sending = true
         sendProblem = ""
         defer { sending = false }
@@ -592,24 +746,41 @@ final class NativeSimulatorModel {
             sendProblem = sessionReason
             return
         }
-        guard let drawn = MarkedPicture.draw(cgImage, markers: markers) else {
-            sendProblem = "The picture could not be saved, so nothing was sent."
-            return
+        var drawn: [(png: Data, width: Int, height: Int, where_: AnnotateWhere)] = []
+        var pictures: [RoundPicture] = []
+        for group in LiveMarkers.pictureGroups(liveMarkers) {
+            guard let capture = captures[group.picture],
+                  let picture = MarkedPicture.draw(capture.image, markers: group.markers) else {
+                sendProblem = "The picture could not be saved, so nothing was sent."
+                return
+            }
+            drawn.append((picture.png, picture.width, picture.height, capture.where_))
+            pictures.append(RoundPicture(path: "", width: picture.width, height: picture.height,
+                                         markers: group.markers.map(\.n), screen: capture.where_.screen))
         }
+        guard let first = drawn.first else { return }
         let round = AnnotationRound(id: "round-\(UUID().uuidString)", createdAt: (Date().timeIntervalSince1970 * 1000).rounded(),
-                                    where_: snapshot.frozen.where_, frameWidth: drawn.width, frameHeight: drawn.height,
+                                    where_: first.where_, frameWidth: first.width, frameHeight: first.height,
                                     annotations: markers, note: note)
-        let saved = try? await bridge.invoke("annotate:save", ["data:image/png;base64,\(drawn.png.base64EncodedString())", round.json])
-        guard let path = (saved as? [String: Any])?["path"] as? String, !path.isEmpty else {
-            sendProblem = "The picture could not be saved, so nothing was sent."
-            return
+        // Last to first: annotate:save keeps one round per id with the picture it saved, so
+        // the kept round ends with the picture carrying #1 — and that save lists the others.
+        for index in drawn.indices.reversed() {
+            let json = index == 0 ? round.json(pictures: pictures) : round.json
+            let saved = try? await bridge.invoke("annotate:save", ["data:image/png;base64,\(drawn[index].png.base64EncodedString())", json])
+            guard let path = (saved as? [String: Any])?["path"] as? String, !path.isEmpty else {
+                sendProblem = "The picture could not be saved, so nothing was sent."
+                return
+            }
+            pictures[index].path = path
         }
-        if let refusal = await write(Handoff.composeRound(round, picturePath: path), to: target) {
+        if let refusal = await write(Handoff.composeRound(round, pictures: pictures), to: target) {
             sendProblem = refusal
             return
         }
         _ = try? await bridge.invoke("annotate:sent", [round.id, ["sessionId": target.id, "label": target.label]])
-        stopAnnotating()
+        // Inspect stays on over the live screen, ready for the next round.
+        clearMarkers()
+        note = ""
         say("Sent to \(target.label).")
     }
 

@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { NOTIFICATION_CLICK_CHANNEL as ENGINE_CLICK, NOTIFY_CHANNEL as ENGINE_NOTIFY, NOTIFY_CLOSE_CHANNEL as ENGINE_CLOSE } from '../main/native-shell/notifications'
-import { PAGE_CALL_CHANNEL as ENGINE_CALL, PAGE_RESULT_CHANNEL as ENGINE_RESULT } from '../main/native-shell/page-call'
 import { baseName, createDrops, type DropHost } from './drops'
 import { NEVER_LEAVES, canOpenOutside, createLinkOpener, installPageLinks, linkDisposition, type OpenLinkMessage } from './links'
 import { NO_BROWSER_WINDOWS, answerMenu, createMenus, linkMenuItems, sessionRowMenuItems, type ContextMenuMessage } from './menus'
@@ -17,11 +16,10 @@ import {
   type BridgeHooks,
   type PageHost,
 } from './page-features'
-import { PAGE_CALL_CHANNEL, PAGE_RESULT_CHANNEL, UI_GLOBAL, WHERE_GLOBAL, answerPageCall } from './page-calls'
 
 /**
  * What a page needs from the native window that Electron gives it for free:
- * Hoot's window readers, banners, menus, links and dropped files — each against
+ * banners, menus, links and dropped files — each against
  * the engine's own side of the same contract.
  */
 
@@ -53,52 +51,6 @@ function fakeIpc() {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
-
-/* ---------------------------------------------------------- page calls -- */
-
-describe('Hoot\u2019s window readers', () => {
-  it('use the engine\u2019s channels', () => {
-    expect([PAGE_CALL_CHANNEL, PAGE_RESULT_CHANNEL]).toEqual([ENGINE_CALL, ENGINE_RESULT])
-  })
-
-  it('read the very globals the page publishes', () => {
-    expect(readFileSync(join(__dirname, '../renderer/driving/ui-bridge.ts'), 'utf8')).toContain(`export const UI_GLOBAL = '${UI_GLOBAL}'`)
-    expect(readFileSync(join(__dirname, '../renderer/driving/where.ts'), 'utf8')).toContain(`export const WHERE_GLOBAL = '${WHERE_GLOBAL}'`)
-  })
-
-  it('answer each of the three calls from those globals', () => {
-    const host: Record<string, unknown> = {
-      [UI_GLOBAL]: { do: (request: unknown) => ({ ok: true, did: JSON.stringify(request) }), list: () => ({ commands: [] }) },
-      [WHERE_GLOBAL]: () => ({ view: 'files' }),
-    }
-    expect(answerPageCall({ id: 'a', fn: 'ui.do', arg: { kind: 'run', target: 'view.files' } }, host)).toEqual({
-      id: 'a',
-      value: { ok: true, did: '{"kind":"run","target":"view.files"}' },
-    })
-    expect(answerPageCall({ id: 'b', fn: 'ui.list' }, host)).toEqual({ id: 'b', value: { commands: [] } })
-    expect(answerPageCall({ id: 'c', fn: 'where' }, host)).toEqual({ id: 'c', value: { view: 'files' } })
-    expect(answerPageCall({ id: 'd', fn: 'eval' }, host)).toBeNull()
-    expect(answerPageCall({ fn: 'where' }, host)).toBeNull()
-  })
-
-  it('stay quiet on a page without them, so the main window\u2019s answer is the one taken', () => {
-    expect(answerPageCall({ id: 'a', fn: 'where' }, {})).toBeNull()
-    expect(answerPageCall({ id: 'a', fn: 'ui.list' }, {})).toBeNull()
-  })
-
-  it('leaves `where` to the native window once it drives the app itself, and keeps ui.*', () => {
-    const host: Record<string, unknown> = {
-      [UI_GLOBAL]: { do: () => ({ ok: true }), list: () => ({ commands: [] }) },
-      [WHERE_GLOBAL]: () => ({ view: 'files' }),
-      __tdNativeScreens: ['session', 'drive'],
-    }
-    expect(answerPageCall({ id: 'w', fn: 'where' }, host)).toBeNull()
-    expect(answerPageCall({ id: 'l', fn: 'ui.list' }, host)).toEqual({ id: 'l', value: { commands: [] } })
-    expect(answerPageCall({ id: 'd', fn: 'ui.do', arg: {} }, host)).toEqual({ id: 'd', value: { ok: true } })
-    host.__tdNativeScreens = ['session']
-    expect(answerPageCall({ id: 'w', fn: 'where' }, host)).toEqual({ id: 'w', value: { view: 'files' } })
-  })
-})
 
 /* -------------------------------------------------------- notifications -- */
 
@@ -359,7 +311,6 @@ describe('a page, wired', () => {
       document: { documentElement: { dataset: {} as Record<string, string | undefined> }, addEventListener: () => undefined },
       addEventListener: () => undefined,
       webkit: { messageHandlers: { tdNative: { postMessage: (message: unknown) => posted.push(message) } } },
-      [UI_GLOBAL]: { list: () => ({ commands: ['view.files'] }) },
     } as unknown as PageHost & Record<string, unknown>
     installNativeShell(host as never)
     const drops = createDrops({ document: { elementFromPoint: () => null }, File: class {}, Event: class {} } as unknown as DropHost)
@@ -396,15 +347,6 @@ describe('a page, wired', () => {
       expect(page.ipc.sent).toEqual([])
     }
     expect(wire('').hooks.push?.('session:data', ['s1', 'x'])).toBe(false)
-  })
-
-  it('answers Hoot\u2019s window readers on the main page only', () => {
-    const main = wire('')
-    main.ipc.push(PAGE_CALL_CHANNEL, { id: 'q1', fn: 'ui.list' })
-    expect(main.ipc.sent).toEqual([[PAGE_RESULT_CHANNEL, ['q1', { commands: ['view.files'] }]]])
-    const island = wire('?island=1')
-    island.ipc.push(PAGE_CALL_CHANNEL, { id: 'q1', fn: 'ui.list' })
-    expect(island.ipc.sent).toEqual([])
   })
 
   it('backs Notification and takes drop-paths on every page', () => {

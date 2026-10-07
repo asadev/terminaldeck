@@ -1,11 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { uiDoCall, UI_LIST_CALL } from '../deck-control/ui-tools'
-import { WHERE_CALL } from '../deck-control/where-tool'
 import { frontDialogs } from './dialogs'
 import { scrubInheritedEnv } from './inherited-env'
 import { nativeMachineName, NATIVE_SHELL_FLAG } from './mode'
-import { createPageCalls, pageCallFor, PAGE_CALL_CHANNEL } from './page-call'
 import { createNativeNotifier, NOTIFICATION_CLICK_CHANNEL } from './notifications'
 import { hydrateOnce } from './hydration'
 
@@ -133,46 +130,6 @@ describe('dialogs with no window', () => {
       throw new Error('no focus today')
     })
     await expect(fake.showMessageBox({ message: 'x' })).resolves.toEqual({ message: 'x' })
-  })
-})
-
-/* ------------------------------------------------------------- page calls -- */
-
-describe('Hoot’s window readers in the native page', () => {
-  it('recognises exactly the three calls the tools make', () => {
-    expect(pageCallFor(WHERE_CALL)).toEqual({ fn: 'where' })
-    expect(pageCallFor(UI_LIST_CALL)).toEqual({ fn: 'ui.list' })
-    expect(pageCallFor(uiDoCall({ kind: 'panel', target: 'tasks x' }))).toEqual({
-      fn: 'ui.do',
-      arg: { kind: 'panel', target: 'tasks x' },
-    })
-    expect(pageCallFor('fetch("https://example.invalid")')).toBeNull()
-    expect(pageCallFor(`${uiDoCall({ kind: 'a', target: 'b' })}; alert(1)`)).toBeNull()
-  })
-
-  it('asks the page by name and returns its answer', async () => {
-    const pushed: unknown[][] = []
-    const calls = createPageCalls({
-      push: (channel, args) => {
-        pushed.push([channel, ...args])
-        return true
-      },
-    })
-    const answer = calls.evaluate(uiDoCall({ kind: 'panel', target: 'tasks' }))
-    const [channel, call] = pushed[0] as [string, { id: string; fn: string; arg: unknown }]
-    expect(channel).toBe(PAGE_CALL_CHANNEL)
-    expect(call.fn).toBe('ui.do')
-    expect(call.arg).toEqual({ kind: 'panel', target: 'tasks' })
-    calls.settle(call.id, { ok: true })
-    await expect(answer).resolves.toEqual({ ok: true })
-  })
-
-  it('answers null with no page, null on silence, and refuses any other script', async () => {
-    const none = createPageCalls({ push: () => false })
-    await expect(none.evaluate(WHERE_CALL)).resolves.toBeNull()
-    const silent = createPageCalls({ push: () => true, timeoutMs: 10 })
-    await expect(silent.evaluate(UI_LIST_CALL)).resolves.toBeNull()
-    await expect(silent.evaluate('document.cookie')).rejects.toThrow(/named page calls/)
   })
 })
 

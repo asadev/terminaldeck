@@ -45,11 +45,9 @@ const HOOT_COLOURS = {
   body: '#F7882F',
   bodyDark: '#E8701A',
   belly: '#FFD3A8',
-  bellyLine: '#F2A86A',
   face: '#FFE7CF',
   eyeWhite: '#FFFFFF',
   pupil: '#2A1A10',
-  lidLine: '#7A3E12',
   frames: '#5A3418',
   beak: '#B4500F',
   glint: '#FFFFFF',
@@ -102,10 +100,8 @@ export function HootMark({ size = 16, animated = true, label, className }: Props
       <path d="M49 17 L46 5 L38 14 Z" fill={c.bodyDark} />
       {/* body */}
       <path d="M32 9 C48 9 55 21 55 35 C55 50 45 59 32 59 C19 59 9 50 9 35 C9 21 16 9 32 9 Z" fill={c.body} />
-      {/* belly */}
-      <path d="M32 33 C42 33 46 41 46 47 C46 54 40 58 32 58 C24 58 18 54 18 47 C18 41 22 33 32 33 Z" fill={c.belly} />
-      <path d="M26 44 q3 3 6 0 q3 3 6 0" stroke={c.bellyLine} strokeWidth="1.6" fill="none" strokeLinecap="round" />
-      <path d="M28.5 50 q3.5 3 7 0" stroke={c.bellyLine} strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      {/* belly: plain, nothing under the beak that reads as lips (Asad's pick, 2026-10-07) */}
+      <path d="M32 40 C41 40 46 46 46 51 C46 56 40 58.5 32 58.5 C24 58.5 18 56 18 51 C18 46 23 40 32 40 Z" fill={c.belly} />
       {/* wings */}
       <path d="M10 33 C8 42 11 50 17 54 C15 46 15 39 17 33 Z" fill={c.bodyDark} />
       <path d="M54 33 C56 42 53 50 47 54 C49 46 49 39 47 33 Z" fill={c.bodyDark} />
@@ -122,11 +118,9 @@ export function HootMark({ size = 16, animated = true, label, className }: Props
       {/* eyelids: the body's orange, folded up until they blink */}
       <g className="hoot-lid">
         <ellipse cx="23" cy="26" rx="5.9" ry="5.9" fill={c.body} />
-        <path d="M18.6 28.4 Q23 31.6 27.4 28.4" stroke={c.lidLine} strokeWidth="1.5" fill="none" strokeLinecap="round" />
       </g>
       <g className="hoot-lid hoot-lid-r">
         <ellipse cx="41" cy="26" rx="5.9" ry="5.9" fill={c.body} />
-        <path d="M36.6 28.4 Q41 31.6 45.4 28.4" stroke={c.lidLine} strokeWidth="1.5" fill="none" strokeLinecap="round" />
       </g>
       {/* glasses: round frames, a bridge, and arms to the tufts */}
       <circle cx="23" cy="26" r="8" fill="none" stroke={c.frames} strokeWidth="2.4" />

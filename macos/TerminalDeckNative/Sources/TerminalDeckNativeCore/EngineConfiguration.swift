@@ -23,6 +23,9 @@ public struct EngineConfiguration: Equatable, Sendable {
     public static let downloadURL = URL(string: "https://terminaldeck.dev/download.html")!
 
     public enum Source: Equatable, Sendable {
+        /// The Node-free native app: its backend runs in process and its web
+        /// pages are served by the native bridge (night plan step 4, D14).
+        case nativeOnly(NativeWebAssets)
         /// The installed Terminal Deck app.
         case installedApp(app: URL, executable: URL, version: String)
         /// A code checkout (developer override, `TD_REPO`).
@@ -32,6 +35,7 @@ public struct EngineConfiguration: Equatable, Sendable {
     }
 
     public enum Problem: Equatable, Sendable {
+        case bundledEngine(String)
         case notInstalled
         case tooOld(found: String)
     }
@@ -55,10 +59,18 @@ public struct EngineConfiguration: Equatable, Sendable {
     /// `TD_REPO` set → that checkout. Otherwise the installed Terminal Deck, if it is
     /// new enough; otherwise what is wrong, so the window can say it.
     public static func resolve(environment: [String: String], applicationSupport: URL, home: String,
-                               installed: InstalledApp?) -> EngineConfiguration {
-        var dataRoot = applicationSupport.appendingPathComponent(dataFolderName, isDirectory: true)
+                               installed: InstalledApp?, resources: URL? = nil) -> EngineConfiguration {
+        var dataRoot = applicationSupport.appendingPathComponent(resources == nil ? dataFolderName : "terminaldeck", isDirectory: true)
         if let custom = environment[dataEnvironmentKey]?.trimmingCharacters(in: .whitespaces), custom.hasPrefix("/") {
             dataRoot = URL(fileURLWithPath: custom, isDirectory: true).standardizedFileURL
+        }
+
+        if let resources {
+            do {
+                return EngineConfiguration(source: .nativeOnly(try NativeWebAssets.discover(resources: resources)), dataRoot: dataRoot)
+            } catch {
+                return EngineConfiguration(source: .unavailable(.bundledEngine(error.localizedDescription)), dataRoot: dataRoot)
+            }
         }
 
         if var repoPath = environment[repoEnvironmentKey]?.trimmingCharacters(in: .whitespaces), !repoPath.isEmpty {
@@ -103,6 +115,7 @@ public struct EngineConfiguration: Equatable, Sendable {
     /// The program to start; nil when there is none to start.
     public var executable: URL? {
         switch source {
+        case .nativeOnly: nil
         case .installedApp(_, let executable, _): executable
         case .checkout(let repo):
             repo.appendingPathComponent("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron", isDirectory: false)
@@ -115,6 +128,7 @@ public struct EngineConfiguration: Equatable, Sendable {
     public var arguments: [String] {
         let shared = ["--native-shell", "--user-data-dir=\(engineDataDirectory.path)"]
         switch source {
+        case .nativeOnly: return []
         case .installedApp: return shared
         case .checkout(let repo): return [repo.path] + shared
         case .unavailable: return []
@@ -129,15 +143,19 @@ public struct EngineConfiguration: Equatable, Sendable {
     /// For the log.
     public var engineDescription: String {
         switch source {
+        case .nativeOnly: "native backend in this app (no Node engine)"
         case .installedApp(let app, _, let version): "installed Terminal Deck \(version) at \(app.path)"
         case .checkout(let repo): "code checkout at \(repo.path) (TD_REPO)"
         case .unavailable(.notInstalled): "none — Terminal Deck is not installed"
         case .unavailable(.tooOld(let found)): "none — Terminal Deck \(found) is older than \(Self.minimumVersion)"
+        case .unavailable(.bundledEngine(let detail)): "none — \(detail)"
         }
     }
 
     public var engineDataDirectory: URL {
-        dataRoot.appendingPathComponent("engine", isDirectory: true)
+        if case .nativeOnly = source { return dataRoot }
+        if case .unavailable(.bundledEngine) = source { return dataRoot }
+        return dataRoot.appendingPathComponent("engine", isDirectory: true)
     }
 
     public var logFile: URL {
@@ -151,6 +169,8 @@ public struct EngineConfiguration: Equatable, Sendable {
         env.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
         return env
     }
+
+    public func childEnvironment(from parent: [String: String]) -> [String: String] { Self.childEnvironment(from: parent) }
 }
 
 /// A Terminal Deck copy found on this Mac.

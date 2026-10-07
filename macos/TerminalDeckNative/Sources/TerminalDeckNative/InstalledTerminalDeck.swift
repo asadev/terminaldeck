@@ -24,10 +24,12 @@ enum InstalledTerminalDeck {
 
     /// Where the engine comes from right now.
     static func configuration() -> EngineConfiguration {
-        EngineConfiguration.resolve(
+        let standalone = Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool == true
+        return EngineConfiguration.resolve(
             environment: ProcessInfo.processInfo.environment,
             applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0],
             home: NSHomeDirectory(),
-            installed: find())
+            installed: standalone ? nil : find(),
+            resources: standalone ? Bundle.main.resourceURL : nil)
     }
 }

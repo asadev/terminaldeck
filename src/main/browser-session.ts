@@ -74,10 +74,10 @@ export interface BrowserSessionInfo {
   /** Where on disk the partition lives, or '' when Electron reports none. */
   storagePath: string
   /** False until the first page has actually been loaded in this partition. */
-  storageExists: boolean
+  storageExists: boolean | null
   cookieCount: number
   domainCount: number
-  cacheBytes: number
+  cacheBytes: number | null
 }
 
 /* -------------------------------------------------------------- the session -- */

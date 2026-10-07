@@ -129,8 +129,12 @@ final class MyWorkModel {
         let local = state.tasks.filter(\.local)
         let shown = TaskList.filter(local, view.filters, today: today, nowHm: nowHm,
                                     favorites: Set(TaskFavoritesStore.shared.ids))
-        let groups = TaskList.group(shown, by: view.groupBy, today: today, showClosed: view.showClosed,
-                                    assigneeName: { MyWorkModel.name(of: $0, in: state) }, nowHm: nowHm)
+        // Lane TK: "All projects" lists every task under its project's name.
+        let projects = TKTasksProjectScope.shared
+        let groups = projects.effective == .all
+            ? TaskProjects.groups(shown, open: projects.open, showClosed: view.showClosed)
+            : TaskList.group(shown, by: view.groupBy, today: today, showClosed: view.showClosed,
+                             assigneeName: { MyWorkModel.name(of: $0, in: state) }, nowHm: nowHm)
         return Drawn(local: local, shown: shown, groups: groups, today: today, nowHm: nowHm, week: TaskList.weekOf(week ?? today))
     }
 
@@ -240,11 +244,14 @@ struct MyWorkView: View {
             if model.view.tab == .table {
                 HStack(spacing: 6) {
                     Text("Group by").foregroundStyle(.secondary)
-                    Picker("Group by", selection: Binding(get: { model.view.groupBy }, set: { model.view.groupBy = $0 })) {
+                    let byProject = TKTasksProjectScope.shared.effective == .all
+                    Picker("Group by", selection: Binding(get: { byProject ? .project : model.view.groupBy }, set: { model.view.groupBy = $0 })) {
                         ForEach(ListGroupBy.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     .labelsHidden()
                     .fixedSize()
+                    .disabled(byProject)
+                    .help(byProject ? "All projects is grouped by project. Switch to This project to group another way." : "")
                 }
                 Toggle("Show closed", isOn: Binding(get: { model.view.showClosed }, set: { model.view.showClosed = $0 }))
                     .toggleStyle(.checkbox)
@@ -522,6 +529,7 @@ struct TaskRowView: View {
             onDrop(dragged)
             return true
         } isTargeted: { dropTarget = orderable && $0 }
+        .contextMenu { TKMoveToProjectMenu(task: task) }
     }
 
     private func update(_ patch: [String: Any]) {
@@ -878,6 +886,7 @@ private struct StageBoard: View {
             ? Color(nsColor: .unemphasizedSelectedContentBackgroundColor) : Color(nsColor: .windowBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
         .draggable(task.id)
+        .contextMenu { TKMoveToProjectMenu(task: task) }
         .disabled(busy)
     }
 }

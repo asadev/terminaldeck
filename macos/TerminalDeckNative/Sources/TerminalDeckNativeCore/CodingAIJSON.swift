@@ -147,6 +147,9 @@ public enum CodingAIErrorText {
             case .malformed, .http: return fallback
             }
         }
+        // A native handler's refusal (NativeRPCError and every other error that
+        // states its own sentence) shows that sentence, never the type's dump.
+        if let stated = (error as? LocalizedError)?.errorDescription, !stated.isEmpty { return from(stated, fallback: fallback) }
         return from(String(describing: error), fallback: fallback)
     }
 }

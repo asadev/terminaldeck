@@ -24,9 +24,8 @@ import { EventEmitter } from 'node:events'
  *    "no window" answer it already has, instead of a type error from Electron.
  *  - `mainFrame` — null, and `senderFrame` on the event is null too: the
  *    guest-page checks that compare frames refuse, which is right.
- *  - `executeJavaScript(code)` — Hoot's window readers. Only the three known
- *    page calls run, as named calls over the bridge (`page-call.ts`); any other
- *    script is refused, because no other script is ever sent.
+ *  - `executeJavaScript(code)` — refused: the page lives in a native window
+ *    this process cannot run script in.
  *
  * Identity is the point: `isApprover` in `index.ts` compares the sender
  * against the main window's contents, and in native mode it also accepts this

@@ -96,9 +96,10 @@ enum IntentsEngine {
 
     /// Bring the app and its window to the front.
     static func bringForward() {
-        NSApplication.shared.activate()
+        NativeFrontGuard.expect("Siri or Shortcuts")
+        NSApplication.shared.activate() // front-ok: a Siri or Shortcuts request the person made
         let windows = NSApplication.shared.windows.filter { $0.canBecomeMain }
-        (windows.first(where: \.isVisible) ?? windows.first)?.makeKeyAndOrderFront(nil)
+        (windows.first(where: \.isVisible) ?? windows.first)?.makeKeyAndOrderFront(nil) // front-ok: same Siri or Shortcuts request
     }
 
     static func note(_ text: String) {

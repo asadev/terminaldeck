@@ -98,16 +98,15 @@ public enum BrowserShot {
     }
 
     /// The one line a session receives: what was typed, then the picture's
-    /// path, the page's address and title, and its size — the web browser's
-    /// `composeShot`, with the title added.
+    /// path, the page's address and its size — exactly the web browser's
+    /// `composeShot` (ScreenshotPopup.tsx). The title is not in the line there,
+    /// so it is not here (lane BR: it was added in the port; TS is the spec).
     public static func compose(instruction: String, path: String, url: URL?, title: String, width: Int, height: Int,
                                marks: Int = 0) -> String {
         var context = "[browser screenshot"
         if marks > 0 { context += " with \(marks) mark\(marks == 1 ? "" : "s") on it" }
         let address = url.map { BrowserText.oneLine($0.absoluteString) } ?? ""
         if !address.isEmpty { context += " of \(address)" }
-        let name = BrowserText.oneLine(title)
-        if !name.isEmpty { context += " (\"\(name)\")" }
         context += ": \(path) (\(width) x \(height))]"
         let lead = BrowserText.oneLine(instruction)
         return lead.isEmpty ? context : "\(lead) \(context)"

@@ -51,6 +51,12 @@ struct NativeBrowserAnnotateView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
         }
         .onExitCommand(perform: leave)
+        .onAppear {
+            // Opened by a click on the live page (Annotate's picker): that element is marker 1.
+            guard annotations.isEmpty, let first = tab.takeAnnotateStart() else { return }
+            annotations = BrowserAnnotate.add([], first)
+            focused = annotations.first?.id
+        }
     }
 
     private var panel: some View {
@@ -345,6 +351,12 @@ struct NativeBrowserRecordPanel: View {
                 }
                 Button("Copy") { tab.copyFlow() }.disabled(tab.steps.isEmpty)
                 Button("Clear") { tab.clearRecording() }.disabled(tab.steps.isEmpty)
+                if !tab.recording {
+                    // Put away; ⋮ ▸ Recorded flow brings it back (lane BR, the web's flow popup).
+                    Button { tab.flowHidden = true } label: { Image(systemName: "xmark") }
+                        .help("Close")
+                        .accessibilityLabel("Close the recorded flow")
+                }
             }
             if !tab.steps.isEmpty {
                 ScrollView {

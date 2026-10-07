@@ -16,7 +16,6 @@ public enum HootArt {
         public static let body = RGB(0xF7882F)
         public static let bodyDark = RGB(0xE8701A)
         public static let belly = RGB(0xFFD3A8)
-        public static let bellyLine = RGB(0xF2A86A)
         public static let face = RGB(0xFFE7CF)
         public static let eyeWhite = RGB(0xFFFFFF)
         public static let pupil = RGB(0x2A1A10)
@@ -67,10 +66,8 @@ public enum HootArt {
             fill("M49 17 L46 5 L38 14 Z", c.bodyDark),
             // body
             fill("M32 9 C48 9 55 21 55 35 C55 50 45 59 32 59 C19 59 9 50 9 35 C9 21 16 9 32 9 Z", c.body),
-            // belly
-            fill("M32 33 C42 33 46 41 46 47 C46 54 40 58 32 58 C24 58 18 54 18 47 C18 41 22 33 32 33 Z", c.belly),
-            line("M26 44 q3 3 6 0 q3 3 6 0", c.bellyLine, 1.6),
-            line("M28.5 50 q3.5 3 7 0", c.bellyLine, 1.6),
+            // belly: plain, nothing under the beak that reads as lips (Asad's pick, 2026-10-07)
+            fill("M32 40 C41 40 46 46 46 51 C46 56 40 58.5 32 58.5 C24 58.5 18 56 18 51 C18 46 23 40 32 40 Z", c.belly),
             // wings
             fill("M10 33 C8 42 11 50 17 54 C15 46 15 39 17 33 Z", c.bodyDark),
             fill("M54 33 C56 42 53 50 47 54 C49 46 49 39 47 33 Z", c.bodyDark),
@@ -84,7 +81,7 @@ public enum HootArt {
             Element(shape: .circle(cx: 41.6, cy: 26.6, r: 3), paint: .fill(c.pupil)),
             Element(shape: .circle(cx: 24.6, cy: 25.4, r: 1), paint: .fill(c.eyeWhite)),
             Element(shape: .circle(cx: 42.6, cy: 25.4, r: 1), paint: .fill(c.eyeWhite)),
-            // (eyelids are folded to nothing in the still pose)
+            // (eyelids are folded to nothing in the still pose; `lids` below is where they close)
             // glasses: round frames, a bridge, and arms to the tufts
             Element(shape: .circle(cx: 23, cy: 26, r: 8), paint: .stroke(c.frames, width: 2.4)),
             Element(shape: .circle(cx: 41, cy: 26, r: 8), paint: .stroke(c.frames, width: 2.4)),
@@ -98,6 +95,10 @@ public enum HootArt {
             fill("M29.6 33 L34.4 33 L32 37.4 Z", c.beak),
         ]
     }()
+
+    /// The two eyelids (the body's orange), as the web mark's `hoot-lid` ellipses: each
+    /// closes from its top edge down over the eye, and they sit inside the glasses' frames.
+    public static let lids: [(cx: CGFloat, cy: CGFloat, r: CGFloat)] = [(23, 26, 5.9), (41, 26, 5.9)]
 
     /// Draws the owl into `rect` of a standard (y-up) Core Graphics context.
     public static func draw(in context: CGContext, rect: CGRect) {

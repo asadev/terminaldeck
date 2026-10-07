@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import TerminalDeckNativeCore
+import TerminalDeckBackend
 
 /// The one model behind every window: the engine process, the main page
 /// (sidebar, tabs and title come from it), the Settings page, and the pages of
@@ -48,6 +49,9 @@ final class AppModel {
     @ObservationIgnored private var screenTitles: [ScreenRef: String] = [:]
 
     @ObservationIgnored private var engineURL: URL?
+    private(set) var preparingSavedData = false
+    private(set) var websiteMigrationNotice: String?
+    @ObservationIgnored private var bootstrapTask: Task<Void, Never>?
 
     // Screens in their own windows (one per ScreenRef), remembered across launches.
     @ObservationIgnored private var screens: [ScreenRef: ScreenModel] = [:]
@@ -62,6 +66,7 @@ final class AppModel {
         defer { restoreAppearance() }
         // The installed Terminal Deck (or a checkout, with TD_REPO) runs as the engine.
         engine = EngineController(configuration: InstalledTerminalDeck.configuration())
+        NativeOSBridge.connect()
         BrowserTabsHook.connect()
         screensToRestore = ScreenRef.decodeList(UserDefaults.standard.data(forKey: Self.openScreensKey))
         web = WebBridge(log: engine.log)
@@ -83,6 +88,7 @@ final class AppModel {
         }
 
         web.onReady = { [weak self] in
+            Task { await NativeCompositionRoot.shared.mainPageReady() }
             self?.pageReady = true
             self?.web.run(.nativeScreens(NativeScreens.registered))
             self?.web.focus()
@@ -149,7 +155,8 @@ final class AppModel {
     private func handleSettingsPage(_ message: PageMessage) {
         switch message {
         case .settingsSections(let sections, let selected):
-            settingsSections = sections
+            // Hoot first, as in the main side panel (Asad, 2026-10-07); the rest keep their order.
+            settingsSections = sections.filter(\.isHoot) + sections.filter { !$0.isHoot }
             settingsSelection = selected
         case .openSettings(let url, let section):
             showSettings(url, section: section)
@@ -594,7 +601,64 @@ final class AppModel {
     // MARK: Engine
 
     func startEngine() {
-        engine.start()
+        guard bootstrapTask == nil else { return }
+        let standalone = Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool == true
+        // D14: the standalone app is Node-free. Its backend is assembled in
+        // process and its pages come from the native bridge; nothing is spawned.
+        guard standalone, case .nativeOnly(let assets) = engine.configuration.source else {
+            engine.start()
+            return
+        }
+        engine.nativeStarter = {
+            guard let root = NativeCompositionRoot.shared.backend else {
+                throw NativeRPCError(code: "unavailable", message: "The native backend is not assembled.")
+            }
+            return try await NativeNodelessBridge.shared.start(assets: assets, root: root)
+        }
+        let configuration = NativeCompositionRoot.pinned(engine.configuration)
+        if configuration != engine.configuration { engine.reconfigure(configuration) }
+        let primary = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("terminaldeck", isDirectory: true)
+        if configuration.engineDataDirectory.standardizedFileURL == primary.standardizedFileURL,
+           NSWorkspace.shared.runningApplications.contains(where: {
+               $0.bundleIdentifier == EngineConfiguration.appBundleID && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+           }) {
+            engine.reconfigure(EngineConfiguration(source: .unavailable(.bundledEngine(
+                "Another copy is already using your data. Quit it, then try again.")), dataRoot: configuration.dataRoot))
+            engine.start()
+            return
+        }
+        preparingSavedData = true
+        bootstrapTask = Task { [weak self] in
+            do {
+                try await NativeCompositionRoot.shared.start(configuration: configuration)
+                guard let self, !Task.isCancelled else { return }
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.preparingSavedData = false
+                self.bootstrapTask = nil
+                self.engine.reconfigure(EngineConfiguration(source: .unavailable(.bundledEngine(error.localizedDescription)), dataRoot: configuration.dataRoot))
+                self.engine.start()
+                return
+            }
+            let report = await NativeBrowserCookieMigration.shared.run(dataRoot: configuration.engineDataDirectory)
+            guard let self, !Task.isCancelled else { return }
+            self.websiteMigrationNotice = report.complete ? nil : report.summary
+            self.preparingSavedData = false
+            self.bootstrapTask = nil
+            self.engine.start()
+        }
+    }
+
+    func retryWebsiteMigration() {
+        guard !preparingSavedData else { return }
+        preparingSavedData = true
+        Task { [weak self] in
+            guard let self else { return }
+            let report = await NativeBrowserCookieMigration.shared.run(dataRoot: self.engine.configuration.engineDataDirectory, retry: true)
+            self.websiteMigrationNotice = report.summary
+            self.preparingSavedData = false
+        }
     }
 
     func tryAgain() {
@@ -629,7 +693,17 @@ final class AppModel {
         settingsSelection = nil
         settingsWeb.reset()
         engine.reconfigure(InstalledTerminalDeck.configuration()) // installed or updated meanwhile?
-        engine.restart()
+        if Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool == true {
+            bootstrapTask?.cancel()
+            bootstrapTask = nil
+            bootstrapTask = Task { [weak self] in
+                guard let self else { return }
+                await self.engine.stopAndWait()
+                guard !Task.isCancelled else { return }
+                self.bootstrapTask = nil
+                self.startEngine()
+            }
+        } else { engine.restart() }
     }
 
     func showLog() {
@@ -638,7 +712,27 @@ final class AppModel {
     }
 
     /// Quit / last window closed / SIGTERM: the engine goes with us.
+    func prepareShutdown() async -> Bool {
+        let trace: @Sendable (String) -> Void = { NativeCompositionRoot.note("quit: " + $0) }
+        trace("prepare shutdown")
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
+        await BackendCompositionRoot.traced("engine", trace) { await engine.stopAndWait() }
+        await BackendCompositionRoot.traced("page bridge", trace) { await NativeNodelessBridge.shared.stop() }
+        do { try await NativeCompositionRoot.shared.stop() }
+        catch {
+            pageFailure = EngineFailure(title: "Terminal Deck could not stop yet", message: error.localizedDescription, detail: nil)
+            isTerminating = false
+            return false
+        }
+        NativeOSBridge.shared.stop()
+        return true
+    }
+
     func shutdown() {
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
         engine.stopNow()
+        NativeOSBridge.shared.stop()
     }
 }

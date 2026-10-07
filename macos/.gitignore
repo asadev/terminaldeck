@@ -2,3 +2,9 @@ build/
 TerminalDeckNative/.build/
 TerminalDeckNative/.swiftpm/
 TerminalDeckNative/.build-*/
+
+# Night-run working folders: logs, scratch apps, scratch homes and a COPY of
+# user data. Never part of the source.
+night/
+# Test packages that link the sources for isolated test runs.
+testpkg-*/

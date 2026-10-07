@@ -8,7 +8,7 @@ import TerminalDeckNativeCore
 /// `NativeBrowserTabs`); this is what the window shows for it — the web
 /// browser's toolbar, in the same order:
 ///
-///   back · forward · reload/stop · home · [Enter a URL, or search] ·
+///   back · forward · reload/stop · home · Session · [Enter a URL, or search] ·
 ///   Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools ·
 ///   Downloads · Profile · ⋮
 ///
@@ -38,6 +38,16 @@ struct NativeBrowserTabView: View {
     let store: NativeBrowserTabs
     let tab: NativeBrowserTab
 
+    private var modeHint: String {
+        var drawing = false, annotating = false
+        switch tab.markup {
+        case .draw: drawing = true
+        case .annotate: annotating = true
+        case nil: break
+        }
+        return BRBrowserModes.hint(inspecting: tab.inspecting, drawing: drawing, hasCapture: annotating)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             NativeBrowserToolbarRow(store: store, tab: tab)
@@ -48,12 +58,26 @@ struct NativeBrowserTabView: View {
                 NativeBrowserFindBar(tab: tab)
                 Divider()
             }
+            NativeBrowserDriveBand(tab: tab) // lane BR: "Hoot is driving on …" (DriveBanner.tsx)
             if let prompt = tab.handoverPrompt {
                 NativeBrowserHandoverBar(tab: tab, prompt: prompt)
                 Divider()
             }
-            if tab.recording || !tab.steps.isEmpty {
+            if tab.savedSignInOffer != nil || tab.savedPasswordOffer != nil || tab.savedLoginMessage != nil {
+                NativeBrowserSavedLoginBar(tab: tab)
+                Divider()
+            }
+            if tab.recording || (!tab.steps.isEmpty && !tab.flowHidden) {
                 NativeBrowserRecordPanel(tab: tab)
+                Divider()
+            }
+            if tab.deviceID == BRDeviceSize.customID && tab.markup == nil {
+                NativeBrowserCustomSizeBar(tab: tab) // lane BR: Size ▸ Custom's W × H (DeviceBar.tsx)
+                Divider()
+            }
+            // The one instruction line (modes.ts modeHint), only while it is the instruction.
+            if !modeHint.isEmpty {
+                NativeBrowserHintRow(text: modeHint)
                 Divider()
             }
             ZStack {
@@ -69,6 +93,9 @@ struct NativeBrowserTabView: View {
             }
         }
         .background(NativeBrowserKeyCatcher { tab.handleKey($0) })
+        .sheet(isPresented: Binding(get: { tab.historyShown }, set: { tab.historyShown = $0 })) {
+            NativeBrowserHistorySheet(tab: tab, profileName: store.profile(tab.profile)?.name ?? "")
+        }
         .overlay(alignment: .bottom) {
             if let notice = store.notice {
                 Text(notice)
@@ -107,6 +134,10 @@ struct NativeBrowserToolbarRow: View {
     var body: some View {
         HStack(spacing: 4) {
             navigation
+            // Which session this window is attached to — between Home and the address,
+            // where the web browser draws it (lane BR: NativeBrowserBRBinding.swift).
+            NativeBrowserConnectButton(tabId: tab.id)
+            NativeBrowserMachinePicker(tab: tab) // lane BR: only with another machine paired (MachinePicker.tsx)
             addressField
             tools
         }
@@ -158,6 +189,7 @@ struct NativeBrowserToolbarRow: View {
 
     private var addressField: some View {
         HStack(spacing: 6) {
+            NativeBrowserServedMark(tab: tab) // lane BR: which machine serves this page (served-mark.ts)
             TextField("Enter a URL, or search", text: $address, selection: $selection)
                 .textFieldStyle(.plain)
                 .focused($addressFocused)
@@ -204,8 +236,8 @@ struct NativeBrowserToolbarRow: View {
             }
 
             NativeBrowserIcon("Annotate", "text.bubble", help: "Annotate — mark things on the page, say what should change, send it to a session",
-                              pressed: isAnnotating) {
-                tab.startMarkup(annotate: true)
+                              pressed: isAnnotating || tab.inspecting) {
+                tab.toggleAnnotate() // lane BR: the live picker first, as the web browser's Annotate
             }
             .disabled(!hasPage)
 
@@ -373,6 +405,12 @@ struct NativeBrowserSizeMenu: View {
                     if tab.deviceID == preset.id { Label(text, systemImage: "checkmark") } else { Text(text) }
                 }
             }
+            Button {
+                tab.deviceID = BRDeviceSize.customID
+            } label: {
+                let text = "Custom — \(tab.customWidth) × \(tab.customHeight)"
+                if tab.deviceID == BRDeviceSize.customID { Label(text, systemImage: "checkmark") } else { Text(text) }
+            }
             Divider()
             Toggle("Landscape", isOn: $tab.deviceLandscape)
                 .disabled(tab.deviceID == nil)
@@ -412,6 +450,7 @@ struct NativeBrowserMoreMenu: View {
             Divider()
             Button("Downloads") { store.downloadsShown = true }
             Button("Open Downloads Folder") { store.downloads.openDownloadsFolder() }
+            Button("Store") { AppModel.shared.select("store") } // lane BR: the Store page (App.tsx showPanel('store'))
             Button("Set as Start Page") { tab.setAsStartPage() }
                 .disabled(tab.url == nil)
             Button("Open in Your Browser") { tab.openInDefaultBrowser() }
@@ -425,6 +464,18 @@ struct NativeBrowserMoreMenu: View {
             Divider()
             Button("Find in Page") { tab.showFind() }.disabled(tab.url == nil || tab.showsStartView)
             Button("Print…") { tab.printPage() }.disabled(tab.url == nil || tab.showsStartView)
+            // Lane BR: the rest of the web browser's ⋮ (BrowserMenu.tsx). History and
+            // Passwords belong to the tab's profile, which an Isolated tab does not save to.
+            Divider()
+            if !tab.isolated {
+                Button("History") { tab.historyShown = true }
+                Button("Passwords") { NativeBRSettingsLink.open("browser") }
+            }
+            if !tab.steps.isEmpty && !tab.recording {
+                Button("Recorded flow") { tab.flowHidden = false }
+            }
+            Button("Scraping") { NativeBRSettingsLink.open("scraping") }
+            Button("Settings") { NativeBRSettingsLink.open("browser") }
         } label: {
             Label("More", systemImage: "ellipsis")
                 .rotationEffect(.degrees(90))
@@ -468,17 +519,18 @@ struct NativeBrowserHandoverBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Hoot needs you").font(.callout.weight(.semibold))
-                Text(prompt).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+            Circle().fill(.orange).frame(width: 8, height: 8)
+            HStack(spacing: 0) {
+                Text(BRHandoverWords.text(prompt: prompt)).lineLimit(2)
+                Text(BRHandoverWords.site(tab.url)).foregroundStyle(.secondary).lineLimit(1)
             }
+            .font(.callout)
             Spacer()
-            Button("Stop") { tab.endHandover("stopped") }
-                .help("Tell the agent not to carry on")
-            Button("Done") { tab.endHandover("resumed") }
+            Button(BRHandoverWords.carryOn) { tab.endHandover("resumed") }
                 .buttonStyle(.borderedProminent)
                 .help("Give the page back to the agent")
+            Button(BRHandoverWords.stop) { tab.endHandover("stopped") }
+                .help("Tell the agent not to carry on")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -531,7 +583,7 @@ struct NativeBrowserContent: View {
     var body: some View {
         ZStack {
             GeometryReader { geometry in
-                if let preset = tab.deviceID.flatMap(BrowserDevicePreset.byID) {
+                if let preset = BRDeviceSize.frame(deviceID: tab.deviceID, customWidth: tab.customWidth, customHeight: tab.customHeight) {
                     let fit = BrowserDevicePreset.fit(width: preset.width, height: preset.height,
                                                       landscape: tab.deviceLandscape,
                                                       into: (geometry.size.width - 24, geometry.size.height - 40))

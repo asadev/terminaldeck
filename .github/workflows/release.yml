@@ -151,36 +151,17 @@ jobs:
             # fails for any other reason is usually the wrong certificate, and
             # that must stay a hard error rather than silently downgrading every
             # release.
-            scripts/mac-release-signed.sh --signed-only
-            cat > release/mac-install-note.md <<'NOTE'
-          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
-          Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
-
-          Signed with a Developer ID certificate, not notarized, so macOS refuses
-          the first launch. Open the app, click **Done**, then go to **System
-          Settings › Privacy & Security** and click **Open Anyway**. Once, per
-          install.
-          NOTE
-            # Terminal Deck Native (Preview): scripts/mac-native-preview.sh wrote its
-            # paragraph during the signing run above, and the `cat >` just replaced the
-            # note it had appended to — so add it back here, after the base note.
-            if [ -f release/native-preview-note.md ]; then cat release/native-preview-note.md >> release/mac-install-note.md; fi
+            # 0.19.0 on: the Mac app is the Node-free Swift app (`--native`).
+            # scripts/mac-native-release.sh wrote the install paragraph, which
+            # says whether it was notarized.
+            scripts/mac-release-signed.sh --native --signed-only
+            cp release/native-install-note.md release/mac-install-note.md
             exit 0
           fi
 
           if [ -n "${MACOS_CERTIFICATE_P12:-}" ]; then
-            scripts/mac-release-signed.sh
-            cat > release/mac-install-note.md <<'NOTE'
-          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
-          Applications. It is signed with a Developer ID certificate and notarized
-          by Apple, and the notarization ticket is stapled to both the app and the
-          disk image — so it opens on a double-click, with no Gatekeeper detour and
-          no network. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
-          NOTE
-            # Terminal Deck Native (Preview): scripts/mac-native-preview.sh wrote its
-            # paragraph during the signing run above, and the `cat >` just replaced the
-            # note it had appended to — so add it back here, after the base note.
-            if [ -f release/native-preview-note.md ]; then cat release/native-preview-note.md >> release/mac-install-note.md; fi
+            scripts/mac-release-signed.sh --native
+            cp release/native-install-note.md release/mac-install-note.md
             exit 0
           fi
 
@@ -189,9 +170,9 @@ jobs:
             exit 1
           fi
 
-          npm run dist:mac
+          scripts/mac-native-release.sh --ad-hoc
           cat > release/mac-install-note.md <<'NOTE'
-          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
+          macOS 26 or later, Apple silicon: open `-arm64.dmg` and drag the app to
           Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
 
           **This build is not signed**, because it was produced by a checkout with
@@ -205,10 +186,22 @@ jobs:
           ```
           NOTE
 
-      # What is *inside* the app, not just that an app came out. See
-      # scripts/check-package.mjs for the 1.0 GB this is here to prevent.
+      # What is *inside* the app is verified by scripts/mac-native-release.sh
+      # (Node-free, helpers, pages, signature) before anything is packaged; this
+      # checks that every file the release and the updater need came out.
+      # (scripts/check-package.mjs mac is the Electron package's check.)
       - name: The package carries what it should
-        run: node scripts/check-package.mjs mac
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          for f in "release/terminaldeck-$v-arm64.dmg" "release/terminaldeck-native-$v-arm64.zip" release/latest-native-mac.yml release/latest-mac.yml release/mac-install-note.md; do
+            [ -s "$f" ] || { echo "::error::missing $f"; exit 1; }
+          done
+          grep -q "^version: \"$v\"$" release/latest-native-mac.yml || { echo "::error::latest-native-mac.yml is not for $v"; exit 1; }
+          # Terminal Deck 0.18.x reads latest-mac.yml: it must name this version and this app's zip.
+          grep -q "^version: $v$" release/latest-mac.yml && grep -q "^path: terminaldeck-native-$v-arm64.zip$" release/latest-mac.yml \
+            || { echo "::error::latest-mac.yml does not offer the native $v zip"; exit 1; }
+          ls -l release
 
       - name: Upload the mac artifacts
         uses: actions/upload-artifact@v4
@@ -219,6 +212,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest-mac.yml
+            release/latest-native-mac.yml
             release/mac-install-note.md
           if-no-files-found: error
           retention-days: 1
@@ -341,6 +335,14 @@ jobs:
           gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir release \
             --pattern '*.exe' --pattern '*.exe.blockmap' --pattern 'latest.yml' \
             --pattern '*.tgz' --pattern 'install.sh' --pattern '*.apk'
+          # The Electron Mac app reads latest-mac.yml from the newest release. The
+          # mac job writes one that points 0.18.x at the native app's zip (it
+          # updates in place from its side panel). Only if it is missing are the
+          # previous release's updater files carried, so no copy says "update failed".
+          if [ ! -f release/latest-mac.yml ]; then
+            gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir release \
+              --pattern 'latest-mac.yml' --pattern 'terminaldeck-[0-9]*-arm64.zip' --pattern 'terminaldeck-[0-9]*-arm64.zip.blockmap' || true
+          fi
           ls -l release
 
       # The server half, which was on npm and nowhere on this page.
@@ -457,19 +459,20 @@ jobs:
 
           notes="$(MACNOTE="$macnote" APP="$app" NOTES="$notes" python3 -c 'import os,sys; sys.stdout.write(os.environ["NOTES"].replace("{{MACNOTE}}", os.environ["MACNOTE"]).replace("{{APP}}", os.environ["APP"]))')"
 
+          # Only files that exist: a Mac-only native release has no Electron dmg,
+          # and gh refuses the whole call over one missing path.
+          shopt -s nullglob
+          assets=(release/*.dmg release/*.zip release/*.exe release/*.blockmap
+                  release/latest-mac.yml release/latest-native-mac.yml release/latest.yml
+                  release/SHA256SUMS.txt release/*.tgz release/install.sh)
+          shopt -u nullglob
+          existing=()
+          for f in "${assets[@]}"; do [ -f "$f" ] && existing+=("$f"); done
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             --notes "$notes" \
-            release/*.dmg \
-            release/*.zip \
-            release/*.exe \
-            release/*.blockmap \
-            release/latest-mac.yml \
-            release/latest.yml \
-            release/SHA256SUMS.txt \
-            release/*.tgz \
-            release/install.sh
+            "${existing[@]}"
 
           # The phone download, when a Mac-only release carried one over. The
           # Android build is uploaded by its own pipeline otherwise, so a release

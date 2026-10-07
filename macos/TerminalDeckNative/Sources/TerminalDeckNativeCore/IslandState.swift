@@ -18,15 +18,19 @@ public struct IslandState: Equatable, Sendable {
     public var badge: Int
     /// One short line (for VoiceOver and the pill's tooltip).
     public var line: String
+    /// Hoot's session is running and reachable: the resting pill shows the owl
+    /// (Asad, 7 Oct: "show hoot in island when its connected only").
+    public var hootConnected: Bool = false
 
     public static let messageType = "island"
     public static let maxLine = 200
     public static let maxBadge = 99_999
 
-    public init(status: IslandStatus, badge: Int = 0, line: String = "") {
+    public init(status: IslandStatus, badge: Int = 0, line: String = "", hootConnected: Bool = false) {
         self.status = status
         self.badge = min(max(0, badge), Self.maxBadge)
         self.line = line
+        self.hootConnected = hootConnected
     }
 
     /// True for any `{type:'island', …}` body, well-formed or not — so the relay
@@ -77,4 +81,21 @@ public enum IslandLocation {
         guard let origin = EngineOrigin(url: engineURL) else { return nil }
         return URL(string: "\(origin.display)/?island=1")
     }
+}
+
+extension IslandState {
+    /// native-island.ts islandState over the native Hoot snapshot's session statuses: the
+    /// badge counts only sessions waiting for the person (`input`, hoot-panel-model needsYou);
+    /// the status is needs-you, then working, else idle — nothing drawn at rest (Asad, 7 Oct:
+    /// the island stays plain black when nothing needs him). TS's "offline" ring for a stopped
+    /// Hoot is left out on purpose: Hoot not running is the island's ordinary rest.
+    public static func native(sessionStatuses: [String], line: String, hootStatus: String? = nil) -> IslandState {
+        let waiting = sessionStatuses.filter { $0 == "input" }.count
+        let working = sessionStatuses.contains("working")
+        return IslandState(status: waiting > 0 ? .needsYou : working ? .working : .idle, badge: waiting, line: line,
+                           hootConnected: hootConnected(hootStatus))
+    }
+    /// Connected = Hoot's session is running (BackendHootMenuBar's snapshot `hoot.status`);
+    /// stopped, starting, failed or unknown is not connected and draws no owl.
+    public static func hootConnected(_ hootStatus: String?) -> Bool { hootStatus == "running" }
 }

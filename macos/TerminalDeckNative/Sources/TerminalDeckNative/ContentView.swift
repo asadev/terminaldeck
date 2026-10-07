@@ -40,9 +40,6 @@ struct ContentView: View {
                         }
                         .sharedBackgroundVisibility(.hidden)
                     }
-                    MainToolbar(canRun: model.canRun,
-                                newSession: model.newSession,
-                                openSettings: model.requestSettings)
                 }
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in
@@ -55,50 +52,29 @@ struct ContentView: View {
         // The tabs name what is on show; with none (only the new-tab buttons) the title does.
         .toolbar(removing: tabs?.tabs.isEmpty == false ? .title : nil)
         .nativeAppDialogs(model) // the page's dialogs, drawn natively (lane S)
+        // A page, channel or tool asking while the person is in another app waits
+        // for them to come back; openWindow would pull the app in front (NativeFront).
         .onChange(of: model.settingsWindowRequest) {
-            openWindow(id: SettingsWindow.sceneID)
+            let open = openWindow
+            NativeFront.whenPersonActs("settings") { open(id: SettingsWindow.sceneID) }
         }
         .onChange(of: model.screenWindowRequest) {
-            for ref in model.takePendingScreens() { openWindow(value: ref) }
+            let open = openWindow
+            NativeFront.whenPersonActs("screens") { for ref in model.takePendingScreens() { open(value: ref) } }
         }
         .task {
             NativeKeyRouter.install(model) // keymap.ts shortcuts while a native view has the keyboard (lane S)
             // Screens that had their own windows when the app last quit.
             guard !restored else { return }
             restored = true
-            for ref in model.takeScreensToRestore() { openWindow(value: ref) }
+            for ref in model.takeScreensToRestore() { openWindow(value: ref) } // front-ok: launch restore, inside the launch the person started
         }
     }
 }
 
-// MARK: Toolbar — only what the sidebar doesn't already offer. The system toolbar
-// draws these as Liquid Glass itself on macOS 26+.
-
-struct MainToolbar: ToolbarContent {
-    let canRun: Bool
-    let newSession: () -> Void
-    let openSettings: () -> Void
-
-    var body: some ToolbarContent {
-        ToolbarItem {
-            Button(action: newSession) {
-                Label("New Session", systemImage: "plus")
-            }
-            .help("Start a new session (⌘T)")
-            .disabled(!canRun)
-        }
-
-        ToolbarSpacer(.fixed)
-
-        ToolbarItem {
-            Button(action: openSettings) {
-                Label("Settings", systemImage: "gearshape")
-            }
-            .help("Open Settings (⌘,)")
-            .disabled(!canRun)
-        }
-    }
-}
+// No toolbar buttons of its own (Asad, 2026-10-07): new sessions come from the strip's
+// terminal and globe buttons (each with a small +), and Settings and the alerts bell
+// sit at the foot of the sidebar, as in the old app. ⌘T and ⌘, stay in the menus.
 
 // MARK: Main page
 
@@ -110,7 +86,7 @@ struct PageDetailView: View {
 
     var body: some View {
         let showsPage = model.pageReady && model.failure == nil
-        let screen = model.failure == nil && model.engineIsUp ? model.currentScreen : nil
+        let screen = model.failure == nil && model.engineIsUp && !model.preparingSavedData ? model.currentScreen : nil
         let native = screen.flatMap { featureOffer(for: $0) ?? NativeScreens.detail(kind: $0.kind, id: $0.id) } ?? emptyState(screen: screen)
         // A dialog the page opened (e.g. New Session from the native terminal) comes in
         // front of the native screen, which stays mounted underneath until it closes.
@@ -118,9 +94,16 @@ struct PageDetailView: View {
         ZStack {
             WebViewContainer(webView: model.web.webView)
                 .opacity(pageInFront ? 1 : 0)
+                // Out of VoiceOver and hit-testing while a native screen is in front (walk 6).
+                .accessibilityHidden(!pageInFront)
+                .allowsHitTesting(pageInFront)
                 .zIndex(native != nil && model.pageModalOpen ? 2 : 0)
 
-            if let failure = model.failure {
+            if model.preparingSavedData {
+                LoadingView(message: "Preparing saved website sign-ins…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.background)
+            } else if let failure = model.failure {
                 FailureView(failure: failure,
                             logPath: model.engine.configuration.logFile.path,
                             tryAgain: model.tryAgain,

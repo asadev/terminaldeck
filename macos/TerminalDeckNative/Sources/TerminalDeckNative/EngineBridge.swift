@@ -1,5 +1,6 @@
 import Foundation
 import TerminalDeckNativeCore
+import TerminalDeckBackend
 
 /// The native app's own line to the engine, for screens drawn in Swift.
 ///
@@ -15,6 +16,11 @@ final class EngineBridge {
     private var token: String?
     private var listeners: [String: [UUID: ([Any]) -> Void]] = [:]
     private var stream: Task<Void, Never>?
+    private var native: BackendCompositionRoot?
+    private var nativeSubscription: NativeRPCSubscription?
+    private var nativeInvokes: Set<String> = []
+    private var nativeSends: Set<String> = []
+    private var nativeEvents: Set<String> = []
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
@@ -23,7 +29,30 @@ final class EngineBridge {
         return URLSession(configuration: config)
     }()
 
-    var isReady: Bool { base != nil }
+    var isReady: Bool { base != nil || native != nil }
+    /// D14 Node-free app: every channel and event belongs to the in-process
+    /// registry; there is no engine to fall back to and no second event stream.
+    private let nodeless = Bundle.main.object(forInfoDictionaryKey: "TDNativeOnly") as? Bool == true
+    private func routesNative(_ channel: String, _ manifest: Set<String>) -> Bool { native != nil && (nodeless || manifest.contains(channel)) }
+
+    /// Install the complete route snapshot before Node starts. Handler failures
+    /// are returned to the caller; only an absent route falls back to Node.
+    func configure(native root: BackendCompositionRoot) async throws {
+        await nativeSubscription?.cancelAndWait()
+        let manifest = await root.manifest()
+        nativeInvokes = Set(manifest["invoke"].elements?.compactMap(\.string) ?? [])
+        nativeSends = Set(manifest["send"].elements?.compactMap(\.string) ?? [])
+        nativeEvents = Set(manifest["events"].elements?.compactMap(\.string) ?? [])
+        native = root
+        nativeSubscription = try await root.registry.subscribeAll(ownerID: BackendCompositionRoot.appOwnerID) { [weak self] event in
+            await self?.dispatchNative(event)
+        }
+    }
+
+    func disconnectNative() async {
+        await nativeSubscription?.cancelAndWait(); nativeSubscription = nil
+        native = nil; nativeInvokes = []; nativeSends = []; nativeEvents = []
+    }
 
     /// Called when the engine prints its ready line.
     func configure(engineURL: URL) {
@@ -45,6 +74,10 @@ final class EngineBridge {
     /// `timeout` (seconds) replaces the 30 s a request may sit silent, for a call that is
     /// slow by nature — starting an MCP server can take 45 s (lane E2).
     func invoke(_ channel: String, _ args: [Any?] = [], timeout: TimeInterval? = nil) async throws -> Any {
+        if routesNative(channel, nativeInvokes), let native {
+            let answer = try await native.invoke(channel, context: nativeContext(), arguments: try nativeArguments(args))
+            return answer.foundation ?? NSNull()
+        }
         let data = try await post("/__td/invoke", channel: channel, args: args, timeout: timeout)
         switch EngineWire.invokeResult(data) {
         case .success(let value): return value
@@ -55,6 +88,14 @@ final class EngineBridge {
     /// The same call, with the answer read in the order it was written (`OrderedJSON`),
     /// for screens that lay out or print what came back — lane E2, the MCP page.
     func invokeOrdered(_ channel: String, _ args: [Any?] = [], timeout: TimeInterval? = nil) async throws -> OrderedJSON {
+        if routesNative(channel, nativeInvokes), let native {
+            let answer = try await native.invoke(channel, context: nativeContext(), arguments: try nativeArguments(args))
+            let envelope = NativeRPCValue.object([.init("ok", .bool(true)), .init("value", answer)])
+            switch OrderedJSON.invokeResult(try envelope.encodedJSON()) {
+            case .success(let value): return value
+            case .failure(let error): throw error
+            }
+        }
         let data = try await post("/__td/invoke", channel: channel, args: args, timeout: timeout)
         switch OrderedJSON.invokeResult(data) {
         case .success(let value): return value
@@ -67,7 +108,17 @@ final class EngineBridge {
         let previous = lastSend
         lastSend = Task { [weak self] in
             await previous?.value
-            _ = try? await self?.post("/__td/send", channel: channel, args: args)
+            guard let self else { return }
+            if self.routesNative(channel, self.nativeSends), let native = self.native {
+                do { try await native.send(channel, context: self.nativeContext(), arguments: try self.nativeArguments(args)) }
+                catch {
+                    // Fire-and-forget still surfaces a failure to native error
+                    // listeners, with no fallback repeating a failed mutation.
+                    self.dispatch(EngineWire.Event(channel: "native:send-error", args: [channel, error.localizedDescription]))
+                }
+                return
+            }
+            _ = try? await self.post("/__td/send", channel: channel, args: args)
         }
     }
     private var lastSend: Task<Void, Never>?
@@ -85,6 +136,18 @@ final class EngineBridge {
 
     // MARK: - inside
 
+    private func nativeContext() -> NativeRPCContext {
+        .init(caller: .nativeApp, ownerID: BackendCompositionRoot.appOwnerID, origin: base)
+    }
+    private func nativeArguments(_ arguments: [Any?]) throws -> [NativeRPCValue] {
+        try arguments.map { try NativeRPCValue.fromFoundation($0 ?? NSNull()) }
+    }
+    private func dispatchNative(_ event: NativeRPCEvent) {
+        for handler in (listeners[event.channel] ?? [:]).values {
+            handler(event.arguments.map { $0.foundation ?? NSNull() })
+        }
+    }
+
     private func post(_ path: String, channel: String, args: [Any?], timeout: TimeInterval? = nil) async throws -> Data {
         guard let base, let token else { throw EngineWireError.notReady }
         var request = URLRequest(url: base.appendingPathComponent(path))
@@ -101,6 +164,7 @@ final class EngineBridge {
 
     private func openStream() {
         stream?.cancel()
+        if nodeless { stream = nil; return } // events arrive from the registry subscription
         stream = Task { [weak self] in
             var delay: UInt64 = 250_000_000
             while !Task.isCancelled {
@@ -138,6 +202,9 @@ final class EngineBridge {
     }
 
     private func dispatch(_ event: EngineWire.Event) {
+        // A migrated event has one Swift producer. Legacy events from the Node
+        // stream must not duplicate it or overwrite its native projection.
+        guard !nativeEvents.contains(event.channel) else { return }
         for handler in (listeners[event.channel] ?? [:]).values { handler(event.args) }
     }
 }

@@ -678,7 +678,7 @@ private struct Composer: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK else { return }
+        guard NativeFront.personActing, panel.runModal() == .OK else { return } // front-ok: guarded by NativeFront.personActing
         attach(panel.urls)
     }
 

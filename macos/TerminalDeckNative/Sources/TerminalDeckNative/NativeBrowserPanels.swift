@@ -3,6 +3,49 @@ import SwiftUI
 import UniformTypeIdentifiers
 import TerminalDeckNativeCore
 
+/// Only safe account/site labels are drawn. Saving/filling stays in the exact
+/// native document and gives immediate pending and failure feedback.
+struct NativeBrowserSavedLoginBar: View {
+    let tab: NativeBrowserTab
+    private var usernames: [String] { tab.savedSignInOffer?["usernames"].elements?.compactMap(\.string) ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let offer = tab.savedPasswordOffer {
+                HStack(spacing: 8) {
+                    Image(systemName: "key.fill").foregroundStyle(.secondary)
+                    Text("Save \(offer.login.username.isEmpty ? "this sign-in" : offer.login.username) for \(offer.login.origin)?")
+                        .font(.callout).lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button("Not now") { tab.answerSavedPassword(keep: false) }
+                    Button("Save") { tab.answerSavedPassword(keep: true) }.buttonStyle(.borderedProminent)
+                }
+            } else if let offer = tab.savedSignInOffer {
+                HStack(spacing: 8) {
+                    Image(systemName: "key").foregroundStyle(.secondary)
+                    Text(offer["autoFilled"].bool == true ? "Saved sign-in filled." : "A saved sign-in is available for this page.")
+                        .font(.callout)
+                    Spacer(minLength: 8)
+                    if usernames.count == 1, let username = usernames.first {
+                        Button("Fill \(username.isEmpty ? "saved sign-in" : username)") { tab.fillSavedLogin(username: username) }
+                    } else if !usernames.isEmpty {
+                        Menu("Fill saved sign-in") {
+                            ForEach(usernames, id: \.self) { username in
+                                Button(username.isEmpty ? "Saved sign-in" : username) { tab.fillSavedLogin(username: username) }
+                            }
+                        }
+                    }
+                }
+                if let message = offer["message"].string, !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
+            }
+            if tab.savedLoginPending { ProgressView("Working…").controlSize(.small) }
+            if let message = tab.savedLoginMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+        .disabled(tab.savedLoginPending)
+        .padding(.horizontal, 12).padding(.vertical, 8).background(.bar)
+    }
+}
+
 // MARK: - "Open a page"
 
 /// What a new tab shows before it has a page — and what it shows instead of an
@@ -465,14 +508,14 @@ struct NativeBrowserProfileButton: View {
         }
         if let window = tab.webView?.window ?? NSApp.keyWindow {
             alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
+        } else if NativeFront.personActing {
+            finish(alert.runModal()) // front-ok: the person's own "New profile" press, no window to sheet over
         }
     }
 }
 
 struct NativeBrowserDownloadsList: View {
-    let downloads: NativeBrowserDownloads
+    let downloads: any NativeCompositionBrowserDownloadsPresentation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -485,6 +528,10 @@ struct NativeBrowserDownloadsList: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             Divider()
+            if !downloads.message.isEmpty {
+                Text(downloads.message).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).padding(14)
+            }
             if downloads.items.isEmpty {
                 Text("Nothing downloaded yet. Files are saved to your Downloads folder.")
                     .font(.callout)
@@ -513,7 +560,8 @@ struct NativeBrowserDownloadsList: View {
 
 struct NativeBrowserDownloadRow: View {
     let item: NativeBrowserDownloads.Item
-    let downloads: NativeBrowserDownloads
+    let downloads: any NativeCompositionBrowserDownloadsPresentation
+    private var localFile: Bool { downloads.backendRow(item.id)?.onMachine.isEmpty ?? true }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -534,9 +582,11 @@ struct NativeBrowserDownloadRow: View {
                     .buttonStyle(.borderless)
                     .help("Stop this download")
             case .finished:
-                Button { downloads.reveal(item.id) } label: { Image(systemName: "magnifyingglass.circle.fill") }
-                    .buttonStyle(.borderless)
-                    .help("Show in Finder")
+                if localFile {
+                    Button { downloads.reveal(item.id) } label: { Image(systemName: "magnifyingglass.circle.fill") }
+                        .buttonStyle(.borderless)
+                        .help("Show in Finder")
+                }
             case .failed, .cancelled:
                 EmptyView()
             }
@@ -544,9 +594,9 @@ struct NativeBrowserDownloadRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .contentShape(.rect)
-        .onTapGesture(count: 2) { if item.state == .finished { downloads.open(item.id) } }
+        .onTapGesture(count: 2) { if item.state == .finished && localFile { downloads.open(item.id) } }
         .contextMenu {
-            if item.state == .finished {
+            if item.state == .finished && localFile {
                 Button("Open") { downloads.open(item.id) }
                 Button("Show in Finder") { downloads.reveal(item.id) }
             }
@@ -571,6 +621,11 @@ struct NativeBrowserDownloadRow: View {
     }
 
     private var status: String {
+        if let row = downloads.backendRow(item.id) {
+            if row.state == .delivering { return row.onMachineName.isEmpty ? "Delivering…" : "Delivering to \(row.onMachineName)…" }
+            if !row.onMachine.isEmpty { return row.onMachineName.isEmpty ? "Saved on another machine" : "Saved on \(row.onMachineName)" }
+            if !row.message.isEmpty { return row.message }
+        }
         let bytes = ByteCountFormatter()
         bytes.countStyle = .file
         switch item.state {

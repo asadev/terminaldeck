@@ -274,6 +274,10 @@ public enum TaskFields {
     ]
 
     public static func isTagArea(_ v: String?) -> Bool { tagAreas.contains { $0.key == v } }
+    public static func isRelationshipArea(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return !value.isEmpty && value.utf16.count <= 40
+    }
     public static func tagAreaLabel(_ key: String) -> String { tagAreas.first { $0.key == key }?.label ?? key }
 
     public static let maxFieldLabel = 80
@@ -474,7 +478,7 @@ public enum TaskFields {
             if let given = c["areas"], given.array == nil { return .failure(FieldFail("Areas must be a list")) }
             var areas: [String] = []
             for a in c["areas"]?.array ?? [] {
-                guard isTagArea(a.string) else { return .failure(FieldFail("Unknown area “\(jsString(a))”")) }
+                guard isRelationshipArea(a.string) else { return .failure(FieldFail("Unknown area “\(jsString(a))”")) }
                 if !areas.contains(a.string!) { areas.append(a.string!) }
             }
             out.areas = areas
@@ -756,7 +760,7 @@ public enum TaskFields {
             var out: [CrmValue] = []
             var seen: Set<String> = []
             for r in list {
-                guard let o = r.object, let area = o["area"]?.string, isTagArea(area) else { return fail("A link is malformed") }
+                guard let o = r.object, let area = o["area"]?.string, isRelationshipArea(area) else { return fail("A link is malformed") }
                 if !allowed.isEmpty && !allowed.contains(area) { return fail("This field does not link that kind of record") }
                 let id = o["id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let label = String(collapse(o["label"]?.string ?? "").prefix(200))

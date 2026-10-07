@@ -12,6 +12,11 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .appInfo) {
             item(AppCommandCatalog.about)
         }
+        // ⌘Q quits even with a sheet or dialog up, as TS did (NativeQuit).
+        CommandGroup(replacing: .appTermination) {
+            Button("Quit " + ((Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? ProcessInfo.processInfo.processName)) { NativeQuit.terminate() }
+                .keyboardShortcut("q")
+        }
         CommandGroup(after: .appSettings) {
             items(.app)
         }
@@ -55,6 +60,10 @@ private extension View {
 enum AppCommandRunner {
     static func perform(_ command: AppMenuCommand, model: AppModel) {
         switch command.action {
+        case .page(let id) where id == "view.browser" && BrowserTabsHook.provider != nil:
+            // Lane BR: View ▸ Browser is "New browser tab" (App.tsx view.browser). The page's own
+            // answer makes a tab the native browser does not hold ("This browser tab is closed").
+            model.newBrowserTab()
         case .page:
             guard model.canRun, let script = command.script else { NSSound.beep(); return }
             let log = model.engine.log

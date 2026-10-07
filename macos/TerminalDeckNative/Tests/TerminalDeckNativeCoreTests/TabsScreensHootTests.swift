@@ -185,7 +185,8 @@ struct HootArtTests {
         }
         #expect(close(pixel(32, 12), 0xF7882F), "body orange on the crown")
         #expect(close(pixel(52, 40), 0xE8701A), "darker orange wing")
-        #expect(close(pixel(40, 48), 0xFFD3A8), "belly")
+        #expect(close(pixel(40, 52), 0xFFD3A8), "belly")
+        #expect(close(pixel(32, 39), 0xF7882F), "plain orange under the beak: no belly marks that read as lips")
         #expect(close(pixel(23, 27), 0x2A1A10), "left pupil")
         #expect(close(pixel(32, 34), 0xB4500F), "beak")
         #expect(pixel(2, 2).3 == 0, "transparent corner — no background, so it sits on light or dark")
@@ -199,7 +200,7 @@ struct HootArtTests {
                 #expect(source.contains("d=\"\(d)\""), "path no longer in HootMark.tsx: \(d)")
             }
         }
-        for (name, hex) in [("body", "#F7882F"), ("bodyDark", "#E8701A"), ("belly", "#FFD3A8"), ("bellyLine", "#F2A86A"),
+        for (name, hex) in [("body", "#F7882F"), ("bodyDark", "#E8701A"), ("belly", "#FFD3A8"),
                             ("face", "#FFE7CF"), ("pupil", "#2A1A10"), ("frames", "#5A3418"), ("beak", "#B4500F")] {
             #expect(source.contains("\(name): '\(hex)'"), "colour \(name) changed in HootMark.tsx")
         }

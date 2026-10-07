@@ -9,9 +9,8 @@ import { postToNative, type NativeHost } from '../shared/native-shell'
 import type { createDrops } from './drops'
 import { canOpenOutside, createLinkOpener, installPageLinks } from './links'
 import { answerMenu, createMenus } from './menus'
-import { isMainPage, registerShimCommand } from './native-shell'
+import { registerShimCommand } from './native-shell'
 import { createNativeNotification } from './notifications'
-import { installPageCalls } from './page-calls'
 
 /** A session's link for a browser tab — `LINK_TAB_CHANNEL` in `main/link-open.ts`. */
 export const LINK_TAB_CHANNEL = 'link:open-tab'
@@ -68,8 +67,6 @@ export function installPageFeatures(
   hooks: BridgeHooks,
   drops: ReturnType<typeof createDrops>,
 ): void {
-  const main = isMainPage(host.location.search)
-
   // Where a menu opens: where the pointer last asked for one.
   let pointer = { x: 0, y: 0 }
   const track = (event: { clientX?: number; clientY?: number }): void => {
@@ -110,6 +107,5 @@ export function installPageFeatures(
    */
   hooks.push = (channel) => channel === LINK_TAB_CHANNEL
 
-  if (main) installPageCalls(ipc, host as unknown as Record<string, unknown>)
   host.Notification = createNativeNotification(ipc)
 }

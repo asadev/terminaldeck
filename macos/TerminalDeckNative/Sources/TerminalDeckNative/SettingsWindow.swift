@@ -11,13 +11,17 @@ struct SettingsWindow: View {
         NavigationSplitView {
             List(selection: Binding(get: { model.settingsSelection }, set: { model.selectSettingsSection($0) })) {
                 ForEach(model.settingsSections) { section in
+                    // Grey text and smaller grey icons, same as the main side panel (Asad, 2026-10-07).
                     Label {
                         Text(section.title)
+                            .foregroundStyle(.secondary)
                     } icon: {
                         if section.isHoot {
-                            HootMark(size: 16)
+                            HootMark(size: 14)
                         } else {
                             Image(systemName: SymbolName.resolve(section.symbol, fallback: "gearshape"))
+                                .foregroundStyle(.secondary)
+                                .imageScale(.small)
                         }
                     }
                     .tag(section.id as String?)
@@ -51,8 +55,11 @@ private struct SettingsDetailView: View {
         let section = engineDown ? nil : model.settingsSelection
         let native = section.flatMap { NativeScreens.settings(sectionId: $0) }
         ZStack {
+            let pageInFront = showsPage && (native == nil || model.settingsModalOpen)
             WebViewContainer(webView: model.settingsWeb.webView)
-                .opacity(showsPage && (native == nil || model.settingsModalOpen) ? 1 : 0)
+                .opacity(pageInFront ? 1 : 0)
+                .accessibilityHidden(!pageInFront)
+                .allowsHitTesting(pageInFront)
                 .zIndex(native != nil && model.settingsModalOpen ? 2 : 0)
 
             if let native, let section {

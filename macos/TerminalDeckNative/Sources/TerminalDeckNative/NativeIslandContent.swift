@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
+import TerminalDeckBackend
 
 // What the island shows when it grows, drawn in Swift (lane B) — renderer/island/
 // IslandPage.tsx with hoot-panel's AllSessions: the line, Hoot's last few lines,
@@ -16,6 +17,14 @@ final class NativeIslandFeed {
     static let shared = NativeIslandFeed()
     private(set) var snapshot: IslandSnapshot?
     private init() {}
+    func acceptNative(_ raw: NativeRPCValue) {
+        let rows = (raw["sessions"].elements ?? []).compactMap { row -> IslandSessionRow? in
+            guard let id = row["id"].string else { return nil }
+            return .init(id: id, label: row["label"].string ?? "Session", status: row["status"].string ?? "idle")
+        }
+        snapshot = IslandSnapshot(assistant: raw["assistant"].string ?? "Hoot", stage: raw["hoot"]["status"].string,
+            sessions: rows, line: raw["label"]["text"].string ?? "Hoot")
+    }
 
     /// True when `body` was the snapshot message (taken here, well-formed or not).
     @discardableResult
@@ -44,8 +53,17 @@ final class NativeIslandChat {
     private init() {}
 
     private var hoot: NativeHootModel { NativeHootModel.shared }
+    func acceptNative(_ raw: NativeRPCValue) {
+        subscription?.cancel(); subscription = nil
+        messages = Array((raw["messages"].elements ?? []).compactMap { row -> IntentChatLine? in
+            guard let id = row["id"].string, let text = row["text"].string,
+                  let role = row["role"].string, ["user", "assistant", "you", "agent"].contains(role) else { return nil }
+            return .init(id: id, role: role == "user" || role == "you" ? .you : .agent, text: text)
+        }.suffix(12))
+    }
 
     func start() {
+        if NativeCompositionHootUI.shared.isBound { return }
         hoot.start()
         if subscription == nil {
             subscription = EngineBridge.shared.on("session:status") { [weak self] args in
@@ -71,6 +89,7 @@ final class NativeIslandChat {
     }
 
     func follow(whole asked: Bool) {
+        if NativeCompositionHootUI.shared.isBound { return }
         Task {
             guard let cwd = await folder() else { return }
             // A different folder (Hoot restarted elsewhere) is read whole, as the page's effect did.
@@ -88,6 +107,16 @@ final class NativeIslandChat {
         guard !text.isEmpty, !sending else { return }
         sending = true
         problem = nil
+        if NativeCompositionHootUI.shared.isBound {
+            Task { defer { sending = false }
+                do {
+                    let result = try await NativeCompositionHootUI.shared.invoke("hoot-panel:say", [.string(text)])
+                    guard result["ok"].bool == true else { problem = result["message"].string ?? "Hoot could not accept this message."; return }
+                    draft = ""
+                } catch { problem = error.localizedDescription }
+            }
+            return
+        }
         Task {
             defer { sending = false }
             var id = hoot.state?.sessionId
@@ -121,7 +150,10 @@ struct NativeIslandContent: View {
 
     private var feed: IslandSnapshot? { NativeIslandFeed.shared.snapshot }
     private var name: String { feed?.assistant ?? CopilotWords.assistant }
-    private var stopped: Bool { NativeHootModel.shared.stage == .stopped && !NativeHootModel.shared.loading }
+    private var stopped: Bool {
+        if NativeCompositionHootUI.shared.isBound { return feed?.stage != "running" }
+        return NativeHootModel.shared.stage == .stopped && !NativeHootModel.shared.loading
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -190,7 +222,11 @@ struct NativeIslandContent: View {
     private var askRow: some View {
         HStack(spacing: 8) {
             if stopped {
-                Button(IslandContentWords.start(name)) { NativeHootModel.shared.ensure() }
+                Button(IslandContentWords.start(name)) {
+                    if NativeCompositionHootUI.shared.isBound {
+                        Task { _ = try? await NativeCompositionHootUI.shared.invoke("hoot-panel:start-hoot") }
+                    } else { NativeHootModel.shared.ensure() }
+                }
                     .buttonStyle(.plain)
                     .font(.callout)
                     .foregroundStyle(.black)
@@ -216,7 +252,7 @@ struct NativeIslandContent: View {
     private func show(_ id: String) {
         IslandController.shared.collapse()
         AppModel.shared.select(id)
-        NSApp.activate()
+        NativeFront.onlyForPerson("island session") { NSApp.activate() }
     }
 }
 

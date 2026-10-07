@@ -6,10 +6,7 @@ import { frontDialogs } from './dialogs'
 import { scrubProcessEnv } from './inherited-env'
 import { isNativeShell, NATIVE_REFUSED_CHANNELS } from './mode'
 import { hydrateOnce } from './hydration'
-import { createNativeBrowserDriver, nativeBrowserTools, NATIVE_BROWSER_RESULT } from './native-browser'
 import { createNativeNotifier, NOTIFY_CHANNEL, NOTIFY_CLOSE_CHANNEL } from './notifications'
-import type { ToolSpec } from '../deck-control/catalogue'
-import { createPageCalls, PAGE_RESULT_CHANNEL } from './page-call'
 import { createHandlerRegistry, type TappableIpcMain } from './registry'
 import { createNativeSender } from './sender'
 
@@ -42,8 +39,6 @@ import { createNativeSender } from './sender'
  *    mode. The modules that keep `event.sender` and push to it later (usage,
  *    cost, MCP state, devices, …) were given the stand-in sender from
  *    `sender.ts`, whose `send` goes to the same event stream.
- *  - **The agents' browser tools** drive the native window's own browser, by
- *    command and answer over the bridge (`native-browser.ts`).
  *  - **Dialogs** are free-standing and bring this process forward (`dialogs.ts`).
  *  - **The environment** it was started with is cleaned of another app's session
  *    first (`inherited-env.ts`).
@@ -63,15 +58,10 @@ let installed = false
 let leaving = false
 let startupDeadline: NodeJS.Timeout | null = null
 
-const pageCalls = createPageCalls({ push: (channel, args) => bridge?.emit(channel, args) ?? false })
-
-const browserDriver = createNativeBrowserDriver({ push: (channel, args) => bridge?.emit(channel, args) ?? false })
-
 const sender = createNativeSender({
   deliver: (channel, args) => bridge?.emit(channel, args) ?? false,
   url: () => (bridge === null ? '' : `${bridge.origin}/`),
   session: () => session.defaultSession,
-  evaluate: (code) => pageCalls.evaluate(code),
 })
 
 /** The event every bridge call carries: the stand-in for the main window, and no frame. */
@@ -102,21 +92,6 @@ export function nativeShellBroadcast(channel: string, args: readonly unknown[]):
 /** Is the native window there to answer a question? The engine's answer to "is the window attended". */
 export function nativeShellAttended(): boolean {
   return installed && !leaving && (bridge?.clientCount() ?? 0) > 0
-}
-
-/**
- * The native page, as the one thing Hoot's window readers need from a window:
- * `executeJavaScript` for the three named page calls. Null outside native mode
- * or with no page open.
- */
-export function nativeShellPageWindow(): { isDestroyed(): boolean; webContents: typeof sender } | null {
-  return nativeShellAttended() ? { isDestroyed: () => false, webContents: sender } : null
-}
-
-
-/** The six browser tools, driving the native window's browser instead of a Chromium page here. */
-export function nativeShellBrowserTools(specs: readonly ToolSpec[]): ToolSpec[] {
-  return nativeBrowserTools(specs, browserDriver)
 }
 
 /** Say why, on the one line the parent reads, and go. */
@@ -161,12 +136,6 @@ export function installNativeShell(): void {
 
   // Free-standing dialogs that come to the front. See `dialogs.ts`.
   frontDialogs(dialog, () => app.focus({ steal: true }))
-
-  // The page's answers to Hoot's named calls. See `page-call.ts`.
-  ipcMain.on(PAGE_RESULT_CHANNEL, (_event, id: unknown, value: unknown) => pageCalls.settle(id, value))
-
-  // The native browser's answers to the agents' browser tools. See `native-browser.ts`.
-  ipcMain.handle(NATIVE_BROWSER_RESULT, (_event, id: unknown, result: unknown) => browserDriver.settle(id, result))
 
   /*
    * stdout is the protocol: one line, read by the parent. The app logs freely

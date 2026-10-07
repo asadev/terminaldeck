@@ -66,7 +66,7 @@ public final class BrowserDriverEngine {
         self.host = host
     }
 
-    /// The answer for `native-browser:result`.
+    /// The answer for one command: `{ value, summary }` or `{ error }`.
     public func answer(_ command: BrowserDriverCommand) async -> [String: Any] {
         do {
             return try await run(command)

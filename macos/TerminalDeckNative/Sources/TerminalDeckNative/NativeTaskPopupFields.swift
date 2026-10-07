@@ -968,7 +968,8 @@ private struct FilesEditor: View {
                     panel.allowsMultipleSelection = true
                     panel.canChooseDirectories = false
                     panel.message = "Upload to \(field.label)"
-                    if panel.runModal() == .OK, !panel.urls.isEmpty { ctx.onFiles(field, panel.urls) }
+                    guard NativeFront.personActing else { return }
+                    if panel.runModal() == .OK, !panel.urls.isEmpty { ctx.onFiles(field, panel.urls) } // front-ok: guarded by NativeFront.personActing
                 } label: {
                     Label("Upload", systemImage: "arrow.up.doc").font(.caption).padding(.horizontal, 6).frame(height: 24).contentShape(Rectangle())
                 }

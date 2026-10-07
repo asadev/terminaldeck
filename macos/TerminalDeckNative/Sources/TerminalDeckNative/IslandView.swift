@@ -11,12 +11,25 @@ import TerminalDeckNativeCore
 /// settle) without the shape moving a point. The canvas is exactly this view's size:
 /// `IslandContainerView` sizes and places the hosting view (`canvasFrame`), so no
 /// SwiftUI alignment rule decides where the pill lands.
+@MainActor
 struct IslandView: View {
     let model: IslandViewModel
     let webView: WKWebView
+    @State private var resizeBase: CGSize?
+    @State private var pendingSize: CGSize?
+
+    private var paintedLayout: IslandLayout {
+        var layout = model.layout
+        if model.expanded, let pendingSize {
+            layout.panel.width = pendingSize.width; layout.panel.height = pendingSize.height
+            layout.contentSize = CGSize(width: max(1, pendingSize.width - 2 * IslandMetrics.contentInset),
+                height: max(1, pendingSize.height - layout.contentTop - IslandMetrics.contentInset))
+        }
+        return layout
+    }
 
     var body: some View {
-        let layout = model.layout
+        let layout = paintedLayout
         let expanded = model.expanded
         let shape = expanded ? layout.panel : layout.pill
         let canvas = layout.expandedFrame.size
@@ -40,9 +53,49 @@ struct IslandView: View {
                 .opacity(expanded && model.pageLoaded ? 1 : 0)
                 .animation(expanded ? .easeOut(duration: 0.14).delay(0.12) : .easeIn(duration: 0.07), value: expanded)
                 .allowsHitTesting(expanded)
+            if NativeCompositionHootUI.shared.isBound && expanded {
+                HStack {
+                    resizeHandle(left: true)
+                    Spacer()
+                    resizeHandle(left: false)
+                }
+                .padding(.horizontal, 4)
+                .frame(width: shape.width, height: shape.height, alignment: .bottom)
+            }
         }
         .frame(width: canvas.width, height: canvas.height, alignment: .top)
         .environment(\.colorScheme, .dark)
+        .onChange(of: model.layout.panel) { _, _ in
+            if resizeBase == nil { pendingSize = nil }
+        }
+        .onChange(of: expanded) { _, grown in
+            if !grown { resizeBase = nil; pendingSize = nil }
+        }
+    }
+
+    private func resizeHandle(left: Bool) -> some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
+            .rotationEffect(.degrees(left ? 90 : 0))
+            .frame(width: 24, height: 24).contentShape(Rectangle())
+            .accessibilityLabel("Resize Hoot panel")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                NativeCompositionHootUI.shared.resizePanel(CGSize(width: model.layout.panel.width + 32,
+                    height: model.layout.panel.height + 32))
+            }
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { drag in
+                    if resizeBase == nil { resizeBase = CGSize(width: model.layout.panel.width, height: model.layout.panel.height) }
+                    guard let base = resizeBase else { return }
+                    pendingSize = NativeCompositionHootUI.shared.clampPanelSize(CGSize(
+                        width: base.width + drag.translation.width * (left ? -2 : 2),
+                        height: base.height + drag.translation.height))
+                }
+                .onEnded { _ in
+                    if let pendingSize { NativeCompositionHootUI.shared.resizePanel(pendingSize) }
+                    resizeBase = nil
+                })
     }
 }
 
@@ -107,12 +160,14 @@ private struct IslandIndicators: View {
         Group {
             if layout.notched {
                 HStack(spacing: 0) {
-                    status.frame(width: layout.ear)
+                    // The owl in the left ear, the spinner/dot beside it; the badge keeps the right ear.
+                    HStack(spacing: 3) { owl; status }.frame(width: layout.ear)
                     Color.clear.frame(width: layout.gap)
                     badge.frame(width: layout.ear)
                 }
             } else {
                 HStack(spacing: 5) {
+                    owl
                     if state != nil { status }
                     if let state, state.badge > 0 { badge }
                 }
@@ -125,12 +180,19 @@ private struct IslandIndicators: View {
         .help(state?.line ?? "")
     }
 
+    /// Hoot, only while it is connected (Asad, 7 Oct); otherwise the pill stays plain black.
+    @ViewBuilder private var owl: some View {
+        if state?.hootConnected == true {
+            HootMark(size: max(10, layout.pill.height - 8))
+                .accessibilityHidden(true)
+        }
+    }
+
     @ViewBuilder private var status: some View {
         switch state?.status {
-        case nil:
+        // Quiet shows nothing: a lone dot reads as the camera (Asad, 2026-10-07).
+        case nil, .idle:
             Color.clear.frame(width: 1, height: 1)
-        case .idle:
-            Circle().fill(Color.white.opacity(0.4)).frame(width: 6, height: 6)
         case .working:
             ProgressView()
                 .progressViewStyle(.circular)

@@ -55,8 +55,7 @@ export function nativeMachineName(name: string): string {
  *
  * Each of these attaches a `WebContentsView` — a Chromium page — to the calling
  * window, and the native page is not a Chromium window. The native shell's
- * browser is the native window's own (Safari's engine); the agents' browser
- * tools reach it through `native-browser.ts`.
+ * browser is the native window's own (Safari's engine).
  */
 export const NATIVE_REFUSED_CHANNELS: Readonly<Record<string, string>> = {
   'browser:create': NATIVE_REFUSAL.browser,

@@ -51,7 +51,7 @@ public struct BrowserSettingsImports: Equatable, Sendable {
 public struct BrowserSettingsStored: Equatable, Sendable {
     public var cookieCount: Int
     public var domainCount: Int
-    public var cacheBytes: Int
+    public var cacheBytes: Int?
 }
 
 public struct BrowserSettingsProfile: Equatable, Sendable, Identifiable {
@@ -138,7 +138,7 @@ public enum BrowserSettings {
 
     public static func stored(_ raw: CodingAIJSON) -> BrowserSettingsStored {
         BrowserSettingsStored(cookieCount: Int(raw["cookieCount"].number ?? 0), domainCount: Int(raw["domainCount"].number ?? 0),
-                              cacheBytes: Int(raw["cacheBytes"].number ?? 0))
+                              cacheBytes: raw["cacheBytes"].number.map { Int($0) })
     }
 
     public static func clearMessage(_ raw: CodingAIJSON) -> String { raw["message"].text ?? "Nothing to report." }
@@ -252,11 +252,15 @@ public enum BrowserSettings {
     }
 
     public static func keptSummary(_ stored: BrowserSettingsStored) -> String {
-        if stored.cookieCount == 0 && stored.cacheBytes == 0 { return "Nothing kept yet." }
-        if stored.cookieCount == 0 { return "No cookies, and \(bytes(stored.cacheBytes)) of cached pages." }
+        guard let cacheBytes = stored.cacheBytes else {
+            let cookies = stored.cookieCount == 0 ? "No cookies" : "\(stored.cookieCount) cookies from \(stored.domainCount) sites"
+            return "\(cookies). Cache size unavailable."
+        }
+        if stored.cookieCount == 0 && cacheBytes == 0 { return "Nothing kept yet." }
+        if stored.cookieCount == 0 { return "No cookies, and \(bytes(cacheBytes)) of cached pages." }
         let sites = "\(stored.domainCount) site\(stored.domainCount == 1 ? "" : "s")"
         let cookies = "\(stored.cookieCount) cookie\(stored.cookieCount == 1 ? "" : "s") from \(sites)"
-        return stored.cacheBytes == 0 ? "\(cookies), and nothing cached." : "\(cookies), and \(bytes(stored.cacheBytes)) of cached pages."
+        return cacheBytes == 0 ? "\(cookies), and nothing cached." : "\(cookies), and \(bytes(cacheBytes)) of cached pages."
     }
 
     public static func profileCaption(_ profile: BrowserSettingsProfile, activeId: String) -> String {

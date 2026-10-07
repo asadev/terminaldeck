@@ -28,21 +28,22 @@ struct SidebarView: View {
     }
 
     @ViewBuilder private var foot: some View {
-        if model.visibleSidebar != nil {
-            VStack(spacing: 8) {
+        VStack(spacing: 8) {
+            if model.visibleSidebar != nil {
                 NativeHooksOffer()
                 NativeUpdateBanner(model: model)
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
+            SidebarSettingsLine(model: model)
         }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
+    /// No List selection: the system draws it in the accent blue whenever the window is
+    /// active, and no tint changes that. Each row draws its own selection instead, a light
+    /// grey rounded fill with the text going dark, like Finder (Asad, 2026-10-07).
     private var sidebarList: some View {
-        List(selection: Binding(get: { model.listSelection }, set: { id in
-            // lane B: the Hoot row brings its folded panel back instead (NativeCopilotEntry.swift).
-            if id == "hoot" { NativeCopilotEntry.press { model.select(id) } } else { model.select(id) }
-        })) {
+        List {
             if let state = model.visibleSidebar {
                 groups(state)
                 projects(state)
@@ -50,13 +51,20 @@ struct SidebarView: View {
         }
     }
 
+    private func choose(_ id: String) {
+        // lane B: the Hoot row brings its folded panel back instead (NativeCopilotEntry.swift).
+        if id == "hoot" { NativeCopilotEntry.press { model.select(id) } } else { model.select(id) }
+    }
+
     private func groups(_ state: SidebarState) -> some View {
                 ForEach(state.groups) { group in
                     Section {
-                        ForEach(group.items) { item in
-                            SidebarRow(item: item)
+                        // Alerts is the bell at the foot (SidebarSettingsLine), not a row.
+                        ForEach(group.items.filter { $0.id != SidebarSettingsLine.alertsID }) { item in
+                            SidebarRow(item: item, selected: model.listSelection == item.id)
+                                .padding(.leading, SidebarRow.leadingShift)
+                                .modifier(SidebarPick(selected: model.listSelection == item.id) { choose(item.id) })
                                 .modifier(SessionRowAnchor(item: item))
-                                .tag(item.id as String?)
                                 .modifier(ItemMenu(item: item, model: model, projectPath: nil, openWindow: openWindow))
                         }
                     } header: {
@@ -65,38 +73,161 @@ struct SidebarView: View {
                 }
     }
 
+    /// Projects without DisclosureGroup: one expandable row makes the sidebar's outline
+    /// reserve a disclosure column on EVERY row, which pushed all items far in from their
+    /// section titles (Asad, 2026-10-07). The project row draws its own chevron instead,
+    /// and its sessions sit one step in beneath it.
     private func projects(_ state: SidebarState) -> some View {
                 Section("Open") {
                     ForEach(state.projects) { project in
-                        DisclosureGroup(isExpanded: Binding(
-                            get: { model.isExpanded(project.id) },
-                            set: { model.setExpanded(project.id, $0) })
-                        ) {
+                        ProjectRow(title: project.title, path: project.id, expanded: model.isExpanded(project.id)) {
+                            model.setExpanded(project.id, !model.isExpanded(project.id))
+                        }
+                        .padding(.leading, SidebarRow.leadingShift)
+                        .contextMenu {
+                            Button("New Session Here") { model.newSession(in: project.id) }
+                            Divider()
+                            Button("Close Project") { model.closeProject(project.id) }
+                        }
+                        if model.isExpanded(project.id) {
                             ForEach(project.sessions) { session in
-                                SidebarRow(item: session)
+                                // Same left edge as its folder (Asad, 2026-10-07: "same placement").
+                                SidebarRow(item: session, selected: model.listSelection == session.id)
+                                    .padding(.leading, SidebarRow.leadingShift)
+                                    .modifier(SidebarPick(selected: model.listSelection == session.id) { choose(session.id) })
                                     .modifier(SessionRowAnchor(item: session))
-                                    .tag(session.id as String?)
                                     .modifier(ItemMenu(item: session, model: model, projectPath: project.id, openWindow: openWindow))
                             }
-                        } label: {
-                            Label(project.title, systemImage: "folder")
-                                .lineLimit(1)
-                                .help(project.id)
-                                .contextMenu {
-                                    Button("New Session Here") { model.newSession(in: project.id) }
-                                    Divider()
-                                    Button("Close Project") { model.closeProject(project.id) }
-                                }
                         }
                     }
 
                     Button(action: model.openProject) {
-                        Label("Open Project…", systemImage: "folder.badge.plus")
+                        Label {
+                            Text("Open Project…").foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "folder.badge.plus").foregroundStyle(.secondary).imageScale(.small)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .padding(.leading, SidebarRow.leadingShift)
                     .help("Open a project folder (⌘O)")
                 }
+    }
+}
+
+/// A project in the "Open" section: grey folder and name, a chevron just after the name
+/// that turns when its sessions show. The whole row toggles them.
+private struct ProjectRow: View {
+    let title: String
+    let path: String
+    let expanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Label {
+                    Text(title).foregroundStyle(.secondary).lineLimit(1)
+                } icon: {
+                    // A filled folder: the outline one read as the terminal icon (Asad, 2026-10-07).
+                    Image(systemName: "folder.fill").foregroundStyle(.secondary).imageScale(.small)
+                }
+                // Right after the name, not at the row's end (Asad, 2026-10-07).
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .animation(.easeOut(duration: 0.15), value: expanded)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(path)
+        .accessibilityLabel(title)
+        .accessibilityValue(expanded ? "expanded" : "collapsed")
+    }
+}
+
+/// The rail's last line, as in the old app (Sidebar.tsx `sidebar-settings`): Settings at
+/// the left, the alerts bell at the end of the line with a dot while alerts wait. Both put
+/// a sheet or window over the work and leave it where it was, so neither is ever drawn as
+/// the current row (Asad, 2026-10-07: "same as before, bottom of side panel").
+struct SidebarSettingsLine: View {
+    static let alertsID = "alerts"
+    let model: AppModel
+    @State private var overSettings = false
+    @State private var overBell = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button(action: model.requestSettings) {
+                Label("Settings", systemImage: "gearshape")
+                    .imageScale(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(overSettings ? 0.06 : 0)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .onHover { overSettings = $0 }
+            .help("Open Settings (⌘,)")
+            .disabled(!model.canRun)
+
+            if let alerts = model.visibleSidebar?.item(id: Self.alertsID) {
+                let count = Self.waiting(alerts)
+                Button { model.select(Self.alertsID) } label: {
+                    Image(systemName: "bell")
+                        .imageScale(.small)
+                        .overlay(alignment: .topTrailing) {
+                            if count > 0 {
+                                Circle().fill(Color.accentColor).frame(width: 6, height: 6).offset(x: 3, y: -2)
+                            }
+                        }
+                        .frame(width: 28, height: 26)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(overBell ? 0.06 : 0)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .onHover { overBell = $0 }
+                .help("Alerts")
+                .accessibilityLabel(count > 0 ? "Alerts (\(count))" : "Alerts")
+            }
+        }
+    }
+
+    /// How many alerts wait: the row's subtitle leads with the number (IntentWork reads it
+    /// the same way); a bare unread mark counts as one.
+    static func waiting(_ item: SidebarItem) -> Int {
+        Int((item.subtitle ?? "").prefix { $0.isNumber }) ?? (item.unread ? 1 : 0)
+    }
+}
+
+/// A sidebar row's own selection (the List has none, so it never paints accent blue):
+/// a click picks it, and the picked row gets Finder's light grey rounded fill.
+private struct SidebarPick: ViewModifier {
+    let selected: Bool
+    let pick: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            // Drawn behind the row's own content, grown out to the row's edges: a sidebar
+            // List ignores listRowBackground (render check, 2026-10-07).
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(selected ? 0.1 : 0))
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -4)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(perform: pick)
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { pick() }
     }
 }
 
@@ -135,7 +266,7 @@ private struct ItemMenu: ViewModifier {
                 }
             }
             Button(item.kind == .session ? "Move to New Window" : "Open in New Window") {
-                openWindow(value: ScreenRef.forSidebarItem(item))
+                openWindow(value: ScreenRef.forSidebarItem(item)) // front-ok: the person's own menu choice
             }
             if let turn = item.turn {
                 Button("Started by Hoot — open that turn") { NativeHootModel.shared.show(turn: turn) }
@@ -168,24 +299,29 @@ private struct SessionRowAnchor: ViewModifier {
 }
 
 struct SidebarRow: View {
+    /// Rows sit just inside their section title, not far in (Asad, 2026-10-07).
+    static let leadingShift: CGFloat = -7
     let item: SidebarItem
+    var selected = false
 
     var body: some View {
         Label {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(item.title)
+                        .foregroundStyle(selected ? .primary : .secondary) // Asad, 2026-10-07: grey text; dark when selected, like Finder
                         .lineLimit(1)
                     if let subtitle = item.subtitle {
                         Text(subtitle)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)
                 if item.isHoot { NativeCopilotEntryChevron() } // lane B
                 StatusMark(status: item.status)
+                NativeBRBindChips(kind: item.kind.name, id: item.id, server: AppModel.shared.tabs?.tabs.first { $0.id == item.id }?.server, name: item.title) // lane BR: B1 chips (Sidebar.tsx)
                 if item.unread {
                     Circle()
                         .fill(.tint)
@@ -195,9 +331,13 @@ struct SidebarRow: View {
             }
         } icon: {
             if item.isHoot {
-                HootMark(size: 16)
+                HootMark(size: 14) // a step smaller, matching the other side-panel icons
             } else {
+                // Grey, not the sidebar's default accent blue (Asad, 2026-10-07). Same symbols.
                 Image(systemName: SymbolName.resolve(item.symbol, fallback: item.kind.defaultSymbol))
+                    // .primary on a sidebar icon turns into the accent blue; name the colour itself.
+                    .foregroundStyle(selected ? Color(nsColor: .labelColor) : Color(nsColor: .secondaryLabelColor))
+                    .imageScale(.small) // a step smaller than the sidebar default (Asad, 2026-10-07)
             }
         }
         .help(helpText)

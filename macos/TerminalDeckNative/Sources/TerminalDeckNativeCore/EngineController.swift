@@ -22,6 +22,8 @@ public struct EngineFailure: Equatable, Sendable {
     public static func needsTerminalDeck(_ problem: EngineConfiguration.Problem) -> EngineFailure {
         let minimum = EngineConfiguration.minimumVersion
         switch problem {
+        case .bundledEngine(let detail):
+            return EngineFailure(title: "Terminal Deck couldn't start", message: detail, detail: nil)
         case .notInstalled:
             return EngineFailure(
                 title: "Terminal Deck isn't installed",
@@ -141,6 +143,9 @@ public final class EngineController {
 
     /// Called once per launch when the engine prints its READY line.
     @ObservationIgnored public var onReady: ((URL) -> Void)?
+    /// `.nativeOnly`: starts the in-process backend and its page bridge and
+    /// returns the page URL. No process is spawned (night plan step 4, D14).
+    @ObservationIgnored public var nativeStarter: (@MainActor () async throws -> URL)?
 
     @ObservationIgnored private var handle: EngineHandle?
     @ObservationIgnored private var generation = 0
@@ -184,6 +189,22 @@ public final class EngineController {
         let fm = FileManager.default
         let executable: URL
         switch config.source {
+        case .nativeOnly:
+            guard let starter = nativeStarter else {
+                fail(EngineFailure(title: "Terminal Deck couldn't start", message: "The native backend was not assembled.", detail: nil))
+                return
+            }
+            log.note("native backend: no engine process")
+            Task { [weak self] in
+                do {
+                    let url = try await starter()
+                    self?.handle(.ready(url), generation: gen)
+                } catch {
+                    guard let self, gen == self.generation, self.phase == .starting else { return }
+                    self.fail(EngineFailure(title: "Terminal Deck couldn't start", message: error.localizedDescription, detail: nil))
+                }
+            }
+            return
         case .unavailable(let problem):
             fail(.needsTerminalDeck(problem))
             return
@@ -220,7 +241,7 @@ public final class EngineController {
         process.executableURL = executable
         process.arguments = config.arguments
         if let directory = config.workingDirectory { process.currentDirectoryURL = directory }
-        process.environment = EngineConfiguration.childEnvironment(from: ProcessInfo.processInfo.environment)
+        process.environment = config.childEnvironment(from: ProcessInfo.processInfo.environment)
 
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin
@@ -386,6 +407,15 @@ public final class EngineController {
 
     private func forget(_ old: EngineHandle) {
         dying.removeAll { $0 === old }
+    }
+
+    /// Leave the UI and native service actors responsive while the engine
+    /// saves its ledger and drains its terminals during normal termination.
+    public func stopAndWait() async {
+        timeoutTask?.cancel()
+        stopInBackground()
+        if let task = shutdownTask { await task.value }
+        log.flush()
     }
 
     /// Quit path: blocks until every engine we started is gone (at most ~4 s).

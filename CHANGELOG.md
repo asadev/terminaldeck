@@ -10,6 +10,30 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-07
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Changed
+
+- **Terminal Deck is now a native Swift app, and Node is gone from it.** Every screen, the terminals, the browser, Hoot, the island and every part behind them — sessions, accounts, machines, the relay, MCP servers, tasks, the store, plugins and Stays Fixed — run in the app itself. There is no Node.js, Electron or Chromium inside, and the download is much smaller (about 80 MB). It uses the same data folder, so your projects, sessions and settings carry over.
+- **It replaces both the previous app and Terminal Deck Native (Preview).** Terminal Deck 0.18.8 offers this version in its side panel; installing it there swaps the app in place. Delete the preview from Applications afterwards.
+- **It needs macOS 26 or later on Apple silicon.**
+- **Plugins run on the Mac's own JavaScript engine**, in a sandbox with no network, as before.
+- **Stays Fixed fetches its own pinned runtime the first time you set it up or run a check**, instead of carrying one inside the app. Opening its screen never downloads anything.
+
+### Added
+
+- **The browser does what the old one did.** Attach a tab to a session, annotate an element and send it to an agent, hand the page over to the person when a password or code is needed, fill a saved sign-in, record a flow, pick a device size or type your own, and open a link or page in your system browser from the right-click menu. ⌥← and ⌥→ go back and forward.
+- **Live Inspect for simulators.** Turn on Inspect and the device keeps playing; the element tree under your pointer refreshes by itself when the screen changes, instead of freezing the picture.
+- **Tasks by project.** The Tasks screen shows the project you are in, or all projects grouped by project. Move a task to another project from its menu; a new task starts in the current project, and agents' task tools see that project's tasks.
+- **A new Hoot.** Hoot has a new owl, in the app, in its panel and on the island.
+
+### Fixed
+
+- **The side panel is tidier.** Settings and the alerts bell sit at its foot, the selected row is a quiet grey, project rows have a folder and their arrow beside the name, and the + for a new terminal or browser tab sits on those buttons instead of in the toolbar.
+- **The island opens only when you really hover over it**, sits above the menu bar, and shows no dot when nothing is happening.
+
 ## [0.18.8] — 2026-10-06
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2404,7 +2428,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.18.6...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.0
 [0.18.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.6
 [0.18.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.5
 [0.18.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.4

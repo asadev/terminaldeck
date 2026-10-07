@@ -148,6 +148,13 @@ private struct StripButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
+                // A small + on the icon's top-right corner says "new" (Asad, 2026-10-07:
+                // this replaces the separate + in the toolbar).
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 8.5, weight: .heavy))
+                        .offset(x: 5, y: -5) // its first spot, a little higher (Asad, 2026-10-07)
+                }
                 .frame(width: TabStripLayout.buttonWidth, height: 24)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Color.primary.opacity(hovering ? 0.08 : 0)))
@@ -205,6 +212,7 @@ struct TabChip: View {
                 Spacer(minLength: 0)
 
                 StatusMark(status: tab.status)
+                NativeBRBindChips(kind: tab.kind, id: tab.id, server: tab.server, name: tab.title) // lane BR: B1 chips (WorkspaceTabStrip.tsx)
                 if tab.unread {
                     Circle()
                         .fill(.tint)

@@ -48,7 +48,11 @@ final class TasksStore {
             })
             subscriptions.append(bridge.on("tasks:open") { args in
                 guard let id = args.first as? String, !id.isEmpty else { return }
-                Task { @MainActor in TasksStore.shared.openRequest = (id, Date()) }
+                Task { @MainActor in
+                    // Lane TK: a task in another project moves the window to that project first.
+                    TKTasksProjectScope.shared.reveal(id, in: TasksStore.shared.state)
+                    TasksStore.shared.openRequest = (id, Date())
+                }
             })
         }
         reload()
@@ -104,7 +108,8 @@ final class TasksStore {
 
     /// A new task: the form's defaults, then what was given; checked here first.
     func create(_ input: [String: Any]) async -> TasksResult {
-        var draft: [String: Any] = ["title": "", "instructions": "", "project": "", "assignee": "none", "status": "To-Do"]
+        // Lane TK: a task made here belongs to the current project unless it names one.
+        var draft: [String: Any] = ["title": "", "instructions": "", "project": TKTasksProjectScope.shared.newTaskProject, "assignee": "none", "status": "To-Do"]
         draft.merge(input) { _, new in new }
         var local = LocalDraft(nil, statuses: [])
         local.title = draft["title"] as? String ?? ""

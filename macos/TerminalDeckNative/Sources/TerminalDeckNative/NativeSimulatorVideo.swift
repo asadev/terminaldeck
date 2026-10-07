@@ -32,6 +32,13 @@ final class DeviceScreenPlayer {
     var backingScale = 1.0
     /// The picture's drawn size in pixels, told by the view.
     var canvas = CGSize.zero
+    /// Inspect is on: the picture on show is fingerprinted (at most fifteen times a
+    /// second, the last one always) for `onSignature`, so a change can be noticed
+    /// without ever pausing the video.
+    var signing = false {
+        didSet { if !signing { signPending = false } }
+    }
+    var onSignature: ((ScreenSignature) -> Void)?
 
     private(set) var pictureSize: CGSize?
     private var format: CMVideoFormatDescription?
@@ -43,6 +50,12 @@ final class DeviceScreenPlayer {
     private var waitingForKey = true
     private var lastAsk = Date.distantPast
     private var pending: CVImageBuffer?
+    /// The picture on show, kept so a marker can keep the frame the person saw.
+    private var shown: CVImageBuffer?
+    private var shownStill: CGImage?
+    private var signedAt: CFTimeInterval = 0
+    private var signPending = false
+    private static let signEvery: CFTimeInterval = 1.0 / 15
     private var paintScheduled = false
     private var inputAt: CFTimeInterval?
     private var counts = PlayerStats()
@@ -92,6 +105,8 @@ final class DeviceScreenPlayer {
         lastConfig = nil
         waitingForKey = true
         pending = nil
+        shown = nil
+        shownStill = nil
         stillLayer.contents = nil
         stillLayer.isHidden = true
         pictureSize = nil
@@ -228,7 +243,10 @@ final class DeviceScreenPlayer {
             stillLayer.isHidden = true
             stillLayer.contents = nil
         }
+        shown = image
+        shownStill = nil
         onPicture?()
+        sign()
     }
 
     private func recover() {
@@ -242,9 +260,103 @@ final class DeviceScreenPlayer {
               let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         stillLayer.contents = cgImage
         stillLayer.isHidden = false
+        shownStill = cgImage
         setPictureSize(CGSize(width: cgImage.width, height: cgImage.height))
         counts.painted += 1
         onPicture?()
+        sign()
+    }
+
+    // MARK: The picture on show, for Inspect
+
+    /// The picture on show now, as an image — the frame a marker keeps.
+    func currentPicture() -> CGImage? {
+        if !stillLayer.isHidden, let shownStill { return shownStill }
+        guard let shown else { return nil }
+        var image: CGImage?
+        guard VTCreateCGImageFromCVPixelBuffer(shown, options: nil, imageOut: &image) == noErr else { return nil }
+        return image
+    }
+
+    private func sign() {
+        guard signing, onSignature != nil else { return }
+        let now = CACurrentMediaTime()
+        let wait = signedAt + Self.signEvery - now
+        if wait > 0 {
+            // Too soon after the last: fingerprint whatever is on show once the gap has passed.
+            guard !signPending else { return }
+            signPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                MainActor.assumeIsolated {
+                    guard self.signPending else { return }
+                    self.signPending = false
+                    self.sign()
+                }
+            }
+            return
+        }
+        signedAt = now
+        let signature: ScreenSignature?
+        if !stillLayer.isHidden, let shownStill {
+            signature = Self.signature(shownStill)
+        } else if let shown {
+            signature = Self.signature(shown)
+        } else {
+            signature = nil
+        }
+        if let signature { onSignature?(signature) }
+    }
+
+    /// The brightness grid of a decoded picture, read straight from its luma plane
+    /// (or the green of a 32-bit one) — a thousand bytes, no copy, no drawing.
+    static func signature(_ buffer: CVPixelBuffer) -> ScreenSignature? {
+        guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        let eightBitPlanar: Set<OSType> = [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                           kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                                           kCVPixelFormatType_420YpCbCr8Planar,
+                                           kCVPixelFormatType_420YpCbCr8PlanarFullRange]
+        let base: UnsafeMutableRawPointer?
+        let rowBytes: Int
+        let width: Int
+        let height: Int
+        let step: Int
+        let offset: Int
+        if CVPixelBufferIsPlanar(buffer), eightBitPlanar.contains(format) {
+            base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0)
+            rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+            width = CVPixelBufferGetWidthOfPlane(buffer, 0)
+            height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+            step = 1
+            offset = 0
+        } else if format == kCVPixelFormatType_32BGRA || format == kCVPixelFormatType_32ARGB {
+            base = CVPixelBufferGetBaseAddress(buffer)
+            rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+            width = CVPixelBufferGetWidth(buffer)
+            height = CVPixelBufferGetHeight(buffer)
+            step = 4
+            offset = format == kCVPixelFormatType_32BGRA ? 1 : 2
+        } else {
+            return nil
+        }
+        guard let base else { return nil }
+        return ScreenSignature.sample(width: width, height: height) { x, y in
+            base.load(fromByteOffset: y * rowBytes + x * step + offset, as: UInt8.self)
+        }
+    }
+
+    /// The same grid for a still picture, drawn down into a tiny grey bitmap.
+    static func signature(_ image: CGImage) -> ScreenSignature? {
+        let columns = ScreenSignature.columns
+        let rows = ScreenSignature.rows
+        guard let context = CGContext(data: nil, width: columns, height: rows, bitsPerComponent: 8, bytesPerRow: columns,
+                                      space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let data = context.data else { return nil }
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: columns, height: rows))
+        let bytes = data.bindMemory(to: UInt8.self, capacity: columns * rows)
+        return ScreenSignature(columns: columns, rows: rows, samples: Array(UnsafeBufferPointer(start: bytes, count: columns * rows)))
     }
 
     private func setPictureSize(_ size: CGSize) {
@@ -295,11 +407,11 @@ private struct DecodedPicture: @unchecked Sendable {
 
 /// What the screen reports back. Closures, so the view stays a plain AppKit view.
 struct DeviceScreenEvents {
-    /// Something to send to the device — only while the screen is live and not inspecting.
+    /// Something to send to the device — a touch, swipe, wheel, key or typing, inspecting or not.
     var input: (DeviceInput) -> Void
     /// Inspecting: the pointer is over this normalised point, or left the picture.
     var hover: (_ point: CGPoint?) -> Void
-    /// Inspecting: a click on this normalised point.
+    /// Inspecting: a click (without a drag) on this normalised point.
     var pick: (_ point: CGPoint) -> Void
     /// The window can or cannot be seen.
     var visibility: (Bool) -> Void
@@ -312,7 +424,9 @@ struct DeviceScreenEvents {
 /// cannot, a press-and-release is a tap, a long press a long press, and a drag
 /// one swipe. The wheel scrolls as a short swipe. Once the screen has focus —
 /// a click gives it focus — typing goes to the device; ⌘V types this Mac's
-/// clipboard. In Inspect mode the mouse points instead of touching.
+/// clipboard. In Inspect mode the live screen keeps playing: the pointer
+/// highlights the element under it and a click marks it instead of tapping,
+/// while a drag still swipes and the wheel and the keyboard still reach the device.
 final class DeviceScreenNSView: NSView {
     var player: DeviceScreenPlayer? {
         didSet { attachPlayer() }
@@ -335,6 +449,12 @@ final class DeviceScreenNSView: NSView {
         }
     }
     var events: DeviceScreenEvents?
+    /// What VoiceOver and accessibility tools call the live picture (it is the device's screen, not a bare image).
+    var spokenName = ""
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .image }
+    override func accessibilityLabel() -> String? { spokenName }
 
     private struct Press {
         var x: Double
@@ -448,10 +568,10 @@ final class DeviceScreenNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         if inspecting {
+            // A click marks (on release, if it did not move); a drag is still a swipe.
             let point = convert(event.locationInWindow, from: nil)
-            if let at = DeviceGeometry.normalizedInside(point, in: fitted) {
-                events?.pick(CGPoint(x: at.x, y: at.y))
-            }
+            guard live, let at = DeviceGeometry.normalizedInside(point, in: fitted) else { return }
+            press = Press(x: at.x, y: at.y, at: Date(), moved: false, last: CGPoint(x: at.x, y: at.y))
             return
         }
         guard live, let at = normalized(event) else { return }
@@ -465,13 +585,22 @@ final class DeviceScreenNSView: NSView {
         if hypot(at.x - held.x, at.y - held.y) > DeviceGesture.tapTravel { held.moved = true }
         press = held
         // Moves that pile up while one is on its way are folded into the newest (`DeviceInputQueue`).
-        if details?.rawTouch == true { events?.input(.touch(phase: "move", x: at.x, y: at.y)) }
+        if details?.rawTouch == true, !inspecting { events?.input(.touch(phase: "move", x: at.x, y: at.y)) }
     }
 
     override func mouseUp(with event: NSEvent) {
         guard let held = press else { return }
         press = nil
         let at = normalized(event) ?? held.last
+        if inspecting {
+            if held.moved {
+                events?.input(DeviceGesture.release(fromX: held.x, fromY: held.y, toX: at.x, toY: at.y, moved: true,
+                                                    heldMs: Date().timeIntervalSince(held.at) * 1000))
+            } else {
+                events?.pick(CGPoint(x: held.x, y: held.y))
+            }
+            return
+        }
         if details?.rawTouch == true {
             events?.input(.touch(phase: "up", x: at.x, y: at.y))
             return
@@ -482,7 +611,7 @@ final class DeviceScreenNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard live, !inspecting else { return }
+        guard live else { return }
         // The page's convention: positive is further down the content. A line
         // from a notched wheel is counted as forty points, as a browser does.
         let scale = event.hasPreciseScrollingDeltas ? 1.0 : 40.0
@@ -509,7 +638,7 @@ final class DeviceScreenNSView: NSView {
     ]
 
     override func keyDown(with event: NSEvent) {
-        guard live, !inspecting, let details else { return super.keyDown(with: event) }
+        guard live, let details else { return super.keyDown(with: event) }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         if flags.contains(.command) || flags.contains(.control) {
@@ -539,7 +668,7 @@ final class DeviceScreenNSView: NSView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // ⌘V and ⌘A belong to the device while its screen has focus.
-        guard window?.firstResponder === self, live, !inspecting else { return super.performKeyEquivalent(with: event) }
+        guard window?.firstResponder === self, live else { return super.performKeyEquivalent(with: event) }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         if flags == .command, chars == "v" { paste(nil); return true }
@@ -548,13 +677,13 @@ final class DeviceScreenNSView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
-        guard live, !inspecting, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        guard live, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
         flushTyping()
         events?.input(.type(String(text.prefix(2_000))))
     }
 
     override func selectAll(_ sender: Any?) {
-        guard live, !inspecting else { return }
+        guard live else { return }
         flushTyping()
         events?.input(.key("select-all"))
     }
@@ -596,7 +725,11 @@ struct DeviceScreenSurface: NSViewRepresentable {
     private func apply(to view: DeviceScreenNSView) {
         view.fitSize = model.fitSize
         view.details = model.device
-        view.live = model.device != nil && !model.annotating
-        view.inspecting = model.annotating
+        view.live = model.device != nil
+        view.inspecting = model.inspecting
+        let name = model.device?.name ?? "Device"
+        view.spokenName = model.inspecting
+            ? "\(name) screen, live, inspecting. Point at an element to see it, click to mark it, drag to swipe, type to type."
+            : "\(name) screen, live. Click to tap, drag to swipe, type to type."
     }
 }

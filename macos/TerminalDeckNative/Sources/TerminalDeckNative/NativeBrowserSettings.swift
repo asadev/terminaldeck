@@ -16,6 +16,13 @@ struct NativeBrowserSettings: View {
         NativeSettingsPage(sectionId: "browser") {
             whereNewTabsOpen
             cookies
+            if let notice = AppModel.shared.websiteMigrationNotice {
+                Section("Saved website sign-ins") {
+                    NativeCodingAINotice(tone: .info, text: notice)
+                    Button("Try moving saved sign-ins again") { AppModel.shared.retryWebsiteMigration() }
+                        .disabled(AppModel.shared.preparingSavedData)
+                }
+            }
             profiles
             passwords
             kept
@@ -31,106 +38,14 @@ struct NativeBrowserSettings: View {
     private var whereNewTabsOpen: some View {
         Section("Where new tabs open") {
             NativeSettingsList(section: "browser", omit: ["browser.persistSession"])
-            NativeSettingsProse(text: "Or take one from a browser you already use — its bookmarks, history and open tabs, read only.")
-            HStack(spacing: 6) {
-                ForEach(model.browsers ?? []) { browser in
-                    Button(BrowserSettings.buttonLabel(browser)) { model.scan(browser.id) }
-                        .disabled(model.scanning || browser.access == .blocked)
-                        .help(browser.access == .blocked ? "This app cannot read \(browser.name)’s data yet — see below." : "")
-                }
-                Button(model.scanning ? "Looking…" : "Every browser") { model.scan(nil) }
-                    .disabled(model.scanning)
-            }
-            if model.browsers?.isEmpty == true {
-                NativeCodingAINotice(tone: .info, text: "No Chromium-based browser was found on this machine.")
-            }
-            if let blocked = BrowserSettings.blockedNote((model.browsers ?? []).filter { $0.access == .blocked }) {
-                NativeCodingAINotice(tone: .warn, text: blocked)
-            }
-            if let urls = model.urls, urls.isEmpty, !model.scanning {
-                NativeCodingAINotice(tone: .info, text: "Nothing local turned up in there.")
-            }
-            if let urls = model.urls, !urls.isEmpty {
-                let startUrl = values.string("browser.startUrl")
-                ForEach(urls) { hit in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(hit.url).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                            Text(BrowserSettings.noteFor(hit)).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button(hit.url == startUrl ? "Start page" : "Use it") {
-                            values.save(["browser.startUrl": .string(hit.url)])
-                            model.status = "Start page set to \(hit.url)"
-                        }
-                        .disabled(hit.url == startUrl)
-                    }
-                }
-            }
-            ForEach(model.problems, id: \.self) { problem in
-                NativeCodingAINotice(tone: .warn, text: problem)
-            }
+            NativeSettingsProse(text: "The browser uses Safari’s WebKit engine.")
         }
     }
-
-    // MARK: Cookies and sign-ins
 
     private var cookies: some View {
         Section("Cookies and sign-ins") {
             NativeSettingsList(section: "browser", omit: ["browser.startUrl"])
-            NativeSettingsProse(text: "Copies cookies from another browser so a site behind a login opens signed in. They are the credentials that keep you signed in, kept in this tab’s own store and never sent anywhere.")
-            if model.imports == nil || model.imports?.supported == true {
-                Text("**macOS will ask your permission** the first time — nothing is read until you press one of these.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let imports = model.imports, !imports.supported {
-                NativeCodingAINotice(tone: .info, text: "Importing cookies works on macOS only.")
-            } else {
-                ForEach(BrowserSettings.groupSources(model.sources ?? []), id: \.browserId) { group in
-                    let chosenId = model.chosenProfile[group.browserId] ?? group.profiles[0].profileId
-                    let source = group.profiles.first { $0.profileId == chosenId } ?? group.profiles[0]
-                    HStack(spacing: 8) {
-                        if group.profiles.count > 1 {
-                            Picker("\(group.browserName) profile to import from",
-                                   selection: Binding(get: { source.profileId },
-                                                      set: { model.chosenProfile[group.browserId] = $0 })) {
-                                ForEach(group.profiles) { profile in
-                                    Text(BrowserSettings.profileOptionLabel(profile)).tag(profile.profileId)
-                                }
-                            }
-                            .labelsHidden()
-                            .fixedSize()
-                            .disabled(model.importing != nil)
-                        }
-                        Button(model.importing == source.id ? "Asking the keychain…" : "Import from \(group.browserName)") {
-                            model.runImport(source)
-                        }
-                        .disabled(model.importing != nil || !source.keychainItem)
-                        Spacer()
-                    }
-                }
-                if model.sources?.isEmpty == true {
-                    NativeCodingAINotice(tone: .info, text: "No browser with a readable cookie database. macOS protects those files until this app has Full Disk Access.")
-                }
-                if model.sources?.contains(where: { !$0.keychainItem }) == true {
-                    NativeCodingAINotice(tone: .info, text: "Some browsers have no import button — this machine holds no key to decrypt their cookies with.")
-                }
-                if let imports = model.imports {
-                    NativeSettingsProse(text: BrowserSettings.importedSummary(imports, now: Date().timeIntervalSince1970 * 1000))
-                }
-                if let note = model.importNote {
-                    NativeCodingAINotice(tone: note.ok ? .info : .warn, text: note.text)
-                }
-                if model.confirmForget {
-                    NativeBrowserSettingsConfirm(text: "Remove the imported cookies? Sign-ins made inside the browser tab stay.",
-                                                 yes: "Remove them", no: "Keep them",
-                                                 onYes: model.forgetImported, onNo: { model.confirmForget = false })
-                } else {
-                    Button("Clear imported cookies", role: .destructive) { model.confirmForget = true }
-                        .disabled((model.imports?.recorded ?? 0) == 0)
-                }
-            }
+            NativeSettingsProse(text: "Sign in inside the browser. Each profile keeps its own Safari website data.")
         }
     }
 
@@ -312,19 +227,7 @@ struct NativeBrowserSettingsConfirm: View {
 @MainActor
 @Observable
 final class NativeBrowserSettingsModel {
-    // Where new tabs open
-    private(set) var browsers: [BrowserSettingsDetected]?
-    private(set) var urls: [BrowserSettingsDevUrl]?
-    private(set) var problems: [String] = []
-    private(set) var scanning = false
     var status: String?
-    // Cookies
-    private(set) var sources: [BrowserSettingsCookieSource]?
-    private(set) var imports: BrowserSettingsImports?
-    private(set) var importing: String?
-    private(set) var importNote: (text: String, ok: Bool)?
-    var confirmForget = false
-    var chosenProfile: [String: String] = [:]
     // Kept
     private(set) var stored: BrowserSettingsStored?
     var confirmClear = false
@@ -352,68 +255,12 @@ final class NativeBrowserSettingsModel {
     }
 
     func load() {
-        Task { browsers = (try? await call("chrome-import:browsers")).map(BrowserSettings.browsers) ?? [] }
-        Task { sources = (try? await call("cookie-import:sources")).map(BrowserSettings.cookieSources) ?? [] }
-        refreshImports()
         refreshStored()
         loadProfiles()
         Task {
             if let raw = try? await call("browser-password:state") {
                 store = BrowserSettings.passwordStore(raw)
                 canStore = store?.available
-            }
-        }
-    }
-
-    // Where new tabs open
-
-    func scan(_ browserId: String?) {
-        scanning = true
-        status = nil
-        Task {
-            do {
-                var request: [String: Any] = ["limit": 40]
-                if let browserId { request["browserId"] = browserId }
-                let result = BrowserSettings.scan(try await call("chrome-import:scan", [request]))
-                urls = result.urls
-                problems = result.problems
-            } catch {
-                status = said(error, "Could not read that browser.")
-            }
-            scanning = false
-        }
-    }
-
-    // Cookies
-
-    func refreshImports() {
-        Task { imports = (try? await call("cookie-import:status")).map(BrowserSettings.imports) }
-    }
-
-    func runImport(_ source: BrowserSettingsCookieSource) {
-        importing = source.id
-        importNote = nil
-        Task {
-            do {
-                let report = BrowserSettings.importReport(try await call("cookie-import:run", [["browserId": source.browserId, "profileId": source.profileId]]))
-                importNote = (report.message, report.ok)
-                refreshImports()
-            } catch {
-                importNote = (said(error, "The import stopped before it could read anything."), false)
-            }
-            importing = nil
-        }
-    }
-
-    func forgetImported() {
-        confirmForget = false
-        Task {
-            do {
-                let raw = try await call("cookie-import:clear")
-                importNote = (BrowserSettings.removedImported(Int(raw["removed"].number ?? 0)), true)
-                refreshImports()
-            } catch {
-                importNote = (said(error, "Could not remove the imported cookies."), false)
             }
         }
     }

@@ -42,12 +42,12 @@ final class DriveOverlay {
         if let drawing, drawing.parent == nil { main.addChildWindow(drawing, ordered: .above) }
         if withPanel {
             if let panelWindow, panelWindow.parent == nil { main.addChildWindow(panelWindow, ordered: .above) }
-            panelWindow?.orderFront(nil)
+            if NSApp.isActive { panelWindow?.orderFront(nil) } // front-ok: only while the app is already in front
         } else if let panelWindow {
             panelWindow.parent?.removeChildWindow(panelWindow)
             panelWindow.orderOut(nil)
         }
-        drawing?.orderFront(nil)
+        if NSApp.isActive { drawing?.orderFront(nil) } // front-ok: only while the app is already in front
         frameObserver.forEach { NotificationCenter.default.removeObserver($0) }
         frameObserver = [NSWindow.didResizeNotification, NSWindow.didMoveNotification].map { name in
             NotificationCenter.default.addObserver(forName: name, object: main, queue: .main) { [weak self] _ in

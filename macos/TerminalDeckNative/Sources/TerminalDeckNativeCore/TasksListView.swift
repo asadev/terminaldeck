@@ -31,14 +31,17 @@ public struct GroupDefaults: Equatable, Sendable {
     public var dueDate: String??
     public var assignee: String?
     public var board: String??
+    /// The project folder a task added under this group gets ("" for none) — "All projects" (lane TK).
+    public var project: String?
 
     public init(status: String? = nil, priority: String?? = nil, dueDate: String?? = nil, assignee: String? = nil,
-                board: String?? = nil) {
+                board: String?? = nil, project: String? = nil) {
         self.status = status
         self.priority = priority
         self.dueDate = dueDate
         self.assignee = assignee
         self.board = board
+        self.project = project
     }
 
     /// As the create call takes it (absent keys left out, nil sent as null).
@@ -49,6 +52,7 @@ public struct GroupDefaults: Equatable, Sendable {
         if let dueDate { out["dueDate"] = dueDate ?? jsonNull }
         if let assignee { out["assignee"] = assignee }
         if let board { out["board"] = board ?? jsonNull }
+        if let project { out["project"] = project }
         return out
     }
 }

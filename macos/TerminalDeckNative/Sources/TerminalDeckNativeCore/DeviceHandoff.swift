@@ -18,15 +18,17 @@ public struct AnnotateWhere: Equatable, Sendable {
     public var deviceId: String?
     public var app: String?
     public var screen: String?
+    public var url: String?
 
     public init(kind: String = "device", place: String, name: String, deviceId: String? = nil,
-                app: String? = nil, screen: String? = nil) {
+                app: String? = nil, screen: String? = nil, url: String? = nil) {
         self.kind = kind
         self.place = place
         self.name = name
         self.deviceId = deviceId
         self.app = app
         self.screen = screen
+        self.url = url
     }
 
     public init?(json: Any?) {
@@ -41,6 +43,7 @@ public struct AnnotateWhere: Equatable, Sendable {
         deviceId = text("deviceId")
         app = text("app")
         screen = text("screen")
+        url = text("url")
     }
 
     public var json: [String: Any] {
@@ -48,6 +51,7 @@ public struct AnnotateWhere: Equatable, Sendable {
         if let deviceId { out["deviceId"] = deviceId }
         if let app { out["app"] = app }
         if let screen { out["screen"] = screen }
+        if let url { out["url"] = url }
         return out
     }
 
@@ -65,14 +69,16 @@ public struct AnnotatedElement: Equatable, Hashable, Sendable {
     public var identifier: String?
     public var component: String?
     public var source: SourceLocation?
+    public var selector: String?
 
     public init(role: String? = nil, name: String? = nil, identifier: String? = nil,
-                component: String? = nil, source: SourceLocation? = nil) {
+                component: String? = nil, source: SourceLocation? = nil, selector: String? = nil) {
         self.role = role
         self.name = name
         self.identifier = identifier
         self.component = component
         self.source = source
+        self.selector = selector
     }
 
     /// What a tree node is, as Annotate records it (`elementOf` in `DevicesPage.tsx`).
@@ -85,6 +91,7 @@ public struct AnnotatedElement: Equatable, Hashable, Sendable {
         self.identifier = identifier
         self.component = node.component
         self.source = node.sourceLocation
+        self.selector = nil
     }
 
     public var json: [String: Any] {
@@ -92,6 +99,7 @@ public struct AnnotatedElement: Equatable, Hashable, Sendable {
         if let role { out["role"] = role }
         if let name { out["name"] = name }
         if let identifier { out["identifier"] = identifier }
+        if let selector { out["selector"] = selector }
         if let component { out["component"] = component }
         if let source {
             var place: [String: Any] = ["file": source.file]
@@ -140,6 +148,15 @@ public struct Annotation: Equatable, Sendable, Identifiable {
 
 /// One frozen picture and everything pointed at on it.
 public struct AnnotationRound: Equatable, Sendable {
+    public struct Picture: Equatable, Sendable {
+        public var path: String; public var width: Int; public var height: Int
+        public init(path: String, width: Int, height: Int) { self.path = path; self.width = width; self.height = height }
+        public var json: [String: Any] { ["path": path, "width": width, "height": height] }
+    }
+    public struct SentTo: Equatable, Sendable {
+        public var sessionId: String; public var label: String; public var at: Double
+        public init(sessionId: String = "", label: String, at: Double) { self.sessionId = sessionId; self.label = label; self.at = at }
+    }
     public var id: String
     /// Milliseconds since 1970, as the page's `Date.now()`.
     public var createdAt: Double
@@ -148,9 +165,11 @@ public struct AnnotationRound: Equatable, Sendable {
     public var frameHeight: Int
     public var annotations: [Annotation]
     public var note: String
+    public var picture: Picture?
+    public var sentTo: SentTo?
 
     public init(id: String, createdAt: Double, where_: AnnotateWhere, frameWidth: Int, frameHeight: Int,
-                annotations: [Annotation], note: String) {
+                annotations: [Annotation], note: String, picture: Picture? = nil, sentTo: SentTo? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.where_ = where_
@@ -158,11 +177,12 @@ public struct AnnotationRound: Equatable, Sendable {
         self.frameHeight = frameHeight
         self.annotations = annotations
         self.note = note
+        self.picture = picture; self.sentTo = sentTo
     }
 
     /// The round as `annotate:save` reads it (`src/main/devices/round.ts`).
     public var json: [String: Any] {
-        [
+        var result: [String: Any] = [
             "id": id,
             "createdAt": createdAt,
             "where": where_.json,
@@ -177,6 +197,9 @@ public struct AnnotationRound: Equatable, Sendable {
                 ]
             },
         ]
+        if let picture { result["picture"] = picture.json }
+        if let sentTo { result["sentTo"] = ["sessionId": sentTo.sessionId, "label": sentTo.label, "at": sentTo.at] }
+        return result
     }
 }
 
@@ -199,7 +222,7 @@ public enum Handoff {
 
     static func clip(_ value: String, _ max: Int = maxQuoted) -> String {
         let one = flat(value)
-        return one.count > max ? String(one.prefix(max - 1)) + "…" : one
+        return one.utf16.count > max ? String(decoding: one.utf16.prefix(max - 1), as: UTF16.self) + "…" : one
     }
 
     static func percent(_ value: Double) -> String {
@@ -214,6 +237,7 @@ public enum Handoff {
             .joined(separator: " ")
         var handles: [String] = []
         if let identifier = element.identifier, !identifier.isEmpty { handles.append("id \(clip(identifier))") }
+        if let selector = element.selector, !selector.isEmpty { handles.append("selector \(clip(selector, 200))") }
         if let component = element.component, !component.isEmpty { handles.append("component \(clip(component, 80))") }
         if let source = element.source {
             var place = "source \(clip(source.file, 200))"
@@ -229,6 +253,11 @@ public enum Handoff {
 
     /// `the iOS Simulator "iPhone 17 Pro", app com.example.Shop, screen Checkout`
     public static func describeWhere(_ where_: AnnotateWhere) -> String {
+        if where_.kind == "browser" {
+            var parts = [where_.url.map { "the page \(clip($0, 300))" } ?? "a browser page"]
+            if !where_.name.isEmpty { parts.append("titled \"\(clip(where_.name))\"") }
+            return parts.joined(separator: " ")
+        }
         var parts = ["the \(clip(where_.place, 40))\(where_.name.isEmpty ? "" : " \"\(clip(where_.name, 60))\"")"]
         if let app = where_.app { parts.append("app \(clip(app, 120))") }
         if let screen = where_.screen { parts.append("screen \(clip(screen, 120))") }
@@ -255,6 +284,18 @@ public enum Handoff {
         return [head, marked.isEmpty ? "" : "\(marked).", note.isEmpty ? "" : "What should change: \(note)"]
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+    public static func roundForTools(_ round: AnnotationRound, sentTo: AnnotationRound.SentTo? = nil) -> [String: Any] {
+        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func iso(_ at: Double) -> String { formatter.string(from: Date(timeIntervalSince1970: at / 1000)) }
+        let receipt = sentTo ?? round.sentTo
+        return ["id": round.id, "createdAt": iso(round.createdAt), "where": round.where_.json,
+            "note": flat(round.note), "picture": round.picture.map { $0.json as Any } ?? NSNull(),
+            "sentTo": receipt.map { ["session": $0.label, "at": iso($0.at)] as Any } ?? NSNull(),
+            "markers": round.annotations.map { entry -> [String: Any] in
+                ["n": entry.n, "element": entry.element.map { $0.json as Any } ?? NSNull(),
+                 "described": describeElement(entry.element), "rect": entry.rect.json]
+            }]
     }
 
     /// `Look [iOS Simulator screenshot of "iPhone 17": /p/x.png (1206 x 2622)]` — `composeDeviceShot`.

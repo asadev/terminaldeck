@@ -274,6 +274,9 @@ struct NativeCommandPalette: View {
         case .session(let hit, _):
             NSPasteboard.general.clearContents()
             copied = NSPasteboard.general.setString(hit.snippet.text, forType: .string)
+        case .command(let command, _) where command.id == "view.browser" && BrowserTabsHook.provider != nil:
+            model.answerDialog(NativeDialogName.palette, "close")
+            model.newBrowserTab() // lane BR: the native browser's tab, as View ▸ Browser
         case .command(let command, _):
             model.answerDialog(NativeDialogName.palette, "run", argument: ["id": command.id])
         case .file(let path, _):

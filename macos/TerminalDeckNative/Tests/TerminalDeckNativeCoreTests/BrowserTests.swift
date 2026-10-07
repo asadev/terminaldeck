@@ -204,7 +204,8 @@ struct BrowserExtrasTests {
         let line = BrowserShot.compose(instruction: "look\nhere", path: "/Users/me/Pictures/Terminal Deck/a.png",
                                        url: URL(string: "http://localhost:3000/"), title: "My\tApp",
                                        width: 1280, height: 800)
-        #expect(line == #"look here [browser screenshot of http://localhost:3000/ ("My App"): /Users/me/Pictures/Terminal Deck/a.png (1280 x 800)]"#)
+        // TS composeShot (BrowserWorkspace.test.tsx:606): no page title in the line.
+        #expect(line == "look here [browser screenshot of http://localhost:3000/: /Users/me/Pictures/Terminal Deck/a.png (1280 x 800)]")
         let bare = BrowserShot.compose(instruction: "  ", path: "/p.png", url: nil, title: "", width: 1, height: 2)
         #expect(bare == "[browser screenshot: /p.png (1 x 2)]")
         #expect(BrowserText.oneLine("a\u{1b}[2Jb\u{2028}c") == "a [2Jb c")

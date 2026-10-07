@@ -53,7 +53,6 @@ final class DriveHost: DriveNavigating, DriveFocusing {
         let bridge = EngineBridge.shared
         subscriptions.append(bridge.on(DriveTour.channel) { [weak self] args in self?.play(args.first) })
         subscriptions.append(bridge.on("browser:drive-state") { [weak self] args in self?.now = DriveNow.of(args.first) })
-        subscriptions.append(bridge.on("native-shell:page-call") { [weak self] args in self?.answerPageCall(args.first) })
         Task {
             if let state = try? await bridge.invoke("copilot:state", []) as? [String: Any] {
                 copilotSessionId = state["sessionId"] as? String
@@ -299,13 +298,10 @@ final class DriveHost: DriveNavigating, DriveFocusing {
         }
     }
 
-    // MARK: Where the person is (where.ts), answered for the engine
+    // MARK: Where the person is (where.ts)
 
-    private func answerPageCall(_ raw: Any?) {
-        guard let call = raw as? [String: Any], let id = call["id"] as? String, (call["fn"] as? String) == "where" else { return }
-        EngineBridge.shared.send("native-shell:page-result", [id, whereView()])
-    }
-
+    /// The page stops publishing `__terminaldeckWhere` while this host drives
+    /// (main.tsx mounts no DriveHost), so Hoot's `app.where` reads this instead.
     /// `describeWhere`: the heading, the session in front and its pane, whether
     /// Hoot is in front, whether a tour is on screen, and every open session.
     func whereView() -> [String: Any] {

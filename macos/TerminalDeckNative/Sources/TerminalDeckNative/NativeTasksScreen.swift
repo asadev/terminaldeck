@@ -56,7 +56,7 @@ struct NativeTasksScreen: View {
     @ViewBuilder private var popup: some View {
         if let state = store.state, let id = myWork.open, let task = state.tasks.first(where: { $0.id == id && $0.local }) {
             let now = Date().timeIntervalSince1970 * 1000
-            let order = myWork.order(state, now: now)
+            let order = myWork.order(TKTasksProjectScope.shared.scoped(state), now: now)
             ZStack {
                 Color.black.opacity(0.25)
                     .ignoresSafeArea()
@@ -82,13 +82,16 @@ struct NativeTasksScreen: View {
 
     private var ticking: Bool { store.state?.tasks.contains { $0.keepOpenUntil != nil } ?? false }
 
-    private func page(_ state: TasksState) -> some View {
+    private func page(_ all: TasksState) -> some View {
+        // Lane TK: the current project's tasks, or every project's (TKTasksProjectScope).
+        let state = TKTasksProjectScope.shared.scoped(all)
         let now = max(clock, Date()).timeIntervalSince1970 * 1000
         let crm = state.tasks.filter { !$0.local }
         var crmState = state
         crmState.tasks = crm
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                TKTasksProjectBar()
                 header(state)
                 if let problem = store.problem {
                     Text(problem)
@@ -367,7 +370,9 @@ struct LocalTaskForm: View {
         self.task = task
         self.onSave = onSave
         self.onCancel = onCancel
-        _draft = State(initialValue: LocalDraft(task, statuses: state.localStatuses))
+        var initial = LocalDraft(task, statuses: state.localStatuses)
+        if task == nil { initial.project = TKTasksProjectScope.shared.newTaskProject }
+        _draft = State(initialValue: initial)
     }
 
     var body: some View {
@@ -378,6 +383,7 @@ struct LocalTaskForm: View {
                 TextField("", text: Binding(get: { draft.title }, set: { draft.title = String($0.prefix(300)) }))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(save)
+                    .accessibilityLabel("Title")
             }
             TasksField("Details") { TasksTextArea(text: $draft.instructions) }
             TasksField("Project folder") {
@@ -385,6 +391,7 @@ struct LocalTaskForm: View {
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .onSubmit(save)
+                    .accessibilityLabel("Project folder")
             }
             if fresh {
                 HStack(alignment: .top, spacing: 12) {
@@ -422,6 +429,8 @@ struct LocalTaskForm: View {
             }
         }
         .disabled(busy)
+        // The form's name is the group's only; each control keeps its own (walk 5).
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(fresh ? "New task" : "Edit \(task?.title ?? "")")
     }
 

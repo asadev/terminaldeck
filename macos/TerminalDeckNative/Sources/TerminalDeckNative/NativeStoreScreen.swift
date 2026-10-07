@@ -51,12 +51,12 @@ final class StorePageModel {
 
     var departments: [StoreDepartmentInput] {
         [
-            StoreDepartmentInput(id: .extensions, name: "Browser extensions", wired: wired(.extensions),
-                                 shelves: BrowserStore.shelves, rows: rows[.extensions] ?? [], filter: filterOf(.extensions)),
+            StoreDepartmentInput(id: .extensions, name: "Browser tools", wired: wired(.extensions),
+                                 shelves: [(BrowserStore.builtInShelf, BrowserStore.builtInName)], rows: rows[.extensions] ?? [], filter: filterOf(.extensions)),
             StoreDepartmentInput(id: .servers, name: "MCP servers", wired: wired(.servers),
                                  shelves: NativeMcpStoreDepartment.shelves, rows: rows[.servers] ?? [], filter: filterOf(.servers)),
             StoreDepartmentInput(id: .community, name: "Community", wired: wired(.community),
-                                 shelves: CommunityRules.shelves, rows: rows[.community] ?? [], filter: filterOf(.community)),
+                                 shelves: CommunityRules.shelves.filter { $0.id != "extension" }, rows: rows[.community] ?? [], filter: filterOf(.community)),
         ]
     }
 
@@ -276,15 +276,15 @@ private struct RailButton: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.callout).foregroundStyle(on ? Color.white : shelf ? Color.secondary : Color.primary)
+                Text(title).font(.callout).foregroundStyle(on ? Color.primary : Color.secondary) // grey rail, no blue (Asad, 2026-10-07)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 6)
-                Text("\(count)").font(.caption).foregroundStyle(on ? Color.white.opacity(0.85) : Color.secondary).monospacedDigit()
+                Text("\(count)").font(.caption).foregroundStyle(Color.secondary).monospacedDigit()
             }
             .padding(.leading, shelf ? 16 : 8)
             .padding(.trailing, 8)
             .padding(.vertical, 5)
-            .background(on ? Color.accentColor : hover ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 6))
+            .background(on ? Color.primary.opacity(0.1) : hover ? Color.primary.opacity(0.06) : .clear, in: .rect(cornerRadius: 6))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

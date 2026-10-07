@@ -198,6 +198,21 @@ public struct DeviceTree: Equatable, Sendable {
 
 /// The questions asked of a tree. Pure, and the same answers as `device-tree.ts`.
 public enum DeviceTreeQuery {
+    public static func findNodes(_ root: DeviceNode, name: String? = nil, partial: Bool = false,
+                                 role: String? = nil, identifier: String? = nil) -> [DeviceNode] {
+        func want(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let name = want(name), role = want(role), identifier = want(identifier)
+        guard !name.isEmpty || !role.isEmpty || !identifier.isEmpty else { return [] }
+        return flatten(root).filter { node in
+            if !identifier.isEmpty, want(node.identifier) != identifier, want(node.testID) != identifier { return false }
+            if !role.isEmpty, want(node.role) != role, plainRole(node.role) != role { return false }
+            if !name.isEmpty {
+                let names = [node.label, node.title, node.text, node.value, node.placeholder].map(want)
+                if !(partial ? names.contains { $0.contains(name) } : names.contains(name)) { return false }
+            }
+            return true
+        }
+    }
     /// Every node, parents before children, at most 200 deep.
     public static func flatten(_ root: DeviceNode) -> [DeviceNode] {
         var out: [DeviceNode] = []

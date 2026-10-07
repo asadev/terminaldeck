@@ -67,6 +67,7 @@ final class CommunityModel {
     func load() async {
         do {
             view = CommunityRules.view(try await EngineBridge.shared.invoke(CommunityRules.listChannel, []))
+            view.items.removeAll { $0.kind == "extension" }
         } catch {
             var empty = CommunityView.none
             empty.problem = deckMessage(error)

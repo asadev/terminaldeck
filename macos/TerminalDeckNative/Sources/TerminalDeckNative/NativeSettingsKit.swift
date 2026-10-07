@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 import TerminalDeckNativeCore
@@ -88,6 +89,12 @@ final class NativeSettingsValues {
         values = SettingsSchema.merge(raw)
         let split = SettingsSchema.split(patch)
         guard !split.prefs.isEmpty || !split.extra.isEmpty else { return }
+        // Which control saved what, and whether the person was here (walk-1 theme flip:
+        // keystrokes typed into another app landed in this window after it took the front).
+        let event = NSApp.currentEvent.map { "\($0.type.rawValue)" } ?? "none"
+        AppModel.shared.engine.log.note("settings saved: " + patch.keys.sorted().joined(separator: ",")
+            + (split.prefs["theme"]?.string.map { " theme=" + $0 } ?? "")
+            + " (app active \(NSApp.isActive), event \(event))")
         saveState = .saving
         saveClear?.cancel()
         let next = values

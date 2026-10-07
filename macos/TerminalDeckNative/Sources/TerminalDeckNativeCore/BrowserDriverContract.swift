@@ -2,25 +2,25 @@ import Foundation
 
 // Agents driving the native browser — the pure half.
 //
-// The engine (src/main/native-shell/native-browser.ts) keeps the agents' six
-// browser tools exactly as the Electron app has them — names, schemas, tiers,
-// `mayDrive`, and the first-change-on-a-public-website question — and sends
-// each call here instead of to Chromium:
+// The agents' six browser tools keep the Electron app's names, schemas, tiers,
+// `mayDrive`, and the first-change-on-a-public-website question. Each call is
+// decoded into one command and answered by `BrowserDriverEngine`, in process
+// (BackendBrowserService and NativeSafariRuntime):
 //
-//     event   native-browser:command   [{ id, verb, args, session }]
-//     invoke  native-browser:result    [id, { value, summary? }]   or   [id, { error }]
+//     command  { id, verb, args, session }
+//     answer   { value, summary? }   or   { error }
 //
 // `verb` is the tool's wire name (`browser_open`, `browser_read`, `browser_step`,
 // `browser_screenshot`, `browser_handover`, `browser_close`), `args` is what the
 // agent passed, `session` is `{ sessionId, machineId }` for a session or null for
 // Hoot / an AI app acting as the owner. Every `value` carries the page's `url`
-// where there is one: the engine remembers it to decide whether the next step
-// is a first change on a public website (put to the person) or not.
+// where there is one, so the caller can decide whether the next step is a first
+// change on a public website (put to the person) or not.
 //
 // Result shapes are the Electron driver's (`src/main/browser-driver.ts`), so an
-// agent cannot tell which browser it drove. Window names (B1, B2) are the
-// engine's own binding map (`browser:bindings`), so `sessions.list` and this
-// side agree on what B2 is.
+// agent cannot tell which browser it drove. Window names (B1, B2) come from the
+// one binding map (`browser:bindings`), so `sessions.list` and this side agree
+// on what B2 is.
 
 /// The six verbs, by their wire names.
 public enum BrowserDriverVerb: String, Sendable, CaseIterable {
@@ -104,7 +104,7 @@ public struct BrowserDriverCommand: @unchecked Sendable {
     public func flag(_ key: String) -> Bool { (args[key] as? Bool) ?? false }
 }
 
-/// What goes back on `native-browser:result`.
+/// What a command answers: `{ value, summary }` or `{ error }`.
 public enum BrowserDriverResult {
     public static func value(_ value: [String: Any], summary: [String: Any] = [:]) -> [String: Any] {
         ["value": value, "summary": summary]

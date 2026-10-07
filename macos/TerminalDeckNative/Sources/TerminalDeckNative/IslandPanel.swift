@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
+import TerminalDeckBackend
 
 /// The island's window: borderless, non-activating, one step above the menu bar
 /// (below other apps' open menus), on every Space and over full-screen apps.
@@ -10,6 +11,7 @@ import TerminalDeckNativeCore
 final class IslandPanel: NSPanel {
     /// A left click arrived. Return true to swallow it (a press on the resting pill).
     var onPress: (() -> Bool)?
+    var onHeld: ((Bool) -> Void)?
     /// A right click arrived. Return true to swallow it.
     var onContextClick: ((NSEvent) -> Bool)?
     /// Whether it may take the keyboard now (only while grown).
@@ -42,7 +44,9 @@ final class IslandPanel: NSPanel {
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
+            onHeld?(true)
             if onPress?() == true { return }
+        case .leftMouseUp: onHeld?(false)
         case .rightMouseDown:
             if onContextClick?(event) == true { return }
         default:
@@ -81,6 +85,40 @@ final class IslandController: NSObject, NSWindowDelegate {
     private var settleGeneration = 0
     private var started = false
     private var keyMonitor: Any?
+    private var nativeHoot = false
+    private var nativeShown = true
+    func acceptNativeShown(_ shown: Bool) { nativeShown = shown; ensureMenuItem() }
+
+    func useNativeHoot() {
+        nativeHoot = true; deadlineTask?.cancel(); deadlineTask = nil
+        web.unload(); model.engineUp = true; model.pageLoaded = true
+    }
+    func hootPanel() -> IslandPanel { if panel == nil { makePanel() }; return panel! }
+    func acceptNativeHoot(_ value: NativeRPCValue) {
+        guard nativeHoot else { return }
+        model.engineUp = true; model.pageLoaded = true
+        model.nativeState = IslandState.native(sessionStatuses: (value["sessions"].elements ?? []).compactMap { $0["status"].string },
+            line: value["label"]["text"].string ?? "Hoot", hootStatus: value["hoot"]["status"].string)
+        let next = value["expanded"].bool == true
+        withAnimation(.spring(duration: 0.3, bounce: 0.1)) { model.expanded = next }
+        var layout = IslandGeometry.layout(for: Self.islandScreen(native: true))
+        let displayWidth = CGFloat(value["geometry"]["displayWidth"].number ?? Double(layout.expandedFrame.width))
+        let barHeight = CGFloat(value["geometry"]["barHeight"].number ?? Double(IslandMetrics.fallbackBar))
+        // shared/hoot-island.ts's defaultExpanded; a remembered drag is clamped
+        // by the same backend limits. Only the shape changes inside this canvas.
+        let defaultWidth = min(BackendHootIslandBounds.limits(displayWidth: displayWidth, barHeight: barHeight).maxWidth,
+            min(IslandMetrics.panelMaxWidth, max(IslandMetrics.panelMinWidth, (displayWidth / 3).rounded())))
+        let size = BackendHootIslandBounds.clamp(displayWidth: displayWidth, barHeight: barHeight,
+            size: CGSize(width: value["size"]["width"].number.map { CGFloat($0) } ?? defaultWidth,
+                height: value["size"]["height"].number.map { CGFloat($0) } ?? 260))
+        layout.panel.width = size.width; layout.panel.height = size.height
+        layout.contentSize = CGSize(width: max(1, size.width - 2 * IslandMetrics.contentInset),
+            height: max(1, size.height - layout.contentTop - IslandMetrics.contentInset))
+        layout.expandedFrame.size = BackendHootIslandBounds.window(displayWidth: displayWidth, barHeight: barHeight)
+        model.layout = layout
+        NativeCompositionHootUI.shared.reportPillSize(CGSize(width: layout.pill.outerWidth, height: layout.pill.height))
+        container?.placeCanvas(); container?.refreshTracking()
+    }
 
     private override init() {
         model = IslandViewModel(layout: IslandGeometry.layout(for: Self.islandScreen()))
@@ -89,7 +127,7 @@ final class IslandController: NSObject, NSWindowDelegate {
         web.onLoaded = { [weak self] loaded in self?.pageLoaded(loaded) }
     }
 
-    var isShown: Bool { UserDefaults.standard.bool(forKey: Self.shownKey) }
+    var isShown: Bool { nativeHoot ? nativeShown : UserDefaults.standard.bool(forKey: Self.shownKey) }
 
     /// Called once when the app has finished launching.
     func start() {
@@ -110,7 +148,8 @@ final class IslandController: NSObject, NSWindowDelegate {
             let window = event.window
             let swallow = MainActor.assumeIsolated { () -> Bool in
                 guard isEscape, let self, let panel = self.panel, window === panel, self.model.expanded else { return false }
-                self.update { $0.dismiss() }
+                if self.nativeHoot { NativeCompositionHootUI.shared.send("hoot-panel:close") }
+                else { self.update { $0.dismiss() } }
                 return true
             }
             return swallow ? nil : event
@@ -118,7 +157,9 @@ final class IslandController: NSObject, NSWindowDelegate {
 
         watchEngine()
         engineChanged()
-        if isShown { show() }
+        // The native graph owns the island (BackendHootMenuBar shows it only when "show in the menu
+        // bar" is on); showing the legacy panel here first put it on screen with the setting off.
+        if isShown && !NativeCompositionRoot.fullGraphSelected { show() }
         ensureMenuItem()
         // SwiftUI may build the main menu after launch finishes.
         DispatchQueue.main.async { [weak self] in self?.ensureMenuItem() }
@@ -127,6 +168,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     // MARK: Show / hide
 
     func setShown(_ shown: Bool) {
+        if nativeHoot { nativeShown = shown; NativeCompositionHootUI.shared.configureShown(shown); return }
         UserDefaults.standard.set(shown, forKey: Self.shownKey)
         if shown { show() } else { hide() }
         ensureMenuItem()
@@ -139,7 +181,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     private func show() {
         if panel == nil { makePanel() }
         place()
-        panel?.orderFrontRegardless()
+        panel?.orderFrontRegardless() // front-ok: the non-activating island panel itself; it never takes the keyboard
         syncPointer()
     }
 
@@ -174,10 +216,26 @@ final class IslandController: NSObject, NSWindowDelegate {
             guard let self else { return .zero }
             return self.model.layout.shapeBox(expanded: self.model.expanded, inWindowOfSize: bounds.size)
         }
-        container.onEnter = { [weak self] in self?.update { $0.pointerEntered(at: Self.now()) } }
-        container.onExit = { [weak self] in self?.update { $0.pointerExited(at: Self.now()) } }
-        panel.allowsKey = { [weak self] in self?.model.expanded ?? false }
+        container.onEnter = { [weak self, weak container, weak panel] in
+            if self?.nativeHoot == true {
+                // Only a real hover on the shape: AppKit also says "entered" when the tracking
+                // area is re-added under a still pointer (every snapshot) or the screen changes.
+                guard let container, let panel else { return }
+                let box = panel.convertToScreen(container.convert(container.trackingBox(container.bounds), to: nil))
+                guard NativeHootPointer.realHover(onScreenRect: box) else { return }
+                NativeCompositionHootUI.shared.send("hoot-panel:pointer", [.bool(true)])
+            }
+            else { self?.update { $0.pointerEntered(at: Self.now()) } }
+        }
+        container.onExit = { [weak self] in
+            if self?.nativeHoot == true { NativeCompositionHootUI.shared.send("hoot-panel:pointer", [.bool(false)]) }
+            else { self?.update { $0.pointerExited(at: Self.now()) } }
+        }
+        panel.allowsKey = { [weak self] in self?.nativeHoot == true || self?.model.expanded == true }
         panel.onPress = { [weak self] in self?.pressed() ?? false }
+        panel.onHeld = { [weak self] value in
+            if self?.nativeHoot == true { NativeCompositionHootUI.shared.send("hoot-panel:held", [.bool(value)]) }
+        }
         panel.onContextClick = { [weak self] event in self?.contextClick(event) ?? false }
 
         self.panel = panel
@@ -187,8 +245,12 @@ final class IslandController: NSObject, NSWindowDelegate {
     // MARK: Where it is
 
     /// The screen with the menu bar, as plain numbers.
-    private static func islandScreen() -> IslandScreen {
-        guard let screen = NSScreen.screens.first else {
+    private static func islandScreen(native: Bool = false) -> IslandScreen {
+        var selected = NSScreen.screens.first
+        if native, let raw = ProcessInfo.processInfo.environment["TERMINALDECK_ISLAND_DISPLAY_X"],
+           let x = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines)), x.isFinite,
+           let chosen = NSScreen.screens.first(where: { x >= $0.frame.minX && x < $0.frame.maxX }) { selected = chosen }
+        guard let screen = selected else {
             return IslandScreen(frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
                                 visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 876))
         }
@@ -200,6 +262,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     }
 
     private func place() {
+        if nativeHoot { container?.placeCanvas(); container?.refreshTracking(); return }
         let layout = IslandGeometry.layout(for: Self.islandScreen())
         if layout != model.layout { model.layout = layout }
         panel?.setFrame(layout.frame(expanded: model.expanded), display: true)
@@ -209,6 +272,7 @@ final class IslandController: NSObject, NSWindowDelegate {
 
     /// A display came or went, changed resolution, or the menu bar moved to another one.
     @objc private func screensChanged(_ note: Notification) {
+        if nativeHoot { return } // The shared BackendHootScreenMonitor owns placement.
         if model.expanded { update { $0.dismiss() } }
         place()
         syncPointer()
@@ -220,6 +284,7 @@ final class IslandController: NSObject, NSWindowDelegate {
 
     /// Every input goes through here: the state machine decides, this makes the screen match.
     private func update(_ change: (inout IslandHover) -> Void) {
+        if nativeHoot { return }
         let was = hover.expanded
         change(&hover)
         if hover.expanded != was {
@@ -268,6 +333,7 @@ final class IslandController: NSObject, NSWindowDelegate {
 
     /// Settle now — a session was opened from the panel (lane B, NativeIslandContent).
     func collapse() {
+        if nativeHoot { NativeCompositionHootUI.shared.send("hoot-panel:close"); return }
         if model.expanded { update { $0.dismiss() } }
     }
 
@@ -284,6 +350,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     /// press itself is swallowed (the window changes size under it). A press on the
     /// grown panel goes to the page as usual.
     private func pressed() -> Bool {
+        if nativeHoot { NativeCompositionHootUI.shared.send("hoot-panel:focus"); return !model.expanded }
         guard !model.expanded else {
             update { $0.pressed(at: Self.now()) }
             return false
@@ -295,6 +362,7 @@ final class IslandController: NSObject, NSWindowDelegate {
 
     /// Right-click on the resting pill: the two things the island itself needs.
     private func contextClick(_ event: NSEvent) -> Bool {
+        if nativeHoot { NativeCompositionHootUI.shared.send("hoot-panel:menu"); return true }
         guard !model.expanded, let container else { return false }
         let menu = NSMenu()
         let open = NSMenuItem(title: "Open Terminal Deck", action: #selector(openApp(_:)), keyEquivalent: "")
@@ -308,7 +376,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openApp(_ sender: Any?) {
-        NSApp.activate()
+        NativeFront.onlyForPerson("island Open") { NSApp.activate() }
     }
 
     /// The tracking area only reports crossings; after the window or the box changes
@@ -331,7 +399,7 @@ final class IslandController: NSObject, NSWindowDelegate {
         } else {
             // Another app is in front: stepping out and back gives its window the keyboard again.
             panel.orderOut(nil)
-            panel.orderFrontRegardless()
+            panel.orderFrontRegardless() // front-ok: the non-activating island panel itself; it never takes the keyboard
         }
     }
 
@@ -360,6 +428,7 @@ final class IslandController: NSObject, NSWindowDelegate {
     /// The island page loads once the main page is up (its first load set the bridge
     /// cookie); when the engine goes, its page and what it said go too.
     private func engineChanged() {
+        if nativeHoot { return }
         let app = AppModel.shared
         var engineURL: URL?
         if case .ready(let url) = app.engine.phase, app.pageReady { engineURL = url }

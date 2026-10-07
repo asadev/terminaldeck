@@ -10,9 +10,9 @@ import TerminalDeckNativeCore
 /// At parity with the web page (`renderer/devices/DevicesPage.tsx`) first: the
 /// list grouped Running / Off / Not available, starting and opening through the
 /// same channels, the live screen (decoded natively), touches, swipes, typing,
-/// hardware buttons, rotation, screenshots with Reveal and Send. Then the
-/// inspector, which takes the place of the page's Annotate and keeps its
-/// numbered markers and its one message.
+/// hardware buttons, rotation, screenshots with Reveal and Send. Then Inspect,
+/// which takes the place of the page's Annotate and keeps its numbered markers
+/// and its one message — on the live screen, which never stops playing.
 struct NativeSimulatorScreen: View {
     @State private var model = NativeSimulatorModel()
 
@@ -131,19 +131,19 @@ private struct DeviceOpenView: View {
             if !model.problem.isEmpty || !model.said.isEmpty {
                 StatusLine(problem: model.problem, said: model.said)
             }
-            // Annotate, as the page lays it out: the frozen picture on the left, the
-            // notes on the right as a card beside it.
+            // Inspect, as the page lays Annotate out: the live screen on the left, the
+            // card with the markers and the elements on the right beside it.
             HStack(spacing: 16) {
                 DeviceStage(model: model)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.isFrozen {
-                    AnnotatePanel(model: model)
+                if model.inspecting {
+                    InspectPanel(model: model)
                         .frame(minWidth: 272, idealWidth: 336, maxWidth: 336)
                         .padding([.vertical, .trailing], 16)
                 }
             }
         }
-        .onExitCommand { model.escapeAnnotate() }
+        .onExitCommand { model.escapeInspect() }
     }
 }
 
@@ -168,7 +168,6 @@ private struct DeviceToolbar: View {
 
     var body: some View {
         let device = model.device
-        let frozen = model.isFrozen
         HStack(spacing: 6) {
             Button {
                 model.back()
@@ -200,7 +199,6 @@ private struct DeviceToolbar: View {
                     if device.buttons.contains("volume-down") { tool("Volume down", "speaker.minus") { model.button("volume-down") } }
                     if device.canRotate { tool("Rotate", "rotate.right") { Task { await model.rotate() } } }
                 }
-                .disabled(frozen)
 
                 tool("Screenshot", "camera") {
                     Task {
@@ -208,24 +206,21 @@ private struct DeviceToolbar: View {
                         shotShown = model.shot != nil
                     }
                 }
-                .disabled(frozen)
                 .popover(isPresented: $shotShown, arrowEdge: .bottom) {
                     ShotPopover(model: model, shown: $shotShown)
                 }
 
-                // The same name and glyph as the browser's: one Annotate.
-                Toggle(isOn: Binding(get: { model.isFrozen }, set: { _ in model.toggleAnnotate() })) {
-                    Label("Annotate", systemImage: "text.bubble")
+                // One Inspect, on the live screen: point at elements, click to mark them.
+                Toggle(isOn: Binding(get: { model.inspecting }, set: { _ in model.toggleInspect() })) {
+                    Label("Inspect", systemImage: "viewfinder")
                 }
                 .toggleStyle(.button)
                 .buttonStyle(.borderless)
-                .disabled(model.freezing)
-                .help("Annotate")
-                .accessibilityLabel("Annotate")
+                .help("Inspect: point at anything on the live screen to see what it is, click to mark it")
+                .accessibilityLabel("Inspect")
 
                 if !device.isPhysical {
                     tool("Shut down", "power") { Task { await model.shutDown() } }
-                        .disabled(frozen)
                 }
             }
         }
@@ -256,34 +251,15 @@ private struct DeviceStage: View {
             ZStack(alignment: .topLeading) {
                 DeviceScreenSurface(model: model)
 
-                if model.isFrozen, let snapshot = model.snapshot {
-                    Image(nsImage: snapshot.image)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: fitted.width, height: fitted.height)
-                        .offset(x: fitted.minX, y: fitted.minY)
-                        .allowsHitTesting(false)
-                }
-
-                if model.isFrozen {
+                if model.inspecting {
                     InspectorOverlay(model: model, fitted: fitted)
                         .allowsHitTesting(false)
                 }
 
-                if model.videoSize == nil && !model.isFrozen {
+                if model.videoSize == nil {
                     Text("Starting the live picture…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .allowsHitTesting(false)
-                }
-
-                if model.freezing {
-                    Text("Freezing the screen…")
-                        .font(.callout)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .glassEffect(.regular, in: .capsule)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .allowsHitTesting(false)
                 }
@@ -303,39 +279,48 @@ private struct DeviceStage: View {
         }
         .padding(12)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(model.device?.name ?? "Device") screen. Click to tap, drag to swipe, type to type.")
+        .accessibilityLabel(model.inspecting
+            ? "\(model.device?.name ?? "Device") screen, live. Point at an element to see it, click to mark it, drag to swipe, type to type."
+            : "\(model.device?.name ?? "Device") screen. Click to tap, drag to swipe, type to type.")
     }
 }
 
-/// The highlight under the pointer, the chosen element, and the numbered markers, over the screen.
+/// The highlight under the pointer, the chosen element, and the numbered markers,
+/// over the live screen. Drawn from the tree only while it is of the screen as it is
+/// now; while the picture moves they wait for the next reading.
 private struct InspectorOverlay: View {
     let model: NativeSimulatorModel
     let fitted: CGRect
 
     var body: some View {
+        let placements = model.placements
+        let shown = model.highlightsShown
+        let marked = Set(placements.compactMap(\.ref))
         Canvas { context, _ in
             let accent = Color.accentColor
             func rect(_ r: NormRect) -> CGRect { DeviceGeometry.viewRect(r, in: fitted) }
 
-            // The element under the pointer, or a row under the pointer in the outline.
-            for ref in [model.hoverRef, model.listHoverRef].compactMap({ $0 }) where model.marker(for: ref) == nil {
-                guard let frame = model.node(ref)?.usableFrame else { continue }
-                let box = Path(roundedRect: rect(frame), cornerRadius: 3)
-                context.fill(box, with: .color(accent.opacity(0.14)))
-                context.stroke(box, with: .color(accent), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+            if shown {
+                // The element under the pointer, or a row under the pointer in the outline.
+                for ref in [model.hoverRef, model.listHoverRef].compactMap({ $0 }) where !marked.contains(ref) {
+                    guard let frame = model.node(ref)?.usableFrame else { continue }
+                    let box = Path(roundedRect: rect(frame), cornerRadius: 3)
+                    context.fill(box, with: .color(accent.opacity(0.14)))
+                    context.stroke(box, with: .color(accent), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                }
+
+                // The chosen one.
+                if let ref = model.focusRef, !marked.contains(ref), let frame = model.node(ref)?.usableFrame {
+                    let box = Path(roundedRect: rect(frame), cornerRadius: 3)
+                    context.fill(box, with: .color(accent.opacity(0.10)))
+                    context.stroke(box, with: .color(accent), lineWidth: 2)
+                }
             }
 
-            // The chosen one.
-            if let ref = model.focusRef, model.marker(for: ref) == nil, let frame = model.node(ref)?.usableFrame {
-                let box = Path(roundedRect: rect(frame), cornerRadius: 3)
-                context.fill(box, with: .color(accent.opacity(0.10)))
-                context.stroke(box, with: .color(accent), lineWidth: 2)
-            }
-
-            // Numbered markers, drawn as the picture an agent receives draws them.
-            for entry in model.markers {
-                let box = rect(entry.rect)
-                let focused = entry.nodeRef != nil && entry.nodeRef == model.focusRef
+            // Numbered markers still on this screen, drawn as the picture an agent receives draws them.
+            for placement in placements {
+                let box = rect(placement.rect)
+                let focused = placement.ref != nil && placement.ref == model.focusRef
                 context.stroke(Path(box), with: .color(.white.opacity(0.9)), lineWidth: focused ? 5 : 4)
                 context.stroke(Path(box), with: .color(accent), lineWidth: focused ? 3 : 2)
                 let radius: CGFloat = 10
@@ -344,7 +329,7 @@ private struct InspectorOverlay: View {
                 let disc = CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
                 context.fill(Path(ellipseIn: disc.insetBy(dx: -1.5, dy: -1.5)), with: .color(.white.opacity(0.9)))
                 context.fill(Path(ellipseIn: disc), with: .color(accent))
-                context.draw(Text("\(entry.n)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white), at: centre)
+                context.draw(Text("\(placement.marker.n)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white), at: centre)
             }
         }
     }

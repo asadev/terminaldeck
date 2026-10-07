@@ -121,6 +121,11 @@ IDENTITY="${TD_MAC_IDENTITY:-Asad Iqbal (6U4VNX5W87)}"
 # that must never be papered over.
 SIGNED_ONLY=0
 
+# `--native` (0.19.0 on): the Mac release is the Node-free Swift app, built and
+# packaged by scripts/mac-native-release.sh inside this signed session. The
+# Electron app is not built at all in this mode.
+NATIVE="${TD_MAC_NATIVE:-0}"
+
 # A ceiling on the wait, because there was not one.
 #
 # `notarytool submit --wait` has no default timeout: when the service stopped
@@ -133,6 +138,7 @@ NOTARIZE_TIMEOUT="${TD_NOTARIZE_TIMEOUT:-2h}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --signed-only) SIGNED_ONLY=1 ;;
+        --native) NATIVE=1 ;;
         --notarize-timeout) NOTARIZE_TIMEOUT="${2:?--notarize-timeout needs a value}"; shift ;;
         *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -292,6 +298,16 @@ npm run build:pwa
 # into the .app's Resources. `dist:mac`/`dist:win` run this; this signed path
 # must too, or the packaged app ships with no server-install package (0.10.0).
 npm run dist:headless
+
+if [[ "$NATIVE" -eq 1 ]]; then
+    step "Terminal Deck (Swift, Node-free)"
+    NATIVE_ARGS=(--identity "$IDENTITY" --keychain "$KEYCHAIN" --require-developer-id --pages-built)
+    [[ "$SIGNED_ONLY" -eq 0 ]] && NATIVE_ARGS+=(--notarize)
+    ASC_KEY_PATH="$ASC_KEY_PATH" ASC_KEY_ID="$ASC_KEY_ID" ASC_ISSUER="$ASC_ISSUER" NOTARIZE_TIMEOUT="$NOTARIZE_TIMEOUT" \
+        "$REPO/scripts/mac-native-release.sh" "${NATIVE_ARGS[@]}" \
+        || die "the native app did not build, sign or verify — see above. Do not publish."
+    exit 0
+fi
 
 step "Package, sign and notarize"
 

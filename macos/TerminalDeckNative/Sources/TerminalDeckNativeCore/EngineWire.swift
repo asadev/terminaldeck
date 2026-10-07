@@ -60,6 +60,7 @@ public enum EngineWire {
     public struct Event: @unchecked Sendable {
         public let channel: String
         public let args: [Any]
+        public init(channel: String, args: [Any]) { self.channel = channel; self.args = args }
     }
 
     /// Reads the Server-Sent Events stream line by line. Feed it each line

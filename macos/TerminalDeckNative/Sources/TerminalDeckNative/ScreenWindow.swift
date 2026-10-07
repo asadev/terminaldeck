@@ -66,7 +66,8 @@ struct ScreenWindow: View {
         }
         // A pop-out asked for from this window's page (or while the main window is closed).
         .onChange(of: model.screenWindowRequest) {
-            for next in model.takePendingScreens() { openWindow(value: next) }
+            let open = openWindow
+            NativeFront.whenPersonActs("screens") { for next in model.takePendingScreens() { open(value: next) } }
         }
     }
 
@@ -99,8 +100,11 @@ private struct ScreenDetailView: View {
         let kind = ref.screenKind
         let native = engineDown || !model.engineIsUp ? nil : NativeScreens.detail(kind: kind, id: ref.id)
         ZStack {
+            let pageInFront = showsPage && (native == nil || screen.modalOpen)
             WebViewContainer(webView: screen.web.webView)
-                .opacity(showsPage && (native == nil || screen.modalOpen) ? 1 : 0)
+                .opacity(pageInFront ? 1 : 0)
+                .accessibilityHidden(!pageInFront)
+                .allowsHitTesting(pageInFront)
                 .zIndex(native != nil && screen.modalOpen ? 2 : 0)
 
             if let native {
