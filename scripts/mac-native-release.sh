@@ -175,7 +175,7 @@ else
     step "Build Terminal Deck $VERSION (Swift, Node-free)"
     APP="$REPO/macos/build/Terminal Deck.app"
     TD_VERSION="$VERSION" TD_APP_OUTPUT="$APP" TD_SCRATCH="${TD_SCRATCH:-$REPO/macos/TerminalDeckNative/.build-release}" \
-        "$REPO/macos/build-standalone.sh"
+        bash "$REPO/macos/build-standalone.sh"
 fi
 
 # ------------------------------------------------------------------ verify
