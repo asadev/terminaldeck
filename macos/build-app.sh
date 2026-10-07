@@ -34,7 +34,9 @@ SCRATCH="${TD_SCRATCH:-$PKG/.build}"   # lanes building at once: give each its o
 # Swift Build named outright: it is the default only from Swift 6.4 (Xcode 27). Swift
 # 6.3 (Xcode 26, the release machine's) defaults to the old native system, which writes
 # no .swiftconstvalues and no Intermediates.noindex — so intents-metadata.sh has nothing to read.
-BUILD=(swift build -c release --build-system swiftbuild --package-path "$PKG" --scratch-path "$SCRATCH")
+# This machine's architecture only (the release is arm64-only): Swift 6.3's Swift Build
+# otherwise builds x86_64 as well, doubling a release build the runner could not finish in 75 min.
+BUILD=(swift build -c release --build-system swiftbuild --arch "$(uname -m)" --package-path "$PKG" --scratch-path "$SCRATCH")
 "${BUILD[@]}" -Xlinker -platform_version -Xlinker macos -Xlinker "$MIN_OS" -Xlinker "$SDK_VERSION"
 BIN_DIR="$("${BUILD[@]}" --show-bin-path)"
 [ -x "$BIN_DIR/$EXE" ] || { echo "error: $BIN_DIR/$EXE was not built" >&2; exit 1; }
