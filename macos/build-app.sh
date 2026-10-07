@@ -132,6 +132,10 @@ done
 echo "==> App Intents metadata (Siri, Shortcuts, Spotlight)"
 "$HERE/intents-metadata.sh" "$SCRATCH" "$APP" "$MIN_OS"
 
+# Every file owner-writable before signing. Copies from SwiftPM checkouts (SwiftTerm's
+# LICENSE) arrive read-only (0444); a read-only file in the bundle makes Squirrel's
+# ShipIt fail the in-place update ("Couldn't remove quarantine attribute", 0.19.0).
+chmod -R u+w "$APP"
 IDENTITY="${TD_SIGN_IDENTITY:--}"
 ENTITLEMENTS="$HERE/NativePreview.entitlements"
 SIGN=(codesign --force --options runtime --sign "$IDENTITY")

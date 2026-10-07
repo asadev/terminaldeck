@@ -201,6 +201,8 @@ jobs:
           # Terminal Deck 0.18.x reads latest-mac.yml: it must name this version and this app's zip.
           grep -q "^version: $v$" release/latest-mac.yml && grep -q "^path: terminaldeck-native-$v-arm64.zip$" release/latest-mac.yml \
             || { echo "::error::latest-mac.yml does not offer the native $v zip"; exit 1; }
+          # Squirrel's install steps on the exact zip being published (0.19.0 rolled back here).
+          bash scripts/native-standalone/check-update-zip.sh "release/terminaldeck-native-$v-arm64.zip"
           ls -l release
 
       - name: Upload the mac artifacts

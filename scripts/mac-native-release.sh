@@ -198,6 +198,7 @@ check "no node binary or .node addon"      "[ -z \"\$(find '$APP' \\( -name node
 check "web pages inside"                   "[ -f '$APP/Contents/Resources/web/renderer/index.html' ] && [ -f '$APP/Contents/Resources/web/native-web/shim.js' ] && [ -f '$APP/Contents/Resources/web/pwa/index.html' ]"
 check "server package inside"              "[ -f '$APP/Contents/Resources/headless/terminaldeck-host.tgz' ]"
 check "SwiftTerm's shaders inside"         "[ -s '$APP/Contents/Resources/SwiftTerm_SwiftTerm.bundle/Contents/Resources/default.metallib' ]"
+check "every file owner-writable (ShipIt)"  "[ -z \"\$(find '$APP' ! -perm -u+w -print -quit)\" ]"
 if [[ "$MODE" == developer-id ]]; then
     check "Developer ID authority"         "grep -q 'Authority=Developer ID Application' <<<\"\$SIG\""
     check "secure timestamp"               "grep -q '^Timestamp=' <<<\"\$SIG\""
@@ -223,6 +224,11 @@ step "Update archive and feed"
 node scripts/native-standalone/make-native-feed.mjs --app "$APP" --output-dir release \
     --version "$VERSION" --architecture arm64 --bundle-id "$BUNDLE_ID"
 [[ -f "$ZIP" && -f "$FEED" ]] || die "make-native-feed.mjs did not write $ZIP and $FEED."
+
+step "The update zip through ShipIt's steps (unpack, quarantine on/off, signature)"
+SHIPIT_ARGS=("$ZIP"); [[ "$MODE" == developer-id ]] && SHIPIT_ARGS+=(--require-developer-id)
+bash "$REPO/scripts/native-standalone/check-update-zip.sh" "${SHIPIT_ARGS[@]}" \
+    || die "the update zip would fail Squirrel's install (0.18.x would roll back) — do not publish."
 
 # ---------------------------------------------------------- first-install dmg
 

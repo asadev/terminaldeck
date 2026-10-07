@@ -10,6 +10,14 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-10-07
+
+This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
+
+### Fixed
+
+- **The update from 0.18.x now installs.** Updating from Terminal Deck 0.18.8's side panel to 0.19.0 failed and put 0.18.8 back, because one file in the app could not be changed by the installer.
+
 ## [0.19.0] — 2026-10-07
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2428,7 +2436,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.1
 [0.19.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.0
 [0.18.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.6
 [0.18.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.18.5
