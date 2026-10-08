@@ -304,7 +304,7 @@ case "$MODE-$NOTARIZE" in
     *)              OPENING="**This build is signed ad-hoc and is for testing only.**" ;;
 esac
 cat > "$NOTE" <<NOTE
-macOS 26 or later, Apple silicon: open \`$(basename "$DMG")\` and drag **Terminal Deck** to Applications. $OPENING Terminal Deck is now a native Swift app with no Node.js or Electron inside; it keeps your projects, sessions and settings. Terminal Deck 0.18.8 offers this update in its side panel and installs it in place. Stays Fixed downloads its own pinned runtime the first time you use it. The app updates itself from \`$(basename "$FEED")\`.
+macOS 26 or later, Apple silicon: open \`$(basename "$DMG")\` and drag **Terminal Deck** to Applications. $OPENING Terminal Deck is now a native Swift app with no Node.js or Electron inside; it keeps your projects, sessions and settings. Coming from 0.19? Download and install once by hand; updates work in the app from then on. If an older copy cannot install this update, install the DMG once by hand. Stays Fixed downloads its own pinned runtime the first time you use it. The app updates itself from \`$(basename "$FEED")\`.
 NOTE
 
 step "Done"

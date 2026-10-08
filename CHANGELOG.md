@@ -14,7 +14,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ### Fixed
 
-- Updating from 0.19 now works.
+- Coming from 0.19? Download and install once by hand; updates work in the app from then on.
+- The updater accepts future native releases without requiring the removed Node engine.
 
 ## [0.20.0] — 2026-10-08
 
