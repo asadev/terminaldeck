@@ -216,6 +216,16 @@ if [[ -n "${MACOS_CERTIFICATE_P12:-}" ]]; then
     # again by the time the *disk image* is signed at the very end. That failure
     # lands on the last step of a twenty-minute build.
     security set-keychain-settings "$KEYCHAIN"
+    # `tr` folds the newlines to spaces, and that is not cosmetic. This value is
+    # baked into a cleanup command that is later run through `eval`, and a
+    # newline inside that string would be read as a command separator — so a
+    # machine with two user keychains would "restore" the first one and then try
+    # to execute the path of the second. A hosted runner has exactly one user
+    # keychain and would never have shown it; this Mac has two.
+    ORIGINAL_KEYCHAINS="$(security list-keychains -d user | sed 's/^[[:space:]]*"//; s/"$//' | tr '\n' ' ')"
+    CLEANUP+=("security list-keychains -d user -s $ORIGINAL_KEYCHAINS >/dev/null 2>&1")
+    # shellcheck disable=SC2086
+    security list-keychains -d user -s "$KEYCHAIN" $ORIGINAL_KEYCHAINS
     security unlock-keychain -p "$KC_PW" "$KEYCHAIN"
 
     security import "$SECRET_DIR/devid.p12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" \
@@ -229,7 +239,9 @@ if [[ -n "${MACOS_CERTIFICATE_P12:-}" ]]; then
 else
     step "Preflight (signing material from this Mac)"
 
-    KEYCHAIN="$HOME/Library/Keychains/terminaldeck-signing.keychain-db"
+    [[ -n "${TD_SIGNING_KEYCHAIN:-}" && -n "${TD_SIGNING_SHA1:-}" ]] ||
+        die "Local Mac release requires explicit TD_SIGNING_KEYCHAIN and TD_SIGNING_SHA1"
+    KEYCHAIN="$TD_SIGNING_KEYCHAIN"
     PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-signing-pw"
 
     # Read from the environment or from disk, never hardcoded. This repository
@@ -249,11 +261,28 @@ else
 
 fi
 
-source "$REPO/scripts/mac-signing-scope.sh"
-export TD_KEYCHAIN="$KEYCHAIN" TD_SIGN_IDENTITY="$IDENTITY"
-td_mac_signing_scope || die "Scoped Mac signing preflight failed"
-IDENTITY="$TD_MAC_SIGNING_SHA1"
-printf '  Developer ID SHA-1: %s in %s\n' "$IDENTITY" "$(basename "$KEYCHAIN")"
+if [[ -n "${TD_SIGNING_KEYCHAIN:-}${TD_SIGNING_SHA1:-}" ]]; then
+    source "$REPO/scripts/mac-signing-scope.sh"
+    td_mac_signing_scope || die "Scoped local Mac signing preflight failed"
+    KEYCHAIN="$TD_KEYCHAIN"
+    IDENTITY="$TD_MAC_SIGNING_SHA1"
+else
+DEVID_COUNT="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -c "Developer ID Application" || true)"
+if [[ "$DEVID_COUNT" -eq 0 ]]; then
+    die "no Developer ID Application certificate in $(basename "$KEYCHAIN")." \
+        "" \
+        "Apple refuses to issue one over the App Store Connect API — POST /v1/certificates" \
+        "answers 403 'This operation can only be performed by the Account Holder' for both" \
+        "DEVELOPER_ID_APPLICATION and DEVELOPER_ID_APPLICATION_G2, whatever the key's role." \
+        "It has to be created in the signed-in developer portal. See SIGNING-HANDOFF.md."
+elif [[ "$DEVID_COUNT" -gt 1 ]]; then
+    die "$DEVID_COUNT Developer ID Application identities are visible." \
+        "codesign cannot choose between identically named identities and calls it" \
+        "errSecInternalComponent, which looks like a locked keychain and is not."
+fi
+
+security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application"
+fi
 
 # ------------------------------------------------------------------- build
 
@@ -284,8 +313,12 @@ step "Package, sign and notarize"
 export APPLE_API_KEY="$ASC_KEY_PATH"
 export APPLE_API_KEY_ID="$ASC_KEY_ID"
 export APPLE_API_ISSUER="$ASC_ISSUER"
-unset CSC_LINK CSC_KEY_PASSWORD CSC_NAME
-export CSC_KEYCHAIN="$KEYCHAIN" CSC_IDENTITY_AUTO_DISCOVERY=false
+if [[ -n "${TD_SIGNING_KEYCHAIN:-}${TD_SIGNING_SHA1:-}" ]]; then
+    unset CSC_LINK CSC_KEY_PASSWORD CSC_NAME
+    export CSC_KEYCHAIN="$KEYCHAIN" CSC_IDENTITY_AUTO_DISCOVERY=false
+else
+export CSC_KEYCHAIN="$KEYCHAIN"
+fi
 
 npx electron-builder --mac --publish never \
     -c.mac.identity="$IDENTITY" \

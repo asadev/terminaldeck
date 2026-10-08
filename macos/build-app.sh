@@ -141,10 +141,15 @@ echo "==> App Intents metadata (Siri, Shortcuts, Spotlight)"
 chmod -R u+w "$APP"
 IDENTITY="${TD_SIGN_IDENTITY:--}"
 ENTITLEMENTS="$HERE/NativePreview.entitlements"
-if [ "$IDENTITY" != "-" ]; then
+if [ -n "${TD_SIGNING_KEYCHAIN:-}${TD_SIGNING_SHA1:-}" ]; then
   source "$HERE/../scripts/mac-signing-scope.sh"
   td_mac_signing_scope || exit 1
   IDENTITY="$TD_SIGN_IDENTITY"
+elif [ "$IDENTITY" != "-" ]; then
+  if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]; then
+    echo 'Local Mac signing requires explicit TD_SIGNING_KEYCHAIN and TD_SIGNING_SHA1' >&2
+    exit 1
+  fi
 fi
 SIGN=(codesign --force --options runtime --sign "$IDENTITY")
 if [ "$IDENTITY" = "-" ]; then
@@ -153,7 +158,7 @@ if [ "$IDENTITY" = "-" ]; then
 else
   echo "==> signing as $IDENTITY, hardened runtime"
   SIGN+=(--timestamp)
-  SIGN+=(--keychain "$TD_KEYCHAIN")
+  [ -n "${TD_KEYCHAIN:-}" ] && SIGN+=(--keychain "$TD_KEYCHAIN")
 fi
 # Inside out: nested bundles first, then the app with its entitlements. Never
 # `codesign --deep` to sign — it signs in the wrong order and skips entitlements.
