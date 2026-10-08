@@ -113,8 +113,8 @@ PY
 fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 mkdir -p "$APP/Contents/Resources/licenses/server-control"
-cp "$HERE/docker/BackendAppsData-Coolify-LICENSE.txt" "$APP/Contents/Resources/licenses/server-control/Coolify.txt"
-cp "$HERE/docker/THIRD-PARTY.md" "$APP/Contents/Resources/licenses/server-control/THIRD-PARTY.md"
+cp "$HERE/licenses/server-control/Coolify-LICENSE.txt" "$APP/Contents/Resources/licenses/server-control/Coolify.txt"
+cp "$HERE/licenses/server-control/THIRD-PARTY.md" "$APP/Contents/Resources/licenses/server-control/THIRD-PARTY.md"
 if [ -n "${TD_VERSION:-}" ]; then
   plutil -replace CFBundleShortVersionString -string "$TD_VERSION" "$APP/Contents/Info.plist"
   plutil -replace CFBundleVersion -string "$TD_VERSION" "$APP/Contents/Info.plist"
