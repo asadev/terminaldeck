@@ -10,6 +10,12 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-10-08
+
+### Fixed
+
+- Updating from 0.19 now works.
+
 ## [0.20.0] — 2026-10-08
 
 This release is for the Mac and the iPhone app on TestFlight. Windows and Android downloads are unchanged. Android’s source version matches 0.20.0; Android is not built or released.
@@ -2473,7 +2479,7 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Session resume (`⌘⇧T`)
 
 [0.20.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.20.0
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.20.1...HEAD
 [0.19.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.2
 [0.19.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.1
 [0.19.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.0
@@ -2509,3 +2515,5 @@ First cut. macOS 12+, Apple silicon, unsigned.
 [0.1.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.3
 [0.1.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.0
+
+[0.20.1]: https://github.com/asadev/terminaldeck/compare/v0.20.0...v0.20.1

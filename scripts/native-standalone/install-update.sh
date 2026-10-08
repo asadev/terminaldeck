@@ -60,9 +60,6 @@ verify_app() {
   [ "$(plist "$candidate" CFBundleShortVersionString)" = "$expected_version" ] || fail 'staged app version differs'
   [ "$(plist "$candidate" CFBundleExecutable)" = "$executable_name" ] || fail 'staged program differs'
   [ -x "$candidate/Contents/MacOS/$executable_name" ] || fail 'staged program is missing'
-  [ -x "$candidate/Contents/Resources/runtime/bin/node" ] || fail 'bundled Node is missing'
-  [ -s "$candidate/Contents/Resources/runtime/manifest.json" ] || fail 'Node manifest is missing'
-  [ -s "$candidate/Contents/Resources/engine/manifest.json" ] || fail 'engine manifest is missing'
   [ ! -e "$candidate/Contents/Frameworks/Electron Framework.framework" ] || fail 'Electron app cannot replace the native app'
   /usr/bin/codesign --verify --deep --strict "$candidate" || fail 'staged code signature is invalid'
   if [ -n "$expected_team" ]; then

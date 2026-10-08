@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertNativeLayout } from './verify-native-layout.mjs'
 /** Generate a local native ZIP and its separate feed. Never publishes anything. */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -35,10 +36,7 @@ try {
   // The Node-free layout NativeUpdatePackage accepts (NativeWebAssets.validateApp):
   // declared Node-free, both helpers, the web assets, and no Node/Electron payload.
   if (plist.TDNativeOnly !== true) throw new Error('Only the Node-free native app (TDNativeOnly) can get a native update feed')
-  for (const legacy of ['runtime', 'engine', 'app.asar', 'app.asar.unpacked']) {
-    if (existsSync(join(resources, legacy))) throw new Error(`The native app still carries a Node payload: Contents/Resources/${legacy}`)
-  }
-  if (existsSync(join(app, 'Contents', 'Frameworks', 'Electron Framework.framework'))) throw new Error('The native app still carries Electron')
+  assertNativeLayout(app)
   for (const name of [plist.CFBundleExecutable, 'TerminalDeckNativeHelper', 'TerminalDeckJSCorePluginHelper']) {
     if (!statSync(join(app, 'Contents', 'MacOS', name)).isFile()) throw new Error(`Native app program is missing: Contents/MacOS/${name}`)
   }

@@ -44,6 +44,25 @@ final class NativeWebAssetsTests: XCTestCase {
         guard case .unavailable(.bundledEngine) = broken.source else { return XCTFail("an incomplete copy must say so, not start") }
     }
 
+    func testUpdaterAcceptsBridgeMarkersButRejectsRuntimeAndEnginePayload() throws {
+        let bundle = try app(try scratch())
+        let node = Data("#!/bin/sh\nprintf '%s\\n' 'Terminal Deck no longer uses Node; this placeholder only lets older updaters accept this version'\nexit 1\n".utf8)
+        let manifest = Data("{\"removed\":true,\"reason\":\"native app; placeholder for older updaters\"}\n".utf8)
+        try write(bundle, "Contents/Resources/runtime/bin/node", node, executable: true)
+        try write(bundle, "Contents/Resources/runtime/manifest.json", manifest)
+        try write(bundle, "Contents/Resources/engine/manifest.json", manifest)
+        XCTAssertNoThrow(try NativeWebAssets.validateApp(bundle, executableName: "TerminalDeckNative", architecture: "arm64"))
+        let configuration = EngineConfiguration.resolve(environment: [:], applicationSupport: try scratch(), home: "/Users/x", installed: nil,
+                                                        resources: bundle.appendingPathComponent("Contents/Resources"))
+        guard case .nativeOnly = configuration.source else { return XCTFail("bridge markers must not select a Node engine") }
+        XCTAssertNil(configuration.executable)
+        try write(bundle, "Contents/Resources/runtime/bin/node", machO(cpu: 0x0100_000c), executable: true)
+        XCTAssertThrowsError(try NativeWebAssets.validateApp(bundle, executableName: "TerminalDeckNative", architecture: "arm64"))
+        try write(bundle, "Contents/Resources/runtime/bin/node", node, executable: true)
+        try write(bundle, "Contents/Resources/engine/index.js")
+        XCTAssertThrowsError(try NativeWebAssets.validateApp(bundle, executableName: "TerminalDeckNative", architecture: "arm64"))
+    }
+
     func testUpdaterAcceptsOnlyTheNodeFreeLayoutForThisMac() throws {
         let root = try scratch()
         XCTAssertNoThrow(try NativeWebAssets.validateApp(try app(root), executableName: "TerminalDeckNative", architecture: "arm64"))

@@ -73,6 +73,16 @@ if [ "${TD_NATIVE_STANDALONE:-0}" = "1" ]; then
   # D14 (night plan step 4): Node-free. No Node runtime, engine, node_modules or
   # native addons are staged. The remaining web pages are plain files served by
   # the app's own native bridge; the backend runs in process.
+  # Old installed helpers require these paths. They contain no Node/engine code.
+  mkdir -p "$APP/Contents/Resources/runtime/bin" "$APP/Contents/Resources/engine"
+  cat > "$APP/Contents/Resources/runtime/bin/node" <<'TD_NODE_PLACEHOLDER'
+#!/bin/sh
+printf '%s\n' 'Terminal Deck no longer uses Node; this placeholder only lets older updaters accept this version'
+exit 1
+TD_NODE_PLACEHOLDER
+  chmod 755 "$APP/Contents/Resources/runtime/bin/node"
+  printf '%s\n' '{"removed":true,"reason":"native app; placeholder for older updaters"}' > "$APP/Contents/Resources/runtime/manifest.json"
+  printf '%s\n' '{"removed":true,"reason":"native app; placeholder for older updaters"}' > "$APP/Contents/Resources/engine/manifest.json"
   plutil -insert TDNativeOnly -bool true "$APP/Contents/Info.plist"
   plutil -insert TDNativeGraph -string full "$APP/Contents/Info.plist"
   WEB_SRC="$HERE/.."

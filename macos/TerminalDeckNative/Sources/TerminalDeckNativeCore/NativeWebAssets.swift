@@ -41,9 +41,29 @@ public struct NativeWebAssets: Equatable, Sendable {
         }
     }
 
-    /// Paths the Node-free app must never carry, relative to Contents/Resources.
+    /// Old payload roots. runtime/engine may contain only the inert updater bridge markers.
     public static let legacyPayloads = ["runtime", "engine", "app.asar", "app.asar.unpacked"]
     public static let required = ["web/renderer/index.html", "web/native-web/shim.js", "web/pwa/index.html"]
+
+    private static func containsOnlyUpdaterPlaceholders(_ resources: URL) -> Bool {
+        let fm = FileManager.default
+        let directories = [("runtime", ["bin", "manifest.json"]), ("runtime/bin", ["node"]), ("engine", ["manifest.json"])]
+        for (path, names) in directories {
+            let directory = resources.appendingPathComponent(path)
+            guard let attributes = try? fm.attributesOfItem(atPath: directory.path),
+                  attributes[.type] as? FileAttributeType == .typeDirectory,
+                  let children = try? fm.contentsOfDirectory(atPath: directory.path), children.sorted() == names.sorted() else { return false }
+        }
+        let node = "#!/bin/sh\nprintf '%s\\n' 'Terminal Deck no longer uses Node; this placeholder only lets older updaters accept this version'\nexit 1\n"
+        let manifest = "{\"removed\":true,\"reason\":\"native app; placeholder for older updaters\"}\n"
+        for (path, bytes) in [("runtime/bin/node", node), ("runtime/manifest.json", manifest), ("engine/manifest.json", manifest)] {
+            let file = resources.appendingPathComponent(path)
+            guard let attributes = try? fm.attributesOfItem(atPath: file.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  (try? Data(contentsOf: file)) == Data(bytes.utf8) else { return false }
+        }
+        return fm.isExecutableFile(atPath: resources.appendingPathComponent("runtime/bin/node").path)
+    }
 
     public static func discover(resources: URL) throws -> NativeWebAssets {
         let root = resources.standardizedFileURL
@@ -73,7 +93,10 @@ public struct NativeWebAssets: Equatable, Sendable {
             let path = contents.appendingPathComponent("MacOS/" + name).path
             guard fm.isExecutableFile(atPath: path) else { throw Problem.missing("Contents/MacOS/" + name) }
         }
-        for legacy in legacyPayloads where fm.fileExists(atPath: contents.appendingPathComponent("Resources/" + legacy).path) {
+        let resources = contents.appendingPathComponent("Resources", isDirectory: true)
+        let onlyPlaceholders = containsOnlyUpdaterPlaceholders(resources)
+        for legacy in legacyPayloads where fm.fileExists(atPath: resources.appendingPathComponent(legacy).path) {
+            if onlyPlaceholders && (legacy == "runtime" || legacy == "engine") { continue }
             throw Problem.legacyPayload("Contents/Resources/" + legacy)
         }
         if fm.fileExists(atPath: contents.appendingPathComponent("Frameworks/Electron Framework.framework").path) {
