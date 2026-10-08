@@ -78,9 +78,9 @@ extension NativeCompositionProduction {
         let metadata = registered.map { spec, _ in
             BackendDeckCoreCatalogueMetadata(tool: spec, title: spec.description, index: spec.description)
         }
+        let joins = self.joins
         let policies = zip(metadata, registered).map { row, registration in joins.mcpPolicy(row, handler: registration.1) }
         try joins.replaceContributions(owner: "agents-watch", [try .init(metadata: metadata, policies: policies)], policiesWrapped: true)
-        let joins = self.joins
         try await root.retain(.init(name: "agents-watch-catalogue", domains: ["agents-watch-catalogue"], ownerID: "native-composition:agents-watch-catalogue", invokes: [],
             stop: { try? joins.replaceContributions(owner: "agents-watch", [], policiesWrapped: true) }))
     }
