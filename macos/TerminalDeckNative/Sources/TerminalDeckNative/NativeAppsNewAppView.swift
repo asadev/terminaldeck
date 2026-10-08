@@ -77,7 +77,7 @@ struct NativeAppsNewAppView: View {
                 }
                 Section {
                     NativeSettingRow(label: "App name", help: "What to call it in your app list.") {
-                        TextField("My app", text: Binding(get: { draft.name }, set: updateName))
+                        TextField("My app", text: Binding(get: { draft.name }, set: { updateName($0) }))
                             .labelsHidden()
                             .frame(minWidth: 200, maxWidth: 260)
                     }
