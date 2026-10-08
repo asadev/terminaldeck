@@ -79,7 +79,7 @@ public actor BackendRemoteGuestChannel {
 public enum BackendRemoteGuestFrames {
     public static func parse(_ text: String) throws -> NativeRPCValue {
         guard text.utf8.count <= 93528 else { throw NativeRPCError.malformed("The host frame is too large") }
-        let value = try NativeRPCValue.parseJSON(Data(text.utf8))
+        let value = RNMHootWireCompatibility.incomingServerEnvelope(try NativeRPCValue.parseJSON(Data(text.utf8)))
         guard let fields = value.fields, let tag = value["t"].string, let kind = BackendRemoteServerMessage.Kind(rawValue: tag) else { throw NativeRPCError.malformed("Unknown host frame type") }
         _ = try BackendRemoteServerMessage(kind, fields: fields.filter { $0.key != "t" })
         var result = value

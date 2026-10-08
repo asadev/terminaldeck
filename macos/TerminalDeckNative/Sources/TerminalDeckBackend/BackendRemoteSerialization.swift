@@ -18,6 +18,7 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
         case loginState = "logins.state", loginSignedIn = "logins.signedin", loginSignedOut = "logins.signedout", settingsState = "settings.state", settingsApplied = "settings.applied", settingsChanged = "settings.changed"
         case githubState = "github.state", githubChanged = "github.changed", hostState = "host.state", sessionSent = "session.sent"
         case deviceRows = "devices.rows", deviceRevoked = "devices.revoked", devicesChanged = "devices.changed"
+        case deviceAccess = "device.access", hootEvents = "hoot.events"
         case windowCall = "window.call", windowHolds = "window.holds", windowResult = "window.result"
         case browserFrame = "browser.frame", browserSurfaceRows = "browser.surfaces.rows", browserHandoverState = "browser.handover.state"
     }
@@ -59,8 +60,28 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
             .settingsState: "rid:s settings:a", .settingsApplied: "rid:s ok:b message:s setting:o", .settingsChanged: "settings:a",
             .githubState: "rid:s github:o", .githubChanged: "github:o", .hostState: "rid:s host:o", .sessionSent: "rid:s id:s ok:b message:s",
             .deviceRows: "rid:s devices:a", .deviceRevoked: "rid:s ok:b message:s devices:a", .devicesChanged: "devices:a",
+            .deviceAccess: "level:s?", .hootEvents: "conversationId:s reset:b events:a",
     ]
     private static func validateRequiredFields(_ kind: Kind, value: NativeRPCValue) throws {
+        if kind == .deviceAccess {
+            guard value["level"] == .null || value["level"].string.flatMap(BackendINT2PhoneAccessLevel.init(rawValue:)) != nil else {
+                throw NativeRPCError.malformed("The host device access level is invalid.")
+            }
+        }
+        if kind == .hootEvents {
+            let events = try value["events"].requireArray("Hoot events")
+            guard events.count <= 600, let conversation = value["conversationId"].string, !conversation.isEmpty else {
+                throw NativeRPCError.malformed("The Hoot event snapshot is not bounded.")
+            }
+            for event in events {
+                let decoded = try HootChatEvent(wire: event)
+                guard decoded.conversationID == conversation,
+                      (event["value"]["text"].string?.utf8.count ?? 0) <= 65536,
+                      ((try? event["value"]["input"].encodedJSON().count) ?? 0) <= 16384 else {
+                    throw NativeRPCError.malformed("The Hoot event exceeds the phone contract.")
+                }
+            }
+        }
         guard let spec = requiredFieldSchemas[kind] else { throw NativeRPCError.invalidArguments("No server schema for \(kind.rawValue)") }
         for item in spec.split(separator: " ") {
             let pair = item.split(separator: ":", maxSplits: 1), key = String(pair[0]), rule = String(pair[1])

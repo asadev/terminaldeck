@@ -62,8 +62,8 @@ struct NativeCopilotMachines: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(on ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08)))
-                            .overlay(Capsule().stroke(on ? Color.accentColor : Color.clear))
+                            .background(Capsule().fill(on ? Color.primary.opacity(0.12) : Color.secondary.opacity(0.08)))
+                            .overlay(Capsule().stroke(on ? Color.secondary.opacity(0.45) : Color.clear))
                         }
                         .buttonStyle(.plain)
                         .help("Hoot on \(machine.name)")

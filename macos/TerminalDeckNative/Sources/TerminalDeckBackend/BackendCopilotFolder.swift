@@ -16,7 +16,7 @@ public struct BackendCopilotFolderChangeResult: Sendable {
     public var wireValue: NativeRPCValue { .object([.init("report", report.wireValue), .init("problem", BackendCopilotStorageIO.optional(problem)), .init("cancelled", .bool(cancelled))]) }
 }
 public enum BackendCopilotFolder {
-    public static let homeSetting = "copilot.home"
+    public static let homeSetting = RNMHootSettingsMigration.homeKey
     public static let choosing = CopilotFolderWords.choosing
     public static let needsRestart = CopilotFolderWords.needsRestart
     public static func chosenHome(_ stored: NativeRPCValue) -> String? {

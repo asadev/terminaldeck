@@ -40,7 +40,7 @@ private actor BackendCopilotSessionTestRecords: BackendCopilotSessionRecordsProv
     var held = true
     var measureCount = 0
     init(_ root: URL) throws {
-        recordPaths = try .init(paths: ["routines", "routine-state.json", "copilot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
+        recordPaths = try .init(paths: ["routines", "routine-state.json", "hoot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
     }
     func paths(userData: String) async throws -> BackendCopilotLayerRecords { recordPaths }
     func measure(userData: String) async -> BackendCopilotSessionFenceMeasurement { measureCount += 1; return .init(fence: held ? .init() : nil, reason: held ? nil : "no mechanism here") }
@@ -120,7 +120,7 @@ final class BackendCopilotSessionTests: XCTestCase {
     func testMissingAgentShellFallbackAndFailedSpawnReturnReadableStoppedState() async throws {
         let (root, runtime, driver, _, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         await driver.configure(agent: false)
-        let missing = try await runtime.ensure(); XCTAssertEqual(missing.status, .stopped); XCTAssertEqual(missing.problem, "Hoot runs on Claude Code, which is not installed on this machine.")
+        let missing = try await runtime.ensure(); XCTAssertEqual(missing.status, .stopped); XCTAssertEqual(missing.problem, "Hoot's claude CLI is not installed on this machine.")
         let noCalls = await driver.snapshot(); XCTAssertEqual(noCalls.calls.count, 0)
         await driver.configure(agent: true, provider: "shell")
         let fallback = try await runtime.ensure(); XCTAssertEqual(fallback.status, .stopped); XCTAssertEqual(fallback.problem, "Hoot started as a shell session rather than an agent.")
@@ -230,12 +230,15 @@ final class BackendCopilotSessionTests: XCTestCase {
     }
     func testExactChannelsAndLegacyHomeScopeSurviveRemovalOfOldJail() async throws {
         let (root, runtime, _, _, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let expected = ["copilot:ensure", "copilot:files", "copilot:read-composed", "copilot:read-contract", "copilot:read-folder-instructions", "copilot:read-instructions", "copilot:reset-instructions", "copilot:signin", "copilot:state", "copilot:stop", "copilot:write-folder-instructions", "copilot:write-instructions"]
+        let expected = ["copilot:ensure", "copilot:files", "copilot:read-composed", "copilot:read-contract", "copilot:read-folder-instructions", "copilot:read-instructions", "copilot:reset-instructions", "copilot:signin", "copilot:state", "copilot:stop", "copilot:write-folder-instructions", "copilot:write-instructions", "hoot:chat:read", "hoot:chat:say", "hoot:chat:stop", "hoot:chat:answer", "copilot:chat:read", "copilot:chat:say", "copilot:chat:stop", "copilot:chat:answer"]
         XCTAssertEqual(BackendCopilotSessionRuntime.channels.sorted(), expected.sorted())
         let scope = BackendCopilotSessionRuntime.homeScope(userData: root.path)
         XCTAssertEqual(scope.home, root.appendingPathComponent("remote/device-home/copilot").path)
-        XCTAssertEqual(scope.folder, root.appendingPathComponent("copilot").path)
+        XCTAssertEqual(scope.folder, root.appendingPathComponent("hoot").path)
         let state = try await runtime.state(); XCTAssertEqual(state.status, .stopped); XCTAssertNil(state.profile); XCTAssertEqual(state.startupFiles.map(\.exists), [false, false, false])
+        let legacyState = try await runtime.invoke("copilot:state", arguments: [])
+        let canonicalState = try await runtime.invoke("hoot:state", arguments: [])
+        XCTAssertEqual(canonicalState, legacyState)
         let files = try await runtime.invoke("copilot:files", arguments: [.string("arbitrary ignored path")])
         XCTAssertEqual(files.elements?.count, 3)
     }

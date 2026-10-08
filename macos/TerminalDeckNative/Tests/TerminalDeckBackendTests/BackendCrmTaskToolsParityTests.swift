@@ -34,7 +34,8 @@ struct BackendCrmTaskToolsParityTests {
             for (id, verbs, expected) in groups {
                 for verb in verbs {
                     let before = await r.audit.tiers.count
-                    do { _ = try await r.call(id, crmParityValue(["do": verb])) } catch {}
+                    let input = id == "tasks.agents" && verb == "save" ? crmParityValue(["do": verb, "agent": ["id": "builder", "name": "Builder"]]) : crmParityValue(["do": verb])
+                    do { _ = try await r.call(id, input) } catch {}
                     let tiers = await r.audit.tiers
                     #expect(tiers.count > before && tiers.last == expected, "\(id) \(verb)")
                 }
@@ -216,17 +217,18 @@ struct BackendCrmTaskToolsParityTests {
         
         }
     }
-    @Test func l13OnlyOwnerCanAddOrLiftEnforcedToolBlocks() async throws {
+    @Test func l13KeysCanAddBlocksButOnlyOwnerCanLiftThem() async throws {
         let parityClock = BackendCrmTaskClockParityVirtualClock()
         parityClock.set(BackendCrmTime.parseInstant("2026-10-07T09:00:00Z")!.timeIntervalSince1970 * 1000)
         parityClock.setReadStep(0)
         try await BackendTaskClockContext.withClock(parityClock) {
             let r = try await BackendCrmTaskToolsParityFixture.make(localOnly:true)
             _ = try await r.f.config.saveAgent(try await r.f.config.agent("builder")!.merging(crmParityValue(["provider":"claude","blockedTools":["WebFetch"],"skillsOff":true])))
-            _ = try await r.call("tasks.agents",crmParityValue(["do":"save","agent":["id":"builder","blockedTools":[],"skillsOff":false,"model":"opus"]]))
-            #expect(crmParityMatches(try await r.f.config.agent("builder") ?? .missing,crmParityValue(["model":"opus","blockedTools":["WebFetch"],"skillsOff":true])))
-            _ = try await r.call("tasks.agents",crmParityValue(["do":"save","agent":["name":"Fresh","blockedTools":["Bash"],"skillsOff":true]]))
-            #expect(crmParityMatches(try await r.f.config.allAgents().first { $0["name"].string == "Fresh" } ?? .missing,crmParityValue(["blockedTools":[],"skillsOff":false])))
+            #expect(await r.refused("tasks.agents",crmParityValue(["do":"save","agent":["id":"builder","blockedTools":[],"skillsOff":false,"model":"opus"]])).contains("Removing the WebFetch block needs the owner"))
+            _ = try await r.call("tasks.agents",crmParityValue(["do":"save","agent":["id":"builder","model":"opus","blockedTools":["WebFetch","Edit"]]]))
+            #expect(crmParityMatches(try await r.f.config.agent("builder") ?? .missing,crmParityValue(["model":"opus","blockedTools":["WebFetch","Edit"],"skillsOff":true])))
+            _ = try await r.call("tasks.agents",crmParityValue(["do":"save","agent":["name":"Fresh","provider":"claude","blockedTools":["Bash"],"skillsOff":true]]))
+            #expect(crmParityMatches(try await r.f.config.allAgents().first { $0["name"].string == "Fresh" } ?? .missing,crmParityValue(["blockedTools":["Bash"],"skillsOff":true])))
         
         }
     }

@@ -20,8 +20,7 @@ struct NativeTasksScreen: View {
         Group {
             switch store.phase {
             case .loading:
-                // The page draws nothing until the first read answers.
-                Color.clear
+                NativeTAGTasksLoading()
             case .failed:
                 ContentUnavailableView {
                     Label("Tasks could not be read", systemImage: "checklist")
@@ -54,24 +53,32 @@ struct NativeTasksScreen: View {
 
     /// The open task's popup, over the whole page, as the page's popup sits over it.
     @ViewBuilder private var popup: some View {
-        if let state = store.state, let id = myWork.open, let task = state.tasks.first(where: { $0.id == id && $0.local }) {
+        if let state = store.state, let id = myWork.open, let task = state.tasks.first(where: { $0.id == id }) {
             let now = Date().timeIntervalSince1970 * 1000
             let order = myWork.order(TKTasksProjectScope.shared.scoped(state), now: now)
             ZStack {
                 Color.black.opacity(0.25)
                     .ignoresSafeArea()
                     .onTapGesture { myWork.open = nil }
-                NativeTaskPopup(
-                    task: task,
-                    tasks: state.tasks.filter(\.local),
-                    siblings: order.contains(task.id) ? order : [task.id],
-                    agents: state.agents,
-                    onNavigate: { myWork.open = $0 },
-                    onClose: { myWork.open = nil },
-                    onDelete: { id in
-                        myWork.open = nil
-                        Task { await store.run { await store.remove(id) } }
-                    })
+                Group {
+                    if task.local {
+                        NativeTaskPopup(
+                            task: task,
+                            tasks: state.tasks.filter(\.local),
+                            linkedTasks: state.tasks,
+                            siblings: order.contains(task.id) ? order : [task.id],
+                            agents: state.agents,
+                            onNavigate: { store.openTask($0) },
+                            onClose: { myWork.open = nil },
+                            onDelete: { id in
+                                myWork.open = nil
+                                Task { await store.run { await store.remove(id) } }
+                            })
+                    } else {
+                        NativeTAGExternalTaskDetail(task: task, tasks: state.tasks,
+                                                    onOpen: { store.openTask($0) }, onClose: { myWork.open = nil })
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .shadow(color: .black.opacity(0.3), radius: 24, y: 8)
                 .padding(24)
@@ -102,7 +109,7 @@ struct NativeTasksScreen: View {
                 if creating {
                     LocalTaskForm(state: state, busy: store.busy) { draft in
                         Task {
-                            var input = (try? draft.payload().get()) ?? [:]
+                            var input = (try? draft.payload(agents: state.agents).get()) ?? [:]
                             if input.isEmpty { input = ["title": draft.title] }
                             if await store.run({ await store.create(input) }) { creating = false }
                         }
@@ -292,7 +299,9 @@ struct TasksLinkButton: View {
 
     var body: some View {
         Button(title, action: action)
-            .buttonStyle(.link)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .nativeUIGGreyControl()
             .help(help ?? "")
     }
 }
@@ -387,11 +396,14 @@ struct LocalTaskForm: View {
             }
             TasksField("Details") { TasksTextArea(text: $draft.instructions) }
             TasksField("Project folder") {
-                TextField("Needed when an agent works on it, e.g. /Users/you/Projects/app", text: $draft.project)
+                TextField("Full folder path; uses the agent's default when empty", text: $draft.project)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .onSubmit(save)
                     .accessibilityLabel("Project folder")
+                if let folder = state.agents.first(where: { $0.id == draft.assignee })?.defaultProject, draft.project.isEmpty {
+                    Text("Uses \(folder)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
             }
             if fresh {
                 HStack(alignment: .top, spacing: 12) {
@@ -683,7 +695,9 @@ struct CrmTasksBodyView: View {
         let minutes = TasksRules.keptOpenMinutes(task.keepOpenUntil, now: now)
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).font(.body.weight(.medium))
+                Button { TasksStore.shared.openTask(task.id) } label: {
+                    Text(task.title).font(.body.weight(.medium)).multilineTextAlignment(.leading)
+                }.buttonStyle(.plain).accessibilityHint("Opens the task")
                 HStack(spacing: 10) {
                     Text(task.agent)
                     if !task.crmStatus.isEmpty {
@@ -697,10 +711,12 @@ struct CrmTasksBodyView: View {
                     if !process.isEmpty {
                         Text(process).foregroundStyle(task.process == .running ? TaskTone.working : Color.secondary)
                     }
-                    if let minutes { Text("kept open for \(minutes) min") }
+                    if task.keepAliveUntilClose == true { Text("kept open until you close it") }
+                    else if let minutes { Text("kept open for \(minutes) min") }
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                NativeTAGTaskLinks(task: task, tasks: TasksStore.shared.state?.tasks ?? state.tasks, compact: true)
                 if detailed {
                     HStack(spacing: 10) {
                         Text(task.externalTaskId).help("The task’s id in the CRM")
@@ -713,7 +729,7 @@ struct CrmTasksBodyView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if minutes != nil, let onCloseSession {
+            if minutes != nil || task.keepAliveUntilClose == true, let onCloseSession {
                 Button("Close session") { onCloseSession(task.id) }
                     .buttonStyle(.bordered)
                     .disabled(busy)

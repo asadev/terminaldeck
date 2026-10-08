@@ -236,7 +236,7 @@ struct NativeBrowserDrawView: View {
                         Text(entry.1).tag(entry.0).help(entry.2)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .fixedSize()
                 if marks.isEmpty {

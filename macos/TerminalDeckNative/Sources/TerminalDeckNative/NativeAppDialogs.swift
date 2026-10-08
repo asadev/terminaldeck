@@ -58,6 +58,18 @@ struct NativeAppDialogs: ViewModifier {
             .sheet(item: binding(NativeDialogName.copilotSetup, dismiss: "close")) { _ in
                 NativeCopilotSetup(model: model)
             }
+            .onChange(of: model.currentScreen?.id) {
+                let kind = model.currentScreen?.kind
+                if kind != "hoot", kind != "copilot", model.dialogs[NativeDialogName.copilotSetup] != nil {
+                    model.answerDialog(NativeDialogName.copilotSetup, "close")
+                }
+            }
+            .onChange(of: model.dialogs[NativeDialogName.copilotSetup]?.seq) {
+                let kind = model.currentScreen?.kind
+                if kind != "hoot", kind != "copilot", model.dialogs[NativeDialogName.copilotSetup] != nil {
+                    model.answerDialog(NativeDialogName.copilotSetup, "close")
+                }
+            }
             // Hoot's permission question shows at once, over any open sheet (NativeConsentSheet.swift).
             .onChange(of: model.dialogs[NativeDialogName.copilotConsent].map { "\($0.opening)#\($0.seq)" }, initial: true) {
                 NativeConsentSheet.sync(model)
@@ -86,7 +98,13 @@ struct NativeAppDialogs: ViewModifier {
     /// `dismiss` — "cancel" for a question, "close" for a window.
     private func binding(_ name: String, dismiss: String = "cancel") -> Binding<OpenDialog?> {
         Binding(
-            get: { model.dialogs[name].map(OpenDialog.init) },
+            get: {
+                if name == NativeDialogName.copilotSetup {
+                    let kind = model.currentScreen?.kind
+                    guard kind == "hoot" || kind == "copilot" else { return nil }
+                }
+                return model.dialogs[name].map(OpenDialog.init)
+            },
             set: { value in if value == nil, model.dialogs[name] != nil { model.answerDialog(name, dismiss) } }
         )
     }

@@ -94,7 +94,9 @@ public struct BackendDeckToolsAppNativeMetricsAdapter: BackendDeckToolsAppUsageS
     public func sessionCost(_ path: String, caller: BackendMCPCallContext) async throws -> NativeRPCValue { try await cost.session(path: path, context: access.rpc(caller), cancellation: caller.cancellation).summary }
     public func setup(_ caller: BackendMCPCallContext) async throws -> NativeRPCValue { try await readSetup(access.rpc(caller)) }
     public func scan(_ path: String, caller: BackendMCPCallContext) async throws -> NativeRPCValue { try await BackendReadinessService.wire(readiness.scan(project: path, context: access.rpc(caller))) }
-    public func fix(_ path: String, id: String, caller: BackendMCPCallContext) async throws -> NativeRPCValue { try await BackendReadinessService.wire(readiness.fix(project: path, id: id, context: access.rpc(caller), requireOffered: true)) }
+    public func fix(_ path: String, id: String, caller: BackendMCPCallContext) async throws -> NativeRPCValue {
+        throw NativeRPCError(code: "approval-required", message: "Use readiness.preview_fix and approve its exact previewId with readiness.fix. A fix id cannot authorize a project change.")
+    }
 }
 
 /// Native GitHub worker provides the same nine channels; no credentials pass

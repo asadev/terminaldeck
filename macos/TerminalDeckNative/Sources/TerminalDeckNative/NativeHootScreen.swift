@@ -130,31 +130,10 @@ struct NativeHootScreen: View {
                     NativeRemoteCopilot(machine: remote)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            } else if let sessionId = model.state?.sessionId, model.state?.paths.root != nil {
-                let session = NativeTerminalSessions.shared.session(for: sessionId)
-                NativeSessionBody(session: session) {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            NativeSessionHeader(session: session)
-                            if HootScreen.showsRestart(status: model.state?.status.rawValue, elsewhere: false) {
-                                restartButton
-                            }
-                        }
-                        Divider()
-                        top(elsewhere: false, started: started)
-                    }
-                }
-                .id(sessionId)
             } else {
                 VStack(spacing: 0) {
                     top(elsewhere: false, started: started)
-                    NativePageEmpty(
-                        mark: AnyView(HootMark(size: 200)),
-                        title: HootScreen.emptyTitle(stage: model.stage),
-                        message: { Text(HootScreen.emptyBody) },
-                        action: PageEmptyAction(label: "Start it", primary: true, busy: model.stage == .starting) { model.ensure() },
-                        hint: { EmptyView() },
-                        extra: { EmptyView() })
+                    NativeHootChat()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

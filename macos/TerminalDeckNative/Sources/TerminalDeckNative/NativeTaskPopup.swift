@@ -10,6 +10,7 @@ import TerminalDeckNativeCore
 struct NativeTaskPopup: View {
     let task: TaskRow
     let tasks: [TaskRow]
+    let linkedTasks: [TaskRow]
     let siblings: [String]
     let agents: [AgentProfile]
     let onNavigate: (String) -> Void
@@ -20,7 +21,7 @@ struct NativeTaskPopup: View {
     var body: some View {
         Group {
             if let model, model.taskId == task.id {
-                TaskPageView(model: model, tasks: tasks, siblings: siblings, onNavigate: onNavigate, onClose: onClose, onDelete: onDelete)
+                TaskPageView(model: model, tasks: tasks, linkedTasks: linkedTasks, siblings: siblings, onNavigate: onNavigate, onClose: onClose, onDelete: onDelete)
             } else {
                 Color(nsColor: .windowBackgroundColor)
             }
@@ -57,6 +58,7 @@ struct SlashCommand: Identifiable {
 private struct TaskPageView: View {
     let model: TaskDetailModel
     let tasks: [TaskRow]
+    let linkedTasks: [TaskRow]
     let siblings: [String]
     let onNavigate: (String) -> Void
     let onClose: () -> Void
@@ -87,6 +89,10 @@ private struct TaskPageView: View {
                            onNavigate: onNavigate, onClose: onClose, onDelete: { onDelete(model.taskId) },
                            onGone: { open in if let open { onNavigate(open) } else { onClose() } },
                            onRelate: { kind in model.relate(kind) })
+            VStack(alignment: .leading, spacing: 8) {
+                NativeTAGTaskLinks(task: model.row, tasks: linkedTasks, onOpen: onNavigate)
+                NativeTAGKeptSession(task: model.row)
+            }.padding(.horizontal, 20)
             if model.more?.archivedAt != nil {
                 banner(icon: "archivebox", text: "This task is archived — it is out of the list.", tone: TaskTone.waiting) {
                     if model.canEditRow {

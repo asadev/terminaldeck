@@ -37,11 +37,12 @@ public actor NativeChannelRegistry {
     private struct Registration: Sendable { let ownerID: String; let policy: Policy; let handler: Handler }
     private struct SendRegistration: Sendable { let id: UUID; let ownerID: String; let policy: Policy; let handler: SendHandler }
     private struct EventRegistration: Sendable { let id: UUID; let ownerID: String; let handler: EventHandler; let finish: @Sendable () -> Void }
-    private struct Pending: Sendable { let ownerID: String; let task: Task<NativeRPCValue, Error> }
+    private struct Pending: Sendable { let ownerID: String; let registrationOwnerID: String; let task: Task<NativeRPCValue, Error> }
     private var handlers: [String: Registration] = [:]
     private var sendHandlers: [String: [SendRegistration]] = [:]
     private var eventHandlers: [String: [EventRegistration]] = [:]
     private var pending: [UUID: Pending] = [:]
+    private var stoppedOwners: Set<String> = []
     private var sequence: UInt64 = 0
     private var closed = false
     private let report: @Sendable (NativeRPCError) -> Void
@@ -55,21 +56,23 @@ public actor NativeChannelRegistry {
 
     public func register(_ channel: String, ownerID: String, policy: @escaping Policy = { _ in }, handler: @escaping Handler) throws {
         try usable(channel)
+        try requireActiveOwner(ownerID)
         guard handlers[channel] == nil else { throw NativeRPCError(code: "duplicate-handler", message: "A handler is already registered for '\(channel)'") }
         handlers[channel] = Registration(ownerID: ownerID, policy: policy, handler: handler)
     }
 
     public func removeHandler(_ channel: String, ownerID: String? = nil) {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
         guard ownerID == nil || handlers[channel]?.ownerID == ownerID else { return }
         handlers[channel] = nil
     }
 
-    public func has(_ channel: String) -> Bool { handlers[channel] != nil }
+    public func has(_ channel: String) -> Bool { handlers[RNMHootChannelCompatibility.incomingChannel(channel)] != nil }
     public func channels() -> [String] { handlers.keys.sorted() }
-    public func hasSend(_ channel: String) -> Bool { !(sendHandlers[channel] ?? []).isEmpty }
+    public func hasSend(_ channel: String) -> Bool { !(sendHandlers[RNMHootChannelCompatibility.incomingChannel(channel)] ?? []).isEmpty }
     public func sends() -> [String] { sendHandlers.keys.sorted() }
-    public func registrationOwner(of channel: String) -> String? { handlers[channel]?.ownerID }
-    public func sendOwners(of channel: String) -> Set<String> { Set((sendHandlers[channel] ?? []).map(\.ownerID)) }
+    public func registrationOwner(of channel: String) -> String? { handlers[RNMHootChannelCompatibility.incomingChannel(channel)]?.ownerID }
+    public func sendOwners(of channel: String) -> Set<String> { Set((sendHandlers[RNMHootChannelCompatibility.incomingChannel(channel)] ?? []).map(\.ownerID)) }
 
     /// The composition root's event fanout observes the same ordered events as
     /// channel listeners. Owner filtering still applies to this subscription.
@@ -78,6 +81,7 @@ public actor NativeChannelRegistry {
     }
 
     public func invoke(_ channel: String, context: NativeRPCContext, arguments: [NativeRPCValue]) async throws -> NativeRPCValue {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
         try usable(channel)
         guard let registration = handlers[channel] else { throw NativeRPCError(code: "missing-handler", message: "No handler registered for '\(channel)'") }
         guard pending[context.requestID] == nil else { throw NativeRPCError(code: "duplicate-request", message: "This request is already in flight") }
@@ -88,7 +92,7 @@ public actor NativeChannelRegistry {
                 try await registration.handler(context, arguments)
             }
         }
-        pending[context.requestID] = Pending(ownerID: context.ownerID, task: task)
+        pending[context.requestID] = Pending(ownerID: context.ownerID, registrationOwnerID: registration.ownerID, task: task)
         defer { pending[context.requestID] = nil }
         do {
             let value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
@@ -110,6 +114,7 @@ public actor NativeChannelRegistry {
 
     public func onSend(_ channel: String, ownerID: String, policy: @escaping Policy = { _ in }, handler: @escaping SendHandler) throws -> NativeRPCSubscription {
         try usable(channel)
+        try requireActiveOwner(ownerID)
         let id = UUID()
         sendHandlers[channel, default: []].append(SendRegistration(id: id, ownerID: ownerID, policy: policy, handler: handler))
         return NativeRPCSubscription(id: id) { [weak self] in await self?.removeSubscription(id) }
@@ -119,6 +124,7 @@ public actor NativeChannelRegistry {
     /// is reported and never prevents another registered listener from receiving.
     @discardableResult
     public func send(_ channel: String, context: NativeRPCContext, arguments: [NativeRPCValue]) async throws -> Bool {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
         try usable(channel)
         let listeners = sendHandlers[channel] ?? []
         for listener in listeners { try listener.policy(context) }
@@ -135,14 +141,18 @@ public actor NativeChannelRegistry {
     }
 
     public func subscribe(_ channel: String, ownerID: String, handler: @escaping EventHandler) throws -> NativeRPCSubscription {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
         try usable(channel)
+        try requireActiveOwner(ownerID)
         let id = UUID()
         eventHandlers[channel, default: []].append(EventRegistration(id: id, ownerID: ownerID, handler: handler, finish: {}))
         return NativeRPCSubscription(id: id) { [weak self] in await self?.removeSubscription(id) }
     }
 
     public func events(_ channel: String, ownerID: String) throws -> AsyncThrowingStream<NativeRPCEvent, Error> {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
         try usable(channel)
+        try requireActiveOwner(ownerID)
         let pair = AsyncThrowingStream<NativeRPCEvent, Error>.makeStream(bufferingPolicy: .bufferingNewest(256))
         let id = UUID()
         eventHandlers[channel, default: []].append(EventRegistration(id: id, ownerID: ownerID, handler: { event in
@@ -166,11 +176,27 @@ public actor NativeChannelRegistry {
     }
 
     public func removeOwner(_ ownerID: String) {
+        removeRegistrations(ownerID)
+        for entry in pending.values where entry.ownerID == ownerID { entry.task.cancel() }
+    }
+
+    private func removeRegistrations(_ ownerID: String) {
         for listener in eventHandlers.values.flatMap({ $0 }) where listener.ownerID == ownerID { listener.finish() }
         handlers = handlers.filter { $0.value.ownerID != ownerID }
         sendHandlers = sendHandlers.mapValues { $0.filter { $0.ownerID != ownerID } }.filter { !$0.value.isEmpty }
         eventHandlers = eventHandlers.mapValues { $0.filter { $0.ownerID != ownerID } }.filter { !$0.value.isEmpty }
-        for entry in pending.values where entry.ownerID == ownerID { entry.task.cancel() }
+    }
+
+    /// Terminal owner teardown, called outside that owner's handlers. Prevent
+    /// new dispatch and wait for cancelled handlers to finish their own cleanup
+    /// before the composition closes their server transports. Other owners and
+    /// callers are unaffected; removeOwner retains its existing reusable form.
+    public func stopOwnerAndWait(_ ownerID: String) async {
+        stoppedOwners.insert(ownerID)
+        let tasks = pending.values.filter { $0.registrationOwnerID == ownerID }.map(\.task)
+        removeRegistrations(ownerID)
+        for task in tasks { task.cancel() }
+        for task in tasks { _ = await task.result }
     }
 
     public func cancelRequest(_ id: UUID, ownerID: String) { if pending[id]?.ownerID == ownerID { pending[id]?.task.cancel() } }
@@ -190,5 +216,9 @@ public actor NativeChannelRegistry {
     private func usable(_ channel: String) throws {
         guard !closed else { throw NativeRPCError(code: "closed", message: "The native channel registry is closed") }
         guard Self.isBridgeChannel(channel) else { throw NativeRPCError.invalidArguments("Invalid bridge channel") }
+    }
+
+    private func requireActiveOwner(_ ownerID: String) throws {
+        guard !stoppedOwners.contains(ownerID) else { throw NativeRPCError(code: "closed", message: "This channel owner has stopped") }
     }
 }

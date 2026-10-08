@@ -228,7 +228,7 @@ struct CopilotConsentSheet: View {
     /// Returns whether the answer reached the wire. **Not `Void`** — see
     /// `answered` below: a sheet that dimmed its buttons over a dropped socket
     /// would be a consent prompt that looks answered and is not.
-    let answer: (Bool) -> Bool
+    let answer: (Bool, HootAnswers?) -> Bool
     let dismiss: () -> Void
 
     /// The one place the answer buttons' metrics live, so that "the same size"
@@ -247,6 +247,7 @@ struct CopilotConsentSheet: View {
      * is not an answer to that — it is behind the sheet.
      */
     @State private var answered: Bool?
+    @State private var formValues: [String: String] = [:]
 
     /// What went wrong here, on this sheet, where the person is looking.
     @State private var problem: String?
@@ -311,6 +312,10 @@ struct CopilotConsentSheet: View {
                             }
                         }
                         .accessibilityIdentifier("copilot.consent.args")
+                        if !question.form.fields.isEmpty || question.form.unsupported != nil {
+                            Caption("Your answers")
+                            HootQuestionFields(form: question.form, values: $formValues)
+                        }
 
                         if !question.argumentsAreOrdered && !question.arguments.isEmpty {
                             // Said, because *as the tool wrote them* and *by
@@ -443,6 +448,7 @@ struct CopilotConsentSheet: View {
                                 in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .foregroundStyle(Theme.onAccent)
                     .accessibilityIdentifier("copilot.consent.allow")
+                    .disabled(question.form.unsupported != nil || (try? question.form.answers(formValues)) == nil && !question.form.fields.isEmpty)
                 }
                 .disabled(answered != nil)
                 .opacity(answered == nil ? 1 : 0.5)
@@ -481,7 +487,14 @@ struct CopilotConsentSheet: View {
      * have. The buttons dim only once the frame has gone.
      */
     private func send(_ approved: Bool) {
-        guard answer(approved) else {
+        guard settlement == nil, question.expiresAt <= 0 || question.expiresAt > Date().timeIntervalSince1970 * 1000 else {
+            problem = "That question has expired. Ask the machine for its current question."
+            return
+        }
+        let payload: HootAnswers?
+        do { payload = approved ? try question.form.answers(formValues) : nil }
+        catch { problem = error.localizedDescription; return }
+        guard answer(approved, payload) else {
             problem = approved
                 ? "That did not reach \(machine). Nothing was allowed — the question is still "
                     + "waiting there."
@@ -516,15 +529,15 @@ struct CopilotConsentSheet: View {
     /// copilot* and *the copilot at the Mac* are different things to be
     /// approving, and `origin` is the only field that says which.
     private var askedBy: String {
-        if question.origin == "window" { return "The copilot at \(machine)" }
-        if question.fromADevice { return "This phone's own copilot run" }
-        if question.origin.isEmpty { return "A copilot on \(machine)" }
+        if question.origin == "window" { return "Hoot at \(machine)" }
+        if question.fromADevice { return "This phone's own Hoot run" }
+        if question.origin.isEmpty { return "A Hoot on \(machine)" }
         return question.origin
     }
 
     private var answeringNote: String {
         "Allowing this runs it once, now. It is not remembered and it does not widen anything: "
-        + "the next call like it asks again. Refusing tells the copilot no, and it carries on "
+        + "the next call like it asks again. Refusing tells Hoot no, and it carries on "
         + "with the rest of its turn. Closing this without answering leaves the question "
         + "waiting until it runs out, and running out is a refusal. "
         + "Whoever is at \(machine) can answer it there instead — the first answer wins."
@@ -536,7 +549,7 @@ struct CopilotConsentSheet: View {
             return "Waiting for an answer. The \(noun) did not say when it runs out."
         }
         if left == 0 {
-            return "This one ran out. Nobody answered, so the copilot was told no."
+            return "This one ran out. Nobody answered, so Hoot was told no."
         }
         return "\(left) second\(left == 1 ? "" : "s") left — if nobody answers, it is refused."
     }
@@ -553,7 +566,7 @@ struct CopilotConsentSheet: View {
     private func settledDetail(_ settlement: CopilotSettlement) -> String {
         if settlement.timedOut {
             return "It ran out after two minutes without an answer, which is a refusal. "
-                + "The copilot has been told."
+                + "Hoot has been told."
         }
         /*
          * **"Here" is decided by `answered`, not by `by`.**
@@ -570,7 +583,7 @@ struct CopilotConsentSheet: View {
             : (settlement.atTheMachine ? "at \(machine)" : "on another connected device")
         if settlement.granted { return "Answered \(place). It is running now." }
         let reason = settlement.reason.map { " (\($0))" } ?? ""
-        return "Answered \(place)\(reason). The copilot has been told no."
+        return "Answered \(place)\(reason). Hoot has been told no."
     }
 }
 
@@ -751,7 +764,7 @@ struct CopilotWatchSheet: View {
             // Not an error, and worded so it does not read as one. A question
             // that ran out was refused by the timeout, which is the safe answer
             // and the design's intended one.
-            return "This one ran out. The copilot was told no."
+            return "This one ran out. Hoot was told no."
         }
         return "\(left) second\(left == 1 ? "" : "s") left to answer it at \(machine)."
     }
@@ -791,10 +804,10 @@ struct CopilotActivitySheet: View {
                     ContentUnavailableView {
                         Label("Nothing yet", systemImage: "list.bullet.rectangle")
                     } description: {
-                        // Not "the copilot has done nothing", which would be a
+                        // Not "Hoot has done nothing", which would be a
                         // claim about the machine. The honest statement is about
                         // the log, which is the thing that was read.
-                        Text("The copilot's action log is empty. Every call it makes lands there, "
+                        Text("Hoot's action log is empty. Every call it makes lands there, "
                              + "including the ones it was refused.")
                     }
                     .accessibilityIdentifier("copilot.log.empty")
@@ -968,7 +981,7 @@ struct CopilotSessionsSheet: View {
                     ContentUnavailableView {
                         Label("None yet", systemImage: "terminal")
                     } description: {
-                        Text("Sessions the copilot starts appear here, each one linked back to "
+                        Text("Sessions Hoot starts appear here, each one linked back to "
                              + "the turn that started it.")
                     }
                     .accessibilityIdentifier("copilot.sessions.empty")

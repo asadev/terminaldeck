@@ -62,8 +62,8 @@ readonly EXPORT_OPTIONS="$SCRIPT_DIR/ExportOptions.plist"
 # already excludes wholesale.
 readonly BUILD_DIR="$IOS_DIR/build"
 readonly RELEASE_DIR="$BUILD_DIR/release"
-readonly DERIVED_DATA="$BUILD_DIR/DerivedData"
-readonly SOURCE_PACKAGES="$BUILD_DIR/SourcePackages"
+readonly DERIVED_DATA="$IOS_DIR/.dd-ios"
+readonly SOURCE_PACKAGES="$DERIVED_DATA/SourcePackages"
 
 # --------------------------------------------------------------- vocabulary
 
@@ -115,7 +115,42 @@ require_macos() {
         die "iOS releases can only be built on macOS." "This is $(uname -s)."
 }
 
-# ---------------------------------------------------------------- credential
+require_ios_disk() {
+    local available_kib
+    available_kib="$(df -Pk "$IOS_DIR" | awk 'NR == 2 { print $4 }')"
+    [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 8388608 ]] ||
+        die "iOS builds need at least 8 GiB free." "Free space before building; reuse ios/.dd-ios."
+}
+
+# ---------------------------------------------------------- cloud-only signing
+
+# Automatic export otherwise prefers a visible local certificate. On a shared
+# Mac, hide every local keychain from this process instead of changing the
+# user's search list. API-key authentication and remote cloud signing still work.
+prepare_ios_cloud_sandbox() {
+    local profile="$1" probe="$RELEASE_DIR/cloud-keychain-isolation.log"
+    [[ -x /usr/bin/sandbox-exec ]] || die "Cloud signing requires local-keychain process isolation"
+    mkdir -p "$RELEASE_DIR"
+    python3 - "$profile" <<'PY'
+import json, re, subprocess, sys
+from pathlib import Path
+search = subprocess.check_output(['security', 'list-keychains', '-d', 'user'], text=True)
+default = subprocess.check_output(['security', 'default-keychain', '-d', 'user'], text=True)
+paths = set(re.findall(r'"([^"]+)"', search + default))
+profile = '(version 1)\n(allow default)\n'
+profile += '(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.securityd.xpc") (global-name "com.apple.secd"))\n'
+profile += '(deny file-read* file-write* (subpath ' + json.dumps(str(Path.home() / 'Library/Keychains')) + '))\n'
+for path in sorted(paths):
+    for suffix in ['', '-wal', '-shm']:
+        profile += '(deny file-read* file-write* (literal ' + json.dumps(path + suffix) + '))\n'
+Path(sys.argv[1]).write_text(profile)
+PY
+    /usr/bin/sandbox-exec -f "$profile" /usr/bin/security find-identity -v -p codesigning >"$probe" 2>&1 ||
+        die "Cannot establish cloud-only signing isolation" "Log: $probe"
+    if grep -Eq '[0-9A-F]{40}' "$probe" || ! grep -q '0 valid identities found' "$probe"; then
+        die "Local signing identities are still visible; refusing cloud export"
+    fi
+}
 
 # Where the private key is. Overridable so a CI runner can put it somewhere
 # else; defaulted to the directory `altool` searches anyway.

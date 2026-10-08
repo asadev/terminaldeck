@@ -67,6 +67,7 @@ struct NativeCodingAISettings: View {
                 }
             case .thisMachine:
                 NativeCodingAIThisMachine(store: store)
+                if SourceNamespace.agentSettingsEnabled { NativeAGSDefaultsSettingsSections() }
             }
         }
         .formStyle(.grouped)
@@ -86,7 +87,7 @@ struct NativeCodingAIScopePicker: View {
                 Text(seat.label).tag(seat.scope)
             }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.segmented).nativeUIGGreyControl()
         .labelsHidden()
         .accessibilityLabel("Where these agents run")
     }

@@ -282,11 +282,13 @@ public enum CopilotReveal {
 // MARK: - The showing
 
 public enum CopilotShowing {
-    public static let setting = "copilot.interactive"
+    public static let setting = RNMHootSettingsMigration.interactiveKey
     /// `toInteractiveDriving`: on unless the setting says false.
     public static func interactive(_ raw: CodingAIJSON) -> Bool {
         let values = raw["values"].isObject ? raw["values"] : raw
-        return values[setting].bool != false
+        // An explicitly stored current key wins, including false or null.
+        // Older peers/settings snapshots still use the protected legacy key.
+        return (values.object?[setting] ?? values["copilot.interactive"]).bool != false
     }
 }
 

@@ -28,12 +28,14 @@ public final class BackendPTYManager: @unchecked Sendable {
         var replay = ReplayBuffer()
         var decoder = UTF8StreamDecoder()
         var status: BackendSessionStatus = .idle
+        var settledViewport: String
         var settle: DispatchWorkItem?
         var watching = true
         var removed = false
 
         init(meta: BackendSessionMeta, process: BackendPTYProcess, terminal: ShadowTerminal) {
             self.meta = meta; self.process = process; self.terminal = terminal
+            self.settledViewport = terminal.viewport()
         }
     }
 
@@ -238,7 +240,11 @@ public final class BackendPTYManager: @unchecked Sendable {
             for session in sessions.values where session.meta.exitCode == nil {
                 session.watching = value
                 session.settle?.cancel(); session.settle = nil
-                if value { setStatus(session, next: BackendSessionClassifier.classify(viewport: session.terminal.viewport())) }
+                if value {
+                    let viewport = session.terminal.viewport()
+                    session.settledViewport = viewport
+                    setStatus(session, next: BackendSessionClassifier.classify(viewport: viewport))
+                }
             }
         }
     }
@@ -277,11 +283,21 @@ public final class BackendPTYManager: @unchecked Sendable {
             emit(.data(id: id, text: text))
         }
         guard session.watching, session.meta.exitCode == nil else { return }
-        setStatus(session, next: .working)
+        // A prompt's redraw/cursor/footer is not another turn. A visible work
+        // signal can report working now; other output is judged once settled.
+        if session.status != .working, BackendSessionClassifier.classify(viewport: session.terminal.viewport()) == .working {
+            setStatus(session, next: .working)
+        }
         session.settle?.cancel()
         let settle = DispatchWorkItem { [weak self, weak session] in
             guard let self, let session, !session.removed, session.meta.exitCode == nil, session.watching else { return }
-            self.setStatus(session, next: BackendSessionClassifier.classify(viewport: session.terminal.viewport()))
+            let viewport = session.terminal.viewport()
+            let next = BackendSessionClassifier.classify(viewport: viewport)
+            if viewport != session.settledViewport, next != session.status || session.status == .idle {
+                self.setStatus(session, next: .working)
+            }
+            session.settledViewport = viewport
+            self.setStatus(session, next: next)
             session.settle = nil
         }
         session.settle = settle

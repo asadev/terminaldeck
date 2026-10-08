@@ -70,6 +70,23 @@ actor BackendStaysFixedParityDriver: BackendStaysFixedEngineRunning {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let envelope = NativeRPCValue.object([.init("at", raw["startedAt"]), .init("result", .string(raw.compact))])
             try envelope.encodedJSON().write(to: folder.appendingPathComponent("last-check.json"))
+            // A fake successful run needs the same completed product evidence
+            // as the bundled engine; its summary alone is not a baseline.
+            let buildID = try raw["candidate"]["id"].requireString("fixture candidate id", nonempty: true)
+            let captureFolder = folder.appendingPathComponent("builds/" + BackendStaysFixedRead.fileSafe(buildID) + "/receipt")
+            try FileManager.default.createDirectory(at: captureFolder, withIntermediateDirectories: true)
+            let sample = BackendStaysFixedFixtures.cli_check_regression["findings"].elements?.first?["sample"] ?? .missing
+            let cold = buildID == BackendStaysFixedFixtures.cli_check_cold["candidate"]["id"].string
+            let output = sample[cold ? "reference" : "candidate"]
+            _ = try output.requireString("captured command output", nonempty: true)
+            let capture: [NativeRPCValue] = [
+                .object([.init("kind", .string("capture"))]),
+                .object([.init("path", sample["path"]), .init("channel", sample["channel"]),
+                         .init("value", output), .init("meta", .object([.init("refused", .bool(false))]))]),
+                .object([.init("kind", .string("end")), .init("count", .number(1))])
+            ]
+            try Data((capture.map(\.compact).joined(separator: "\n") + "\n").utf8)
+                .write(to: captureFolder.appendingPathComponent(String(format: "%08d.jsonl", checks)))
         } catch { return .init(code: 1, stdout: "", stderr: error.localizedDescription, timedOut: false, cancelled: false) }
         return .init(code: 0, stdout: raw.compact + "\n", stderr: "", timedOut: false, cancelled: false)
     }
@@ -101,13 +118,18 @@ actor BackendStaysFixedParityDriver: BackendStaysFixedEngineRunning {
         XCTAssertEqual(setup["ok"].bool, true); XCTAssertTrue(setup["wrote"].elements?.contains(.string("staysfixed.config.js")) == true)
         let ready = await service.status(f.project.path)
         XCTAssertEqual(ready["setUp"].bool, true); XCTAssertEqual(ready["agents"].bool, true); XCTAssertEqual(ready["configFile"].string, "staysfixed.config.js")
+        let unchecked = try await service.markGood(f.project.path, anyway: true)
+        XCTAssertEqual(unchecked["marked"], .bool(false)); XCTAssertEqual(unchecked["refusedFor"], .string("unchecked"))
+        let earlyShips = await driver.ships; XCTAssertEqual(earlyShips, [])
         let cold = try await service.check(f.project.path, by: "you")
         XCTAssertEqual(cold["verdict"].string, "not-compared"); let progress = await service.progress(f.project.path); XCTAssertEqual(progress, .null)
+        XCTAssertNil(BackendSFXReferenceGuard.refusal(f.project.path), cold.compact)
         let cut = try await service.markGood(f.project.path, anyway: false); XCTAssertEqual(cut["marked"].bool, true)
         let good = await service.status(f.project.path); XCTAssertTrue(good["reference"]["name"].string?.hasPrefix("1.0.0") == true)
         let regression = try await service.check(f.project.path, by: "Hoot")
         XCTAssertEqual(regression["verdict"].string, "differences"); XCTAssertEqual(regression["differences"].elements?.count, 1)
-        let difference = regression["differences"].elements![0], change = difference["changes"].elements![0]
+        let difference = try XCTUnwrap(regression["differences"].elements?.first, "Expected regression evidence from the checked fixture")
+        let change = try XCTUnwrap(difference["changes"].elements?.first, "Expected the receipt change; fail the test instead of indexing absent evidence")
         XCTAssertEqual(difference["changes"].elements?.count, 1); XCTAssertTrue(change["before"].string?.contains("Total: 10.00") == true)
         XCTAssertTrue(change["after"].string?.contains("Total: 10.0\n") == true); XCTAssertEqual(difference["needsPerson"].bool, true)
         XCTAssertNotNil(regression["unchanged"].string?.range(of: #"Everything else it looked at — \d+ things — is unchanged\."#, options: .regularExpression))

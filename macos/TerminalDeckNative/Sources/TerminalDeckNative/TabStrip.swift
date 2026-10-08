@@ -2,6 +2,26 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
+/// Shared session paper and ink. The renderer's selected tab and terminal use
+/// the same ground (tokens.css); selection glyphs share its one accent.
+@MainActor
+enum NativeSessionChrome {
+    static var scheme: TerminalScheme { NativeTerminalSettings.shared.scheme }
+    static var ground: Color { Color(nsColor: scheme.colour(scheme.background, fallback: .textBackgroundColor)) }
+    static var ink: Color { Color(nsColor: scheme.colour(scheme.foreground, fallback: .labelColor)) }
+    static var secondaryInk: Color { ink.opacity(0.65) }
+    static var accent: Color {
+        Color(nsColor: (TerminalColour(hex: scheme.isLight ? "#1a66c4" : "#3b8fee")!).nsColor)
+    }
+    static var edge: Color { border(light: scheme.isLight) }
+    static func border(light: Bool) -> Color { light ? Color(red: 56 / 255, green: 56 / 255, blue: 56 / 255).opacity(0.18) : .white.opacity(0.17) }
+    static var focusEdge: Color { accent.opacity(scheme.isLight ? 0.62 : 1) }
+    static func cardGround(emphasized: Bool, light: Bool) -> Color {
+        let hex = light ? (emphasized ? "#ededed" : "#f5f5f5") : (emphasized ? "#252525" : "#202020")
+        return Color(nsColor: TerminalColour(hex: hex)!.nsColor)
+    }
+}
+
 // The session tabs, inside the toolbar row itself (one slim 40 pt header).
 //
 // SwiftUI toolbar items take their ideal width and will not stretch, so the strip
@@ -200,6 +220,7 @@ struct TabChip: View {
                     } else {
                         Image(systemName: SymbolName.resolve(tab.symbol, fallback: TabItem.defaultSymbol(kind: tab.kind)))
                             .font(.system(size: 11.5))
+                            .foregroundStyle(tab.active ? NativeSessionChrome.accent : Color.secondary)
                     }
                 }
                 .frame(width: 16, height: 16)
@@ -222,10 +243,10 @@ struct TabChip: View {
             }
             .padding(.horizontal, 7)
             .frame(height: 24)
-            .foregroundStyle(tab.active ? .primary : .secondary)
+            .foregroundStyle(tab.active ? NativeSessionChrome.ink : Color.secondary)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.primary.opacity(tab.active ? 0.11 : (hovering ? 0.05 : 0)))
+                    .fill(tab.active ? NativeSessionChrome.ground : Color.primary.opacity(hovering ? 0.05 : 0))
             )
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
@@ -236,11 +257,11 @@ struct TabChip: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .frame(width: 16, height: 16)
-                        .background(Circle().fill(Color.primary.opacity(0.12)))
+                        .background(Circle().fill((tab.active ? NativeSessionChrome.ink : Color.primary).opacity(0.12)))
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(tab.active ? .primary : .secondary)
+                .foregroundStyle(tab.active ? NativeSessionChrome.ink : Color.secondary)
                 .padding(.leading, 7)
                 .help("Close Tab")
                 .accessibilityLabel("Close \(tab.title)")

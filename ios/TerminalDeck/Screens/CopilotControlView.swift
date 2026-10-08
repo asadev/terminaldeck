@@ -5,7 +5,7 @@
  * ## The correction this file exists for
  *
  * A previous lane read *"here on the right top corner you can give a button for
- * all about copilot"* as a reading page, and built a good one. Asad, looking at
+ * all about Hoot"* as a reading page, and built a good one. Asad, looking at
  * it:
  *
  * > *"When I said that you need to add a button which will be all about copilot
@@ -204,7 +204,7 @@ struct CopilotControlView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("Copilot")
+        .navigationTitle("Hoot")
         .navigationBarTitleDisplayMode(.inline)
         // The two settings the machine owns are read on arrival rather than by
         // the caller, so every way in lands on a section that is already filling
@@ -270,8 +270,8 @@ struct CopilotControlView: View {
                                     settlement: link?.settlement(for: question.id),
                                     machine: host?.label ?? "that machine",
                                     noun: machineNoun,
-                                    answer: { approved in
-                                        link?.answer(question.id, approved: approved) ?? false
+                                    answer: { approved, answers in
+                                        link?.answer(question.id, approved: approved, answers: answers) ?? false
                                     },
                                     dismiss: {
                                         link?.dismissSettled(question.id)
@@ -348,7 +348,7 @@ struct CopilotControlView: View {
      */
     private var whenYouOpen: some View {
         VStack(alignment: .leading, spacing: 0) {
-            caption("When you open this tab", about: "the copilot's setup", says: Self.aboutSetup)
+            caption("When you open this tab", about: "Hoot's setup", says: Self.aboutSetup)
             card {
                 if reading.kind == .headless {
                     folderRow
@@ -364,7 +364,7 @@ struct CopilotControlView: View {
     }
 
     private static let aboutSetup =
-        "Where the copilot works, and whether this tab starts one for you. Both are this "
+        "Where Hoot works, and whether this tab starts one for you. Both are this "
         + "phone's, kept for this machine only. The folder is filled in from the first session "
         + "this tab starts, and can be changed here at any time. Its standing instructions are "
         + "under Its files, further down this screen. Its name is a line inside that same file "
@@ -518,7 +518,7 @@ struct CopilotControlView: View {
             // current value is still offered, so the control is never empty.
             let ids = (row.options?.isEmpty == false) ? row.options! : [row.value]
             VStack(alignment: .leading, spacing: 0) {
-                caption("The agent", about: "the copilot's agent", says: Self.aboutAgent)
+                caption("The agent", about: "Hoot's agent", says: Self.aboutAgent)
                 card {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -639,7 +639,7 @@ struct CopilotControlView: View {
     private var permissions: some View {
         let grant = reading.grant
         return VStack(alignment: .leading, spacing: 0) {
-            caption("What this phone may do", about: "the copilot's grant", says: Self.aboutGrant)
+            caption("What this phone may do", about: "Hoot's grant", says: Self.aboutGrant)
             card {
                 tierRow("Watch it work", on: grant.canWatch, id: "read")
                 line
@@ -656,7 +656,7 @@ struct CopilotControlView: View {
 
     private static let aboutGrant =
         "Set by how this phone was paired, at the machine — one of your own devices gets all "
-        + "three, a guest is never offered the copilot at all. Nothing here can widen it."
+        + "three, a guest is never offered Hoot at all. Nothing here can widen it."
 
     private func tierRow(_ title: String, on: Bool, id: String) -> some View {
         HStack {
@@ -802,7 +802,7 @@ struct CopilotControlView: View {
                             icon: "stop.circle",
                             id: "cancel") { link?.cancel() }
                         line
-                        row(title: "Stop this phone's copilot",
+                        row(title: "Stop this phone's Hoot",
                             detail: "Ends this phone's run. The one at the \(machineNoun) keeps going.",
                             icon: "xmark.circle",
                             id: "stop",
@@ -835,7 +835,7 @@ struct CopilotControlView: View {
      */
     private var whileItWorks: some View {
         VStack(alignment: .leading, spacing: 0) {
-            caption("While it works", about: "the copilot's scan", says: Self.aboutWhileItWorks)
+            caption("While it works", about: "Hoot's scan", says: Self.aboutWhileItWorks)
             card {
                 WhileItWorksToggle(
                     interactive: link?.state?.interactive ?? true,
@@ -854,7 +854,7 @@ struct CopilotControlView: View {
     }
 
     private static let aboutWhileItWorks =
-        "Whether the copilot takes that machine along when it looks through your sessions, or works "
+        "Whether Hoot takes that machine along when it looks through your sessions, or works "
         + "quietly. With it on, that machine moves its window to what it is reading and boxes the "
         + "words, at machine speed — to watch, not to read. The answer reaches you here either way. "
         + "It is that machine's own setting, changed from here."
@@ -911,7 +911,7 @@ struct CopilotControlView: View {
     private var files: some View {
         if let link {
             VStack(alignment: .leading, spacing: 0) {
-                caption("Its files", about: "the copilot's files", says: Self.aboutFiles)
+                caption("Its files", about: "Hoot's files", says: Self.aboutFiles)
                 card {
                     if link.files.isEmpty {
                         // Two different silences, and they send a person to two
@@ -919,7 +919,7 @@ struct CopilotControlView: View {
                         // other is a machine that has answered nothing.
                         valueRow(title: link.isLoadingFiles ? "Reading…" : "Nothing has come back",
                                  value: link.isLoadingFiles
-                                     ? "Asking the \(machineNoun) what its copilot reads."
+                                     ? "Asking the \(machineNoun) what its Hoot reads."
                                      : "That \(machineNoun) has not sent its list.",
                                  mono: false,
                                  chevron: false)
@@ -947,7 +947,7 @@ struct CopilotControlView: View {
     }
 
     private static let aboutFiles =
-        "Everything the copilot reads before it answers anything, read off the machine's disk "
+        "Everything Hoot reads before it answers anything, read off the machine's disk "
         + "each time this screen opens. Two of them the app writes itself on every start and "
         + "there is nothing to save over; the rest are yours — its instructions, the folder's "
         + "own, and everything it has remembered."
@@ -982,7 +982,7 @@ struct CopilotControlView: View {
             // pair is read for the same reason.
             let dead = host?.notice.isShowing == true && host?.connection.isLive != true
             VStack(alignment: .leading, spacing: 0) {
-                caption("Routines", about: "the copilot's routines", says: Self.aboutRoutines)
+                caption("Routines", about: "Hoot's routines", says: Self.aboutRoutines)
                 card {
                     if link.routines.isEmpty {
                         valueRow(title: link.routinesAnswered ? "There are none" : "Reading…",
@@ -1016,7 +1016,7 @@ struct CopilotControlView: View {
 
     private static let aboutRoutines =
         "Saved instructions this machine runs on its own — one file each, with a trigger, a "
-        + "folder and a prompt. They are kept where the copilot may read them and cannot write "
+        + "folder and a prompt. They are kept where Hoot may read them and cannot write "
         + "them, so one is only made or edited on the machine itself. From here: run one now, "
         + "hold it, let it run again, read it, or delete it."
 
@@ -1101,14 +1101,14 @@ struct CopilotControlView: View {
                 NavigationLink {
                     AboutCopilotView(model: model, hostID: hostID)
                 } label: {
-                    row(title: "What a copilot is",
+                    row(title: "What Hoot is",
                         detail: "What it reaches, and what it may do without asking.",
                         icon: "info.circle",
                         id: "about",
                         asLabel: true) {}
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("What a copilot is. What it reaches, and what it may do "
+                .accessibilityLabel("What Hoot is. What it reaches, and what it may do "
                                     + "without asking.")
                 .accessibilityIdentifier("copilot.controls.about")
             }
@@ -1340,7 +1340,7 @@ extension View {
                         Image(systemName: "gearshape")
                             .font(.system(size: 17))
                     }
-                    .accessibilityLabel("Copilot controls")
+                    .accessibilityLabel("Hoot controls")
                     .accessibilityIdentifier(CopilotControl.buttonIdentifier)
                 }
             }
@@ -1402,7 +1402,7 @@ enum CopilotControl {
      * The enum stays as one word for the identifier, so the row and any test
      * that presses it cannot drift apart.
      */
-    static let settingsRow = "settings.copilot"
+    static let settingsRow = "settings.Hoot"
 
     enum Panel: String, CaseIterable, Identifiable {
         case whenYouOpen

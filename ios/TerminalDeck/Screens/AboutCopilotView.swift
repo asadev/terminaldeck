@@ -6,7 +6,7 @@
  *
  * It was built as the destination of the button in the Copilot tab's top right,
  * reading *"here on the right top corner you can give a button for all about
- * copilot"* as a page to read. Asad, looking at it:
+ * Hoot"* as a page to read. Asad, looking at it:
  *
  * > *"When I said that you need to add a button which will be all about copilot
  * > in the copilot page, it doesn't mean like information about copilot. I meant
@@ -165,7 +165,7 @@ struct AboutCopilotPage: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("About the copilot")
+        .navigationTitle("About Hoot")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -426,9 +426,9 @@ enum AboutCopilot {
         guard let tools = reading.tools, tools > 0 else { return nil }
         let count = tools == 1 ? "1 tool" : "\(tools) tools"
         guard let tokens = reading.turnTokens, tokens > 0 else {
-            return "That \(reading.noun)'s copilot carries \(count)."
+            return "That \(reading.noun)'s Hoot carries \(count)."
         }
-        return "That \(reading.noun)'s copilot carries \(count), and they cost it about \(tokens) "
+        return "That \(reading.noun)'s Hoot carries \(count), and they cost it about \(tokens) "
             + "tokens of every turn before anybody has said anything."
     }
 
@@ -500,14 +500,14 @@ enum AboutCopilot {
     static let whyNoneHere = Passage(
         id: "why",
         caption: "Why there is none on this server",
-        body: "The copilot's tools are the desktop app's own — its session list, its transcripts, "
-            + "its settings — and a server has no app for them to drive. So no copilot appears on "
+        body: "Hoot's tools are the desktop app's own — its session list, its transcripts, "
+            + "its settings — and a server has no app for them to drive. So no Hoot appears on "
             + "a device paired to a server, and it is nothing to do with how this phone was "
             + "paired: a server has none for any device, of either kind.\n\n"
             + "It is not a piece somebody forgot either. An Alter call is confirmed by a person "
             + "in a window, and a server has no window — the question would have to be carried "
             + "out to a connected device, and nothing here is wired to carry it. Handing a "
-            + "copilot its tools without that would put a fourth pill on this phone whose every "
+            + "Hoot its tools without that would put a fourth pill on this phone whose every "
             + "button refuses, which is worse than the absence rather than better."
     )
 
@@ -539,7 +539,7 @@ enum AboutCopilot {
             id: "instead",
             caption: "What this \(reading.noun) has instead",
             body: "A session with an agent in it — the same work at a different surface. The "
-                + "Copilot tab lands you straight in that conversation whenever one is running "
+                + "Hoot tab lands you straight in that conversation whenever one is running "
                 + "here, as a chat rather than at a prompt, and Back brings you out to the "
                 + "screen you came from.\n\n"
                 + "It never starts one for you. Choosing a tab is one mis-tap, and a new session "
@@ -605,7 +605,7 @@ enum AboutCopilot {
         let body: String
         switch reading.access {
         case .notOffered:
-            body = "Nothing: there is no copilot on this \(reading.noun) for this phone. Either "
+            body = "Nothing: there is no Hoot on this \(reading.noun) for this phone. Either "
                 + "it is running a version of \(Brand.name) without one, or this phone is paired "
                 + "with it as a guest. Which of the two it is was decided at the machine when "
                 + "this phone was approved, and cannot be told apart from here."
@@ -621,7 +621,7 @@ enum AboutCopilot {
                 + "screen would be indistinguishable from a fault in this app."
         case .watch:
             body = "Watch it: what it is doing, what it started, and what it was refused. No "
-                + "composer and no Start — talking to a copilot is an Act, because it spends "
+                + "composer and no Start — talking to Hoot is an Act, because it spends "
                 + "money and causes tool calls, and this phone has been given Read and not that."
         case .direct:
             let answering = reading.grant.canAnswer
@@ -660,7 +660,7 @@ enum AboutCopilot {
     static let neverShared = Passage(
         id: "yours",
         caption: "Only your own devices",
-        body: "The copilot is never shared. A device approved as My device reaches it on the "
+        body: "Hoot is never shared. A device approved as My device reaches it on the "
             + "first connection, with nothing to press in between; a device approved as a guest "
             + "is never offered it at all — not a refused button and not an empty screen, the "
             + "capability is simply absent from what that device is told the machine can do.\n\n"

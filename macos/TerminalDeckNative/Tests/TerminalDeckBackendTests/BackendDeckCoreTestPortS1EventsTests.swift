@@ -54,7 +54,8 @@ final class BackendDeckCoreTestPortS1EventsTests: BackendDeckCoreTestPortS1Event
     func testMcpEventsL184() async {
         let w = W(), h = w.instance()
         let listed = await h.events.list(), entries = listed["events"].elements ?? []
-        XCTAssertEqual(entries.map { $0["name"].string }, ["session.turn_finished", "session.needs_input", "session.exited"])
+        XCTAssertEqual(entries.map { $0["name"].string }, ["session.turn_finished", "session.needs_input", "session.exited",
+            "task.blocked", "task.finished", "task.needs_reply", "task.progress", "task.question", "task.started"])
         for entry in entries {
             XCTAssertEqual(entry["delivery"], .array([.string("webhook")]))
             XCTAssertEqual(entry["inputSchema"]["type"], .string("object"))

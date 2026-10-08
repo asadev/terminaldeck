@@ -485,7 +485,7 @@ private struct MenuRowStyle: ButtonStyle {
     let current: Bool
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(configuration.isPressed ? Color.accentColor.opacity(0.25) : (current ? Color.accentColor.opacity(0.10) : .clear),
+            .background(configuration.isPressed ? Color.primary.opacity(0.18) : (current ? Color.primary.opacity(0.10) : .clear),
                         in: .rect(cornerRadius: 5))
     }
 }

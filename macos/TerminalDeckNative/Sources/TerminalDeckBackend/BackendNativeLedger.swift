@@ -46,6 +46,12 @@ public actor BackendNativeLedger: BackendSessionLedger {
         append("agentSessionId", session.agentSessionId ?? (input.pickConversation == true ? input.resumeConversationId : nil))
         append("model", input.model)
         append("agentInstructions", input.agentInstructions)
+        append("claudeAgent", input.claudeAgent)
+        append("permissionMode", input.permissionMode)
+        append("taskID", input.taskID)
+        append("taskProject", input.taskProject)
+        append("agentDefinitionsFile", input.agentDefinitionsFile)
+        if let allowed = input.allowedTools { fields.append(.init("allowedTools", .array(allowed.map(NativeRPCValue.string)))) }
         if let denied = input.deniedTools { fields.append(.init("deniedTools", .array(denied.map(NativeRPCValue.string)))) }
         if let noSkills = input.noSkills { fields.append(.init("noSkills", .bool(noSkills))) }
         append("confineDeviceId", context.deviceBoundary?.deviceKey)

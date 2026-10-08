@@ -11,7 +11,7 @@ extension NativeCompositionProduction {
                         browser: NativeCompositionBrowser, sessions: BackendCompositionSessions,
                         usage: BackendCompositionUsage, setup: @escaping @Sendable (NativeRPCContext) async throws -> NativeRPCValue,
                         diagnostics: NativeCompositionDiagnostics.Services) throws -> [BackendDeckToolsDefinition] {
-        guard let hoot, let routinesOwner, let github = clients.github, let githubAuth = clients.githubAuth, let fixed = clients.staysFixed else {
+        guard let hoot, let routinesOwner, let github = clients.github, let githubAuth = clients.githubAuth, let fixed = clients.staysFixed, let airReadiness, let sfxSetup = clients.sfxSetup else {
             throw NativeRPCError(code: "composition-incomplete", message: "The app tools need Hoot, routines, GitHub and Stays Fixed owners.")
         }
         let authority = self.authority!, registry = root.registry
@@ -46,10 +46,14 @@ extension NativeCompositionProduction {
         let metrics = BackendDeckToolsAppNativeMetricsAdapter(usage: usage.usage, cost: usage.cost, readiness: usage.readiness, access: access,
             setup: setup)
         definitions += try BackendDeckToolsAppUsage.definitions(service: metrics, access: access)
-        definitions += try BackendDeckToolsAppSetup.definitions(service: metrics, access: access)
+        definitions += try BackendDeckToolsAppSetup.definitions(service: metrics, access: access).filter {
+            !["readiness.scan", "readiness.fix"].contains($0.spec.id)
+        }
+        definitions += try airReadiness.definitions()
         definitions += try BackendDeckToolsAppGitHub.definitions(service: BackendCompositionDeckToolsGitHub(service: github, auth: githubAuth), access: access)
         definitions += try BackendDeckToolsAppFixed.definitions(service: BackendCompositionDeckToolsFixed(service: fixed,
             provisioning: staysFixedProvisioning), access: access)
+        definitions += try BackendSFXMCP.definitions(service: sfxSetup, access: access)
         let recipes = browser.recipes, service = browser.service
         let rpc: @Sendable (BackendMCPCallContext) async throws -> NativeRPCContext = { [weak self] native in
             guard let access = await MainActor.run(body: { self?.browserAccess }) else { throw NativeRPCError(code: "unavailable", message: "The browser caller table is not installed.") }

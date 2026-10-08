@@ -178,12 +178,12 @@ final class LiveCopilotUITests: XCTestCase {
 
         let bar = app.tabBars.firstMatch
         XCTAssertTrue(bar.waitForExistence(timeout: 15))
-        for name in ["Copilot", "Sessions", "Localhost", "Settings"] {
+        for name in ["Hoot", "Sessions", "Localhost", "Settings"] {
             XCTAssertTrue(bar.buttons[name].waitForExistence(timeout: 10),
                           "\(name) should be a tab")
         }
         XCTAssertEqual(bar.buttons.count, 4, "four pills on his own machine")
-        let copilot = bar.buttons["Copilot"].frame
+        let copilot = bar.buttons["Hoot"].frame
         for name in ["Sessions", "Localhost", "Settings"] {
             XCTAssertLessThan(copilot.minX, bar.buttons[name].frame.minX,
                               "the copilot should be to the left of \(name)")

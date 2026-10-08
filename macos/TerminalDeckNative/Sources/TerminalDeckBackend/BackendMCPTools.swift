@@ -78,12 +78,14 @@ public struct BackendMCPCallerGrant: Sendable {
     public let allowedTools: Set<String>
     public let allowedTiers: Set<BackendMCPTier>
     public let projectRoot: String?
+    /// Backend-owned task launch scope, never supplied by MCP call arguments.
+    public let taskProject: String?
     /// Consulted anew for every call, never frozen at token creation.
     public let permitted: @Sendable () async -> Bool
     public init(attended: Bool, allowedTools: Set<String>, allowedTiers: Set<BackendMCPTier>,
-                projectRoot: String? = nil, permitted: @escaping @Sendable () async -> Bool = { true }) {
+                projectRoot: String? = nil, taskProject: String? = nil, permitted: @escaping @Sendable () async -> Bool = { true }) {
         self.attended = attended; self.allowedTools = allowedTools; self.allowedTiers = allowedTiers
-        self.projectRoot = projectRoot; self.permitted = permitted
+        self.projectRoot = projectRoot; self.taskProject = taskProject; self.permitted = permitted
     }
 }
 
@@ -328,11 +330,11 @@ public actor BackendNativeMCPServer: BackendMCPToolEndpoint {
                     .init("error", .object([.init("code", .number(-32603)), .init("message", .string("The live tool catalogue is unavailable."))]))]))
             }
             guard await entry.grant.permitted(), callers[callerID] != nil else { return .empty(401) }
-            let allowed = current.filter { $0.advertised && (entry.grant.allowedTools.contains($0.id) || entry.grant.allowedTools.contains($0.wireName)) }
+            let allowed = current.filter { BackendUIGMemoryDiscovery.showsTool($0) && $0.advertised && (RNMHootMCPCompatibility.permits($0.id, granted: entry.grant.allowedTools) || RNMHootMCPCompatibility.permits($0.wireName, granted: entry.grant.allowedTools)) }
             return result(.object([.init("tools", .array(allowed.sorted { $0.id < $1.id }.map(\.wireValue)))]))
         case "tools/call":
             let name = envelope["params"]["name"].string ?? ""
-            guard entry.grant.allowedTools.contains(name), let canonical = aliases[name], let tool = tools[canonical] else {
+            guard RNMHootMCPCompatibility.permits(name, granted: entry.grant.allowedTools), let canonical = aliases[name], let tool = tools[canonical] else {
                 return result(BackendMCPToolReply.failure("No tool called \(name).").wireValue)
             }
             guard let sessionID = entry.sessionID, entry.grant.allowedTiers.contains(tool.spec.tier) else {

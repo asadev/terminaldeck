@@ -30,10 +30,12 @@ enum NativeScreens {
         "git",         // ("panel", "git"): NativeGitScreen — lane V
         "github",      // ("panel", "github"): NativeGitHubScreen — lane V
         "readiness",   // ("panel", "readiness"): NativeReadinessScreen — lane V
+        "agents-watch", // Native agents inventory and readable conversation.
+        "receiver", // RCV
         "hooks",       // ("panel", "hooks"): NativeHooksScreen — lane V
         "artifacts",   // ("panel", "artifacts"): NativeArtifactsScreen
         "staysfixed",  // ("panel", "staysfixed"): NativeStaysFixedScreen
-        "memory",      // ("panel", "memory"): NativeMemoryScreen
+        "memory",      // Keep the native door while the Memory page is paused.
         "mcp",         // ("panel", "mcp"): NativeMcpScreen — lane E2
         "overview",    // ("panel", "overview"): NativeOverviewScreen
         "store",       // ("panel", "store"): NativeStoreScreen (with B's and E2's departments)
@@ -74,22 +76,24 @@ enum NativeScreens {
     @MainActor
     static func detail(kind: String, id: String) -> AnyView? {
         switch (kind, id) {
-        case (let kind, let id) where NativeLayoutScreen.wants(kind: kind): return AnyView(NativeLayoutScreen(kind: kind, id: id)) // lane T: split / swarm
+        case (let kind, let id) where NativeLayoutScreen.wants(kind: kind, id: id): return AnyView(NativeLayoutScreen(kind: kind, id: id)) // lane T: split / swarm
         case ("session", let sessionId) where NativeTerminalScreen.handles(sessionId): return AnyView(NativeTerminalScreen(sessionId: sessionId))
         case ("browser", let tabId): return AnyView(NativeBrowserScreen(tabId: tabId))
         case ("panel", "simulators"): return AnyView(NativeSimulatorScreen())
         case ("panel", "files"): return AnyView(NativeFilesScreen())
         case ("panel", "git"): return AnyView(NativeGitScreen())
         case ("panel", "github"): return AnyView(NativeGitHubScreen())
-        case ("panel", "readiness"): return AnyView(NativeReadinessScreen())
+        case ("panel", "readiness"): return AnyView(NativeAIRReadinessScreen())
+        case ("panel", "agents-watch"): return AnyView(AWAgentsWatchScreen())
+        case ("panel", "receiver"): return AnyView(NativeRCVScreen()) // RCV
         case ("panel", "hooks"): return AnyView(NativeHooksScreen())
         case ("panel", "artifacts"): return AnyView(NativeArtifactsScreen())
-        case ("panel", "staysfixed"): return AnyView(NativeStaysFixedScreen())
-        case ("panel", "memory"): return AnyView(NativeMemoryScreen())
+        case ("panel", "staysfixed"): return AnyView(NativeSFXScreen())
+        case ("panel", "memory"): return AnyView(NativeUIGMemoryUnavailable())
         case ("panel", "mcp"): return AnyView(NativeMcpScreen()) // lane E2
         case ("panel", "overview"): return AnyView(NativeOverviewScreen())
         case ("panel", "store"): return AnyView(NativeStoreScreen())
-        case ("panel", "tasks"): return AnyView(NativeTasksScreen()) // lane I
+        case ("panel", "tasks"): return AnyView(NativeUIGTasksScreen()) // UIG; existing task state and renderers.
         case ("panel", "remote"): return AnyView(NativeMachinesScreen()) // lane E1
         case ("hoot", _): return AnyView(NativeHootScreen()) // lane R: Hoot's window (CopilotView)
         default:

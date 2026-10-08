@@ -229,7 +229,7 @@ struct MyWorkView: View {
             Picker("Views", selection: Binding(get: { model.view.tab }, set: { model.view.tab = $0 })) {
                 ForEach(TasksTab.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             Picker("Whose tasks", selection: Binding(get: { model.view.filters.pile }, set: { pile in model.filter { $0.pile = pile } })) {
@@ -449,8 +449,8 @@ private struct Chip: View {
                 .font(.callout)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(on ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)))
-                .overlay(Capsule().stroke(on ? Color.accentColor : Color(nsColor: .separatorColor)))
+                .background(Capsule().fill(on ? Color.primary.opacity(0.12) : Color(nsColor: .controlBackgroundColor)))
+                .overlay(Capsule().stroke(on ? Color.secondary.opacity(0.45) : Color(nsColor: .separatorColor)))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -552,17 +552,20 @@ struct TaskRowView: View {
                     .draggable(task.id)
             }
             TaskRing(task: task, busy: busy) { update(["status": done ? "To-Do" : "Done"]) }
-            Button(action: onOpen) {
-                Text(task.title)
-                    .lineLimit(2)
-                    .strikethrough(done)
-                    .foregroundStyle(done ? Color(nsColor: .tertiaryLabelColor) : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+            VStack(alignment: .leading, spacing: 3) {
+                Button(action: onOpen) {
+                    Text(task.title)
+                        .lineLimit(2)
+                        .strikethrough(done)
+                        .foregroundStyle(done ? Color(nsColor: .tertiaryLabelColor) : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the task")
+                NativeTAGTaskLinks(task: task, tasks: TasksStore.shared.state?.tasks ?? state.tasks, compact: true)
             }
-            .buttonStyle(.plain)
             .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
-            .accessibilityHint("Opens the task")
             HStack(spacing: 4) {
                 if !task.instructions.isEmpty { Badge(text: "¶", help: "Has details") }
                 if let from = task.handedFrom { Badge(text: "from \(from)", attention: true, help: "\(from) handed this to you") }
@@ -800,7 +803,7 @@ struct AddTaskRow: View {
 
 /// Cards in stages: one column per status, in the CRM's order; dragging a card to
 /// another column changes its status; "+ Add task" under a column makes one there.
-private struct StageBoard: View {
+struct StageBoard: View {
     let tasks: [TaskRow]
     let today: String
     let nowHm: String
@@ -862,6 +865,7 @@ private struct StageBoard: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            NativeTAGTaskLinks(task: task, tasks: TasksStore.shared.state?.tasks ?? state.tasks, compact: true)
             if !task.labels.isEmpty {
                 HStack(spacing: 4) {
                     ForEach(Array(task.labels.prefix(3)), id: \.self) { TagPill(text: $0) }
@@ -895,7 +899,7 @@ private struct StageBoard: View {
 
 /// One Monday-to-Sunday week by due date. A click on a task opens it; its ring marks
 /// it done or reopens it; "+ Add" puts a task on that day.
-private struct WeekCalendar: View {
+struct WeekCalendar: View {
     let tasks: [TaskRow]
     let days: [String]
     let today: String
@@ -988,7 +992,7 @@ private struct WeekCalendar: View {
 
 /// Your deleted tasks — deleted, merged into another, or made a subtask — each kept
 /// whole until you restore it. Nothing empties it.
-private struct TrashList: View {
+struct TrashList: View {
     let tasks: [TaskRow]
     let now: Double
     let busy: Bool

@@ -81,8 +81,8 @@ struct StoreChip: View {
             .font(.caption)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
-            .background(on ? AnyShapeStyle(Color.accentColor.opacity(0.22)) : AnyShapeStyle(.quaternary.opacity(0.6)), in: .capsule)
-            .overlay(Capsule().strokeBorder(on ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+            .background(on ? AnyShapeStyle(Color.primary.opacity(0.12)) : AnyShapeStyle(.quaternary.opacity(0.6)), in: .capsule)
+            .overlay(Capsule().strokeBorder(on ? Color.secondary.opacity(0.45) : .clear, lineWidth: 1))
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)

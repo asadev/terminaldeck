@@ -165,8 +165,12 @@ struct NativeIslandContent: View {
                     .truncationMode(.tail)
             }
             if expanded {
-                conversation
-                askRow
+                if NativeCompositionHootUI.shared.isBound {
+                    NativeHootChat(compact: true)
+                } else {
+                    conversation
+                    askRow
+                }
                 if let problem = chat.problem {
                     Text(problem)
                         .font(.footnote)

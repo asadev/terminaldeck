@@ -8,7 +8,7 @@ import TerminalDeckNativeCore
 /// through the app's rules, files dropped from Finder typed as paths, copy on
 /// select, and a frozen state once the session has ended.
 @MainActor
-final class DeckTerminalView: TerminalView {
+class DeckTerminalView: TerminalView {
     /// Who handles what this view cannot do alone (paste, drop, focus).
     weak var host: NativeTerminalSession?
     /// Selecting copies, as General → Copy on select says.

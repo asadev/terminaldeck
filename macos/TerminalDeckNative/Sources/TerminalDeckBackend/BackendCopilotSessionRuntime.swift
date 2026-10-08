@@ -124,14 +124,15 @@ public struct BackendCopilotSessionDependencies: Sendable {
     public let driver: any BackendCopilotSessionDriving
     public let records: any BackendCopilotSessionRecordsProviding
     public let tools: (any BackendCopilotSessionToolProviding)?
+    public let chat: BackendHootChatStore?
     public let cols: Int
     public let rows: Int
     public init(userData: String, storageDir: String? = nil,
                 chosenFolder: @escaping @Sendable () async throws -> NativeRPCValue = { .null },
                 driver: any BackendCopilotSessionDriving, records: any BackendCopilotSessionRecordsProviding,
-                tools: (any BackendCopilotSessionToolProviding)? = nil, cols: Int = 120, rows: Int = 30) {
+                tools: (any BackendCopilotSessionToolProviding)? = nil, chat: BackendHootChatStore? = nil, cols: Int = 120, rows: Int = 30) {
         self.userData = userData; self.storageDir = storageDir ?? URL(fileURLWithPath: userData).appendingPathComponent("remote").path
-        self.chosenFolder = chosenFolder; self.driver = driver; self.records = records; self.tools = tools; self.cols = cols; self.rows = rows
+        self.chosenFolder = chosenFolder; self.driver = driver; self.records = records; self.tools = tools; self.chat = chat; self.cols = cols; self.rows = rows
     }
 }
 
@@ -140,7 +141,8 @@ public struct BackendCopilotSessionDependencies: Sendable {
 public actor BackendCopilotSessionRuntime {
     public static let homeKey = "copilot"
     public static let signInTTLMilliseconds: Double = 60_000
-    public static let channels = ["copilot:ensure", "copilot:state", "copilot:files", "copilot:stop", "copilot:signin", "copilot:read-instructions", "copilot:read-contract", "copilot:read-composed", "copilot:write-instructions", "copilot:read-folder-instructions", "copilot:write-folder-instructions", "copilot:reset-instructions"]
+    public static let channels = ["copilot:ensure", "copilot:state", "copilot:files", "copilot:stop", "copilot:signin", "copilot:read-instructions", "copilot:read-contract", "copilot:read-composed", "copilot:write-instructions", "copilot:read-folder-instructions", "copilot:write-folder-instructions", "copilot:reset-instructions"] + BackendHootChatChannels.invokes
+    public nonisolated let structuredChat: BackendHootChatStore?
     private struct Live: Sendable {
         let sessionID: String
         let startedAt: Double
@@ -159,7 +161,7 @@ public actor BackendCopilotSessionRuntime {
     /// The records supplier this one runtime actually measures with (join
     /// evidence for request 8; never re-supplied separately).
     public nonisolated let installedRecords: any BackendCopilotSessionRecordsProviding
-    public init(dependencies: BackendCopilotSessionDependencies) { deps = dependencies; installedRecords = dependencies.records }
+    public init(dependencies: BackendCopilotSessionDependencies) { deps = dependencies; installedRecords = dependencies.records; structuredChat = dependencies.chat }
     public static func legacyHome(storageDir: String) -> String { URL(fileURLWithPath: storageDir).appendingPathComponent("device-home").appendingPathComponent(homeKey).path }
     /// Register this at transcript-reader boot, even after the old jail is gone.
     public static func homeScope(userData: String, storageDir: String? = nil) -> NativeTranscriptHomeScope {
@@ -225,11 +227,13 @@ public actor BackendCopilotSessionRuntime {
         if !scaffold.created.isEmpty { BackendCopilotHome.appendAction(paths, .init(action: "home.created", detail: scaffold.created.joined(separator: ", "))) }
         var prepared: BackendCopilotSessionTools?
         do {
-            guard try await deps.driver.hasClaude() else { return try await refuse("Hoot runs on Claude Code, which is not installed on this machine.") }
+            let selectedProvider = structuredChat?.provider.rawValue ?? "claude"
+            guard try await deps.driver.hasClaude() else { return try await refuse("Hoot's \(selectedProvider) CLI is not installed on this machine.") }
             var measured = await deps.records.measure(userData: deps.userData)
             fenceProblem = measured.reason
             let profile = try await deps.driver.resolveProfile(projectPath: paths.root)
             prepared = try await deps.tools?.prepare()
+            if let receiver = deps.driver as? any BackendHootChatToolRequirementsReceiving { await receiver.toolRequirements(prepared) }
             let canonical = try await deps.records.paths(userData: deps.userData)
             let layer = BackendCopilotLayer.write(paths.layer, input: .init(root: paths.root, actionsLog: paths.actions,
                 chosenFolder: !paths.ownFolder, userData: deps.userData, tools: prepared?.tools ?? [], toolsAttached: prepared != nil, records: canonical))
@@ -237,7 +241,7 @@ public actor BackendCopilotSessionRuntime {
                 if let prepared { await deps.tools?.abandon(prepared) }
                 return try await refuse("Hoot's instructions could not be prepared: \(layer.error ?? "unavailable")")
             }
-            var input = BackendCreateSessionInput(cwd: paths.root, cols: deps.cols, rows: deps.rows, provider: "claude")
+            var input = BackendCreateSessionInput(cwd: paths.root, cols: deps.cols, rows: deps.rows, provider: selectedProvider)
             input.resume = false; input.profileId = profile.id
             let mcp = prepared.map { ["--mcp-config", $0.configPath, "--strict-mcp-config"] } ?? []
             let launchArguments = mcp + BackendCopilotLayer.args(composed: composed)
@@ -249,7 +253,7 @@ public actor BackendCopilotSessionRuntime {
                 fenceProblem = measured.reason
                 meta = try await deps.driver.start(input, fence: nil, extraArguments: launchArguments)
             }
-            guard meta.provider == "claude" else {
+            guard meta.provider == selectedProvider else {
                 try await deps.driver.stop(meta.id)
                 if let prepared { await deps.tools?.abandon(prepared) }
                 return try await refuse("Hoot started as a \(meta.provider) session rather than an agent.")
@@ -289,6 +293,10 @@ public actor BackendCopilotSessionRuntime {
     }
     public var isClosing: Bool { closing }
     public func stop() async throws -> BackendCopilotSessionState {
+        if let starting {
+            starting.cancel()
+            _ = try? await starting.value
+        }
         let paths = try await layerPaths()
         if let existing = live {
             try await deps.driver.stop(existing.sessionID)
@@ -307,6 +315,33 @@ public actor BackendCopilotSessionRuntime {
         signInCache = result; return result
     }
     public func invoke(_ channel: String, arguments: [NativeRPCValue]) async throws -> NativeRPCValue {
+        let channel = RNMHootChannelCompatibility.incomingChannel(channel)
+        if BackendHootChatChannels.invokes.contains(channel) {
+            guard let chat = structuredChat else { throw NativeRPCError(code: "unavailable", message: "Hoot's structured chat is unavailable.") }
+            switch BackendHootChatChannels.canonical(channel) {
+            case "hoot:chat:read":
+                guard arguments.count <= 2 else { throw NativeRPCError.invalidArguments("Expected cursor and limit.") }
+                let cursor = try BackendHootChatChannels.integer(arguments.first ?? .null, maximum: Int.max - 1)
+                let limit = try BackendHootChatChannels.integer(arguments.count > 1 ? arguments[1] : .null, maximum: 500) ?? 200
+                return await chat.snapshot(after: cursor, limit: limit)
+            case "hoot:chat:say":
+                guard (1...2).contains(arguments.count) else { throw NativeRPCError.invalidArguments("Expected message and optional attachments.") }
+                let text = try arguments[0].requireString("message")
+                let attachments = arguments.count == 2 ? try arguments[1].requireArray("attachments") : []
+                let state = try await ensure()
+                guard state.status == .running else { throw NativeRPCError(code: "unavailable", message: state.problem ?? "Hoot could not start.") }
+                return try await chat.say(text, attachments: attachments)
+            case "hoot:chat:stop":
+                guard arguments.isEmpty else { throw NativeRPCError.invalidArguments("Expected no stop arguments.") }
+                _ = try await stop(); return await chat.snapshot()
+            case "hoot:chat:answer":
+                guard (2...3).contains(arguments.count), let approved = arguments[1].bool else { throw NativeRPCError.invalidArguments("Expected request ID, approve/deny and optional structured answers.") }
+                try await chat.answer(id: try arguments[0].requireString("requestId", nonempty: true), allowed: approved,
+                    answers: arguments.count == 3 ? try arguments[2].requireObject("answers") : .object([]))
+                return await chat.snapshot()
+            default: throw NativeRPCError.invalidArguments("Unknown Hoot chat channel.")
+            }
+        }
         switch channel {
         case "copilot:ensure": return try await ensure().wireValue
         case "copilot:state": return try await state().wireValue

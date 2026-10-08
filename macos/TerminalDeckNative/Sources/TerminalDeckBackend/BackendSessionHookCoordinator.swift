@@ -46,6 +46,7 @@ public actor BackendSessionHookCoordinator {
     private let attribution: BackendAccountAttribution?
     private let ledger: BackendNativeLedger?
     private var listeners: [UUID: @Sendable (BackendSessionHookEvent) async -> Void] = [:]
+    private var acceptedListeners: [UUID: @Sendable (BackendSessionHookEvent) async -> Void] = [:]
     public init(lifecycle: BackendSessionLifecycleCoordinator, attribution: BackendAccountAttribution, ledger: BackendNativeLedger) {
         self.lifecycle = lifecycle; self.attribution = attribution; self.ledger = ledger
     }
@@ -64,6 +65,12 @@ public actor BackendSessionHookCoordinator {
         let id = UUID(); listeners[id] = listener; return id
     }
     public func removeObserver(_ id: UUID) { listeners[id] = nil }
+    /// Local activity consumers receive only events accepted by the existing
+    /// process, provider and conversation checks below.
+    public func observeAccepted(_ listener: @escaping @Sendable (BackendSessionHookEvent) async -> Void) -> UUID {
+        let id = UUID(); acceptedListeners[id] = listener; return id
+    }
+    public func removeAcceptedObserver(_ id: UUID) { acceptedListeners[id] = nil }
     public func receive(_ event: BackendSessionHookEvent) async {
         // External agent events remain available to the external-session/usage
         // domain without inventing a local PTY, account or process owner.
@@ -82,6 +89,7 @@ public actor BackendSessionHookCoordinator {
                 }
                 if ["UserPromptSubmit", "BeforeAgent"].contains(event.event) { try? await ledger.activity(id) }
                 if event.event == "SessionEnd" { await attribution.drop(sessionID: id) }
+                for listener in Array(acceptedListeners.values) { await listener(event) }
             }
         }
         for listener in listeners.values { await listener(event) }
@@ -99,5 +107,5 @@ public actor BackendSessionHookCoordinator {
         }
         return false
     }
-    public func stop() { listeners.removeAll() }
+    public func stop() { listeners.removeAll(); acceptedListeners.removeAll() }
 }

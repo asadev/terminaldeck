@@ -8,7 +8,7 @@ public enum BackendDeckCoreCatalogueRules {
     public static let maxCatalogueTools = 20
     public static let maxCatalogueTokens = 8_000
     public static let estimatedCharsPerToken = 3.5
-    public static let protectedPrefixes = ["remote.", "copilot.", "deckControl.", "security.", "confine."]
+    public static let protectedPrefixes = ["remote.", "hoot.", "copilot.", "deckControl.", "security.", "confine."]
     public static let protectedKeys = ["browser.persistSession", "advanced.debugMode"]
     public static let writablePreferences = ["theme", "defaultProvider", "restoreSessions", "notifyOnComplete"]
     // ECMAScript trim's set excludes C1 U+0085 and includes the BOM U+FEFF.

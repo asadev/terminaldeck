@@ -64,7 +64,7 @@ export interface CopilotSetup {
   /** What to print. Falls back to this app's own word for an unnamed copilot. */
   name: string
   /**
-   * Has the setup flow ever finished? Resolves once the file has been read.
+   * Has setup finished, or has its first-visit offer been dismissed? Waits for the file read.
    *
    * `true` for a build with no channels, deliberately: a window that cannot ask
    * must not answer by putting a setup flow in front of a feature it also cannot
@@ -73,6 +73,8 @@ export interface CopilotSetup {
   hasRun(): Promise<boolean>
   /** Read it again — after the flow saves, after an edit in Settings. */
   reload(): void
+  /** Remember that the person closed or finished the first-visit offer. */
+  dismiss(): void
 }
 
 export function useCopilotSetup(injected?: Partial<CopilotBridge>): CopilotSetup {
@@ -80,6 +82,12 @@ export function useCopilotSetup(injected?: Partial<CopilotBridge>): CopilotSetup
   const [status, setStatus] = useState<SetupStatus>(() =>
     bridge.copilotReadInstructions ? 'loading' : 'unavailable',
   )
+  const dismissed = useRef(false)
+  try { dismissed.current ||= localStorage.getItem('hoot.setup.dismissed.v1') === 'true' } catch { /* storage unavailable */ }
+  const dismiss = useCallback(() => {
+    dismissed.current = true
+    try { localStorage.setItem('hoot.setup.dismissed.v1', 'true') } catch { /* remember for this window */ }
+  }, [])
   const [identity, setIdentity] = useState<CopilotIdentity>(NO_IDENTITY)
 
   /**
@@ -106,17 +114,11 @@ export function useCopilotSetup(injected?: Partial<CopilotBridge>): CopilotSetup
     const job = ask()
       .then((raw) => {
         const result = toInstructionsRead(raw)
-        /*
-         * An unreadable file is `unset`, and that is the correct reading rather
-         * than a swallowed error. The one way it fails on a healthy machine is
-         * `ENOENT` — no instructions have been written, which is exactly a
-         * machine where nobody has been asked anything yet. A window that
-         * treated it as "set" would silently never offer the flow on the one
-         * install that most needs it.
-         */
+        // A missing file means setup is incomplete. Other read failures are
+        // not evidence that the person has never finished setup.
         const reading = result.ok
           ? readCopilotIdentity(result.text)
-          : { ran: false, identity: NO_IDENTITY }
+          : { ran: result.error !== 'There are no instructions yet. Create its files first.', identity: NO_IDENTITY }
         if (mounted.current) {
           setIdentity(reading.identity)
           setStatus(reading.ran ? 'set' : 'unset')
@@ -143,9 +145,9 @@ export function useCopilotSetup(injected?: Partial<CopilotBridge>): CopilotSetup
   }, [read])
 
   const hasRun = useCallback((): Promise<boolean> => {
-    if (inFlight.current) return inFlight.current
-    if (status === 'loading') return read()
-    return Promise.resolve(status !== 'unset')
+    if (dismissed.current) return Promise.resolve(true)
+    const result = inFlight.current ?? (status === 'loading' ? read() : Promise.resolve(status !== 'unset'))
+    return result.then((ran) => ran || dismissed.current)
   }, [status, read])
 
   return {
@@ -153,6 +155,7 @@ export function useCopilotSetup(injected?: Partial<CopilotBridge>): CopilotSetup
     identity,
     name: copilotName(identity),
     hasRun,
+    dismiss,
     reload: useCallback(() => void read(), [read]),
   }
 }

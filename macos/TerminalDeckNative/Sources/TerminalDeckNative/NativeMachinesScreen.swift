@@ -17,7 +17,7 @@ struct NativeMachinesScreen: View {
     private var showsList: Bool {
         switch route {
         case .list: return true
-        case .add: return false
+        case .add, .thisMac: return false
         case .server(let id): return !NativeServersModel.shared.servers.contains { $0.id == id }
         }
     }

@@ -39,9 +39,7 @@ struct SidebarView: View {
         .padding(.bottom, 8)
     }
 
-    /// No List selection: the system draws it in the accent blue whenever the window is
-    /// active, and no tint changes that. Each row draws its own selection instead, a light
-    /// grey rounded fill with the text going dark, like Finder (Asad, 2026-10-07).
+    /// Own selection fill: neutral panel rows, matching terminal paper for sessions.
     private var sidebarList: some View {
         List {
             if let state = model.visibleSidebar {
@@ -63,7 +61,7 @@ struct SidebarView: View {
                         ForEach(group.items.filter { $0.id != SidebarSettingsLine.alertsID }) { item in
                             SidebarRow(item: item, selected: model.listSelection == item.id)
                                 .padding(.leading, SidebarRow.leadingShift)
-                                .modifier(SidebarPick(selected: model.listSelection == item.id) { choose(item.id) })
+                                .modifier(SidebarPick(selected: model.listSelection == item.id, session: item.kind == .session) { choose(item.id) })
                                 .modifier(SessionRowAnchor(item: item))
                                 .modifier(ItemMenu(item: item, model: model, projectPath: nil, openWindow: openWindow))
                         }
@@ -94,7 +92,7 @@ struct SidebarView: View {
                                 // Same left edge as its folder (Asad, 2026-10-07: "same placement").
                                 SidebarRow(item: session, selected: model.listSelection == session.id)
                                     .padding(.leading, SidebarRow.leadingShift)
-                                    .modifier(SidebarPick(selected: model.listSelection == session.id) { choose(session.id) })
+                                    .modifier(SidebarPick(selected: model.listSelection == session.id, session: true) { choose(session.id) })
                                     .modifier(SessionRowAnchor(item: session))
                                     .modifier(ItemMenu(item: session, model: model, projectPath: project.id, openWindow: openWindow))
                             }
@@ -209,9 +207,10 @@ struct SidebarSettingsLine: View {
 }
 
 /// A sidebar row's own selection (the List has none, so it never paints accent blue):
-/// a click picks it, and the picked row gets Finder's light grey rounded fill.
+/// a click picks it. Sessions share their paper with the selected top tab.
 private struct SidebarPick: ViewModifier {
     let selected: Bool
+    var session = false
     let pick: () -> Void
 
     func body(content: Content) -> some View {
@@ -220,7 +219,7 @@ private struct SidebarPick: ViewModifier {
             // List ignores listRowBackground (render check, 2026-10-07).
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(selected ? 0.1 : 0))
+                    .fill(selected && session ? NativeSessionChrome.ground : Color.primary.opacity(selected ? 0.1 : 0))
                     .padding(.horizontal, -8)
                     .padding(.vertical, -4)
             )
@@ -309,12 +308,12 @@ struct SidebarRow: View {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(item.title)
-                        .foregroundStyle(selected ? .primary : .secondary) // Asad, 2026-10-07: grey text; dark when selected, like Finder
+                        .foregroundStyle(selected && item.kind == .session ? NativeSessionChrome.ink : (selected ? Color.primary : Color.secondary))
                         .lineLimit(1)
                     if let subtitle = item.subtitle {
                         Text(subtitle)
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(selected && item.kind == .session ? NativeSessionChrome.secondaryInk : Color(nsColor: .tertiaryLabelColor))
                             .lineLimit(1)
                     }
                 }
@@ -336,7 +335,7 @@ struct SidebarRow: View {
                 // Grey, not the sidebar's default accent blue (Asad, 2026-10-07). Same symbols.
                 Image(systemName: SymbolName.resolve(item.symbol, fallback: item.kind.defaultSymbol))
                     // .primary on a sidebar icon turns into the accent blue; name the colour itself.
-                    .foregroundStyle(selected ? Color(nsColor: .labelColor) : Color(nsColor: .secondaryLabelColor))
+                    .foregroundStyle(selected && item.kind == .session ? NativeSessionChrome.accent : (selected ? Color(nsColor: .labelColor) : Color(nsColor: .secondaryLabelColor)))
                     .imageScale(.small) // a step smaller than the sidebar default (Asad, 2026-10-07)
             }
         }

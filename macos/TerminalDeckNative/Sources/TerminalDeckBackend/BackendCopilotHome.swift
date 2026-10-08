@@ -19,7 +19,7 @@ public struct BackendCopilotPaths: Sendable, Equatable {
         instructions = layer.yours
         memory = BackendCopilotStorageIO.join(root, "memory")
         memoryIndex = BackendCopilotStorageIO.join(memory, "MEMORY.md")
-        log = BackendCopilotStorageIO.join(userData, "copilot-log")
+        log = RNMHootPaths(userData: userData).log.path
         actions = BackendCopilotStorageIO.join(log, "actions.jsonl")
     }
     public var wireValue: NativeRPCValue {
@@ -104,7 +104,7 @@ public struct BackendCopilotFolderInstructionsWrite: Sendable {
 public enum BackendCopilotHome {
     public static let maxInstructionsBytes = 256 * 1024
     public static let logLimitBytes = 4 * 1024 * 1024
-    public static func defaultHome(_ userData: String) -> String { BackendCopilotStorageIO.join(userData, "copilot") }
+    public static func defaultHome(_ userData: String) -> String { RNMHootPaths(userData: userData).home.path }
     public static func folderInstructions(_ paths: BackendCopilotPaths) -> String { BackendCopilotStorageIO.join(paths.root, "CLAUDE.md") }
     public static func folderInstructionsBackup(_ paths: BackendCopilotPaths) -> String { BackendCopilotStorageIO.join(paths.layer.dir, "folder-instructions.bak") }
     public static func legacyRoutinesDir(_ paths: BackendCopilotPaths) -> String { BackendCopilotStorageIO.join(paths.root, "routines") }
@@ -113,7 +113,7 @@ public enum BackendCopilotHome {
 
     public static func appendAction(_ paths: BackendCopilotPaths, _ entry: BackendCopilotAction, now: Date = Date()) {
         do {
-            // Request 8: the one shared raw writer for copilot-log/actions.jsonl,
+            // Request 8: the one shared raw writer for hoot-log/actions.jsonl,
             // the same sink deck-core's action log appends through. Same bytes,
             // same >=4 MiB rotation of the existing file.
             try BackendHootJoinRawSink.shared(directory: URL(fileURLWithPath: paths.log, isDirectory: true)).home(entry, now: now)

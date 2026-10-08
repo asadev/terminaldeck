@@ -65,6 +65,14 @@ check() {
   body=$(curl -sS --max-time 15 "https://$DOMAIN/.well-known/oauth-protected-resource")
   [[ "$body" == *"does not use OAuth"* ]] || { echo "the OAuth discovery probe did not get its JSON 404"; return 1; }
   echo "ok"
+  say "the Receiver route"
+  body=$(curl -sS --max-time 15 -X POST "https://$DOMAIN/in/AAAAAAAAAAAAAAAAAAAAAAAAAA" \
+    -H 'content-type: application/json' --data '{}' --write-out $'\n%{http_code}')
+  [[ "${body##*$'\n'}" == "404" && "$body" == *"This Receiver address is not active."* ]] || {
+    echo "POST /in/<id> did not give the Receiver's inactive-address 404"
+    return 1
+  }
+  echo "ok"
   say "container"
   ssh_ "docker inspect $CONTAINER --format 'restart={{.HostConfig.RestartPolicy.Name}} running={{.State.Running}}'"
   say "the neighbour we must not disturb"
@@ -83,13 +91,14 @@ ls -l relay/dist/relay.mjs
 # Piped over one connection rather than scp: this box drops rapid repeat
 # connections, and a half-written file would be a broken relay.
 say "shipping"
-ssh_ "mkdir -p $REMOTE_DIR"
+ssh_ "mkdir -p $REMOTE_DIR /opt/terminaldeck-relay-data && chmod 700 /opt/terminaldeck-relay-data"
 < relay/dist/relay.mjs ssh -i "$KEY" "$HOST" "cat > $REMOTE_DIR/relay.mjs && wc -c $REMOTE_DIR/relay.mjs"
 
 say "running"
 ssh_ "docker rm -f $CONTAINER >/dev/null 2>&1 || true
 docker run -d --name $CONTAINER --restart unless-stopped --network coolify \
   -v $REMOTE_DIR:/app:ro -w /app -e PORT=8080 \
+  -v /opt/terminaldeck-relay-data:/data -e RECEIVER_DIR=/data \
   --label traefik.enable=true \
   --label 'traefik.http.routers.tdrelay.rule=Host(\`$DOMAIN\`)' \
   --label traefik.http.routers.tdrelay.entrypoints=https \

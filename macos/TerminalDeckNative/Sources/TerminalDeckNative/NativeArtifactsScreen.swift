@@ -57,7 +57,7 @@ private struct ArtifactsContent: View {
         // rest. Without both frames an empty state that does not stretch leaves
         // the whole page centred, with a blank band above the filter bar.
         VStack(spacing: 0) {
-            ArtifactsControls(model: model)
+            NativeUIGArtifactsControls(model: model)
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
@@ -85,7 +85,7 @@ private struct ArtifactsControls: View {
                     Text("Made here \(counts.made)").tag(ArtifactScopeKind.made)
                     Text("Changed \(counts.changed)").tag(ArtifactScopeKind.changed)
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .fixedSize()
                 .help("Made here: files an agent wrote whole — the things it produced. Changed: files that already existed and an agent edited.")
@@ -103,7 +103,7 @@ private struct ArtifactsControls: View {
                     Text("This project’s sessions").tag(ArtifactScope.project)
                     Text("Every session").tag(ArtifactScope.all)
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .fixedSize()
                 .help("Every session also reads sessions started elsewhere that wrote into this folder")
@@ -179,9 +179,9 @@ private struct ArtifactsChip: View {
                 .lineLimit(1)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
-                .background(on ? AnyShapeStyle(Color.accentColor.opacity(0.22)) : AnyShapeStyle(.quaternary.opacity(0.6)),
+                .background(on ? AnyShapeStyle(Color.primary.opacity(0.12)) : AnyShapeStyle(.quaternary.opacity(0.6)),
                             in: .capsule)
-                .overlay(Capsule().strokeBorder(on ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+                .overlay(Capsule().strokeBorder(on ? Color.secondary.opacity(0.45) : .clear, lineWidth: 1))
                 .contentShape(.capsule)
         }
         .buttonStyle(.plain)
@@ -215,7 +215,7 @@ private struct ArtifactsBody: View {
 
         case .ready:
             if let found = model.found, found.artifacts.isEmpty {
-                EmptyArtifacts(model: model, found: found)
+            NativeUIGArtifactsEmptyState(model: model)
             } else {
                 HSplitView {
                     ArtifactsList(model: model)

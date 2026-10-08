@@ -60,7 +60,7 @@ public struct BackendHootMenuSessionState: Sendable {
     public let write: (NativeRPCValue) throws -> Void
     public let hoot: () -> BackendHootMenuSessionState
     public let startHoot: () async throws -> String?
-    public let say: (String, String) throws -> Void
+    public let say: (String, String) async throws -> Void
     public let watchChat: (String, String?, @escaping @MainActor ([NativeRPCValue], Bool) -> Void) throws -> any BackendHootCancellation
     public let sessions: () -> [IslandSessionRow]
     public let isHoot: (String) -> Bool
@@ -77,7 +77,7 @@ public struct BackendHootMenuSessionState: Sendable {
                 makeCatcher: @escaping () throws -> any BackendHootCatcherSurface,
                 place: @escaping () -> BackendHootIslandPlace, read: @escaping (String) -> NativeRPCValue,
                 write: @escaping (NativeRPCValue) throws -> Void, hoot: @escaping () -> BackendHootMenuSessionState,
-                startHoot: @escaping () async throws -> String?, say: @escaping (String, String) throws -> Void,
+                startHoot: @escaping () async throws -> String?, say: @escaping (String, String) async throws -> Void,
                 watchChat: @escaping (String, String?, @escaping @MainActor ([NativeRPCValue], Bool) -> Void) throws -> any BackendHootCancellation,
                 sessions: @escaping () -> [IslandSessionRow], isHoot: @escaping (String) -> Bool,
                 showSession: @escaping (String) -> Void, openApp: @escaping (String?) -> Void,
@@ -275,11 +275,11 @@ public struct BackendHootMenuSessionState: Sendable {
             after("settle", milliseconds: Self.settleMS) { [weak self] in self?.noticeSessions(); self?.push() }
         }
     }
-    public func say(_ raw: NativeRPCValue) -> NativeRPCValue {
+    public func say(_ raw: NativeRPCValue) async -> NativeRPCValue {
         let text = raw.string.map(BackendSharedText.trim) ?? ""
         guard !text.isEmpty else { return Self.result(false, "Nothing to send.") }; hootCache = nil; let state = hoot()
         guard state.status == "running", let id = state.sessionID else { return Self.result(false, "Hoot isn’t running.") }
-        do { try deps.say(id, Self.prefix(text, units: 4000)); return Self.result(true) } catch { return Self.result(false, "Hoot did not take that message.") }
+        do { try await deps.say(id, Self.prefix(text, units: 4000)); return Self.result(true) } catch { return Self.result(false, "Hoot did not take that message.") }
     }
     public func startHoot() async -> NativeRPCValue {
         do { let problem = try await deps.startHoot(); hootCache = nil; follow(); push(); return Self.result(problem == nil, problem ?? "") }
@@ -364,7 +364,7 @@ public struct BackendHootMenuSessionState: Sendable {
     private func invoke(_ channel: String, argument: NativeRPCValue) async throws -> NativeRPCValue {
         switch channel {
         case "hoot-panel:snapshot": return snapshot()
-        case "hoot-panel:say": return say(argument)
+        case "hoot-panel:say": return await say(argument)
         case "hoot-panel:start-hoot": return await startHoot()
         case "hoot-panel:show-session": return argument.string.map(showSession) ?? .object([.init("ok", .bool(false))])
         case "hoot-menubar:config": return config()

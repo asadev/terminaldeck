@@ -26,7 +26,9 @@ struct ScreenWindow: View {
     let ref: ScreenRef?
     let model: AppModel
     @State private var screen: ScreenModel?
+    @State private var window: NSWindow?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack {
@@ -39,6 +41,9 @@ struct ScreenWindow: View {
         .frame(minWidth: 480, minHeight: 320)
         .navigationTitle(windowTitle)
         .navigationSubtitle(windowSubtitle)
+        .toolbarBackground(terminalWindow ? NativeSessionChrome.ground : Color.clear, for: .windowToolbar)
+        .toolbarBackgroundVisibility(terminalWindow ? .visible : .automatic, for: .windowToolbar)
+        .background(NativeTerminalWindowChrome(enabled: terminalWindow))
         .toolbar {
             // The screen's own icon beside its title (Hoot's owl for Hoot). It also
             // gives every screen window the same slim 40 pt toolbar, title on the left.
@@ -56,7 +61,21 @@ struct ScreenWindow: View {
                 .padding(.horizontal, 2)
             }
             .sharedBackgroundVisibility(.hidden)
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: moveBack) {
+                    Label("Move back to main window", systemImage: "arrow.down.left.square")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .help("Move back to main window")
+                .accessibilityLabel("Move back to main window")
+                .accessibilityAction { moveBack() }
+                .disabled(ref == nil)
+            }
+            .sharedBackgroundVisibility(.hidden)
         }
+        .background(NativeWindowReader { window = $0 })
         .onAppear {
             if let ref, screen == nil { screen = model.attachScreen(ref) }
         }
@@ -71,10 +90,22 @@ struct ScreenWindow: View {
         }
     }
 
+    private func moveBack() {
+        guard let ref else { return }
+        let close = dismiss
+        let open = openWindow
+        model.returnScreenToMain(ref, from: window,
+                                 openMain: { NativeFront.whenPersonActs("return-screen-main") { open(id: "main") } }, closeWindow: { close() })
+    }
+
     private var windowTitle: String {
         if let title = screen?.title, !title.isEmpty { return title }
         if let ref, let known = model.knownTitle(for: ref) { return known }
         return "Terminal Deck"
+    }
+
+    private var terminalWindow: Bool {
+        ref?.kind == .session && ref.map { NativeTerminalScreen.handles($0.id) } == true
     }
 
     /// The page's subtitle when there is one; otherwise real progress only.
@@ -84,6 +115,35 @@ struct ScreenWindow: View {
         if model.failure != nil || screen.failure != nil { return "Not running" }
         if !screen.ready { return model.engineIsUp ? "Loading…" : "Starting…" }
         return screen.subtitle ?? ""
+    }
+}
+
+/// Let a popped-out terminal's paper continue through its AppKit titlebar.
+struct NativeTerminalWindowChrome: NSViewRepresentable {
+    var enabled: Bool
+
+    func makeNSView(context: Context) -> ChromeView { ChromeView() }
+
+    func updateNSView(_ view: ChromeView, context: Context) {
+        let scheme = NativeSessionChrome.scheme
+        view.ground = enabled ? scheme.colour(scheme.background, fallback: .windowBackgroundColor) : nil
+        view.terminalAppearance = enabled ? NSAppearance(named: scheme.isLight ? .aqua : .darkAqua) : nil
+        view.apply()
+    }
+
+    final class ChromeView: NSView {
+        var ground: NSColor?
+        var terminalAppearance: NSAppearance?
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+
+        func apply() {
+            guard let window, let ground else { return }
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = ground
+            window.appearance = terminalAppearance
+            window.titlebarSeparatorStyle = .none
+        }
     }
 }
 

@@ -27,10 +27,10 @@ public actor BackendTaskLocalService {
         else { guard let agent = try await config.agent(id) else { throw NativeRPCError.invalidArguments("Assign it to nobody, to yourself, to Hoot or to one of your task agents.") }; return Self.assignment(agent["id"].string!, kind: "agent") }
         return Self.assignment(id, kind: kind)
     }
-    public func create(_ input: NativeRPCValue, by: String = BackendTaskActor.current, parentID: String? = nil) async throws -> BackendTaskRecord {
+    public func create(_ input: NativeRPCValue, by: String = BackendTaskActor.current, parentID: String? = nil, notificationKeyID: String? = nil) async throws -> BackendTaskRecord {
         await enter(); defer { leave() }; try Task.checkCancellation()
         let title = try BackendTaskValues.text(input["title"], "The title", max: 300, required: true)!, details = try BackendTaskValues.text(input["instructions"], "The details", max: 20_000) ?? ""
-        let project = try BackendTaskValues.text(input["project"], "The project folder", max: 1_024) ?? "", assignment = try await assignee(input["assignee"])
+        let assignment = try await assignee(input["assignee"]), project = try await projectFolder(input["project"], assignment: assignment)
         try Self.checkProject(project, assignment: assignment)
         let status = try Self.status(input["status"]) ?? "To-Do", external = UUID().uuidString.lowercased(), now = BackendTaskValues.time()
         let parent: BackendTaskRecord?
@@ -44,6 +44,8 @@ public actor BackendTaskLocalService {
             ("lastTurn", .null), ("childrenTold", .null), ("stopped", .bool(false)), ("seq", .number(0)), ("local", .bool(true)), ("notes", .array([])), ("handedFrom", .null),
             ("labels", .array([])), ("taskType", .string("task")), ("completedAt", status == "Done" ? .number(now) : .null), ("createdAt", .number(now)), ("updatedAt", .number(now))])
         value = try value.merging(Self.fields(input))
+        value = value.setting("parentTaskId", parent.map { .string($0.id) } ?? .null)
+        if let key = notificationKeyID ?? parent?.value["notificationKeyId"].string { value = value.setting("notificationKeyId", .string(key)) }
         if input.has("goalId") { value = value.setting("goalId", try await goal(input["goalId"])) }
         else if let parent { value = value.setting("goalId", parent.value["goalId"]) }
         if input.has("useWorkspace") { guard let flag = input["useWorkspace"].bool else { throw NativeRPCError.invalidArguments("Running in its own workspace is on or off.") }; value = value.setting("useWorkspace", .bool(flag)) }
@@ -51,13 +53,17 @@ public actor BackendTaskLocalService {
         try await store.note(record.id, by: by, kind: "edited", text: "Created, assigned to \(await nameOf(assignment)).")
         if status != "Done" { try await engine.accept(record.id) }; return try await task(record.id)
     }
-    public func update(_ id: String, input: NativeRPCValue, by: String = BackendTaskActor.current) async throws -> BackendTaskRecord {
+    public func update(_ id: String, input: NativeRPCValue, by: String = BackendTaskActor.current, notificationKeyID: String? = nil) async throws -> BackendTaskRecord {
         await enter(); defer { leave() }; try Task.checkCancellation(); let before = try await task(id)
         var patch = try Self.fields(input)
         for (key, maximum, label) in [("title", 300, "The title"), ("instructions", 20_000, "The details"), ("project", 1_024, "The project folder")] {
             if input.has(key), let text = try BackendTaskValues.text(input[key], label, max: maximum, required: key == "title") { patch = patch.setting(key, .string(text)) }
         }
         let assignment = input.has("assignee") ? try await assignee(input["assignee"]) : before.value["assignee"]
+        if (patch["project"].string ?? before.project).isEmpty {
+            patch = patch.setting("project", .string(try await projectFolder(.null, assignment: assignment)))
+        }
+        if input.has("assignee"), let notificationKeyID { patch = patch.setting("notificationKeyId", .string(notificationKeyID)) }
         try Self.checkProject(patch["project"].string ?? before.project, assignment: assignment)
         if let status = try Self.status(input["status"]) { patch = patch.setting("crmStatus", .string(status)).setting("completedAt", status == "Done" ? .number(BackendTaskValues.time()) : .null) }
         if input.has("goalId") { patch = patch.setting("goalId", try await goal(input["goalId"])) }
@@ -103,6 +109,12 @@ public actor BackendTaskLocalService {
         guard let task = try await store.byID(id), task.isLocal else { throw NativeRPCError.invalidArguments("That task no longer exists.") }; return task
     }
     public func setUpdateObserver(_ observer: UpdateObserver?) { updateObserver = observer }
+    public func projectFolder(_ raw: NativeRPCValue, assignment: NativeRPCValue) async throws -> String {
+        let given = try BackendTaskValues.text(raw, "The project folder", max: 1_024) ?? ""
+        if !given.isEmpty { return given }
+        guard assignment["kind"].string == "agent", let id = assignment["agentId"].string else { return given }
+        return try await config.agent(id)?["defaultProject"].string ?? given
+    }
     public func installEngineStatusObserver(_ observer: (@Sendable (String, String) async -> Void)?) async -> Bool {
         guard let actual = engine as? BackendTaskEngine else { return false }; await actual.setLocalStatusObserver(observer); return true
     }

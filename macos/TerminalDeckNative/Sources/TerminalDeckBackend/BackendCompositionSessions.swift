@@ -81,6 +81,7 @@ public actor BackendCompositionSessions {
         public let events: [String]
     }
     public nonisolated let manager: BackendPTYManager
+    public func agentSettingsCipher() -> BackendAccountKeychainCipher { dependencies.cipher }
     public nonisolated let ledger: BackendNativeLedger
     public nonisolated let accounts: BackendAccountLaunchAdapter
     public nonisolated let profiles: BackendAccountProfileStore

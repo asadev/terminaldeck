@@ -1,10 +1,25 @@
 import Foundation
+import TerminalDeckNativeCore
 
 public enum BackendSessionStatus: String, Codable, Sendable {
     case idle, working, waiting, input, completed, exited
 }
 
-public enum BackendSessionOrigin: String, Codable, Sendable { case user, copilot, app }
+public enum BackendSessionOrigin: String, Codable, Sendable {
+    case user, copilot, app
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        guard let origin = Self(rawValue: value == "hoot" ? "copilot" : value) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown session origin")
+        }
+        self = origin
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
 public enum BackendRemovalReason: String, Codable, Sendable { case stopped, replaced }
 
 /// Wire names match SessionMeta in src/shared/types.ts. Optional identity fields
@@ -80,6 +95,14 @@ public struct BackendCreateSessionInput: Codable, Equatable, Sendable {
     public var deniedTools: [String]?
     public var noSkills: Bool?
     public var agentInstructions: String?
+    public var claudeAgent: String?
+    public var allowedTools: [String]?
+    public var permissionMode: String?
+    public var agentSettings: AGSAgentSettings?
+    /// Backend-owned task launch marker, never parsed from renderer input.
+    public var taskID: String?
+    public var taskProject: String?
+    public var agentDefinitionsFile: String?
     public var replaces: String?
     public var profileId: String?
     public var homeProfileId: String?

@@ -39,10 +39,10 @@ struct NativePaneBar<Chips: View, Controls: View>: View {
             .accessibilityLabel("Close this pane")
         }
         .padding(.horizontal, 10)
-        .frame(height: 30)
-        .background(focused ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.background))
-        .overlay(alignment: .bottom) { Divider() }
-        .opacity(focused ? 1 : 0.78)
+        .frame(height: 34)
+        .opacity(focused ? 1 : 0.78) // dim the content, never the terminal paper
+        .foregroundStyle(NativeSessionChrome.ink)
+        .background(NativeSessionChrome.ground)
     }
 
     @ViewBuilder private var lead: some View {

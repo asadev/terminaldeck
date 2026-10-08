@@ -115,6 +115,7 @@ public actor BackendProjectToolComposition: BackendLaunchCapability {
         let directory: URL
         let tools: BackendSessionToolLeases?
         let tokenLease: UUID?
+        let server: BackendProjectMCPServerSpec
         var sessionID: String?
         let deadline: Task<Void, Never>
     }
@@ -124,7 +125,7 @@ public actor BackendProjectToolComposition: BackendLaunchCapability {
         guard userData.isFileURL, userData.path.hasPrefix("/") else { throw BackendSessionFailure.invalidInput("Project launch composition needs the app's own user-data root.") }
         self.source = source; self.userData = userData; inherited = inheritedEnvironment; readiness = source.readiness
     }
-    public func prepare(provider: String, cwd: String, loginPath: String) async throws -> BackendPreparedProjectTools? {
+    public func prepare(provider: String, cwd: String, loginPath: String, allowedTools: [String]? = nil, deniedTools: [String] = [], taskID: String? = nil, taskProject: String? = nil) async throws -> BackendPreparedProjectTools? {
         guard !stopped else { throw BackendSessionFailure.closed }
         guard let definition = try await source.resolve(cwd: cwd, provider: provider, loginPath: loginPath) else { return nil }
         guard !stopped else { throw BackendSessionFailure.closed }
@@ -137,11 +138,23 @@ public actor BackendProjectToolComposition: BackendLaunchCapability {
         do {
             switch definition {
             case .stdio(_, let spec):
+                if deniedTools.contains("mcp__" + spec.name) { return nil }
+                if let allowedTools, !allowedTools.contains("mcp__" + spec.name) {
+                    // An opaque external stdio endpoint has no app-owned caller
+                    // grant to narrow. Do not expose it with a partial allow-list.
+                    if allowedTools.contains(where: { $0.hasPrefix("mcp__" + spec.name + "__") }) {
+                        throw BackendSessionFailure.missingCapability("a serving per-tool grant for the external \(spec.name) MCP server")
+                    }
+                    return nil
+                }
                 guard BackendNativeProviders.lookup(spec.command, path: loginPath) != nil else { throw BackendSessionFailure.missingCapability("the project's actual MCP engine executable") }
                 server = spec
             case let .registeredEndpoint(projectRoot, name, endpoint, names, launcher):
+                let proposed = taskID == nil ? names : names.union(BackendTAGToolPolicy.taskTools)
+                let permitted = BackendTAGToolPolicy.filter(proposed, server: name, allowed: allowedTools, denied: deniedTools)
+                guard !permitted.isEmpty else { return nil }
                 let registry = try BackendSessionToolLeases(endpoint: endpoint, userData: userData)
-                let prepared = try await registry.prepare(serverName: name, allowed: names, projectRoot: projectRoot)
+                let prepared = try await registry.prepare(serverName: name, allowed: permitted, projectRoot: taskID == nil ? projectRoot : taskProject ?? projectRoot, taskProject: taskID == nil ? nil : taskProject)
                 tools = registry; tokenLease = prepared.id
                 server = try await registry.nativeStdioSpec(prepared, serverName: name, launcher: launcher)
             }
@@ -183,7 +196,7 @@ public actor BackendProjectToolComposition: BackendLaunchCapability {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
                 await self?.expire(id)
             }
-            leases[id] = Lease(directory: directory, tools: tools, tokenLease: tokenLease, deadline: deadline)
+            leases[id] = Lease(directory: directory, tools: tools, tokenLease: tokenLease, server: server, deadline: deadline)
             return BackendPreparedProjectTools(id: id, arguments: arguments, environment: environment,
                 readableFiles: files, implementation: server.implementation)
         } catch {
@@ -191,6 +204,15 @@ public actor BackendProjectToolComposition: BackendLaunchCapability {
             try? FileManager.default.removeItem(at: directory)
             throw error
         }
+    }
+    public func agentSettingsServerName(provider: String, cwd: String, loginPath: String) async throws -> String? {
+        guard !stopped else { throw BackendSessionFailure.closed }
+        guard let definition = try await source.resolve(cwd: cwd, provider: provider, loginPath: loginPath) else { return nil }
+        switch definition { case .stdio(_, let server): return server.name; case .registeredEndpoint(_, let name, _, _, _): return name }
+    }
+    public func agentSettingsConfiguration(_ id: UUID) throws -> NativeRPCValue {
+        guard !stopped, let lease = leases[id] else { throw BackendSessionFailure.closed }
+        return .object([.init(lease.server.name, lease.server.wireValue)])
     }
     public func bind(_ id: UUID, sessionID: String) async throws {
         guard var lease = leases[id], lease.sessionID == nil else { throw BackendSessionFailure.invalidInput("The pending project-tool launch expired.") }

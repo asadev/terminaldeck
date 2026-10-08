@@ -196,6 +196,7 @@ public actor BackendDeckCoreSecurityAccessKeys {
     }
     private nonisolated static func view(_ key: NativeRPCValue) -> NativeRPCValue {
         key.removing("hash").setting("crmOnly", .bool(key["crmOnly"].bool == true))
+            .setting("grantedScopes", .array(BackendTAGAccessScope.grantedScopes(key).map(NativeRPCValue.string)))
             .setting("notify", key["notify"].removing("secret").setting("hasSecret", .bool(key["notify"]["secret"].string != nil)))
     }
     private nonisolated static func hash(_ text: String) -> String { SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined() }

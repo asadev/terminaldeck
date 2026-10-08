@@ -2,7 +2,7 @@
  * The Copilot tab, on a machine that has no copilot — and is not going to get
  * one.
  *
- * > *"copilot should be always there when we are with server — copilot should
+ * > *"Hoot should be always there when we are with server — Hoot should
  * > automatically come there. When we are with desktop then only it is
  * > optional."*
  *
@@ -12,8 +12,8 @@
  *
  * ## This screen is the fallback, not the destination
  *
- * > *"copilot page should be always landing in a copilot session according to
- * > the settings of the copilot — either in an existing session if there is any,
+ * > *"Hoot page should be always landing in Hoot session according to
+ * > the settings of Hoot — either in an existing session if there is any,
  * > or it should start a new. But it should be always a chat to land with,
  * > terminal and chat mode too."*
  *
@@ -31,10 +31,10 @@
  * start behind a setup somebody had to complete first, and drew a two-row chooser
  * until they had. He looked at that and said the same thing a third time:
  *
- * > *"the copilot page will directly land into some session — not to a selection
+ * > *"Hoot page will directly land into some session — not to a selection
  * > and something on the page. It is still not that way… Because it should
  * > directly start a session on whatever the selected folder for it is. When we
- * > go to copilot it should just start the session; if there is already an
+ * > go to Hoot it should just start the session; if there is already an
  * > existing session it should start from there where we left, and if not then
  * > it should create itself and start from the beginning. I told the exact same
  * > also before."*
@@ -96,7 +96,7 @@
  *
  * ## What that did to Back, and to the machinery that protected it
  *
- * > *"On copilot page we have a bug. As soon as I reach on this copilot page,
+ * > *"On Hoot page we have a bug. As soon as I reach on this Hoot page,
  * > once I open a conversation and I go back, I cannot go back more than that —
  * > it will automatically take me to inside the chat. I go back, it takes me in
  * > the chat back. I keep going back and it is keep taking me inside the chat
@@ -126,10 +126,10 @@
  *
  * It began as two rows that changed tab. He looked at that and said:
  *
- * > *"the copilot page has two options — to redirect to the session page or
+ * > *"Hoot page has two options — to redirect to the session page or
  * > menu — but it doesn't make any sense. It should be just having an option to
- * > start the copilot, or chat to the copilot, or start the session or something
- * > like that, instead of just redirecting to the other pages. And copilot
+ * > start Hoot, or chat to Hoot, or start the session or something
+ * > like that, instead of just redirecting to the other pages. And Hoot
  * > should have a consistent connection and all of this stuff."*
  *
  * The fault is worth naming precisely rather than merely fixed: a row reading
@@ -171,13 +171,13 @@
  * the right method and inspect mode's `sendToAgent` is untouched; this screen
  * simply no longer has a question that needs either.
  *
- * ## "Chat to the copilot", answered honestly
+ * ## "Chat to Hoot", answered honestly
  *
  * **A copilot conversation is not reachable on a server, and it is declined on
  * purpose in three places rather than merely missing from one.**
  *
- *  - `src/headless/cli.ts`, `NO_COPILOT_HERE`: *"the copilot's tools only run in
- *    the desktop app, so no Copilot appears on a device paired to a server, of
+ *  - `src/headless/cli.ts`, `NO_COPILOT_HERE`: *"Hoot's tools only run in
+ *    the desktop app, so no Hoot appears on a device paired to a server, of
  *    either kind."*
  *  - `src/headless/host.ts` declines to pass a `copilot` at all, and says why it
  *    is not simply wired: `registerDeckControlIpc` wants an `ipcMain` and an
@@ -195,7 +195,7 @@
  * agent in a session on this server** — and the tab now *is* that conversation
  * rather than a way to one. What a server calls a copilot session is a session
  * with the machine's own `agents.defaultProvider` in it, which is *"according to
- * the settings of the copilot"* read literally: `host-core.ts` reaches for that
+ * the settings of Hoot"* read literally: `host-core.ts` reaches for that
  * exact field when a `create` frame names no provider.
  *
  * ### The composer waited for a method rather than shipping half of one
@@ -216,7 +216,7 @@
  * would have been the exact fault this screen was rewritten to remove, so the
  * gap was reported rather than papered over.
  *
- * ## "Copilot should have a consistent connection"
+ * ## "Hoot should have a consistent connection"
  *
  * On a desktop the copilot has states that move — `.connecting`, `.connected`,
  * `.notGranted` — and `CopilotView` draws each. On a server it is a permanent
@@ -531,7 +531,7 @@ struct CopilotOnServerView: View {
                     .font(.system(size: 22, weight: .light))
                     .foregroundStyle(Theme.faint)
                     .frame(width: 24)
-                Text("No copilot on this \(noun)")
+                Text("No Hoot on this \(noun)")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -545,7 +545,7 @@ struct CopilotOnServerView: View {
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("copilot.onServer.where")
-                InfoDot(about: "no copilot here", text: Self.why)
+                InfoDot(about: "no Hoot here", text: Self.why)
                 Spacer(minLength: 0)
             }
         }
@@ -573,8 +573,8 @@ struct CopilotOnServerView: View {
      * is where the same work happens, which is what the card underneath offers.
      */
     private static let why =
-        "The copilot's tools are the desktop app's own — its session list, its transcripts, its "
-        + "settings — and a server has no app for them to drive. So no copilot appears on a device "
+        "Hoot's tools are the desktop app's own — its session list, its transcripts, its "
+        + "settings — and a server has no app for them to drive. So no Hoot appears on a device "
         + "paired to a server. It is not about how this phone was paired: a server has none for "
         + "any device, of either kind. An agent running in a session here is the same work at a "
         + "different surface, and that is what this screen starts."
@@ -657,7 +657,7 @@ struct CopilotOnServerView: View {
 
         if starting || canRetry || mustPick {
             VStack(alignment: .leading, spacing: 0) {
-                caption("The copilot on this \(noun)")
+                caption("Hoot on this \(noun)")
                 card {
                     if starting {
                         HStack(spacing: 12) {

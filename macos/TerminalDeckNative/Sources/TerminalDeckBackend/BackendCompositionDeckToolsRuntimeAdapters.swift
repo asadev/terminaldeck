@@ -69,7 +69,7 @@ public struct BackendCompositionDeckToolsAssetRuntime: BackendDeckToolsAssetRunt
 /// person's `copilot.interactive` setting, the one gate, and the core evidence.
 public struct BackendCompositionDeckToolsTourRuntime: BackendDeckToolsTourRuntime {
     /// tour-tool.ts INTERACTIVE_KEY (L97).
-    public static let interactiveKey = "copilot.interactive"
+    public static let interactiveKey = RNMHootSettingsMigration.interactiveKey
     private let gate: BackendCompositionDeckToolsGate
     private let evidence: any BackendDeckToolsTourEvidence
     /// `evidence`: the one `BackendDeckToolsTourNativeEvidence` over core's surface.

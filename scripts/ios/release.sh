@@ -35,8 +35,8 @@
 #   ASC_KEY_PATH               default ~/private_keys/AuthKey_$ASC_KEY_ID.p8
 #   TD_IOS_MARKETING_VERSION   default: the version in package.json
 #   TD_IOS_BUILD               default: yymmddHHMM, UTC, at the moment of the run
-#   TD_IOS_SIGN_STYLE          automatic (default) | manual
-#   TD_IOS_PROFILE             profile name; required when signing manually
+#   TD_IOS_SIGN_STYLE          cloud only; local distribution signing forbidden
+# Local keychains are denied to the export process; shared settings are untouched.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
@@ -95,17 +95,8 @@ KEY_PATH="$(asc_key_path)"
 # copying a private key somewhere it was not put deliberately.
 export API_PRIVATE_KEYS_DIR="$(dirname "$KEY_PATH")"
 
-SIGN_STYLE="${TD_IOS_SIGN_STYLE:-automatic}"
-case "$SIGN_STYLE" in
-    automatic) ;;
-    manual)
-        [[ -n "${TD_IOS_PROFILE:-}" ]] || die \
-            "TD_IOS_SIGN_STYLE=manual needs TD_IOS_PROFILE set to a provisioning profile name" \
-            "Manual signing uses a profile that already exists in the developer account;" \
-            "automatic signing creates one. Unless you have a reason, use automatic."
-        ;;
-    *) die "TD_IOS_SIGN_STYLE must be 'automatic' or 'manual', not '$SIGN_STYLE'" ;;
-esac
+SIGN_STYLE="${TD_IOS_SIGN_STYLE:-cloud}"
+[[ "$SIGN_STYLE" == cloud ]] || die "iOS signing is cloud-only; local signing is forbidden"
 
 # ------------------------------------------------------------------ preflight
 
@@ -126,6 +117,7 @@ heading "Building $APP_NAME $MARKETING ($BUILD)"
 detail "bundle    $BUNDLE_ID"
 detail "team      $TEAM_ID"
 detail "signing   $SIGN_STYLE"
+detail "identity  Apple cloud-managed distribution; no local iOS certificate"
 detail "key       $KEY_ID, issuer ${ISSUER:0:8}…"
 
 # ------------------------------------------------------------------- archive
@@ -134,6 +126,7 @@ mkdir -p "$RELEASE_DIR"
 ARCHIVE="$RELEASE_DIR/$SCHEME.xcarchive"
 EXPORT_DIR="$RELEASE_DIR/export"
 IPA="$EXPORT_DIR/$SCHEME.ipa"
+require_ios_disk
 rm -rf "$ARCHIVE" "$EXPORT_DIR"
 
 heading "1/4  Archive"
@@ -145,16 +138,14 @@ archive_args=(
     -project "$XCODEPROJ"
     -scheme "$SCHEME"
     -configuration Release
+    -jobs "${TD_IOS_BUILD_JOBS:-2}"
     # Not a simulator and not a specific phone: the one archive that can be
     # thinned by the App Store for every device that will ever run it.
     -destination 'generic/platform=iOS'
     -archivePath "$ARCHIVE"
     -derivedDataPath "$DERIVED_DATA"
     -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
-    # Lets xcodebuild register the App ID and create or renew the provisioning
-    # profile against the developer account instead of failing because neither
-    # exists yet. This is the flag the issuer id is for.
-    -allowProvisioningUpdates
+    # Authenticate if needed, but never allow provisioning updates or creation.
     -authenticationKeyPath "$KEY_PATH"
     -authenticationKeyID "$KEY_ID"
     -authenticationKeyIssuerID "$ISSUER"
@@ -165,13 +156,9 @@ archive_args=(
     "CURRENT_PROJECT_VERSION=$BUILD"
 )
 
-if [[ "$SIGN_STYLE" == "manual" ]]; then
-    archive_args+=(
-        CODE_SIGN_STYLE=Manual
-        "CODE_SIGN_IDENTITY=Apple Distribution"
-        "PROVISIONING_PROFILE_SPECIFIER=$TD_IOS_PROFILE"
-    )
-fi
+archive_args+=(CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=
+              PROVISIONING_PROFILE_SPECIFIER= "DEVELOPMENT_TEAM=$TEAM_ID")
 
 ARCHIVE_LOG="$RELEASE_DIR/archive.log"
 if ! (cd "$IOS_DIR" && xcodebuild archive "${archive_args[@]}" >"$ARCHIVE_LOG" 2>&1); then
@@ -179,17 +166,15 @@ if ! (cd "$IOS_DIR" && xcodebuild archive "${archive_args[@]}" >"$ARCHIVE_LOG" 2
     grep -E 'error:' "$ARCHIVE_LOG" | head -10 >&2 || true
     if grep -q "No profiles for" "$ARCHIVE_LOG"; then
         printf '\n' >&2
-        printf 'xcodebuild could not get a provisioning profile for %s even with the\n' "$BUNDLE_ID" >&2
-        printf 'API key. The usual cause is the key not having permission to manage them:\n' >&2
-        printf 'an App Store Connect key needs the Admin or App Manager role to create App\n' >&2
-        printf 'IDs, certificates and profiles. Check the role next to key %s at\n' "$KEY_ID" >&2
-        printf 'https://appstoreconnect.apple.com/access/integrations/api and, if it is\n' >&2
-        printf 'lower than that, generate a new key — a role cannot be raised in place.\n' >&2
+        printf 'The existing App Store profile for %s is unavailable.\n' "$BUNDLE_ID" >&2
+        printf 'No certificates or profiles were created or updated.\n' >&2
     fi
     die "archive failed" "Full log: $ARCHIVE_LOG"
 fi
 
 APP="$ARCHIVE/Products/Applications/$SCHEME.app"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" == "$BUNDLE_ID" ]] ||
+    die "Archive identity is not $BUNDLE_ID; refusing automatic provisioning"
 pass "archived — $ARCHIVE"
 detail "$(codesign -dv --verbose=2 "$APP" 2>&1 | sed -n 's/^Authority=/signed by /p' | head -1)"
 detail "version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"))"
@@ -202,21 +187,19 @@ heading "2/4  Export"
 # two keys added to it, so the copy is what gets patched and thrown away.
 OPTIONS="$RELEASE_DIR/ExportOptions.resolved.plist"
 cp "$EXPORT_OPTIONS" "$OPTIONS"
-if [[ "$SIGN_STYLE" == "manual" ]]; then
-    /usr/libexec/PlistBuddy -c "Set :signingStyle manual" "$OPTIONS"
-    /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$OPTIONS"
-    /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$BUNDLE_ID string '$TD_IOS_PROFILE'" "$OPTIONS"
-fi
+/usr/libexec/PlistBuddy -c "Set :method app-store-connect" "$OPTIONS"
+/usr/libexec/PlistBuddy -c "Set :signingStyle automatic" "$OPTIONS"
+/usr/libexec/PlistBuddy -c "Set :teamID $TEAM_ID" "$OPTIONS"
 
+CLOUD_SANDBOX="$RELEASE_DIR/CloudSigningOnly.sb"
+prepare_ios_cloud_sandbox "$CLOUD_SANDBOX"
+export_command=(/usr/bin/sandbox-exec -f "$CLOUD_SANDBOX" /usr/bin/xcodebuild -exportArchive)
+export_args=(-archivePath "$ARCHIVE" -exportPath "$EXPORT_DIR"
+             -exportOptionsPlist "$OPTIONS" -allowProvisioningUpdates
+             -authenticationKeyPath "$KEY_PATH" -authenticationKeyID "$KEY_ID"
+             -authenticationKeyIssuerID "$ISSUER")
 EXPORT_LOG="$RELEASE_DIR/export.log"
-if ! xcodebuild -exportArchive \
-        -archivePath "$ARCHIVE" \
-        -exportPath "$EXPORT_DIR" \
-        -exportOptionsPlist "$OPTIONS" \
-        -allowProvisioningUpdates \
-        -authenticationKeyPath "$KEY_PATH" \
-        -authenticationKeyID "$KEY_ID" \
-        -authenticationKeyIssuerID "$ISSUER" >"$EXPORT_LOG" 2>&1; then
+if ! "${export_command[@]}" "${export_args[@]}" >"$EXPORT_LOG" 2>&1; then
     printf '\n'
     grep -E 'error:|Error Domain' "$EXPORT_LOG" | head -10 >&2 || true
     die "export failed" "Full log: $EXPORT_LOG"

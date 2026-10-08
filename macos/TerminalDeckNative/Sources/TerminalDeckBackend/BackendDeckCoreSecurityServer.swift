@@ -87,7 +87,7 @@ public actor BackendDeckCoreSecurityServer {
                 ownPorts: BackendDevOwnPorts, tasks: (any BackendDeckCoreSecurityTaskHTTP)? = nil,
                 listenerFactory: @escaping BackendDeckCoreSecurityListenerFactory = { BackendDeckCoreSecurityNativeListening(handler: $0) },
                 listing: @escaping Listing = { tools, caller, granted in
-                    tools.filter { $0.visible(to: granted, caller: caller) && ($0.tool.advertised || ($0.tool.id == "tools.run" && caller.kind == .key)) }.map { $0.tool.wireValue }
+                    tools.filter { BackendUIGMemoryDiscovery.showsTool($0.tool) && $0.visible(to: granted, caller: caller) && ($0.tool.advertised || ($0.tool.id == "tools.run" && caller.kind == .key)) }.map { $0.tool.wireValue }
                 },
                 authenticated: AuthenticatedExchange? = nil, beforeListing: BeforeListing? = nil) {
         self.control = control; self.keys = keys; self.ownPorts = ownPorts; self.tasks = tasks; self.listenerFactory = listenerFactory; self.listing = listing
@@ -325,7 +325,7 @@ public actor BackendDeckCoreSecurityServer {
         case "tools/call":
             guard let name = message["params"]["name"].string else { return Self.rpcError(id: id, code: -32602, message: "Invalid tools/call params") }
             // Refuse hidden names before dispatch: no log row revealing the hidden tool.
-            if let allowed = grant.tools, !allowed.contains(name) { return result(Self.toolResult(value: .null, error: "no tool called \(name)")) }
+            if let allowed = grant.tools, !RNMHootMCPCompatibility.permits(name, granted: allowed) { return result(Self.toolResult(value: .null, error: "no tool called \(name)")) }
             if let policy = await control.policy(named: name), !policy.visible(to: grant.tools, caller: caller) { return result(Self.toolResult(value: .null, error: "no tool called \(name)")) }
             let options = BackendDeckCoreSecurityCallOptions(caller: caller, attended: grant.attended, granted: grant.tools, cancellation: scope)
             let called = await Self.authenticatedCall(grant: grant, scope: scope, wrapper: authenticated) { [control] in

@@ -434,6 +434,12 @@ struct NativeNewSessionDialog: View {
             }
             projectSection
             if model.server == nil { agentSection }
+            if SourceNamespace.agentSettingsEnabled, model.server == nil, let provider = model.decided?.provider, AGSCapabilities.providers.contains(provider) {
+                DisclosureGroup("Agent settings") {
+                    if model.here { NativeINT2AGSSessionSettings(provider: provider) }
+                    else { Text("This remote machine has not negotiated agent settings. No private overrides will be sent.").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
             if model.here {
                 loginSection
                 Toggle("Remember these choices for this project", isOn: $model.remember)

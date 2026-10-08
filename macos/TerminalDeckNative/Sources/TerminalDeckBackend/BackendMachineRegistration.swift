@@ -101,6 +101,9 @@ public enum BackendMachineRegistration {
         public func disconnect(caller: NativeRPCContext) async { await runtime.callerDisconnected(caller) }
     }
 
+    /// The panels Machines cannot transfer without (the original four); others are optional.
+    public static let requiredPanelDomains: Set<String> = Set(([.artifacts, .store, .readiness, .mcp] as [BackendRemotePanelRegistry.Domain]).map(\.rawValue))
+    public static func hasRequiredPanels(_ supplied: [String]) -> Bool { requiredPanelDomains.isSubset(of: Set(supplied)) }
     /// nil means no area was installed or advertised; the Node route stays.
     /// Other missing/conflicting suppliers throw unavailable before retention.
     public static func register(in composition: BackendCompositionRoot, dependencies: Dependencies?) async throws -> Installed? {
@@ -118,8 +121,11 @@ public enum BackendMachineRegistration {
         guard d.browser.held != nil, d.browser.ownSessions != nil, d.browser.receivedHolds != nil, d.browser.receivedResult != nil, !d.browser.allowedTools.isEmpty else {
             throw unavailable("The authenticated bidirectional native browser binding/dispatcher is incomplete.")
         }
-        guard Set(await d.panels.suppliedDomains()) == Set(BackendRemotePanelRegistry.Domain.allCases.map(\.rawValue)) else {
-            throw unavailable("All four actual native panel providers are required before transferring this area.")
+        // O2 (8 Oct, release blocker): the four original panels must be supplied; the phone panels
+        // widened Domain to cases that are deliberately never supplied (memory, plugins, github,
+        // ai-apps), so equality with allCases made every launch fail.
+        guard Self.hasRequiredPanels(await d.panels.suppliedDomains()) else {
+            throw unavailable("The four required native panel providers (artifacts, store, readiness, mcp) must be registered before transferring this area.")
         }
         try await d.requireSuppliers()
         try Task.checkCancellation()

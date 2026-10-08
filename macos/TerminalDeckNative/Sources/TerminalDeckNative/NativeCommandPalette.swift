@@ -51,7 +51,7 @@ struct NativeCommandPalette: View {
         case .sessions:
             return hits.enumerated().map { .session($0.element, $0.offset) }
         case .commands:
-            return Fuzzy.rank(request.commands, term.text, limit: Palette.maxResults) { $0.searchText }
+            return Fuzzy.rank(UIGMemoryVisibility.palette(request.commands), term.text, limit: Palette.maxResults) { $0.searchText }
                 .map { .command($0.item, Fuzzy.clamp($0.ranges, from: 0, to: $0.item.title.utf16.count)) }
         case .files:
             let candidates = term.text.trimmingCharacters(in: .whitespaces).isEmpty

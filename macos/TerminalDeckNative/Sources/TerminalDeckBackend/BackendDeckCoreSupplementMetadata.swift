@@ -51,15 +51,15 @@ public enum BackendDeckCoreSupplementMetadata {
     "wire": "tasks_get",
     "title": "Read a CRM task",
     "index": "One CRM task: its instructions, its CRM status and its result.",
-    "audience": "copilot"
+    "keyGrant": "tasks"
   },
   {
     "module": "../tasks/task-tools",
     "id": "tasks.delegate",
     "wire": "tasks_delegate",
     "title": "Hand part of a CRM task to an agent",
-    "index": "Ask the CRM to create a child task for one of your agents, by name.",
-    "audience": "copilot"
+    "index": "Create a linked child task for a partner agent, within the handoff limit.",
+    "keyGrant": "tasks"
   },
   {
     "module": "../tasks/task-tools",
@@ -123,6 +123,14 @@ public enum BackendDeckCoreSupplementMetadata {
     "wire": "tasks_agents",
     "title": "Task agents",
     "index": "List, create, change or remove the task agents your tasks can be given to: their role, coding agent, model, instructions, tools and skills.",
+    "keyGrant": "tasks"
+  },
+  {
+    "module": "../tasks/local-task-tools",
+    "id": "tasks.agents_import",
+    "wire": "tasks_agents_import",
+    "title": "Import Claude Code agents",
+    "index": "Import agent definitions from .claude/agents and keep profiles synced to source changes.",
     "keyGrant": "tasks"
   },
   {

@@ -86,7 +86,45 @@ enum BackendDeckCoreTestPortS1CatalogueCostSources {
                 description: row["description"].requireString("description"), inputSchema: row["inputSchema"], tier: tier, advertised: false)
             definitions.append(BackendDeckToolsDefinition(spec: spec, title: row["title"].string ?? "", index: row["index"].string, handler: handler))
         }
+        // Tonight's native factories replace the legacy readiness pair and
+        // add guided Stays Fixed setup. Keep the registrar's exact-set check.
+        definitions.removeAll { BackendAIRReadinessTools.toolIDs.contains($0.spec.id) }
+        definitions += try roundTwoDefinitions()
         return definitions
+    }
+
+    private static func roundTwoDefinitions() throws -> [BackendDeckToolsDefinition] {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SFX-catalogue-unused")
+        let files = BackendFilesystemService(authority: BackendFilesystemAuthority { _ in
+            BackendFilesystemScope(readRoots: [], writeRoots: [])
+        })
+        let projects = try BackendProjectService(store: NativeStateStore(), files: files,
+            home: root.path, appDataRoot: root, liveSessions: { [] })
+        let readiness = BackendAIRReadinessService(projects: projects,
+            scan: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("scan readiness") },
+            callerIdentity: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("identify a caller") },
+            approve: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("approve a fix") },
+            authorizeMutation: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("change a project") })
+        let airAccess = BackendAIRReadinessToolAccess(
+            rpcContext: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve RPC") },
+            knownFolder: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve a folder") },
+            authorizeRead: { _, _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("authorize a read") },
+            noteResult: { _, _ in },
+            authorizeLaunch: { _, _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("approve a launch") },
+            launchAI: { _, _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("launch AI") })
+        let setup = BackendSFXSetupService(
+            plan: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("preview setup") },
+            setup: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("save setup") })
+        let fixedAccess = BackendDeckToolsAppAccess(
+            caller: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve a caller") },
+            knownFolder: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve a folder") },
+            session: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve a session") },
+            runnableProject: { _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve a project") },
+            rpc: { _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("resolve RPC") },
+            authorize: { _, _, _, _, _, _ in throw backendDeckCoreTestPortS1CatalogueCostUnused("authorize setup") },
+            record: { _, _, _, _ in })
+        return try BackendAIRReadinessTools.definitions(service: readiness, access: airAccess)
+            + BackendSFXMCP.definitions(service: setup, access: fixedAccess)
     }
 
     /// BackendCompositionRoot.installDeckTools: the registrar, then one bundle per area.
@@ -266,8 +304,10 @@ final class BackendDeckCoreTestPortS1CatalogueCostTests: BackendDeckCoreTestPort
         XCTAssertGreaterThan(a.shipped.count, 140)
         // And it is the runtime's own list, not a second one assembled beside it.
         let (_, tools) = try await runtimeCost(a)
-        XCTAssertEqual(tools.count, a.shipped.count)
-        XCTAssertEqual(Set(tools), Set(a.shipped.map { $0.tool.id }))
+        let visible = a.shipped.filter { BackendUIGMemoryDiscovery.showsTool($0.tool) }
+        XCTAssertEqual(a.shipped.count - visible.count, 2)
+        XCTAssertEqual(tools.count, visible.count)
+        XCTAssertEqual(Set(tools), Set(visible.map { $0.tool.id }))
     }
 
     // TSCASE catalogue-cost.test.ts:122
@@ -309,7 +349,8 @@ final class BackendDeckCoreTestPortS1CatalogueCostTests: BackendDeckCoreTestPort
     func testCatalogueCostL157NamesTheAreasNotEveryHeldTool() async throws {
         let a = try await assembly()
         let description = try advertised(a.shipped).first { $0.tool.wireName == Describe.wire }?.tool.description ?? ""
-        for area in Describe.areas { XCTAssertTrue(description.contains("\(area.id) — "), area.id) }
+        for area in Describe.areas where area.id != "memory" { XCTAssertTrue(description.contains("\(area.id) — "), area.id) }
+        XCTAssertFalse(description.contains("memory — "))
         // No per-tool lines: that is the bill this replaced.
         XCTAssertFalse(description.contains("sessions_wait —"))
         XCTAssertFalse(description.contains("browser_passwords —"))

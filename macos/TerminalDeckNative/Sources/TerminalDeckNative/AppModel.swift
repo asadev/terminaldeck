@@ -127,16 +127,30 @@ final class AppModel {
             pageTitle = title
             pageSubtitle = subtitle
         case .sidebar(let state):
+            var filtered = UIGMemoryVisibility.sidebar(state)
+            if let selected = state.selectedId, let original = state.item(id: selected),
+               !UIGMemoryVisibility.showsSidebarItem(original) {
+                let rows = filtered.groups.flatMap(\.items) + filtered.projects.flatMap(\.sessions)
+                let replacement = rows.first { $0.kind.name == "panel" && $0.id == "tasks" }
+                    ?? rows.first { $0.kind.name == "session" }
+                    ?? rows.first { $0.kind.name == "panel" }
+                filtered.selectedId = replacement?.id
+                if let replacement { send(.select(replacement.id)) }
+            }
             // The page moved its own selection: follow it, away from a browser tab.
-            if state.selectedId != lastPageSelectedId { activeBrowserTab = nil }
-            lastPageSelectedId = state.selectedId
-            sidebar = state
-            sidebarSelection = state.selectedId
+            let pageSelectionChanged = filtered.selectedId != lastPageSelectedId
+            if pageSelectionChanged { activeBrowserTab = nil }
+            lastPageSelectedId = filtered.selectedId
+            sidebar = NativeRCVNavigation.sidebar(NativeINT2Navigation.sidebar(filtered)) // RCV
+            if pageSelectionChanged || (sidebarSelection != NativeINT2Navigation.watchID && sidebarSelection != NativeRCVNavigation.id) {
+                sidebarSelection = filtered.selectedId
+            }
         case .tabs(let state):
-            let active = state.activeID
+            let filtered = UIGMemoryVisibility.tabs(state)
+            let active = filtered.activeID
             if active != lastActiveTabId, active != nil { activeBrowserTab = nil }
             lastActiveTabId = active
-            tabs = state
+            tabs = filtered
         case .openSettings(let url, let section):
             showSettings(url, section: section)
         case .openWindow(let ref, let title):
@@ -201,6 +215,11 @@ final class AppModel {
 
     private func receiveDialog(_ request: DialogRequest, from source: WebBridge) {
         if let current = dialogs[request.name], current.seq > request.seq { return } // an older opening, late
+        if request.open, request.name == NativeDialogName.copilotSetup,
+           source === web, UserDefaults.standard.bool(forKey: "hoot.setup.dismissed.v1") {
+            source.run(DialogCommand(request.name, "done"))
+            return
+        }
         if request.open {
             dialogs[request.name] = request
             dialogSources[request.name] = source
@@ -213,6 +232,9 @@ final class AppModel {
     /// Answer a dialog: the page runs the same code its own dialog would. Closing
     /// answers close it here at once (the page confirms with `open: false`).
     func answerDialog(_ name: String, _ action: String, argument: [String: Any]? = nil, closes: Bool = true) {
+        if name == NativeDialogName.copilotSetup, closes {
+            UserDefaults.standard.set(true, forKey: "hoot.setup.dismissed.v1")
+        }
         (dialogSources[name] ?? web).run(DialogCommand(name, action, argument: argument))
         if closes {
             dialogs[name] = nil
@@ -250,15 +272,37 @@ final class AppModel {
 
     /// Ask whichever window is up to open (or focus) this screen's window.
     func openScreenWindow(_ ref: ScreenRef, title: String? = nil) {
+        guard UIGMemoryVisibility.showsScreen(ref) else {
+            engine.log.note("screen window open: \(ref.screenKind)/\(ref.id) refused by visibility")
+            return
+        }
         if let title { screenTitles[ref] = title }
         if !pendingScreens.contains(ref) { pendingScreens.append(ref) }
         screenWindowRequest += 1
+        engine.log.note("screen window open: \(ref.screenKind)/\(ref.id) queued; "
+                       + (NativeFront.personActing ? "person acting" : "kept behind until the app is active"))
+    }
+
+    /// Keep the screen in its pop-out until a deferred return can open main.
+    func returnScreenToMain(_ ref: ScreenRef, from window: NSWindow?,
+                            openMain: @escaping @MainActor () -> Void,
+                            closeWindow: @escaping @MainActor () -> Void) {
+        engine.log.note("screen window return: \(ref.screenKind)/\(ref.id); "
+                       + (NativeFront.personActing ? "person acting" : "kept behind until the app is active"))
+        NativeFront.whenPersonActs("return-screen:\(ref.kind.rawValue):\(ref.id)") { [weak self, weak window] in
+            guard let self else { return }
+            self.detachScreen(ref)
+            if ref.kind == .session { NativePoppedSessions.shared.gone(ref.id, from: window) }
+            openMain()
+            if ref.kind == .panel { self.select(ref.id) } else { self.selectTab(ref.id) }
+            closeWindow()
+        }
     }
 
     /// The screens waiting for a window — handed out once.
     func takePendingScreens() -> [ScreenRef] {
         defer { pendingScreens = [] }
-        return pendingScreens
+        return UIGMemoryVisibility.restoredScreens(pendingScreens)
     }
 
     // MARK: Screens in their own windows
@@ -322,7 +366,7 @@ final class AppModel {
     /// The screen windows that were open when the app last quit — handed out once.
     func takeScreensToRestore() -> [ScreenRef] {
         defer { screensToRestore = [] }
-        return screensToRestore
+        return UIGMemoryVisibility.restoredScreens(screensToRestore)
     }
 
     /// The screen's symbol as the sidebar or tab strip shows it ("" if unknown).
@@ -425,6 +469,8 @@ final class AppModel {
     /// active tab (it marks none while a panel covers the tabs), else the sidebar's selection.
     var currentScreen: (kind: String, id: String)? {
         if let shownBrowserTab { return ("browser", shownBrowserTab) }
+        if sidebarSelection == NativeINT2Navigation.watchID { return ("panel", NativeINT2Navigation.watchID) }
+        if sidebarSelection == NativeRCVNavigation.id { return ("panel", NativeRCVNavigation.id) } // RCV
         if let tab = visibleTabs?.tabs.first(where: \.active) { return (tab.kind, tab.id) }
         if let id = sidebarSelection, let item = sidebar?.item(id: id) { return (item.kind.name, id) }
         return nil
@@ -512,6 +558,7 @@ final class AppModel {
     // MARK: Actions → page
 
     private func send(_ command: PageCommand) {
+        guard UIGMemoryVisibility.showsPageCommand(command) else { NSSound.beep(); return }
         guard canRun else { NSSound.beep(); return }
         web.run(command)
     }
@@ -523,6 +570,9 @@ final class AppModel {
     func newSession(in projectPath: String) { send(.newSessionIn(projectPath)) }
     func closeProject(_ projectPath: String) { send(.closeProject(projectPath)) }
     func selectTab(_ id: String) {
+        let kind = tabs?.tabs.first(where: { $0.id == id })?.kind
+            ?? sidebar?.item(id: id)?.kind.name ?? (isBrowserTab(id) ? "browser" : "panel")
+        guard UIGMemoryVisibility.showsScreen(kind: kind, id: id) else { return }
         if let provider = BrowserTabsHook.provider, isBrowserTab(id) {
             activeBrowserTab = id
             provider.selectBrowserTab(id)
@@ -571,6 +621,7 @@ final class AppModel {
 
     func select(_ id: String?) {
         guard let id else { return }
+        guard UIGMemoryVisibility.showsScreen(kind: sidebar?.item(id: id)?.kind.name ?? "panel", id: id) else { return }
         // The bell opens the Alerts sheet over whatever is on show; it is not a place
         // (the web rail's bell is a button), so the selection stays where it was.
         if id == "alerts" {
@@ -581,6 +632,7 @@ final class AppModel {
         activeBrowserTab = nil
         guard id != sidebarSelection || wasBrowser else { return }
         sidebarSelection = id
+        if id == NativeINT2Navigation.watchID || id == NativeRCVNavigation.id { return }
         send(.select(id))
     }
 

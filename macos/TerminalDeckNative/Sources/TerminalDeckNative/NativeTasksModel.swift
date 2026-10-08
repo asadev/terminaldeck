@@ -80,6 +80,12 @@ final class TasksStore {
 
     func clearOpenRequest() { openRequest = nil }
 
+    /// Linked tasks can live in another project; reveal that project before opening.
+    func openTask(_ id: String) {
+        TKTasksProjectScope.shared.reveal(id, in: state)
+        openRequest = (id, Date())
+    }
+
     // MARK: Calls
 
     /// One call on a `tasks:*` channel, as a result: never a throw.
@@ -118,7 +124,7 @@ final class TasksStore {
         local.assignee = draft["assignee"] as? String ?? "none"
         local.status = draft["status"] as? String ?? "To-Do"
         local.goalId = draft["goalId"] as? String ?? ""
-        switch local.payload() {
+        switch local.payload(agents: state?.agents ?? []) {
         case .failure(let problem):
             return .refused(problem.message)
         case .success(var payload):

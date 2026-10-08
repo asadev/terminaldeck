@@ -369,6 +369,14 @@ function Workspace() {
    */
   const copilotSetup = useCopilotSetup()
   const [copilotSetupOpen, setCopilotSetupOpen] = useState(false)
+  const hootSetupRequest = useRef(0)
+  const hootSetupVisible = useRef(false)
+  const closeHootSetup = useCallback(() => {
+    hootSetupRequest.current += 1
+    if (hootSetupVisible.current) copilotSetup.dismiss()
+    hootSetupVisible.current = false
+    setCopilotSetupOpen(false)
+  }, [copilotSetup.dismiss])
 
   /**
    * The fleet, and the copilot, told apart — because they are not the same list
@@ -2705,6 +2713,7 @@ function Workspace() {
 
   const selectTab = useCallback(
     (id: string) => {
+      closeHootSetup()
       /*
        * A session on another machine, opened in the pane the way a local one is.
        *
@@ -2808,7 +2817,7 @@ function Workspace() {
       if (!windowSessions.some((session) => session.id === id)) return
       setActiveSession(id)
     },
-    [windowSessions, setActiveSession, showTab, clearPanel],
+    [windowSessions, setActiveSession, showTab, clearPanel, closeHootSetup],
   )
   selectTabRef.current = selectTab
 
@@ -3844,6 +3853,7 @@ function Workspace() {
    */
   const showPanel = useCallback(
     (id: PanelId, focus: string | null = null) => {
+      closeHootSetup()
       setPanelFocus(focus)
       selectPanel(id)
       // And a remote session on screen, for the reason `selectTab` gives: it
@@ -3859,7 +3869,7 @@ function Workspace() {
       // `selectTab`, which does the same for the same reason.
       setCopilotPending(false)
     },
-    [selectPanel],
+    [selectPanel, closeHootSetup],
   )
   // A task reminder clicked: the Tasks page, that task open.
   useEffect(() => window.deck.onTasksOpen?.((taskId) => showPanel('tasks', `task:${taskId}@${Date.now()}`)), [showPanel])
@@ -3937,12 +3947,15 @@ function Workspace() {
    */
   const openCopilot = useCallback(
     (turn?: string | null) => {
+      const request = ++hootSetupRequest.current
       void copilotSetup.hasRun().then((ran) => {
+        if (request !== hootSetupRequest.current) return
         if (ran) {
           showCopilot(turn)
           return
         }
         setCopilotTurn(turn ?? null)
+        hootSetupVisible.current = true
         setCopilotSetupOpen(true)
       })
     },
@@ -5114,11 +5127,11 @@ function Workspace() {
   }, [nativeCopilotSetup, copilotSetupOpen])
   dialogHandlers.current[NATIVE_DIALOGS.copilotSetup] = (action) => {
     if (action === 'close') {
-      setCopilotSetupOpen(false)
+      closeHootSetup()
       return true
     }
     if (action !== 'done') return false
-    setCopilotSetupOpen(false)
+    closeHootSetup()
     copilotSetup.reload()
     showCopilot(copilotTurn)
     return true
@@ -8415,9 +8428,9 @@ function Workspace() {
       */}
       <CopilotSetup
         open={copilotSetupOpen && !nativeCopilotSetup}
-        onClose={() => setCopilotSetupOpen(false)}
+        onClose={closeHootSetup}
         onDone={() => {
-          setCopilotSetupOpen(false)
+          closeHootSetup()
           copilotSetup.reload()
           showCopilot(copilotTurn)
         }}

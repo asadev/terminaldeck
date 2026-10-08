@@ -530,8 +530,8 @@ private struct FieldChipToggle: View {
         Button(action: action) {
             Text(title).font(.caption)
                 .padding(.horizontal, 10).frame(height: 28)
-                .background(Capsule().fill(on ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1)))
-                .overlay(Capsule().stroke(on ? Color.accentColor.opacity(0.5) : .clear))
+                .background(Capsule().fill(on ? Color.primary.opacity(0.12) : Color.secondary.opacity(0.1)))
+                .overlay(Capsule().stroke(on ? Color.secondary.opacity(0.45) : .clear))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -1411,9 +1411,9 @@ private struct VotingButton: View {
                 Text("\(votes.count)").monospacedDigit()
             }
             .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(mine ? Color.accentColor : .secondary)
+            .foregroundStyle(mine ? Color.primary : .secondary)
             .padding(.horizontal, 10).frame(height: 28)
-            .background(Capsule().fill(mine ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12)))
+            .background(Capsule().fill(mine ? Color.primary.opacity(0.12) : Color.secondary.opacity(0.12)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -1637,7 +1637,7 @@ struct FieldConfigForm: View {
                             let on = (config.icon ?? .star) == r
                             Button { config.icon = r } label: {
                                 Text(r.glyph).foregroundStyle(Color.orange).frame(width: 32, height: 32)
-                                    .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1)))
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.primary.opacity(0.12) : Color.secondary.opacity(0.1)))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(r.label)

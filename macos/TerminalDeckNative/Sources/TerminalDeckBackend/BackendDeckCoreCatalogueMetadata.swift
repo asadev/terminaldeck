@@ -31,6 +31,7 @@ public struct BackendDeckCoreCatalogueMetadata: Sendable {
         return granted == nil || granted!.contains(tool.id) || granted!.contains(tool.wireName) || aliases.contains { granted!.contains($0) }
     }
     public func asListed(keyCaller: Bool) -> Self? {
+        guard BackendUIGMemoryDiscovery.showsTool(tool) else { return nil }
         if audience == "keys" && !keyCaller || audience == "copilot" && keyCaller { return nil }
         return Self(tool: tool, title: title, aliases: aliases, index: index ?? (keyCaller ? keyIndex : nil),
                     audience: audience, keyIndex: keyIndex, keyGrant: keyGrant)
@@ -116,12 +117,12 @@ public enum BackendDeckCoreCatalogueDescribe {
         .init(id: "sessions", covers: "sessions beyond the listed tools (wait for an answer, press keys, read the screen, rename, switch account, held sessions), past conversations, projects, files, git, dev servers, the overview, and Stays Fixed checks (that nothing which already worked has changed)", prefixes: ["sessions", "chats", "projects", "files", "git", "dev", "dashboard", "artifacts", "alerts", "log", "tour", "fixed"]),
         // Asad retired Chrome imports/extensions; the native index names the Safari features that remain.
         .init(id: "browser", covers: "the built-in browser beyond the listed verbs: windows, toolbar, downloads, history, profiles, saved logins, site data, sign-in help, scraping, worker profiles and downloading files", prefixes: ["browser", "assets"]),
-        .init(id: "machines", covers: "other paired computers and their sessions, servers (sites, logs, terminals), who can reach this computer, and GitHub", prefixes: ["machines", "servers", "remote", "github"]),
+        .init(id: "machines", covers: "other paired computers and their sessions, servers (apps, deploys, addresses, databases, backups, advanced Docker resources, logs and terminals), who can reach this computer, and GitHub", prefixes: ["machines", "servers", "docker", "apps", "remote", "github"]),
         .init(id: "agents", covers: "the coding agents, their logins, models and controls, their MCP servers and hooks, routines, usage and cost, dictation, setup and readiness checks, the community store, and tasks — your own and CRM tasks — with the task agents", prefixes: ["agents", "accounts", "mcp", "hooks", "routines", "usage", "voice", "setup", "readiness", "store", "tasks", "crm"]),
         .init(id: "knowledge", covers: "what is known about a project and how sure: verified results, claims, decisions, constraints, architecture, what is stale or in conflict — and recording or replacing it", prefixes: ["knowledge"]),
         .init(id: "devices", covers: "iOS Simulators, Android emulators and USB Android phones on this Mac: list, start, see, tap, swipe, type, buttons, the elements on screen, and what a person marked with Annotate", prefixes: ["devices"]),
         .init(id: "memory", covers: "your own memory notes — the ones your agent keeps and reads at the start — searched and read, with their links", prefixes: ["memory"]),
-        .init(id: "app", covers: "this app itself: version, logs, diagnostics, updates, settings, notifications, Hoot, clicks in its window, sessions in windows of their own and the monitors, opening links, and what this tool server covers", prefixes: ["app", "settings", "updates", "notifications", "hoot", "ui", "windows", "links", "tools"])
+        .init(id: "app", covers: "this app itself: version, logs, diagnostics, updates, settings, notifications, Hoot, clicks in its window, sessions in windows of their own and the monitors, opening links, access requests, and what this tool server covers", prefixes: ["app", "settings", "updates", "notifications", "hoot", "ui", "windows", "links", "tools", "access"])
     ]
     public static let description = "Get the full schema for one of the tools listed below. They are real tools you can call; their arguments are fetched here rather than sent on every turn. Ask for the ones you need, then call them."
     public static let areaDescription = "Most of this server’s tools are held back to keep this list short, grouped into the areas below. Call this with an area to list what it has, then with the tool names you want to get their arguments, then call them."
@@ -131,11 +132,11 @@ public enum BackendDeckCoreCatalogueDescribe {
     }
     public static func covers(_ id: String) -> String { areas.first { $0.id == id }?.covers ?? "the \(id) tools" }
     public static func index(_ behind: [BackendDeckCoreCatalogueMetadata]) -> String {
-        behind.map { "\($0.tool.wireName) — \($0.index ?? $0.title)" }.joined(separator: "\n")
+        BackendUIGMemoryDiscovery.metadata(behind).map { "\($0.tool.wireName) — \($0.index ?? $0.title)" }.joined(separator: "\n")
     }
     public static func areaIndex(_ behind: [BackendDeckCoreCatalogueMetadata]) -> String {
         var counts: [String: Int] = [:]
-        for spec in behind { counts[areaOf(spec.tool.id), default: 0] += 1 }
+        for spec in BackendUIGMemoryDiscovery.metadata(behind) { counts[areaOf(spec.tool.id), default: 0] += 1 }
         let order = areas.map(\.id)
         return counts.keys.sorted { a, b in
             let ia = order.firstIndex(of: a) ?? order.count, ib = order.firstIndex(of: b) ?? order.count
@@ -181,7 +182,12 @@ public enum BackendDeckCoreCatalogueDescribe {
             let inside = catalogue.compactMap { $0.asListed(keyCaller: caller.kind == .key) }.filter {
                 $0.tool.id != id && areaOf($0.tool.id) == area && $0.visible(to: granted, caller: caller)
             }
-            if inside.isEmpty { unknown.append("no area called \(area)") }
+            if inside.isEmpty {
+                if area == "agents", caller.kind == .key, !caller.tasks,
+                   catalogue.contains(where: { $0.keyGrant == "tasks" && areaOf($0.tool.id) == "agents" && $0.asListed(keyCaller: true) != nil }) {
+                    answer = BackendDeckCoreCatalogueRules.object([("area", .string(area)), ("covers", .string(covers(area))), ("held", .array([])), ("alreadyListed", .array([]))])
+                } else { unknown.append("no area called \(area)") }
+            }
             else {
                 let held = inside.filter { $0.index != nil }
                 heldCount = held.count
@@ -191,6 +197,12 @@ public enum BackendDeckCoreCatalogueDescribe {
                         ("name", .string(spec.tool.wireName)), ("tier", .string(spec.tool.tier.rawValue)), ("does", .string(spec.index ?? spec.title))
                     ]) })), ("alreadyListed", BackendDeckCoreCatalogueRules.strings(inside.filter { $0.index == nil }.map { $0.tool.wireName }))
                 ])
+            }
+        }
+        if area == "agents", caller.kind == .key, !caller.tasks {
+            let hidden = catalogue.filter { $0.keyGrant == "tasks" && areaOf($0.tool.id) == "agents" && $0.asListed(keyCaller: true) != nil }.count
+            if hidden > 0 {
+                answer = answer.setting("taskToolsHidden", .number(Double(hidden))).setting("note", .string("\(hidden) task tools hidden. Turn on 'Your tasks' for key \(caller.keyName ?? caller.keyID ?? "this key") in Settings → Connect an AI app."))
             }
         }
         for name in names {

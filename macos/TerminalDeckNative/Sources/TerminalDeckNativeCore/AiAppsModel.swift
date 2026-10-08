@@ -79,6 +79,8 @@ public struct AiAccessKey: Equatable, Sendable, Identifiable {
     public let notifyMode: AiNotifyMode
     public let notifyURL: String?
     public let hasSecret: Bool
+    /// Owner-granted scopes reported by the backend; nil reads older key views.
+    public var grantedScopes: [String]? = nil
 }
 
 public struct AiDelivery: Equatable, Sendable {
@@ -160,7 +162,8 @@ public struct AiAppsState: Equatable, Sendable {
             lastVia: ["this-mac", "internet"].contains(raw["lastVia"].string ?? "") ? raw["lastVia"].string : nil,
             notifyMode: mode,
             notifyURL: notify["url"].text,
-            hasSecret: notify["hasSecret"].isTrue
+            hasSecret: notify["hasSecret"].isTrue,
+            grantedScopes: raw["grantedScopes"].array.map { $0.compactMap(\.string) }
         )
     }
 
@@ -265,6 +268,22 @@ public enum AiAppsLines {
     /// The second line under a key: where it may work, and for Full control whether it asks first.
     public static func scope(_ key: AiAccessKey) -> String {
         folders(key.folders) + (key.level == .full ? (key.askFirst ? " · Asks before big changes" : " · Big changes without asking") : "")
+    }
+
+    public static func grantedScopes(_ key: AiAccessKey) -> String {
+        let fallback = ["look"] + (key.level == .look ? [] : ["work"]) + (key.level == .full ? ["full"] : []) + (key.tasks ? ["tasks"] : [])
+        var scopes: [String] = []
+        for scope in key.grantedScopes ?? fallback where !scopes.contains(scope) { scopes.append(scope) }
+        let labels = scopes.map { scope in
+            switch scope {
+            case "look", "read": "Read"
+            case "work": "Run actions"
+            case "full": "Full control"
+            case "tasks": "Your tasks"
+            default: scope
+            }
+        }
+        return "Granted scopes: \(labels.isEmpty ? "None" : labels.joined(separator: " · "))"
     }
 
     /// `deliveryLine`.

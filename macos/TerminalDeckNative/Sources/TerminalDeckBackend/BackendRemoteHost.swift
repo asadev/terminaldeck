@@ -18,6 +18,7 @@ public struct BackendRemoteHostContext: Sendable {
     public let peerPublicKey: Data?
     public let claimedCapabilities: Set<String>
     public let reach: BackendRemoteDeviceReach
+    public var phoneAccess: BackendINT2PhoneAccessLevel? = nil
     public var rpcContext: NativeRPCContext { .init(caller: .pairedDevice, ownerID: deviceID, capabilities: ["filesystem.read", "git.read", "state.read"]) }
 }
 public struct BackendRemoteCreateRequest: Sendable {
@@ -33,10 +34,13 @@ public struct BackendRemoteHostFeature: Sendable {
     public let messageTypes: Set<String>
     public let policy: Policy
     public let sessionField: String?
+    public let additionalAdvertisedCapabilities: Set<String>
     public let handle: @Sendable (BackendRemoteClientMessage, BackendRemoteHostContext) async throws -> [BackendRemoteServerMessage]
     public init(capability: String, messageTypes: Set<String>, policy: Policy = .ownerOnly, sessionField: String? = nil,
+                additionalAdvertisedCapabilities: Set<String> = [],
                 handle: @escaping @Sendable (BackendRemoteClientMessage, BackendRemoteHostContext) async throws -> [BackendRemoteServerMessage]) {
         self.capability = capability; self.messageTypes = messageTypes; self.policy = policy; self.sessionField = sessionField; self.handle = handle
+        self.additionalAdvertisedCapabilities = additionalAdvertisedCapabilities
     }
 }
 public struct BackendRemoteHostOperations: Sendable {
@@ -126,7 +130,9 @@ public actor BackendRemoteHost {
     public func setPairingSpentHandler(_ handler: (@Sendable () async -> Void)?) { pairingSpent = handler }
     public func setDeviceDisconnectedHandler(_ handler: (@Sendable (String) async -> Void)?) { deviceDisconnected = handler }
     public func register(_ feature: BackendRemoteHostFeature) throws {
-        guard BackendRemoteProtocol.capabilities.contains(feature.capability), !feature.messageTypes.isEmpty else { throw NativeRPCError.invalidArguments("The remote feature has no known capability or messages") }
+        guard BackendRemoteProtocol.capabilities.contains(feature.capability),
+              feature.additionalAdvertisedCapabilities.isSubset(of: BackendRemoteProtocol.capabilities),
+              !feature.messageTypes.isEmpty else { throw NativeRPCError.invalidArguments("The remote feature has no known capability or messages") }
         for type in feature.messageTypes {
             guard features[type] == nil, !Self.baseline.contains(type) else { throw NativeRPCError.invalidArguments("A remote handler already owns \(type)") }
         }
@@ -142,7 +148,9 @@ public actor BackendRemoteHost {
         }
         var tags = Set<String>()
         for feature in additions {
-            guard BackendRemoteProtocol.capabilities.contains(feature.capability), !feature.messageTypes.isEmpty else { throw NativeRPCError.malformed("Unknown remote feature capability") }
+            guard BackendRemoteProtocol.capabilities.contains(feature.capability),
+                  feature.additionalAdvertisedCapabilities.isSubset(of: BackendRemoteProtocol.capabilities),
+                  !feature.messageTypes.isEmpty else { throw NativeRPCError.malformed("Unknown remote feature capability") }
             for tag in feature.messageTypes {
                 guard tags.insert(tag).inserted, features[tag] == nil, !Self.baseline.contains(tag) else { throw NativeRPCError.malformed("A remote handler already owns \(tag)") }
             }
@@ -165,6 +173,11 @@ public actor BackendRemoteHost {
         }
         return current
     }
+    public func panelSessionIDs(_ previous: BackendRemoteHostContext) async throws -> Set<String> {
+        let current = try await refreshedContext(previous)
+        try await trust.requirePhoneAccess(current.deviceID, message: "list")
+        return Set(try await sessions(current).compactMap { $0["id"].string })
+    }
     /// Validate everything before publishing any feature/supplier ownership.
     public func installRemoteServe(ownerID: String, features additions: [BackendRemoteHostFeature],
                                    suppliers: BackendRemoteServeRegistration.Suppliers,
@@ -175,7 +188,9 @@ public actor BackendRemoteHost {
         guard let ptySource else { throw NativeRPCError(code: "unavailable", message: "The atomic native PTY replay source is unavailable.") }
         var tags = Set<String>()
         for feature in additions {
-            guard BackendRemoteProtocol.capabilities.contains(feature.capability), !feature.messageTypes.isEmpty else { throw NativeRPCError.malformed("Unknown remote feature capability") }
+            guard BackendRemoteProtocol.capabilities.contains(feature.capability),
+                  feature.additionalAdvertisedCapabilities.isSubset(of: BackendRemoteProtocol.capabilities),
+                  !feature.messageTypes.isEmpty else { throw NativeRPCError.malformed("Unknown remote feature capability") }
             for tag in feature.messageTypes {
                 guard tags.insert(tag).inserted, features[tag] == nil, !Self.baseline.contains(tag) else { throw NativeRPCError.malformed("A remote handler already owns \(tag)") }
             }
@@ -247,6 +262,7 @@ public actor BackendRemoteHost {
         }; return result
     }
     public func remoteServeDropDevice(_ id: String) async {
+        await phoneAccessChanged(id)
         for connection in live.keys.filter({ live[$0]?.device?.id == id }) { await disconnect(connection, code: 1008, reason: "This device is no longer approved.") }
     }
     public func remoteServeFoldersChanged(_ id: String) async {
@@ -255,6 +271,20 @@ public actor BackendRemoteHost {
             try? await send(connection, .init(.folders, fields: [.init("folders", .array(context.reach.folders.map(NativeRPCValue.string)))]))
         }
         await refreshGrants()
+    }
+    public func phoneAccessChanged(_ deviceID: String) async {
+        for id in Array(live.keys) where live[id]?.device?.id == deviceID {
+            try? await sendPhoneAccess(id, deviceID: deviceID)
+            guard await trust.phoneAccess(deviceID) == nil else { continue }
+            live[id]?.attached.removeAll(); live[id]?.attachmentBoundaries.removeAll()
+            live[id]?.pendingAttachmentEvents.removeAll()
+        }
+        announce()
+    }
+    private func sendPhoneAccess(_ id: UUID, deviceID: String) async throws {
+        guard live[id]?.capabilities.contains("device.access") == true else { return }
+        let level = await trust.phoneAccess(deviceID)
+        try await send(id, .init(.deviceAccess, fields: [.init("level", level.map { .string($0.rawValue) } ?? .null)]))
     }
     public func remoteServeAskWindows(deviceID: String, message: BackendRemoteServerMessage) async throws -> Int {
         var delivered = 0
@@ -389,6 +419,8 @@ public actor BackendRemoteHost {
         if message.type == "enroll" { try await enroll(id, message); return }
         if message.type == "ping" { try await send(id, .init(.pong, fields: [])); return }
         guard let context = try await context(id) else { await refuse(id, code: "unauthenticated", message: "Say hello before opening a session.", close: 1008); return }
+        do { try await trust.requirePhoneAccess(context.deviceID, message: message.type, panel: message["panel"].string) }
+        catch { await refuse(id, code: "unauthorized", message: "This device's current host access does not permit that action."); return }
         switch message.type {
         case "list": try await sendSessions(id, context: context)
         case "attach":
@@ -434,6 +466,7 @@ public actor BackendRemoteHost {
             let session = message["id"].string!
             guard live[id]?.attached.contains(session) == true else { await unknown(id, session); return }
             guard try await visible(session, context: context) else { await refuse(id, code: "unauthorized", message: BackendRemoteServeSessionPolicy.unsharedMessage); return }
+            try await trust.requirePhoneAccess(context.deviceID, message: message.type)
             if let ptySource {
                 if message.type == "input" { try ptySource.write(session, data: message["data"].string!) }
                 else { try ptySource.resize(session, cols: Int(message["cols"].number!), rows: Int(message["rows"].number!)) }
@@ -445,7 +478,8 @@ public actor BackendRemoteHost {
                 guard let creator = lease.suppliers.create else { await unavailable(id, "This host cannot start a session."); return }
                 let outcome = await creator.create(.init(message: message, deviceID: context.deviceID))
                 if let session = outcome.session {
-                    guard live[id]?.device?.id == context.deviceID, await trust.isApproved(context.deviceID), await trust.canReachFolder(context.deviceID, folder: session.cwd) else {
+                    guard live[id]?.device?.id == context.deviceID, await trust.isApproved(context.deviceID), await trust.canReachFolder(context.deviceID, folder: session.cwd),
+                          (try? await trust.requirePhoneAccess(context.deviceID, message: "create")) != nil else {
                         ptySource?.kill(session.id); return
                     }
                 }
@@ -458,7 +492,8 @@ public actor BackendRemoteHost {
             case .success(let planned): request = planned
             }
             let session = try await create(request, context)
-            guard live[id]?.device?.id == context.deviceID, await trust.isApproved(context.deviceID), await trust.canReachFolder(context.deviceID, folder: session.cwd) else {
+            guard live[id]?.device?.id == context.deviceID, await trust.isApproved(context.deviceID), await trust.canReachFolder(context.deviceID, folder: session.cwd),
+                  (try? await trust.requirePhoneAccess(context.deviceID, message: "create")) != nil else {
                 manager.kill(session.id)
                 throw BackendRemoteTrustFailure.denied("This device is no longer approved for that folder.")
             }
@@ -468,6 +503,7 @@ public actor BackendRemoteHost {
         case "close", "rename":
             let session = message["id"].string!
             guard try await visible(session, context: context) else { await unknown(id, session); return }
+            try await trust.requirePhoneAccess(context.deviceID, message: message.type)
             if message.type == "close" {
                 guard let close = operations.close else { await unavailable(id, "This host cannot close a session."); return }
                 guard try await close(session) else { await unknown(id, session); return }
@@ -493,6 +529,7 @@ public actor BackendRemoteHost {
             if let field = feature.sessionField, let session = message[field].string, !(try await visible(session, context: context)) { await unknown(id, session); return }
             if message.type == "window.holds" { await serveLease?.hooks.windowHolds(message, context.deviceID) }
             if message.type == "sessions.mine" { live[id]?.ownSessions = message["sessions"].elements ?? []; announce() }
+            try await trust.requirePhoneAccess(context.deviceID, message: message.type, panel: message["panel"].string)
             for answer in try await feature.handle(message, context) { try await send(id, answer) }
         }
     }
@@ -515,10 +552,11 @@ public actor BackendRemoteHost {
         live[id]?.timer?.cancel(); live[id]?.timer = nil
         guard let context = try await context(id) else { return }
         var fields: [NativeRPCValue.Field] = [.init("protocol", .number(1)), .init("deviceId", .string(device.id)), .init("deviceName", .string(device.name)),
-            .init("token", .null), .init("sessions", .array(try await sessions(context))), .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string))),
+            .init("token", .null), .init("sessions", .array(context.phoneAccess == nil ? [] : try await sessions(context))), .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string))),
             .init("hostPlatform", .string("darwin")), .init("hostName", .string(self.name)), .init("appVersion", .string(appVersion)), .init("hostKind", .string("desktop"))]
         if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil { fields.append(.init("folders", .array(context.reach.folders.map(NativeRPCValue.string)))) }
         try await send(id, .init(.welcome, fields: fields)); announce()
+        try await sendPhoneAccess(id, deviceID: device.id)
     }
     private func enroll(_ id: UUID, _ message: BackendRemoteClientMessage) async throws {
         guard let row = live[id], row.device == nil else { throw BackendRemoteTrustFailure.denied("This connection already authenticated.") }
@@ -544,7 +582,9 @@ public actor BackendRemoteHost {
         // must prove the new credential and its sealed public-key binding.
     }
     private func capabilities(_ context: BackendRemoteHostContext) -> [String] {
+        guard context.phoneAccess != nil else { return context.claimedCapabilities.contains("device.access") ? ["device.access"] : [] }
         var enabled: Set<String> = []
+        if context.claimedCapabilities.contains("device.access") { enabled.insert("device.access") }
         if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil { enabled.insert("create") }
         if operations.close != nil { enabled.insert("close") }
         if operations.rename != nil { enabled.insert("rename") }
@@ -557,6 +597,7 @@ public actor BackendRemoteHost {
             // window permission is checked at dispatch, not advertisement.
             if feature.capability == "hostwindows" || feature.policy != .windowGrant || context.reach.drivesWindows {
                 supplied[feature.capability, default: []].formUnion(feature.messageTypes)
+                enabled.formUnion(feature.additionalAdvertisedCapabilities.intersection(context.claimedCapabilities))
             }
         }
         for (capability, types) in supplied {
@@ -582,7 +623,8 @@ public actor BackendRemoteHost {
             effective = .init(kind: reach.kind, unrestricted: reach.unrestricted, folders: reach.folders, accounts: reach.accounts, drivesWindows: drives)
         } else { effective = reach }
         return .init(connectionID: id, deviceID: device.id, kind: reach.kind, address: row.wire.address,
-            peerPublicKey: row.wire.peerPublicKey, claimedCapabilities: row.capabilities, reach: effective)
+            peerPublicKey: row.wire.peerPublicKey, claimedCapabilities: row.capabilities, reach: effective,
+            phoneAccess: await trust.phoneAccess(device.id))
     }
     private func visible(_ sessionID: String, context: BackendRemoteHostContext) async throws -> Bool {
         if let lease = serveLease {

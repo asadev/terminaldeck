@@ -217,6 +217,7 @@ private struct TaskAgentsGroup: View {
     @State private var editing: String?
     @State private var removing: String?
     @State private var problem: String?
+    @State private var importMessage: String?
 
     var body: some View {
         let current = TasksRules.pickableAgents(state.agents)
@@ -236,8 +237,8 @@ private struct TaskAgentsGroup: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     Text(agent.name).font(.body.weight(.medium))
-                                    QuietBadge(text: agent.role)
                                 }
+                                Text(agent.role).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                 if let line = TasksSettingsText.statusLine(agent.status, at: agent.statusAt) {
                                     Text(line).font(.caption).foregroundStyle(.secondary)
                                 }
@@ -246,7 +247,6 @@ private struct TaskAgentsGroup: View {
                             Button("Restore") { Task { await lifecycle(agent.id, .restore) } }.disabled(busy)
                         }
                     }
-                    if editing == nil, let problem { NativeCodingAINotice(tone: .error, text: problem) }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Archived agents")
@@ -254,14 +254,18 @@ private struct TaskAgentsGroup: View {
             if editing == "new" {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("New agent").font(.callout.weight(.semibold))
-                    AgentFormView(agent: nil, busy: busy, problem: problem, onSave: save, onCancel: { open(nil) })
+                    AgentFormView(agent: nil, agents: state.agents, busy: busy, problem: problem, onSave: save, onCancel: { open(nil) })
                 }
             } else {
                 HStack {
-                    Button("Add agent") { open("new") }.buttonStyle(.borderedProminent).disabled(busy)
+                    Button("Add agent") { open("new") }.buttonStyle(.borderedProminent).disabled(busy || state.agents.count >= TasksLimits.maxAgents)
+                    Button("Import from .claude/agents/…", action: importAgents).disabled(busy)
                     Spacer()
+                    Text("\(state.agents.count) of \(TasksLimits.maxAgents) agents").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if let importMessage { Text(importMessage).font(.caption).foregroundStyle(.secondary) }
+            if editing == nil, let problem { NativeCodingAINotice(tone: .error, text: problem) }
         } header: {
             Text("Task agents")
         }
@@ -273,19 +277,22 @@ private struct TaskAgentsGroup: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(agent.name).font(.body.weight(.medium))
-                        QuietBadge(text: agent.role)
                         if let badge = TasksSettingsText.statusBadge(agent.status) { QuietBadge(text: badge) }
                     }
+                    Text(agent.role).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     Text(TasksSettingsText.agentSummary(agent)).font(.caption).foregroundStyle(.secondary)
                     if let stack = TasksSettingsText.agentStackSummary(agent) { Text(stack).font(.caption).foregroundStyle(.secondary) }
                     if let line = TasksSettingsText.statusLine(agent.status, at: agent.statusAt) { Text(line).font(.caption).foregroundStyle(.secondary) }
-                    Text(agent.verifyCommand.map { "Checked by: \($0)" } ?? "\(BRAND_ASSISTANT) checks the result").font(.caption).foregroundStyle(.secondary)
+                    Text(TAGAgentSettings.reviewerLabel(agent, agents: state.agents)).font(.caption).foregroundStyle(.secondary)
+                    if let source = agent.sourceFile {
+                        NativeTAGSourceStatus(source: source, status: agent.syncStatus, syncedAt: agent.syncedAt, error: agent.syncError)
+                    }
                 }
                 Spacer()
                 Button(editing == agent.id ? "Close" : "Change") { open(editing == agent.id ? nil : agent.id) }.disabled(busy)
             }
             if editing == agent.id {
-                AgentFormView(agent: agent, busy: busy, problem: problem, onSave: save, onCancel: { open(nil) })
+                AgentFormView(agent: agent, agents: state.agents, busy: busy, problem: problem, onSave: save, onCancel: { open(nil) })
                 HStack(spacing: 8) {
                     if agent.status == .paused {
                         Button("Resume") { Task { await lifecycle(agent.id, .resume) } }.disabled(busy).help("Takes new work again")
@@ -325,10 +332,40 @@ private struct TaskAgentsGroup: View {
             let result = await run {
                 switch AgentForm.payload(draft, agents: agents) {
                 case .failure(let p): return .refused(p.message)
-                case .success(let profile): return await TasksStore.shared.call("tasks:agent-save", [profile.wire], refusal: "This build cannot save agents.")
+                case .success(let profile):
+                    var payload = profile.wire
+                    if SourceNamespace.agentSettingsEnabled, let settings = draft.agsSettings, let revision = draft.agsRevision {
+                        do { payload["ags"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)); payload["agsRevision"] = Double(revision) }
+                        catch { return .refused("The complete agent settings could not be encoded. Your draft was kept.") }
+                    }
+                    return await TasksStore.shared.call("tasks:agent-save", [payload], refusal: "This build cannot save agents.")
                 }
             }
             if result.ok { open(nil) } else { problem = result.message ?? "That did not save." }
+        }
+    }
+
+    private func importAgents() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a project folder or its .claude/agents folder. Changes to its agent files stay in sync while Terminal Deck is open."
+        panel.prompt = "Import agents"
+        panel.showsHiddenFiles = true
+        NativeFront.whenPersonActs("main") { guard panel.runModal() == .OK, let folder = panel.url?.path else { return }
+        problem = nil
+        importMessage = "Importing agents…"
+        Task {
+            let result = await run { await TasksStore.shared.call("tasks:agents-import", [folder], refusal: "This build cannot import Claude Code agents.") }
+            if result.ok {
+                open(nil)
+                importMessage = result.message ?? "Agents imported. Their source files stay in sync while Terminal Deck is open."
+            } else {
+                importMessage = nil
+                problem = result.message ?? "The agents could not be imported."
+            }
+        }
         }
     }
 
@@ -350,15 +387,18 @@ private struct TaskAgentsGroup: View {
 
 private struct AgentFormView: View {
     let agent: AgentProfile?
+    let agents: [AgentProfile]
     let busy: Bool
     let problem: String?
     let onSave: (AgentDraft) -> Void
     let onCancel: () -> Void
     @State private var draft: AgentDraft
     @State private var found: AgentInventory?
+    @State private var ags = NativeAGSSettingsModel()
 
-    init(agent: AgentProfile?, busy: Bool, problem: String?, onSave: @escaping (AgentDraft) -> Void, onCancel: @escaping () -> Void) {
+    init(agent: AgentProfile?, agents: [AgentProfile], busy: Bool, problem: String?, onSave: @escaping (AgentDraft) -> Void, onCancel: @escaping () -> Void) {
         self.agent = agent
+        self.agents = agents
         self.busy = busy
         self.problem = problem
         self.onSave = onSave
@@ -368,6 +408,7 @@ private struct AgentFormView: View {
 
     var body: some View {
         let provider: String? = draft.provider.isEmpty ? nil : draft.provider
+        let supportsAGS = SourceNamespace.agentSettingsEnabled && AGSCapabilities.providers.contains(draft.provider.isEmpty ? ags.settings.provider : draft.provider)
         let canEnforce = AgentCapabilities.enforces(provider, .blockedTools)
         let tools = found?.tools ?? TasksSettingsText.defaultTools(provider)
         let whereLine = found.map { "Found for \($0.account)." } ?? "Nothing was read from this Mac, so only what is saved is listed."
@@ -378,7 +419,10 @@ private struct AgentFormView: View {
             Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow {
                     TaskSettingField(label: "Name") { box("Name", \.name, max: 60) }
-                    TaskSettingField(label: "Role") { box("builder, reviewer, tester…", \.role, max: 60, label: "Role") }
+                    TaskSettingField(label: "Role or description") {
+                        LinesBox(text: Binding(get: { draft.role }, set: { draft.role = String($0.prefix(4000)) }),
+                                 placeholder: "What this agent does", disabled: busy, label: "Role or description")
+                    }
                 }
                 GridRow {
                     TaskSettingField(label: "Coding agent") {
@@ -390,19 +434,24 @@ private struct AgentFormView: View {
                     }
                     TaskSettingField(label: "Account") { box("Default", \.account, max: 80, label: "Account") }
                 }
-                GridRow {
-                    TaskSettingField(label: "Model", help: can(provider, .model) ? nil : AgentCapabilities.how(provider, .model),
-                               tag: { SupportTag(provider: provider, setting: .model) }) {
-                        box("Default", \.model, max: 80, label: "Model", off: !can(provider, .model) && draft.model.isEmpty)
-                    }
-                    TaskSettingField(label: "Effort", help: helpFor(provider, .effort, "Set when the session starts, like the model. If the coding agent refuses it, the task says so."),
-                               tag: { SupportTag(provider: provider, setting: .effort) }) {
-                        Picker("Effort", selection: $draft.effort) {
-                            Text("Agent default").tag("")
-                            ForEach(EFFORT_CHOICES, id: \.id) { Text($0.label).tag($0.id) }
+                if !supportsAGS {
+                    GridRow {
+                        TaskSettingField(label: "Model", help: AgentCapabilities.how(provider, .model),
+                                         tag: { SupportTag(provider: provider, setting: .model) }) {
+                            box("Default", \.model, max: 80, label: "Model", off: !can(provider, .model) && draft.model.isEmpty)
                         }
-                        .labelsHidden()
-                        .disabled(busy || (!can(provider, .effort) && draft.effort.isEmpty))
+                        TaskSettingField(label: "Effort", help: helpFor(provider, .effort, "Set when the session starts. A refusal is shown on the task."),
+                                         tag: { SupportTag(provider: provider, setting: .effort) }) {
+                            Picker("Effort", selection: $draft.effort) {
+                                Text("Agent default").tag("")
+                                ForEach(EFFORT_CHOICES.filter { !SourceNamespace.agentSettingsEnabled || $0.id == "auto" || AGSCapabilities.efforts(provider: provider ?? "claude").contains($0.id) }, id: \.id) {
+                                    Text($0.label).tag($0.id)
+                                }
+                                if SourceNamespace.agentSettingsEnabled, !draft.effort.isEmpty, draft.effort != "auto", !AGSCapabilities.efforts(provider: provider ?? "claude").contains(draft.effort) {
+                                    Text("\(draft.effort) (unavailable)").tag(draft.effort)
+                                }
+                            }.labelsHidden().disabled(busy || (!can(provider, .effort) && draft.effort.isEmpty))
+                        }
                     }
                 }
                 GridRow {
@@ -410,14 +459,24 @@ private struct AgentFormView: View {
                     TaskSettingField(label: "Longest run", help: "Minutes. 0 means no limit.") { box("", \.maxRunMinutes, max: 6, label: "Longest run") }
                 }
                 GridRow {
-                    TaskSettingField(label: "Keep open after finishing", help: "Minutes. 0 closes it at once.") {
-                        box("", \.keepAliveMinutes, max: 6, label: "Keep open after finishing")
+                    TaskSettingField(label: "Keep open after finishing", help: "Timed keep-open is capped at 24 hours. 0 closes it at once.") {
+                        NativeTAGKeepOpenControl(draft: $draft, busy: busy)
                     }
                     Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                 }
             }
-            TaskSettingField(label: "Instructions", help: TasksSettingsText.instructionsHelp(provider, file: draft.instructionsFile),
-                       tag: { SupportTag(provider: provider, setting: .instructions) }) {
+            if supportsAGS {
+                NativeAGSAgentSettingsEditor(settings: $ags.settings, busy: busy || ags.busy || !ags.loaded, availableMCPServers: [])
+                Text("The complete account-specific MCP inventory and private CLI launch plan are not installed yet. Unverified session overrides are refused when starting, without changing the CLI's global settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            NativeTAGProfileSettings(draft: $draft, agents: agents, busy: busy, showsScalars: !supportsAGS)
+            TaskSettingField(label: "Instructions", help: TasksSettingsText.instructionsHelp(provider, file: draft.instructionsFile,
+                                                                                         claudeAgent: draft.claudeAgent.isEmpty ? nil : draft.claudeAgent),
+                       tag: {
+                           if draft.claudeAgent.isEmpty { SupportTag(provider: provider, setting: .instructions) }
+                           else { QuietBadge(text: "Task brief") }
+                       }) {
                 LinesBox(text: Binding(get: { draft.instructions }, set: { draft.instructions = String($0.prefix(TasksLimits.maxInstructionsChars)) }),
                          placeholder: "Optional, e.g. Work on a branch. Run the tests before you finish.",
                          disabled: busy || (!can(provider, .instructions) && draft.instructions.isEmpty), label: "Instructions")
@@ -440,16 +499,14 @@ private struct AgentFormView: View {
                          tag: { SupportTag(provider: provider, setting: .skillSelection) }, choices: found?.skills ?? [], selected: draft.skills,
                          disabled: busy || ((!can(provider, .skillSelection) || draft.skillsOff) && draft.skills.isEmpty),
                          missing: "not in a skill folder") { draft.skills = $0 }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Enforced by Claude Code").font(.callout.weight(.semibold))
-                Text(canEnforce
-                     ? "Claude Code itself refuses these, whatever the brief says. Another coding agent is not started with them set."
-                     : "\(TasksSettingsText.providerName(provider)) cannot enforce these. Choose Claude Code, or leave them empty.")
+            if !supportsAGS {
+                Text("Enforced by Claude Code").font(.callout.weight(.medium))
+                Text(canEnforce ? "Claude Code itself refuses these tools. Another coding agent is not started with them set." : "Choose Claude Code to enforce these limits, or leave them empty.")
                     .font(.caption).foregroundStyle(.secondary)
+                ChoicePicker(label: "Block these tools", help: "Off unless you choose some. Nothing is ever allowed from here.",
+                             tag: { SupportTag(provider: provider, setting: .blockedTools) }, choices: tools, selected: draft.blockedTools,
+                             disabled: busy || (!canEnforce && draft.blockedTools.isEmpty)) { draft.blockedTools = $0 }
             }
-            ChoicePicker(label: "Block these tools", help: "Off unless you pick some. Nothing is ever allowed from here.",
-                         tag: { SupportTag(provider: provider, setting: .blockedTools) }, choices: tools, selected: draft.blockedTools,
-                         disabled: busy || (!canEnforce && draft.blockedTools.isEmpty)) { draft.blockedTools = $0 }
             NativeSettingRow(label: "Turn all skills off",
                              help: "\(AgentCapabilities.support(provider, .skillsOff).tag): starts Claude Code with no skills at all.",
                              more: AgentCapabilities.how(provider, .skillsOff)) {
@@ -466,17 +523,38 @@ private struct AgentFormView: View {
                     .accessibilityLabel("Check command")
             }
             if let problem { NativeCodingAINotice(tone: .error, text: problem) }
+            if supportsAGS, let problem = ags.problem { NativeCodingAINotice(tone: .error, text: problem) }
             HStack(spacing: 8) {
-                Button(agent == nil ? "Add agent" : "Save") { onSave(draft) }
+                Button(agent == nil ? "Add agent" : "Save") {
+                    var submitted = draft
+                    if supportsAGS, ags.loaded, let revision = ags.revision {
+                        var settings = ags.settings
+                        settings.keepOpen = draft.keepAliveUntilClose
+                        submitted.provider = settings.provider; submitted.model = settings.model ?? ""; submitted.effort = settings.effort ?? ""
+                        submitted.allowedTools = settings.allowedTools; submitted.blockedTools = settings.deniedTools
+                        submitted.permissionMode = settings.permissionMode ?? ""; submitted.defaultProject = settings.workingFolder ?? ""
+                        submitted.agsSettings = settings; submitted.agsRevision = revision
+                    }
+                    onSave(submitted)
+                }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(busy || draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || (supportsAGS && (ags.busy || !ags.loaded)) || draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
                     .help(draft.name.trimmingCharacters(in: .whitespaces).isEmpty ? "Give the agent a name first" : "")
                 Button("Cancel", action: onCancel)
                 Spacer()
             }
         }
         .padding(.vertical, 4)
+        .task {
+            guard SourceNamespace.agentSettingsEnabled else { return }
+            if draft.provider.isEmpty || AGSCapabilities.providers.contains(draft.provider) {
+                await ags.start(profile: agent?.id, provider: draft.provider.isEmpty ? "claude" : draft.provider)
+                if agent == nil { ags.settings = AGSAgentSettings(provider: draft.provider.isEmpty ? ags.settings.provider : draft.provider) }
+            }
+        }
+        .onChange(of: draft.provider) { _, provider in if SourceNamespace.agentSettingsEnabled, !provider.isEmpty { ags.settings.provider = provider } }
+        .onDisappear { ags.stop() }
         // Read again when the account or agent changes: its skills and MCP servers are its own.
         .task(id: "\(draft.provider)|\(account)") {
             try? await Task.sleep(for: .milliseconds(300))

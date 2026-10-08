@@ -130,7 +130,7 @@ struct DeckTabs: View {
                         }
                 }
                 .toolbar(DeckChrome.tabBar(on: model.copilotSurface), for: .tabBar)
-                .tabItem { pill("Copilot", "sparkles") }
+                .tabItem { pill("Hoot", "sparkles") }
                 /*
                  * The count of questions waiting on an answer, on the pill.
                  *
@@ -147,7 +147,7 @@ struct DeckTabs: View {
                  * questions on it either, so there is no badge stranded on a
                  * pill that is no longer drawn.
                  */
-                .badge(model.copilot?.waitingCount ?? 0)
+                .badge(max(model.copilot?.waitingCount ?? 0, model.current?.hootStream.items.filter { $0.kind == .approval }.count ?? 0))
                 .tag(DeckModel.Tab.copilot)
             }
 
@@ -418,7 +418,7 @@ private struct CopilotTabScreen: View {
             ContentUnavailableView {
                 Label("No machine", systemImage: "sparkles")
             } description: {
-                Text("Pair a machine and its copilot appears here.")
+                Text("Pair a machine and its Hoot appears here.")
             }
             .accessibilityIdentifier("copilot.noMachine")
         }
@@ -1289,6 +1289,29 @@ struct DeckSettingsView: View {
                         filesDestination: { FilesView(model: model, start: model.toolsFolder) },
                         sourceDestination: { SourceControlView(model: model, path: model.toolsFolder) })
 
+                    if PanelKind.allCases.contains(where: { !$0.isLegacy && model.current?.canReadPanel($0) == true }) {
+                        SectionCaption("Project work")
+                        SettingsGroup {
+                            NavigationLink {
+                                ProjectWorkView(model: model)
+                            } label: {
+                                SettingsRowBody(title: "Project work", value: model.current?.phoneAccess?.level.title ?? "", icon: "checklist")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("settings.projectWork")
+                        }
+                    }
+
+                    if let host = model.current, host.offeredCapabilities.contains("device.access") {
+                        SectionCaption("Access on \(host.label)")
+                        SettingsGroup {
+                            SettingsRowBody(title: host.phoneAccess?.level.title ?? "Waiting for access",
+                                            value: "Granted on the machine", icon: "lock.shield")
+                        }
+                        Text("Change or take back this phone’s access from that machine.")
+                            .font(.footnote).foregroundStyle(Theme.faint).padding(.top, 8)
+                    }
+
                     SectionCaption("This phone")
 
                     SettingsGroup {
@@ -1388,12 +1411,12 @@ struct DeckSettingsView: View {
                          * without has nothing for this screen to set.
                          */
                         if model.showsCopilotTab {
-                            SettingsRow(title: "Copilot",
+                            SettingsRow(title: "Hoot",
                                         value: model.copilotSettingsValue,
                                         icon: "sparkles") {
                                 model.settingsRoute.append(.copilot)
                             }
-                            .accessibilityIdentifier("settings.copilot")
+                            .accessibilityIdentifier("settings.Hoot")
 
                             SettingsDivider()
                         }

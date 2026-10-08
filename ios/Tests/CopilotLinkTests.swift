@@ -522,6 +522,11 @@ final class CopilotLinkTests: XCTestCase {
         XCTAssertEqual(errors.count, 2)
 
         connected(read: true, act: true, alter: true)
+        for id in ["q1", "q2"] {
+            link.apply(ask: CopilotConsentQuestion(id: id, tool: "settings.write", tier: "alter", summary: "Change theme",
+                arguments: [], argumentsAreOrdered: true, origin: "device:d-7", requestedAt: 0,
+                expiresAt: Date().timeIntervalSince1970 * 1000 + 60_000))
+        }
         XCTAssertTrue(link.answer("q1", approved: false))
         XCTAssertTrue(link.answer("q2", approved: true))
         XCTAssertEqual(wire.sent, [.copilotAnswer(id: "q1", approved: false),

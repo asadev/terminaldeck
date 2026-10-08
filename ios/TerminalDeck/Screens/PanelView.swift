@@ -245,6 +245,12 @@ struct PanelView: View {
         // way down, so an identical frame does not even fire this — which is
         // what `settle` is for.
         .onChange(of: model.panelData(panel)) { _, arrived in absorb(arrived) }
+        .onChange(of: model.current?.phoneAccess) { _, _ in
+            forming = nil
+            confirming = nil
+            finished()
+            if model.current?.canReadPanel(panel) == true { read() }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 panelActions
@@ -491,7 +497,7 @@ struct PanelView: View {
      */
     @ViewBuilder
     private var panelActions: some View {
-        if model.canReadPanels, !offered.isEmpty {
+        if model.current?.canActOnPanel(panel) == true, !offered.isEmpty {
             if offered.count == 1, let only = offered.first {
                 Button(only.label) { raise(only, row: nil) }
                     .font(.system(size: 15, weight: .medium))
@@ -674,7 +680,13 @@ struct PanelView: View {
      */
     @ViewBuilder
     private func panelRow(_ row: PanelRow, at index: Int) -> some View {
-        if panel == .artifacts, let artifact = ArtifactRef(id: row.key) {
+        if let sessionId = row.sessionId, let host = model.current, host.session(sessionId) != nil {
+            NavigationLink {
+                TerminalScreen(model: model, hostID: host.id, sessionID: sessionId)
+            } label: { rowBody(row, chevron: true) }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("panel.\(panel).row.\(index)")
+        } else if panel == .artifacts, let artifact = ArtifactRef(id: row.key) {
             NavigationLink {
                 ArtifactView(model: model,
                              opened: artifact,
@@ -801,7 +813,7 @@ struct PanelView: View {
         // rows on it that are still worth reading and verbs that would be sent
         // into nothing. `HostLink.actOnPanel` refuses them anyway; a button
         // whose only outcome is a silent refusal is not a button.
-        if !model.canReadPanels {
+        if model.current?.canActOnPanel(panel) != true {
             EmptyView()
         } else if row.actions.count == 1, let only = row.actions.first {
             Button {

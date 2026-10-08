@@ -66,6 +66,7 @@ public actor BackendCopilotRemoteFrames {
         await runs.stopAll()
     }
     public func handle(_ message: BackendRemoteClientMessage, context: BackendRemoteHostContext) async -> [BackendRemoteServerMessage] {
+        let message = BackendRemoteClientMessage(RNMHootWireCompatibility.incomingClientEnvelope(message.value))
         let id = context.connectionID, deviceID = context.deviceID
         if connections[id] == nil { connections[id] = Connection(deviceID: deviceID) }
         guard connections[id]?.deviceID == deviceID else { return refusal("unauthorized", "This device does not have Hoot.") }

@@ -55,9 +55,12 @@ struct BackendCopilotRemoteFramesTests: Sendable {
             #expect(BackendRemoteProtocol.copilotFileTarget(bad) == nil)
         }
         #expect(BackendRemoteProtocol.isCopilotMemoryName("reference_servers.md"))
-        let oversized = NativeRPCValue.object([.init("t", .string("copilot.file.write")), .init("id", .string("yours")), .init("text", .string(String(repeating: "x", count: 32769)))])
-        guard case .refused(let error) = BackendRemoteProtocol.parseClientMessage(oversized) else { Issue.record("Oversized file write was parsed"); return }
-        #expect(error.reason == "copilot.file.write larger than the file limit")
+        for tag in ["copilot.file.write", "hoot.file.write"] {
+            let oversized = NativeRPCValue.object([.init("t", .string(tag)), .init("id", .string("yours")), .init("text", .string(String(repeating: "x", count: 32769)))])
+            guard case .refused(let error) = BackendRemoteProtocol.parseClientMessage(oversized) else { Issue.record("Oversized file write was parsed"); continue }
+            #expect(error.code == "too-large")
+            #expect(error.reason == "copilot.file.write larger than the file limit")
+        }
     }
     @Test func eachSocketNeedsHelloGuestsFailAndRevocationLandsOnNextFrame() async throws {
         let rig = try await BackendCopilotRemoteTestFixture()

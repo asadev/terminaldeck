@@ -119,9 +119,14 @@ public actor BackendStaysFixedService {
     }
     public func setup(_ project: String) async throws -> NativeRPCValue {
         let root = normalize(project), driver = try await engine()
-        let result = await driver.cli(["init", "--json"], cwd: root, timeout: 120_000, keep: nil, onEvent: { _ in })
+        let result = await driver.cli(["init", "--json", "--offline"], cwd: root, timeout: 120_000, keep: nil, onEvent: { _ in })
         let raw = BackendStaysFixedEngineFiles.lastJSON(result.stdout)
-        let outcome = BackendStaysFixedRead.setup(raw ?? .object([]), roots: [root, BackendPluginsFiles.real(root)], failure: raw == nil ? failure(result, "setting up") : nil)
+        let failed = result.cancelled || result.timedOut || result.code != 0 || raw?["ok"].bool != true
+        // Keep partial written-file evidence, but never turn failed execution or
+        // error JSON into a success-shaped setup answer.
+        let normalized = failed ? (raw ?? .object([])).setting("ok", .bool(false)) : raw!
+        let outcome = BackendStaysFixedRead.setup(normalized, roots: [root, BackendPluginsFiles.real(root)],
+            failure: failed ? failure(result, "setting up") : nil)
         readinessCache[root] = nil; describeCache[root] = nil
         if !outcome["readiness"].isNullish { readinessCache[root] = (now(), outcome["readiness"].setting("git", .bool(BackendStaysFixedWhere.git(root)))) }
         await changed(root); return outcome
@@ -222,6 +227,7 @@ public actor BackendStaysFixedService {
     public func markGood(_ project: String, anyway: Bool) async throws -> NativeRPCValue {
         let root = normalize(project), driver = try await engine()
         if running[root] != nil { return BackendStaysFixedRead.object([("ok", .bool(false)), ("marked", .bool(false)), ("already", .bool(false)), ("refused", .null), ("refusedFor", .null), ("summary", .string("A check is running. Mark the build as good once it has finished."))]) }
+        if let refusal = BackendSFXReferenceGuard.refusal(root) { return refusal }
         func ask(_ force: Bool) async -> NativeRPCValue {
             let result = await driver.cli(["ship", "--why", "Marked as good in Terminal Deck", "--json"] + (force ? ["--force"] : []), cwd: root, timeout: 60_000, keep: nil, onEvent: { _ in })
             let raw = BackendStaysFixedEngineFiles.lastJSON(result.stdout); return BackendStaysFixedRead.mark(raw ?? .object([]), failure: raw == nil ? failure(result, "marking the build as good") : nil)

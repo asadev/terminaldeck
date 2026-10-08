@@ -114,6 +114,6 @@ public enum AppCommandCatalog {
     public static let about = AppMenuCommand(.app, "About Terminal Deck", .page("app.about"))
 
     public static func commands(in menu: AppMenuCommand.Menu) -> [AppMenuCommand] {
-        all.filter { $0.menu == menu }
+        all.filter { $0.menu == menu && UIGMemoryVisibility.showsMenuCommand($0) }
     }
 }

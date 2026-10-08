@@ -74,6 +74,7 @@ import {
   type McpRouting,
   type McpSink,
 } from './mcp-route'
+import { ReceiverHub, handleReceiverHttp, isReceiverFrame } from './receiver' // RCV: the Receiver's webhook door
 
 /* -------------------------------------------------------------------------- */
 /* Envelope                                                                    */
@@ -282,6 +283,8 @@ interface Host {
    * Per host and in memory, like everything else here — see `mcp-route.ts`.
    */
   mcp: McpHostState
+  /** RCV: this socket as the Receiver sees it (identity matters: a reconnect replaces it). */
+  receiver: { send(frame: Buffer): void }
 }
 
 export interface RelayOptions {
@@ -293,6 +296,8 @@ export interface RelayOptions {
   maxHosts?: number
   /** How long an AI app's request waits for its Mac. See `MCP_RELAY_WAIT_MS`. */
   mcpWaitMs?: number
+  /** RCV: where Receiver sources and sealed deliveries survive a restart. Unset: memory only. */
+  receiverDir?: string | null
   now?: () => number
 }
 
@@ -307,6 +312,7 @@ export interface RelayStats {
 export class Rendezvous implements McpRouting {
   private readonly hosts = new Map<string, Host>()
   private readonly options: Required<RelayOptions>
+  readonly receiver: ReceiverHub
 
   constructor(options: RelayOptions = {}) {
     this.options = {
@@ -314,8 +320,10 @@ export class Rendezvous implements McpRouting {
       maxGuestsPerHost: options.maxGuestsPerHost ?? 8,
       maxHosts: options.maxHosts ?? 5_000,
       mcpWaitMs: options.mcpWaitMs ?? MCP_RELAY_WAIT_MS,
+      receiverDir: options.receiverDir ?? null,
       now: options.now ?? Date.now,
     }
+    this.receiver = new ReceiverHub({ dir: this.options.receiverDir, now: this.options.now })
   }
 
   stats(): RelayStats {
@@ -351,6 +359,7 @@ export class Rendezvous implements McpRouting {
       socket: null as unknown as RelaySocket,
       guests: new Map(),
       mcp: new McpHostState(this.options.now),
+      receiver: { send: (frame: Buffer) => host.socket.send(frame) },
     }
     host.socket = new RelaySocket(
       socket,
@@ -359,6 +368,7 @@ export class Rendezvous implements McpRouting {
       this.options.heartbeatMs,
     )
     this.hosts.set(id, host)
+    this.receiver.hostJoined(id, host.receiver)
     return { ok: true, hostId: id }
   }
 
@@ -386,6 +396,7 @@ export class Rendezvous implements McpRouting {
 
   /** Host → relay: unwrap the envelope and hand the payload to one guest. */
   private fromHost(host: Host, frame: Buffer): void {
+    if (frame.length >= ENVELOPE_HEADER && isReceiverFrame(frame[0])) return this.receiver.fromHost(host.id, host.receiver, frame)
     // The MCP family first, by its type byte: those are answers to HTTP
     // requests this process is holding, never bytes for a guest.
     if (frame.length >= ENVELOPE_HEADER && frame[0] >= MCP_ENVELOPE.request && frame[0] <= MCP_ENVELOPE.reach) {
@@ -426,6 +437,7 @@ export class Rendezvous implements McpRouting {
     // Every HTTP request this host still owed an answer gets a 502 now, rather
     // than holding an AI app's connection open until the deadline.
     host.mcp.drop()
+    this.receiver.hostLeft(host.id, host.receiver)
   }
 
   /* --------------------------------------------------------------- MCP -- */
@@ -540,6 +552,7 @@ export function createRelayServer(options: RelayOptions = {}): RelayServer {
     }
     // The one route that is a website of sorts: AI apps calling a Mac's tools.
     // It owns `/mcp/…` and the discovery probes, and nothing else.
+    if (handleReceiverHttp(req, res, rendezvous.receiver)) return
     if (handleMcpHttp(req, res, rendezvous, rendezvous.mcpWaitMs())) return
     res.writeHead(404, { 'content-type': 'text/plain' })
     res.end('not found\n')

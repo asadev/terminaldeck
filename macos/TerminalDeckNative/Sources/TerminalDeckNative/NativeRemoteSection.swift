@@ -428,6 +428,7 @@ private struct DeviceRow: View {
                 if device.state == .approved, let kinds = model.kinds {
                     Text(RemoteRules.kindNote(kinds[device.id])).font(.callout).foregroundStyle(.secondary)
                 }
+                if device.state == .approved { NativeINT2PhoneAccessControl(deviceID: device.id) }
                 if device.state != .revoked {
                     if let fingerprint = device.fingerprint {
                         Text(fingerprint).font(.callout.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)

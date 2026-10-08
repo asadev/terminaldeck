@@ -199,14 +199,28 @@ public enum BackendCopilotInspect {
             caller: caller, ms: row["ms"].number, error: string(row["error"]), sessionId: string(row["sessionId"]))
     }
     public static func readActionLog(_ paths: BackendCopilotPaths, want: Double = Double(defaultActionRows)) -> BackendCopilotActionLogReport {
+        readActionLogWithReceipt(paths, want: want).report
+    }
+    /// Only a successful readText result acknowledges log data. Neither stat
+    /// nor the legacy masked UI error result proves that the bytes were read.
+    public static func readActionLogWithReceipt(_ paths: BackendCopilotPaths, want: Double = Double(defaultActionRows))
+        -> (report: BackendCopilotActionLogReport, successfulRead: Bool) {
         let limit = Int(min(Double(maxActionRows), max(1, want.isFinite ? floor(want) : Double(defaultActionRows))))
         let info = try? BackendCopilotServiceFiles.stat(paths.actions)
-        func lines(_ path: String) -> [String] { ((try? BackendCopilotServiceFiles.readText(path)) ?? "").components(separatedBy: "\n").filter { !$0.isEmpty } }
+        var successfulRead = false
+        func lines(_ path: String) -> [String] {
+            do {
+                let text = try BackendCopilotServiceFiles.readText(path)
+                successfulRead = true
+                return text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            } catch { return [] }
+        }
         var collected = lines(paths.actions)
         if collected.count < limit { collected = lines(paths.actions + ".1") + collected }
-        return .init(dir: paths.log, file: paths.actions, exists: info != nil, bytes: info?.bytes ?? 0,
+        let report = BackendCopilotActionLogReport(dir: paths.log, file: paths.actions, exists: info != nil, bytes: info?.bytes ?? 0,
             outsideCopilotFolder: !paths.log.hasPrefix(paths.root + "/") && paths.log != paths.root,
             rows: collected.suffix(limit).compactMap(parseActionRow), more: collected.count > limit, error: nil)
+        return (report, successfulRead)
     }
     public static func reveal(_ deps: BackendCopilotInspectDependencies, place: NativeRPCValue) async throws -> NativeRPCValue {
         let paths = try await deps.paths()

@@ -109,7 +109,7 @@ public actor BackendCompositionClients {
         if domains.contains("community") { channels += communityChannels }
         if domains.contains("memory") { channels += BackendMemoryChannels.names }
         if domains.contains("plugins") { channels += BackendPluginsChannels.channels }
-        if domains.contains("staysfixed") { channels += BackendStaysFixedChannels.channels }
+        if domains.contains("staysfixed") { channels += BackendStaysFixedChannels.channels + BackendSFXSetupChannels.channels }
         return channels
     }
     /// `authenticatedKind == .local` is the trusted local Hoot identity from
@@ -160,6 +160,7 @@ public actor BackendCompositionClients {
     public nonisolated let knowledge: BackendKnowledgeService?
     public nonisolated let plugins: BackendPluginsHost?
     public nonisolated let staysFixed: BackendStaysFixedService?
+    public nonisolated let sfxSetup: BackendSFXSetupService?
     private let registry: NativeChannelRegistry, mcpServer: BackendNativeMCPServer
     private let ownerID: String, toolsOwnerID: String
     private let dependencies: BackendCompositionClientsDependencies
@@ -172,7 +173,7 @@ public actor BackendCompositionClients {
                  mcpClients: BackendMcpClientService?, github: BackendGitHubService?, githubAuth: BackendGitHubAuthenticator?,
                  customAgents: BackendCustomAgentsStore?, community: (any BackendCommunityStoreProviding)?,
                  memory: BackendMemoryService?, knowledge: BackendKnowledgeService?, plugins: BackendPluginsHost?,
-                 staysFixed: BackendStaysFixedService?, pluginCatalogue: BackendCompositionClientsPluginCatalogue?,
+                 staysFixed: BackendStaysFixedService?, sfxSetup: BackendSFXSetupService?, pluginCatalogue: BackendCompositionClientsPluginCatalogue?,
                  githubChanges: BackendCompositionChangeHub) {
         self.domains = domains; invokeChannels = Self.channels(for: domains)
         sendChannels = domains.contains("github") ? ["github:clear-cache"] : []
@@ -187,6 +188,7 @@ public actor BackendCompositionClients {
         self.mcpClients = mcpClients; self.github = github; self.githubAuth = githubAuth; self.githubChanges = githubChanges
         self.customAgents = customAgents; self.community = community; self.memory = memory
         self.knowledge = knowledge; self.plugins = plugins; self.staysFixed = staysFixed
+        self.sfxSetup = sfxSetup
         self.pluginCatalogue = pluginCatalogue
     }
 
@@ -295,9 +297,21 @@ public actor BackendCompositionClients {
                 }, loginPath: loginPath, changed: { project in try? await registry.publish("staysfixed:changed", arguments: [.string(project)]) },
                 provisioning: dependencies.staysFixedProvisioning)
         } else { fixed = nil }
+        let sfxSetup: BackendSFXSetupService?
+        if let fixed {
+            let planner = BackendSFXSetupPlanner(userData: dataRoot, executable: dependencies.plainNodeExecutable,
+                inheritedEnvironment: inheritedEnvironment, locate: {
+                    guard let locate = dependencies.staysFixedLocate else {
+                        throw NativeRPCError(code: "unavailable", message: "Stays Fixed is not part of this build.")
+                    }
+                    return try locate()
+                }, loginPath: loginPath, provisioning: dependencies.staysFixedProvisioning)
+            sfxSetup = BackendSFXSetupService(plan: { try await planner.plan($0, prepareRuntime: $1) },
+                setup: { try await fixed.setup($0) })
+        } else { sfxSetup = nil }
         let graph = BackendCompositionClients(domains: transferredDomains, registry: registry, mcpServer: mcpServer, ownerID: ownerID,
             dependencies: dependencies, mcpClients: client, github: github, githubAuth: auth, customAgents: agents,
-            community: community, memory: memory, knowledge: knowledge, plugins: plugins, staysFixed: fixed, pluginCatalogue: pluginCatalogue,
+            community: community, memory: memory, knowledge: knowledge, plugins: plugins, staysFixed: fixed, sfxSetup: sfxSetup, pluginCatalogue: pluginCatalogue,
             githubChanges: githubChanges)
         do { try await graph.registerChannels(providers: providers, dataRoot: dataRoot, home: home, environment: inheritedEnvironment); return graph }
         catch { await graph.shutdown(); throw error }
@@ -311,6 +325,7 @@ public actor BackendCompositionClients {
             userData: dataRoot.path, probe: BackendCommunityNativeProbe(providers: providers), emptyHomes: BackendOSStoreInstaller.agentHomes(environment: environment, home: home)) }
         if let memory { try await BackendMemoryChannels.register(registry: registry, ownerID: ownerID, service: memory) }
         if let staysFixed { try await BackendStaysFixedChannels.register(registry: registry, ownerID: ownerID, service: staysFixed) }
+        if let sfxSetup { try await BackendSFXSetupChannels.register(registry: registry, ownerID: ownerID, service: sfxSetup) }
         try await registerLazyTools()
         if let plugins {
             try await BackendPluginsChannels.register(registry: registry, ownerID: ownerID, host: plugins)

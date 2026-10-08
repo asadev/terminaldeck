@@ -29,7 +29,8 @@ public enum BackendTaskSessionDriver {
                               authorize: @escaping Gate, environment: @escaping @Sendable () async throws -> [String: String],
                               setControl: @escaping @Sendable (String, String, String) async throws -> Void,
                               noteTurn: @escaping @Sendable (String) async -> Void,
-                              tellHoot: @escaping @Sendable (String) async throws -> Void) -> BackendTaskSessionAccess {
+                              tellHoot: @escaping @Sendable (String) async throws -> Void,
+                              bindTaskSession: (@Sendable (BackendTaskRecord, BackendSessionMeta) async throws -> Void)? = nil) -> BackendTaskSessionAccess {
         let executor = BackendDevProcessExecutor()
         let deliver: @Sendable (String, String) async throws -> Void = { id, raw in
             var line = raw.replacingOccurrences(of: #"\s*\n\s*"#, with: " ", options: .regularExpression).replacingOccurrences(of: #"[\x00-\x1f\x7f]"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,15 +52,27 @@ public enum BackendTaskSessionDriver {
             var input = BackendCreateSessionInput(cwd: cwd, provider: agent["provider"].string)
             input.profileId = agent["account"].string; input.resume = resume != nil; input.resumeConversationId = resume
             input.deniedTools = agent["blockedTools"].elements?.compactMap(\.string); input.noSkills = agent["skillsOff"].bool
-            if ["claude", "codex"].contains(input.provider ?? ""), agent["instructionsFile"].string != nil { input.agentInstructions = agent["id"].string }
+            input.claudeAgent = agent["claudeAgent"].string
+            input.allowedTools = agent["allowedTools"].elements?.compactMap(\.string)
+            input.permissionMode = agent["permissionMode"].string
+            input.taskID = task.id
+            input.taskProject = task.project.isEmpty ? nil : task.project
+            input.agentDefinitionsFile = try BackendTAGAgentDefinitionLaunch.prepare(agent: agent, specs: specs)
+            if input.claudeAgent != nil { input.provider = "claude" }
+            if input.claudeAgent == nil, ["claude", "codex"].contains(input.provider ?? ""), agent["instructionsFile"].string != nil { input.agentInstructions = agent["id"].string }
             input.origin = .copilot
             let filename = "\(Int(BackendTaskValues.time()))-\(UUID().uuidString.lowercased()).md"
             let body = "# \(task.value["title"].string ?? "Task")\n\nrepo: \(cwd)\nagent: \(input.provider ?? "the default")\nfrom-turn: \(task.id)\n\n---\n\n\(brief)\n"
             try specs.writeBytes(filename, data: Data(body.utf8), replace: false)
             let path = try specs.file(filename).path
             let session = try await lifecycle.create(input, holdOnFailure: false)
-            if let id = task.value["externalTaskId"].string { try manager.rename(session.id, title: "crm-" + id) }
-            do { try await deliver(session.id, "Read \(path) and do exactly what it says. That file is your whole brief — nothing else has been said to you, and nobody is going to add to it. Read it before you start.") }
+            do {
+                // Root's store owner binds the exact original assignment before
+                // the first brief can make a worker call its task tools.
+                try await bindTaskSession?(task, session)
+                if let id = task.value["externalTaskId"].string { try manager.rename(session.id, title: "crm-" + id) }
+                try await deliver(session.id, "Read \(path) and do exactly what it says. That file is your whole brief — nothing else has been said to you, and nobody is going to add to it. Read it before you start.")
+            }
             catch {
                 // This driver owns only this newly created launch. A failed
                 // delivery cannot leave an unclaimed task worker spending.

@@ -89,10 +89,12 @@ import TerminalDeckNativeCore
         let values = try await (first.value, joined.value); XCTAssertEqual(values.0, values.1)
         let checks = await driver.checks; XCTAssertEqual(checks, 1)
         let progress = await service.progress(project.path); XCTAssertEqual(progress, .null)
+        XCTAssertNil(BackendSFXReferenceGuard.refusal(project.path), values.0.compact)
         let marked = try await service.markGood(project.path, anyway: true); XCTAssertEqual(marked["marked"], .bool(true))
         let calls = await driver.ships; XCTAssertEqual(calls, [false, true])
         await driver.setUnchecked()
-        _ = try await service.markGood(project.path, anyway: true)
+        let unchecked = try await service.markGood(project.path, anyway: true)
+        XCTAssertEqual(unchecked["marked"], .bool(false)); XCTAssertEqual(unchecked["refusedFor"], .string("unchecked"))
         let uncheckedCalls = await driver.ships; XCTAssertEqual(uncheckedCalls, [false, true, false])
     }
     func testUnavailableEngineIsExplicitAndChannelArgumentErrorsKeepShape() async throws {
@@ -151,7 +153,26 @@ private actor BackendStaysFixedFixtureDriver: BackendStaysFixedEngineRunning {
                 await withCheckedContinuation { checkWaiter = $0 }
             } onCancel: { Task { await self.releaseCheck() } }
             if Task.isCancelled { return .init(code: nil, stdout: "", stderr: "", timedOut: false, cancelled: true) }
-            return .init(code: 0, stdout: BackendStaysFixedFixtures.cli_check_regression.compact, stderr: "", timedOut: false, cancelled: false)
+            let raw = BackendStaysFixedFixtures.cli_check_regression
+            do {
+                let buildID = try raw["candidate"]["id"].requireString("fixture candidate id", nonempty: true)
+                let sample = raw["findings"].elements?.first?["sample"] ?? .missing
+                _ = try sample["candidate"].requireString("captured command output", nonempty: true)
+                let folder = URL(fileURLWithPath: cwd).appendingPathComponent(".staysfixed/v2")
+                let captureFolder = folder.appendingPathComponent("builds/" + BackendStaysFixedRead.fileSafe(buildID) + "/receipt")
+                try FileManager.default.createDirectory(at: captureFolder, withIntermediateDirectories: true)
+                let capture: [NativeRPCValue] = [
+                    .object([.init("kind", .string("capture"))]),
+                    .object([.init("path", sample["path"]), .init("channel", sample["channel"]), .init("value", sample["candidate"]),
+                             .init("meta", .object([.init("refused", .bool(false))]))]),
+                    .object([.init("kind", .string("end")), .init("count", .number(1))])
+                ]
+                try Data((capture.map(\.compact).joined(separator: "\n") + "\n").utf8)
+                    .write(to: captureFolder.appendingPathComponent(String(format: "%08d.jsonl", checks)), options: .atomic)
+                let envelope = NativeRPCValue.object([.init("at", raw["startedAt"]), .init("result", .string(raw.compact))])
+                try envelope.encodedJSON().write(to: folder.appendingPathComponent("last-check.json"), options: .atomic)
+            } catch { return .init(code: 1, stdout: "", stderr: error.localizedDescription, timedOut: false, cancelled: false) }
+            return .init(code: 0, stdout: raw.compact, stderr: "", timedOut: false, cancelled: false)
         }
         return .init(code: 0, stdout: "{}", stderr: "", timedOut: false, cancelled: false)
     }

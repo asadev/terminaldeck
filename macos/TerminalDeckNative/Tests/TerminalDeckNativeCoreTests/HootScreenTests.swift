@@ -24,7 +24,7 @@ struct HootScreenTests {
         #expect(HootScreen.stateLine(stage: .ready, loading: false, account: nil, recordsHeld: true) == "Running · signed in, its log held")
         #expect(HootScreen.stateLine(stage: .firstRun, loading: false, account: nil, recordsHeld: false) == "Running · signed out")
         #expect(HootScreen.restartHelp(stateLine: "Running · signed in")
-                == "Running · signed in — restarting ends this conversation and starts a fresh one. Its folder and memory are untouched.")
+                == "Running · signed in — restarting stops Hoot's CLI and resumes this conversation. Its folder and memory are untouched.")
         #expect(HootScreen.showsRestart(status: "running", elsewhere: false))
         #expect(!HootScreen.showsRestart(status: "running", elsewhere: true))
         #expect(!HootScreen.showsRestart(status: "starting", elsewhere: false))

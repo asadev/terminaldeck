@@ -18,11 +18,15 @@ public struct BackendDeckCoreCatalogueCoverageRow: Sendable, Equatable {
 }
 
 public enum BackendDeckCoreCatalogueCoverage {
-    public static let areaNames = ["sessions", "machines", "agents", "browser", "devices", "fixed", "memory", "window"]
+    public static let areaNames = BackendUIGMemoryDiscovery.coverageAreas(["sessions", "machines", "agents", "browser", "devices", "fixed", "memory", "window"])
     public static let maxRows = 60
     /// Keep the full original map inspectable. Only Chrome-specific operations retire.
     public static var rows: [BackendDeckCoreCatalogueCoverageRow] {
-        BackendDeckCoreCatalogueCoverageLiterals.sourceRows.map { row in
+        BackendUIGMemoryDiscovery.coverageRows(BackendDeckCoreCatalogueCoverageLiterals.sourceRows + [
+            .init(area: "fixed", action: "staysfixed:setup-preview", tools: ["fixed.setup_preview"]),
+            .init(area: "fixed", action: "staysfixed:setup-prepare", tools: ["fixed.setup_prepare"]),
+            .init(area: "fixed", action: "staysfixed:setup-apply", tools: ["fixed.setup_apply"])
+        ]).map { row in
             if row.tools?.contains(where: { ["browser.extensions", "browser.import"].contains($0) }) == true {
                 return .init(area: row.area, action: row.action, skip: "Retired by Asad's Chrome removal. The native Mac browser uses Safari/WebKit; Chrome imports and Chrome extensions are removed.")
             }

@@ -977,9 +977,9 @@ private struct BoardView: View {
                     Text("\(counts.total) \(DashboardWords.plural(counts.total, "session"))").font(.system(size: 15, weight: .semibold))
                     BoardSummary(parts: BoardRules.summaryParts(counts))
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 10, alignment: .top)], alignment: .leading, spacing: 10) {
+                NativeSessionBoardLayout {
                     ForEach(BoardRules.sort(sessions)) { session in
-                        BoardCard(session: session, name: names[session.id] ?? session.title, twin: twins.contains(session.id),
+                        NativeSessionBoardCard(session: session, name: names[session.id] ?? session.title, twin: twins.contains(session.id),
                                   now: model.now, here: session.projectPath == projectPath)
                     }
                 }
@@ -996,14 +996,55 @@ private struct BoardSummary: View {
         HStack(spacing: 0) {
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 if index > 0 { Text(" · ").foregroundStyle(.secondary) }
-                Text(part.text).foregroundStyle(BoardColors.attention(part.attention))
+                Text(part.text).foregroundStyle(part.attention == .blocked ? BoardColors.attention(.blocked) : .secondary)
             }
         }
         .font(.callout)
     }
 }
 
-private struct BoardCard: View {
+/// SessionBoard.css: cards in each row share a height, even when one has no figures.
+struct NativeSessionBoardLayout: Layout {
+    private let gap: CGFloat = 8
+
+    private func finiteWidth(_ width: CGFloat, count: Int) -> CGFloat {
+        guard width.isFinite else { return CGFloat(max(1, count)) * 268 + CGFloat(max(0, count - 1)) * gap }
+        return max(0, width)
+    }
+
+    private func geometry(width: CGFloat, subviews: Subviews) -> (columns: Int, cell: CGFloat, rows: [CGFloat]) {
+        let width = finiteWidth(width, count: subviews.count)
+        let columns = max(1, Int(min(CGFloat(max(1, subviews.count)), (width + gap) / (268 + gap))))
+        let cell = max(0, (width - CGFloat(columns - 1) * gap) / CGFloat(columns))
+        var rows: [CGFloat] = []
+        for (index, view) in subviews.enumerated() {
+            if index % columns == 0 { rows.append(0) }
+            rows[rows.count - 1] = max(rows[rows.count - 1], view.sizeThatFits(.init(width: cell, height: nil)).height)
+        }
+        return (columns, cell, rows)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = finiteWidth(proposal.width ?? 268, count: subviews.count)
+        let layout = geometry(width: width, subviews: subviews)
+        return CGSize(width: width, height: layout.rows.reduce(0, +) + CGFloat(max(0, layout.rows.count - 1)) * gap)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = geometry(width: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        for (index, view) in subviews.enumerated() {
+            let row = index / layout.columns
+            let column = index % layout.columns
+            if column == 0, row > 0 { y += layout.rows[row - 1] + gap }
+            view.place(at: CGPoint(x: bounds.minX + CGFloat(column) * (layout.cell + gap), y: y), anchor: .topLeading,
+                       proposal: .init(width: layout.cell, height: layout.rows[row]))
+        }
+    }
+}
+
+struct NativeSessionBoardCard: View {
+    @Environment(\.colorScheme) private var colorScheme
     let session: BoardSession
     let name: String
     let twin: Bool
@@ -1021,29 +1062,25 @@ private struct BoardCard: View {
                         Text(BoardRules.label(attention))
                     }
                     .font(.caption.weight(.medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(BoardColors.attention(attention).opacity(0.14), in: .capsule)
+                    .foregroundStyle(attention == .blocked || attention == .finished ? BoardColors.attention(attention) : .secondary)
                     Spacer(minLength: 4)
                     Text("\(BoardRules.folderOf(session.projectPath))\(Text(here ? "" : " · other project").foregroundStyle(.tertiary))")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .help(session.projectPath)
                 }
-                HStack(spacing: 6) {
-                    Text(name).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                    if twin { Text(BoardRules.shortSessionId(session.id)).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary) }
-                }
+                (Text(name) + Text(twin ? " \(BoardRules.shortSessionId(session.id))" : "").font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary))
+                    .font(.system(size: 14, weight: .semibold)).lineLimit(2)
                 .help(session.title)
-                Text(BoardRules.stateSentence(session, now: now)).font(.callout).foregroundStyle(BoardColors.attention(attention))
+                Text(BoardRules.stateSentence(session, now: now)).font(.callout).foregroundStyle(wants ? BoardColors.attention(attention) : .secondary)
                 Text(BoardRules.meta(session, now: now)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 if let work = session.work, work.requests > 0 {
-                    HStack(alignment: .top, spacing: 14) {
+                    NativeBoardFiguresLayout {
                         BoardFigure(label: "Tokens", value: DashboardWords.formatTokens(work.tokens))
                         BoardFigure(label: "Requests", value: String(work.requests))
                         if let percent = work.contextPercent {
                             let tone = DashboardWords.contextTone(percent)
                             BoardFigure(label: "Context", value: "\(Int(percent.rounded()))%",
-                                   color: tone == .crit ? .red : tone == .warn ? .orange : .primary)
+                                   color: tone == .crit ? .red : tone == .warn ? .orange : .secondary)
                         }
                         if work.lastActivityAt > 0 {
                             BoardFigure(label: "Last wrote", value: "\(BoardRules.formatElapsed(max(0, now - work.lastActivityAt))) ago")
@@ -1052,11 +1089,11 @@ private struct BoardCard: View {
                     .padding(.top, 2)
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: .rect(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(wants ? BoardColors.attention(attention).opacity(0.6) : Color(nsColor: .separatorColor), lineWidth: wants ? 1.2 : 0.5))
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(NativeSessionChrome.cardGround(emphasized: wants, light: colorScheme == .light), in: .rect(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(NativeSessionChrome.border(light: colorScheme == .light), lineWidth: 1))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1064,14 +1101,40 @@ private struct BoardCard: View {
     }
 }
 
+/// The old board's figures wrap within the card instead of widening the page.
+private struct NativeBoardFiguresLayout: Layout {
+    private func positions(width: CGFloat, subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
+        var points: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width { x = 0; y += row + 4; row = 0 }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + 16
+            row = max(row, size.height)
+        }
+        return (points, CGSize(width: width, height: y + row))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        positions(width: proposal.width ?? 268, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = positions(width: bounds.width, subviews: subviews)
+        for (view, point) in zip(subviews, layout.points) {
+            view.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .topLeading, proposal: .unspecified)
+        }
+    }
+}
+
 private struct BoardFigure: View {
     let label: String
     let value: String
-    var color: Color = .primary
+    var color: Color = .secondary
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.caption.weight(.semibold)).foregroundStyle(color).monospacedDigit()
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.caption).foregroundStyle(color).monospacedDigit()
         }
     }
 }

@@ -61,13 +61,18 @@ final class ParityWireTests: XCTestCase {
 
     // MARK: - claimed capabilities
 
-    func testTheClientClaimsTheFourPushAndDualCapabilities() {
-        // The same list `CLAIMED_CAPABILITIES` carries in the PWA: three pushes a
-        // client would otherwise miss (github, devices, settings — the `*.changed`
-        // frames), and the client half of a dual-listed name (watch).
+    func testClientClaimsSupportedPushAndPanelMetadata() {
+        // Explicit supported domains protect against dropped host metadata,
+        // accidental claims of unsupported UI, and the host's 24-name bound.
         XCTAssertEqual(Set(WireCapability.claimed),
                        [WireCapability.github, WireCapability.devices,
-                        WireCapability.settings, WireCapability.watch])
+                        WireCapability.settings, WireCapability.watch, "device.access", "hoot.events",
+                        "panels.artifacts", "panels.store", "panels.readiness", "panels.mcp",
+                        "panels.tasks", "panels.goals", "panels.memory", "panels.plugins",
+                        "panels.staysfixed", "panels.settings", "panels.ai-apps", "panels.simulators",
+                        "panels.github", "panels.hooks", "panels.servers"])
+        XCTAssertLessThanOrEqual(WireCapability.claimed.count, 24)
+        XCTAssertEqual(Set(WireCapability.claimed).count, WireCapability.claimed.count)
     }
 
     // MARK: - sign-in

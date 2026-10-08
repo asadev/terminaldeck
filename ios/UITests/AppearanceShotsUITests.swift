@@ -192,7 +192,7 @@ final class AppearanceShotsUITests: XCTestCase {
             let controls = app.buttons["copilot.controls"]
             if controls.exists {
                 controls.tap()
-                _ = app.navigationBars["Copilot"].waitForExistence(timeout: 5)
+                _ = app.navigationBars["Hoot"].waitForExistence(timeout: 5)
                 capture("\(scheme.rawValue)-22-copilot-controls")
                 // Waited on by the sheet's own navigation title rather than by
                 // an identifier on the row that opened it. The old walk waited

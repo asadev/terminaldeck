@@ -23,6 +23,8 @@ final class NativeCompositionProduction {
     var taskRegistration: BackendTaskRegistration?
     var taskEngine: BackendTaskEngine?
     var taskView: BackendTaskStateView?
+    var airReadiness: NativeCompositionINT2AIR?
+    var agentSettings: NativeCompositionINT2AGS?
     var routinesOwner: BackendRoutinesService?
     var remoteRegistration: BackendRemoteServeRegistration.Installed?
     var remoteHost: BackendRemoteHostService?
@@ -33,6 +35,7 @@ final class NativeCompositionProduction {
     var machineStore: BackendMachineStore?
     var machineCoordinator: BackendMachineCoordinator?
     var serversOwner: BackendServersFeature?
+    var serverControl: NativeServerControlRuntime?
     var leaseFacade: BackendDeckToolsSessionsLeaseFacade?
     var hoot: BackendHootJoinAssembly.Assembled?
     var osServices: NativeCompositionOS.Services?
@@ -51,6 +54,7 @@ final class NativeCompositionProduction {
     let linkRequests = BackendCompositionLinkRequests()
     let linkTabWindow = NativeCompositionLinkTabWindow()
     var notifications: BackendOSNativeNotifier?
+    var phoneHoot: BackendINT2HootPhone?
     /// open-shim.ts: written at start (installOpenShim), read by the hook context.
     let openShim = BackendMacAppHandoffOpenShim(files: BackendMacAppHandoffShimDisk())
     /// app-context.ts: the app map a session is told about at SessionStart/BeforeAgent.
@@ -82,7 +86,7 @@ final class NativeCompositionProduction {
             sessionStatus: { [joins] id in (try? joins.authority())?.statusRecord(id) ?? .null }, windows: { [joins] in joins.browserWindows(sessionID: $0) })
         coreSurface = surface
         // One tour stage for the tour tool and the core's tour channels (deck-tools handoff "Tours").
-        let stage = BackendDeckToolsTourStage(logDirectory: root.dataRoot.appendingPathComponent("copilot-log", isDirectory: true),
+        let stage = BackendDeckToolsTourStage(logDirectory: RNMHootPaths(dataRoot: root.dataRoot).log,
             window: tourWindow, writeFailure: { [report] in report("tour record: " + $0) })
         tourStage = stage
         let consent = BackendDeckCoreWindowConsent(isApprover: { context in
@@ -91,7 +95,7 @@ final class NativeCompositionProduction {
             try await root.registry.publish(channel, arguments: [value], ownerID: owner); return true
         }, broadcast: { [root] channel, value in
             try await root.registry.publish(channel, arguments: [value], ownerID: BackendCompositionRoot.appOwnerID)
-        })
+        }, relay: NativeCompositionINT2PhoneConsent(self))
         core = try await root.installDeckCore(providers: .init(surface: surface, window: consent,
             whereDependencies: .init(window: NativeCompositionWhere(root: root), page: { nil }),
             mcp: joins, features: joins, tours: BackendDeckToolsTourCoreAdapter(stage: stage), relay: relay, taskHTTP: joins, livePolicies: { [joins] in joins.livePolicies() },
@@ -134,7 +138,10 @@ final class NativeCompositionProduction {
             dependencies: suppliers.sessionDependencies(projectMCPSource: projectSource, browserReach: reach,
                 cleanup: .init(readiness: .ready, release: { [joins] in try await joins.releaseSession($0) }),
                 restoreContext: restore, excludedAppWorkingDirectories: [Bundle.main.bundleURL.path],
-                emit: { _ in }, renamed: { [root] id, title in
+                emit: { [weak self] event in
+                    guard SourceNamespace.agentSettingsEnabled else { return }
+                    Task { await self?.agentSettings?.events.session(event) }
+                }, renamed: { [root] id, title in
                     try? await root.registry.publish("session:renamed", arguments: [.string(id), .string(title)], ownerID: BackendCompositionRoot.appOwnerID)
                 }, hookAdditionalContext: { [joins] in try await joins.hookContext($0) }), oldSessionOwnerDisabled: true)
         try authority.bind(sessions); try joins.bind(sessions: sessions)
@@ -151,6 +158,7 @@ final class NativeCompositionProduction {
         usage = try await root.installUsage(accounts: sessions.accounts, lifecycle: sessions.lifecycle,
             dependencies: suppliers.usageDependencies(), excludingToolIDs: deckToolIDs)
         joins.bind(files: files, usage: usage)
+        try await installAIRReadiness()
         var deps = NativeCompositionClients.runtimeDependencies(dataRoot: root.dataRoot, configuration: engineConfiguration,
             window: window, report: report)
         deps.outputValidator = BackendMcpClientJSONSchemaValidator()
@@ -187,9 +195,19 @@ final class NativeCompositionProduction {
             storageRoot: root.dataRoot.appendingPathComponent("remote"), sessions: sessions, deckCore: core,
             confinement: await sessions.macConfinement, machineID: "", pickFolder: { try await NativeCompositionFolderPicker.pick($0) },
             transcriptScope: { [joins] in try await joins.accountTranscriptScope() }, reveal: NativeCompositionReveal(),
-            window: { [authority] in try authority!.requireLocalUI($0) }, stopPhoneRuns: joins.stopPhoneRuns()), oldHootOwnerDisabled: true)
+            window: { [authority] in try authority!.requireLocalUI($0) }, stopPhoneRuns: { [weak self] in
+                await (await MainActor.run { self?.phoneHoot })?.stop()
+            },
+            headlessPolicy: { [sessions] input, provider, context in
+                try await sessions!.launcher.headlessPolicy(input, provider: provider, context: context)
+            }, headlessProvider: try await BackendHootProviderChoice(settings: root.settings).selected(),
+            readAcknowledged: { folder in
+                try await NativeCompositionRoot.shared.confirmHootRead([folder])
+            }), oldHootOwnerDisabled: true)
+        try await installINT2PhoneHoot()
         // deck-tools needs Hoot's administrative service (copilot-admin tools) and every owner above.
         try await installDeckToolsAndOS()
+        try await installServerControl()
         await installOpenShim()
         try await startAreas()
     }

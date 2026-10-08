@@ -140,8 +140,8 @@ final class CopilotChatUITests: XCTestCase {
     // MARK: - Steps
 
     private func openCopilot() throws {
-        let tab = app.tabBars.buttons["Copilot"].firstMatch
-        let button = tab.exists ? tab : app.buttons["Copilot"].firstMatch
+        let tab = app.tabBars.buttons["Hoot"].firstMatch
+        let button = tab.exists ? tab : app.buttons["Hoot"].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 20),
                       "this phone is paired as one of his devices, so the pill is there")
         button.tap()

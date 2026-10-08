@@ -13,7 +13,7 @@ final class BackendRoutinesLogTests: XCTestCase {
     func testRoutineRowsUseSharedActionPathAndISOString() throws {
         let root = try scratch(), sink = BackendRoutinesActionLog(userData: root, now: { Date(timeIntervalSince1970: 0) })
         sink.logger(.init(action: "routine.run", routine: "overnight", runID: "r1", outcome: "started", detail: "Started."))
-        XCTAssertEqual(sink.actions.path, root.appendingPathComponent("copilot-log/actions.jsonl").path)
+        XCTAssertEqual(sink.actions.path, root.appendingPathComponent("hoot-log/actions.jsonl").path)
         let bytes = try Data(contentsOf: sink.actions), row = try NativeRPCValue.parseJSON(bytes)
         XCTAssertEqual(row["at"].string, "1970-01-01T00:00:00.000Z")
         XCTAssertEqual(row["runId"].string, "r1")
@@ -35,7 +35,7 @@ final class BackendRoutinesLogTests: XCTestCase {
     }
     func testUnwritablePathDoesNotThrowAndReportsFailure() throws {
         let root = try scratch()
-        try Data("file prevents directory creation".utf8).write(to: root.appendingPathComponent("copilot-log"))
+        try Data("file prevents directory creation".utf8).write(to: root.appendingPathComponent("hoot-log"))
         let sink = BackendRoutinesActionLog(userData: root)
         sink.logger(.init(action: "routine.skip", routine: "one", outcome: "refused"))
         XCTAssertNotNil(sink.lastError)

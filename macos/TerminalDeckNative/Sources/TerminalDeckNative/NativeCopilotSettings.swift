@@ -22,6 +22,7 @@ struct NativeCopilotSettings: View {
                 NativeSettingsHead(title: CopilotWords.assistant, blurb: CopilotWords.blurb)
             }
             CopilotSessionGroup(model: model)
+            NativeHootProviderSelection()
             CopilotFilesGroup(model: model)
             CopilotShowingGroup(model: model)
             CopilotMenuBarGroup(model: model)

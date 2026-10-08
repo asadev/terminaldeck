@@ -179,7 +179,7 @@ final class SwipeActionsUITests: XCTestCase {
         // Conditional, and asserted rather than skipped over: a Copilot pill that
         // is drawn but nameless is the same defect as a nameless Menu.
         if bar.buttons.count == 4 {
-            XCTAssertTrue(bar.buttons["Copilot"].exists,
+            XCTAssertTrue(bar.buttons["Hoot"].exists,
                           "a fourth pill has to be the copilot, by name")
         }
         capture("00-the-pill")

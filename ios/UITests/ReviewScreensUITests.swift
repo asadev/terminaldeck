@@ -212,7 +212,7 @@ final class ReviewScreensUITests: XCTestCase {
 
         let bar = app.tabBars.firstMatch
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "there should be a tab bar")
-        for name in ["Copilot", "Sessions", "Localhost", "Settings"] {
+        for name in ["Hoot", "Sessions", "Localhost", "Settings"] {
             XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a pill")
         }
         XCTAssertEqual(bar.buttons.count, 4, "four pills, and only four")
@@ -221,7 +221,7 @@ final class ReviewScreensUITests: XCTestCase {
         // would miss. The frames are compared rather than the labels: a bar with
         // the right four pills in the wrong order is a bar somebody's thumb has
         // to relearn.
-        let copilot = bar.buttons["Copilot"].frame
+        let copilot = bar.buttons["Hoot"].frame
         for name in ["Sessions", "Localhost", "Settings"] {
             XCTAssertLessThan(copilot.minX, bar.buttons[name].frame.minX,
                               "the copilot should be to the left of \(name)")

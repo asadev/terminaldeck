@@ -79,6 +79,10 @@ extension BackendRemoteTrustStore {
         try saveShares("remote-accounts.json", accounts, key: "accounts")
         try saveDevices("remote-device-kinds.json", .object(nextKinds.map { .init($0.key, .object([.init("kind", .string($0.value.kind.rawValue)), .init("decidedAt", .number($0.value.decidedAt))])) }))
         folderGrants = folders; sessionGrants = sessions; accountGrants = accounts; kinds = nextKinds
+        phoneAccessLevels[id] = nil
+        try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .object(phoneAccessLevels.map {
+            .init($0.key, .string($0.value.rawValue))
+        }))]), file: directory.appendingPathComponent("remote-access.json"))
         windowAllowed.remove(id); windowDenied.remove(id)
         try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .array(windowAllowed.sorted().map(NativeRPCValue.string))),
             .init("denied", .array(windowDenied.sorted().map(NativeRPCValue.string)))]), file: directory.appendingPathComponent("remote-windows.json"))
@@ -138,5 +142,9 @@ extension BackendRemoteTrustStore {
         windowAllowed = Set(cleanIDs(windows["devices"].elements?.compactMap(\.string) ?? [], max: 64, length: 200))
         windowDenied = Set(cleanIDs(windows["denied"].elements?.compactMap(\.string) ?? [], max: 64, length: 200))
         windowAllowed.subtract(windowDenied)
+        phoneAccessLevels = [:]
+        for field in (read("remote-access.json")["devices"].fields ?? []).prefix(64) {
+            if let raw = field.value.string, let level = BackendINT2PhoneAccessLevel(rawValue: raw) { phoneAccessLevels[field.key] = level }
+        }
     }
 }

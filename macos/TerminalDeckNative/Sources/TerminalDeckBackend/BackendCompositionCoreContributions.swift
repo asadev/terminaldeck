@@ -15,7 +15,7 @@ public enum BackendCompositionCoreContributions {
         let sessions = BackendDeckToolsSessionsCatalogue.entries.map(\.id)
         let app = try BackendDeckToolsAppMetadata.entries().map { $0.spec.id }
         let machines = try BackendDeckToolsMachinesCatalogue.rows().map { try $0["id"].requireString("source tool id", nonempty: true) }
-        return Set(root + sessions + app + machines)
+        return Set(root + sessions + app + machines).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs)
     }
 
     /// The Safari tools the browser owner registered, with their source rows

@@ -22,7 +22,9 @@ public actor BackendCopilotSessionSecurityEndpoint: BackendMCPToolEndpoint {
         return try .init(url: endpoint.url, implementation: .native)
     }
     public func catalogue() async throws -> [BackendMCPTool] {
-        await server.control.tools().filter { $0.visible(to: nil, caller: .local) && $0.tool.advertised }.map(\.tool)
+        await server.control.tools().filter {
+            $0.visible(to: nil, caller: .local) && $0.tool.advertised && BackendUIGMemoryDiscovery.showsTool($0.tool)
+        }.map(\.tool)
     }
     public func register(token: String, grant: BackendMCPCallerGrant) async throws -> BackendMCPRegistration {
         guard let endpoint = await server.currentEndpoint() else {

@@ -77,7 +77,7 @@ struct CopilotFilesGroup: View {
         let layer = state?.layerFiles ?? []
         let yoursFile = layer.first { $0.owner == .yours }
         let contractFile = layer.first { $0.path.hasSuffix("tools.md") }
-        let composedFile = layer.first { $0.path.hasSuffix("copilot.md") }
+        let composedFile = layer.first { $0.path.hasSuffix("hoot.md") } ?? layer.first { $0.path.hasSuffix("copilot.md") }
         let folderFile = (state?.startupFiles ?? []).first { $0.owner == .folder && $0.purpose != "Memory" && $0.purpose != "Memory index" }
         let keys = (yours: "\(instructions.rawValue):\(yoursFile?.modifiedAt ?? 0)", contract: "\(contractFile?.modifiedAt ?? 0)",
                     composed: "\(composedFile?.modifiedAt ?? 0)",
@@ -108,7 +108,7 @@ struct CopilotFilesGroup: View {
                            says: "The two halves above, composed — byte for byte what the running \(CopilotWords.assistant) was given, and never written into its folder.",
                            action: open == .composed ? "Close" : "View", onAction: { toggle(.composed) }) {
                 if open == .composed {
-                    NativeReadOnlyFile(label: CopilotWords.baseName(composedFile?.path ?? "copilot.md"), text: composed.text,
+                    NativeReadOnlyFile(label: CopilotWords.baseName(composedFile?.path ?? "hoot.md"), text: composed.text,
                                        problem: composed.problem ?? (composedFile.map { !$0.exists } == true
                                            ? "It has not been written yet — it is composed when \(CopilotWords.assistant) starts." : nil),
                                        because: "A copy, made at the moment it started. Editing it would change nothing: it is written again from the two halves every time \(CopilotWords.assistant) starts.",

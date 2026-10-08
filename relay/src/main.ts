@@ -41,6 +41,8 @@ const relay = createRelayServer({
   heartbeatMs: Number(process.env.HEARTBEAT_MS ?? 30_000),
   maxGuestsPerHost: Number(process.env.MAX_GUESTS_PER_HOST ?? 8),
   maxHosts: Number(process.env.MAX_HOSTS ?? 5_000),
+  // RCV: a writable folder makes Receiver sources and sealed deliveries survive restarts.
+  receiverDir: process.env.RECEIVER_DIR || null,
 })
 
 relay.server.on('clientError', (_error, socket) => socket.destroy())

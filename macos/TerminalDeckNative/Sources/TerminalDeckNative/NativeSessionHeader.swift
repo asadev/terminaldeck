@@ -61,11 +61,17 @@ struct NativeSessionHeader: View {
                 .buttonStyle(.borderless)
                 .help("Move to new window")
                 .accessibilityLabel("Move to new window")
+                .accessibilityAction {
+                    NativePoppedSessions.shared.popOut(session.sessionId, title: header.title)
+                }
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .frame(minHeight: 54)
+        .frame(minHeight: 48)
+        .foregroundStyle(NativeSessionChrome.ink)
+        .background(Color(nsColor: session.ground))
+        .environment(\.colorScheme, NativeSessionChrome.scheme.isLight ? .light : .dark)
         .background(NativeWindowReader { window in
             inMainWindow = window == nil || window === AppModel.shared.web.webView.window
         })

@@ -10,6 +10,34 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-08
+
+This release is for the Mac and the iPhone app on TestFlight. Windows and Android downloads are unchanged. Android’s source version matches 0.20.0; Android is not built or released.
+
+### Added
+
+- Manage Docker containers and apps from Terminal Deck: deploy, inspect logs, check health, and manage domains, backups and templates.
+- Receiver collects webhooks and app events in one inbox. Match them with rules, see where they went, send work to an agent or Hoot, and approve replies. Presets include WhatsApp, CRM, GitHub and Sentry; any webhook can use the same rules.
+- Watch agents work and talk from Agents at work.
+- Use GitHub inside the app for repository work, issues and pull requests.
+- The new features have MCP tools as well as screens.
+
+### Changed
+
+- The new agent-settings and app-hooks pages are held back from this release.
+- Hoot has a normal chat with streaming replies and working questions and approvals. It uses the same conversation on the Mac and iPhone.
+- The iPhone app adds host-backed pages and actions, project work and Hoot. The Mac controls each paired phone's Look, Work or Full access.
+- Browser profiles share one menu. Downloads has its own button, Annotate uses a normal pointer, and the solid grey bars are gone.
+- Tasks are easier to follow by project. Simulators have a compact device list and a clear Start or Open action. Memory is hidden from the sidebar for now.
+- AI setup shows what is missing and offers an action to fix it. Stays Fixed has clearer setup and result screens.
+- Hoot is called Hoot in visible names, data folders and tools. Existing data moves across, and old tool names still work.
+- Artifacts has one plain empty state. Segmented controls use the same quiet grey style.
+
+### Fixed
+
+- Repeated session notifications stop after the session has stopped.
+- Duplicate sessions have matching boxes. Selected tab pills and window headers follow the terminal colour. Split terminals let you switch to the browser, and popped-out windows can return to Terminal Deck from their own window.
+
 ## [0.19.2] — 2026-10-08
 
 This release is for the Mac. Windows, the phone apps and the server package stay on 0.15.0.
@@ -2444,7 +2472,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.19.2...HEAD
+[0.20.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.20.0
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.20.0...HEAD
 [0.19.2]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.2
 [0.19.1]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.1
 [0.19.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.19.0

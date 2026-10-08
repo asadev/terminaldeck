@@ -420,7 +420,7 @@ struct NativeBrowserDownloadsButton: View {
                 if downloads.runningCount > 0 {
                     Circle()
                         .trim(from: 0, to: downloads.overallFraction ?? 0.15)
-                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .stroke(NativeSessionChrome.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .frame(width: 22, height: 22)
                 }
@@ -437,15 +437,16 @@ struct NativeBrowserDownloadsButton: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 3.5)
                     .frame(minWidth: 14, minHeight: 14)
-                    .background(badge.tone == "bad" ? Color.red : badge.tone == "busy" ? Color.accentColor : Color.secondary,
+                    .background(badge.tone == "bad" ? Color.red : badge.tone == "busy" ? NativeSessionChrome.accent : Color.secondary,
                                 in: .capsule)
                     .offset(x: 3, y: -2)
                     .allowsHitTesting(false)
             }
         }
         .help("Downloads")
+        .foregroundStyle(.secondary)
         .accessibilityLabel("Downloads")
-        .popover(isPresented: Binding(get: { store.downloadsShown && downloads.badge != nil },
+        .popover(isPresented: Binding(get: { store.downloadsShown },
                                       set: { store.downloadsShown = $0 }), arrowEdge: .bottom) {
             NativeBrowserDownloadsList(downloads: downloads)
         }
@@ -478,17 +479,21 @@ struct NativeBrowserProfileButton: View {
             if !store.profiles.isEmpty { Divider() }
             Button("New Profile…") { askForNewProfile() }
                 .disabled(!EngineBridge.shared.isReady)
+            Divider()
+            NativeBrowserMenuActions(store: store, tab: tab)
         } label: {
             Text(current?.badge.isEmpty == false ? current!.badge : "·")
                 .font(.system(size: 11, weight: .semibold))
                 .frame(width: 20, height: 20)
-                .background(Color.accentColor.opacity(0.18), in: .circle)
+                .background(Color.primary.opacity(0.08), in: .circle)
+                .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
         }
         .menuIndicator(.hidden)
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help(current?.name ?? "Profile")
+        .help(current.map { "Profile — \($0.name)" } ?? "Profile")
+        .accessibilityLabel("Profile")
     }
 
     private func askForNewProfile() {

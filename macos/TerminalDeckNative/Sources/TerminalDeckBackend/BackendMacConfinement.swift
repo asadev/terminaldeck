@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import TerminalDeckNativeCore
 
 /// Native macOS port of confine/plan.ts, seatbelt.ts and records.ts. Readiness
 /// means the full implementation exists; each requested boundary must still
@@ -189,7 +190,7 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
         let root = URL(fileURLWithPath: kernelPath(root.path))
         let remote = URL(fileURLWithPath: kernelPath(root.appendingPathComponent("remote").path))
         return [root.appendingPathComponent("routines"), root.appendingPathComponent("routine-state.json"),
-            root.appendingPathComponent("copilot-log"), remote.appendingPathComponent("remote-device-kinds.json"),
+            RNMHootPaths(dataRoot: root).log, remote.appendingPathComponent("remote-device-kinds.json"),
             remote.appendingPathComponent("remote-auth.json"), remote.appendingPathComponent("access-keys.json"),
             root.appendingPathComponent("plugin-grants.json")].map { kernelPath($0.path) }
     }

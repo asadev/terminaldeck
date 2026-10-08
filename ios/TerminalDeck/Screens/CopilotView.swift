@@ -177,6 +177,9 @@ struct CopilotView: View {
     /// What the scroll watches: how many rows there are, and what the last one
     /// says. Both, because a streaming answer only ever moves the second.
     private var tail: String {
+        if host?.hasStructuredHoot == true {
+            return "hoot:\(host?.hootStream.sequence ?? 0)"
+        }
         let rows = link?.timeline ?? []
         guard let last = rows.last else { return "0" }
         return "\(rows.count):\(last.id):\(last.digest)"
@@ -204,7 +207,7 @@ struct CopilotView: View {
             Theme.background.ignoresSafeArea()
             content
         }
-        .navigationTitle("Copilot")
+        .navigationTitle("Hoot")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             /*
@@ -254,7 +257,7 @@ struct CopilotView: View {
              * rather than the product's, which is what `singleHostTitle` is for.
              */
             ToolbarItem(placement: .principal) {
-                HostSwitcher(model: model, singleHostTitle: "Copilot")
+                HostSwitcher(model: model, singleHostTitle: "Hoot")
             }
         }
         /*
@@ -286,7 +289,7 @@ struct CopilotView: View {
                                     settlement: link?.settlement(for: question.id),
                                     machine: host?.label ?? "that machine",
                                     noun: host?.hostPlatform.noun ?? "desktop",
-                                    answer: { approved in
+                                    answer: { approved, answers in
                                         // The sheet stays up until the desktop
                                         // says the question is settled, so the
                                         // person sees where their answer landed
@@ -296,7 +299,7 @@ struct CopilotView: View {
                                         // buttons over a dead socket would be a
                                         // consent prompt that looks answered and
                                         // is not.
-                                        link?.answer(question.id, approved: approved) ?? false
+                                        link?.answer(question.id, approved: approved, answers: answers) ?? false
                                     },
                                     dismiss: {
                                         link?.dismissSettled(question.id)
@@ -438,11 +441,11 @@ struct CopilotView: View {
              * on that screen.
              */
             ContentUnavailableView {
-                Label("No copilot here", systemImage: "sparkles")
+                Label("No Hoot here", systemImage: "sparkles")
             } description: {
-                Text("There is no copilot on \(host?.label ?? "that machine") for this phone. "
+                Text("There is no Hoot on \(host?.label ?? "that machine") for this phone. "
                      + "Either that \(hostNoun) is running a version of \(Brand.name) without "
-                     + "one, or this phone is paired with it as a guest — the copilot is only "
+                     + "one, or this phone is paired with it as a guest — Hoot is only "
                      + "there for your own devices, and which one this is decided at the machine "
                      + "when the phone was approved.")
             }
@@ -486,7 +489,7 @@ struct CopilotView: View {
         HStack(spacing: 8) {
             ProgressView().controlSize(.small).tint(Theme.faint)
             Text(model.connection.isLive
-                 ? "Opening the copilot again\u{2026}"
+                 ? "Opening Hoot again\u{2026}"
                  : "Waiting for \(host?.label ?? "that machine") to come back.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.faint)
@@ -527,7 +530,7 @@ struct CopilotView: View {
         VStack(spacing: 14) {
             ProgressView().controlSize(.large).tint(Theme.secondary)
             Text(model.connection.isLive
-                 ? "Opening the copilot on \(host?.label ?? "that machine")…"
+                 ? "Opening Hoot on \(host?.label ?? "that machine")…"
                  : "Waiting for \(host?.label ?? "that machine") to come back.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
@@ -559,9 +562,9 @@ struct CopilotView: View {
         ContentUnavailableView {
             Label("Nothing granted here", systemImage: "lock")
         } description: {
-            Text("This phone reached \(host?.label ?? "that machine")'s copilot and was given "
+            Text("This phone reached \(host?.label ?? "that machine")'s Hoot and was given "
                  + "nothing it may do. That is unusual — a device paired as your own gets the "
-                 + "copilot in full — so it is worth a look at that \(hostNoun).")
+                 + "Hoot in full — so it is worth a look at that \(hostNoun).")
         }
         .accessibilityIdentifier("copilot.notGranted")
     }
@@ -590,6 +593,12 @@ struct CopilotView: View {
                         }
                     }
 
+                    if host?.hasStructuredHoot == true, let stream = host?.hootStream {
+                        HootChatRows(stream: stream)
+                        ForEach(link?.timeline ?? []) { entry in
+                            if case let .mine(outgoing) = entry { CopilotOutgoingBubble(outgoing: outgoing) }
+                        }
+                    } else {
                     ForEach(link?.timeline ?? []) { entry in
                         switch entry {
                         case let .message(message):
@@ -599,6 +608,7 @@ struct CopilotView: View {
                         case let .mine(outgoing):
                             CopilotOutgoingBubble(outgoing: outgoing)
                         }
+                    }
                     }
 
                     /*
@@ -612,9 +622,9 @@ struct CopilotView: View {
                      * `awaitingReply` reads the timeline rather than a flag — see
                      * `CopilotLink`.
                      */
-                    if link?.awaitingReply == true { CopilotTypingIndicator() }
+                    if host?.hasStructuredHoot == true ? host?.hootStream.isStreaming == true : link?.awaitingReply == true { CopilotTypingIndicator() }
 
-                    if (link?.timeline.isEmpty ?? true) { nothingYet }
+                    if host?.hasStructuredHoot == true ? host?.hootStream.items.isEmpty == true : (link?.timeline.isEmpty ?? true) { nothingYet }
 
                     // An anchor rather than "scroll to the last row", because the
                     // last row changes identity as a streaming answer is
@@ -731,7 +741,7 @@ struct CopilotView: View {
 
     private var nothingYetLine: String {
         if link?.state == nil {
-            return "\(host?.label ?? "That machine") has not said what its copilot is doing yet."
+            return "\(host?.label ?? "That machine") has not said what its Hoot is doing yet."
         }
         if link?.hasRun == true {
             return "Nothing said yet. What it says and what it does both land here, in the order they happen."
@@ -739,7 +749,7 @@ struct CopilotView: View {
         if host?.copilotAccess == .direct {
             return "No conversation on this \(hostNoun) yet."
         }
-        return "What the copilot says and what it does will land here, in the order they happen."
+        return "What Hoot says and what it does will land here, in the order they happen."
     }
 
     private static let bottom = "copilot.bottom"
@@ -795,13 +805,15 @@ struct CopilotView: View {
                      * allowed any.
                      */
                     HStack(spacing: 8) {
-                        StateChip(subject: hostNoun.capitalized, state: deskWord(state),
+                        StateChip(subject: host?.hasStructuredHoot == true ? "Hoot" : hostNoun.capitalized, state: deskWord(state),
                                   tone: state.deskIsRunning ? Theme.positive
                                       : state.deskIsStarting ? Theme.accent : Theme.faint)
                             .accessibilityIdentifier("copilot.status")
+                        if host?.hasStructuredHoot != true {
                         StateChip(subject: "This phone", state: state.hasRun ? "running" : "none",
                                   tone: state.hasRun ? Theme.positive : Theme.faint)
                             .accessibilityIdentifier("copilot.run")
+                        }
                         Spacer(minLength: 0)
                     }
 
@@ -941,7 +953,7 @@ struct CopilotView: View {
      */
     private var cannotStart: some View {
         Text(link?.state.flatMap(\.reason)
-             ?? "The \(hostNoun) has not said whether a copilot can start here.")
+             ?? "The \(hostNoun) has not said whether Hoot can start here.")
             .font(.system(size: 12))
             .foregroundStyle(Theme.secondary)
             .multilineTextAlignment(.leading)
@@ -1009,7 +1021,7 @@ struct CopilotView: View {
      */
     private var startCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Start a copilot for this phone")
+            Text("Start Hoot for this phone")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.primary)
             Text("Runs on the \(hostNoun) · spends money")
@@ -1070,16 +1082,17 @@ struct CopilotView: View {
                  * and Claude's own plus is a menu; the two the phone can offer
                  * are a file and a photo, each a system picker.
                  */
+                if host?.hasStructuredHoot != true {
                 Menu {
                     Button {
                         showingFileImporter = true
                     } label: {
-                        Label("Attach files", systemImage: "doc")
+                        Label("Add a file name", systemImage: "doc")
                     }
                     Button {
                         showingPhotoPicker = true
                     } label: {
-                        Label("Photos", systemImage: "photo")
+                        Label("Add a photo name", systemImage: "photo")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -1090,8 +1103,9 @@ struct CopilotView: View {
                 }
                 .accessibilityLabel("Add")
                 .accessibilityIdentifier("copilot.plus")
+                }
 
-                TextField("Ask the copilot…", text: $draft, axis: .vertical)
+                TextField("Ask Hoot…", text: $draft, axis: .vertical)
                     .lineLimit(1 ... 5)
                     .font(.system(size: 16))
                     .foregroundStyle(Theme.primary)
@@ -1331,7 +1345,7 @@ private struct CopilotMessageRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(mine ? "You said: \(message.text)"
-                                 : "Copilot said: \(message.text)")
+                                 : "Hoot said: \(message.text)")
     }
 
     @ViewBuilder
@@ -1534,7 +1548,7 @@ private struct CopilotTypingIndicator: View {
         }
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Copilot is replying")
+        .accessibilityLabel("Hoot is replying")
         .accessibilityIdentifier("copilot.typing")
         .onAppear { animating = true }
     }

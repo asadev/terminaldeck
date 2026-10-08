@@ -445,7 +445,7 @@ private struct McpServerBody: View {
                             Text("\(key.rawValue)  \(data.count(key))").tag(key)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.segmented).nativeUIGGreyControl()
                     .labelsHidden()
                     .fixedSize()
                     Button("Refresh") { model.loadInventory(server.id) }
@@ -610,7 +610,7 @@ struct McpMachinePills: View {
                     Text(target.name).tag(target.machineId)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             .help(pick.flatMap { id in targets.first { $0.machineId == id } }

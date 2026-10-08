@@ -43,7 +43,7 @@ public enum HootScreen {
 
     /// The Restart button's title text (the web's `title`).
     public static func restartHelp(stateLine: String) -> String {
-        "\(stateLine) — restarting ends this conversation and starts a fresh one. Its folder and memory are untouched."
+        "\(stateLine) — restarting stops Hoot's CLI and resumes this conversation. Its folder and memory are untouched."
     }
 
     /// Restart is drawn only over a running Hoot on this computer.
@@ -158,10 +158,10 @@ public enum HootScreen {
         if let rows = sidebar?.projects.first(where: { $0.id == startedGroup })?.sessions, !rows.isEmpty {
             return rows.filter { $0.kind == .session }.map { row in
                 Started(id: row.id, label: row.title.isEmpty ? (byId[row.id]?.title ?? "Session") : row.title,
-                        runId: byId[row.id]?.origin == "copilot" ? byId[row.id]?.runId : nil)
+                        runId: RNMHootSettingsMigration.isHootOrigin(byId[row.id]?.origin) ? byId[row.id]?.runId : nil)
             }
         }
-        return metas.filter { $0.origin == "copilot" }.map {
+        return metas.filter { RNMHootSettingsMigration.isHootOrigin($0.origin) }.map {
             Started(id: $0.id, label: $0.title.isEmpty ? "Session" : $0.title, runId: $0.runId)
         }
     }

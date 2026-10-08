@@ -10,6 +10,14 @@ public actor BackendTaskConfiguration {
     private let persistence: BackendTaskPersistence, instructions: BackendTaskPersistence
     private var agents: [NativeRPCValue] = [], connections: [NativeRPCValue] = [], loaded = false
     private let changed: @Sendable () async -> Void
+    private let importWatchers = BackendRoutinesFileWatchers()
+    private var importStops: [String: @Sendable () -> Void] = [:]
+    private var importWatching = true
+    private var importGeneration: UInt64 = 0
+    private var agsStore: BackendAGSStore?
+    private var savingAGS = false
+    private var agsWaiters: [CheckedContinuation<Void, Never>] = []
+    private var agsFailure: NativeRPCError?
     public init(persistence: BackendTaskPersistence, changed: @escaping @Sendable () async -> Void = {}) throws {
         self.persistence = persistence; self.changed = changed
         instructions = try BackendTaskPersistence(directory: persistence.directory.appendingPathComponent("agent-instructions"), ownership: persistence.ownership)
@@ -23,6 +31,9 @@ public actor BackendTaskConfiguration {
             // memory only; the stored bytes are rewritten only by a real change.
             var cleaned: [NativeRPCValue] = []
             for entry in raw["agents"].elements ?? [] {
+                if entry["effort"].string == "ultracode" {
+                    throw NativeRPCError(code: "agent-settings-migration", message: "A saved task agent uses the unsupported ultracode effort. Review that agent's settings before task profiles can start.")
+                }
                 var input = entry
                 if entry.fields != nil, case .failure = Self.lifecycleOf(entry) { input = entry.removing("status").removing("statusAt") }
                 if let agent = try? Self.cleanAgent(input, others: cleaned) { cleaned.append(agent) }
@@ -82,18 +93,33 @@ public actor BackendTaskConfiguration {
         guard !others.contains(where: { $0["id"].string != id && $0["name"].string?.lowercased() == name.lowercased() }) else { throw NativeRPCError.invalidArguments("Another agent is already called \(name).") }
         let provider = try optionalText(input["provider"], "The coding agent", max: 40)
         // blockedToolsOf: a name Claude Code would not take is refused first, then a setting this agent cannot keep.
-        let blockedTools = try textList(input["blockedTools"], "Blocked tools", max: 30, maxLength: 140)
-        if let odd = blockedTools.first(where: { !BackendSharedAgentTools.isToolName($0) }) { throw NativeRPCError.invalidArguments("\(odd) is not a tool name that can be blocked.") }
+        let blockedTools = try textList(input["blockedTools"], "Blocked tools", max: 200, maxLength: 200)
         let skillsOff = input["skillsOff"].bool == true
-        if (!blockedTools.isEmpty && !Capabilities.enforces(provider.string, setting: .blockedTools)) || (skillsOff && !Capabilities.enforces(provider.string, setting: .skillsOff)) {
-            throw NativeRPCError.invalidArguments("Only Claude Code can block tools or turn skills off. Clear them, or choose Claude Code.")
+        if SourceNamespace.agentSettingsEnabled {
+            if !blockedTools.isEmpty { try BackendAGSValidation.check(AGSAgentSettings(provider: provider.string ?? "claude", deniedTools: blockedTools)) }
+            if (!blockedTools.isEmpty && !AGSCapabilities.providers.contains(provider.string ?? "claude")) || (skillsOff && !Capabilities.enforces(provider.string, setting: .skillsOff)) {
+                throw NativeRPCError.invalidArguments("Choose a supported coding agent for tool restrictions; turning all skills off still requires Claude Code.")
+            }
+        } else {
+            if let odd = blockedTools.first(where: { !BackendSharedAgentTools.isToolName($0) }) {
+                throw NativeRPCError.invalidArguments("\(odd) is not a tool name that can be blocked.")
+            }
+            if (!blockedTools.isEmpty && !Capabilities.enforces(provider.string, setting: .blockedTools)) || (skillsOff && !Capabilities.enforces(provider.string, setting: .skillsOff)) {
+                throw NativeRPCError.invalidArguments("Only Claude Code can block tools or turn skills off. Clear them, or choose Claude Code.")
+            }
         }
         let lifecycle: (status: String, statusAt: Double?)
         switch lifecycleOf(input) { case .success(let value): lifecycle = value; case .failure(let problem): throw NativeRPCError.invalidArguments(problem.sentence) }
-        let role = try optionalText(input["role"], "The role", max: 60), account = try optionalText(input["account"], "The account", max: 80)
+        let role = try optionalText(input["role"], "The role", max: 4_000), account = try optionalText(input["account"], "The account", max: 80)
         let model = try optionalText(input["model"], "The model", max: 80), effort = try optionalText(input["effort"], "The effort", max: 20)
-        if let level = effort.string, !["low", "medium", "high", "xhigh", "max", "ultracode", "auto"].contains(level) {
-            throw NativeRPCError.invalidArguments("The effort has to be one of: low, medium, high, xhigh, max, ultracode, auto.")
+        if let level = effort.string {
+            if SourceNamespace.agentSettingsEnabled {
+                if level != "auto", !AGSCapabilities.efforts(provider: provider.string ?? "claude").contains(level) {
+                    throw NativeRPCError.invalidArguments("That effort is not supported by the selected coding agent. Review its settings rather than launching with a substitute.")
+                }
+            } else if !EFFORT_CHOICES.contains(where: { $0.id == level }) {
+                throw NativeRPCError.invalidArguments("The effort has to be one of: \(EFFORT_CHOICES.map(\.id).joined(separator: ", ")).")
+            }
         }
         let instructions = try optionalText(input["instructions"], "The instructions", max: 32_000)
         let preferred = try textList(input["toolsPreferred"], "Tools to prefer", max: 30, maxLength: 80), avoided = try textList(input["toolsAvoided"], "Tools to avoid", max: 30, maxLength: 80)
@@ -102,11 +128,11 @@ public actor BackendTaskConfiguration {
         let runMinutes = try whole(input["maxRunMinutes"], "Longest run", min: 0, max: 1_440, fallback: 60)
         let keepAlive = try whole(input["keepAliveMinutes"], "Keep open", min: 0, max: 1_440, fallback: 30)
         let verify = try optionalText(input["verifyCommand"], "The check command", max: 500)
-        return BackendTaskValues.object([("id", .string(id)), ("name", .string(name)), ("role", role.string.map(NativeRPCValue.string) ?? .string("general")), ("provider", provider),
+        return try BackendTaskValues.object([("id", .string(id)), ("name", .string(name)), ("role", role.string.map(NativeRPCValue.string) ?? .string("general")), ("provider", provider),
             ("account", account), ("model", model), ("effort", effort), ("instructions", instructions), ("instructionsFile", .null),
             ("toolsPreferred", .array(preferred.map(NativeRPCValue.string))), ("toolsAvoided", .array(avoided.map(NativeRPCValue.string))), ("skills", .array(skills.map(NativeRPCValue.string))),
             ("blockedTools", .array(blockedTools.map(NativeRPCValue.string))), ("skillsOff", .bool(skillsOff)), ("maxConcurrent", concurrent), ("maxRunMinutes", runMinutes),
-            ("keepAliveMinutes", keepAlive), ("verifyCommand", verify), ("status", .string(lifecycle.status)), ("statusAt", lifecycle.statusAt.map(NativeRPCValue.number) ?? .null)])
+            ("keepAliveMinutes", keepAlive), ("verifyCommand", verify), ("status", .string(lifecycle.status)), ("statusAt", lifecycle.statusAt.map(NativeRPCValue.number) ?? .null)] + BackendTAGAgentProfile.fields(input, provider: provider.string))
     }
     /// agent-lifecycle.ts `applyLifecycle`: the status one action leads to, or the sentence saying why it cannot.
     static func applyLifecycle(_ current: String, action: String, name: String) -> (to: String?, refusal: String?) {
@@ -137,19 +163,38 @@ public actor BackendTaskConfiguration {
         }
         return moved
     }
-    public func allAgents() throws -> [NativeRPCValue] { try started(); return try agents.map(view) }
-    public func agent(_ nameOrID: String) throws -> NativeRPCValue? {
+    public func allAgents() async throws -> [NativeRPCValue] { try await waitForAGS(); try started(); return try agents.map(view) }
+    public func agent(_ nameOrID: String) async throws -> NativeRPCValue? {
+        try await waitForAGS()
         try started(); let wanted = nameOrID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return try agents.first { $0["id"].string == wanted || $0["name"].string?.lowercased() == wanted }.map(view)
     }
     public func connection(_ keyID: String) throws -> NativeRPCValue? { try started(); return connections.first { $0["keyId"].string == keyID } }
     public func connectionViews() throws -> [NativeRPCValue] { try started(); return connections.map { $0.removing("eventsSecret").setting("hasEventsSecret", .bool(!$0["eventsSecret"].isNullish)) } }
     public func saveAgent(_ input: NativeRPCValue) async throws -> NativeRPCValue {
+        try await waitForAGS()
+        if let store = agsStore {
+            let id = input["id"].string ?? ""
+            if !input["ags"].isNullish {
+                let settings = try BackendAGSCodec.decode(AGSAgentSettings.self, input["ags"])
+                let expected = try BackendAGSMCP.expectedRevision(input.setting("revision", input["agsRevision"]))
+                return try await saveAgentWithAGS(input.removing("ags").removing("agsRevision"), settings: settings, expectedRevision: expected)
+            }
+            if AGSCapabilities.providers.contains(input["provider"].string ?? "claude") {
+                let previous = id.isEmpty ? nil : try await store.profile(id)
+                let projection = try BackendAGSProfileProjection.settings(input, defaultProvider: previous?.provider ?? "claude")
+                var next = previous ?? projection
+                next.provider = projection.provider; next.model = projection.model; next.effort = projection.effort
+                next.permissionMode = projection.permissionMode; next.allowedTools = projection.allowedTools
+                next.deniedTools = projection.deniedTools; next.workingFolder = projection.workingFolder; next.keepOpen = projection.keepOpen
+                return try await saveAgentWithAGS(input, settings: next, expectedRevision: try await store.currentRevision())
+            }
+        }
         try started(); try persistence.writable()
         // What a save carries about status is not read at all: it is kept below.
         let cleaned = try Self.cleanAgent(input.fields == nil ? input : input.removing("status").removing("statusAt"), others: agents)
         let id = cleaned["id"].string ?? "", index = agents.firstIndex { $0["id"].string == id }
-        guard index != nil || agents.count < 20 else { throw NativeRPCError.invalidArguments("There can be at most 20 agents.") }
+        guard index != nil || agents.count < BackendTAGAgentProfile.maximumAgents else { throw NativeRPCError.invalidArguments("There can be at most 50 agents.") }
         let existing = index.map { agents[$0] }
         var row = cleaned.setting("status", existing?["status"] ?? .string("active")).setting("statusAt", existing?["statusAt"] ?? .null)
         try Self.checkSupported(row)
@@ -165,7 +210,120 @@ public actor BackendTaskConfiguration {
         if let index { agents[index] = row } else { agents.append(row) }
         do { try flush() } catch { agents = before; throw error }; await changed(); return try view(row)
     }
+    /// Compare against the actor's current profile and mutate before the first
+    /// suspension, so stale key edits cannot remove a newer owner/key block.
+    public func saveAgentNarrowed(_ input: NativeRPCValue, inheritedPermissionMode: String = "default") async throws -> NativeRPCValue {
+        try await waitForAGS(); try started()
+        let existing: NativeRPCValue?
+        if let id = input["id"].string { existing = try await agent(id) } else { existing = nil }
+        let narrowed = try BackendTAGProfilePolicy.validate(input: input, existing: existing, inheritedPermissionMode: inheritedPermissionMode)
+        if let store = agsStore, let id = input["id"].string {
+            guard let existing else { throw NativeRPCError(code: "owner-required", message: "A key may only narrow an existing owner task profile.") }
+            let owner = try await store.profile(id) ?? BackendAGSProfileProjection.settings(existing, defaultProvider: existing["provider"].string ?? "claude")
+            var next = owner
+            let projection = try BackendAGSProfileProjection.settings(narrowed, defaultProvider: owner.provider)
+            next.model = projection.model; next.effort = projection.effort; next.permissionMode = projection.permissionMode
+            next.allowedTools = projection.allowedTools; next.deniedTools = projection.deniedTools
+            next.workingFolder = projection.workingFolder; next.keepOpen = projection.keepOpen
+            if owner.permissionMode == nil || owner.permissionMode == "default", next.permissionMode != owner.permissionMode {
+                throw NativeRPCError(code: "not-permitted", message: "The owner's inherited permission mode must be resolved before a key can change it.")
+            }
+            let defaults = try await store.defaults().providers[owner.provider]
+            try BackendAGSPolicy.requireNarrowing(BackendAGSPolicy.resolve(defaults: defaults, profile: next), owner: BackendAGSPolicy.resolve(defaults: defaults, profile: owner))
+            return try await saveAgentWithAGS(narrowed, settings: next, expectedRevision: try await store.currentRevision(), narrowOnly: true, inheritedPermissionMode: inheritedPermissionMode)
+        }
+        return try await saveAgent(narrowed)
+    }
+    public func bindAGS(_ store: BackendAGSStore) throws {
+        guard agsStore == nil, !savingAGS else { throw NativeRPCError(code: "composition-conflict", message: "Agent settings already have a canonical profile owner.") }
+        agsStore = store
+    }
+    public func saveSettingsForProfile(_ id: String, settings: AGSAgentSettings, expectedRevision: UInt64,
+                                       narrowOnly: Bool = false, inheritedPermissionMode: String = "default") async throws -> NativeRPCValue {
+        guard let current = try await agent(id), current["status"].string == "active" else {
+            throw NativeRPCError(code: "unavailable", message: "Choose an active existing task profile before changing its settings.")
+        }
+        return try await saveAgentWithAGS(current, settings: settings, expectedRevision: expectedRevision,
+            narrowOnly: narrowOnly, inheritedPermissionMode: inheritedPermissionMode)
+    }
+    private func waitForAGS() async throws {
+        try Task.checkCancellation()
+        if let failure = agsFailure { throw failure }
+        try Task.checkCancellation()
+        if savingAGS { await withCheckedContinuation { agsWaiters.append($0) } }
+        if let failure = agsFailure { throw failure }
+    }
+    private func releaseAGSBarrier() {
+        savingAGS = false
+        let waiters = agsWaiters; agsWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+    /// Both owned records, plus the existing instructions file, publish under
+    /// this actor's claim barrier. Cache/events publish only after disk success.
+    public func saveAgentWithAGS(_ input: NativeRPCValue, settings: AGSAgentSettings, expectedRevision: UInt64,
+                                 narrowOnly: Bool = false, inheritedPermissionMode: String = "default") async throws -> NativeRPCValue {
+        try await waitForAGS(); try started(); try persistence.writable()
+        guard let store = agsStore else { throw NativeRPCError(code: "unavailable", message: "The combined agent profile save is not installed.") }
+        try BackendAGSValidation.check(settings)
+        var proposal = input.removing("ags").removing("agsRevision")
+            .setting("provider", .string(settings.provider)).setting("model", settings.model.map(NativeRPCValue.string) ?? .null)
+            .setting("effort", settings.effort.map(NativeRPCValue.string) ?? .null)
+            .setting("permissionMode", settings.permissionMode.map(NativeRPCValue.string) ?? .null)
+            .setting("allowedTools", settings.allowedTools.map { .array($0.map(NativeRPCValue.string)) } ?? .null)
+            .setting("blockedTools", .array(settings.deniedTools.map(NativeRPCValue.string)))
+            .setting("defaultProject", settings.workingFolder.map(NativeRPCValue.string) ?? .null)
+            .setting("keepAliveUntilClose", .bool(settings.keepOpen))
+        let existing = agents.first { $0["id"] == proposal["id"] }
+        if narrowOnly { proposal = try BackendTAGProfilePolicy.validate(input: proposal, existing: existing, inheritedPermissionMode: inheritedPermissionMode) }
+        let clean = try Self.cleanAgent(proposal.removing("status").removing("statusAt"), others: agents)
+        let id = try clean["id"].requireString("agent id", nonempty: true)
+        guard existing != nil || agents.count < BackendTAGAgentProfile.maximumAgents else { throw NativeRPCError.invalidArguments("There can be at most 50 agents.") }
+        var row = clean.setting("status", existing?["status"] ?? .string("active")).setting("statusAt", existing?["statusAt"] ?? .null)
+        try Self.checkSupported(row)
+        let beforeConfig = try persistence.readOwnedBytes("task-config.json")
+        let beforeInstructions = try instructions.readOwnedBytes(id + ".md", maximumBytes: 128_000)
+        savingAGS = true
+        defer { if savingAGS { releaseAGSBarrier() } }
+        let prepared: BackendAGSProfileTransaction
+        do {
+            if narrowOnly {
+                let owner = try await store.profile(id) ?? BackendAGSProfileProjection.settings(try view(existing ?? clean), defaultProvider: settings.provider)
+                let defaults = try await store.defaults().providers[owner.provider]
+                try BackendAGSPolicy.requireNarrowing(BackendAGSPolicy.resolve(defaults: defaults, profile: settings), owner: BackendAGSPolicy.resolve(defaults: defaults, profile: owner))
+            }
+            prepared = try await store.prepareProfileTransaction(id, settings: settings, expectedRevision: expectedRevision)
+        } catch { throw error }
+        do {
+            try Task.checkCancellation()
+            if persistence.ownership != .memory {
+                if let text = row["instructions"].string, !text.isEmpty { try instructions.writeBytes(id + ".md", data: Data((text + "\n").utf8)) }
+                else { try instructions.remove(id + ".md") }
+                row = row.setting("instructions", .null)
+            }
+            var next = agents
+            if let index = next.firstIndex(where: { $0["id"].string == id }) { next[index] = row } else { next.append(row) }
+            try persistence.write("task-config.json", value: BackendTaskValues.object([("v", .number(1)), ("agents", .array(next.map { $0.removing("instructionsFile") })), ("connections", .array(connections))]))
+            try prepared.publish()
+            try await store.finishProfileTransaction(prepared)
+            agents = next
+        } catch {
+            do {
+                try prepared.restore()
+                if let beforeConfig { try persistence.writeBytes("task-config.json", data: beforeConfig) } else { try persistence.remove("task-config.json") }
+                if let beforeInstructions { try instructions.writeBytes(id + ".md", data: beforeInstructions) } else { try instructions.remove(id + ".md") }
+                try await store.cancelProfileTransaction(prepared)
+            } catch {
+                let failure = NativeRPCError(code: "settings-rollback-failed", message: "The combined agent profile save could not restore its original records. Task claims are paused until the owner recovers them.")
+                agsFailure = failure; throw failure
+            }
+            throw error
+        }
+        releaseAGSBarrier()
+        await store.announceProfileTransaction(); await changed()
+        return try view(row)
+    }
     public func setStatus(_ id: String, action: String) async throws -> NativeRPCValue {
+        try await waitForAGS()
         try started(); try persistence.writable(); guard let index = agents.firstIndex(where: { $0["id"].string == id }) else { throw NativeRPCError.invalidArguments("That agent no longer exists.") }
         let step = Self.applyLifecycle(agents[index]["status"].string ?? "active", action: action, name: agents[index]["name"].string ?? id)
         guard let next = step.to else { throw NativeRPCError.invalidArguments(step.refusal ?? "That is not something an agent can do: \(action).") }
@@ -178,7 +336,7 @@ public actor BackendTaskConfiguration {
         typealias Capabilities = BackendSharedAgentCapabilities
         let provider = agent["provider"].string, label = Capabilities.agentLabel(provider)
         for (setting, value, what) in [(Capabilities.Setting.model, agent["model"], "a model"), (.effort, agent["effort"], "an effort level")]
-        where !value.isNullish && !Capabilities.enforces(provider, setting: setting) {
+        where !value.isNullish && !(SourceNamespace.agentSettingsEnabled && AGSCapabilities.providers.contains(provider ?? "claude")) && !Capabilities.enforces(provider, setting: setting) {
             throw NativeRPCError.invalidArguments("\(label) cannot be given \(what) by this app. Clear it, or choose Claude Code.")
         }
         // What only a brief can carry, for an agent that reads none.
@@ -190,12 +348,107 @@ public actor BackendTaskConfiguration {
         }
     }
     public func removeAgent(_ id: String) async throws {
+        try await waitForAGS()
         try started(); try persistence.writable(); guard agents.contains(where: { $0["id"].string == id }) else { throw NativeRPCError.invalidArguments("That agent no longer exists.") }
         let before = (agents, connections); agents.removeAll { $0["id"].string == id }
         connections = connections.map { connection in var identities = connection["identities"]; for field in identities.fields ?? [] where field.value.string == id { identities = identities.removing(field.key) }; return connection.setting("identities", identities) }
         do { try flush(); try instructions.remove(id + ".md") } catch { (agents, connections) = before; throw error }; await changed()
     }
-    public func stop() throws { if loaded, persistence.ownership != .readOnly { try flush() } }
+    /// Folder reads create/update profiles only; source files are never changed.
+    /// Explicit import and event-driven re-sync share the same restrictions.
+    public func importAgents(folder: String, narrowOnly: Bool = false, inheritedPermissionMode: String = "default") async throws -> NativeRPCValue {
+        try await importAgentsImpl(folder: folder, narrowOnly: narrowOnly, inheritedPermissionMode: inheritedPermissionMode, generation: nil)
+    }
+    private func importAgentsImpl(folder: String, narrowOnly: Bool, inheritedPermissionMode: String, generation: UInt64?) async throws -> NativeRPCValue {
+        try await waitForAGS()
+        try started(); try persistence.writable()
+        try requireImportGeneration(generation)
+        let directory = try BackendTAGAgentImport.directory(folder)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "md" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var imported = 0, updated = 0, errors: [NativeRPCValue] = [], seen = Set<String>()
+        for file in files {
+            try requireImportGeneration(generation)
+            do {
+                guard let definition = try BackendTAGAgentImport.read(file) else {
+                    if agents.contains(where: { $0["sourceFile"].string == file.path }) { throw NativeRPCError.invalidArguments("The source file no longer contains an agent name and frontmatter.") }
+                    continue
+                }
+                guard seen.insert(definition.name).inserted else { throw NativeRPCError.invalidArguments("More than one source file names \(definition.name).") }
+                let old = try await agent(definition.name)
+                if let source = old?["sourceFile"].string, source != file.path { throw NativeRPCError.invalidArguments("\(definition.name) is already synced from \(source).") }
+                var row = BackendTAGAgentImport.merge(definition, existing: old, directory: directory, file: file)
+                if narrowOnly {
+                    var proposed = row
+                    for key in ["sourceFile", "sourceDirectory", "syncStatus", "syncedAt", "syncError"] { proposed = proposed.removing(key) }
+                    let restricted = try BackendTAGProfilePolicy.validate(input: proposed, existing: old, inheritedPermissionMode: inheritedPermissionMode)
+                    for key in ["blockedTools", "skillsOff", "allowedTools", "permissionMode", "keepAliveMinutes", "keepAliveUntilClose"] where restricted.has(key) { row = row.setting(key, restricted[key]) }
+                }
+                _ = try await saveAgent(row)
+                try requireImportGeneration(generation)
+                if old == nil { imported += 1 } else { updated += 1 }
+            } catch is CancellationError { throw CancellationError()
+            } catch {
+                let message = String(error.localizedDescription.prefix(2_000))
+                errors.append(BackendTaskValues.object([("file", .string(file.path)), ("message", .string(message))]))
+                if let index = agents.firstIndex(where: { $0["sourceFile"].string == file.path }) {
+                    agents[index] = agents[index].setting("syncStatus", .string("error")).setting("syncError", .string(message))
+                }
+            }
+        }
+        try requireImportGeneration(generation)
+        let paths = Set(files.map(\.path))
+        for index in agents.indices where agents[index]["sourceDirectory"].string == directory.path && !paths.contains(agents[index]["sourceFile"].string ?? "") {
+            agents[index] = agents[index].setting("syncStatus", .string("missing")).setting("syncError", .string("The source file is missing. The last synced profile was kept."))
+        }
+        try flush(); await changed(); try watchImportDirectory(directory.path)
+        return BackendTaskValues.object([("agents", .array(try await allAgents())), ("folder", .string(directory.path)), ("imported", .number(Double(imported))), ("updated", .number(Double(updated))), ("errors", .array(errors))])
+    }
+    public func startImportWatchers() async throws {
+        try started(); guard persistence.ownership != .readOnly else { return }; importWatching = true
+        for directory in Set(agents.compactMap { $0["sourceDirectory"].string }) {
+            do { try watchImportDirectory(directory) }
+            catch { markImportProblem(directory, error: error); try? flush(); await changed(); continue }
+            // One startup read catches edits made while the app was closed.
+            // Subsequent syncs come only from the shared FSEvents stream.
+            await syncImportDirectory(directory, generation: importGeneration)
+        }
+    }
+    public func stopImportWatchers() {
+        importWatching = false; importGeneration &+= 1
+        for off in importStops.values { off() }; importStops.removeAll()
+    }
+    private func watchImportDirectory(_ directory: String) throws {
+        guard importWatching, importStops[directory] == nil else { return }
+        let generation = importGeneration
+        importStops[directory] = try importWatchers.watch(directory) { [weak self] relative in
+            guard !relative.contains("/"), relative.lowercased().hasSuffix(".md") else { return }
+            Task { await self?.syncImportDirectory(directory, generation: generation) }
+        }
+    }
+    private func requireImportGeneration(_ generation: UInt64?) throws {
+        if let generation, !importWatching || generation != importGeneration { throw CancellationError() }
+    }
+    private func markImportProblem(_ directory: String, error: any Error) {
+        for index in agents.indices where agents[index]["sourceDirectory"].string == directory {
+            agents[index] = agents[index].setting("syncStatus", .string("error")).setting("syncError", .string(String(error.localizedDescription.prefix(2_000))))
+        }
+    }
+    private func syncImportDirectory(_ directory: String, generation: UInt64) async {
+        guard importWatching, generation == importGeneration else { return }
+        do { _ = try await importAgentsImpl(folder: directory, narrowOnly: false, inheritedPermissionMode: "default", generation: generation) }
+        catch is CancellationError { return }
+        catch {
+            guard importWatching, generation == importGeneration else { return }
+            markImportProblem(directory, error: error)
+            try? flush(); await changed()
+        }
+    }
+    public func stop() throws {
+        guard !savingAGS else { throw NativeRPCError(code: "settings-saving", message: "The combined agent profile save is still draining.") }
+        if let failure = agsFailure { throw failure }
+        stopImportWatchers(); if loaded, persistence.ownership != .readOnly { try flush() }
+    }
     private func view(_ agent: NativeRPCValue) throws -> NativeRPCValue {
         guard persistence.ownership != .memory, let id = agent["id"].string else { return agent.setting("instructionsFile", .null) }
         let path = try instructions.file(id + ".md")
@@ -210,6 +463,7 @@ public actor BackendTaskConfiguration {
         return text.isEmpty ? agent.setting("instructionsFile", .null) : agent.setting("instructions", .string(text)).setting("instructionsFile", .string(path.path))
     }
     public func saveConnection(_ keyID: String, input: NativeRPCValue) async throws -> NativeRPCValue {
+        try await waitForAGS()
         try started(); try persistence.writable(); guard !keyID.isEmpty else { throw NativeRPCError.invalidArguments("Choose an access key first.") }
         let index = connections.firstIndex { $0["keyId"].string == keyID }
         var row = index.map { connections[$0] } ?? BackendTaskValues.object([("keyId", .string(keyID)), ("name", .null), ("enabled", .bool(false)), ("eventsUrl", .null), ("eventsSecret", .null), ("statuses", Self.defaultStatuses), ("hootIdentity", .null), ("identities", .object([])), ("allowedSenders", .array([])), ("folders", .array([])), ("maxHops", .number(3))])

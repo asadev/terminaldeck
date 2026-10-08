@@ -55,9 +55,7 @@ final class BackendDeckCoreTestPortS1MiscTests: BackendDeckCoreTestPortSecurityC
     /// BackendDeckToolsRegistration.register refuses definitions whose ids are
     /// not exactly this union, so it is the registered id set without a live service.
     private func deckToolsIDs() throws -> [String] {
-        try BackendDeckToolsCatalogue.entries().map(\.spec.id) + BackendDeckToolsSessionsCatalogue.entries.map(\.id)
-            + BackendDeckToolsAppMetadata.entries().map(\.spec.id)
-            + BackendDeckToolsMachinesCatalogue.rows().map { try $0["id"].requireString("source tool id", nonempty: true) }
+        try BackendDeckCoreTestPortS1CatalogueCostSources.deckToolDefinitions().map(\.spec.id)
     }
     // TSCASE assembled-catalogue.test.ts:48
     func testAssembledCatalogueL48NamesEveryToolTheCoverageTablesPointAt() throws {

@@ -12,10 +12,10 @@ final class BackendCopilotFolderTests: XCTestCase {
         }
         XCTAssertTrue(BackendCopilotFolder.validate(.string("projects/thing"), userData: data, checks: present).problem!.contains("full path"))
         XCTAssertTrue(BackendCopilotFolder.validate(.string("/"), userData: data, checks: present).problem!.contains("root of the disk"))
-        for path in [data, data + "/routines", data + "/copilot-log", data + "/remote"] {
+        for path in [data, data + "/routines", data + "/copilot", data + "/copilot-layer", data + "/copilot-log", data + "/hoot-layer", data + "/hoot-log", data + "/remote"] {
             XCTAssertTrue(BackendCopilotFolder.validate(.string(path), userData: data, checks: present).problem!.contains("this app’s own storage"))
         }
-        for path in [data + "/copilot", data + "/copilot/memory", data + "-backup", "/somebody/work"] {
+        for path in [data + "/hoot", data + "/hoot/memory", data + "-backup", "/somebody/work"] {
             XCTAssertTrue(BackendCopilotFolder.validate(.string(path), userData: data, checks: present).ok)
         }
         XCTAssertTrue(BackendCopilotFolder.validate(.string("/somebody/work"), userData: data, checks: { _ in false }).problem!.contains("no folder there"))
@@ -24,7 +24,7 @@ final class BackendCopilotFolderTests: XCTestCase {
         XCTAssertEqual(BackendCopilotFolder.chosenHome(.string("  /Volumes/Work/./folder/../Hoot  ")), "/Volumes/Work/Hoot")
         XCTAssertNil(BackendCopilotFolder.chosenHome(.number(3)))
         let missing = BackendCopilotFolder.report(stored: .string("/unmounted"), userData: "/app/data", runningIn: "/old", checks: { _ in false })
-        XCTAssertEqual(missing.home, "/app/data/copilot")
+        XCTAssertEqual(missing.home, "/app/data/hoot")
         XCTAssertEqual(missing.chosen, "/unmounted")
         XCTAssertTrue(missing.isDefault); XCTAssertTrue(missing.restartNeeded); XCTAssertNotNil(missing.problem)
         XCTAssertEqual(BackendCopilotFolder.pickerStart(missing, home: "/Users/person"), "/Users/person")
@@ -51,7 +51,7 @@ final class BackendCopilotFolderTests: XCTestCase {
         XCTAssertTrue(rows.first!.detail!.contains("Nothing of this app’s is written there"))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: chosen.path), ["CLAUDE.md"])
         let cleared = try await service.clear()
-        XCTAssertEqual(cleared.report.home, data.path + "/copilot")
+        XCTAssertEqual(cleared.report.home, data.path + "/hoot")
         XCTAssertEqual(try String(contentsOf: chosen.appendingPathComponent("CLAUDE.md"), encoding: .utf8), "# person's assistant\n")
         await deps.setPicked(nil)
         let cancelled = try await service.pick()
@@ -63,8 +63,11 @@ final class BackendCopilotFolderTests: XCTestCase {
         XCTAssertEqual(finalStored, .null)
     }
     func testChoosingTextSaysActualAccessAndRestart() {
-        XCTAssertEqual(BackendCopilotFolder.homeSetting, "copilot.home")
+        XCTAssertEqual(BackendCopilotFolder.homeSetting, "hoot.home")
         XCTAssertTrue(BackendDeckCoreCatalogueRules.isProtectedSetting(BackendCopilotFolder.homeSetting))
+        for setting in ["copilot.home", "copilot.interactive", "hoot.home", "hoot.interactive"] {
+            XCTAssertTrue(BackendDeckCoreCatalogueRules.isProtectedSetting(setting), setting)
+        }
         XCTAssertTrue(BackendCopilotFolder.choosing.contains("including any credentials kept there"))
         XCTAssertTrue(BackendCopilotFolder.choosing.contains("same access any session you start in that folder already has"))
         XCTAssertTrue(BackendCopilotFolder.needsRestart.contains("The one running now keeps working where it began."))

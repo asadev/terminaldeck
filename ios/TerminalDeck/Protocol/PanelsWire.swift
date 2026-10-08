@@ -160,6 +160,12 @@ enum PanelKind: String, Equatable, Hashable, CaseIterable {
     case store
     case readiness
     case mcp
+    case tasks, goals, memory, plugins, staysfixed, settings, aiApps = "ai-apps"
+    case simulators, github, hooks, servers
+
+    var isLegacy: Bool { [.artifacts, .store, .readiness, .mcp].contains(self) }
+    var capability: String { "panels.\(rawValue)" }
+    var requiresFullControl: Bool { ![.tasks, .goals].contains(self) }
 
     /// What the panel is called on screen, in his words for the two that have
     /// them — *"ai readiness, mcp servers"*.
@@ -169,6 +175,17 @@ enum PanelKind: String, Equatable, Hashable, CaseIterable {
         case .store: return "Store"
         case .readiness: return "AI readiness"
         case .mcp: return "MCP servers"
+        case .tasks: return "Tasks"
+        case .goals: return "Goals and plans"
+        case .memory: return "Memory"
+        case .plugins: return "Plugins and skills"
+        case .staysfixed: return "Stays Fixed"
+        case .settings: return "Machine settings"
+        case .aiApps: return "AI app connections"
+        case .simulators: return "Simulators"
+        case .github: return "GitHub"
+        case .hooks: return "Hooks"
+        case .servers: return "Server control"
         }
     }
 
@@ -180,6 +197,17 @@ enum PanelKind: String, Equatable, Hashable, CaseIterable {
         case .store: return "shippingbox"
         case .readiness: return "checkmark.seal"
         case .mcp: return "server.rack"
+        case .tasks: return "checklist"
+        case .goals: return "target"
+        case .memory: return "brain"
+        case .plugins: return "puzzlepiece.extension"
+        case .staysfixed: return "checkmark.shield"
+        case .settings: return "gearshape"
+        case .aiApps: return "point.3.connected.trianglepath.dotted"
+        case .simulators: return "iphone"
+        case .github: return "chevron.left.forwardslash.chevron.right"
+        case .hooks: return "link"
+        case .servers: return "server.rack"
         }
     }
 }
@@ -245,6 +273,7 @@ struct PanelRow: Equatable, Identifiable, Hashable {
      * between the tap and the frame arriving.
      */
     let key: String?
+    let sessionId: String?
     /// What can be done to this row. Empty for a row that is only information.
     let actions: [PanelAction]
 
@@ -252,13 +281,14 @@ struct PanelRow: Equatable, Identifiable, Hashable {
 
     init(title: String, detail: String? = nil, value: String? = nil,
          status: PanelStatus? = nil, index: Int = 0,
-         key: String? = nil, actions: [PanelAction] = []) {
+         key: String? = nil, sessionId: String? = nil, actions: [PanelAction] = []) {
         self.title = title
         self.detail = detail
         self.value = value
         self.status = status
         self.index = index
         self.key = key
+        self.sessionId = sessionId
         self.actions = actions
     }
 }
@@ -798,6 +828,7 @@ extension WireCodec {
                         // never onto the screen, so cleaning it would change what
                         // is addressed. The parser at the other end bounds it.
                         key: string(row["id"]),
+                        sessionId: string(row["sessionId"]).flatMap { !$0.isEmpty && $0.utf8.count <= 512 ? $0 : nil },
                         actions: panelActions(row["actions"]))
     }
 

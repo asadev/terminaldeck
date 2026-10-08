@@ -17,9 +17,9 @@ struct NativeModeSwitch: View {
         } label: {
             Image(systemName: "rectangle.split.2x1")
                 .font(.system(size: 14))
-                .foregroundStyle(split ? Color.accentColor : (layout.splitOffer ? Color.secondary.opacity(0.6) : Color.secondary))
+                .foregroundStyle(split ? NativeSessionChrome.accent : (layout.splitOffer ? Color.secondary.opacity(0.6) : Color.secondary))
                 .padding(4)
-                .background(split ? Color.accentColor.opacity(0.15) : .clear, in: .rect(cornerRadius: 5))
+                .background(split ? NativeSessionChrome.accent.opacity(0.15) : .clear, in: .rect(cornerRadius: 5))
         }
         .buttonStyle(.borderless)
         .help(label)
@@ -33,8 +33,11 @@ struct NativeModeSwitch: View {
 struct NativeLayoutScreen: View {
     /// Whether the main window's detail for this kind is the arrangement rather than one screen.
     @MainActor
-    static func wants(kind: String) -> Bool {
+    static func wants(kind: String, id: String) -> Bool {
         guard kind == "session" || kind == "browser", let layout = AppModel.shared.tabs?.layout else { return false }
+        // Native browser tabs live outside the page's pane tree. Selecting one
+        // must show that browser, while the saved split remains ready to return to.
+        if kind == "browser", BrowserTabsHook.provider?.browserTabs.contains(where: { $0.id == id }) == true { return false }
         return layout.swarm || layout.splitting
     }
 
@@ -224,8 +227,10 @@ private struct PaneLeafView: View {
                 }
             }
         }
-        .clipShape(.rect(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(focused && !primary ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1.5))
+        .clipShape(.rect(cornerRadius: 12))
+        // Every session is a box, including the host and an unfocused duplicate.
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(
+            focused ? NativeSessionChrome.focusEdge : NativeSessionChrome.edge, lineWidth: 1))
         .simultaneousGesture(TapGesture().onEnded { if !focused { AppModel.shared.web.run(.focusPane(paneId)) } })
     }
 
@@ -332,8 +337,8 @@ private struct NativeSwarmScreen: View {
             .accessibilityAddTraits(focused ? .isSelected : [])
         }
         .clipShape(.rect(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focused ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.25),
-                                                               lineWidth: focused ? 1.5 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focused ? NativeSessionChrome.focusEdge : NativeSessionChrome.edge,
+                                                               lineWidth: 1))
         .simultaneousGesture(TapGesture().onEnded { if !focused { AppModel.shared.web.run(.selectTab(row.id)) } })
     }
 }

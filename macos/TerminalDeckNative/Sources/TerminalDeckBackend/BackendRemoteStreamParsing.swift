@@ -50,24 +50,31 @@ extension BackendRemoteProtocol {
             if let reason = r["reason"].string, ["denied", "no-account"].contains(reason) { message = message.setting("reason", .string(reason)) }
             return message
         case "copilot.answer":
-            return message.setting("id", .string(try r.id("id", reason: "copilot.answer without a question id")))
-                .setting("approved", .bool(try r.boolean("approved", reason: "copilot.answer without a decision")))
-        case "copilot.say":
-            return message.setting("text", .string(try r.text("text", reason: "copilot.say without text", bytes: 16384, controls: true, oversize: "copilot.say larger than the message limit", controlReason: "copilot.say with an unusable message")))
-        case "copilot.log":
-            try r.optional("limit", into: &message) { .number(try r.whole("limit", 1, 200, reason: "copilot.log with a limit out of range")) }
-            try r.optional("before", into: &message) { .string(try r.id("before", reason: "copilot.log with an unusable cursor")) }
+            message = message.setting("id", .string(try r.id("id", reason: "Hoot answer without a question id")))
+                .setting("approved", .bool(try r.boolean("approved", reason: "Hoot answer without a decision")))
+            if !r["answers"].isNullish {
+                guard r["answers"].fields != nil, try r["answers"].encodedJSON().count <= 16_384 else {
+                    throw r.bad("Hoot answers must be a bounded object")
+                }
+                message = message.setting("answers", r["answers"])
+            }
             return message
-        case "copilot.interactive": return message.setting("on", .bool(try r.boolean("on", reason: "copilot.interactive without a state")))
+        case "copilot.say":
+            return message.setting("text", .string(try r.text("text", reason: "Hoot message without text", bytes: 16384, controls: true, oversize: "Hoot message larger than the message limit", controlReason: "Hoot message is unusable")))
+        case "copilot.log":
+            try r.optional("limit", into: &message) { .number(try r.whole("limit", 1, 200, reason: "Hoot log limit is out of range")) }
+            try r.optional("before", into: &message) { .string(try r.id("before", reason: "Hoot log cursor is unusable")) }
+            return message
+        case "copilot.interactive": return message.setting("on", .bool(try r.boolean("on", reason: "Hoot interactive setting has no state")))
         case "copilot.file.read", "copilot.file.write", "copilot.file.reset":
-            let id = try r.text("id", reason: "\(r.type) with an unknown file")
-            guard copilotFileTarget(id) != nil else { throw r.bad("\(r.type) with an unknown file") }
+            let id = try r.text("id", reason: "Hoot file request has an unknown file")
+            guard copilotFileTarget(id) != nil else { throw r.bad("Hoot file request has an unknown file") }
             message = message.setting("id", .string(id))
-            if r.type == "copilot.file.write" { message = message.setting("text", .string(try r.text("text", reason: "copilot.file.write without text", allowEmpty: true, bytes: 32768, oversize: "copilot.file.write larger than the file limit"))) }
+            if r.type == "copilot.file.write" { message = message.setting("text", .string(try r.text("text", reason: "Hoot file write has no text", allowEmpty: true, bytes: 32768, oversize: "copilot.file.write larger than the file limit"))) }
             return message
         case "copilot.memory.delete":
-            let name = try r.text("name", reason: "copilot.memory.delete without a memory file")
-            guard isCopilotMemoryName(name) else { throw r.bad("copilot.memory.delete without a memory file") }
+            let name = try r.text("name", reason: "Hoot memory deletion has no memory file")
+            guard isCopilotMemoryName(name) else { throw r.bad("Hoot memory deletion has no memory file") }
             return message.setting("name", .string(name))
         default: return nil
         }

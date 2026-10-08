@@ -27,7 +27,7 @@ private actor BackendHootJoinFenceDriver: BackendCopilotSessionDriving {
 private struct BackendHootJoinHeldRecords: BackendCopilotSessionRecordsProviding {
     let root: URL
     func paths(userData: String) async throws -> BackendCopilotLayerRecords {
-        try .init(paths: ["routines", "routine-state.json", "copilot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
+        try .init(paths: ["routines", "routine-state.json", "hoot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
     }
     func measure(userData: String) async -> BackendCopilotSessionFenceMeasurement { .init(fence: .init(), reason: nil) }
 }
@@ -87,7 +87,7 @@ final class BackendHootJoinTests: XCTestCase {
 
     func testDeckCoreActionLogAppendsThroughTheSharedSink() async throws {
         let root = try scratch(); defer { try? FileManager.default.removeItem(at: root) }
-        let directory = root.appendingPathComponent("copilot-log", isDirectory: true)
+        let directory = root.appendingPathComponent("hoot-log", isDirectory: true)
         let log = BackendDeckCoreSecurityActionLog(directory: directory)
         let sink = try BackendHootJoinRawSink.shared(directory: directory)
         XCTAssertTrue(log.rawSink === sink)
@@ -95,13 +95,14 @@ final class BackendHootJoinTests: XCTestCase {
         BackendCopilotHome.appendAction(BackendCopilotPaths(userData: root.path), .init(action: "session.stopped"))
         let lines = try String(contentsOf: sink.file, encoding: .utf8).split(separator: "\n")
         XCTAssertEqual(lines.count, 2)
-        XCTAssertTrue(lines[0].hasPrefix(#"{"v":1,"tool":"sessions_list""#)); XCTAssertTrue(lines[1].contains(#""action":"session.stopped""#))
+        let first = try XCTUnwrap(lines.first), second = try XCTUnwrap(lines.dropFirst().first)
+        XCTAssertTrue(first.hasPrefix(#"{"v":1,"tool":"sessions_list""#)); XCTAssertTrue(second.contains(#""action":"session.stopped""#))
         let broken = await log.broken(); XCTAssertFalse(broken)
     }
 
     func testOneSharedRawWriterKeepsHomeBytesAndToolRotation() throws {
         let root = try scratch(); defer { try? FileManager.default.removeItem(at: root) }
-        let log = root.appendingPathComponent("copilot-log", isDirectory: true)
+        let log = root.appendingPathComponent("hoot-log", isDirectory: true)
         let first = try BackendHootJoinRawSink.shared(directory: log), second = try BackendHootJoinRawSink.shared(directory: URL(fileURLWithPath: log.path + "/"))
         XCTAssertTrue(first === second, "one sink per canonical actions file")
         XCTAssertEqual(first.file.lastPathComponent, BackendDeckCoreSecurityActionLog.fileName)

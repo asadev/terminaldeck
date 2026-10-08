@@ -25,11 +25,11 @@ public struct BackendTaskRegistration: Sendable {
     public func start() async throws {
         try await view.store.requireWritableOwnership(); try await view.store.start(); try await view.config.start(); try await view.goals.start()
         try await outbox.start()
-        do { await monitor.start(); try await engine.start(); try await detail.start() }
+        do { try await view.config.startImportWatchers(); await monitor.start(); try await engine.start(); try await detail.start() }
         catch { await monitor.stop(); await detail.stop(); try? await engine.stop(); try? await outbox.stop(); throw error }
     }
     public func stop() async throws {
-        await monitor.stop(); await detail.stop()
+        await view.config.stopImportWatchers(); await monitor.stop(); await detail.stop()
         var failure: (any Error)?
         do { try await engine.stop() } catch { failure = error }
         do { try await outbox.stop() } catch { if failure == nil { failure = error } }

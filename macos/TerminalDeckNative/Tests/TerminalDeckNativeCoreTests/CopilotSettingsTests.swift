@@ -126,6 +126,11 @@ private let stateText = #"""
     #expect(CopilotShowing.interactive(json(#"{"values":{"copilot.interactive":false}}"#)) == false)
     #expect(CopilotShowing.interactive(json(#"{"copilot.interactive":false}"#)) == false)
     #expect(CopilotShowing.interactive(json(#"{"values":{"copilot.interactive":"no"}}"#)))
+    #expect(CopilotShowing.interactive(json(#"{"values":{"hoot.interactive":false}}"#)) == false)
+    #expect(CopilotShowing.interactive(json(#"{"hoot.interactive":false}"#)) == false)
+    #expect(CopilotShowing.interactive(json(#"{"hoot.interactive":true,"copilot.interactive":false}"#)))
+    #expect(CopilotShowing.interactive(json(#"{"values":{"hoot.interactive":false,"copilot.interactive":true}}"#)) == false)
+    #expect(CopilotShowing.interactive(json(#"{"hoot.interactive":null,"copilot.interactive":false}"#)))
 }
 
 @Test func voiceKeyReadsProvidersAndStatus() {

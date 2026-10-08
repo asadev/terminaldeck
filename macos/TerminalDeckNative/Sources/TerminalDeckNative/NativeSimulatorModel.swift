@@ -120,6 +120,9 @@ final class NativeSimulatorModel {
 
     // MARK: Inside
 
+    @ObservationIgnored private let deviceRail: Bool
+    @ObservationIgnored private var deviceRequests = UIGSimulatorRequestFence()
+    @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var subscriptions: [EngineSubscription] = []
     @ObservationIgnored private var listTask: Task<Void, Never>?
     @ObservationIgnored private var diagnosticsTask: Task<Void, Never>?
@@ -143,7 +146,8 @@ final class NativeSimulatorModel {
     private static let lastKey = "simulators.last"
     private var bridge: EngineBridge { EngineBridge.shared }
 
-    init() {
+    init(deviceRail: Bool = false) {
+        self.deviceRail = deviceRail
         player.onPictureSize = { [weak self] size in
             self?.videoSize = size
             self?.screenMoved()
@@ -169,6 +173,7 @@ final class NativeSimulatorModel {
     func appear() {
         guard !appeared else { return }
         appeared = true
+        if let device { _ = deviceRequests.begin(device.id) }
         subscriptions = [
             bridge.on("devices:frame") { [weak self] args in
                 guard let self, args.count >= 2, let id = args[0] as? String, id == self.device?.id,
@@ -193,6 +198,12 @@ final class NativeSimulatorModel {
     func disappear() {
         guard appeared else { return }
         appeared = false
+        deviceRequests.invalidate()
+        opening = ""
+        inputTask?.cancel()
+        inputTask = nil
+        inputQueue.removeAll()
+        pumping = false
         for subscription in subscriptions { subscription.cancel() }
         subscriptions = []
         listTask?.cancel()
@@ -202,7 +213,7 @@ final class NativeSimulatorModel {
 
     /// The app came to the front: a simulator started from Xcode meanwhile should simply be there.
     func appBecameActive() {
-        guard device == nil else { return }
+        guard device == nil || deviceRail else { return }
         Task { await refresh() }
     }
 
@@ -215,13 +226,15 @@ final class NativeSimulatorModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 // The first list is read whatever the window's state; after that, only while it can be seen.
-                if self.device == nil, first || self.windowsCanBeSeen() {
+                if self.device == nil || self.deviceRail, first || self.windowsCanBeSeen() {
                     let next = await self.refresh()
                     if first, let next {
                         first = false
-                        let last = UserDefaults.standard.string(forKey: Self.lastKey) ?? ""
-                        if !last.isEmpty, next.devices.contains(where: { $0.id == last && $0.available }) {
-                            await self.open(last)
+                        if !self.deviceRail {
+                            let last = UserDefaults.standard.string(forKey: Self.lastKey) ?? ""
+                            if !last.isEmpty, next.devices.contains(where: { $0.id == last && $0.available }) {
+                                await self.open(last)
+                            }
                         }
                     }
                 }
@@ -251,11 +264,13 @@ final class NativeSimulatorModel {
     }
 
     func open(_ id: String) async {
+        let request = deviceRequests.begin(id)
         opening = id
         problem = ""
-        defer { opening = "" }
+        defer { if deviceRequests.accepts(request), opening == id { opening = "" } }
         do {
             let answer = try await bridge.invoke("devices:open", [id])
+            guard deviceRequests.accepts(request), !Task.isCancelled else { return }
             guard let details = DeviceDetails(json: answer) else {
                 problem = "That device could not be opened."
                 return
@@ -267,27 +282,33 @@ final class NativeSimulatorModel {
             watch(visible ? true : nil)
             expectPicture(since: Date())
         } catch {
+            guard deviceRequests.accepts(request), !Task.isCancelled else { return }
             problem = Self.sentence(error)
         }
     }
 
     func start(_ entry: DeviceEntry) async {
+        let request = deviceRequests.begin(entry.id)
         busy[entry.id] = "Starting…"
+        defer { busy[entry.id] = nil }
         problem = ""
         let answer: Any?
         do {
             answer = try await bridge.invoke("devices:boot", [entry.id])
         } catch {
+            guard deviceRequests.accepts(request), !Task.isCancelled else { return }
             busy[entry.id] = nil
             problem = Self.sentence(error)
             return
         }
+        guard deviceRequests.accepts(request), !Task.isCancelled else { return }
         busy[entry.id] = nil
         switch DeviceOutcome(json: answer, fallback: "It would not start.") {
         case .refused(let message):
             problem = message
         case .ok(let id):
             await refresh()
+            guard deviceRequests.accepts(request), !Task.isCancelled else { return }
             await open(id ?? entry.id)
         }
     }
@@ -309,6 +330,11 @@ final class NativeSimulatorModel {
     }
 
     private func closeDevice(remember: Bool) {
+        deviceRequests.invalidate()
+        opening = ""
+        inputTask?.cancel()
+        inputTask = nil
+        pumping = false
         if device != nil { watch(false) }
         stopInspecting()
         device = nil
@@ -345,7 +371,7 @@ final class NativeSimulatorModel {
     // MARK: - Input
 
     func sendInput(_ input: DeviceInput) {
-        guard let id = device?.id else { return }
+        guard let id = device?.id, let request = deviceRequests.currentTicket else { return }
         inputQueue.push(input)
         player.markInput()
         lastInputAt = Date()
@@ -353,12 +379,13 @@ final class NativeSimulatorModel {
         screenMoved()
         guard !pumping else { return }
         pumping = true
-        Task { [weak self] in
-            while let self, let next = self.inputQueue.next() {
+        inputTask = Task { [weak self] in
+            while !Task.isCancelled, let self, self.deviceRequests.accepts(request), self.device?.id == id,
+                  let next = self.inputQueue.next() {
                 let call = next.call(device: id)
                 _ = try? await self.bridge.invoke(call.channel, call.args)
             }
-            self?.pumping = false
+            if let self, self.deviceRequests.accepts(request) { self.pumping = false; self.inputTask = nil }
         }
     }
 

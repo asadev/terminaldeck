@@ -67,7 +67,7 @@ public actor BackendDeckCoreEventsHub {
             guard let key = raw["keyId"].string, let state = raw["state"].string, ["pending","delivered","undelivered"].contains(state),
                   let attempts = raw["attempts"].number, attempts >= 0, attempts <= Double(Int.max),
                   event["id"].string != nil, event["sessionId"].string != nil, event["at"].number != nil,
-                  ["finished","needs-input","exited"].contains(event["type"].string ?? "") else { return nil }
+                  (["finished","needs-input","exited"].contains(event["type"].string ?? "") || BackendTAGTaskNotifications.valid(event)) else { return nil }
             let next = raw["nextAt"].number ?? (state == "pending" ? clock.now() : nil)
             return Item(token: UUID(), event: event, keyID: key, state: state, attempts: Int(attempts), nextAt: next,
                         via: raw["via"].string, deliveredAt: raw["deliveredAt"].number, lastError: raw["lastError"].string)

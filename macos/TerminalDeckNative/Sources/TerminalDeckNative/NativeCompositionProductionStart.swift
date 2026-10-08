@@ -80,6 +80,7 @@ extension NativeCompositionProduction {
     /// Unretained services the backend's area shutdown does not own.
     func stop() async {
         linkTabWindow.stop()
+        await releaseServerControlOwner(BackendCompositionRoot.appOwnerID)
         sessions?.manager.setOpenShim(directory: nil, browser: nil); try? await openShim.remove(dataRoot: root.dataRoot.path)
         let trace: @Sendable (String) -> Void = { NativeCompositionRoot.note("quit: " + $0) }
         if let remoteHost { await BackendCompositionRoot.traced("remote host", trace) { await remoteHost.stop() } }

@@ -52,9 +52,13 @@ public actor BackendCompositionRoot {
         }
     }
 
-    public init(dataRoot: URL, state: NativeStateStore, environment: [String: String], home: String) throws {
+    public init(dataRoot: URL, state: NativeStateStore, environment: [String: String], home: String,
+                settingsStore: BackendAppSettingsStore? = nil) throws {
         self.dataRoot = dataRoot.standardizedFileURL; self.state = state
-        settings = BackendAppSettingsStore(userData: dataRoot, writable: state.ownership == .exclusive || state.ownership == .memory)
+        if let settingsStore, settingsStore.directory.standardizedFileURL != self.dataRoot {
+            throw NativeRPCError.invalidArguments("The native graph must share the settings owner's selected data folder")
+        }
+        settings = settingsStore ?? BackendAppSettingsStore(userData: dataRoot, writable: state.ownership == .exclusive || state.ownership == .memory)
         self.environment = environment; self.home = home
         preparedSessions = BackendCompositionSessions.Prepared(environment: environment)
         registry = NativeChannelRegistry(report: { failure in NSLog("[native backend] %@: %@", failure.code, failure.message) })
@@ -126,6 +130,11 @@ public actor BackendCompositionRoot {
               environment.userData.standardizedFileURL == dataRoot else {
             throw NativeRPCError(code: "ownership-required", message: "Settings must share the selected data folder and the one native writer.")
         }
+        let hootPaths = RNMHootPaths(dataRoot: dataRoot)
+        let migration = try await settings.migrateRNMHootSettings(
+            legacyDefaultHome: hootPaths.legacyDirectory(.home).path, hootDefaultHome: hootPaths.home.path)
+        NSLog("[native settings] Hoot migration copied %d, preserved %d, remapped home %@",
+            migration.copiedKeys.count, migration.preservedKeys.count, migration.remappedHome ? "yes" : "no")
         let owner = "native-composition:settings"
         let projection = await BackendCompositionState.make(store: state, settings: settings,
             dataRoot: dataRoot, registry: registry, copilotRoot: { [dataRoot] values in
@@ -444,7 +453,14 @@ public actor BackendCompositionRoot {
         guard !stopped else { return }; stopped = true
         // Consumers stop before their dispatch/caller owners. Store stays alive
         // until the transitional engine has saved its final session ledger.
-        let consumers = areas.values.filter { $0.name != "sessions" }.sorted { $0.name > $1.name }
+        // Server-control must drain its cancelled handlers and sealed recovery
+        // while the existing servers owner still holds their SSH connections.
+        let consumers = areas.values.filter { $0.name != "sessions" }.sorted {
+            if $0.name == "server-control" || $1.name == "server-control" {
+                return $0.name == "server-control" && $1.name != "server-control"
+            }
+            return $0.name > $1.name
+        }
         let order = consumers + areas.values.filter { $0.name == "sessions" }
         for area in order {
             do { try await Self.traced("area " + area.name, trace) { try await area.stop() } }

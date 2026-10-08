@@ -13,16 +13,21 @@ public struct BackendRemotePanelActionRequest: Sendable {
     public let fields: [String: String]
 }
 public struct BackendRemotePanelProvider: Sendable {
+    public enum Scope: Sendable { case project, machine }
+    public let scope: Scope
     public let read: @Sendable (BackendRemotePanelRequest, NativeRPCContext) async throws -> NativeRPCValue
     public let act: (@Sendable (BackendRemotePanelActionRequest, NativeRPCContext) async throws -> NativeRPCValue)?
-    public init(read: @escaping @Sendable (BackendRemotePanelRequest, NativeRPCContext) async throws -> NativeRPCValue,
-                act: (@Sendable (BackendRemotePanelActionRequest, NativeRPCContext) async throws -> NativeRPCValue)? = nil) { self.read = read; self.act = act }
+    public init(scope: Scope = .project, read: @escaping @Sendable (BackendRemotePanelRequest, NativeRPCContext) async throws -> NativeRPCValue,
+                act: (@Sendable (BackendRemotePanelActionRequest, NativeRPCContext) async throws -> NativeRPCValue)? = nil) { self.scope = scope; self.read = read; self.act = act }
 }
 
 /// Artifact/Store/Readiness/MCP adapters share the actual panel contract. No
 /// placeholder provider is installed for a domain that has not been supplied.
 public actor BackendRemotePanelRegistry {
-    public enum Domain: String, CaseIterable, Sendable { case artifacts, store, readiness, mcp }
+    public enum Domain: String, CaseIterable, Sendable {
+        case artifacts, store, readiness, mcp, tasks, goals, memory, plugins, staysfixed, settings, simulators, github, hooks, servers
+        case aiApps = "ai-apps"
+    }
     private var panels: [String: BackendRemotePanelProvider] = [:]
     public init() {}
     public func register(_ domain: Domain, provider: BackendRemotePanelProvider) throws {
@@ -33,7 +38,8 @@ public actor BackendRemotePanelRegistry {
     public func suppliedDomains() -> [String] { panels.keys.sorted() }
     public func feature() throws -> BackendRemoteHostFeature {
         guard !panels.isEmpty else { throw NativeRPCError(code: "panel-unavailable", message: "No actual native panel providers are registered") }
-        return .init(capability: "panels", messageTypes: ["panel.read", "panel.act"], policy: .grantedDevice) { [weak self] message, context in
+        return .init(capability: "panels", messageTypes: ["panel.read", "panel.act"], policy: .grantedDevice,
+            additionalAdvertisedCapabilities: Set(panels.keys.map { "panels." + $0 })) { [weak self] message, context in
             guard let self else { throw NativeRPCError(code: "panel-closed", message: "The native panel registry stopped") }
             return [try await self.handle(message, context: context)]
         }
@@ -45,9 +51,15 @@ public actor BackendRemotePanelRegistry {
         let name = message["panel"].string!
         guard let provider = panels[name] else { throw NativeRPCError(code: "panel-unavailable", message: "The \(name) panel has no native service registered on this host") }
         let path = message["path"].string ?? context.reach.folders.first ?? ""
-        guard !path.isEmpty, context.reach.unrestricted || context.reach.folders.contains(where: { BackendRemoteTrustStore.within($0, path) }) else { throw NativeRPCError(code: "panel-denied", message: "This device was not granted that project folder") }
+        if provider.scope == .project {
+            guard !path.isEmpty, context.reach.unrestricted || context.reach.folders.contains(where: { BackendRemoteTrustStore.within($0, path) }) else { throw NativeRPCError(code: "panel-denied", message: "This device was not granted that project folder") }
+        } else {
+            guard context.kind == .mine else { throw NativeRPCError(code: "panel-denied", message: "Machine management belongs to an owner-approved device.") }
+        }
         let request = BackendRemotePanelRequest(path: path, scope: message["scope"].string, query: message["query"].string)
-        let before = try await provider.read(request, rpcContext)
+        let before = try await BackendINT2PhonePanelCaller.$current.withValue(context) {
+            try await provider.read(request, rpcContext)
+        }
         try validatePayload(before, expectedPath: path)
         let result: NativeRPCValue
         if message.type == "panel.act" {
@@ -63,7 +75,9 @@ public actor BackendRemotePanelRegistry {
                 throw NativeRPCError(code: "panel-action", message: "That action was not offered by this panel")
             }
             let fields = Dictionary(uniqueKeysWithValues: (message["fields"].fields ?? []).map { ($0.key, $0.value.string!) })
-            result = try await act(.init(panel: request, action: action, id: id, fields: fields), rpcContext)
+            result = try await BackendINT2PhonePanelCaller.$current.withValue(context) {
+                try await act(.init(panel: request, action: action, id: id, fields: fields), rpcContext)
+            }
             try validatePayload(result, expectedPath: path)
         } else { result = before }
         // An action's real redraw is its confirmation. Outcomes never invent a

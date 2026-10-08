@@ -157,7 +157,7 @@ final class DriveHost: DriveNavigating, DriveFocusing {
 
     /// "Don’t show me next time": interactive mode off, and this tour ends.
     func quiet() {
-        Task { _ = try? await EngineBridge.shared.invoke("settings:set", [["copilot.interactive": false]]) }
+        Task { _ = try? await EngineBridge.shared.invoke("settings:set", [[RNMHootSettingsMigration.interactiveKey: false]]) }
         player?.end()
     }
 

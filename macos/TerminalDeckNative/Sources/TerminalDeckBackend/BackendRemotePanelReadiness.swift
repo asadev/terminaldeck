@@ -9,7 +9,7 @@ public enum BackendRemotePanelReadiness {
     public static let fixes: Set<String> = ["create-claude-md", "create-agents-md", "create-gemini-md", "create-readme", "create-gitignore", "patch-gitignore", "git-init", "ignore-secrets", "untrack-secrets", "add-test-script", "replace-test-script", "add-typecheck-script", "add-lint-script", "create-lockfile", "upgrade-agent-cli"]
     public static func provider(service: BackendReadinessService, staleAgents: (@Sendable (NativeRPCContext) async throws -> [NativeRPCValue])? = nil) -> BackendRemotePanelProvider {
         provider(scan: { path, context in BackendReadinessService.wire(try await service.scan(project: path, context: context)) },
-                 fix: { path, id, context in BackendReadinessService.wire(try await service.fix(project: path, id: id, context: context, requireOffered: true)) }, staleAgents: staleAgents)
+                 fix: nil, staleAgents: staleAgents)
     }
     public static func provider(scan: @escaping Scan, fix: Fix? = nil,
                                 staleAgents: (@Sendable (NativeRPCContext) async throws -> [NativeRPCValue])? = nil) -> BackendRemotePanelProvider {

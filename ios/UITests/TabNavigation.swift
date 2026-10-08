@@ -283,10 +283,10 @@ extension XCUIApplication {
         // failure. Checked before tapping rather than relying on `openTab`'s
         // fallback, which searches the whole screen for the word and would find
         // it in a sentence explaining why there is no copilot here.
-        guard tabBars.firstMatch.buttons["Copilot"].waitForExistence(timeout: 10) else {
+        guard tabBars.firstMatch.buttons["Hoot"].waitForExistence(timeout: 10) else {
             return false
         }
-        tabBars.firstMatch.buttons["Copilot"].tap()
+        tabBars.firstMatch.buttons["Hoot"].tap()
         if copilotIsShowing { return true }
         // Something is pushed over it — one Back is enough; this stack is one
         // deep by construction.
@@ -301,10 +301,10 @@ extension XCUIApplication {
                 || buttons["copilot.back"].exists
                 || otherElements["copilot.notGranted"].exists
                 || otherElements["copilot.notOffered"].exists
-                || staticTexts["Copilot"].exists {
+                || staticTexts["Hoot"].exists {
                 return true
             }
-            _ = staticTexts["Copilot"].waitForExistence(timeout: 1)
+            _ = staticTexts["Hoot"].waitForExistence(timeout: 1)
         }
         return false
     }

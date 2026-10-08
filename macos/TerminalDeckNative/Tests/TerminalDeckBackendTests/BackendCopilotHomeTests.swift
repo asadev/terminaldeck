@@ -22,10 +22,10 @@ final class BackendCopilotHomeTests: XCTestCase {
         XCTAssertNil(result.error)
     }
     func testLayoutSeparatesWorkingFolderLayerAndRecords() {
-        XCTAssertEqual(paths.root, data.path + "/copilot")
+        XCTAssertEqual(paths.root, data.path + "/hoot")
         XCTAssertEqual(paths.memory, paths.root + "/memory")
-        XCTAssertEqual(paths.instructions, data.path + "/copilot-layer/instructions.md")
-        XCTAssertEqual(paths.actions, data.path + "/copilot-log/actions.jsonl")
+        XCTAssertEqual(paths.instructions, data.path + "/hoot-layer/instructions.md")
+        XCTAssertEqual(paths.actions, data.path + "/hoot-log/actions.jsonl")
         XCTAssertFalse(paths.instructions.hasPrefix(paths.root + "/"))
         XCTAssertFalse(paths.actions.hasPrefix(paths.root + "/"))
         XCTAssertTrue(paths.ownFolder)

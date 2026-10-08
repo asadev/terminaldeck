@@ -61,11 +61,14 @@ enum NativeCompositionDeckToolsUI {
             guard listed.insert(id).inserted else { continue }
             commands.append(.object([.init("id", .string(id)), .init("title", .string(command.title)), .init("group", .string("Menu"))]))
         }
-        return listing.setting("commands", .array(commands))
+        return BackendUIGMemoryDiscovery.uiListing(listing.setting("commands", .array(commands)))
     }
 
     /// ui-bridge.ts `do({ kind, target })`; a menu-only action runs as its menu item does.
     static func perform(kind: String, target: String) async throws -> NativeRPCValue? {
+        guard kind != "run" || UIGMemoryVisibility.showsCommand(target) else {
+            throw NativeRPCError(code: "unavailable", message: UIGMemoryVisibility.unavailableTitle)
+        }
         if kind == "run", let command = nativeCommand(target) {
             guard mainPage() != nil else { return nil }
             AppCommandRunner.perform(command, model: AppModel.shared)
@@ -75,6 +78,9 @@ enum NativeCompositionDeckToolsUI {
     }
 
     static func call(kind: String, target: String) async throws -> NativeRPCValue? {
+        guard kind != "run" || UIGMemoryVisibility.showsCommand(target) else {
+            throw NativeRPCError(code: "unavailable", message: UIGMemoryVisibility.unavailableTitle)
+        }
         guard let page = mainPage() else { return nil }
         let raw = try await page.callAsyncJavaScript(doBody, arguments: ["request": ["kind": kind, "target": target]],
                                                      in: nil, contentWorld: .page)

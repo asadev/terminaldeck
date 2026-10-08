@@ -1238,7 +1238,7 @@ struct TerminalScreen: View {
     private func restartCopilot() {
         guard let host else { return }
         guard let folder = session?.cwd, !folder.isEmpty else {
-            show("This machine has not said which folder the copilot is in.")
+            show("This machine has not said which folder Hoot is in.")
             return
         }
         show("Starting a fresh conversation…")

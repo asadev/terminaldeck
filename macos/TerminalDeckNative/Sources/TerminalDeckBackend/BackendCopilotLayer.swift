@@ -9,10 +9,11 @@ public struct BackendCopilotLayerPaths: Equatable, Sendable {
     public let contract: String
     public let composed: String
     public init(userData: String) {
-        dir = URL(fileURLWithPath: userData).appendingPathComponent("copilot-layer").path
-        yours = URL(fileURLWithPath: dir).appendingPathComponent("instructions.md").path
-        contract = URL(fileURLWithPath: dir).appendingPathComponent("tools.md").path
-        composed = URL(fileURLWithPath: dir).appendingPathComponent("copilot.md").path
+        let paths = RNMHootPaths(userData: userData)
+        dir = paths.layer.path
+        yours = paths.instructions.path
+        contract = paths.tools.path
+        composed = paths.composed.path
     }
     public var wireValue: NativeRPCValue { .object([.init("dir", .string(dir)), .init("yours", .string(yours)), .init("contract", .string(contract)), .init("composed", .string(composed))]) }
 }

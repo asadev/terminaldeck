@@ -8,6 +8,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     private let knowledge: (@Sendable (BackendTaskRecord) async throws -> String)?
     private let knowledgeAdapter: BackendTaskKnowledgeAdapter?
     private var localStatusObserver: (@Sendable (String, String) async -> Void)?
+    private var notifications: (@Sendable (BackendTaskRecord, NativeRPCValue) async throws -> Void)?
     /// Actual CRM outbox adapter must be supplied for mirrored task effects.
     private let outgoing: (@Sendable (BackendTaskRecord, NativeRPCValue) async throws -> Void)?
     private let problem: @Sendable (String) async -> Void
@@ -20,10 +21,11 @@ public actor BackendTaskEngine: BackendTaskExecuting {
                 knowledge: (@Sendable (BackendTaskRecord) async throws -> String)? = nil,
                 knowledgeAdapter: BackendTaskKnowledgeAdapter? = nil,
                 outgoing: (@Sendable (BackendTaskRecord, NativeRPCValue) async throws -> Void)? = nil,
+                notifications: (@Sendable (BackendTaskRecord, NativeRPCValue) async throws -> Void)? = nil,
                 problem: @escaping @Sendable (String) async -> Void) throws {
         guard access.readiness == .ready else { throw BackendSessionFailure.missingCapability("task execution through the actual session/grant/delivery owner") }
         self.store = store; config = configuration; self.goals = goals; self.access = access
-        self.workspace = workspace; self.knowledge = knowledge; self.knowledgeAdapter = knowledgeAdapter; self.outgoing = outgoing; self.problem = problem
+        self.workspace = workspace; self.knowledge = knowledge; self.knowledgeAdapter = knowledgeAdapter; self.outgoing = outgoing; self.notifications = notifications; self.problem = problem
     }
     public func start() async throws {
         guard stopped else { return }; try await store.requireWritableOwnership(); try await store.start(); try await config.start(); try await goals.start(); stopped = false
@@ -43,6 +45,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         case "hoot":
             _ = try await store.update(id, patch: fields([("process", .string("running")), ("runStartedAt", .number(BackendTaskValues.time()))]))
             try await setLifecycleStatus(id, key: "onStarted")
+            await notify(id, type: "task.started", body: "Hoot started on this.")
             try await tellHoot(id, try await hootBrief(try await record(id)))
         default: _ = try await store.update(id, patch: fields([("process", .string("queued"))])); try await pump()
         }; await arm()
@@ -54,7 +57,16 @@ public actor BackendTaskEngine: BackendTaskExecuting {
             guard !stopped, !starting.contains(task.id), BackendGoalStore.blockers(task, all: try await store.all()).isEmpty else { continue }
             guard let agent = try await config.agent(task.agentID) else { try await block(task.id, text: "The agent this task was assigned to no longer exists in Terminal Deck."); continue }
             guard try await working(task.agentID) < Int(agent["maxConcurrent"].number ?? 1) else { continue }
-            guard try await makeRoom(task.project) else { continue }
+            let folder: String
+            do { folder = try await workspace(task) } catch { try await block(task.id, text: "Could not prepare the folder \(agent["name"].string ?? "this agent") works in: " + error.localizedDescription); continue }
+            guard try await makeRoom(folder) else {
+                if task.value["reviewOfTaskId"].string != nil, task.value["reviewWaitingForFolder"].bool != true {
+                    _ = try await store.update(task.id, patch: fields([("reviewWaitingForFolder", .bool(true))]))
+                    try await comment(task.id, kind: "blocker", text: "The reviewer is waiting for the worker's folder. A separate workspace could not be used. Close the finished worker's session to let the review start.")
+                }
+                continue
+            }
+            if task.value["reviewWaitingForFolder"].bool == true { _ = try await store.update(task.id, patch: fields([("reviewWaitingForFolder", .bool(false))])) }
             try await begin(task.id, agent: agent, reply: nil)
         }; await arm()
     }
@@ -69,7 +81,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
                 let message = error.localizedDescription
                 if message.contains("already have a session running in") || message.contains("sessions running, which is the limit") {
                     _ = try await store.update(id, patch: fields([("process", .string("queued"))]))
-                    if message.contains("sessions running, which is the limit"), let oldest = try await store.all().filter({ $0.sessionID != nil && $0.value["keepOpenUntil"].number != nil }).min(by: { ($0.value["keepOpenUntil"].number ?? 0) < ($1.value["keepOpenUntil"].number ?? 0) }) { try await close(oldest.id) }
+                    if message.contains("sessions running, which is the limit"), let oldest = try await store.all().filter({ $0.sessionID != nil && $0.value["keepOpenUntil"].number != nil && $0.value["keepAliveUntilClose"].bool != true }).min(by: { ($0.value["keepOpenUntil"].number ?? 0) < ($1.value["keepOpenUntil"].number ?? 0) }) { try await close(oldest.id) }
                 } else if !stopped { try await block(id, text: "Could not start \(agent["name"].string ?? agentID): \(message).") }
             }
                 }
@@ -78,13 +90,13 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     /// task-engine.ts `working`: sessions an agent has open and is not keeping idle.
     private func working(_ agentID: String) async throws -> Int {
         let ids = Set(await access.sessions().filter { $0.exitCode == nil }.map(\.id))
-        return try await store.all().filter { $0.agentID == agentID && (starting.contains($0.id) || ($0.sessionID.map(ids.contains) == true && $0.value["keepOpenUntil"].isNullish)) }.count
+        return try await store.all().filter { $0.agentID == agentID && (starting.contains($0.id) || ($0.sessionID.map(ids.contains) == true && $0.value["keepOpenUntil"].isNullish && $0.value["keepAliveUntilClose"].bool != true)) }.count
     }
     /// task-engine.ts `makeRoom`: one session per folder; a kept-open holder is closed so the next task can use it.
     private func makeRoom(_ folder: String) async throws -> Bool {
-        let ids = Set(await access.sessions().filter { $0.exitCode == nil }.map(\.id))
-        guard let holder = try await store.all().first(where: { $0.project == folder && $0.sessionID.map(ids.contains) == true }) else { return true }
-        if !holder.value["keepOpenUntil"].isNullish { try await close(holder.id) }; return false
+        let ids = Set(await access.sessions().filter { $0.exitCode == nil && $0.cwd == folder }.map(\.id))
+        guard let holder = try await store.all().first(where: { $0.sessionID.map(ids.contains) == true }) else { return true }
+        if !holder.value["keepOpenUntil"].isNullish, holder.value["keepAliveUntilClose"].bool != true { try await close(holder.id) }; return false
     }
     public func nudge() { guard !stopped else { return }; Task { do { try await self.pump() } catch { await self.problem(error.localizedDescription) } } }
     public func reply(_ id: String, text: String) async throws {
@@ -101,13 +113,15 @@ public actor BackendTaskEngine: BackendTaskExecuting {
             var sent = true
             do { try await access.send(session, flatten(text)) } catch { sent = false }
             if sent {
-                _ = try await store.update(id, patch: fields([("keepOpenUntil", .null), ("runStartedAt", .number(BackendTaskValues.time())), ("result", .null), ("stalled", .null)])); quiet[session] = BackendTaskValues.time()
-                try await setLifecycleStatus(id, key: "onStarted"); await arm(); return
+                _ = try await store.update(id, patch: fields([("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(false)), ("runStartedAt", .number(BackendTaskValues.time())), ("result", .null), ("stalled", .null)])); quiet[session] = BackendTaskValues.time()
+                try await setLifecycleStatus(id, key: "onStarted"); await notify(id, type: "task.started", body: "The agent is continuing with your reply."); await arm(); return
             }
         }
         guard let agent = try await config.agent(task.agentID) else { try await block(id, text: "The agent this task was assigned to no longer exists in Terminal Deck."); return }
         _ = try await store.update(id, patch: fields([("process", .string("queued")), ("result", .null), ("stalled", .null)]))
-        guard try await working(agent["id"].string ?? task.agentID) < Int(agent["maxConcurrent"].number ?? 1), try await makeRoom(task.project) else { return }
+        guard try await working(agent["id"].string ?? task.agentID) < Int(agent["maxConcurrent"].number ?? 1) else { return }
+        let folder = try await workspace(task)
+        guard try await makeRoom(folder) else { return }
         try await begin(id, agent: agent, reply: text); await arm()
     }
     public func cancel(_ id: String, reason: String) async throws {
@@ -125,7 +139,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         try await accept(id)
     }
     public func closeSession(_ id: String) async throws {
-        guard try await record(id).sessionID != nil else { throw NativeRPCError.invalidArguments("That task has no open session.") }; try await close(id); await arm()
+        guard try await record(id).sessionID != nil else { throw NativeRPCError.invalidArguments("That task has no open session.") }; try await close(id); nudge(); await arm()
     }
     public func retry(_ id: String, note: String) async throws {
         checks[id]?.cancel()
@@ -138,11 +152,13 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     }
     public func review(_ id: String, pass: Bool, evidence: [String], reasons: String) async throws {
         let task = try await record(id)
+        try await requireReviewer(task)
         guard task.isLocal else { throw NativeRPCError.invalidArguments("That is a CRM task: use tasks_verify for it.") }
         guard !task.value["result"].isNullish || task.value["crmStatus"].string == "Done" else { throw NativeRPCError.invalidArguments("It has not finished yet. Review it once its worker says it is done.") }
         let evidence = evidence.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, reasons = reasons.trimmingCharacters(in: .whitespacesAndNewlines)
         if pass { guard !evidence.isEmpty else { throw NativeRPCError.invalidArguments("A pass has to name its evidence: the files, commands or output that show it is done.") }; try await verify(id, verified: true, note: "Reviewed and verified. Evidence: " + evidence.joined(separator: "; "), evidence: evidence); return }
         guard !reasons.isEmpty else { throw NativeRPCError.invalidArguments("A fail has to say what is wrong, so the worker can fix it.") }
+        try await recordReviewVerdict(task, pass: false, evidence: evidence, reasons: reasons)
         let seen = try await record(id), result = seen.value["result"].isNullish ? fields([("at", .number(BackendTaskValues.time())), ("answer", .null), ("check", .null)]) : seen.value["result"]
         _ = try await store.update(id, patch: fields([("result", result.setting("verified", .bool(false)))]))
         try await comment(id, kind: "blocker", text: "Reviewed: not done yet. " + reasons, by: try await reviewer(task))
@@ -155,9 +171,13 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     }
     public func verify(_ id: String, verified: Bool, note: String, evidence: [String] = []) async throws {
         let task = try await record(id)
+        try await requireReviewer(task)
+        if verified, BackendTaskActor.current.hasPrefix("taskagent:"), note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && evidence.isEmpty { throw NativeRPCError.invalidArguments("A reviewer pass has to name the evidence it checked.") }
+        if !verified, BackendTaskActor.current.hasPrefix("taskagent:"), note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw NativeRPCError.invalidArguments("A reviewer fail has to say what is missing.") }
+        let actor = try await reviewer(task)
+        try await recordReviewVerdict(task, pass: verified, evidence: evidence, reasons: note)
         let result = task.value["result"].isNullish ? fields([("at", .number(BackendTaskValues.time())), ("answer", .null), ("check", .null)]) : task.value["result"]
         _ = try await store.update(id, patch: fields([("result", result.setting("verified", .bool(verified)))]))
-        let actor = try await reviewer(task)
         if verified {
             try await comment(id, kind: "completion", text: note.isEmpty ? "Checked and complete." : note, by: actor); try await setLifecycleStatus(id, key: "onVerified")
             if task.assigneeKind == "hoot" { _ = try await store.update(id, patch: fields([("process", .string("exited")), ("runStartedAt", .null)])) }
@@ -167,11 +187,12 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     }
     public func noteStatus(sessionID: String, status: BackendSessionStatus) async throws {
         guard !stopped, let task = try await store.bySession(sessionID) else { return }
-        if status == .working, !task.value["keepOpenUntil"].isNullish { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .null), ("runStartedAt", .number(BackendTaskValues.time()))])) }
+        if status == .working, !task.value["keepOpenUntil"].isNullish || task.value["keepAliveUntilClose"].bool == true { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(false)), ("runStartedAt", .number(BackendTaskValues.time()))])) }
         if status == .working {
             quiet[sessionID] = nil
             if task.value["stalled"]["reason"].string == "quiet" {
                 _ = try await store.update(task.id, patch: fields([("stalled", .null)])); try await store.note(task.id, by: task.agentID, kind: "progress", text: "Working again."); try await setLifecycleStatus(task.id, key: "onStarted")
+                await notify(task.id, type: "task.progress", body: "Working again.")
             }
         } else if status != .exited, quiet[sessionID] == nil { quiet[sessionID] = BackendTaskValues.time() }
         // Turn completion is deliberately a separate observed notification.
@@ -182,6 +203,8 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         guard !stopped, let task = try await store.bySession(sessionID), task.value["questionOpen"].bool != true else { return }
         _ = try await store.update(task.id, patch: fields([("questionOpen", .bool(true))]))
         try await comment(task.id, kind: "question", text: "The agent is asking something. Reply on this task to answer.\n\n" + tail(screen, 1_200))
+        await notify(task.id, type: "task.blocked", body: "The agent is waiting for an answer.")
+        if !task.isLocal { await notify(task.id, type: "task.needs-reply", body: "Reply on this task to answer the agent's question.") }
         try await setLifecycleStatus(task.id, key: "onBlocked"); try await handToHuman(task.id); await arm()
     }
     public func noteFinishedTurn(sessionID: String, turnID: String, answer: String) async throws {
@@ -190,7 +213,12 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         _ = try await store.update(task.id, patch: fields([("lastTurn", .string(turnID)), ("questionOpen", .bool(false)), ("conversationId", session?.agentSessionId.map(NativeRPCValue.string) ?? task.value["conversationId"])]))
         let agent = try await config.agent(agentIdOf(task) ?? ""), who = agent?["name"].string ?? "An agent", title = head(task.value["title"].string ?? "", 80), told = head(answer, 3_000)
         await knowledgeAdapter?.note(task, kind: "finished", summary: told)
-        if let command = agent?["verifyCommand"].string, !command.isEmpty {
+        if let parentID = task.value["reviewOfTaskId"].string {
+            try await finishReviewer(task, parentID: parentID, answer: answer)
+        } else if let reviewerID = agent?["reviewerAgent"].string, !reviewerID.isEmpty {
+            _ = try await store.update(task.id, patch: fields([("result", fields([("at", .number(BackendTaskValues.time())), ("verified", .bool(false)), ("answer", .string(answer)), ("check", .null)]))]))
+            try await startReviewer(task.id, reviewerID: reviewerID, turnID: turnID, workspace: session?.cwd ?? task.project)
+        } else if let command = agent?["verifyCommand"].string, !command.isEmpty {
             let cwd = session?.cwd ?? task.project, job = Task { [access] in try await access.check(command, cwd) }; checks[task.id] = job
             defer { checks[task.id] = nil }
             let check = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }, output = String(check.output.suffix(1_500))
@@ -210,7 +238,8 @@ public actor BackendTaskEngine: BackendTaskExecuting {
             }
         }
         let minutes = agent?["keepAliveMinutes"].number ?? 0
-        if minutes > 0 { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .number(BackendTaskValues.time() + minutes * 60_000)), ("runStartedAt", .null)])) }
+        if agent?["keepAliveUntilClose"].bool == true { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(true)), ("runStartedAt", .null)])) }
+        else if minutes > 0 { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .number(BackendTaskValues.time() + minutes * 60_000)), ("keepAliveUntilClose", .bool(false)), ("runStartedAt", .null)])) }
         else { try await close(task.id) }; nudge(); await arm()
         try await tellFinishedChildren(task)
     }
@@ -266,11 +295,22 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         let current = try await record(id)
         guard !stopped, current.value["stopped"].bool != true, current.agentID == task.agentID else { try await access.stop(session.id); return }
         let liveIDs = Set(await access.sessions().filter { $0.exitCode == nil }.map(\.id))
-        guard try await store.claim(id, sessionID: session.id, liveSessionIDs: liveIDs) else { closing.insert(session.id); try await access.stop(session.id); return }
-        _ = try await store.update(id, patch: fields([("runStartedAt", .number(BackendTaskValues.time())), ("keepOpenUntil", .null), ("questionOpen", .bool(false)), ("stalled", .null), ("conversationId", session.agentSessionId.map(NativeRPCValue.string) ?? task.value["conversationId"])]))
+        do {
+            guard try await store.claim(id, sessionID: session.id, liveSessionIDs: liveIDs, expectedAssignee: task.value["assignee"]) else { closing.insert(session.id); try await access.stop(session.id); return }
+        } catch {
+            closing.insert(session.id); try? await access.stop(session.id)
+            // A changed assignment belongs to its new run; do not block it
+            // because the previous launch lost its claim.
+            let latest = try await record(id)
+            if latest.value["assignee"] != task.value["assignee"] || latest.value["stopped"].bool == true { return }
+            throw error
+        }
+        _ = try await store.update(id, patch: fields([("runStartedAt", .number(BackendTaskValues.time())), ("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(false)), ("questionOpen", .bool(false)), ("stalled", .null), ("conversationId", session.agentSessionId.map(NativeRPCValue.string) ?? task.value["conversationId"])]))
         quiet[session.id] = BackendTaskValues.time()
         for key in ["model", "effort"] { if let value = agent[key].string { do { try await access.setControl(session.id, key, value) } catch { try await comment(id, kind: "progress", text: "Could not set \(key) \(value): \(error.localizedDescription).") } } }
-        try await setLifecycleStatus(id, key: "onStarted"); try await comment(id, kind: "progress", text: "\(name) \(reply == nil ? "started on this." : "is continuing with the reply.")")
+        try await setLifecycleStatus(id, key: "onStarted")
+        await notify(id, type: "task.started", body: "\(name) \(reply == nil ? "started on this." : "is continuing with the reply.")")
+        try await comment(id, kind: "progress", text: "\(name) \(reply == nil ? "started on this." : "is continuing with the reply.")")
         if reply == nil { await knowledgeAdapter?.note(try await record(id), kind: "delegated", summary: head(task.value["instructions"].string ?? "", 500)) }
     }
     /// agent-lifecycle.ts delegationRefusal.
@@ -306,7 +346,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     private func close(_ id: String) async throws {
         let task = try await record(id); guard let session = task.sessionID, !closing.contains(session) else { return }; closing.insert(session)
         if let meta = await access.sessions().first(where: { $0.id == session }), let conversation = meta.agentSessionId { _ = try await store.update(id, patch: fields([("conversationId", .string(conversation))])) }
-        do { try await access.stop(session); try await store.release(id); quiet[session] = nil }
+        do { try await access.stop(session); try await store.release(id); _ = try await store.update(id, patch: fields([("keepAliveUntilClose", .bool(false))])); quiet[session] = nil }
         catch { closing.remove(session); throw error }
     }
     private func block(_ id: String, text: String, by: String? = nil) async throws {
@@ -317,12 +357,14 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         let task = try await record(id), body = head(text, 8_000)
         if task.isLocal { try await store.note(id, by: by ?? task.value["assignee"]["identity"].string ?? "hoot", kind: kind, text: body) }
         else { try requireOutgoing(task); try await outgoing!(task, fields([("type", .string("task.comment")), ("actor", by.map(NativeRPCValue.string) ?? task.value["assignee"]["identity"]), ("comment", fields([("kind", .string(kind)), ("body", .string(body)), ("inReplyTo", .null)]))])) }
+        if let type = ["progress": "task.progress", "question": "task.question", "blocker": "task.blocked", "completion": task.value["result"].isNullish ? "task.progress" : "task.finished"][kind] { await notify(id, type: type, body: body) }
     }
     private func handToHuman(_ id: String) async throws {
         let task = try await record(id); guard task.isLocal, task.assigneeKind != "human" else { return }
         let from = task.assigneeKind == "agent" ? task.agentID : task.value["handedFrom"].string
         _ = try await store.update(id, patch: fields([("assignee", BackendTaskLocalService.assignment("me", kind: "human")), ("mainAssignee", .string("me")), ("handedFrom", from.map(NativeRPCValue.string) ?? .null)]))
         try await store.note(id, by: from ?? "hoot", kind: "assigned", text: "Handed to you.")
+        await notify(id, type: "task.needs-reply", body: "This task needs your reply.", agentID: from)
     }
     private func arm() async {
         timer?.cancel(); timer = nil; guard !stopped else { return }
@@ -344,6 +386,7 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         do {
             let now = BackendTaskValues.time()
             for task in try await store.all() where task.sessionID != nil {
+                if task.value["keepAliveUntilClose"].bool == true { continue }
                 if let until = task.value["keepOpenUntil"].number, until <= now { _ = try await store.update(task.id, patch: fields([("keepOpenUntil", .null)])); try await close(task.id); continue }
                 let agent = try await config.agent(task.agentID)
                 if let started = task.value["runStartedAt"].number, let minutes = agent?["maxRunMinutes"].number, minutes > 0, started + minutes * 60_000 <= now {
@@ -388,15 +431,17 @@ public actor BackendTaskEngine: BackendTaskExecuting {
     private func tail(_ text: String, _ maximum: Int) -> String { let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines); return trimmed.utf16.count <= maximum ? trimmed : "…" + String(decoding: Array(trimmed.utf16.suffix(maximum)), as: UTF16.self) }
     private func flatten(_ text: String) -> String { text.replacingOccurrences(of: #"\s*\n\s*"#, with: " ", options: .regularExpression).replacingOccurrences(of: #"[\x00-\x1f\x7f]"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines) }
     private func tellFinishedChildren(_ task: BackendTaskRecord) async throws {
-        guard let parentExternal = task.value["parentExternalTaskId"].string, let key = task.value["keyId"].string,
-              let parent = try await store.byID(key + ":" + parentExternal), parent.assigneeKind == "hoot" else { return }
-        let children = try await store.all().filter { $0.value["keyId"].string == key && $0.value["parentExternalTaskId"].string == parentExternal }
+        guard task.value["reviewOfTaskId"].isNullish, let parentExternal = task.value["parentExternalTaskId"].string, let key = task.value["keyId"].string,
+              let parent = try await store.byID(task.value["parentTaskId"].string ?? key + ":" + parentExternal) else { return }
+        let children = try await store.all().filter { $0.value["reviewOfTaskId"].isNullish && ($0.value["parentTaskId"].string == parent.id || $0.value["keyId"].string == key && $0.value["parentExternalTaskId"].string == parentExternal) }
         guard !children.contains(where: { $0.value["result"].isNullish && $0.value["stopped"].bool != true }) else { return }
         let digest = children.map { "\($0.value["externalTaskId"].string ?? ""):\($0.value["stopped"].bool == true ? "stopped" : $0.value["result"]["verified"].bool == true ? "true" : "false")" }.sorted().joined(separator: ",")
         guard parent.value["childrenTold"].string != digest else { return }
         _ = try await store.update(parent.id, patch: fields([("childrenTold", .string(digest))]))
         let lines = children.map { child in let state = child.value["stopped"].bool == true ? "stopped" : child.value["result"]["verified"].bool == true ? "verified" : "finished, not verified"; return "\(child.value["externalTaskId"].string ?? child.id) (\(state)): \(head(child.value["result"]["answer"].string ?? "", 300).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))" }
-        try await tellHoot(parent.id, "Every task you handed on for CRM task \(parent.id) has finished. " + lines.joined(separator: " | "))
+        let message = "Every task you handed on for CRM task \(parent.id) has finished. " + lines.joined(separator: " | ")
+        if parent.assigneeKind == "hoot" { try await tellHoot(parent.id, message) }
+        else if agentIdOf(parent) != nil, let session = parent.sessionID, await alive(session) { try await access.send(session, flatten(message)); await notify(parent.id, type: "task.progress", body: message) }
     }
     private func requireOutgoing(_ task: BackendTaskRecord) throws { if !task.isLocal, outgoing == nil { throw BackendSessionFailure.missingCapability("the authenticated CRM task outbox; mirrored tasks were kept unchanged") } }
     private func coordinated(_ task: BackendTaskRecord) async throws -> Bool {
@@ -405,12 +450,64 @@ public actor BackendTaskEngine: BackendTaskExecuting {
         return try await store.byID(key + ":" + parent)?.assigneeKind == "hoot"
     }
     private func reviewer(_ task: BackendTaskRecord) async throws -> String {
+        if BackendTaskActor.current.hasPrefix("taskagent:") {
+            let agent = String(BackendTaskActor.current.dropFirst("taskagent:".count))
+            if task.isLocal { return agent }
+            if let connection = try await config.connection(task.value["keyId"].string ?? ""), let identity = connection["identities"].fields?.first(where: { $0.value.string == agent })?.key { return identity }
+        }
         if task.isLocal { return "hoot" }
         let connection = try await config.connection(task.value["keyId"].string ?? "")
         return connection?["hootIdentity"].string ?? task.value["assignee"]["identity"].string ?? "hoot"
     }
     private func record(_ id: String) async throws -> BackendTaskRecord { guard let task = try await store.byID(id) else { throw NativeRPCError.invalidArguments("That task no longer exists.") }; return task }
+    private func requireReviewer(_ task: BackendTaskRecord) async throws {
+        let actor = BackendTaskActor.current
+        guard actor.hasPrefix("taskagent:") else { return }
+        let id = String(actor.dropFirst("taskagent:".count))
+        guard let childID = task.value["reviewerTaskId"].string, let child = try await store.byID(childID),
+              child.value["reviewOfTaskId"].string == task.id, child.value["reviewTurnId"] == task.value["lastTurn"],
+              child.assigneeKind == "agent", child.agentID == id, child.value["stopped"].bool != true,
+              task.value["stopped"].bool != true, !task.value["result"].isNullish else { throw NativeRPCError(code: "not-permitted", message: "Only this task's assigned reviewer may verify its current result.") }
+    }
+    private func recordReviewVerdict(_ task: BackendTaskRecord, pass: Bool, evidence: [String], reasons: String) async throws {
+        guard BackendTaskActor.current.hasPrefix("taskagent:"), let childID = task.value["reviewerTaskId"].string else { return }
+        _ = try await store.update(task.id, patch: fields([("reviewVerdict", fields([("reviewerTaskId", .string(childID)), ("turnId", task.value["lastTurn"]), ("pass", .bool(pass)), ("evidence", .array(evidence.map(NativeRPCValue.string))), ("reasons", .string(reasons)), ("at", .number(BackendTaskValues.time()))]))]))
+    }
+    private func startReviewer(_ id: String, reviewerID: String, turnID: String, workspace: String) async throws {
+        let task = try await record(id)
+        guard let agent = try await config.agent(reviewerID), Self.delegationRefusal(agent) == nil, reviewerID != agentIdOf(task) else { try await block(id, text: "The configured reviewer is missing, paused, archived or is the worker itself. Choose another reviewer in Settings → Task agents."); return }
+        let maximum = task.isLocal ? 3 : Int(try await config.connection(task.value["keyId"].string ?? "")?["maxHops"].number ?? 3)
+        guard (task.value["hops"].number ?? 0) < Double(maximum) else { try await block(id, text: "The reviewer cannot start: this task tree has reached its hand-off limit of \(maximum)."); return }
+        if let childID = task.value["reviewerTaskId"].string, let child = try await store.byID(childID), child.value["reviewTurnId"].string == turnID { return }
+        let child = try BackendTAGTaskReviewer.child(parent: task, reviewer: agent, turnID: turnID, workspace: workspace)
+        _ = try await store.put(child.value)
+        _ = try await store.update(id, patch: fields([("reviewerTaskId", .string(child.id)), ("reviewVerdict", .null)]))
+        try await store.note(child.id, by: task.agentID, kind: "assigned", text: "Assigned to review \(task.id).")
+        try await comment(id, kind: "completion", text: "Finished. \(agent["name"].string ?? reviewerID) is reviewing it.\n\n" + head(task.value["result"]["answer"].string ?? "", 3_000))
+        // The parent worker's keep-open state is installed later in this turn.
+        // The final nudge starts the reviewer through the ordinary queue.
+    }
+    private func finishReviewer(_ task: BackendTaskRecord, parentID: String, answer: String) async throws {
+        guard let parent = try await store.byID(parentID), parent.value["reviewerTaskId"].string == task.id, parent.value["reviewVerdict"]["reviewerTaskId"].string == task.id, parent.value["reviewVerdict"]["turnId"] == task.value["reviewTurnId"] else {
+            _ = try await store.update(task.id, patch: fields([("result", fields([("at", .number(BackendTaskValues.time())), ("verified", .bool(false)), ("answer", .string(answer)), ("check", .string("The reviewer did not record a verdict."))]))]))
+            try await block(task.id, text: "The reviewer finished without recording a verdict. Use tasks_review or tasks_verify with the evidence checked.")
+            if let parent = try await store.byID(parentID), parent.value["reviewerTaskId"].string == task.id, parent.value["stopped"].bool != true { try await block(parent.id, text: "The reviewer finished without recording a verdict. The worker's result remains unverified.") }
+            return
+        }
+        _ = try await store.update(task.id, patch: fields([("result", fields([("at", .number(BackendTaskValues.time())), ("verified", .bool(true)), ("answer", .string(answer)), ("check", .null)]))]))
+        try await comment(task.id, kind: "completion", text: "Review recorded.\n\n" + head(answer, 3_000))
+        try await setLifecycleStatus(task.id, key: "onVerified")
+    }
     public func setLocalStatusObserver(_ observer: (@Sendable (String, String) async -> Void)?) { localStatusObserver = observer }
+    public func setNotificationObserver(_ observer: (@Sendable (BackendTaskRecord, NativeRPCValue) async throws -> Void)?) { notifications = observer }
+    private func notify(_ id: String, type: String, body: String, agentID: String? = nil) async {
+        guard let notifications else { return }
+        do {
+            let task = try await record(id)
+            guard BackendTAGTaskNotifications.keyID(task) != nil else { return }
+            try await notifications(task, BackendTAGTaskNotifications.event(task, type: type, body: body, agentID: agentID))
+        } catch { await problem("Could not send the task notification: " + error.localizedDescription) }
+    }
     private func active() throws { guard !stopped else { throw NativeRPCError(code: "not-started", message: "Tasks are not running on this computer right now.") } }
     private func fields(_ pairs: [(String, NativeRPCValue)]) -> NativeRPCValue { BackendTaskValues.object(pairs) }
 }

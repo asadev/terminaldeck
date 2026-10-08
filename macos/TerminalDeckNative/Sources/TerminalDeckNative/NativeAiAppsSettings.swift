@@ -166,6 +166,7 @@ private struct AiKeyRow: View {
                     }
                     note(AiAppsLines.used(key, now: model.now))
                     note(AiAppsLines.scope(key))
+                    note(AiAppsLines.grantedScopes(key))
                     if let line = AiAppsLines.delivery(state.delivery[key.id], now: model.now) { note(line) }
                     if let line = AiAppsLines.pushes(state.subscriptions[key.id] ?? []) { note(line) }
                 }
@@ -256,7 +257,7 @@ private struct AiLevelPicker: View {
             Picker("What this key may do", selection: $level) {
                 ForEach(AiAccessLevel.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             .disabled(disabled)
@@ -335,7 +336,7 @@ private struct AiNotifyBlock: View {
             Picker("How this app hears about its sessions", selection: Binding(get: { mode }, set: { choose($0) })) {
                 ForEach(AiNotifyMode.allCases) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             .disabled(model.busy)
@@ -477,7 +478,7 @@ private struct AiNewKeyMade: View {
                 Picker("Which app to set it up in", selection: $app) {
                     ForEach(AiApp.allCases) { Text($0.label).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
             }
 
@@ -486,7 +487,7 @@ private struct AiNewKeyMade: View {
                     Text("On this Mac").tag(AiSetupWhere.thisMac)
                     Text("On another computer").tag(AiSetupWhere.elsewhere)
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .fixedSize()
             }

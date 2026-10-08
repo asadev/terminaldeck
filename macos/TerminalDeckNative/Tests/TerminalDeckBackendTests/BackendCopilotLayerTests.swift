@@ -7,19 +7,19 @@ final class BackendCopilotLayerTests: XCTestCase {
     private func fixture(tools: [BackendCopilotLayerTool] = [], attached: Bool = false, chosen: Bool = false) throws -> (URL, BackendCopilotLayerContractInput) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("BackendCopilotLayer-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let paths = try BackendCopilotLayerRecords(paths: ["routines", "routine-state.json", "copilot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
-        return (root, .init(root: root.appendingPathComponent("copilot").path, actionsLog: root.appendingPathComponent("copilot-log/actions.jsonl").path,
+        let paths = try BackendCopilotLayerRecords(paths: ["routines", "routine-state.json", "hoot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path })
+        return (root, .init(root: root.appendingPathComponent("hoot").path, actionsLog: root.appendingPathComponent("hoot-log/actions.jsonl").path,
             chosenFolder: chosen, userData: root.path, tools: tools, toolsAttached: attached, records: paths))
     }
     func testPathsAndBackendOnlyFlag() throws {
         let (root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let paths = BackendCopilotLayerPaths(userData: root.path)
-        XCTAssertEqual(paths.dir, root.appendingPathComponent("copilot-layer").path)
-        XCTAssertEqual(paths.yours, root.appendingPathComponent("copilot-layer/instructions.md").path)
-        XCTAssertEqual(paths.contract, root.appendingPathComponent("copilot-layer/tools.md").path)
-        XCTAssertEqual(paths.composed, root.appendingPathComponent("copilot-layer/copilot.md").path)
+        XCTAssertEqual(paths.dir, root.appendingPathComponent("hoot-layer").path)
+        XCTAssertEqual(paths.yours, root.appendingPathComponent("hoot-layer/instructions.md").path)
+        XCTAssertEqual(paths.contract, root.appendingPathComponent("hoot-layer/tools.md").path)
+        XCTAssertEqual(paths.composed, root.appendingPathComponent("hoot-layer/hoot.md").path)
         XCTAssertEqual(BackendCopilotLayer.args(composed: paths.composed), ["--append-system-prompt-file", paths.composed])
-        XCTAssertFalse(paths.composed.hasPrefix(root.appendingPathComponent("copilot").path + "/"))
+        XCTAssertFalse(paths.composed.hasPrefix(root.appendingPathComponent("hoot").path + "/"))
     }
     func testLiveCatalogueGroupsByTierAndIncludesUnknownTiers() throws {
         let tools: [BackendCopilotLayerTool] = [.init(wire: "settings_write", tier: "alter", title: "Change a setting"),

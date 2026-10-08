@@ -75,7 +75,7 @@ public struct BackendRoutinesCopilotRunner: BackendRoutinesRunner {
     private let options: BackendRoutinesCopilotRunnerOptions
     public init(options: BackendRoutinesCopilotRunnerOptions) { self.options = options }
     public static func runsDirectory(_ copilotRoot: URL) throws -> URL {
-        guard copilotRoot.isFileURL, copilotRoot.path.hasPrefix("/") else { throw NativeRPCError.invalidArguments("Routine runs need an absolute copilot directory.") }
+        guard copilotRoot.isFileURL, copilotRoot.path.hasPrefix("/") else { throw NativeRPCError.invalidArguments("Routine runs need Hoot’s full folder path.") }
         let folder = copilotRoot.appendingPathComponent("runs", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]); return folder
     }
@@ -104,7 +104,7 @@ public struct BackendRoutinesCopilotRunner: BackendRoutinesRunner {
     }
     private static func causeSentence(_ cause: BackendRoutinesCause) -> String {
         switch cause {
-        case .manual(let by): return "\(by == "copilot" ? "Hoot" : "the person") asked for it by name"
+        case .manual(let by): return "\(RNMHootSettingsMigration.isHootOrigin(by) ? "Hoot" : "the person") asked for it by name"
         case .sessionFinished(let id, let code): return "session \(id) finished with exit code \(code)"
         case .sessionFailed(let id, let code): return "session \(id) failed with exit code \(code)"
         case .sessionIdle(let id, let after): return "session \(id) has been idle for \(Int(floor(after / 60_000 + 0.5))) minutes"

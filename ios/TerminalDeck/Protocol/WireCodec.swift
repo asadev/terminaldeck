@@ -54,9 +54,20 @@ enum WireCodec {
         } catch {
             return .failed(reason: "not JSON")
         }
-        guard let object = parsed as? [String: Any] else { return .failed(reason: "not an object") }
+        guard var object = parsed as? [String: Any] else { return .failed(reason: "not an object") }
+
+        // New hosts and old phones coexist during Hoot rename. Outbound
+        // commands keep the old alias until all host versions accept the new one.
+        if let type = object["t"] as? String, type.hasPrefix("hoot."), type != "hoot.events" {
+            object["t"] = "copilot." + type.dropFirst("hoot.".count)
+        }
 
         switch object["t"] as? String {
+        case "hoot.events", "copilot.events":
+            guard let batch = HootEventBatch.decode(object) else { return .failed(reason: "Malformed Hoot event stream") }
+            return .ok(.hootEvents(batch), activity: [:])
+        case "device.access":
+            return .ok(.phoneAccess(PhoneAccessGrant.decode(object)), activity: [:])
         case "welcome":
             guard let version = whole(object["protocol"]),
                   let deviceId = string(object["deviceId"]),
@@ -103,12 +114,12 @@ enum WireCodec {
                          hostName: hostName(object["hostName"]),
                          folders: folders(object["folders"]),
                          // Absent is `.silent`, and so is malformed — both mean
-                         // "this phone has no copilot on that machine", which is
+                         // "this phone has no Hoot on that machine", which is
                          // what a guest device is told by omission. The presence
                          // of the field is the whole answer now, and it is a
                          // different question from what the capability list
                          // claims. See `CopilotConnection`.
-                         copilot: copilotConnection(object["copilot"]),
+                         copilot: copilotConnection(object["hoot"] ?? object["copilot"]),
                          // What build the host runs, and which shell serves. Both
                          // absent from every desktop before 0.10.0, and absent is
                          // its own answer: the version reads as "older" and the
@@ -1161,13 +1172,15 @@ enum WireCodec {
             object = ["t": "copilot.hello"]
         case .copilotBye:
             object = ["t": "copilot.bye"]
-        case let .copilotAnswer(id, approved):
+        case let .copilotAnswer(id, approved, answers):
             // `approved` is written either way, unlike `remember` on a
             // credential answer. There it is a scope the desktop reads as
             // `=== true`, so a `false` would be a field saying nothing; here it
             // *is* the decision, and a refusal that travelled as an absence
             // would be a refusal one lenient parser away from being an approval.
-            object = ["t": "copilot.answer", "id": id, "approved": approved]
+            var response: [String: Any] = ["t": "copilot.answer", "id": id, "approved": approved]
+            if approved, let answers { response["answers"] = answers.object }
+            object = response
         case .copilotAttach:
             object = ["t": "copilot.attach"]
         case .copilotDetach:
@@ -1418,7 +1431,12 @@ enum WireCodec {
      */
     private static func capabilities(_ value: Any?) -> Set<String> {
         guard let rows = value as? [Any] else { return [] }
-        return Set(rows.compactMap { string($0) }.filter { !$0.isEmpty && $0.count <= 32 })
+        let names = rows.compactMap { string($0) }.filter { !$0.isEmpty && $0.count <= 32 }
+        return Set(names + names.compactMap { name in
+            if name == "hoot" { return "copilot" }
+            if name.hasPrefix("hoot.") { return "copilot." + name.dropFirst(5) }
+            return nil
+        })
     }
 
     /**

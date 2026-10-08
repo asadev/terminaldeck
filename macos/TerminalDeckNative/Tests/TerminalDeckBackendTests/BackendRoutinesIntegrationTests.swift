@@ -59,7 +59,7 @@ final class BackendRoutinesIntegrationTests: XCTestCase {
         XCTAssertEqual(requests.first?.cause.kind, "file-change")
         XCTAssertEqual(requests.first?.routine.prompt, "Something under src changed. Have a look.")
         await service.stop()
-        let path = root.appendingPathComponent("copilot-log/actions.jsonl")
+        let path = root.appendingPathComponent("hoot-log/actions.jsonl")
         let lines = try String(contentsOf: path, encoding: .utf8).split(separator: "\n")
         let actions = try lines.map { try NativeRPCValue.parseJSON(Data($0.utf8)) }
         XCTAssertTrue(actions.contains { $0["action"].string == "routine.run" && $0["outcome"].string == "started" })

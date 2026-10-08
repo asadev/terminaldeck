@@ -67,6 +67,9 @@ struct NativeSessionBody<Bar: View>: View {
                     .background(Color(nsColor: session.ground))
                     .animation(.easeOut(duration: 0.14), value: session.ended)
                 }
+                // Split and swarm headers belong to this terminal's paper too.
+                .background(Color(nsColor: session.ground))
+                .environment(\.colorScheme, NativeSessionChrome.scheme.isLight ? .light : .dark)
                 .onAppear { session.screenAppeared() }
                 .onDisappear { session.screenDisappeared() }
             }

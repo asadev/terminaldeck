@@ -121,7 +121,7 @@ struct NativeSessionInspector: View {
                 Picker("Session detail", selection: $tab) {
                     ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 ScrollView {
                     Group {

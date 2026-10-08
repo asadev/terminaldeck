@@ -105,6 +105,37 @@ final class HostLink: Identifiable {
     /// value would be right for whichever was greeted last and wrong for the
     /// other — which is a subtler version of the constant string it replaces.
     private(set) var hostPlatform: HostPlatform = .unknown
+    private(set) var phoneAccess: PhoneAccessGrant?
+    private(set) var offeredCapabilities: Set<String> = []
+    let hootStream = HootEventStream()
+    var hasStructuredHoot: Bool { offeredCapabilities.contains("hoot.events") || offeredCapabilities.contains("copilot.events") }
+    private var permitsWork: Bool {
+        !offeredCapabilities.contains("device.access") || phoneAccess?.level == .work || phoneAccess?.level == .full
+    }
+    private var permitsFull: Bool {
+        !offeredCapabilities.contains("device.access") || phoneAccess?.level == .full
+    }
+
+    func canReadPanel(_ panel: PanelKind) -> Bool {
+        guard canReadPanels else { return false }
+        return panel.isLegacy || offeredCapabilities.contains(panel.capability) && phoneAccess != nil
+    }
+
+    func canActOnPanel(_ panel: PanelKind) -> Bool {
+        guard canReadPanel(panel) else { return false }
+        if !offeredCapabilities.contains("device.access") { return panel.isLegacy }
+        return phoneAccess?.level == .full || phoneAccess?.level == .work && !panel.requiresFullControl
+    }
+
+    @discardableResult
+    private func sendAuthorized(_ message: ClientMessage) -> Bool {
+        if offeredCapabilities.contains("device.access"),
+           !(phoneAccess ?? .init(level: .look)).allows(message) {
+            lastError = "This phone does not have permission for that action. Change its access on the machine."
+            return false
+        }
+        return transport?.send(message) ?? false
+    }
 
     /// What build the machine at the other end is running, e.g. `0.10.0`, or nil
     /// when it never said — every host before 0.10.0. Display text and nothing
@@ -175,11 +206,11 @@ final class HostLink: Identifiable {
     /// One indirection buys back the rule that a view never builds a wire message.
     @ObservationIgnored
     private lazy var wire: TunnelWire = WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     }
     @ObservationIgnored
     private lazy var uploadWire: UploadWire = WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     }
 
     /**
@@ -202,7 +233,7 @@ final class HostLink: Identifiable {
         // more: pairing this device as one of his *is* the copilot's
         // authorisation. See `CopilotLink`.
         let link = CopilotLink(wire: WireProxy { [weak self] message in
-            self?.transport?.send(message) ?? false
+            self?.sendAuthorized(message) ?? false
         })
         // One error surface per machine. A second `lastError` on the copilot
         // would be a second banner that can disagree with this one about which
@@ -226,7 +257,7 @@ final class HostLink: Identifiable {
      */
     @ObservationIgnored
     private(set) lazy var bar: SessionBarLink = SessionBarLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
 
     /**
@@ -239,30 +270,30 @@ final class HostLink: Identifiable {
      */
     @ObservationIgnored
     private(set) lazy var controls: SessionControlsLink = SessionControlsLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
     @ObservationIgnored
     private(set) lazy var serverSettings: ServerSettingsLink = ServerSettingsLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
     @ObservationIgnored
     private(set) lazy var devices: DeviceRosterLink = DeviceRosterLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
     @ObservationIgnored
     private(set) lazy var watch: WatchLink = WatchLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
     @ObservationIgnored
     private(set) lazy var github: GitHubLink = GitHubLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
     /// The host's own lifecycle over the relay — status, restart, stop. "The
     /// relay is the network": when a server is a connected machine, its server
     /// page reaches the host here rather than over an SSH address that can drop.
     @ObservationIgnored
     private(set) lazy var hostControl: HostControlLink = HostControlLink(wire: WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
+        self?.sendAuthorized(message) ?? false
     })
 
     private var bridges: [String: TerminalBridge] = [:]
@@ -300,7 +331,7 @@ final class HostLink: Identifiable {
 
     /// Only true when this machine said it can. See `WireCapability`.
     var canCreateSessions: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.create) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.create) ?? false)
     }
 
     /**
@@ -315,18 +346,18 @@ final class HostLink: Identifiable {
      * pressed it.
      */
     var canCloseSessions: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.close) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.close) ?? false)
     }
 
     /// Whether this machine will take a name for one of its sessions. Read the
     /// same way `canCloseSessions` is and separately from it — see
     /// `WireCapability.rename` for why the two are not one answer.
     var canRenameSessions: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.rename) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.rename) ?? false)
     }
 
     var canBrowseLocalhost: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.localhost) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.localhost) ?? false)
     }
 
     /**
@@ -345,11 +376,11 @@ final class HostLink: Identifiable {
      * folder.
      */
     var canOpenPagesThere: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.web) ?? false)
+        permitsFull && connection.isLive && (transport?.capabilities.contains(WireCapability.web) ?? false)
     }
 
     var canSendFiles: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.upload) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.upload) ?? false)
     }
 
     /**
@@ -362,7 +393,7 @@ final class HostLink: Identifiable {
      * the public demo box offers neither.
      */
     var canUseDevServers: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.devserver) ?? false)
+        permitsWork && connection.isLive && (transport?.capabilities.contains(WireCapability.devserver) ?? false)
     }
 
     /**
@@ -462,7 +493,7 @@ final class HostLink: Identifiable {
     /// guest at the source — a profile is somebody's signed-in cookie jar, and
     /// clearing one signs their machine out of everything in it.
     var canUseMachineProfiles: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.browserProfiles) ?? false)
+        permitsFull && connection.isLive && (transport?.capabilities.contains(WireCapability.browserProfiles) ?? false)
     }
 
     /// The machine's profiles, or nil until a `browser.profile.rows` has landed.
@@ -480,20 +511,20 @@ final class HostLink: Identifiable {
      */
     func readMachineProfiles() {
         guard canUseMachineProfiles else { return }
-        transport?.send(.browserProfiles)
+        sendAuthorized(.browserProfiles)
     }
 
     /// Switch the machine's browser. The answer is the whole list coming back
     /// with the tick moved, which is what lets the screen confirm itself.
     func useMachineProfile(_ id: String) {
         guard canUseMachineProfiles else { return }
-        transport?.send(.browserProfileUse(id: id))
+        sendAuthorized(.browserProfileUse(id: id))
     }
 
     /// Empty one profile's jar on the machine. Nothing this phone holds moves.
     func clearMachineProfile(_ id: String) {
         guard canUseMachineProfiles else { return }
-        transport?.send(.browserProfileClear(id: id))
+        sendAuthorized(.browserProfileClear(id: id))
     }
 
     /// What the machine last said about a folder, a file, git, and each panel.
@@ -511,7 +542,7 @@ final class HostLink: Identifiable {
         guard canReadFiles else { return }
         fileListing = nil
         readError = nil
-        transport?.send(.filesList(path: path))
+        sendAuthorized(.filesList(path: path))
     }
 
     /**
@@ -527,21 +558,21 @@ final class HostLink: Identifiable {
         guard canReadFiles else { return }
         if at == 0 { fileText = nil }
         readError = nil
-        transport?.send(.filesRead(path: path, at: at, max: 64 * 1024))
+        sendAuthorized(.filesRead(path: path, at: at, max: 64 * 1024))
     }
 
     func gitStatus(_ path: String) {
         guard canReadGit else { return }
         gitState = nil
         readError = nil
-        transport?.send(.gitStatus(path: path))
+        sendAuthorized(.gitStatus(path: path))
     }
 
     func gitDiff(_ path: String, file: String, staged: Bool) {
         guard canReadGit else { return }
         gitPatch = nil
         readError = nil
-        transport?.send(.gitDiff(path: path, file: file, staged: staged))
+        sendAuthorized(.gitDiff(path: path, file: file, staged: staged))
     }
 
     /**
@@ -554,10 +585,10 @@ final class HostLink: Identifiable {
      * loads would be showing an answer to a different question.
      */
     func readPanel(_ panel: PanelKind, path: String? = nil, scope: String? = nil, query: String? = nil) {
-        guard canReadPanels else { return }
+        guard canReadPanel(panel) else { return }
         panels[panel] = nil
         readError = nil
-        transport?.send(.panelRead(panel: panel.rawValue, path: path, scope: scope, query: query))
+        sendAuthorized(.panelRead(panel: panel.rawValue, path: path, scope: scope, query: query))
     }
 
     /**
@@ -571,9 +602,12 @@ final class HostLink: Identifiable {
      */
     func actOnPanel(_ panel: PanelKind, action: String, path: String? = nil,
                     id: String? = nil, fields: [String: String] = [:]) {
-        guard canReadPanels else { return }
+        guard canActOnPanel(panel) else {
+            lastError = "This phone can look at this page. Change its access on the machine to make changes."
+            return
+        }
         readError = nil
-        transport?.send(.panelAct(panel: panel.rawValue, action: action,
+        sendAuthorized(.panelAct(panel: panel.rawValue, action: action,
                                   path: path, id: id, fields: fields))
     }
 
@@ -583,7 +617,7 @@ final class HostLink: Identifiable {
     /// a guest at the source: a bound window can be told to navigate anywhere and
     /// photographed, and its output is handed to a session running commands.
     var canDriveBrowser: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.browserControl) ?? false)
+        permitsFull && connection.isLive && (transport?.capabilities.contains(WireCapability.browserControl) ?? false)
     }
 
     /// What the machine's browser has open, or nil until a `browser.window.rows`
@@ -648,7 +682,7 @@ final class HostLink: Identifiable {
     /// at the machine opening a tab, a session binding a window of its own.
     func readMachineWindows() {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindows)
+        sendAuthorized(.machineWindows)
     }
 
     /**
@@ -673,18 +707,18 @@ final class HostLink: Identifiable {
     func openMachineWindow(url: String? = nil, profile: String? = nil,
                            isolated: Bool = false, session: String? = nil) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowOpen(url: url, profile: profile,
+        sendAuthorized(.machineWindowOpen(url: url, profile: profile,
                                            isolated: isolated, session: session))
     }
 
     func goMachineWindow(_ id: String, to url: String) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowGo(id: id, url: url))
+        sendAuthorized(.machineWindowGo(id: id, url: url))
     }
 
     func actOnMachineWindow(_ id: String, _ act: MachineBrowserWire.Act) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowAct(id: id, action: act))
+        sendAuthorized(.machineWindowAct(id: id, action: act))
     }
 
     /**
@@ -708,7 +742,7 @@ final class HostLink: Identifiable {
      */
     func sizeMachineWindow(_ id: String, width: Int, height: Int) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowSize(id: id, width: width, height: height))
+        sendAuthorized(.machineWindowSize(id: id, width: width, height: height))
     }
 
     /**
@@ -739,7 +773,7 @@ final class HostLink: Identifiable {
         } else if let letGo = machineBrowser?.windows.first(where: { $0.id == id })?.session {
             releasedWindows[letGo] = id
         }
-        transport?.send(.machineWindowBind(id: id, session: session))
+        sendAuthorized(.machineWindowBind(id: id, session: session))
     }
 
     /**
@@ -754,12 +788,12 @@ final class HostLink: Identifiable {
     func shotMachineWindow(_ id: String, to session: String? = nil, note: String? = nil) {
         guard canDriveBrowser else { return }
         machineShot = nil
-        transport?.send(.machineWindowShot(id: id, session: session, note: note))
+        sendAuthorized(.machineWindowShot(id: id, session: session, note: note))
     }
 
     func readMachineSteps(_ id: String) {
         guard canDriveBrowser else { return }
-        transport?.send(.machineWindowSteps(id: id))
+        sendAuthorized(.machineWindowSteps(id: id))
     }
 
     /**
@@ -798,7 +832,7 @@ final class HostLink: Identifiable {
     func pickInMachineWindow(_ id: String, x: Double, y: Double, up: Int = 0) {
         guard canDriveBrowser, !id.isEmpty else { return }
         pickingIn = id
-        transport?.send(.machineWindowPick(id: id, x: x, y: y, up: up))
+        sendAuthorized(.machineWindowPick(id: id, x: x, y: y, up: up))
     }
 
     /// The sheet was put away, or inspecting was turned off. The held element
@@ -836,7 +870,7 @@ final class HostLink: Identifiable {
         browsed = nil
         browseError = nil
         browsing = path ?? ""
-        transport?.send(.browseFolders(path: path))
+        sendAuthorized(.browseFolders(path: path))
     }
 
     /// Leave the picker, so a late answer for a folder nobody is looking at is
@@ -868,11 +902,11 @@ final class HostLink: Identifiable {
     }
 
     func refresh() {
-        transport?.send(.list)
+        sendAuthorized(.list)
         // Asked for alongside the sessions rather than on a timer of its own.
         // The host's scan spawns `lsof`; polling it from a phone in a pocket
         // would run that on somebody's laptop every few seconds forever.
-        if canBrowseLocalhost { transport?.send(.ports) }
+        if canBrowseLocalhost { sendAuthorized(.ports) }
         // Pull-to-refresh, and nothing else, asks these again. A dev server's
         // changes are *pushed* — see `askDevServers` — so a timer here would be
         // this app polling a question the desktop is already answering, which is
@@ -942,6 +976,9 @@ final class HostLink: Identifiable {
     /// it. Shared by `stop()` and `restart()` so the two cannot drift about what
     /// a dropped connection means on screen.
     private func drop() {
+        phoneAccess = nil
+        offeredCapabilities = []
+        hootStream.disconnected()
         closeLocalhost()
         clearUpload()
         transport?.stop()
@@ -1025,7 +1062,7 @@ final class HostLink: Identifiable {
         wanted.insert(id)
         rememberLastOpened(id)
         guard !attached.contains(id) else { return }
-        if transport?.send(.attach(id: id, size: bridge(for: id).size)) != true {
+        if sendAuthorized(.attach(id: id, size: bridge(for: id).size)) != true {
             bridge(for: id).note(connection.detail)
         }
     }
@@ -1123,7 +1160,7 @@ final class HostLink: Identifiable {
         bridges[id]?.endBacklogHold()
         guard attached.contains(id) else { return }
         attached.remove(id)
-        transport?.send(.detach(id: id))
+        sendAuthorized(.detach(id: id))
     }
 
     func reattach(_ id: String) {
@@ -1138,7 +1175,7 @@ final class HostLink: Identifiable {
             return
         }
         openWhenCreated = true
-        transport?.send(.create(folder: folder, size: pendingSize))
+        sendAuthorized(.create(folder: folder, size: pendingSize))
     }
 
     /**
@@ -1162,7 +1199,7 @@ final class HostLink: Identifiable {
             lastError = "\(label) cannot close sessions from the phone."
             return
         }
-        transport?.send(.close(id: id))
+        sendAuthorized(.close(id: id))
     }
 
     /**
@@ -1183,7 +1220,7 @@ final class HostLink: Identifiable {
             return
         }
         restartAfterClose = (id: id, folder: folder)
-        transport?.send(.close(id: id))
+        sendAuthorized(.close(id: id))
     }
 
     /**
@@ -1203,7 +1240,7 @@ final class HostLink: Identifiable {
             lastError = "\(label) cannot rename sessions from the phone."
             return
         }
-        transport?.send(.rename(id: id, title: title))
+        sendAuthorized(.rename(id: id, title: title))
     }
 
     /**
@@ -1220,7 +1257,7 @@ final class HostLink: Identifiable {
             lastError = "\(label) cannot open pages from the phone."
             return
         }
-        transport?.send(.webOpen(url: url))
+        sendAuthorized(.webOpen(url: url))
     }
 
     private var pendingSize: TerminalSize? {
@@ -1420,7 +1457,7 @@ final class HostLink: Identifiable {
      */
     func askDevServers() {
         guard canUseDevServers else { return }
-        for folder in devFolders { transport?.send(.devStatus(folder: folder)) }
+        for folder in devFolders { sendAuthorized(.devStatus(folder: folder)) }
     }
 
     /**
@@ -1437,7 +1474,7 @@ final class HostLink: Identifiable {
             lastError = "\(label) cannot start dev servers from the phone."
             return
         }
-        guard transport?.send(.devStart(folder: folder)) == true else {
+        guard sendAuthorized(.devStart(folder: folder)) == true else {
             lastError = "Not connected — \(label) was not asked to start that."
             return
         }
@@ -1619,7 +1656,7 @@ final class HostLink: Identifiable {
     private func sendInput(_ id: String, _ text: String) {
         guard !text.isEmpty else { return }
         for chunk in WireCodec.chunkInput(text) {
-            guard transport?.send(.input(id: id, data: chunk)) == true else {
+            guard sendAuthorized(.input(id: id, data: chunk)) == true else {
                 bridges[id]?.note("not sent — \(connection.detail)")
                 return
             }
@@ -1667,7 +1704,7 @@ final class HostLink: Identifiable {
 
     private func sendResize(_ id: String, cols: Int, rows: Int) {
         guard attached.contains(id), TerminalSize(cols: cols, rows: rows) != nil else { return }
-        transport?.send(.resize(id: id, cols: cols, rows: rows))
+        sendAuthorized(.resize(id: id, cols: cols, rows: rows))
     }
 
     func dismissError() {
@@ -1687,6 +1724,9 @@ final class HostLink: Identifiable {
             notice.observe(state)
             onConnectionChange?(state)
             if !state.isLive && wasLive {
+                phoneAccess = nil
+                copilot.setPhoneAccess(negotiated: offeredCapabilities.contains("device.access"), level: nil)
+                hootStream.disconnected()
                 attached.removeAll()
                 // Nothing is attached any more, so there is nothing left to be
                 // politely let go of. A timer left running would fire a `detach`
@@ -1765,7 +1805,23 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
+        case let .hootEvents(batch):
+            guard hasStructuredHoot, copilot.grant.canWatch, copilot.isOpen else { return }
+            let previous = hootStream.conversationId == batch.conversationId ? hootStream.sequence : 0
+            hootStream.apply(batch)
+            copilot.acknowledgeStructured(batch.events.filter { $0.sequence > previous && $0.sequence <= hootStream.sequence })
+            if hootStream.needsReplay { sendAuthorized(.copilotAttach) }
+        case let .phoneAccess(grant):
+            guard offeredCapabilities.contains("device.access") else { return }
+            phoneAccess = grant
+            copilot.setPhoneAccess(negotiated: true, level: grant?.level)
+            // Stale forms/actions must disappear as soon as access is taken back.
+            panels.removeAll()
+            if grant == nil { hootStream.clear() }
         case let .welcome(_, deviceId, _, _, list, capabilities, platform, name, folders, copilotConnection, appVersion, kind):
+            offeredCapabilities = capabilities
+            phoneAccess = nil
+            copilot.setPhoneAccess(negotiated: capabilities.contains("device.access"), level: nil)
             sessions = list
             lastActivity = activity
             lastError = nil
@@ -1805,7 +1861,7 @@ final class HostLink: Identifiable {
                 }
             }
             granted = folders
-            if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
+            if capabilities.contains(WireCapability.localhost) { sendAuthorized(.ports) }
             /*
              * The copilot connection is **re-opened** on every welcome, for a
              * sharper version of the reason `askDevServers` is called on every
@@ -2032,7 +2088,7 @@ final class HostLink: Identifiable {
             // once, at the bottom. `TerminalBackfill` carries the argument.
             bridges[id]?.holdForBacklog()
             if let size = bridges[id]?.size {
-                transport?.send(.resize(id: id, cols: size.cols, rows: size.rows))
+                sendAuthorized(.resize(id: id, cols: size.cols, rows: size.rows))
             }
             // A line from inspect mode that was waiting for exactly this. Sent
             // after the resize so the agent's prompt box is already the right
@@ -2185,6 +2241,7 @@ final class HostLink: Identifiable {
             // arrives as a frame is also proof this machine has a copilot, and
             // the same object arriving inside a `welcome` is not.
             copilot.apply(pushed: connection)
+            if !copilot.grant.canWatch { hootStream.clear() }
             // The same push takes the routines away, because the machine asks
             // one question about this device's kind for both. Only ever takes:
             // whether it *has* routines is the capability list's answer.

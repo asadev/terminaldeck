@@ -64,6 +64,7 @@ public actor BackendRemoteTrustStore {
     var accountGrants: [String: Share] = [:]
     var kinds: [String: KindRecord] = [:]
     var windowAllowed: Set<String> = [], windowDenied: Set<String> = []
+    var phoneAccessLevels: [String: BackendINT2PhoneAccessLevel] = [:]
     public var onChanged: (@Sendable () -> Void)?
 
     public init(directory: URL, clock: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }) { self.directory = directory; self.clock = clock }
@@ -79,7 +80,7 @@ public actor BackendRemoteTrustStore {
             identity = loaded; lease = held
         } catch { throw error }
     }
-    public func close() { cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data() }
+    public func close() { cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data(); phoneAccessLevels = [:] }
     public func hostIdentity() throws -> BackendRemoteHostIdentity { try requireOpen(); guard let identity else { throw BackendRemoteTrustFailure.closed }; return identity }
     public func listDevices() -> [BackendRemoteDevice] { devices.map(\.publicDevice) }
     public func device(_ id: String) -> BackendRemoteDevice? { devices.first { $0.id == id }?.publicDevice }

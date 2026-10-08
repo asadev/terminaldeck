@@ -112,6 +112,9 @@ PY
   tar -xOf "$HERE/../vendor/staysfixed-0.15.0-neutral.tgz" package/LICENSE > "$APP/Contents/Resources/licenses/staysfixed/LICENSE"
 fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+mkdir -p "$APP/Contents/Resources/licenses/server-control"
+cp "$HERE/docker/BackendAppsData-Coolify-LICENSE.txt" "$APP/Contents/Resources/licenses/server-control/Coolify.txt"
+cp "$HERE/docker/THIRD-PARTY.md" "$APP/Contents/Resources/licenses/server-control/THIRD-PARTY.md"
 if [ -n "${TD_VERSION:-}" ]; then
   plutil -replace CFBundleShortVersionString -string "$TD_VERSION" "$APP/Contents/Info.plist"
   plutil -replace CFBundleVersion -string "$TD_VERSION" "$APP/Contents/Info.plist"
@@ -138,6 +141,11 @@ echo "==> App Intents metadata (Siri, Shortcuts, Spotlight)"
 chmod -R u+w "$APP"
 IDENTITY="${TD_SIGN_IDENTITY:--}"
 ENTITLEMENTS="$HERE/NativePreview.entitlements"
+if [ "$IDENTITY" != "-" ]; then
+  source "$HERE/../scripts/mac-signing-scope.sh"
+  td_mac_signing_scope || exit 1
+  IDENTITY="$TD_SIGN_IDENTITY"
+fi
 SIGN=(codesign --force --options runtime --sign "$IDENTITY")
 if [ "$IDENTITY" = "-" ]; then
   echo "==> signing ad-hoc (no Developer ID), hardened runtime"
@@ -145,7 +153,7 @@ if [ "$IDENTITY" = "-" ]; then
 else
   echo "==> signing as $IDENTITY, hardened runtime"
   SIGN+=(--timestamp)
-  [ -n "${TD_KEYCHAIN:-}" ] && SIGN+=(--keychain "$TD_KEYCHAIN")
+  SIGN+=(--keychain "$TD_KEYCHAIN")
 fi
 # Inside out: nested bundles first, then the app with its entitlements. Never
 # `codesign --deep` to sign — it signs in the wrong order and skips entitlements.

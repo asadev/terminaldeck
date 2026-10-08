@@ -353,7 +353,7 @@ struct PairingView: View {
                     .textCase(.uppercase)
                 InfoDot(about: "device kinds",
                         text: "My device is full access — it’s you at another keyboard. A guest reaches "
-                            + "only the folders that are chosen for it, and the copilot is never shared. "
+                            + "only the folders that are chosen for it, and Hoot is never shared. "
                             + "Whoever approves this device picks one, and it is fixed once they do: "
                             + "changing it means pairing again.")
                 Spacer(minLength: 0)

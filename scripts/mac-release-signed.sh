@@ -68,6 +68,7 @@
 # number. Both are rebuilt below, using electron-builder's own blockmap code so
 # the replacement is byte-for-byte the file it would have written itself.
 
+set +x
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -156,13 +157,9 @@ die()  { printf '\n\033[31merror:\033[0m %s\n' "$1" >&2; shift; for l in "$@"; d
 # keychain holding exactly one Developer ID Application identity and a readable
 # `.p8` on disk, and does not care where they came from.
 
-# Teardown runs in reverse, the way teardown always should: the search list is
-# restored before the keychain it points at is deleted, and the keychain is
-# deleted before the directory holding it is removed. Forward order would
-# "succeed" at every step by deleting the file first and then failing quietly to
-# find it, leaving a dangling entry in the user's keychain search list — which
-# on a developer's own Mac is a booby trap for the next signing run rather than
-# a cosmetic mess.
+# Hosted CI owns an ephemeral keychain; signing always names that keychain and
+# its exact Developer ID SHA-1. Local runs use only terminaldeck-signing.
+# Neither mode rewrites the shared keychain search/default preferences.
 CLEANUP=()
 cleanup() {
     for ((i = ${#CLEANUP[@]} - 1; i >= 0; i--)); do
@@ -172,6 +169,8 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -n "${MACOS_CERTIFICATE_P12:-}" ]]; then
+    [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] ||
+        die "Repository-secret keychain import is restricted to a hosted CI runner"
     step "Preflight (signing material from repository secrets)"
 
     [[ -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]] || die "MACOS_CERTIFICATE_P12 is set but MACOS_CERTIFICATE_PASSWORD is not."
@@ -217,16 +216,6 @@ if [[ -n "${MACOS_CERTIFICATE_P12:-}" ]]; then
     # again by the time the *disk image* is signed at the very end. That failure
     # lands on the last step of a twenty-minute build.
     security set-keychain-settings "$KEYCHAIN"
-    # `tr` folds the newlines to spaces, and that is not cosmetic. This value is
-    # baked into a cleanup command that is later run through `eval`, and a
-    # newline inside that string would be read as a command separator — so a
-    # machine with two user keychains would "restore" the first one and then try
-    # to execute the path of the second. A hosted runner has exactly one user
-    # keychain and would never have shown it; this Mac has two.
-    ORIGINAL_KEYCHAINS="$(security list-keychains -d user | sed 's/^[[:space:]]*"//; s/"$//' | tr '\n' ' ')"
-    CLEANUP+=("security list-keychains -d user -s $ORIGINAL_KEYCHAINS >/dev/null 2>&1")
-    # shellcheck disable=SC2086
-    security list-keychains -d user -s "$KEYCHAIN" $ORIGINAL_KEYCHAINS
     security unlock-keychain -p "$KC_PW" "$KEYCHAIN"
 
     security import "$SECRET_DIR/devid.p12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" \
@@ -258,33 +247,13 @@ else
         "export ASC_ISSUER_ID=<uuid>, or put it in ~/private_keys/issuer_id.txt." \
         "It is readable only at App Store Connect > Users and Access > Integrations."
 
-    security unlock-keychain -p "$(cat "$PW_FILE")" "$KEYCHAIN"
-
-    # `imatch-ship` holds a second `Apple Distribution: Asad Iqbal` for a
-    # different product. It is deliberately absent from the search list; if
-    # something has put it back, signing breaks in a way that takes hours to
-    # attribute.
-    if grep -q "imatch-ship" <<<"$(security list-keychains)"; then # not a pipe: see APP_SIG below
-        die "imatch-ship.keychain-db is in the search list." \
-            "Remove it: security list-keychains -s $KEYCHAIN ~/Library/Keychains/login.keychain-db"
-    fi
 fi
 
-DEVID_COUNT="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -c "Developer ID Application" || true)"
-if [[ "$DEVID_COUNT" -eq 0 ]]; then
-    die "no Developer ID Application certificate in $(basename "$KEYCHAIN")." \
-        "" \
-        "Apple refuses to issue one over the App Store Connect API — POST /v1/certificates" \
-        "answers 403 'This operation can only be performed by the Account Holder' for both" \
-        "DEVELOPER_ID_APPLICATION and DEVELOPER_ID_APPLICATION_G2, whatever the key's role." \
-        "It has to be created in the signed-in developer portal. See SIGNING-HANDOFF.md."
-elif [[ "$DEVID_COUNT" -gt 1 ]]; then
-    die "$DEVID_COUNT Developer ID Application identities are visible." \
-        "codesign cannot choose between identically named identities and calls it" \
-        "errSecInternalComponent, which looks like a locked keychain and is not."
-fi
-
-security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application"
+source "$REPO/scripts/mac-signing-scope.sh"
+export TD_KEYCHAIN="$KEYCHAIN" TD_SIGN_IDENTITY="$IDENTITY"
+td_mac_signing_scope || die "Scoped Mac signing preflight failed"
+IDENTITY="$TD_MAC_SIGNING_SHA1"
+printf '  Developer ID SHA-1: %s in %s\n' "$IDENTITY" "$(basename "$KEYCHAIN")"
 
 # ------------------------------------------------------------------- build
 
@@ -315,7 +284,8 @@ step "Package, sign and notarize"
 export APPLE_API_KEY="$ASC_KEY_PATH"
 export APPLE_API_KEY_ID="$ASC_KEY_ID"
 export APPLE_API_ISSUER="$ASC_ISSUER"
-export CSC_KEYCHAIN="$KEYCHAIN"
+unset CSC_LINK CSC_KEY_PASSWORD CSC_NAME
+export CSC_KEYCHAIN="$KEYCHAIN" CSC_IDENTITY_AUTO_DISCOVERY=false
 
 npx electron-builder --mac --publish never \
     -c.mac.identity="$IDENTITY" \

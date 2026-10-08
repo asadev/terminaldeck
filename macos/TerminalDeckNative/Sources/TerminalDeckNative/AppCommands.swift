@@ -59,6 +59,7 @@ private extension View {
 @MainActor
 enum AppCommandRunner {
     static func perform(_ command: AppMenuCommand, model: AppModel) {
+        if case .page(let id) = command.action, !UIGMemoryVisibility.showsCommand(id) { NSSound.beep(); return }
         switch command.action {
         case .page(let id) where id == "view.browser" && BrowserTabsHook.provider != nil:
             // Lane BR: View ▸ Browser is "New browser tab" (App.tsx view.browser). The page's own

@@ -124,6 +124,22 @@ extension NativeCompositionProduction {
         definitions += try appDefinitions(access: appAccess, gate: gate, os: os, browser: browser, sessions: sessions, usage: usage,
             setup: setup, diagnostics: diagnostics)
 
+        guard let github = clients.github, let githubAuth = clients.githubAuth else {
+            throw NativeRPCError(code: "unavailable", message: "The existing GitHub account service is unavailable.")
+        }
+        let githubTools = BackendGitHubNativeTools(home: configuration.homeDirectory.path,
+            loginPath: { [root] in try await root.providers.loginPath() })
+        let githubWorkspace = BackendGHComposition(authenticator: githubAuth,
+            repositoryService: github, tools: githubTools,
+            environment: configuration.inheritedEnvironment, registry: root.registry,
+            addProject: { [root] path in try await root.state.addProject(path) })
+        _ = try await BackendGHRegistration.install(root: root, composition: githubWorkspace,
+            bindings: joins, access: appAccess, repositoryService: github)
+        try await installINT2HootChatTools(access: appAccess)
+        await root.installReceiverTools(access: appAccess, joins: joins, github: githubWorkspace.service) // RCV
+        try await installINT2PhoneAccess(access: appAccess)
+        if SourceNamespace.agentSettingsEnabled { try await installINT2AGSTools(access: appAccess) }
+
         // Machines, servers, remote, devices, workers (+ the shared lift definition).
         definitions += try await BackendCompositionDeckToolsMachines.definitions(scope: scope, rpc: { try await access.rpc($0) },
             registry: registry, dataRoot: root.dataRoot, home: configuration.homeDirectory,
@@ -149,6 +165,9 @@ extension NativeCompositionProduction {
         try joins.replaceContributions(owner: "safari", [try await BackendCompositionCoreContributions.safari(server: root.mcp, joins: joins)], policiesWrapped: true)
         try joins.replaceContributions(owner: "tasks-servers", [try await BackendCompositionCoreContributions.supplement(server: root.mcp, joins: joins,
             knowledgeFromClients: clients.domains.contains("knowledge") && clients.knowledge != nil)], policiesWrapped: true)
+        try await installINT2WatchCatalogue()
+        guard let panels = machinePending?.panels else { throw NativeRPCError(code: "composition-incomplete", message: "Phone panels need the existing machine registry.") }
+        try await installINT2PhonePanels(panels: panels)
         try await registerMachines()
         try await installBrowserChannels()
         _ = sessions; _ = hoot; _ = routinesOwner

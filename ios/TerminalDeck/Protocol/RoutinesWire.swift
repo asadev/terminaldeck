@@ -60,7 +60,7 @@ enum RoutinesWire {
     /// A host advertises it only when it holds a routine engine, and only to one
     /// of its owner's own devices: a routine is a prompt that machine runs with
     /// that machine's tools in that machine's folders, so it goes where the
-    /// copilot goes and *"the copilot is never shared"* covers it.
+    /// copilot goes and *"Hoot is never shared"* covers it.
     static let capability = "routines"
 
     /// The most rows this client will draw off one `routines.rows`. The host caps

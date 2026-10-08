@@ -91,17 +91,39 @@ struct BackendServersConnectionTests {
         let capped = BackendServersSSHBuffer(maximum: 3); capped.takeOutput(Data([1, 2, 3])); capped.takeError(Data([4])); #expect(capped.truncated)
     }
     @Test func shellSizeStartFolderAndFollowingReleaseExactlyOnce() async throws {
-        let app = try makeApp(); defer { app.cleanup() }
+        let releases = AsyncStream<String>.makeStream()
+        defer { releases.continuation.finish() }
+        let app = try makeApp(lifecycle: { id, phase in
+            if id == "one", phase == "released" { releases.continuation.yield(phase) }
+        }); defer { app.cleanup() }
+        func nextRelease() async throws -> String? {
+            let result = BackendServersSSHOnce<String?>()
+            let observer = Task {
+                var iterator = releases.stream.makeAsyncIterator()
+                result.finish(.success(await iterator.next()))
+            }
+            let timeout = Task {
+                try await Task.sleep(for: .seconds(2))
+                result.finish(.failure(BackendServersProblem("test-timeout", "The connection never published its release.")))
+            }
+            defer { observer.cancel(); timeout.cancel() }
+            return try await result.value()
+        }
         let shell = try await app.pool.shell("one", size: .init(cols: 91, rows: 33), startIn: "/my folder/$(reboot)")
         #expect(app.client.shellHandle.size == .init(cols: 91, rows: 33))
         #expect(app.client.shellHandle.writes == ["cd '/my folder/$(reboot)'\n"])
         shell.resize(.init(cols: 120, rows: 40)); #expect(app.client.shellHandle.size == .init(cols: 120, rows: 40))
         shell.close(); shell.close()
-        await Task.yield(); #expect(!(await app.pool.isOpen("one")))
+        #expect(try await nextRelease() == "released")
+        #expect(!(await app.pool.isOpen("one")))
+        #expect(app.client.closeCount == 1)
         let follow = try await app.pool.follow("one", argv: ["tail", "-f", "/my log"])
         #expect(app.client.followCommand == "'tail' '-f' '/my log'")
         #expect(await app.pool.isOpen("one"))
-        follow.close(); follow.close(); await Task.yield(); #expect(!(await app.pool.isOpen("one")))
+        follow.close(); follow.close()
+        #expect(try await nextRelease() == "released")
+        #expect(!(await app.pool.isOpen("one")))
+        #expect(app.client.closeCount == 2)
     }
     @Test func listingRangesAndSafePartialDelivery() async throws {
         let app = try makeApp(); defer { app.cleanup() }
@@ -159,7 +181,7 @@ struct BackendServersConnectionTests {
         await app.pool.release(first); await app.pool.release(second)
         #expect(await app.pool.isOpen("one")); await app.pool.release(fresh)
     }
-    private func makeApp() throws -> BackendServersConnectionTestApp {
+    private func makeApp(lifecycle: @escaping @Sendable (String, String) -> Void = { _, _ in }) throws -> BackendServersConnectionTestApp {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("servers-connection-" + UUID().uuidString), ids = BackendServersConnectionTestIDs()
         let store = BackendServersStore(dataRoot: root, policy: .init(mayRead: true, mayWrite: true), makeID: { ids.next() })
         _ = try store.add(.init(name: "one", address: "first.example", username: "root"))
@@ -167,7 +189,7 @@ struct BackendServersConnectionTests {
         let credentials = BackendServersCredentials(dataRoot: root, cipher: cipher, policy: .init(mayRead: true, mayWrite: true), keyValidator: .init { _, _ in nil })
         credentials.holdForSession("one", credential: .password("only-server-one"))
         let client = BackendServersConnectionTestClient(), dialer = BackendServersConnectionTestDialer(client)
-        return .init(root: root, store: store, credentials: credentials, client: client, dialer: dialer, pool: .init(store: store, credentials: credentials, dialer: dialer))
+        return .init(root: root, store: store, credentials: credentials, client: client, dialer: dialer, pool: .init(store: store, credentials: credentials, dialer: dialer, lifecycle: lifecycle))
     }
 }
 struct BackendServersConnectionTestApp: Sendable {

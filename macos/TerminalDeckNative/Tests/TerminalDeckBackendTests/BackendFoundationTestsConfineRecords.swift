@@ -25,7 +25,7 @@ final class BackendFoundationTestsConfineRecords: XCTestCase {
     // actually expects seven paths and seven deny rules; preserve the code.
     func testFenceNamesExactlyTheSevenSourceRecords() throws {
         let root = try scratch(); defer { try? FileManager.default.removeItem(at: root) }
-        let expected = ["routines", "routine-state.json", "copilot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path }
+        let expected = ["routines", "routine-state.json", "hoot-log", "remote/remote-device-kinds.json", "remote/remote-auth.json", "remote/access-keys.json", "plugin-grants.json"].map { root.appendingPathComponent($0).path }
         XCTAssertEqual(BackendMacConfinement.recordsFencePaths(root), expected)
         XCTAssertEqual(BackendMacConfinement.recordsFenceProfile(root).components(separatedBy: "(deny ").count - 1, 7)
     }

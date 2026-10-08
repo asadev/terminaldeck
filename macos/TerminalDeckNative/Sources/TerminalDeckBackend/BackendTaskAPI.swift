@@ -50,7 +50,7 @@ public actor BackendTaskAPI {
             guard Self.folderAllowed(connection, path: project) else { throw Failure("folder_not_allowed", "\(project) is not a folder this connection allows work in.") }
             let status = try optional(input, "status", maximum: 60), allowed = connection["statuses"]["statuses"].elements?.compactMap(\.string) ?? []
             let now = BackendTaskValues.time(), task = BackendTaskValues.object([("id", .string(keyID + ":" + external)), ("keyId", .string(keyID)), ("externalTaskId", .string(external)),
-                ("originExternalTaskId", parent?.value["originExternalTaskId"] ?? .string(external)), ("externalThreadId", try optional(input, "externalThreadId", maximum: 200).map(NativeRPCValue.string) ?? parent?.value["externalThreadId"] ?? .null), ("parentExternalTaskId", parentID.map(NativeRPCValue.string) ?? .null),
+                ("originExternalTaskId", parent?.value["originExternalTaskId"] ?? .string(external)), ("externalThreadId", try optional(input, "externalThreadId", maximum: 200).map(NativeRPCValue.string) ?? parent?.value["externalThreadId"] ?? .null), ("parentExternalTaskId", parentID.map(NativeRPCValue.string) ?? .null), ("parentTaskId", parent.map { .string($0.id) } ?? .null), ("notificationKeyId", .string(keyID)),
                 ("title", .string(try required(input, "title", maximum: 300))), ("instructions", .string(try optional(input, "instructions", maximum: 20_000) ?? "")), ("project", .string(project)), ("assignee", assignment),
                 ("mainAssignee", try optional(input, "mainAssignee", maximum: 200).map(NativeRPCValue.string) ?? assignment["identity"]), ("creator", try optional(input, "creator", maximum: 200).map(NativeRPCValue.string) ?? .null), ("requestedBy", .string(who)),
                 ("crmStatus", status.map { allowed.contains($0) ? .string($0) : connection["statuses"]["initial"] } ?? connection["statuses"]["initial"]), ("process", .string("queued")), ("sessionId", .null), ("conversationId", .null), ("runStartedAt", .null), ("keepOpenUntil", .null), ("hops", .number(Double(hops))),
@@ -94,12 +94,13 @@ public actor BackendTaskAPI {
     }
     public func snapshot(_ task: BackendTaskRecord) async throws -> NativeRPCValue {
         let agent = try await config.agent(task.agentID)
-        return fields([("externalTaskId", task.value["externalTaskId"]), ("originExternalTaskId", task.value["originExternalTaskId"]), ("assignee", task.value["assignee"]["identity"]), ("agent", task.assigneeKind == "hoot" ? .string("Hoot") : agent?["name"] ?? .string(task.agentID)), ("crmStatus", task.value["crmStatus"]), ("process", task.value["process"]), ("keptOpenUntil", task.value["keepOpenUntil"].number.map { .string(BackendTaskOutbox.iso($0)) } ?? .null), ("finished", .bool(!task.value["result"].isNullish)), ("verified", task.value["result"].isNullish ? .null : task.value["result"]["verified"]), ("updatedAt", .string(BackendTaskOutbox.iso(task.value["updatedAt"].number ?? 0)))])
+        return fields([("externalTaskId", task.value["externalTaskId"]), ("originExternalTaskId", task.value["originExternalTaskId"]), ("parentTaskId", task.value["parentTaskId"].isNullish ? .null : task.value["parentTaskId"]), ("assignee", task.value["assignee"]["identity"]), ("agent", task.assigneeKind == "hoot" ? .string("Hoot") : agent?["name"] ?? .string(task.agentID)), ("crmStatus", task.value["crmStatus"]), ("process", task.value["process"]), ("keptOpenUntil", task.value["keepOpenUntil"].number.map { .string(BackendTaskOutbox.iso($0)) } ?? .null), ("keepAliveUntilClose", .bool(task.value["keepAliveUntilClose"].bool == true)), ("finished", .bool(!task.value["result"].isNullish)), ("verified", task.value["result"].isNullish ? .null : task.value["result"]["verified"]), ("updatedAt", .string(BackendTaskOutbox.iso(task.value["updatedAt"].number ?? 0)))])
     }
     private func sender(_ connection: NativeRPCValue, who: String, parent: BackendTaskRecord?) async throws {
         let allowed = connection["allowedSenders"].elements?.compactMap(\.string) ?? []
         if allowed.contains(who) { return }
-        if let parent, parent.assigneeKind == "hoot", who == connection["hootIdentity"].string {
+        if let parent, parent.value["stopped"].bool != true,
+           (parent.assigneeKind == "hoot" && who == connection["hootIdentity"].string || parent.assigneeKind == "agent" && who == parent.value["assignee"]["identity"].string && connection["identities"][who].string == parent.agentID) {
             var at: BackendTaskRecord? = parent
             for _ in 0..<(Int(connection["maxHops"].number ?? 3) + 2) {
                 guard let task = at else { break }

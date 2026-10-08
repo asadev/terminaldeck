@@ -217,7 +217,24 @@ final class CopilotLink {
      * every device the copilot is not for — every guest, and every machine whose
      * build has none.
      */
-    private(set) var grant: CopilotGrant = .none
+    private var hostGrant: CopilotGrant = .none
+    private var answeredQuestions: Set<String> = []
+    private var deviceAccessNegotiated = false
+    private var deviceLevel: PhoneAccessLevel?
+    var grant: CopilotGrant {
+        guard deviceAccessNegotiated else { return hostGrant }
+        return .init(read: hostGrant.read && deviceLevel != nil,
+                     act: hostGrant.act && (deviceLevel == .work || deviceLevel == .full),
+                     alter: hostGrant.alter && deviceLevel == .full)
+    }
+
+    func setPhoneAccess(negotiated: Bool, level: PhoneAccessLevel?) {
+        let couldWatch = grant.canWatch
+        deviceAccessNegotiated = negotiated
+        deviceLevel = level
+        if !grant.canWatch { clearWatched() }
+        if !couldWatch, grant.canWatch, isOpen { subscribe() }
+    }
 
     /// Whether the machine's capability list names `copilot`. A different
     /// question from whether it has one: one is about the host's vocabulary, the
@@ -663,6 +680,7 @@ final class CopilotLink {
     /// Shared by `connectionLost()` and `forget()` so the two cannot drift about
     /// what a closed connection means on screen.
     private func closeLocally() {
+        answeredQuestions = []
         isOpen = false
         isOpening = false
         // The questions especially. A confirmation this phone can no longer
@@ -689,7 +707,7 @@ final class CopilotLink {
     /// carried across, and there is no secret left to drop.
     func forget() {
         cancelWaits()
-        grant = .none
+        hostGrant = .none
         isOffered = false
         areFilesOffered = false
         files = []
@@ -768,7 +786,7 @@ final class CopilotLink {
     func apply(connection: CopilotConnection) {
         let hadWatch = grant.canWatch
         let wasOpen = isOpen
-        grant = connection.grant
+        hostGrant = connection.grant
         linked = connection.linked
         isOpen = connection.open
         if connection.open { isOpening = false }
@@ -948,6 +966,12 @@ final class CopilotLink {
         }
     }
 
+    func acknowledgeStructured(_ events: [HootEvent]) {
+        settle(against: events.filter { $0.kind == .user }.map {
+            CopilotChatMessage(id: $0.id, role: .you, text: $0.text, at: $0.at, truncated: false)
+        })
+    }
+
     private func merge(_ message: CopilotChatMessage) {
         let entry = CopilotEntry.message(message)
         if let at = timeline.firstIndex(where: { $0.id == entry.id }) {
@@ -1000,7 +1024,11 @@ final class CopilotLink {
         // — and a `copilot.settled` may never arrive at all for a device that
         // reconnected in between.
         let live = Set(questions.map(\.id))
-        asked.removeAll { !live.contains($0.id) && settlements[$0.id] == nil }
+        let mine = Set(questions.filter(\.mine).map(\.id))
+        asked.removeAll { (!live.contains($0.id) || !mine.contains($0.id)) && settlements[$0.id] == nil }
+        for question in questions where question.mine {
+            if let consent = question.consent { apply(ask: consent) }
+        }
     }
 
     /**
@@ -1251,7 +1279,7 @@ final class CopilotLink {
         isLoadingFiles = true
         guard wire.send(.copilotFiles) else {
             isLoadingFiles = false
-            onError?("Not connected — the copilot's files were not asked for.")
+            onError?("Not connected — Hoot's files were not asked for.")
             return
         }
     }
@@ -1313,11 +1341,11 @@ final class CopilotLink {
     @discardableResult
     func saveFile(_ id: String, text: String) -> Bool {
         guard canEditCopilotFiles else {
-            onError?("\(Self.machineRefusal) change the copilot's files.")
+            onError?("\(Self.machineRefusal) change Hoot's files.")
             return false
         }
         guard files.first(where: { $0.id == id })?.writable == true else {
-            onError?("That file is written by the app every time the copilot starts, so there is nothing to save.")
+            onError?("That file is written by the app every time Hoot starts, so there is nothing to save.")
             return false
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1326,7 +1354,7 @@ final class CopilotLink {
             return false
         }
         guard text.utf8.count <= Copilot.maxFileBytes else {
-            onError?("That is \(byteSize(text.utf8.count)). The most that can be sent to the copilot's "
+            onError?("That is \(byteSize(text.utf8.count)). The most that can be sent to Hoot's "
                      + "files is \(byteSize(Copilot.maxFileBytes)).")
             return false
         }
@@ -1351,7 +1379,7 @@ final class CopilotLink {
     @discardableResult
     func restoreInstructions() -> Bool {
         guard canEditCopilotFiles else {
-            onError?("\(Self.machineRefusal) change the copilot's files.")
+            onError?("\(Self.machineRefusal) change Hoot's files.")
             return false
         }
         guard let own = files.first(where: { $0.isOwnInstructions }) else { return false }
@@ -1377,7 +1405,7 @@ final class CopilotLink {
     @discardableResult
     func forgetMemory(_ name: String) -> Bool {
         guard canEditCopilotFiles else {
-            onError?("\(Self.machineRefusal) change the copilot's files.")
+            onError?("\(Self.machineRefusal) change Hoot's files.")
             return false
         }
         guard Copilot.isMemoryName(name) else { return false }
@@ -1405,7 +1433,7 @@ final class CopilotLink {
     func start() {
         guard grant.canDirect else { return refuse() }
         guard wire.send(.copilotStart) else {
-            return onError?("Not connected — the copilot was not asked to start.") ?? ()
+            return onError?("Not connected — Hoot was not asked to start.") ?? ()
         }
     }
 
@@ -1431,7 +1459,7 @@ final class CopilotLink {
             return false
         }
         guard trimmed.utf8.count <= Copilot.maxSayBytes else {
-            onError?("That message is \(byteSize(trimmed.utf8.count)). The most the copilot will "
+            onError?("That message is \(byteSize(trimmed.utf8.count)). The most Hoot will "
                      + "take at once is \(byteSize(Copilot.maxSayBytes)).")
             return false
         }
@@ -1551,7 +1579,7 @@ final class CopilotLink {
     func cancel() {
         guard grant.canDirect else { return refuse() }
         guard wire.send(.copilotCancel) else {
-            return onError?("Not connected — the copilot was not interrupted.") ?? ()
+            return onError?("Not connected — Hoot was not interrupted.") ?? ()
         }
     }
 
@@ -1588,17 +1616,28 @@ final class CopilotLink {
      * this end does is not *draw* an Allow on a row it was told is not its own.
      */
     @discardableResult
-    func answer(_ id: String, approved: Bool) -> Bool {
+    func answer(_ id: String, approved: Bool, answers: HootAnswers? = nil) -> Bool {
         guard grant.canAnswer else {
-            onError?("\(Self.machineRefusal) answer the copilot's confirmations.")
+            onError?("\(Self.machineRefusal) answer Hoot's confirmations.")
             return false
         }
-        guard wire.send(.copilotAnswer(id: id, approved: approved)) else {
+        guard isOpen, let question = asked.first(where: { $0.id == id }),
+              settlements[id] == nil, !answeredQuestions.contains(id),
+              question.expiresAt <= 0 || question.expiresAt > Date().timeIntervalSince1970 * 1000 else {
+            onError?("That question is no longer waiting for this phone.")
+            return false
+        }
+        guard !approved || question.form.validate(answers) else {
+            onError?("Answer Hoot's required fields before allowing this request.")
+            return false
+        }
+        guard wire.send(.copilotAnswer(id: id, approved: approved, answers: approved ? answers : nil)) else {
             onError?(approved
                      ? "Not connected — that was not allowed. It is still waiting at the machine."
                      : "Not connected — that was not refused. It is still waiting at the machine.")
             return false
         }
+        answeredQuestions.insert(id)
         return true
     }
 
@@ -1617,7 +1656,7 @@ final class CopilotLink {
     @discardableResult
     func setInteractive(_ on: Bool) -> Bool {
         guard grant.canAnswer else {
-            onError?("\(Self.machineRefusal) change what its copilot shows.")
+            onError?("\(Self.machineRefusal) change what its Hoot shows.")
             return false
         }
         guard wire.send(.copilotSetInteractive(on: on)) else {

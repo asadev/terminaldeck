@@ -98,7 +98,7 @@ struct RemoteShareSwitch: View {
         Picker(label, selection: Binding(get: { value }, set: { change($0) })) {
             ForEach(RemoteShare.allCases, id: \.self) { mode in Text(mode.label).tag(mode) }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.segmented).nativeUIGGreyControl()
         .labelsHidden()
         .fixedSize()
         .disabled(disabled)

@@ -214,6 +214,16 @@ final class BackendServersSSHClient: BackendServersConnection, @unchecked Sendab
         let shell = try BackendServersSSHPty(executable: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: childOptions() + ["-tt", "--", server.address], environment: BackendServersSSH.environment(), size: size)
         let id = track { shell.close() }; _ = shell.onClose { [weak self] in _ = self?.lock.withLock { self?.children.removeValue(forKey: id) } }; return shell
     }
+    func dockerDialStdio() async throws -> any BackendServersDuplex {
+        try Task.checkCancellation()
+        // child() attaches only to our existing authenticated SSH master;
+        // childOptions() disables independent sign-in and credential fallback.
+        let channel = try child(extra: ["-T"], command: "docker system dial-stdio")
+        // Never surface SSH stderr through Docker output. Drain it so the
+        // existing process's bounded pre-subscription queue cannot block.
+        _ = channel.stderr.listen { _ in }
+        return channel
+    }
     func openSFTP() async throws -> any BackendServersSFTP {
         do { let channel = try child(extra: ["-T", "-s"], command: "sftp"); return try await BackendServersSSHSFTP.open(channel) }
         catch { if error is BackendServersProblem { throw error }; throw BackendServersProblem("not-a-server", "This server will not let us list its folders. You can still type the path.") }

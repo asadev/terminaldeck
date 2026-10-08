@@ -417,7 +417,7 @@ private final class BackendPluginsParityAuthority: BackendPluginsCallerAuthority
     func testGrantsFileMatchesActualRecordsFencePathsAndDeniesWrites() throws {
         let f = try temp(); defer { try? FileManager.default.removeItem(at: f.root) }
         let actual = BackendMacConfinement.recordsFencePaths(f.data)
-        for name in ["routines", "routine-state.json", "copilot-log", "plugin-grants.json"] {
+        for name in ["routines", "routine-state.json", "hoot-log", "plugin-grants.json"] {
             XCTAssertTrue(actual.contains(BackendPluginsFiles.real(f.data.appendingPathComponent(name).path)))
         }
         let profile = BackendMacConfinement.recordsFenceProfile(f.data)

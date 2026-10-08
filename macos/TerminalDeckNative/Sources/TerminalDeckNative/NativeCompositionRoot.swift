@@ -18,6 +18,7 @@ final class NativeCompositionRoot {
     private var browser: NativeCompositionBrowser?
     private var remoteBrowserControl: BackendRemoteServeBrowserControl?
     private var hoot: BackendHootJoinAssembly.Assembled?
+    private var hootMigration: RNMHootDataMigration.Launch?
     private let hootTranscriptOwnerID = "native-composition:hoot-transcripts"
     private var starting = false
     private var startupFailure: NativeRPCError?
@@ -78,8 +79,27 @@ final class NativeCompositionRoot {
             stateFile: configuration.engineDataDirectory.appendingPathComponent("state.json"),
             ownership: .exclusive, failurePolicy: .sourceCompatible)
         let state = try await NativeStateService.shared.authoritativeStore()
-        let graph = try BackendCompositionRoot(dataRoot: configuration.engineDataDirectory, state: state,
-            environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory())
+        // Check the source through the same settings actor the graph will own,
+        // before moving folders or entering its backup-before-write path.
+        let settings = BackendAppSettingsStore(userData: configuration.engineDataDirectory, writable: true)
+        do {
+            try await settings.requireSupportedHootMigrationSource()
+            hootMigration = try RNMHootDataMigration(dataRoot: configuration.engineDataDirectory)
+                .prepareForLaunch(report: { Self.note("Hoot data migration: " + $0.event) })
+        } catch {
+            hootMigration = nil
+            await NativeStateService.shared.stop()
+            throw error
+        }
+        let graph: BackendCompositionRoot
+        do {
+            graph = try BackendCompositionRoot(dataRoot: configuration.engineDataDirectory, state: state,
+                environment: ProcessInfo.processInfo.environment, home: NSHomeDirectory(), settingsStore: settings)
+        } catch {
+            hootMigration = nil
+            await NativeStateService.shared.stop()
+            throw error
+        }
         do {
             try await graph.installFoundations()
             let projection = try await graph.installSettings(environment: NativeCompositionSettings.environment(
@@ -127,6 +147,7 @@ final class NativeCompositionRoot {
             NativeTranscriptBackend.shared.removeHomeScope(ownerID: hootTranscriptOwnerID)
             remoteBrowserControl = nil; browser = nil
             await EngineBridge.shared.disconnectNative()
+            hootMigration = nil
             await NativeStateService.shared.stop(); throw failure
         }
     }
@@ -134,6 +155,15 @@ final class NativeCompositionRoot {
     /// The main page finished loading (first load or a reload): the full graph
     /// restores/re-announces sessions now that the page can hear them.
     func mainPageReady() async { await production?.pageReady() }
+
+    /// Only an actual successful owner read can acknowledge moved archives.
+    /// The migration itself, writes, scaffolds and stat results are not reads.
+    func confirmHootRead(_ folders: Set<RNMHootPaths.Folder>) throws {
+        guard let launch = hootMigration else {
+            throw NativeRPCError(code: "hoot-migration", message: "Hoot's migration was not prepared for this launch.")
+        }
+        hootMigration = try RNMHootDataMigration(paths: launch.paths).confirmRead(folders, on: launch)
+    }
 
     /// Called during assembly before launch, after the concrete browser/session
     /// caller graph and writer ownership are supplied. Never called just because
@@ -177,7 +207,8 @@ final class NativeCompositionRoot {
                 return await NativeTranscriptBackend.shared.includingAssembledHomes(scope)
             }, reveal: inputs.reveal, window: inputs.window,
             transcriptHomeScopes: { await NativeTranscriptBackend.shared.configuredHomeScopes },
-            stopPhoneRuns: inputs.stopPhoneRuns)
+            stopPhoneRuns: inputs.stopPhoneRuns, headlessPolicy: inputs.headlessPolicy,
+            headlessProvider: inputs.headlessProvider, readAcknowledged: inputs.readAcknowledged)
         do {
             let installed = try await BackendHootJoinAssembly.install(in: backend, inputs: joined,
                 oldHootOwnerDisabled: oldHootOwnerDisabled) { authority in
@@ -226,6 +257,7 @@ final class NativeCompositionRoot {
         remoteBrowserControl = nil; browser = nil
         await BackendCompositionRoot.traced("app bridge", trace) { await EngineBridge.shared.disconnectNative() }
         await BackendCompositionRoot.traced("state service", trace) { await NativeStateService.shared.stop() }
+        hootMigration = nil
         startupFailure = nil
     }
 }

@@ -183,7 +183,10 @@ public actor BackendDeckCoreSecurityControl {
         let summary = (try? policy.summary(args, context)) ?? "Run \(policy.tool.id)"
         var tier = policy.tool.tier; var mustAnswer = false
         if let must = policy.ownerMustAnswer { do { mustAnswer = try must(args) } catch { mustAnswer = true } }
-        if mustAnswer { tier = .alter }
+        // Asking for access is a read-tier request available to read-only keys.
+        // Its sole grant handler still requires a real owner answer below.
+        let accessScopeRequest = policy.tool.id == "access.request_scope" && policy.audience == "keys" && policy.tool.tier == .read && mustAnswer
+        if mustAnswer && !accessScopeRequest { tier = .alter }
         if let escalate = policy.escalate { do { if let higher = try escalate(args, context), Self.rank(higher) > Self.rank(tier) { tier = higher } } catch { tier = .alter } }
         let baseTier: BackendMCPTier? = tier == policy.tool.tier ? nil : policy.tool.tier
         func stopped(_ reason: BackendDeckCoreSecurityRefusalReason, _ message: String, required: Bool? = nil) async -> BackendDeckCoreSecurityCallResult {
@@ -217,7 +220,7 @@ public actor BackendDeckCoreSecurityControl {
         var confirmation = BackendDeckCoreSecurityConfirmation(required: false)
         if tier == .alter && !mustAnswer && caller.kind == .key && caller.keyID != nil && caller.askFirst == false {
             confirmation = .init(required: true, granted: true, by: "standing:key:" + caller.keyID!, at: now())
-        } else if tier == .alter {
+        } else if tier == .alter || accessScopeRequest {
             let keyed = caller.kind == .key && caller.keyID != nil
             let outcome = await consent.request(tool: policy.tool.id, tier: tier, summary: summary, arguments: scrubbed,
                 cancellation: cancellation, origin: caller.consentSurface,
@@ -388,7 +391,7 @@ public actor BackendDeckCoreSecurityControl {
 
     nonisolated static func sameCaller(_ a: BackendDeckCoreSecurityCaller, _ b: BackendDeckCoreSecurityCaller) -> Bool {
         a.kind == b.kind && a.deviceID == b.deviceID && a.keyID == b.keyID && a.sessionID == b.sessionID &&
-        a.machineID == b.machineID && a.projectRoot == b.projectRoot && a.tiers == b.tiers
+        a.machineID == b.machineID && a.projectRoot == b.projectRoot && a.taskProject == b.taskProject && a.tiers == b.tiers
     }
     /// Every value equals the call's own argument, except a redaction marker
     /// string ("[…]") which may stand for any value (or an absent one).
@@ -406,7 +409,7 @@ public actor BackendDeckCoreSecurityControl {
         return false
     }
     private nonisolated static func rank(_ tier: BackendMCPTier) -> Int { tier == .alter ? 2 : tier == .act ? 1 : 0 }
-    public nonisolated static let notWhileDriving = ["sessions.send", "sessions.start", "sessions.stop", "sessions.keys", "sessions.rename", "sessions.account", "sessions.held", "settings.write", "settings.reset", "agents.set_control", "accounts.sign_in", "updates.install", "tour.play", "ui.do", "hoot.run", "machines.session", "servers.shell", "routines."]
+    public nonisolated static let notWhileDriving = ["sessions.send", "sessions.start", "readiness.ask_ai", "sessions.stop", "sessions.keys", "sessions.rename", "sessions.account", "sessions.held", "settings.write", "settings.reset", "agents.set_control", "accounts.sign_in", "updates.install", "tour.play", "ui.do", "hoot.run", "machines.session", "servers.shell", "routines."]
     public nonisolated static func refusedWhileDriving(_ id: String) -> Bool { notWhileDriving.contains { $0.hasSuffix(".") ? id.hasPrefix($0) : id == $0 } }
     public nonisolated static func detailFor(summary: String, outcome: BackendDeckCoreSecurityActionOutcome, confirmed: BackendDeckCoreSecurityConfirmation, error: String?) -> String {
         if outcome == .ok {

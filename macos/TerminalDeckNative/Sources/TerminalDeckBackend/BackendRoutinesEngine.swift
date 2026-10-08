@@ -24,7 +24,7 @@ public enum BackendRoutinesCause: Sendable, Equatable {
     }
     public var description: String {
         switch self {
-        case .manual(let by): return by == "copilot" ? "Hoot asked for it." : "You asked for it."
+        case .manual(let by): return RNMHootSettingsMigration.isHootOrigin(by) ? "Hoot asked for it." : "You asked for it."
         case .sessionFinished(let id, _): return "Session \(String(id.prefix(8))) finished."
         case .sessionFailed(let id, let code): return "Session \(String(id.prefix(8))) exited with code \(code)."
         case .sessionIdle(let id, _): return "Session \(String(id.prefix(8))) went quiet."

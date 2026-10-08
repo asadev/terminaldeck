@@ -134,7 +134,7 @@ final class BackendDeckCoreTestPortSecurityStorage: BackendDeckCoreTestPortSecur
         let root = URL(fileURLWithPath: BackendMacConfinement.kernelPath(try scratch().path)), directory = root.appendingPathComponent("remote"), store = try keys(directory)
         _ = try await made(store, name: "A", level: "look")
         let paths = BackendMacConfinement.recordsFencePaths(root), file = await store.file
-        let expected = [root.appendingPathComponent("routines"), root.appendingPathComponent("routine-state.json"), root.appendingPathComponent("copilot-log"), file].map { BackendMacConfinement.kernelPath($0.path) }
+        let expected = [root.appendingPathComponent("routines"), root.appendingPathComponent("routine-state.json"), root.appendingPathComponent("hoot-log"), file].map { BackendMacConfinement.kernelPath($0.path) }
         XCTAssertTrue(expected.allSatisfy(paths.contains))
         let profile = BackendMacConfinement.recordsFenceProfile(root)
         XCTAssertTrue(profile.contains("(deny file-write* (literal " + BackendMacConfinement.seatbeltString(BackendMacConfinement.kernelPath(file.path)) + "))"))

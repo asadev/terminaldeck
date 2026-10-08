@@ -100,13 +100,29 @@ public struct AgentProfile: Equatable, Sendable, Identifiable {
     public var verifyCommand: String?
     public var status: AgentStatus
     public var statusAt: Double?
+    public var claudeAgent: String?
+    /// Nil uses Claude Code's tools; an empty list allows no tools.
+    public var allowedTools: [String]?
+    public var permissionMode: String?
+    public var keepAliveUntilClose: Bool?
+    public var defaultProject: String?
+    public var reviewerAgent: String?
+    public var sourceFile: String?
+    public var sourceDirectory: String?
+    public var syncedAt: Double?
+    public var syncStatus: String?
+    public var syncError: String?
 
     public init(id: String, name: String, role: String = "general", provider: String? = nil, account: String? = nil,
                 model: String? = nil, effort: String? = nil, instructions: String? = nil, instructionsFile: String? = nil,
                 toolsPreferred: [String] = [], toolsAvoided: [String] = [], skills: [String] = [], blockedTools: [String] = [],
                 skillsOff: Bool = false, maxConcurrent: Int = 1, maxRunMinutes: Int = TasksLimits.defaultRunMinutes,
                 keepAliveMinutes: Int = TasksLimits.defaultKeepAliveMinutes, verifyCommand: String? = nil,
-                status: AgentStatus = .active, statusAt: Double? = nil) {
+                status: AgentStatus = .active, statusAt: Double? = nil,
+                claudeAgent: String? = nil, allowedTools: [String]? = nil, permissionMode: String? = nil,
+                keepAliveUntilClose: Bool? = nil, defaultProject: String? = nil, reviewerAgent: String? = nil,
+                sourceFile: String? = nil, sourceDirectory: String? = nil, syncedAt: Double? = nil,
+                syncStatus: String? = nil, syncError: String? = nil) {
         self.id = id
         self.name = name
         self.role = role
@@ -127,6 +143,17 @@ public struct AgentProfile: Equatable, Sendable, Identifiable {
         self.verifyCommand = verifyCommand
         self.status = status
         self.statusAt = statusAt
+        self.claudeAgent = claudeAgent
+        self.allowedTools = allowedTools
+        self.permissionMode = permissionMode
+        self.keepAliveUntilClose = keepAliveUntilClose
+        self.defaultProject = defaultProject
+        self.reviewerAgent = reviewerAgent
+        self.sourceFile = sourceFile
+        self.sourceDirectory = sourceDirectory
+        self.syncedAt = syncedAt
+        self.syncStatus = syncStatus
+        self.syncError = syncError
     }
 
     /// As `tasks:agent-save` takes it.
@@ -140,6 +167,11 @@ public struct AgentProfile: Equatable, Sendable, Identifiable {
             "blockedTools": blockedTools, "skillsOff": skillsOff,
             "maxConcurrent": maxConcurrent, "maxRunMinutes": maxRunMinutes, "keepAliveMinutes": keepAliveMinutes,
             "verifyCommand": orNullValue(verifyCommand), "status": status.rawValue, "statusAt": orNullValue(statusAt),
+            "claudeAgent": orNullValue(claudeAgent), "allowedTools": allowedTools.map { $0 as Any } ?? jsonNull,
+            "permissionMode": orNullValue(permissionMode), "keepAliveUntilClose": keepAliveUntilClose.map { $0 as Any } ?? jsonNull,
+            "defaultProject": orNullValue(defaultProject), "reviewerAgent": orNullValue(reviewerAgent),
+            "sourceFile": orNullValue(sourceFile), "sourceDirectory": orNullValue(sourceDirectory),
+            "syncedAt": orNullValue(syncedAt), "syncStatus": orNullValue(syncStatus), "syncError": orNullValue(syncError),
         ]
     }
 }
@@ -211,6 +243,11 @@ public struct TaskRow: Equatable, Sendable, Identifiable {
     public var crmStatus: String
     public var process: ProcessState
     public var keepOpenUntil: Double?
+    public var keepAliveUntilClose: Bool?
+    public var parentTaskId: String?
+    public var parentExternalTaskId: String?
+    public var reviewerTaskId: String?
+    public var reviewOfTaskId: String?
     public var verified: Bool?
     public var updatedAt: Double
     /// Made here, with no CRM: editable on the Tasks page.
@@ -250,7 +287,9 @@ public struct TaskRow: Equatable, Sendable, Identifiable {
                 dueTime: String? = nil, labels: [String] = [], board: String? = nil, taskType: String = "task",
                 estimateMinutes: Double? = nil, archivedAt: Double? = nil, deletedAt: Double? = nil,
                 completedAt: Double? = nil, position: Double? = nil, recurrence: String? = nil, goalId: String? = nil,
-                useWorkspace: Bool = false, stalled: TaskStall? = nil, waitingOn: [String] = [], createdAt: Double = 0) {
+                useWorkspace: Bool = false, stalled: TaskStall? = nil, waitingOn: [String] = [], createdAt: Double = 0,
+                keepAliveUntilClose: Bool? = nil, parentTaskId: String? = nil, parentExternalTaskId: String? = nil,
+                reviewerTaskId: String? = nil, reviewOfTaskId: String? = nil) {
         self.id = id
         self.keyId = keyId
         self.externalTaskId = externalTaskId
@@ -260,6 +299,11 @@ public struct TaskRow: Equatable, Sendable, Identifiable {
         self.crmStatus = crmStatus
         self.process = process
         self.keepOpenUntil = keepOpenUntil
+        self.keepAliveUntilClose = keepAliveUntilClose
+        self.parentTaskId = parentTaskId
+        self.parentExternalTaskId = parentExternalTaskId
+        self.reviewerTaskId = reviewerTaskId
+        self.reviewOfTaskId = reviewOfTaskId
         self.verified = verified
         self.updatedAt = updatedAt
         self.local = local
@@ -422,6 +466,7 @@ public struct AgentInventory: Equatable, Sendable {
 
 /// The main process's own limits (`task-config.ts`), so a form can say them first.
 public enum TasksLimits {
+    public static let maxAgents = 50
     public static let maxConcurrent = 5
     public static let maxMinutes = 24 * 60
     public static let defaultRunMinutes = 60
@@ -482,7 +527,12 @@ public enum TasksDecode {
             skills: J.strings(r["skills"]), blockedTools: J.strings(r["blockedTools"]), skillsOff: J.isTrue(r["skillsOff"]),
             maxConcurrent: J.int(r["maxConcurrent"], 1), maxRunMinutes: J.int(r["maxRunMinutes"], TasksLimits.defaultRunMinutes),
             keepAliveMinutes: J.int(r["keepAliveMinutes"], TasksLimits.defaultKeepAliveMinutes),
-            verifyCommand: J.text(r["verifyCommand"]), status: status, statusAt: J.number(r["statusAt"]))
+            verifyCommand: J.text(r["verifyCommand"]), status: status, statusAt: J.number(r["statusAt"]),
+            claudeAgent: J.text(r["claudeAgent"]), allowedTools: r["allowedTools"] is [Any] ? J.strings(r["allowedTools"]) : nil,
+            permissionMode: J.text(r["permissionMode"]), keepAliveUntilClose: J.bool(r["keepAliveUntilClose"]),
+            defaultProject: J.text(r["defaultProject"]), reviewerAgent: J.text(r["reviewerAgent"]),
+            sourceFile: J.text(r["sourceFile"]), sourceDirectory: J.text(r["sourceDirectory"]), syncedAt: J.number(r["syncedAt"]),
+            syncStatus: J.text(r["syncStatus"]), syncError: J.text(r["syncError"]))
     }
 
     static func statuses(_ raw: Any?) -> StatusConfig {
@@ -551,7 +601,10 @@ public enum TasksDecode {
             estimateMinutes: J.number(r["estimateMinutes"]), archivedAt: J.number(r["archivedAt"]),
             deletedAt: J.number(r["deletedAt"]), completedAt: J.number(r["completedAt"]), position: J.number(r["position"]),
             recurrence: J.text(r["recurrence"]), goalId: J.text(r["goalId"]), useWorkspace: J.isTrue(r["useWorkspace"]),
-            stalled: stall(r["stalled"]), waitingOn: J.strings(r["waitingOn"]), createdAt: J.count(r["createdAt"], 0))
+            stalled: stall(r["stalled"]), waitingOn: J.strings(r["waitingOn"]), createdAt: J.count(r["createdAt"], 0),
+            keepAliveUntilClose: J.bool(r["keepAliveUntilClose"]), parentTaskId: J.text(r["parentTaskId"]),
+            parentExternalTaskId: J.text(r["parentExternalTaskId"]), reviewerTaskId: J.text(r["reviewerTaskId"]),
+            reviewOfTaskId: J.text(r["reviewOfTaskId"]))
     }
 
     static func goal(_ raw: Any?) -> GoalRow? {
@@ -766,11 +819,12 @@ public struct LocalDraft: Equatable, Sendable {
     }
 
     /// What `tasks:local-create` / `tasks:local-update` is sent, or what to fix first.
-    public func payload() -> Result<[String: Any], TasksProblem> {
+    public func payload(agents: [AgentProfile] = []) -> Result<[String: Any], TasksProblem> {
         let title = self.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { return .failure(TasksProblem("Give the task a title.")) }
-        let project = self.project.trimmingCharacters(in: .whitespacesAndNewlines)
+        var project = self.project.trimmingCharacters(in: .whitespacesAndNewlines)
         let working = assignee != "none" && assignee != "me"
+        if working && project.isEmpty { project = agents.first { $0.id == assignee }?.defaultProject ?? "" }
         if working && project.isEmpty { return .failure(TasksProblem("Choose the project folder the agent should work in.")) }
         return .success([
             "title": title,
@@ -876,6 +930,20 @@ public struct AgentDraft: Equatable, Sendable {
     public var maxRunMinutes: String
     public var keepAliveMinutes: String
     public var verifyCommand: String
+    public var claudeAgent: String
+    public var allowedTools: [String]?
+    public var permissionMode: String
+    public var keepAliveUntilClose: Bool
+    public var defaultProject: String
+    public var reviewerAgent: String
+    public var sourceFile: String?
+    public var sourceDirectory: String?
+    public var syncedAt: Double?
+    public var syncStatus: String?
+    public var syncError: String?
+
+    public var agsSettings: AGSAgentSettings? = nil
+    public var agsRevision: UInt64? = nil
 
     public init(_ agent: AgentProfile?) {
         id = agent?.id ?? ""
@@ -898,6 +966,17 @@ public struct AgentDraft: Equatable, Sendable {
         maxRunMinutes = String(agent?.maxRunMinutes ?? TasksLimits.defaultRunMinutes)
         keepAliveMinutes = String(agent?.keepAliveMinutes ?? TasksLimits.defaultKeepAliveMinutes)
         verifyCommand = agent?.verifyCommand ?? ""
+        claudeAgent = agent?.claudeAgent ?? ""
+        allowedTools = agent?.allowedTools
+        permissionMode = agent?.permissionMode ?? ""
+        keepAliveUntilClose = agent?.keepAliveUntilClose == true
+        defaultProject = agent?.defaultProject ?? ""
+        reviewerAgent = agent?.reviewerAgent ?? ""
+        sourceFile = agent?.sourceFile
+        sourceDirectory = agent?.sourceDirectory
+        syncedAt = agent?.syncedAt
+        syncStatus = agent?.syncStatus
+        syncError = agent?.syncError
     }
 }
 
@@ -958,21 +1037,50 @@ public enum AgentForm {
         let maxRun = whole(draft.maxRunMinutes, field: "Longest run", min: 0, max: TasksLimits.maxMinutes, fallback: TasksLimits.defaultRunMinutes)
         let keepAlive = whole(draft.keepAliveMinutes, field: "Keep open", min: 0, max: TasksLimits.maxMinutes,
                               fallback: TasksLimits.defaultKeepAliveMinutes)
-        for value in [maxConcurrent, maxRun, keepAlive] {
+        for value in [maxConcurrent, maxRun] {
             if case .failure(let problem) = value { return .failure(problem) }
         }
+        if !draft.keepAliveUntilClose, case .failure(let problem) = keepAlive { return .failure(problem) }
         let provider = orNil(draft.provider)
-        if (!unique(draft.blockedTools).isEmpty && !AgentCapabilities.enforces(provider, .blockedTools))
+        if draft.id.isEmpty && agents.count >= TasksLimits.maxAgents {
+            return .failure(TasksProblem("You can have at most \(TasksLimits.maxAgents) task agents."))
+        }
+        let claudeOnly = orNil(draft.claudeAgent) != nil || (!SourceNamespace.agentSettingsEnabled && (draft.allowedTools != nil || orNil(draft.permissionMode) != nil))
+        if claudeOnly && AgentCapabilities.family(provider) != .claude {
+            return .failure(TasksProblem("Claude Code agent, allowed tools and permission mode need Claude Code. Clear them, or choose Claude Code."))
+        }
+        if SourceNamespace.agentSettingsEnabled, AgentCapabilities.family(provider) == .codex {
+            let tools = (draft.allowedTools ?? []) + draft.blockedTools
+            if !tools.allSatisfy({ $0.range(of: #"^mcp__[A-Za-z0-9_-]{1,64}__[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil }) {
+                return .failure(TasksProblem("Codex tool lists need exact MCP tool names. Built-in tool restrictions need a supported permission mode."))
+            }
+        }
+        let permissionModes = SourceNamespace.agentSettingsEnabled ? AGSCapabilities.permissionModes(provider: provider ?? "claude") : TAGAgentSettings.permissionModes
+        if !draft.permissionMode.isEmpty && !permissionModes.contains(draft.permissionMode) {
+            return .failure(TasksProblem("Choose a permission mode from the list."))
+        }
+        if let project = orNil(draft.defaultProject), !project.hasPrefix("/") {
+            return .failure(TasksProblem("Default project must be a full folder path starting with /, or empty."))
+        }
+        if !draft.reviewerAgent.isEmpty && (draft.reviewerAgent == draft.id || !agents.contains(where: { $0.id == draft.reviewerAgent && $0.status != .archived })) {
+            return .failure(TasksProblem("Choose another available task agent as the reviewer."))
+        }
+        if (!unique(draft.blockedTools).isEmpty && !(SourceNamespace.agentSettingsEnabled ? AGSCapabilities.providers.contains(provider ?? "claude") : AgentCapabilities.enforces(provider, .blockedTools)))
             || (draft.skillsOff && !AgentCapabilities.enforces(provider, .skillsOff)) {
             return .failure(TasksProblem(AgentCapabilities.enforceOnlyClaude))
         }
         // A setting the chosen agent cannot be given is refused, never saved to be dropped.
-        if orNil(draft.model) != nil && !AgentCapabilities.enforces(provider, .model) {
+        if orNil(draft.model) != nil && !(SourceNamespace.agentSettingsEnabled && AGSCapabilities.providers.contains(provider ?? "claude")) && !AgentCapabilities.enforces(provider, .model) {
             return .failure(TasksProblem("\(AgentCapabilities.label(provider)) cannot be given a model by this app. Clear it, or choose Claude Code."))
         }
-        let knownEffort = EFFORT_CHOICES.contains { $0.id == draft.effort }
-        if knownEffort && !AgentCapabilities.enforces(provider, .effort) {
+        let knownEffort = SourceNamespace.agentSettingsEnabled
+            ? draft.effort == "auto" || AGSCapabilities.efforts(provider: provider ?? "claude").contains(draft.effort)
+            : EFFORT_CHOICES.contains { $0.id == draft.effort }
+        if !SourceNamespace.agentSettingsEnabled, !draft.effort.isEmpty, !AgentCapabilities.enforces(provider, .effort) {
             return .failure(TasksProblem("\(AgentCapabilities.label(provider)) cannot be given an effort level by this app. Clear it, or choose Claude Code."))
+        }
+        if SourceNamespace.agentSettingsEnabled, !draft.effort.isEmpty, !knownEffort {
+            return .failure(TasksProblem("That saved effort is not supported by the selected coding agent. Review it before saving; it will not be silently replaced."))
         }
         let id = draft.id.isEmpty ? slug(name, taken: agents.map(\.id)) : draft.id
         let role = draft.role.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -987,7 +1095,14 @@ public enum AgentForm {
             keepAliveMinutes: (try? keepAlive.get()) ?? TasksLimits.defaultKeepAliveMinutes,
             verifyCommand: orNil(draft.verifyCommand),
             // Sent as it is; the main process keeps an agent's status whatever a save carries.
-            status: draft.status, statusAt: draft.statusAt))
+            status: draft.status, statusAt: draft.statusAt,
+            claudeAgent: orNil(draft.claudeAgent), allowedTools: draft.allowedTools.map(unique), permissionMode: orNil(draft.permissionMode),
+            // An untouched legacy nil remains absent; explicitly turning an
+            // existing on/off setting off still sends false.
+            keepAliveUntilClose: draft.keepAliveUntilClose ? true : (agents.first { $0.id == id }?.keepAliveUntilClose).map { _ in false },
+            defaultProject: orNil(draft.defaultProject), reviewerAgent: orNil(draft.reviewerAgent),
+            sourceFile: draft.sourceFile, sourceDirectory: draft.sourceDirectory, syncedAt: draft.syncedAt,
+            syncStatus: draft.syncStatus, syncError: draft.syncError))
     }
 }
 

@@ -320,7 +320,7 @@ private struct MemoryTools: View {
                 Text("This memory").tag(false)
                 Text("Every memory").tag(true)
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
 
@@ -328,7 +328,7 @@ private struct MemoryTools: View {
                 Text("Notes").tag(MemoryScreenModel.Mode.notes)
                 Text("Graph").tag(MemoryScreenModel.Mode.graph)
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             Spacer(minLength: 0)

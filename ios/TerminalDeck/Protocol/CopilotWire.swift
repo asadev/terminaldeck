@@ -735,6 +735,7 @@ struct CopilotAction: Equatable, Identifiable {
  * be inviting exactly the reflex Yes this whole design refuses.
  */
 struct CopilotQuestion: Equatable, Identifiable {
+    var consent: CopilotConsentQuestion? = nil
     let id: String
     let tool: String
     /// One sentence naming what will happen if this is approved, composed by the
@@ -808,6 +809,7 @@ struct CopilotQuestion: Equatable, Identifiable {
  *    and the countdown has to be in front of them.
  */
 struct CopilotConsentQuestion: Equatable, Identifiable {
+    var form: HootQuestionForm = .none
     let id: String
     let tool: String
     /// Always `alter` today. Carried so a client renders the stakes rather than
@@ -1298,7 +1300,9 @@ extension WireCodec {
               let id = string(row["id"]), !id.isEmpty,
               let tool = displayLine(row["tool"]),
               let summary = displayLine(row["summary"]) else { return nil }
-        return CopilotQuestion(id: id,
+        let consent = literalTrue(row["mine"]) && row["args"] is [String: Any]
+            ? copilotConsentQuestion(row, raw: "") : nil
+        return CopilotQuestion(consent: consent, id: id,
                                tool: tool,
                                summary: summary,
                                requestedAt: epoch(row["requestedAt"]),
@@ -1328,6 +1332,7 @@ extension WireCodec {
               let summary = displayLine(row["summary"]) else { return nil }
         let ordered = CopilotArguments.fromAsk(rawFrame: raw)
         return CopilotConsentQuestion(
+            form: HootQuestionForm.decode(tool: tool, arguments: row["args"] as? [String: Any] ?? [:]),
             id: id,
             tool: tool,
             tier: string(row["tier"]) ?? "",
@@ -1335,7 +1340,7 @@ extension WireCodec {
             arguments: ordered ?? CopilotArguments.sorted(row["args"] as? [String: Any] ?? [:]),
             argumentsAreOrdered: ordered != nil,
             // Printed rather than mapped, and empty when the host did not say:
-            // the sheet then says "a copilot on that machine" rather than
+            // the sheet then says "Hoot on that machine" rather than
             // claiming it was this phone's own run, which is the one attribution
             // on the screen somebody would act on.
             origin: string(row["origin"]) ?? "",

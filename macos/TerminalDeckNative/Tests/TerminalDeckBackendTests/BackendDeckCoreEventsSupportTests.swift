@@ -107,7 +107,7 @@ final class BackendDeckCoreEventsSupportTests: XCTestCase {
         XCTAssertEqual(rows.count,14)
         XCTAssertEqual(rows.first { $0["id"].string == "mcp.call" }?["tier"].string,"alter")
         XCTAssertEqual(rows.first { $0["id"].string == "mcp.add" }?["inputSchema"]["required"].elements?.compactMap(\.string),["name","scope","transport"])
-        XCTAssertEqual(BackendDeckCoreEvents.catalogue().map { $0["name"].string },["session.turn_finished","session.needs_input","session.exited"])
+        XCTAssertEqual(BackendDeckCoreEvents.catalogue().map { $0["name"].string },["session.turn_finished","session.needs_input","session.exited"] + BackendTAGTaskNotifications.eventNames.values.sorted().map(Optional.some))
     }
     func testMCPInputAndOutputSecretRules() throws {
         let input = BackendDeckCoreEventsSupport.object([("next",BackendDeckCoreEventsSupport.object([("headers",BackendDeckCoreEventsSupport.object([("Authorization",.string("Bearer secret"))]))]))])

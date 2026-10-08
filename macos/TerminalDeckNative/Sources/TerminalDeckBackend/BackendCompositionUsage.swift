@@ -156,5 +156,5 @@ public actor BackendCompositionUsage {
         registry = nil; registrationOwner = nil
     }
 
-    public static let toolIDs: Set<String> = ["usage.read", "usage.refresh", "usage.cost", "chats.insights", "sessions.search", "alerts.list", "readiness.scan", "readiness.fix"]
+    public static let toolIDs: Set<String> = ["usage.read", "usage.refresh", "usage.cost", "chats.insights", "sessions.search", "alerts.list"]
 }

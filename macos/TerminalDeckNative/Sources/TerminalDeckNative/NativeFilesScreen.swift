@@ -320,11 +320,11 @@ private struct IgnoredToggle: View {
         Button(action: action) {
             Text("Ignored")
                 .font(.caption)
-                .foregroundStyle(on ? Color.accentColor : .secondary)
+                .foregroundStyle(on ? Color.primary : .secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
-                .background(on ? Color.accentColor.opacity(0.15) : .clear, in: .capsule)
-                .overlay(Capsule().strokeBorder(on ? Color.accentColor : Color.secondary.opacity(0.35)))
+                .background(on ? Color.primary.opacity(0.12) : .clear, in: .capsule)
+                .overlay(Capsule().strokeBorder(on ? Color.secondary.opacity(0.45) : Color.secondary.opacity(0.35)))
         }
         .buttonStyle(.plain)
         .help(on ? "Hide files your .gitignore excludes" : "Show files your .gitignore excludes")

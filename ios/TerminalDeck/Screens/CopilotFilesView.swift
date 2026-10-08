@@ -221,7 +221,7 @@ struct CopilotFileEditorView: View {
             Button("Keep mine", role: .cancel) {}
         } message: {
             Text("What is there now is copied to a file beside it on the machine first, so nothing "
-                 + "is lost. The copilot follows the new text from its next start.")
+                 + "is lost. Hoot follows the new text from its next start.")
         }
         .confirmationDialog("Forget \(file?.name ?? "this memory")?",
                             isPresented: $confirmingForget,
@@ -229,7 +229,7 @@ struct CopilotFileEditorView: View {
             Button("Forget it", role: .destructive) { forget() }
             Button("Keep it", role: .cancel) {}
         } message: {
-            Text("The file is deleted on the machine. The copilot stops knowing what is in it.")
+            Text("The file is deleted on the machine. Hoot stops knowing what is in it.")
         }
     }
 
@@ -411,7 +411,7 @@ struct CopilotFileEditorView: View {
         guard !canSave else { return nil }
         guard let file else { return nil }
         if link?.canEditCopilotFiles != true {
-            return "This phone can read the copilot's files. Changing them is part of answering "
+            return "This phone can read Hoot's files. Changing them is part of answering "
                 + "its confirmations, which this phone was not given."
         }
         // A machine sentence is already on screen as the problem line; a second
@@ -419,7 +419,7 @@ struct CopilotFileEditorView: View {
         // where one is the truth.
         guard link?.openFileError == nil else { return nil }
         return file.owner == .app
-            ? "The app writes this one every time the copilot starts, so there is nothing to save."
+            ? "The app writes this one every time Hoot starts, so there is nothing to save."
             : "The machine is not offering to save this one."
     }
 

@@ -36,6 +36,13 @@ many JSONL lines with the usage repeated, a GUI app cannot see `claude` on PATH.
 If you can check an assumption against something real on this machine, do it
 before writing code that depends on it.
 
+**Every feature ships with its MCP tools.** Anything a person can do on a new
+screen, an agent must be able to do too: Claude/Codex/Gemini sessions, Hoot and
+connected AI apps, through the app's MCP door (deck-tools). Reads run freely;
+anything that changes data or a server asks the person first, with the same
+approval rules as the existing tools. A feature without its tools is not done.
+(Asad, 2026-10-07.)
+
 **Compiling is not working.** Two bugs shipped clean typechecks and clean console
 output while being visibly wrong on screen. If a change is visible, look at it.
 

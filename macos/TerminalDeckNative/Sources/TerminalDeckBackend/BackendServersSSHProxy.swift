@@ -26,7 +26,7 @@ public final class BackendServersSSHProxy: @unchecked Sendable {
                         maximumOutputBytes: Int = 4 * 1024 * 1024) async throws -> BackendServersRunResult {
         try Task.checkCancellation()
         let state = try BackendServersSSHProxySession(command: command, stdin: stdin ?? Data(), maximumOutputBytes: maximumOutputBytes)
-        guard (1...30_000).contains(timeoutMilliseconds) else { throw NativeRPCError.invalidArguments("An SSH command deadline must be between 1 and 30000 milliseconds.") }
+        guard (1...3_600_000).contains(timeoutMilliseconds) else { throw NativeRPCError.invalidArguments("An SSH command deadline must be between 1 and 3600000 milliseconds.") }
         let attempt = UUID()
         try lock.withLock {
             guard !stopped else { throw Self.lost() }

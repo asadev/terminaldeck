@@ -61,9 +61,7 @@ Knowledge stays inside its project unless the person has shared it.
 
 ### Memory
 
-`memory_search` and `memory_read` look through your own memory and, read-only,
-the memory of a project you name. Your own memory you keep through
-`hoot_memory`; what belongs in it is in the person's half below.
+Keep your own memory through `hoot_memory`; what belongs in it is in the person's half below.
 """#
     }
 

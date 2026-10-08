@@ -77,7 +77,8 @@ public enum TasksSettingsText {
     /// The one line under an agent's name.
     public static func agentSummary(_ agent: AgentProfile) -> String {
         let run = agent.maxRunMinutes == 0 ? "no time limit" : "stops after \(agent.maxRunMinutes) min"
-        let keep = agent.keepAliveMinutes == 0 ? "closes when done" : "stays open \(agent.keepAliveMinutes) min"
+        let keep = agent.keepAliveUntilClose == true ? "stays open until you close it"
+            : agent.keepAliveMinutes == 0 ? "closes when done" : "stays open \(agent.keepAliveMinutes) min"
         let model = [agent.model, agent.effort.map { "\($0) effort" }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
         return "\(providerName(agent.provider))\(model.isEmpty ? "" : " (\(model))") · \(agent.maxConcurrent) at once · \(run) · \(keep)"
     }
@@ -85,7 +86,7 @@ public enum TasksSettingsText {
     /// The second line: what the agent is told besides the task, or nil.
     public static func agentStackSummary(_ agent: AgentProfile) -> String? {
         func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
-        let atStart = agent.instructionsFile != nil && AgentCapabilities.enforces(agent.provider, .instructions)
+        let atStart = agent.claudeAgent == nil && agent.instructionsFile != nil && AgentCapabilities.enforces(agent.provider, .instructions)
         let told = [
             agent.instructions == nil || atStart ? nil : "instructions",
             agent.toolsPreferred.isEmpty ? nil : plural(agent.toolsPreferred.count, "preferred tool"),
@@ -93,7 +94,9 @@ public enum TasksSettingsText {
             agent.skills.isEmpty ? nil : plural(agent.skills.count, "skill"),
         ].compactMap { $0 }
         let enforced = [
-            atStart ? "standing instructions" : nil,
+            agent.claudeAgent.map { "Claude Code agent \($0)" } ?? (atStart ? "standing instructions" : nil),
+            agent.allowedTools.map { $0.isEmpty ? "no tools allowed" : plural($0.count, "allowed tool") },
+            agent.permissionMode.map { "\($0) permissions" },
             agent.blockedTools.isEmpty ? nil : plural(agent.blockedTools.count, "tool") + " blocked",
             agent.skillsOff ? "skills off" : nil,
         ].compactMap { $0 }
@@ -122,7 +125,10 @@ public enum TasksSettingsText {
     }
 
     /// Under the instructions box: how they reach the agent, and where the file is.
-    public static func instructionsHelp(_ provider: String?, file: String?) -> String {
+    public static func instructionsHelp(_ provider: String?, file: String?, claudeAgent: String? = nil) -> String {
+        if let claudeAgent {
+            return "Extra instructions in each task's brief. Claude Code keeps the \(claudeAgent) identity from its agent definition."
+        }
         let h = AgentCapabilities.how(provider, .instructions)
         let how = AgentCapabilities.support(provider, .instructions) == .advisory
             ? "Given to this agent at the start of every task, and again when it picks a task back up. \(h)" : h

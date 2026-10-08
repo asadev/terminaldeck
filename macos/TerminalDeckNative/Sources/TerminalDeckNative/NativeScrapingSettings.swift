@@ -20,7 +20,7 @@ struct NativeScrapingSettings: View {
                         Text(seat.label).tag(seat.scope)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .accessibilityLabel("Where scraping runs")
             }
@@ -314,8 +314,8 @@ private struct NativeScrapingChoice: View {
                 let on = value == option.0
                 Button(option.1) { onPick(option.0) }
                     .buttonStyle(.bordered)
-                    .tint(on ? Color.accentColor : nil)
-                    .background(on ? Color.accentColor.opacity(0.15) : .clear, in: .rect(cornerRadius: 6))
+                    .nativeUIGGreyControl()
+                    .background(on ? Color.primary.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
                     .accessibilityAddTraits(on ? .isSelected : [])
             }
         }

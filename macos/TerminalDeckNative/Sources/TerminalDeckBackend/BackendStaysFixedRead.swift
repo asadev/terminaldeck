@@ -100,12 +100,18 @@ public enum BackendStaysFixedRead {
     }
     public static func setup(_ raw: NativeRPCValue, roots: [String], failure: String?) -> NativeRPCValue {
         if raw.fields?.isEmpty != false, let failure { return object([("ok", .bool(false)), ("wrote", .array([])), ("problem", .string(failure)), ("readiness", .null)]) }
-        let problems = list(raw["problems"]).map { $0.string ?? text($0["message"], text($0["what"])) }
+        let problems = list(raw["problems"]).map { $0.string ?? text($0["message"], text($0["what"])) }.filter { !$0.isEmpty }
         let wrote = list(raw["written"]).compactMap(\.string).filter { !$0.isEmpty }.map { path in
             if let root = roots.first(where: { path.hasPrefix($0 + "/") }) { return String(path.dropFirst(root.count + 1)) }; return path
         }
-        let ok = raw["ok"].bool != false && problems.isEmpty
-        return object([("ok", .bool(ok)), ("wrote", .array(wrote.map(NativeRPCValue.string))), ("problem", ok ? .null : .string(problems.joined(separator: " ").isEmpty ? failure ?? "Set up did not finish." : problems.joined(separator: " "))), ("readiness", raw["plan"].fields?.isEmpty == false ? readiness(raw, plan: true) : .null)])
+        let engineError = raw["error"].string ?? text(raw["error"]["message"], text(raw["message"]))
+        let hint = text(raw["error"]["hint"], text(raw["hint"]))
+        // Legacy captured successful payloads may omit ok. The live service
+        // requires ok == true; an explicit error or failed run is never ready.
+        let ok = raw["ok"].bool != false && raw["error"].isNullish && problems.isEmpty && failure == nil
+        let detail = !problems.isEmpty ? problems.joined(separator: " ") : !engineError.isEmpty ? engineError : failure ?? "Set up did not finish."
+        let problem = [detail, hint, "Try setup again. If settings were saved, use Finish setup."].filter { !$0.isEmpty }.joined(separator: " ")
+        return object([("ok", .bool(ok)), ("wrote", .array(wrote.map(NativeRPCValue.string))), ("problem", ok ? .null : .string(problem)), ("readiness", !ok || raw["plan"].fields?.isEmpty != false ? .null : readiness(raw, plan: true))])
     }
     public static func mark(_ raw: NativeRPCValue, failure: String?) -> NativeRPCValue {
         if raw.fields?.isEmpty != false { return object([("ok", .bool(false)), ("marked", .bool(false)), ("already", .bool(false)), ("refused", .null), ("refusedFor", .null), ("summary", .string(failure ?? "It could not be marked."))]) }

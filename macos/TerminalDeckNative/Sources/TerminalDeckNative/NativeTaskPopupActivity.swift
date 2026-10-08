@@ -421,8 +421,8 @@ private struct Reactions: View {
                     HStack(spacing: 4) { Text(r.emoji); Text("\(r.userIds.count)").monospacedDigit() }
                         .font(.caption)
                         .padding(.horizontal, 6).frame(height: 24)
-                        .background(Capsule().fill(mine ? Color.purple.opacity(0.12) : Color(nsColor: .windowBackgroundColor)))
-                        .overlay(Capsule().stroke(mine ? Color.purple.opacity(0.4) : Color(nsColor: .separatorColor)))
+                        .background(Capsule().fill(mine ? Color.primary.opacity(0.12) : Color(nsColor: .windowBackgroundColor)))
+                        .overlay(Capsule().stroke(mine ? Color.secondary.opacity(0.45) : Color(nsColor: .separatorColor)))
                 }
                 .buttonStyle(.plain)
                 .help(who)

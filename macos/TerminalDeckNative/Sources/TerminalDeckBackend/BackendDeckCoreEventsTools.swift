@@ -55,7 +55,7 @@ public enum BackendDeckCoreEventsTools {
                     let ack = await hub.ack(keyId:keyID,ids:try ids(args,"ack")), acked = ack["acked"].elements?.count ?? 0
                     let seconds = args["timeoutSeconds"].number.map { min(max($0.rounded(.towardZero),1),120) } ?? 45
                     let events = await hub.wait(keyId:keyID,timeoutMs:seconds*1_000,cancellation:context.cancellation,max:20), outstanding = await hub.size(keyId:keyID)
-                    let value = BackendDeckCoreEventsSupport.object([("notifications",.array(events)),("timedOut",.bool(events.isEmpty)),("outstanding",.number(Double(outstanding))),("note",.string(events.isEmpty ? "Nothing happened in your sessions while waiting. Call notifications_wait again." : "Handle these, then pass their ids as ack on your next notifications_wait."))])
+                    let value = BackendDeckCoreEventsSupport.object([("notifications",.array(events)),("timedOut",.bool(events.isEmpty)),("outstanding",.number(Double(outstanding))),("note",.string(events.isEmpty ? "Nothing happened in your sessions or tasks while waiting. Call notifications_wait again." : "Handle these, then pass their ids as ack on your next notifications_wait."))])
                     return .init(value:value,summary:BackendDeckCoreEventsSupport.object([("received",.number(Double(events.count))),("acked",.number(Double(acked))),("outstanding",.number(Double(outstanding)))]))
                 case "notifications.list":
                     let events = await hub.list(keyId:keyID); return .init(value:BackendDeckCoreEventsSupport.object([("notifications",.array(events))]),summary:BackendDeckCoreEventsSupport.object([("outstanding",.number(Double(events.count)))]))

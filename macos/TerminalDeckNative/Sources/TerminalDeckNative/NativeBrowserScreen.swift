@@ -10,7 +10,7 @@ import TerminalDeckNativeCore
 ///
 ///   back · forward · reload/stop · home · Session · [Enter a URL, or search] ·
 ///   Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools ·
-///   Downloads · Profile · ⋮
+///   Downloads · Profile (one menu)
 ///
 /// then the progress line, find in page, the handover and Record panels, and
 /// the page (or "Open a page"); Annotate and Draw freeze the page over it.
@@ -51,9 +51,8 @@ struct NativeBrowserTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             NativeBrowserToolbarRow(store: store, tab: tab)
+                .overlay(alignment: .bottom) { NativeBrowserProgressLine(tab: tab).allowsHitTesting(false) }
                 .zIndex(2) // the suggestions list hangs over the page
-            NativeBrowserProgressLine(tab: tab)
-            Divider()
             if tab.findVisible && tab.markup == nil {
                 NativeBrowserFindBar(tab: tab)
                 Divider()
@@ -138,14 +137,24 @@ struct NativeBrowserToolbarRow: View {
             // where the web browser draws it (lane BR: NativeBrowserBRBinding.swift).
             NativeBrowserConnectButton(tabId: tab.id)
             NativeBrowserMachinePicker(tab: tab) // lane BR: only with another machine paired (MachinePicker.tsx)
-            addressField
-            tools
+            addressField.frame(minWidth: 100).layoutPriority(1)
+            ViewThatFits(in: .horizontal) {
+                tools
+                ScrollView(.horizontal) { tools }
+                    .scrollIndicators(.never)
+            }
+            .frame(minWidth: 26, idealWidth: 194, maxWidth: 194)
+            .frame(height: 26)
+            .layoutPriority(2)
+            NativeBrowserDownloadsButton(store: store)
+            NativeBrowserProfileButton(store: store, tab: tab)
         }
         .buttonStyle(.borderless)
         .labelStyle(.iconOnly)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(.bar)
+        .background(NativeSessionChrome.ground)
+        .environment(\.colorScheme, NativeSessionChrome.scheme.isLight ? .light : .dark)
         .onAppear {
             address = BrowserAddress.display(tab.url)
             if tab.url == nil { addressFocused = true }
@@ -211,7 +220,7 @@ struct NativeBrowserToolbarRow: View {
         .background(.quaternary.opacity(0.55), in: .rect(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.accentColor.opacity(addressFocused ? 0.7 : 0), lineWidth: 1.5)
+                .strokeBorder(NativeSessionChrome.accent.opacity(addressFocused ? 0.7 : 0), lineWidth: 1.5)
         }
         .overlay(alignment: .topLeading) {
             if addressFocused && !tab.suggestions.isEmpty {
@@ -223,7 +232,7 @@ struct NativeBrowserToolbarRow: View {
         .padding(.horizontal, 4)
     }
 
-    // Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools · Downloads · Profile · ⋮
+    // Shared/Isolated · Annotate · Record · Shot · Draw · Size · Devtools · Downloads · Profile
     private var tools: some View {
         HStack(spacing: 2) {
             NativeBrowserIcon(tab.isolated ? "Isolated" : "Shared",
@@ -235,7 +244,7 @@ struct NativeBrowserToolbarRow: View {
                 tab.switchStore(profile: tab.profile, isolated: !tab.isolated)
             }
 
-            NativeBrowserIcon("Annotate", "text.bubble", help: "Annotate — mark things on the page, say what should change, send it to a session",
+            NativeBrowserIcon("Annotate", "cursorarrow", help: "Annotate — mark things on the page, say what should change, send it to a session",
                               pressed: isAnnotating || tab.inspecting) {
                 tab.toggleAnnotate() // lane BR: the live picker first, as the web browser's Annotate
             }
@@ -272,16 +281,8 @@ struct NativeBrowserToolbarRow: View {
             }
             .disabled(!hasPage)
 
-            // Exactly the web toolbar's rule: there while the list has a row (kept
-            // across relaunch), gone when it is empty; ⋮ ▸ Downloads always reaches it.
-            if store.downloads.badge != nil {
-                NativeBrowserDownloadsButton(store: store)
-            }
-
-            NativeBrowserProfileButton(store: store, tab: tab)
-
-            NativeBrowserMoreMenu(store: store, tab: tab)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// The web toolbar's inline completion: on an insertion, the top suggestion
@@ -375,8 +376,8 @@ struct NativeBrowserIcon: View {
             Label(label, systemImage: symbol)
                 .font(.system(size: 13, weight: .regular))
                 .frame(width: 26, height: 26)
-                .foregroundStyle(pressed ? AnyShapeStyle(tint ?? Color.accentColor) : AnyShapeStyle(.primary))
-                .background(pressed ? AnyShapeStyle((tint ?? Color.accentColor).opacity(0.14)) : AnyShapeStyle(.clear),
+                .foregroundStyle(pressed ? AnyShapeStyle(tint ?? Color.primary) : AnyShapeStyle(Color.secondary))
+                .background(pressed ? AnyShapeStyle((tint ?? Color.primary).opacity(0.14)) : AnyShapeStyle(.clear),
                             in: .rect(cornerRadius: 6))
                 .contentShape(.rect)
         }
@@ -420,8 +421,8 @@ struct NativeBrowserSizeMenu: View {
             Label("Size", systemImage: "iphone")
                 .font(.system(size: 13))
                 .frame(width: 26, height: 26)
-                .foregroundStyle(tab.deviceID != nil ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
-                .background(tab.deviceID != nil ? AnyShapeStyle(Color.accentColor.opacity(0.14)) : AnyShapeStyle(.clear),
+                .foregroundStyle(tab.deviceID != nil ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
+                .background(tab.deviceID != nil ? AnyShapeStyle(Color.primary.opacity(0.12)) : AnyShapeStyle(.clear),
                             in: .rect(cornerRadius: 6))
         }
         .menuIndicator(.hidden)
@@ -431,25 +432,16 @@ struct NativeBrowserSizeMenu: View {
     }
 }
 
-/// ⋮ — the page in front of you, and what this browser remembers about it.
-struct NativeBrowserMoreMenu: View {
+/// The page actions within the one Profile menu.
+struct NativeBrowserMenuActions: View {
     @Bindable var store: NativeBrowserTabs
     let tab: NativeBrowserTab
 
-    /// With no Downloads button on the bar, the list opens from here instead
-    /// (the web browser's "standing door").
-    private var listFromHere: Binding<Bool> {
-        Binding(get: { store.downloadsShown && store.downloads.badge == nil },
-                set: { if !$0 { store.downloadsShown = false } })
-    }
-
     var body: some View {
-        Menu {
+        Group {
             Button("New Tab") { store.create(after: tab.id) }
             Button("New Isolated Tab") { store.create(after: tab.id, isolated: true, profile: tab.profile) }
             Divider()
-            Button("Downloads") { store.downloadsShown = true }
-            Button("Open Downloads Folder") { store.downloads.openDownloadsFolder() }
             Button("Store") { AppModel.shared.select("store") } // lane BR: the Store page (App.tsx showPanel('store'))
             Button("Set as Start Page") { tab.setAsStartPage() }
                 .disabled(tab.url == nil)
@@ -476,18 +468,6 @@ struct NativeBrowserMoreMenu: View {
             }
             Button("Scraping") { NativeBRSettingsLink.open("scraping") }
             Button("Settings") { NativeBRSettingsLink.open("browser") }
-        } label: {
-            Label("More", systemImage: "ellipsis")
-                .rotationEffect(.degrees(90))
-                .font(.system(size: 13))
-                .frame(width: 26, height: 26)
-        }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("More")
-        .popover(isPresented: listFromHere, arrowEdge: .bottom) {
-            NativeBrowserDownloadsList(downloads: store.downloads)
         }
     }
 }
@@ -498,14 +478,13 @@ struct NativeBrowserProgressLine: View {
     var body: some View {
         GeometryReader { geometry in
             Rectangle()
-                .fill(Color.accentColor)
+                .fill(NativeSessionChrome.accent)
                 .frame(width: geometry.size.width * max(0.05, tab.progress))
                 .opacity(tab.isLoading ? 1 : 0)
                 .animation(.easeOut(duration: 0.2), value: tab.progress)
                 .animation(.easeOut(duration: 0.3), value: tab.isLoading)
         }
         .frame(height: 2)
-        .background(.bar)
     }
 }
 

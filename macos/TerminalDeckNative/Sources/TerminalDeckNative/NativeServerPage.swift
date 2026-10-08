@@ -13,6 +13,8 @@ struct NativeServerPage: View {
     @Binding var route: NativeServersRoute
     @State private var room: NativeServerRoom
     @State private var setup: NativeServerSetupModel
+    @State private var control: NativeServerControlController
+    @State private var connectionExpanded = false
 
     init(model: NativeServersModel, server: CodingAIServer, route: Binding<NativeServersRoute>) {
         self.model = model
@@ -20,6 +22,7 @@ struct NativeServerPage: View {
         _route = route
         _room = State(initialValue: NativeServerRoom(serverId: server.id))
         _setup = State(initialValue: NativeServerSetupModel(serverId: server.id))
+        _control = State(initialValue: NativeServerControlController(target: server.id, name: server.name))
     }
 
     private static let order: [ServerCardInfo.Kind] = [.site, .app, .database, .other]
@@ -27,7 +30,8 @@ struct NativeServerPage: View {
     var body: some View {
         let state = model.states[server.id]
         let link = state?.link ?? .connecting
-        let view = state?.view
+        GeometryReader { viewport in
+        ScrollViewReader { scroll in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
@@ -45,38 +49,30 @@ struct NativeServerPage: View {
                 if let state, state.identityChanged {
                     NativeServerIdentityChanged(state: state) { route = .list }
                 } else {
-                    NativeServerHealth(state: state, now: model.now) { room.look() }
-                    NativeServerSetupPanel(model: setup)
-                    NativeServerHost(server: server, connected: link == .ready)
-
-                    if link == .failed {
-                        HStack(spacing: 8) {
-                            NativeCodingAINotice(tone: .error, text: state?.problem ?? "We could not reach this server.")
-                            Button("Try again") { room.look() }
+                    if NativeServerControlRelease.enabled {
+                        NativeServerControlHost(controller: control,
+                            apps: NativeServerControlScreens.apps, advanced: NativeServerControlScreens.advanced)
+                            .environment(\.nativeServerCheckConnection, {
+                                withAnimation {
+                                    connectionExpanded = true
+                                    scroll.scrollTo("server-connection-" + server.id, anchor: .top)
+                                }
+                            })
+                            .frame(height: max(600, viewport.size.height - 48), alignment: .topLeading)
+                        DisclosureGroup("Server connection", isExpanded: $connectionExpanded) {
+                            legacyConnection
                         }
+                        .id("server-connection-" + server.id)
+                    } else {
+                        legacyConnection
                     }
-                    if let view, view.cards.isEmpty {
-                        NativeSettingsProse(text: ServerWords.nothingFound)
-                    }
-                    ForEach(Self.order, id: \.self) { kind in
-                        let cards = (view?.cards ?? []).filter { $0.kind == kind }
-                        if !cards.isEmpty {
-                            NativeServerCardGroup(kind: kind, cards: cards, previews: state?.previews ?? [:],
-                                                  absent: view?.absent ?? [:], room: room)
-                        }
-                    }
-                    NativeServerAdvanced(
-                        server: server, extra: model.extra(server.id), state: state, now: model.now,
-                        onRename: { model.rename(server.id, to: $0) },
-                        onForget: { model.forget(server.id, route: $route) },
-                        onGrant: { room.grant($0) },
-                        onRevoke: { room.revoke() },
-                        onDrivesWindows: { model.setDrivesWindows(server.id, $0) })
                 }
             }
             .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: MachinesPage.measure, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        }
         }
         .onAppear {
             room.report = { state in NativeServersModel.shared.remember(state) }
@@ -87,6 +83,39 @@ struct NativeServerPage: View {
             setup.stop()
             room.close()
         }
+    }
+
+    @ViewBuilder private var legacyConnection: some View {
+        let state = model.states[server.id]
+        let link = state?.link ?? .connecting
+        let view = state?.view
+        NativeServerHealth(state: state, now: model.now) { room.look() }
+        NativeServerSetupPanel(model: setup)
+        NativeServerHost(server: server, connected: link == .ready)
+
+        if link == .failed {
+            HStack(spacing: 8) {
+                NativeCodingAINotice(tone: .error, text: state?.problem ?? "We could not reach this server.")
+                Button("Try again") { room.look() }
+            }
+        }
+        if let view, view.cards.isEmpty {
+            NativeSettingsProse(text: ServerWords.nothingFound)
+        }
+        ForEach(Self.order, id: \.self) { kind in
+            let cards = (view?.cards ?? []).filter { $0.kind == kind }
+            if !cards.isEmpty {
+                NativeServerCardGroup(kind: kind, cards: cards, previews: state?.previews ?? [:],
+                                      absent: view?.absent ?? [:], room: room)
+            }
+        }
+        NativeServerAdvanced(
+            server: server, extra: model.extra(server.id), state: state, now: model.now,
+            onRename: { model.rename(server.id, to: $0) },
+            onForget: { model.forget(server.id, route: $route) },
+            onGrant: { room.grant($0) },
+            onRevoke: { room.revoke() },
+            onDrivesWindows: { model.setDrivesWindows(server.id, $0) })
     }
 }
 

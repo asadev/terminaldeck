@@ -17,13 +17,14 @@ public struct BackendDeckCoreSecurityCaller: Sendable {
     /// Native session capability provenance, supplied by the existing lease
     /// grant only. This is never read from wire metadata or tool arguments.
     public let projectRoot: String?
+    public let taskProject: String?
     public init(kind: Kind, tiers: Set<BackendMCPTier>, deviceID: String? = nil,
                 keyID: String? = nil, keyName: String? = nil, askFirst: Bool? = nil,
                 tasks: Bool = false, folders: [String]? = nil, sessionID: String? = nil, machineID: String? = nil,
-                projectRoot: String? = nil) {
+                projectRoot: String? = nil, taskProject: String? = nil) {
         self.kind = kind; self.tiers = tiers; self.deviceID = deviceID; self.keyID = keyID
         self.keyName = keyName; self.askFirst = askFirst; self.tasks = tasks; self.folders = folders
-        self.sessionID = sessionID; self.machineID = machineID; self.projectRoot = projectRoot
+        self.sessionID = sessionID; self.machineID = machineID; self.projectRoot = projectRoot; self.taskProject = taskProject
     }
     public static let local = Self(kind: .local, tiers: [.read, .act, .alter])
     public var actsAsOwner: Bool { kind == .local || kind == .key }

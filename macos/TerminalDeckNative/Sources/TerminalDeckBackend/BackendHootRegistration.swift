@@ -7,9 +7,9 @@ public enum BackendHootRegistration {
     public static let domain = "hoot"
     public static let menuInvokes: Set<String> = ["hoot-panel:snapshot", "hoot-panel:say", "hoot-panel:start-hoot", "hoot-panel:show-session", "hoot-menubar:config", "hoot-menubar:configure", "hoot-menubar:open"]
     public static let folderInvokes: Set<String> = ["copilot:folder", "copilot:folder:pick", "copilot:folder:clear"]
-    public static let invokeChannels = Set(BackendCopilotSessionRuntime.channels + BackendCopilotInspect.channels).union(folderInvokes).union(menuInvokes)
+    public static let invokeChannels = Set(BackendCopilotSessionRuntime.channels + BackendCopilotInspect.channels).union(folderInvokes).union(menuInvokes).union(["hoot:provider:read", "hoot:provider:select"])
     public static let sendChannels: Set<String> = ["hoot-panel:pointer", "hoot-panel:held", "hoot-panel:focus", "hoot-panel:close", "hoot-panel:size", "hoot-panel:resize", "hoot-panel:menu", "hoot-panel:catch", "session:labels"]
-    public static let eventChannels: Set<String> = ["hoot-panel:snapshot"]
+    public static let eventChannels: Set<String> = ["hoot-panel:snapshot", BackendHootChatChannels.event]
     public static let consumedEvents: Set<String> = ["prefs:changed", "settings:changed", "session:status", "session:renamed", "session:exit", "session:removed", "session:created", "session:switched"]
     /// These remain supplied to deck-tools, not installed a second time here.
     public static let delegatedHootToolIDs: Set<String> = ["hoot.state", "hoot.run", "hoot.instructions", "hoot.memory"]
@@ -33,6 +33,8 @@ public enum BackendHootRegistration {
         public let reveal: (any BackendCopilotInspectRevealing)?
         /// The backend half of the menu dependencies; started/stopped with the area.
         public let menuSupply: BackendHootJoinMenuSupply?
+        public let providerChoice: BackendHootProviderChoice?
+        public let readAcknowledged: (@Sendable (RNMHootPaths.Folder) async throws -> Void)?
         public init(dataRoot: URL, storageRoot: URL, runtime: BackendCopilotSessionRuntime,
                     manager: BackendPTYManager, lifecycle: BackendSessionLifecycleCoordinator,
                     folder: BackendCopilotFolderService, mcpDoor: BackendCopilotSessionMCPDoor,
@@ -40,12 +42,16 @@ public enum BackendHootRegistration {
                     boundary: BackendHootJoinSpawnBoundary, menu: BackendHootMenuBar,
                     menuSnapshot: BackendHootJoinMenuSnapshot, screenMonitor: BackendHootScreenMonitor,
                     authority: any BackendHootRegistrationAuthority, joins: any BackendHootRegistrationGraphJoins,
-                    reveal: (any BackendCopilotInspectRevealing)? = nil, menuSupply: BackendHootJoinMenuSupply? = nil) {
+                    reveal: (any BackendCopilotInspectRevealing)? = nil, menuSupply: BackendHootJoinMenuSupply? = nil,
+                    readAcknowledged: (@Sendable (RNMHootPaths.Folder) async throws -> Void)? = nil,
+                    providerChoice: BackendHootProviderChoice? = nil) {
             self.dataRoot = dataRoot; self.storageRoot = storageRoot; self.runtime = runtime; self.manager = manager
             self.lifecycle = lifecycle; self.folder = folder; self.mcpDoor = mcpDoor; self.actionLog = actionLog
             self.rawSink = rawSink; self.boundary = boundary; self.menu = menu; self.menuSnapshot = menuSnapshot
             self.screenMonitor = screenMonitor; self.authority = authority; self.joins = joins; self.reveal = reveal
             self.menuSupply = menuSupply
+            self.providerChoice = providerChoice
+            self.readAcknowledged = readAcknowledged
         }
     }
     public struct Installed: Sendable {
@@ -81,7 +87,7 @@ public enum BackendHootRegistration {
         guard missing.isEmpty else {
             throw NativeRPCError(code: "unavailable", message: "Hoot's required joins are unavailable: " + missing.map(\.rawValue).sorted().joined(separator: ", "))
         }
-        let expectedLog = d.dataRoot.standardizedFileURL.appendingPathComponent("copilot-log/actions.jsonl").path
+        let expectedLog = RNMHootPaths(dataRoot: d.dataRoot).actions.standardizedFileURL.path
         guard d.rawSink.file.standardizedFileURL.path == expectedLog else {
             throw NativeRPCError(code: "unavailable", message: "Hoot's shared raw action writer belongs to another data folder.")
         }
@@ -126,6 +132,7 @@ public enum BackendHootRegistration {
         var startup: Task<Void, Error>?
         var sends: [NativeRPCSubscription] = []
         var watches: [NativeRPCSubscription] = []
+        var chatWatch: Task<Void, Never>?
         var pendingEvents: [NativeRPCEvent] = []
         var hiddenPredicate: UUID?
         init(registry: NativeChannelRegistry, mcp: BackendNativeMCPServer, ownerID: String, dependencies: Dependencies) {
@@ -177,6 +184,15 @@ public enum BackendHootRegistration {
                 try Task.checkCancellation()
                 guard !closed else { throw NativeRPCError(code: "unavailable", message: "The native Hoot registration stopped during startup.") }
                 active = true
+                if let chat = d.runtime.structuredChat {
+                    let stream = await chat.subscribe()
+                    chatWatch = Task { [weak self] in
+                        for await snapshot in stream {
+                            guard !Task.isCancelled else { return }
+                            await self?.chatChanged(snapshot)
+                        }
+                    }
+                }
                 let queued = pendingEvents; pendingEvents = []
                 for event in queued { await forward(event) }
             } catch {
@@ -189,6 +205,13 @@ public enum BackendHootRegistration {
         func refreshMenu() async throws {
             let state = try await d.runtime.state(), metadata = await d.lifecycle.metadata()
             await d.menuSnapshot.update(state, metadata: metadata)
+        }
+        func chatChanged(_ snapshot: NativeRPCValue) async {
+            guard active, !closed else { return }
+            do {
+                try await registry.publish(BackendHootChatChannels.event, arguments: [snapshot])
+                try await refreshMenu()
+            } catch { NSLog("[native Hoot] chat update failed: %@", error.localizedDescription) }
         }
         func forward(_ event: NativeRPCEvent) async {
             guard !closed else { return }
@@ -219,9 +242,28 @@ public enum BackendHootRegistration {
             return try await backendInvoke(channel, args: args)
         }
         func backendInvoke(_ channel: String, args: [NativeRPCValue]) async throws -> NativeRPCValue {
+            let channel = RNMHootChannelCompatibility.incomingChannel(channel)
+            if channel == "hoot:provider:read" || channel == "hoot:provider:select" {
+                guard let choice = d.providerChoice else { throw NativeRPCError(code: "unavailable", message: "Hoot's provider preference owner is unavailable.") }
+                let current = d.runtime.structuredChat?.provider ?? .claude
+                if channel == "hoot:provider:read" {
+                    guard args.isEmpty else { throw NativeRPCError.invalidArguments("Expected no provider read arguments.") }
+                    return try await choice.read(current: current)
+                }
+                guard args.count == 1 else { throw NativeRPCError.invalidArguments("Expected one provider selection.") }
+                return try await choice.select(args[0], current: current)
+            }
             try requireStarted()
             let value: (Int) -> NativeRPCValue = { args.indices.contains($0) ? args[$0] : .missing }
-            if BackendCopilotSessionRuntime.channels.contains(channel) { return try await d.runtime.invoke(channel, arguments: args) }
+            if BackendCopilotSessionRuntime.channels.contains(channel) {
+                let result = try await d.runtime.invoke(channel, arguments: args)
+                if channel == "copilot:read-instructions", result["ok"].bool == true {
+                    try await d.readAcknowledged?(.layer)
+                } else if ["copilot:read-contract", "copilot:read-composed"].contains(channel), result["text"].string != nil {
+                    try await d.readAcknowledged?(.layer)
+                }
+                return result
+            }
             if folderInvokes.contains(channel) {
                 guard args.isEmpty else { throw NativeRPCError.invalidArguments("Expected 0...0 arguments, got \(args.count)") }
                 if channel == "copilot:folder" { return try await d.folder.report().wireValue }
@@ -240,10 +282,18 @@ public enum BackendHootRegistration {
                 }
                 return result.wireValue
             case "copilot:memory": return BackendCopilotInspect.readMemory(paths).wireValue
-            case "copilot:memory-read": return BackendCopilotInspect.readMemoryFact(paths, name: value(0))
+            case "copilot:memory-read":
+                let result = BackendCopilotInspect.readMemoryFact(paths, name: value(0))
+                if result["ok"].bool == true, BackendCompositionAuthority.within(paths.root, RNMHootPaths(dataRoot: d.dataRoot).home.path) {
+                    try await d.readAcknowledged?(.home)
+                }
+                return result
             case "copilot:memory-write": return BackendCopilotInspect.writeMemoryFact(paths, name: value(0), text: value(1))
             case "copilot:memory-delete": return BackendCopilotInspect.deleteMemoryFact(paths, name: value(0))
-            case "copilot:actions": return BackendCopilotInspect.readActionLog(paths, want: value(0).number ?? 200).wireValue
+            case "copilot:actions":
+                let receipt = BackendCopilotInspect.readActionLogWithReceipt(paths, want: value(0).number ?? 200)
+                if receipt.successfulRead { try await d.readAcknowledged?(.log) }
+                return receipt.report.wireValue
             case "copilot:reveal": return try await BackendCopilotInspect.reveal(inspection(), place: value(0))
             default: throw NativeRPCError(code: "unavailable", message: "Unknown Hoot session channel.")
             }
@@ -275,12 +325,16 @@ public enum BackendHootRegistration {
         func disconnect(_ context: NativeRPCContext) async throws {
             let role = try source(context)
             guard role != .unrelated else { return }
-            if role == .window { try await d.joins.windowGone(context) }
+            if role == .window {
+                if let chat = d.runtime.structuredChat, await chat.isBusy { _ = try await d.runtime.stop() }
+                try await d.joins.windowGone(context)
+            }
             else if active { await MainActor.run { d.screenMonitor.stop(); d.menu.dispose() } }
         }
         func stop() async throws {
             if closed && !didStart { await cleanupRoutes(); return }
             closed = true; active = false
+            chatWatch?.cancel(); chatWatch = nil
             startup?.cancel()
             if let startup { _ = try? await startup.value }
             if didStart {

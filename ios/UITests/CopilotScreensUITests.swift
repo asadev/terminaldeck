@@ -237,7 +237,7 @@ final class CopilotScreensUITests: XCTestCase {
         // And it goes home. Then back in through the pill, which is the fourth
         // one because this is one of his own machines.
         app.buttons["copilot.back"].tap()
-        XCTAssertTrue(app.tabBars.firstMatch.buttons["Copilot"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.tabBars.firstMatch.buttons["Hoot"].waitForExistence(timeout: 10),
                       "four pills on a machine whose copilot is this phone's")
         capture("alter-01b-four-pills")
         XCTAssertTrue(app.openCopilotTab(), "and the fourth one goes back in")

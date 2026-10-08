@@ -18,6 +18,11 @@ public struct BackendNativeInstructions: BackendInstructionLaunchResolver, Senda
     public func arguments(_ input: BackendCreateSessionInput, provider: BackendProviderSpec,
                           context: BackendLaunchContext) async throws -> [String] {
         var arguments: [String] = []
+        if let file = input.agentDefinitionsFile {
+            guard provider.id == "claude", let name = input.claudeAgent else { throw BackendSessionFailure.invalidInput("An owned Claude agent definition needs its named Claude identity.") }
+            arguments += try BackendTAGAgentDefinitionLaunch.arguments(file: file, storageRoot: storageRoot, name: name)
+        }
+        arguments += try BackendTAGLaunchArguments.arguments(input, provider: provider.id)
         let denied = input.deniedTools ?? []
         if !denied.isEmpty || input.noSkills == true {
             guard provider.id == "claude" else {
@@ -29,7 +34,7 @@ public struct BackendNativeInstructions: BackendInstructionLaunchResolver, Senda
             if !denied.isEmpty { arguments += ["--disallowedTools", denied.joined(separator: ",")] }
             if input.noSkills == true { arguments.append("--disable-slash-commands") }
         }
-        if let agentID = input.agentInstructions {
+        if let agentID = input.agentInstructions, input.claudeAgent == nil {
             // TS agents/agent-launch.ts instructionLaunchArgs, in its order and words.
             guard agentID.range(of: #"^[a-z0-9][a-z0-9-]{0,39}$"#, options: .regularExpression) != nil else {
                 throw BackendSessionFailure.invalidInput("\(agentID) is not a task agent id.")

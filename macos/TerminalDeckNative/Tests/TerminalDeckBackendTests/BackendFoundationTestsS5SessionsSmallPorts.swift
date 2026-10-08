@@ -25,6 +25,7 @@ struct BackendFoundationTestsS5SessionsActivity {
 
 final class BackendFoundationTestsS5SessionsCounter: @unchecked Sendable {
     private let lock = NSLock(); private var value = 0
+    var observation: NativeRPCSubscription?
     func bump() { lock.lock(); value += 1; lock.unlock() }
     var count: Int { lock.lock(); defer { lock.unlock() }; return value }
 }
@@ -38,7 +39,7 @@ struct BackendFoundationTestsS5SessionsHeldChange {
         let store = NativeStateStore(initialState: NativeStateStore.defaults)
         try await store.startSessionLedger()
         let counter = BackendFoundationTestsS5SessionsCounter()
-        _ = await store.observeSnapshot { _ in counter.bump() }   // seeds once on registration
+        counter.observation = await store.observeSnapshot { _ in counter.bump() }   // retain through all changes; seeds once
         return (store, counter)
     }
     // TS session-held.test.ts:176 (hold, fail, release each announce exactly one change)

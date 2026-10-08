@@ -87,7 +87,7 @@ struct TKTasksProjectBar: View {
             Picker("Show tasks from", selection: Binding(get: { projects.effective }, set: { projects.scope = $0 })) {
                 ForEach(TaskProjectScope.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.segmented).nativeUIGGreyControl()
             .labelsHidden()
             .fixedSize()
             .disabled(!projects.hasCurrent)

@@ -14,16 +14,10 @@ import TerminalDeckNativeCore
 /// which takes the place of the page's Annotate and keeps its numbered markers
 /// and its one message — on the live screen, which never stops playing.
 struct NativeSimulatorScreen: View {
-    @State private var model = NativeSimulatorModel()
+    @State private var model = NativeSimulatorModel(deviceRail: true)
 
     var body: some View {
-        Group {
-            if model.device != nil {
-                DeviceOpenView(model: model)
-            } else {
-                SimulatorListView(model: model)
-            }
-        }
+        NativeUIGSimulatorScreen(model: model)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
         .onAppear { model.appear() }
@@ -121,21 +115,32 @@ private struct DeviceRow: View {
 
 // MARK: - One device open
 
-private struct DeviceOpenView: View {
+struct DeviceOpenView: View {
     @Bindable var model: NativeSimulatorModel
+    var showsDeviceBack = true
 
     var body: some View {
         VStack(spacing: 0) {
-            DeviceToolbar(model: model)
-            Divider()
             if !model.problem.isEmpty || !model.said.isEmpty {
                 StatusLine(problem: model.problem, said: model.said)
             }
             // Inspect, as the page lays Annotate out: the live screen on the left, the
             // card with the markers and the elements on the right beside it.
             HStack(spacing: 16) {
-                DeviceStage(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                GeometryReader { geometry in
+                    let available = CGSize(width: max(1, geometry.size.width - 24),
+                                           height: max(1, geometry.size.height - 76))
+                    let fitted = DeviceGeometry.fitted(content: model.fitSize ?? available, in: available)
+                    VStack(spacing: 0) {
+                        DeviceStage(model: model)
+                            .frame(height: fitted.height + 24)
+                        DeviceToolbar(model: model, showsDeviceBack: showsDeviceBack)
+                            .fixedSize(horizontal: true, vertical: true)
+                            .padding(.bottom, 8)
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if model.inspecting {
                     InspectPanel(model: model)
                         .frame(minWidth: 272, idealWidth: 336, maxWidth: 336)
@@ -164,30 +169,35 @@ private struct StatusLine: View {
 
 private struct DeviceToolbar: View {
     @Bindable var model: NativeSimulatorModel
+    var showsDeviceBack = true
     @State private var shotShown = false
 
     var body: some View {
         let device = model.device
         HStack(spacing: 6) {
-            Button {
-                model.back()
-            } label: {
-                Label("Devices", systemImage: "chevron.backward")
-                    .labelStyle(.titleAndIcon)
+            if showsDeviceBack {
+                Button {
+                    model.back()
+                } label: {
+                    Label("Devices", systemImage: "chevron.backward")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
 
+            if showsDeviceBack {
             Text(device?.name ?? "")
                 .font(.headline)
                 .lineLimit(1)
                 .padding(.leading, 6)
-                .help(model.diagnostics ? "Option-click to hide the diagnostics" : "")
+                .help(device?.name ?? "")
                 .onTapGesture {
                     // For measuring, not for everyday use, so it has no button of its own.
                     if NSEvent.modifierFlags.contains(.option) { model.diagnostics.toggle() }
                 }
 
             Spacer(minLength: 12)
+            }
 
             if let device {
                 Group {
@@ -214,7 +224,7 @@ private struct DeviceToolbar: View {
                 Toggle(isOn: Binding(get: { model.inspecting }, set: { _ in model.toggleInspect() })) {
                     Label("Inspect", systemImage: "viewfinder")
                 }
-                .toggleStyle(.button)
+                .toggleStyle(.button).nativeUIGGreyControl()
                 .buttonStyle(.borderless)
                 .help("Inspect: point at anything on the live screen to see what it is, click to mark it")
                 .accessibilityLabel("Inspect")

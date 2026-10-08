@@ -16,6 +16,9 @@ public struct BackendUsageRPC: Sendable {
     }
     public func invoke(_ channel: String, args: [NativeRPCValue], context: NativeRPCContext) async throws -> NativeRPCValue {
         guard Self.invokeChannels.contains(channel) else { throw BackendSessionFailure.unsupported("The native metrics channel is not registered.") }
+        guard channel != "readiness:fix" else {
+            throw NativeRPCError(code: "approval-required", message: "Re-check AI readiness, preview the exact file changes, and approve that preview before applying a fix. Machine CLI upgrades need the manual instructions shown in Coding AI.")
+        }
         try await authorize(context, channel, args); try Task.checkCancellation()
         let first = args.first ?? .missing
         if BackendCostService.channels.contains(channel) { return try await cost.invoke(channel, args: args, ownerID: context.ownerID, context: context) }

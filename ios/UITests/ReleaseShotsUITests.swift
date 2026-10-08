@@ -126,7 +126,7 @@ final class ReleaseShotsUITests: XCTestCase {
     private func fourTabsAndMachinesIsNotOneOfThem() throws {
         let bar = app.tabBars.firstMatch
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the tab bar should be on the session list")
-        for name in ["Copilot", "Sessions", "Localhost", "Settings"] {
+        for name in ["Hoot", "Sessions", "Localhost", "Settings"] {
             XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a tab")
         }
         XCTAssertEqual(bar.buttons.count, 4, "four tabs, no more")

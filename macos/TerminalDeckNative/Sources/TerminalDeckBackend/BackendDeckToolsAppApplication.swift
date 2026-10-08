@@ -32,7 +32,7 @@ public protocol BackendDeckToolsAppSettingsService: Sendable {
 }
 public enum BackendDeckToolsAppApplication {
     private typealias K = BackendDeckToolsAppKit
-    public static let protectedPrefixes = ["remote.", "copilot.", "deckControl.", "security.", "confine."]
+    public static let protectedPrefixes = ["remote.", "hoot.", "copilot.", "deckControl.", "security.", "confine."]
     public static let protectedKeys = ["browser.persistSession", "advanced.debugMode"]
     public static func isProtected(_ key: String) -> Bool { protectedKeys.contains(key) || protectedPrefixes.contains(where: key.hasPrefix) }
     private static func updater(_ service: any BackendDeckToolsAppApplicationService) async throws -> any BackendDeckToolsAppUpdateService {

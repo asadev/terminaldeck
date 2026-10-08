@@ -408,78 +408,15 @@ private struct ConnectedPage: View {
     let cwd: String
 
     var body: some View {
-        let overview = Self.overview(model.result)
-        let overviewFailure: GitHubFailure? = {
-            if case .failed(let failure)? = model.result { return failure }
-            if !model.loading && model.result == nil { return GitHubFailure(kind: "error", message: "No answer from the GitHub bridge.") }
-            return nil
-        }()
-        let folderRepo = state.repo?.ref
-        let folder = GitHubRules.folderLine(state.repo, branch: state.branch)
-        let pageFailure = GitHubRules.pageFailure(state.repo, overview: overviewFailure)
-        let limit = overview?.limit ?? 0
-        let pullCount = GitHubRules.countLabel(Self.rowCount(overview?.pulls), limit: limit)
-        let issueCount = Self.issuesOff(overview?.issues) ? "—" : GitHubRules.countLabel(Self.rowCount(overview?.issues), limit: limit)
-        let showRepos = model.tab == .repos || pageFailure != nil
-
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                ConnectionBar(model: model, state: state)
-                if let copilot = model.copilot { CopilotRow(tool: copilot) }
-
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.branch").font(.system(size: 12)).foregroundStyle(.secondary)
-                    if let folderRepo {
-                        LinkButton(url: folderRepo.url, help: "\(folderRepo.nameWithOwner) — open on GitHub (remote: \(folderRepo.remote))") {
-                            Text(folder ?? folderRepo.nameWithOwner).font(.title3.weight(.semibold))
-                        }
-                    } else {
-                        Text(pageFailure != nil ? GitHubRules.folderName(cwd) : (folder ?? "No folder open"))
-                            .font(.title3.weight(.semibold))
-                            .help(cwd)
-                    }
-                    Spacer()
-                    Button { Task { await model.load(refresh: true) } } label: {
-                        Label("Refresh GitHub data", systemImage: "arrow.clockwise")
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .disabled(model.busy)
-                    .help("Refresh")
-                }
-
-                if let pageFailure {
-                    FailureBlock(failure: pageFailure) {
-                        if state.repo?.failure != nil { Task { await model.loadAuth() } } else { Task { await model.load(refresh: true) } }
-                    }
-                }
-
-                HStack(spacing: 20) {
-                    if pageFailure == nil {
-                        TabButton(title: "Pull requests", count: pullCount, on: model.tab == .pulls) { model.tab = .pulls }
-                        TabButton(title: "Issues", count: issueCount, on: model.tab == .issues) { model.tab = .issues }
-                    }
-                    TabButton(title: "Repositories", count: GitHubRules.repoCount(state.access), on: showRepos) { model.tab = .repos }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("GitHub lists")
-
-                Group {
-                    if showRepos {
-                        RepositoryList(model: model, access: state.access, current: folderRepo?.nameWithOwner,
-                                       installUrl: state.credentialKind == "github-app" ? state.installUrl : nil)
-                    } else if model.tab == .pulls {
-                        ListBody(model: model, kind: .pulls, overview: overview)
-                    } else {
-                        ListBody(model: model, kind: .issues, overview: overview)
-                    }
-                }
-            }
-            .frame(maxWidth: 1312, alignment: .leading)
-            .padding(.horizontal, 44)
-            .padding(.vertical, 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 16) {
+            ConnectionBar(model: model, state: state)
+            if let copilot = model.copilot { CopilotRow(tool: copilot) }
+            NativeGHWorkspaceScreen(cwd: cwd)
         }
+        .frame(maxWidth: 1312, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 44)
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -513,7 +450,7 @@ private struct TabButton: View {
                     Text(title).font(.body.weight(on ? .semibold : .regular)).foregroundStyle(on ? .primary : .secondary)
                     if let count { Text(count).font(.callout.monospacedDigit()).foregroundStyle(.secondary) }
                 }
-                Rectangle().fill(on ? Color.accentColor : .clear).frame(height: 2)
+                Rectangle().fill(on ? Color.secondary : .clear).frame(height: 2)
             }
             .fixedSize()
             .contentShape(.rect)

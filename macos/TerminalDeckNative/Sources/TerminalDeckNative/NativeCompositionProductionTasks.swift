@@ -5,6 +5,8 @@ import TerminalDeckNativeCore
 
 extension NativeCompositionProduction {
     func installTasksAndRoutines() async throws {
+        let scopeRequests = BackendTAGAccessScope(keys: core.keys)
+        try joins.replaceContributions(owner: "tag-access", [try scopeRequests.bundle()])
         let persistence = try BackendTaskPersistence(directory: root.dataRoot.appendingPathComponent("remote"), ownership: root.state.ownership)
         // One change hook for store/config/goals/outbox; the CRM registration is its
         // only subscriber and publishes `tasks:changed` once per change (TS deck-control
@@ -14,6 +16,12 @@ extension NativeCompositionProduction {
         let config = try BackendTaskConfiguration(persistence: persistence, changed: { await changes.fire() })
         let goals = BackendGoalStore(persistence: persistence, changed: { await changes.fire() })
         try await store.start(); try await config.start(); try await goals.start()
+        let ags: NativeCompositionINT2AGS?
+        if SourceNamespace.agentSettingsEnabled {
+            ags = try await installINT2AGS(configuration: config)
+        } else {
+            ags = nil
+        }
         let outbox = BackendTaskOutbox(persistence: persistence, target: { [config, core] key in
             guard let current = await core!.keys.get(id: key), current["crmOnly"].bool == true || current["tasks"].bool == true,
                   let connection = try await config.connection(key), connection["enabled"].bool == true,
@@ -40,6 +48,11 @@ extension NativeCompositionProduction {
                 guard let session = state.sessionId else { throw NativeRPCError(code: "unavailable", message: "Hoot is not running on this Mac, so this task is waiting for it.") }
                 let line = text.replacingOccurrences(of: #"\s*\n\s*"#, with: " ", options: .regularExpression)
                 _ = try await surface.deliverBrief(session, line: line)
+            }, bindTaskSession: { [store, sessions] task, session in
+                let live = Set(sessions!.manager.list().filter { $0.exitCode == nil }.map(\.id))
+                guard try await store.claim(task.id, sessionID: session.id, liveSessionIDs: live, expectedAssignee: task.value["assignee"]) else {
+                    throw NativeRPCError(code: "task-already-held", message: "Another live session already holds this task. The new session was stopped.")
+                }
             })
         let engine = try BackendTaskEngine(store: store, configuration: config, goals: goals, access: access,
             workspace: { [files, authority] task in
@@ -47,8 +60,13 @@ extension NativeCompositionProduction {
                 return try await workspaces.folderFor(taskID: task.id, project: task.project,
                     useWorkspace: task.value["useWorkspace"].bool == true, title: task.value["title"].string ?? "",
                     context: authority!.localContext()) ?? task.project
-            }, outgoing: BackendTaskOutbox.outgoing(store: store, outbox: outbox), problem: { [report] in report($0) })
+            }, outgoing: BackendTaskOutbox.outgoing(store: store, outbox: outbox), notifications: { [core] task, event in
+                if let ags { await ags.events.task(event) }
+                try await core!.notifications.taskNotifications(task, event)
+            }, problem: { [report] in report($0) })
         let local = BackendTaskLocalService(store: store, configuration: config, goals: goals, engine: engine)
+        await root.installReceiver(tasks: local, configuration: config, sessions: sessions, appName: configuration.appName,
+            hook: { event in if let ags { await ags.events.receiver(id: event.id) } }) // RCV
         let attachments = BackendTaskAttachments(persistence: persistence,
             authorizeSource: { [files, authority] path in try await files!.authority.authorize(path, context: authority!.localContext()) })
         // deck-control ELECTRON_TASK_REMINDERS: a Mac banner; a click shows the task (index.ts showTask:
@@ -80,20 +98,69 @@ extension NativeCompositionProduction {
             keyViews: { [core] in await core!.keys.list() })
         let planning = BackendGoalPlanning(goals: goals, tasks: store, configuration: config, local: local, detail: detail)
         let api = BackendTaskAPI(store: store, configuration: config, engine: engine)
-        let tools = BackendTaskToolAuthority(requireTasks: { [authority, store] native in
+        let tools = BackendTaskToolAuthority(requireTasks: { [authority, store, weak self] native in
             let caller = try await authority!.resolve(native).caller
+            if let self, await self.allowsINT2PhoneTasks(caller, mutation: false) { return }
             let worker = caller.sessionID == nil ? nil : try await store.bySession(caller.sessionID!)
             guard caller.kind == .local || caller.kind == .key && caller.tasks || caller.kind == .session && worker != nil else { throw NativeRPCError(code: "not-granted", message: "This caller has no task grant.") }
-        }, requireHoot: { [authority] native in
-            guard try await authority!.resolve(native).caller.kind == .local else { throw NativeRPCError(code: "not-granted", message: "This task operation belongs to Hoot.") }
-        }, visible: { [authority] native, task in
+        }, requireHoot: { [authority, joins, weak self] native in
             let caller = try await authority!.resolve(native).caller
-            return caller.kind == .local || caller.kind == .key && task.value["keyId"].string == caller.keyID || caller.kind == .session && task.sessionID == caller.sessionID
+            let (tool, args) = try await joins.nativeTool(native)
+            let readingGoals = tool == "tasks.goals" && ["list", "get"].contains(args["do"].string ?? "list") || tool == "tasks.progress"
+            if let self, await self.allowsINT2PhoneTasks(caller, mutation: !readingGoals) { return }
+            guard caller.kind == .local else { throw NativeRPCError(code: "not-granted", message: "This task operation belongs to Hoot.") }
+        }, visible: { [authority, store, weak self] native, task in
+            let caller = try await authority!.resolve(native).caller
+            if caller.kind == .local { return true }
+            if caller.kind == .remote {
+                guard task.isLocal, let self else { return false }
+                return await self.allowsINT2PhoneTasks(caller, mutation: false, project: task.project)
+            }
+            if caller.kind == .key {
+                guard caller.tasks, task.isLocal || task.value["keyId"].string == caller.keyID else { return false }
+                return caller.folders == nil || caller.folders!.contains { BackendCompositionAuthority.within(task.project, $0) }
+            }
+            guard caller.kind == .session, let session = caller.sessionID, let worker = try await store.bySession(session) else { return false }
+            return task.sessionID == session || task.value["parentTaskId"].string == worker.id || (worker.value["reviewOfTaskId"].string == task.id && task.value["reviewerTaskId"].string == worker.id)
         }, project: { [authority] native, path in _ = try await authority!.knownFolder(path, native: native) },
-            authorize: { [joins] native, tool, _, tier in try await joins.prepareNative(native, tier: tier, sentence: "Use " + tool) },
-            actorName: { [authority] native in let caller = try await authority!.resolve(native).caller; return caller.kind == .local ? "Hoot" : caller.keyName ?? "Task worker" },
+            authorize: { [joins, authority, store, goals, weak self] native, tool, args, tier in
+                try await joins.prepareNative(native, tier: tier, sentence: "Use " + tool, ownerMustAnswer: tier != .read)
+                let caller = try await authority!.resolve(native).caller
+                if caller.kind == .remote {
+                    var project = args["project"].string
+                    if let id = args["task"].string, let task = try await store.byID(id) {
+                        guard task.isLocal else { throw NativeRPCError(code: "access-denied", message: "This phone panel cannot change a CRM task.") }
+                        project = task.project
+                    }
+                    if let id = args["goal"].string, let goal = try await goals.byID(id) {
+                        guard let actual = goal["project"].string, !actual.isEmpty else { throw NativeRPCError(code: "access-denied", message: "This goal has no granted project.") }
+                        project = actual
+                    }
+                    guard let self, await self.allowsINT2PhoneTasks(caller, mutation: tier != .read, project: project) else {
+                        throw NativeRPCError(code: "access-denied", message: "The phone's current task access changed while approval was pending.")
+                    }
+                }
+            },
+            actorName: { [authority, store] native in
+                let caller = try await authority!.resolve(native).caller
+                if caller.kind == .session, let session = caller.sessionID, let worker = try await store.bySession(session) { return "taskagent:" + worker.agentID }
+                return caller.kind == .local ? "hoot" : BackendTaskActor.appActor(caller.keyName ?? "AI app")
+            },
             crmKeyID: { [authority] native in guard let key = try await authority!.resolve(native).caller.keyID else { throw NativeRPCError(code: "not-granted", message: "This caller is not a CRM key.") }; return key },
-            callerProject: { [sessions, state, store] native in BackendTaskProjectScope.callerProject(sessionID: native.sessionID, taskProject: native.sessionID.isEmpty ? nil : try await store.bySession(native.sessionID)?.project, sessionFolder: sessions!.manager.list().first { $0.id == native.sessionID }?.cwd, openProjects: state.listProjects().compactMap { $0["path"].string }) })
+            callerProject: { [sessions, state, store] native in BackendTaskProjectScope.callerProject(sessionID: native.sessionID, taskProject: native.sessionID.isEmpty ? nil : try await store.bySession(native.sessionID)?.project, sessionFolder: sessions!.manager.list().first { $0.id == native.sessionID }?.cwd, openProjects: state.listProjects().compactMap { $0["path"].string }) },
+            callerKeyID: { [authority] native in try await authority!.resolve(native).caller.keyID },
+            inheritedPermissionMode: { [root] in
+                guard let path = try? await root.providers.loginPath(), let provider = try? await root.providers.resolve(.init(cwd: "/", provider: "claude"), loginPath: path) else { return "default" }
+                return BackendTAGProfilePolicy.inheritedMode(arguments: provider.args)
+            },
+            requireTaskAction: { [authority, store, weak self] native, tool in
+                let caller = try await authority!.resolve(native).caller
+                if ["tasks.get", "tasks.delegate"].contains(tool), let self,
+                   await self.allowsINT2PhoneTasks(caller, mutation: tool != "tasks.get") { return }
+                if caller.kind == .local || ["tasks.delegate", "tasks.get"].contains(tool) && caller.kind == .key && caller.tasks { return }
+                if caller.kind == .session, let session = caller.sessionID, let worker = try await store.bySession(session), worker.assigneeKind == "agent" { return }
+                throw NativeRPCError(code: "not-granted", message: "This task operation needs Hoot or its assigned task agent.")
+            })
         let dependencies = try suppliers.taskDependencies(keyViews: { [core] in await core!.keys.list() }, makeCRMKey: { [core] name in
             let result = try await core!.keys.create(.object([.init("name", .string(name)), .init("crmOnly", .bool(true))]))
             return (try result["id"].requireString("key id"), try result["key"].requireString("key"))
@@ -110,6 +177,7 @@ extension NativeCompositionProduction {
                 return (file.lastPathComponent, nil, bytes)
             }, oldTaskOwnerDisabled: true)
         taskRegistration = registration; taskEngine = engine; taskView = view
+        try await installINT2AgentsWatch(tasks: view, taskAuthority: tools)
         joins.bindTaskMonitor(monitor, report: report)
         joins.bindTasks(wake: { await engine.nudge() }, stop: { try? await registration.stop() },
             http: NativeCompositionTaskHTTP(api: api, keys: core.keys))

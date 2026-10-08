@@ -10,6 +10,7 @@ public final class BackendCompositionEvents: @unchecked Sendable {
     private var consumer: Task<Void, Never>?
     private var core: BackendDeckCoreRuntime?
     private var usage: BackendCompositionUsage?
+    private var agsAlerts: BackendAGSAlerts?
     private var targetAccounts: [String: String] = [:]
     public init(registry: NativeChannelRegistry) {
         self.registry = registry
@@ -21,9 +22,11 @@ public final class BackendCompositionEvents: @unchecked Sendable {
     public func submit(_ event: BackendSessionLifecycleEvent) { continuation.yield(event) }
     public func bind(core: BackendDeckCoreRuntime) { lock.withLock { self.core = core } }
     public func bind(usage: BackendCompositionUsage) { lock.withLock { self.usage = usage } }
+    public func bind(agsAlerts: BackendAGSAlerts?) { lock.withLock { self.agsAlerts = agsAlerts } }
     private func receive(_ event: BackendSessionLifecycleEvent) async {
-        let owners = lock.withLock { (core, usage) }
+        let owners = lock.withLock { (core, usage, agsAlerts) }
         await owners.1?.noteLifecycleEvent(event)
+        await owners.2?.receive(event)
         do {
             switch event {
             case .created(let meta):
@@ -63,6 +66,6 @@ public final class BackendCompositionEvents: @unchecked Sendable {
     }
     public func stop() async {
         continuation.finish(); await consumer?.value; consumer = nil
-        lock.withLock { core = nil; usage = nil }
+        lock.withLock { core = nil; usage = nil; agsAlerts = nil }
     }
 }

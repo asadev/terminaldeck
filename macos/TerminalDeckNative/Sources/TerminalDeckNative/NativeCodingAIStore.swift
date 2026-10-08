@@ -527,17 +527,8 @@ final class NativeCodingAIStore {
     // MARK: - Stale agent CLIs
 
     func upgrade(_ row: CodingAIStaleAgent) {
-        upgrading = row.command
-        Task {
-            do {
-                let raw = try await call("readiness:fix", ["", CodingAIStaleAgent.upgradeFix])
-                upgradeResults[row.command] = CodingAIStaleAgent.fixResult(raw) ?? (false, "The upgrade gave no answer.")
-                readStaleAgents()
-            } catch {
-                upgradeResults[row.command] = (false, CodingAIErrorText.from(error, fallback: "The upgrade did not run."))
-            }
-            upgrading = nil
-        }
+        upgradeResults[row.command] = (false, "Automatic CLI upgrades are unavailable until their exact changes can be previewed and approved. Update " + row.command + " manually using its install instructions. " + row.advice)
+        upgrading = nil
     }
 
     func dismiss(_ row: CodingAIStaleAgent) {

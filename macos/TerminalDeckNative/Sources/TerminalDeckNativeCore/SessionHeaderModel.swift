@@ -59,7 +59,7 @@ public enum SessionFolder {
     /// `shownFolderName`: the assistant's own folder is named for it.
     public static func shown(_ path: String, assistant: Bool = false, assistantName: String = "Hoot") -> String {
         let own = label(path)
-        return assistant && own == "copilot" ? "\(assistantName)’s folder" : own
+        return assistant && (own == "hoot" || own == "copilot") ? "\(assistantName)’s folder" : own
     }
 
     /// The folder chip's hover label.

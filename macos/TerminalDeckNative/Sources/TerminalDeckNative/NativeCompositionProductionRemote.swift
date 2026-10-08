@@ -55,8 +55,9 @@ extension NativeCompositionProduction {
             offeredFolders: { [state, sessions, joins] _ in BackendRemoteServeSessionPolicy.offeredFolders(state.listProjects().compactMap { $0["path"].string }, sessions: sessions!.manager.list(), hidden: { joins.hidden.contains($0) }) },
             observeAccountDeletion: { [configuration, sessions] callback in
                 try await NativeCompositionAccountDeletion.observe(directory: configuration.dataDirectory, profiles: sessions!.profiles, callback: callback)
-            }, forgetAdditionalDeviceState: { [usage] id in
+            }, forgetAdditionalDeviceState: { [usage, weak self] id in
                 await usage!.disconnect(ownerID: id); await asks.gone(id)
+                await self?.releaseServerControlOwner(id)
                 let browser = try await NativeCompositionRoot.shared.browserForComposition()
                 await browser.disconnect(.init(caller: .pairedDevice, ownerID: id))
             },

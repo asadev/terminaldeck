@@ -56,7 +56,7 @@ public actor BackendDeckCoreRuntime {
     /// Live catalogue titles for Hoot's composed layer (the same metadata the
     /// describe tool reads); Hoot's MCP door matches them by wire name + tier.
     public nonisolated func hootLayerTitles() -> [BackendCopilotLayerTool] {
-        metadata.read().map { BackendCopilotLayerTool($0.tool, title: $0.title) }
+        BackendUIGMemoryDiscovery.metadata(metadata.read()).map { BackendCopilotLayerTool($0.tool, title: $0.title) }
     }
     private let window: BackendDeckCoreWindowConsent
     private let metadata: BackendDeckCoreRuntimeMetadata
@@ -116,13 +116,13 @@ public actor BackendDeckCoreRuntime {
         guard dataDirectory.isFileURL, dataDirectory.path.hasPrefix("/"), !dataDirectory.path.contains("\0") else { throw NativeRPCError.invalidArguments("deck-control needs the app's absolute data directory") }
         if await registry.has("deck-control:status") { throw NativeRPCError(code: "duplicate-handler", message: "deck-control: registerDeckControlIpc was called twice") }
         guard surface.copilotRoot().hasPrefix("/"), !surface.copilotRoot().contains("\0") else {
-            throw NativeRPCError.invalidArguments("deck-control needs the copilot's absolute directory")
+            throw NativeRPCError.invalidArguments("Deck control needs Hoot’s full folder path.")
         }
         let root = URL(fileURLWithPath: surface.copilotRoot(), isDirectory: true)
         let files = try BackendTaskPersistence(directory: root, ownership: ownership)
         // copilotPaths keeps audit records beside the editable home, even when
         // the owner chooses a different home. They stay inside the records fence.
-        let log = BackendDeckCoreSecurityActionLog(directory: dataDirectory.appendingPathComponent("copilot-log", isDirectory: true))
+        let log = BackendDeckCoreSecurityActionLog(directory: RNMHootPaths(dataRoot: dataDirectory).log)
         let consent = BackendDeckCoreSecurityConsentBroker(timeoutMilliseconds: consentTimeoutMilliseconds, clock: consentClock,
             ask: { await window.ask($0) }, settled: { await window.settled(id: $0, outcome: $1) })
         let keys = BackendDeckCoreSecurityAccessKeys(directory: dataDirectory.appendingPathComponent("remote", isDirectory: true))

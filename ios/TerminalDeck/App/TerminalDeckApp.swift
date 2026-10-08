@@ -103,7 +103,10 @@ struct TerminalDeckApp: App {
 @MainActor
 enum Composition {
     static func model() -> DeckModel {
-        DeckModel(credentials: KeychainCredentialStore(), device: DeviceIdentity.describe())
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ios-alignment-preview") { return IOSAlignmentPreview.model() }
+        #endif
+        return DeckModel(credentials: KeychainCredentialStore(), device: DeviceIdentity.describe())
     }
 
 }

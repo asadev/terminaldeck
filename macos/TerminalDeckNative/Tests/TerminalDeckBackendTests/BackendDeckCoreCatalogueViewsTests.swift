@@ -95,7 +95,18 @@ final class BackendDeckCoreCatalogueViewsTests: XCTestCase {
         let retired = BackendDeckCoreCatalogueCoverage.rows.filter { $0.skip?.contains("Retired by Asad's Chrome removal") == true }
         XCTAssertEqual(retired.count, 16)
         XCTAssertTrue(retired.allSatisfy { $0.tools == nil })
-        XCTAssertEqual(BackendDeckCoreCatalogueCoverage.rows.count, source.count)
+        let rows = BackendDeckCoreCatalogueCoverage.rows
+        let sourceKeys = Set(source.map { "\($0.area):\($0.action)" })
+        let pausedKeys = Set(source.filter { $0.area == "memory" }.map { "\($0.area):\($0.action)" })
+        let setupKeys: Set<String> = ["fixed:staysfixed:setup-preview", "fixed:staysfixed:setup-prepare", "fixed:staysfixed:setup-apply"]
+        // Retain the raw 599-row map; discovery omits seven paused Memory rows
+        // and includes the three guided Stays Fixed setup actions.
+        XCTAssertEqual(pausedKeys.count, 7)
+        XCTAssertEqual(rows.count, 595)
+        XCTAssertEqual(Set(rows.map { "\($0.area):\($0.action)" }), sourceKeys.subtracting(pausedKeys).union(setupKeys))
+        XCTAssertEqual(Set(rows.map { "\($0.area):\($0.action)" }).count, rows.count)
+        XCTAssertTrue(rows.allSatisfy { ($0.tools?.isEmpty == false) != ($0.skip != nil) })
+        XCTAssertFalse(rows.contains { $0.area == "memory" || $0.action.hasPrefix("memory:") || ($0.tools ?? []).contains(where: UIGMemoryVisibility.isMemoryToolName) })
         let counts = try BackendDeckCoreCatalogueCoverage.answer(.object([])).value
         XCTAssertEqual(counts["counts"].fields?.map(\.key), BackendDeckCoreCatalogueCoverage.areaNames)
         XCTAssertFalse(counts.has("rows"))

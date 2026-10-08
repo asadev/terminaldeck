@@ -113,7 +113,7 @@ final class CopilotLandingUITests: XCTestCase {
      * the same skip, a minute later.
      */
     private func pressTheCopilotPill() -> Bool {
-        let pill = app.tabBars.firstMatch.buttons["Copilot"]
+        let pill = app.tabBars.firstMatch.buttons["Hoot"]
         guard pill.waitForExistence(timeout: 90) else { return false }
         pill.tap()
         return true
@@ -246,7 +246,7 @@ final class CopilotLandingUITests: XCTestCase {
         XCTAssertTrue(left, "one press of Back did not leave the Copilot tab")
         XCTAssertFalse(app.staticTexts["copilot.onServer.title"].exists,
                        "Back landed on the page he asked to have removed")
-        XCTAssertFalse(app.tabBars.firstMatch.buttons["Copilot"].isSelected,
+        XCTAssertFalse(app.tabBars.firstMatch.buttons["Hoot"].isSelected,
                        "the Copilot pill is still the selected tab after leaving it")
 
         /*

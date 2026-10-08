@@ -45,7 +45,7 @@ extension NativeCompositionProduction {
     }
 }
 
-private final class NativeCompositionServerCaller: @unchecked Sendable {
+final class NativeCompositionServerCaller: @unchecked Sendable {
     private let authority: BackendCompositionAuthority
     private let joins: BackendCompositionProductionBindings
     private let lock = NSLock()
@@ -68,6 +68,7 @@ private final class NativeCompositionServerCaller: @unchecked Sendable {
         if who.kind == .nativeUI { try authority.requireLocalUI(who.context); return }
         guard let native = lock.withLock({ native[who.context.requestID] }) else { throw NativeRPCError(code: "access-denied", message: "This server operation has no current core caller.") }
         _ = try await authority.resolve(native)
+        if operation.tier == .read { try authority.authorizeMetadata(who.context); return }
         try await joins.prepareNative(native, tier: operation.tier, sentence: "Use server " + operation.operation)
     }
 }

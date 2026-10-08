@@ -10,7 +10,7 @@ extension BackendRemoteProtocol {
             try r.optional("path", into: &message) { .string(try r.folder("path", unusable: "folders.browse with an unusable folder", oversized: "folders.browse with a folder over the path limit")) }
             return message
         case "panel.act", "panel.read":
-            message = message.setting("panel", .string(try r.named("panel", allowed: ["artifacts", "store", "readiness", "mcp"], reason: "\(type) for a panel this build does not serve")))
+            message = message.setting("panel", .string(try r.named("panel", allowed: BackendRemoteProtocol.panels, reason: "\(type) for a panel this build does not serve")))
             if type == "panel.act" {
                 message = message.setting("action", .string(try r.text("action", reason: "panel.act with an unusable action", bytes: 128, controls: true)))
             }

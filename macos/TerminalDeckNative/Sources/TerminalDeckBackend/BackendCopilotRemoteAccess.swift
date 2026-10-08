@@ -61,7 +61,7 @@ public enum BackendCopilotRemoteSurface {
         "copilot.answer": .alter, "copilot.interactive": .alter,
     ]
     public static func allowed(_ grant: BackendCopilotRemoteGrant, verb: String) -> Bool {
-        guard let tier = frameTier[verb] else { return false }; return grant.tiers.contains(tier)
+        guard let tier = frameTier[RNMHootWireCompatibility.incomingClientType(verb)] else { return false }; return grant.tiers.contains(tier)
     }
     public static func runConfigName(_ deviceID: String) -> String {
         let safe = deviceID.unicodeScalars.map { scalar -> String in
@@ -78,7 +78,7 @@ public enum BackendCopilotRemoteSurface {
         try write(text)
         deferWrite(submitGapMilliseconds) {
             do { try write("\r") }
-            catch { onDeferredError("[remote] could not submit a copilot message: \(error.localizedDescription)") }
+            catch { onDeferredError("[remote] could not submit a Hoot message: \(error.localizedDescription)") }
         }
     }
 }

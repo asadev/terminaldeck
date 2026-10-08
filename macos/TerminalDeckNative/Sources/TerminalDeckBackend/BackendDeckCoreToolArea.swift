@@ -32,11 +32,13 @@ public struct BackendDeckCoreToolArea: Sendable {
     }
 
     public func register(on server: BackendNativeMCPServer) async throws {
-        for tool in tools {
+        let contribution = try tools.map { tool -> (BackendMCPTool, BackendNativeMCPServer.Handler) in
             guard let handler = handlers[tool.id] else {
                 throw BackendSessionFailure.missingCapability("the \(tool.id) tool handler")
             }
-            try await server.registerTool(tool, handler: handler)
+            return (tool, handler)
         }
+        try await server.replaceTools(ownerID: "backend.tool-area:" + id,
+            tools: RNMHootMCPCompatibility.registrations(contribution))
     }
 }

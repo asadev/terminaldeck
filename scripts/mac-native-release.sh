@@ -70,22 +70,18 @@ for out in "$ZIP" "$FEED" "$DMG" release/latest-mac.yml; do [[ ! -e "$out" ]] ||
 # --------------------------------------------------------------- signing mode
 
 step "Signing identity"
-FULL_ID="Developer ID Application: $IDENTITY"
-KC_ARGS=(); [[ -n "$KEYCHAIN" ]] && KC_ARGS=("$KEYCHAIN")
-IDENTITIES=""
-[[ "$FORCE_ADHOC" -eq 1 ]] || IDENTITIES="$(security find-identity -v -p codesigning ${KC_ARGS[@]+"${KC_ARGS[@]}"} 2>/dev/null || true)"
-[[ "$FORCE_ADHOC" -eq 1 && "$REQUIRE_DEVID" -eq 1 ]] && die "--ad-hoc and --require-developer-id contradict each other."
-if grep -qF "\"$FULL_ID\"" <<<"$IDENTITIES"; then
-    MODE=developer-id
-    export TD_SIGN_IDENTITY="$FULL_ID"
-    [[ -n "$KEYCHAIN" ]] && export TD_KEYCHAIN="$KEYCHAIN"
-    printf '  %s\n' "$FULL_ID"
-else
-    [[ "$REQUIRE_DEVID" -eq 1 ]] && die "\"$FULL_ID\" is not in ${KEYCHAIN:-any keychain codesign can see}." \
-        "A release must be Developer ID signed; refusing to fall back to ad-hoc."
+if [[ "${FORCE_ADHOC:-0}" == 1 ]]; then
+    [[ "$REQUIRE_DEVID" == 0 ]] || die "--ad-hoc cannot satisfy --require-developer-id"
     MODE=adhoc
     export TD_SIGN_IDENTITY="-"
-    printf '  \033[33mno "%s" here — ad-hoc, for a local test only.\033[0m\n' "$FULL_ID"
+else
+    source "$REPO/scripts/mac-signing-scope.sh"
+    export TD_KEYCHAIN="${KEYCHAIN:-$HOME/Library/Keychains/terminaldeck-signing.keychain-db}"
+    export TD_SIGN_IDENTITY="$IDENTITY"
+    td_mac_signing_scope || die "Scoped Developer ID selection failed; no shared-keychain fallback"
+    KEYCHAIN="$TD_KEYCHAIN"
+    MODE=developer-id
+    printf '  %s (%s)\n' "$TD_MAC_SIGNING_NAME" "$TD_MAC_SIGNING_SHA1"
 fi
 [[ "$NOTARIZE" -eq 1 && "$MODE" != developer-id ]] && die "--notarize needs a Developer ID signature."
 
@@ -240,7 +236,7 @@ hdiutil create -quiet -volname "Terminal Deck $VERSION" -srcfolder "$STAGE" -fs 
 rm -rf "$STAGE"
 if [[ "$MODE" == developer-id ]]; then
     SIGN=(codesign --force --sign "$TD_SIGN_IDENTITY" --timestamp)
-    [[ -n "$KEYCHAIN" ]] && SIGN+=(--keychain "$KEYCHAIN")
+    SIGN+=(--keychain "$KEYCHAIN")
     "${SIGN[@]}" "$DMG"
     if [[ "$NOTARIZE" -eq 1 ]]; then
         xcrun notarytool submit "$DMG" --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" \

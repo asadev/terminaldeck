@@ -5,7 +5,7 @@ import TerminalDeckNativeCore
 /// (`copilot.home`), the one desk runtime and the shared Home action writer.
 /// The picker is the app's free-standing AppKit Open panel (no parent sheet).
 public struct BackendHootJoinFolderSupply: BackendCopilotFolderDependencies {
-    public static let homeSetting = "copilot.home"
+    public static let homeSetting = RNMHootSettingsMigration.homeKey
     private let dataRoot: String
     private let settings: BackendAppSettingsStore
     private let running: @Sendable () async -> String?
@@ -58,6 +58,9 @@ public enum BackendHootJoinAssembly {
         /// Stops paired-device Hoot (`{ await frames.stop(); await runs.stopAll() }`)
         /// once the native remote host serves it; nil = no native phone runs exist.
         public let stopPhoneRuns: (@Sendable () async -> Void)?
+        public let headlessPolicy: (@Sendable (BackendCreateSessionInput, BackendProviderSpec, BackendLaunchContext) async throws -> [String])?
+        public let readAcknowledged: (@Sendable (RNMHootPaths.Folder) async throws -> Void)?
+        public let headlessProvider: HootChatProvider
         public init(storageRoot: URL, sessions: BackendCompositionSessions, deckCore: BackendDeckCoreRuntime,
                     confinement: BackendMacConfinement?, machineID: String,
                     pickFolder: @escaping @Sendable (String) async throws -> String?,
@@ -65,10 +68,16 @@ public enum BackendHootJoinAssembly {
                     reveal: (any BackendCopilotInspectRevealing)?,
                     window: @escaping @Sendable (NativeRPCContext) throws -> Void = BackendCompositionRoot.requireLocalUI,
                     transcriptHomeScopes: (@Sendable () async -> [NativeTranscriptHomeScope])? = nil,
-                    stopPhoneRuns: (@Sendable () async -> Void)? = nil) {
+                    stopPhoneRuns: (@Sendable () async -> Void)? = nil,
+                    headlessPolicy: (@Sendable (BackendCreateSessionInput, BackendProviderSpec, BackendLaunchContext) async throws -> [String])? = nil,
+                    headlessProvider: HootChatProvider = .claude,
+                    readAcknowledged: (@Sendable (RNMHootPaths.Folder) async throws -> Void)? = nil) {
             self.storageRoot = storageRoot; self.sessions = sessions; self.deckCore = deckCore; self.confinement = confinement
             self.machineID = machineID; self.pickFolder = pickFolder; self.transcriptScope = transcriptScope
             self.reveal = reveal; self.window = window; self.transcriptHomeScopes = transcriptHomeScopes; self.stopPhoneRuns = stopPhoneRuns
+            self.headlessPolicy = headlessPolicy
+            self.readAcknowledged = readAcknowledged
+            self.headlessProvider = headlessProvider
         }
     }
     /// Everything the app and the other areas need afterwards.
@@ -94,8 +103,10 @@ public enum BackendHootJoinAssembly {
         let storageRoot = inputs.storageRoot.standardizedFileURL
         let sessions = inputs.sessions
         let boundary = BackendHootJoinSpawnBoundary(hidden: .shared)
-        let driver = BackendCopilotSessionNativeDriver(providers: root.providers, profiles: sessions.profiles,
-            signIns: sessions.signIn, launcher: sessions.launcher, ptys: sessions.manager, exposure: boundary.exposureHook)
+        let history = inputs.headlessProvider == .claude ? "hoot/chat.json" : "hoot/chat-\(inputs.headlessProvider.rawValue).json"
+        let chat = try BackendHootChatStore(file: dataRoot.appendingPathComponent(history), provider: inputs.headlessProvider, consent: inputs.deckCore.consent)
+        let driver = BackendHootChatDriver(providers: root.providers, sessions: sessions,
+            confinement: inputs.confinement, chat: chat, exposure: boundary.exposureHook, policy: inputs.headlessPolicy)
         let deckCore = inputs.deckCore, providers = root.providers
         let records: any BackendCopilotSessionRecordsProviding
         if let confinement = inputs.confinement {
@@ -111,7 +122,7 @@ public enum BackendHootJoinAssembly {
                 let value = await settings.value(BackendHootJoinFolderSupply.homeSetting)
                 return value == .missing ? .null : value
             },
-            driver: driver, records: records, tools: door))
+            driver: driver, records: records, tools: door, chat: chat))
         let folder = BackendCopilotFolderService(dependencies: BackendHootJoinFolderSupply(dataRoot: dataRoot, settings: settings,
             runningIn: { try? await runtime.state().folder.runningIn }, pick: inputs.pickFolder))
         let authority = BackendHootJoinSourceAuthority(window: inputs.window)
@@ -132,7 +143,8 @@ public enum BackendHootJoinAssembly {
         let registration = try await root.installHoot(dependencies: .init(dataRoot: dataRoot, storageRoot: storageRoot,
             runtime: runtime, manager: sessions.manager, lifecycle: sessions.lifecycle, folder: folder, mcpDoor: door,
             actionLog: deckCore.log, rawSink: joins.sink, boundary: boundary, menu: menu, menuSnapshot: snapshot,
-            screenMonitor: monitor, authority: authority, joins: joins, reveal: inputs.reveal, menuSupply: supply),
+            screenMonitor: monitor, authority: authority, joins: joins, reveal: inputs.reveal, menuSupply: supply,
+            readAcknowledged: inputs.readAcknowledged, providerChoice: BackendHootProviderChoice(settings: root.settings)),
             oldHootOwnerDisabled: oldHootOwnerDisabled)
         return .init(registration: registration, authority: authority, runtime: runtime, boundary: boundary,
             joins: joins, menu: menu, screenMonitor: monitor)

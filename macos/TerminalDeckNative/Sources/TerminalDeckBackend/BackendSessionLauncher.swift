@@ -192,10 +192,24 @@ public actor BackendSessionLauncher {
         self.manager = manager; self.dependencies = dependencies
     }
 
+    /// Direct-pipe Hoot uses the same launch instruction owner as PTY sessions.
+    /// Its driver appends the backend context extras once after these flags.
+    public func headlessPolicy(_ input: BackendCreateSessionInput, provider: BackendProviderSpec,
+                               context: BackendLaunchContext) async throws -> [String] {
+        try Task.checkCancellation()
+        guard input.provider == nil || input.provider == provider.id else { throw BackendSessionFailure.providerMismatch }
+        let instructions = try await dependencies.instructions.arguments(input, provider: provider, context: context)
+        let explicitPermission = input.permissionMode != nil && provider.id == "claude"
+        return (explicitPermission ? BackendTAGLaunchArguments.removingPermissionOverride(provider.args) : provider.args) + instructions
+    }
+
     public func create(_ input: BackendCreateSessionInput, context: BackendLaunchContext = BackendLaunchContext()) async throws -> BackendSessionMeta {
         await enter()
         defer { leave() }
         try Task.checkCancellation()
+        guard input.agentSettings == nil else {
+            throw BackendSessionFailure.missingCapability("the selected account's verified CLI help and owned agent-settings/MCP launch lease; this session was not started with ignored settings")
+        }
         guard input.cwd.hasPrefix("/"), !input.cwd.contains("\0") else { throw BackendSessionFailure.invalidInput("The session folder must be an absolute path.") }
         if context.deviceBoundary != nil && context.appFenceID != nil {
             throw BackendSessionFailure.unsupported("A device boundary and an app fence cannot be nested for one session.")
@@ -208,16 +222,18 @@ public actor BackendSessionLauncher {
         let instructions = try await dependencies.instructions.arguments(input, provider: provider, context: context)
         // Source withLaunchArgs composes global flags before a named resume
         // subcommand (notably Codex's -c developer_instructions).
-        let additions = instructions + context.extraArguments
+        let explicitPermission = input.permissionMode != nil && provider.id == "claude"
+        let additions = instructions + (explicitPermission ? BackendTAGLaunchArguments.removingPermissionOverride(context.extraArguments) : context.extraArguments)
         let composedProvider = BackendProviderSpec(id: provider.id, command: provider.command,
-            args: provider.args + additions,
-            resumeArgs: provider.resumeArgs.isEmpty ? [] : provider.resumeArgs + additions)
+            args: (explicitPermission ? BackendTAGLaunchArguments.removingPermissionOverride(provider.args) : provider.args) + additions,
+            resumeArgs: provider.resumeArgs.isEmpty ? [] : (explicitPermission ? BackendTAGLaunchArguments.removingPermissionOverride(provider.resumeArgs) : provider.resumeArgs) + additions)
         let selection = try BackendConversationLaunch.arguments(input, provider: composedProvider, live: live)
         // TS host-core.ts: `if (named && chosen !== resumeArgs) throw …` — before any account work.
         if selection.heldNamed { throw BackendSessionFailure.conversationHeld }
         let account = try await dependencies.accounts.resolve(input, provider: provider, loginPath: path, context: context)
         var session: BackendSessionMeta?
         do {
+            if let prepared = BackendAGSLaunchScope.prepared { try BackendAGSLaunchBinding.requireAccount(prepared, actual: account, provider: provider) }
             let tabKey = try await dependencies.ledger.tabKey(input, context: context, live: live)
             var conversationID = selection.conversationID
             var launchArguments = selection.launchArguments

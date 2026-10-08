@@ -50,6 +50,12 @@ public actor BackendAppSettingsStore {
     private func removeSnapshotListener(_ id: UUID) { snapshotListeners.removeAll { $0.0 == id } }
     private func announceSnapshot() { let value = get(); for (_, listener) in snapshotListeners { listener(value) } }
     public func value(_ key: String) -> NativeRPCValue { load()[key] }
+    public func requireSupportedHootMigrationSource() throws {
+        _ = load()
+        guard !backupBeforeWrite else {
+            throw NativeRPCError(code: "hoot-migration", message: "Hoot settings migration needs a readable, supported settings file.")
+        }
+    }
     public func patch(_ patch: NativeRPCValue) throws -> NativeRPCValue {
         let next = Self.applyPatch(load(), patch)
         try persist(next); cache = next; announceSnapshot(); return envelope(next)

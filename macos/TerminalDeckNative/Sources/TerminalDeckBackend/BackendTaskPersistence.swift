@@ -44,6 +44,26 @@ public struct BackendTaskPersistence: Sendable {
         }
         return try NativeRPCValue.parseJSON(data, maximumBytes: maximumBytes)
     }
+    /// Exact owned bytes for a rollback; no JSON re-encoding or link traversal.
+    public func readOwnedBytes(_ name: String, maximumBytes: Int = 4 * 1024 * 1024) throws -> Data? {
+        if ownership == .memory { return nil }
+        let target = try file(name)
+        let descriptor = Darwin.open(target.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        if descriptor < 0 { if errno == ENOENT { return nil }; throw posix("read private rollback record") }
+        defer { Darwin.close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1, info.st_size <= maximumBytes else {
+            throw NativeRPCError(code: "record-unreadable", message: "The private rollback record is not a bounded regular file")
+        }
+        var bytes = Data(), buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 { return bytes }
+            if count < 0 { if errno == EINTR { continue }; throw posix("read private rollback record") }
+            guard bytes.count + count <= maximumBytes else { throw NativeRPCError.malformed("Private rollback record is too large") }
+            bytes.append(contentsOf: buffer.prefix(count))
+        }
+    }
     public func write(_ name: String, value: NativeRPCValue) throws { try writeBytes(name, data: value.encodedJSON(pretty: true)) }
     public func writeBytes(_ name: String, data: Data, replace: Bool = true) throws {
         try writable(); if ownership == .memory { return }

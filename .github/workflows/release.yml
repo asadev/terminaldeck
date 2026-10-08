@@ -205,6 +205,16 @@ jobs:
           bash scripts/native-standalone/check-update-zip.sh "release/terminaldeck-native-$v-arm64.zip"
           ls -l release
 
+      # The new phone names this release in its server-install URL. Keep the
+      # matching tarball beside the Mac assets even though Android/Windows are held.
+      - name: Server installer matching the phone version
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          npm pack ./out/headless --pack-destination release
+          cp scripts/install-headless.sh release/install.sh
+          test -s "release/terminaldeck-$v.tgz"
+
       - name: Upload the mac artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -215,6 +225,8 @@ jobs:
             release/*.blockmap
             release/latest-mac.yml
             release/latest-native-mac.yml
+            release/*.tgz
+            release/install.sh
             release/mac-install-note.md
           if-no-files-found: error
           retention-days: 1
@@ -336,7 +348,7 @@ jobs:
           echo "$previous" > release/carried-from.txt
           gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir release \
             --pattern '*.exe' --pattern '*.exe.blockmap' --pattern 'latest.yml' \
-            --pattern '*.tgz' --pattern 'install.sh' --pattern '*.apk'
+            --pattern '*.tgz' --pattern 'install.sh' --pattern '*.apk' --skip-existing
           # The Electron Mac app reads latest-mac.yml from the newest release. The
           # mac job writes one that points 0.18.x at the native app's zip (it
           # updates in place from its side panel). Only if it is missing are the
@@ -456,7 +468,7 @@ jobs:
           # "Privacy & Security" came out as "Privacy {{MACNOTE}} Security" in the
           # published v0.10.0 notes. python replaces literally on every bash.
           if [ -f release/carried-from.txt ]; then
-            notes="$(printf '%s\n\n%s' "**This release is for the Mac.** Windows, the phone download and the server package are unchanged from $(cat release/carried-from.txt); their files are carried over so their updaters stay where they are." "$notes")"
+            notes="$(printf '%s\n\n%s' "**This release updates the Mac and prepares the matching server installer for the iPhone.** Windows and Android downloads are unchanged from $(cat release/carried-from.txt); their files are carried over so their updaters stay where they are." "$notes")"
           fi
 
           notes="$(MACNOTE="$macnote" APP="$app" NOTES="$notes" python3 -c 'import os,sys; sys.stdout.write(os.environ["NOTES"].replace("{{MACNOTE}}", os.environ["MACNOTE"]).replace("{{APP}}", os.environ["APP"]))')"

@@ -10,6 +10,7 @@ enum NativeServersRoute: Hashable {
     case list
     case add
     case server(String)
+    case thisMac
 }
 
 /// Machines → Servers, drawn in Swift (`machines/servers/*`, and the server half
@@ -30,6 +31,13 @@ struct NativeServersArea: View {
                 NativeServersSection(model: model, route: $route)
             case .add:
                 NativeAddServerPage(model: model, route: $route)
+            case .thisMac:
+                if NativeServerControlRelease.enabled {
+                    NativeServerControlLocalSurface(route: $route, advanced: NativeServerControlScreens.advanced)
+                } else {
+                    NativeServersSection(model: model, route: $route)
+                        .onAppear { route = .list }
+                }
             case .server(let id):
                 if let server = model.servers.first(where: { $0.id == id }) {
                     NativeServerPage(model: model, server: server, route: $route)
@@ -235,11 +243,14 @@ struct NativeServersSection: View {
                     }
                 }
             }
+            if NativeServerControlRelease.enabled {
+                NativeServerControlLocalEntry { route = .thisMac }
+            }
             Button("Add a server") {
                 model.clearAddError()
                 route = .add
             }
-            .buttonStyle(NativeServersPrimaryButtonStyle())
+            .buttonStyle(.bordered).nativeUIGGreyControl()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

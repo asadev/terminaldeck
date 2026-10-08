@@ -33,7 +33,7 @@ public enum BackendDeckToolsRegistration {
         let machineIDs = try BackendDeckToolsMachinesCatalogue.rows().map {
             try $0["id"].requireString("source tool id", nonempty: true)
         }
-        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs)
+        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs)
         let supplied = Set(definitions.map { $0.spec.id })
         guard supplied == expected, definitions.count == expected.count else {
             let missing = expected.subtracting(supplied).sorted().joined(separator: ", ")
@@ -69,7 +69,7 @@ public enum BackendDeckToolsRegistration {
             }
         }
         try Task.checkCancellation()
-        try await server.replaceTools(ownerID: ownerID, tools: contribution)
+        try await server.replaceTools(ownerID: ownerID, tools: RNMHootMCPCompatibility.registrations(contribution))
         return Installed(areas: areas, metadata: metadata, toolIDs: areas.flatMap { $0.tools.map(\.id) })
     }
 }

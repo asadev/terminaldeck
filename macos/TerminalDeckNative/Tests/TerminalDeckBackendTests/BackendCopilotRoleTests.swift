@@ -10,9 +10,11 @@ final class BackendCopilotRoleTests: XCTestCase {
         XCTAssertTrue(role.hasSuffix("person's half below."))
         XCTAssertFalse(role.hasSuffix("\n"))
         for phrase in ["nothing stops you", "Do it yourself", "Hand it to an agent", "A result becomes verified only through a review that names its evidence", "stale or conflicting"] { XCTAssertTrue(role.contains(phrase), phrase) }
-        for tool in ["tasks_goals", "tasks_plan", "tasks_progress", "tasks_retry", "tasks_reassign", "tasks_review", "knowledge_search", "knowledge_get", "knowledge_record", "knowledge_supersede", "knowledge_note", "memory_search", "memory_read", "hoot_memory"] {
+        for tool in ["tasks_goals", "tasks_plan", "tasks_progress", "tasks_retry", "tasks_reassign", "tasks_review", "knowledge_search", "knowledge_get", "knowledge_record", "knowledge_supersede", "knowledge_note", "hoot_memory"] {
             XCTAssertTrue(role.contains("`" + tool + "`"), tool)
         }
+        XCTAssertFalse(role.contains("`memory_search`"))
+        XCTAssertFalse(role.contains("`memory_read`"))
         XCTAssertFalse(role.contains("you do not change files"))
         XCTAssertFalse(role.contains("you were started without"))
     }

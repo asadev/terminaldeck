@@ -86,7 +86,7 @@ import TerminalDeckNativeCore
             },
             say: { [weak self] id, text in
                 guard let self else { throw NativeRPCError(code: "unavailable", message: "Hoot's island supply has stopped.") }
-                try self.say(id, text)
+                try await self.say(id, text)
             },
             watchChat: { [weak self] cwd, agentSessionID, update in
                 guard let self else { throw NativeRPCError(code: "unavailable", message: "Hoot's island supply has stopped.") }
@@ -119,7 +119,12 @@ import TerminalDeckNativeCore
 
     /// `typeAndSubmit` into Hoot's own live PTY only: text, then a bare CR
     /// 50 ms later. The PTY write itself rechecks that the process is alive.
-    private func say(_ id: String, _ text: String) throws {
+    private func say(_ id: String, _ text: String) async throws {
+        if runtime.structuredChat != nil {
+            guard runtime.isCopilotSession(id) else { throw BackendSessionFailure.missingSession }
+            _ = try await runtime.invoke("hoot:chat:say", arguments: [.string(text)])
+            return
+        }
         guard runtime.isCopilotSession(id), manager.list().contains(where: { $0.id == id && $0.exitCode == nil }) else {
             throw BackendSessionFailure.missingSession
         }
@@ -130,6 +135,22 @@ import TerminalDeckNativeCore
     private func watchChat(cwd: String, agentSessionID: String?,
                            update: @escaping @MainActor ([NativeRPCValue], Bool) -> Void) -> any BackendHootCancellation {
         let handle = BackendHootJoinChatWatch()
+        if let chat = runtime.structuredChat {
+            handle.task = Task {
+                let stream = await chat.subscribe()
+                for await value in stream {
+                    guard !Task.isCancelled else { return }
+                    let events = try? (value["events"].elements ?? []).map(HootChatEvent.init(wire:))
+                    let messages = HootChatProjection.rows(events ?? []).compactMap { row -> NativeRPCValue? in
+                        guard [.user, .message, .textDelta, .error].contains(row.kind) else { return nil }
+                        return .object([.init("id", .string(row.id)), .init("role", .string(row.kind == .user ? "user" : "assistant")),
+                            .init("text", row.value["text"])])
+                    }
+                    update(messages, true)
+                }
+            }
+            return handle
+        }
         let scope = transcriptScope
         handle.task = Task { [weak handle] in
             do {

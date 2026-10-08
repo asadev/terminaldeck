@@ -13,6 +13,7 @@ public actor BackendSessionLifecycleCoordinator {
     private let cleanup: BackendSessionLifecycleCleanup
     private let emit: @Sendable (BackendSessionLifecycleEvent) -> Void
     private var statuses: [String: BackendSessionStatus] = [:]
+    private var acceptedStatuses: [String: BackendSessionStatus] = [:]
     private var hookStatus: [String: (status: BackendSessionStatus, at: Date)] = [:]
     private var observedAgents: [String: (provider: String, conversationID: String?)] = [:]
     private struct LaunchFacts: Sendable { let input: BackendCreateSessionInput; let context: BackendLaunchContext }
@@ -80,6 +81,12 @@ public actor BackendSessionLifecycleCoordinator {
         input.tabKey = old.tabKey ?? saved.tabKey; input.model = requested.model ?? raw["model"].string
         input.deniedTools = (raw["deniedTools"].elements ?? []).compactMap(\.string)
         input.noSkills = raw["noSkills"].bool == true ? true : nil; input.agentInstructions = raw["agentInstructions"].string
+        input.claudeAgent = raw["claudeAgent"].string
+        input.allowedTools = raw["allowedTools"].elements?.compactMap(\.string)
+        input.permissionMode = raw["permissionMode"].string
+        input.taskID = raw["taskID"].string
+        input.taskProject = raw["taskProject"].string
+        input.agentDefinitionsFile = raw["agentDefinitionsFile"].string
         if input.resume == true, input.resumeConversationId == nil { input.resumeConversationId = old.agentSessionId ?? saved.conversationID }
         if input.resume == true, saved.provider == "claude", input.resumeConversationId == nil {
             throw BackendSessionFailure.unsupported("No exact conversation is known for this restart. Open the saved conversation chooser instead of guessing a new one.")
@@ -106,6 +113,8 @@ public actor BackendSessionLifecycleCoordinator {
     }
     func writeDirect(sessionID: String, data: String) async throws {
         try manager.write(sessionID, data: data)
+        hookStatus[sessionID] = nil
+        if data.contains("\n") || data.contains("\r") { emitStatus(sessionID, .working, source: "input") }
         try await ledger.activity(sessionID)
     }
     func setTypingOwner(_ owner: (@Sendable (String, String) async throws -> Void)?) { typingOwner = owner }
@@ -127,10 +136,24 @@ public actor BackendSessionLifecycleCoordinator {
     }
     public func noteHookStatus(sessionID: String, status: BackendSessionStatus, receivedAt: Date) {
         guard manager.list().contains(where: { $0.id == sessionID && $0.exitCode == nil }) else { return }
-        hookStatus[sessionID] = (status, receivedAt); emit(.status(sessionID: sessionID, status: status, source: "hook"))
+        hookStatus[sessionID] = (status, receivedAt); emitStatus(sessionID, status, source: "hook")
+    }
+    private func emitStatus(_ id: String, _ status: BackendSessionStatus, source: String) {
+        guard acceptedStatuses[id] != status else { return }
+        acceptedStatuses[id] = status
+        emit(.status(sessionID: id, status: status, source: source))
     }
     public func noteAgentObservation(sessionID: String, provider: String, conversationID: String?, ended: Bool) {
         observedAgents[sessionID] = ended ? nil : (provider, conversationID)
+    }
+    public func acceptedAlertBaseline() -> [BackendAGSAlertSession] {
+        manager.list().filter { $0.exitCode == nil }.map {
+            BackendAGSAlertSession(id: $0.id, status: acceptedStatuses[$0.id])
+        }
+    }
+    public func acceptedAlertStatus(sessionID: String) -> BackendSessionStatus? {
+        guard manager.list().contains(where: { $0.id == sessionID && $0.exitCode == nil }) else { return nil }
+        return acceptedStatuses[sessionID]
     }
     @discardableResult
     public func observe(_ callback: @escaping @Sendable (BackendSessionEvent) async -> Void) -> UUID {
@@ -140,17 +163,25 @@ public actor BackendSessionLifecycleCoordinator {
     public func noteSessionEvent(_ event: BackendSessionEvent) async {
         switch event {
         case .data(let id, _):
-            // New output is evidence of new work; stale Stop/Permission hook
-            // status must not keep the row completed or blocked indefinitely.
-            hookStatus[id] = nil
-        case .status(let id, let status): statuses[id] = status; emit(.status(sessionID: id, status: hookStatus[id]?.status ?? status, source: hookStatus[id] == nil ? "screen" : "hook"))
+            // Completed/input hooks remain authoritative through TUI redraws.
+            // New input or the next work hook starts another turn. A work hook
+            // can still yield to the screen if its matching Stop never arrives.
+            if hookStatus[id]?.status == .working { hookStatus[id] = nil }
+        case .status(let id, let status):
+            guard let session = manager.list().first(where: { $0.id == id }) else { break }
+            if session.exitCode != nil || status == .exited { hookStatus[id] = nil; statuses[id] = .exited }
+            else { statuses[id] = status }
+            emitStatus(id, hookStatus[id]?.status ?? statuses[id] ?? .idle, source: hookStatus[id] == nil ? "screen" : "hook")
         case .exit(let id, _):
             statuses[id] = .exited; hookStatus[id] = nil
+            if manager.list().contains(where: { $0.id == id }) { emitStatus(id, .exited, source: "exit") }
+            else { acceptedStatuses[id] = nil }
             observedAgents[id] = nil
             await launch.processExited(id); await attribution.drop(sessionID: id)
             do { try await cleanup.release(id); try await store.ledgerFlush() } catch { failures.append(error.localizedDescription) }
         case .removed(let id, let reason):
             statuses[id] = nil; hookStatus[id] = nil
+            acceptedStatuses[id] = nil
             observedAgents[id] = nil
             launchFacts[id] = nil
             await launch.removed(id, reason: reason); await attribution.drop(sessionID: id)

@@ -123,7 +123,9 @@ public enum BackendDeckCoreStatus {
     public static func value(endpoint: BackendDeckCoreSecurityEndpoint, control: BackendDeckCoreSecurityControl,
                              metadata: [BackendDeckCoreCatalogueMetadata], consent: BackendDeckCoreSecurityConsentBroker,
                              log: BackendDeckCoreSecurityActionLog) async throws -> NativeRPCValue {
-        let policies = await control.tools(), ids = Set(policies.map { $0.tool.id })
+        let policies = await control.tools().filter { BackendUIGMemoryDiscovery.showsTool($0.tool) }
+        let ids = Set(policies.map { $0.tool.id })
+        let metadata = BackendUIGMemoryDiscovery.metadata(metadata)
         let registry = try BackendDeckCoreCatalogueRegistry(metadata: metadata.filter { ids.contains($0.tool.id) })
         let cost = BackendDeckCoreCatalogueCost.measure(try registry.listing())
         let titles = Dictionary(uniqueKeysWithValues: metadata.map { ($0.tool.id, $0.title) })

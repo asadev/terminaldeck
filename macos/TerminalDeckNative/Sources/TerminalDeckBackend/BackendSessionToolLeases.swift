@@ -36,7 +36,7 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
     private let runID = UUID().uuidString.lowercased()
     private struct Lease: Sendable {
         let directory: URL
-        let registration: BackendMCPRegistration
+        let registration: BackendMCPRegistration?
         var sessionID: String?
         let deadline: UUID
     }
@@ -56,17 +56,22 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
     public func prepareOrdinary() async throws -> BackendPreparedToolLease {
         try await prepare(serverName: "deck-control", allowed: BackendOrdinarySessionToolGrant.names, projectRoot: nil)
     }
+    public func prepareOrdinary(restricting allowedTools: [String]?, deniedTools: [String], taskID: String? = nil, taskProject: String? = nil) async throws -> BackendPreparedToolLease? {
+        let allowed = BackendTAGToolPolicy.filter(BackendTAGToolPolicy.sessionNames(taskID: taskID), server: "deck-control", allowed: allowedTools, denied: deniedTools)
+        guard !allowed.isEmpty else { return nil }
+        return try await prepare(serverName: "deck-control", allowed: allowed, projectRoot: taskID == nil ? nil : taskProject, taskProject: taskID == nil ? nil : taskProject)
+    }
 
     /// A configured project tool endpoint supplies its actual tool ids; a
     /// project grant is never the entire app/Commander catalogue.
-    public func prepare(serverName: String, allowed: Set<String>, projectRoot: String?) async throws -> BackendPreparedToolLease {
+    public func prepare(serverName: String, allowed: Set<String>, projectRoot: String?, taskProject: String? = nil) async throws -> BackendPreparedToolLease {
         guard !stopped, readiness == .ready else { throw BackendSessionFailure.missingCapability("the serving session MCP endpoint") }
         guard serverName.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil,
               let serving = try await endpoint.description() else { throw BackendSessionFailure.missingCapability("the listening session MCP endpoint") }
         let catalogue = try await endpoint.catalogue()
         guard !stopped else { throw BackendSessionFailure.closed }
         var grant: Set<String> = []
-        for spec in catalogue where allowed.contains(spec.id) || allowed.contains(spec.wireName) {
+        for spec in catalogue where RNMHootMCPCompatibility.permits(spec.id, granted: allowed) || RNMHootMCPCompatibility.permits(spec.wireName, granted: allowed) {
             grant.insert(spec.id); grant.insert(spec.wireName)
         }
         guard !grant.isEmpty else { throw BackendSessionFailure.missingCapability("registered tools for this session's actual grant") }
@@ -81,7 +86,7 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
         let config = directory.appendingPathComponent(serverName + ".json")
         let tokenFile = directory.appendingPathComponent(serverName + ".token")
         let registration = try await endpoint.register(token: token,
-            grant: BackendMCPCallerGrant(attended: true, allowedTools: grant, allowedTiers: [.read, .act, .alter], projectRoot: projectRoot))
+            grant: BackendMCPCallerGrant(attended: true, allowedTools: grant, allowedTiers: [.read, .act, .alter], projectRoot: projectRoot, taskProject: taskProject))
         do {
             guard !stopped else { throw BackendSessionFailure.closed }
             let server = NativeRPCValue.object([.init("type", .string("http")), .init("url", .string(serving.url.absoluteString)),
@@ -103,6 +108,37 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
             readableFiles: [config.path, tokenFile.path], implementation: serving.implementation)
     }
 
+    /// A lease in this exact existing owner namespace, with NO MCP caller token.
+    public func reserveAgentSettingsFiles() throws -> BackendAGSLaunchFileLease {
+        guard !stopped, readiness == .ready else { throw BackendSessionFailure.closed }
+        try prepareNamespace()
+        let id = UUID(), directory = root.appendingPathComponent("native-" + runID).appendingPathComponent(id.uuidString.lowercased())
+        try BackendPrivateLaunchFiles.createDirectory(directory, under: root)
+        let deadline = clock.schedule(after: 60_000) { [weak self] in Task { await self?.expire(id) } }
+        leases[id] = Lease(directory: directory, registration: nil, sessionID: nil, deadline: deadline)
+        return BackendAGSLaunchFileLease(id: id, directory: directory, write: { [weak self] files in
+            guard let self else { throw BackendSessionFailure.closed }; try await self.writeAgentSettingsFiles(id, files: files)
+        }, bind: { [weak self] session in
+            guard let self else { throw BackendSessionFailure.closed }; try await self.bind(id, sessionID: session)
+        }, abandon: { [weak self] in await self?.abandon(id) })
+    }
+    private func writeAgentSettingsFiles(_ id: UUID, files: [String: Data]) throws {
+        guard !stopped, let lease = leases[id], lease.registration == nil, lease.sessionID == nil,
+              files.count <= 50 else { throw BackendSessionFailure.closed }
+        for (name, bytes) in files {
+            guard name.hasPrefix("ags-"), name.hasSuffix(".json"), !name.contains("/"), !name.contains("\0"), bytes.count <= 2 * 1024 * 1024 else { throw BackendSessionFailure.invalidInput("Invalid private agent settings file.") }
+            try BackendPrivateLaunchFiles.write(bytes, to: lease.directory.appendingPathComponent(name))
+        }
+    }
+    public func agentSettingsConfiguration(_ id: UUID) throws -> NativeRPCValue {
+        guard !stopped, let lease = leases[id], lease.registration != nil else { throw BackendSessionFailure.closed }
+        let files = try FileManager.default.contentsOfDirectory(at: lease.directory, includingPropertiesForKeys: nil)
+        let configs = files.filter { $0.pathExtension == "json" }
+        guard configs.count == 1, let bytes = try BackendAccountFiles.boundedRead(configs[0], maximum: 2 * 1024 * 1024) else { throw BackendSessionFailure.invalidInput("The actual session MCP configuration is missing.") }
+        let value = try NativeRPCValue.parseJSON(bytes)["mcpServers"]
+        guard value.fields != nil else { throw BackendSessionFailure.invalidInput("The actual session MCP configuration is malformed.") }; return value
+    }
+
     public func nativeStdioSpec(_ prepared: BackendPreparedToolLease, serverName: String,
                                 launcher: BackendNativeMCPStdioLauncher) async throws -> BackendProjectMCPServerSpec {
         guard let lease = leases[prepared.id], let serving = try await endpoint.description() else {
@@ -119,8 +155,8 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
 
     public func bind(_ id: UUID, sessionID: String, machineID: String = "") async throws {
         guard var lease = leases[id], lease.sessionID == nil else { throw BackendSessionFailure.invalidInput("The session MCP caller expired or was already claimed.") }
-        try await endpoint.bind(lease.registration, sessionID: sessionID, machineID: machineID)
-        guard !stopped, leases[id] != nil else { await endpoint.revoke(lease.registration); throw BackendSessionFailure.closed }
+        if let registration = lease.registration { try await endpoint.bind(registration, sessionID: sessionID, machineID: machineID) }
+        guard !stopped, leases[id] != nil else { if let registration = lease.registration { await endpoint.revoke(registration) }; throw BackendSessionFailure.closed }
         clock.cancel(lease.deadline); lease.sessionID = sessionID; leases[id] = lease
     }
     public func abandon(_ id: UUID) async { await forget(id) }
@@ -141,7 +177,7 @@ public actor BackendSessionToolLeases: BackendLaunchCapability {
     private func forget(_ id: UUID) async {
         guard let lease = leases.removeValue(forKey: id) else { return }
         clock.cancel(lease.deadline)
-        await endpoint.revoke(lease.registration) // Revoke/cancel requests before removing secret files.
+        if let registration = lease.registration { await endpoint.revoke(registration) } // Revoke before removing secret files.
         try? FileManager.default.removeItem(at: lease.directory)
     }
 

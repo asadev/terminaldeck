@@ -30,6 +30,12 @@ public struct BackendSessionSaved: Equatable, Sendable {
         input.deniedTools = denied.isEmpty ? nil : denied
         input.noSkills = raw["noSkills"].bool == true ? true : nil
         input.agentInstructions = raw["agentInstructions"].string.flatMap { $0.isEmpty ? nil : $0 }
+        input.claudeAgent = raw["claudeAgent"].string
+        input.allowedTools = raw["allowedTools"].elements?.compactMap(\.string)
+        input.permissionMode = raw["permissionMode"].string
+        input.taskID = raw["taskID"].string
+        input.taskProject = raw["taskProject"].string
+        input.agentDefinitionsFile = raw["agentDefinitionsFile"].string
         return input
     }
     public static func from(_ input: BackendCreateSessionInput) -> NativeRPCValue {
@@ -37,11 +43,13 @@ public struct BackendSessionSaved: Equatable, Sendable {
             .init("profileId", input.profileId.map(NativeRPCValue.string) ?? .null), .init("cols", .number(Double(input.cols))),
             .init("rows", .number(Double(input.rows))), .init("lastSeenAt", .number(Date().timeIntervalSince1970 * 1000))])
         for (key, string) in [("homeProfileId", input.homeProfileId), ("agentSessionId", input.resumeConversationId),
-                              ("model", input.model), ("agentInstructions", input.agentInstructions), ("tabKey", input.tabKey)] {
+                              ("model", input.model), ("agentInstructions", input.agentInstructions), ("tabKey", input.tabKey),
+                              ("claudeAgent", input.claudeAgent), ("permissionMode", input.permissionMode), ("taskID", input.taskID), ("taskProject", input.taskProject), ("agentDefinitionsFile", input.agentDefinitionsFile)] {
             if let string { value = value.setting(key, .string(string)) }
         }
         if let denied = input.deniedTools, !denied.isEmpty { value = value.setting("deniedTools", .array(denied.map(NativeRPCValue.string))) }
         if input.noSkills == true { value = value.setting("noSkills", .bool(true)) }
+        if let allowed = input.allowedTools { value = value.setting("allowedTools", .array(allowed.map(NativeRPCValue.string))) }
         return value
     }
 }

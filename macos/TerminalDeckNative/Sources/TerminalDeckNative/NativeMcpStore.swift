@@ -84,7 +84,7 @@ struct NativeMcpStoreDepartment: View {
                         Text(choice.label).tag(choice.value).help(choice.help)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 .fixedSize()
             }

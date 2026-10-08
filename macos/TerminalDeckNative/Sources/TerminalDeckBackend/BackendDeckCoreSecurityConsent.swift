@@ -103,11 +103,18 @@ public actor BackendDeckCoreSecurityConsentBroker {
     }
     public func respond(id: String, approved: Bool, by: String) -> Bool {
         guard let entry = pending[id], Self.mayAnswerFor(origin: entry.question.origin, by: by) else { return false }
+        guard entry.question.expiresAt > now() else { expire(id); return false }
+        if entry.question.tool == "access.request_scope", by != "window", !by.hasPrefix("device:") { return false }
         if entry.cancellation?.isCancelled == true { cancel(id); return false }
         let outcome = BackendDeckCoreSecurityConsentOutcome(granted: approved, reason: approved ? nil : .declined, by: by, at: now())
         finish(id, outcome: outcome); return true
     }
-    public func mayAnswer(id: String, by: String) -> Bool { pending[id].map { Self.mayAnswerFor(origin: $0.question.origin, by: by) } ?? false }
+    public func mayAnswer(id: String, by: String) -> Bool {
+        pending[id].map { question in
+            question.question.expiresAt > now() && Self.mayAnswerFor(origin: question.question.origin, by: by) &&
+                (question.question.tool != "access.request_scope" || by == "window" || by.hasPrefix("device:"))
+        } ?? false
+    }
     public func callerGone(_ surface: String) throws {
         guard surface != "window" else { throw NativeRPCError.invalidArguments("deck-control: use approverGone() for the window") }
         for id in order where pending[id]?.question.origin == surface { finish(id, outcome: deny(.callerGone)) }

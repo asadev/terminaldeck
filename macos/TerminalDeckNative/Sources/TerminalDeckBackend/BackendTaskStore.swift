@@ -57,16 +57,19 @@ public actor BackendTaskStore {
     }
     public func note(_ id: String, by: String, kind: String, text: String) async throws {
         guard let task = try byID(id) else { throw NativeRPCError.invalidArguments("That task no longer exists.") }
-        let note = BackendTaskValues.object([("at", .number(BackendTaskValues.time())), ("by", .string(by)), ("kind", .string(kind)), ("text", .string(text))])
+        let note = BackendTaskValues.object([("id", .string("task-note-" + UUID().uuidString.lowercased())), ("at", .number(BackendTaskValues.time())), ("by", .string(by)), ("kind", .string(kind)), ("text", .string(text))])
         _ = try await update(id, patch: BackendTaskValues.object([("notes", .array(Array(((task.value["notes"].elements ?? []) + [note]).suffix(100))))]))
     }
-    public func claim(_ id: String, sessionID: String, liveSessionIDs: Set<String>) async throws -> Bool {
+    public func claim(_ id: String, sessionID: String, liveSessionIDs: Set<String>, expectedAssignee: NativeRPCValue? = nil) async throws -> Bool {
         guard let task = try byID(id) else { throw NativeRPCError.invalidArguments("That task no longer exists.") }
+        if let expectedAssignee {
+            guard task.value["assignee"] == expectedAssignee, task.value["stopped"].bool != true else { throw NativeRPCError.invalidArguments("The task changed assignment before its brief was delivered. The new session was stopped.") }
+        }
         if let holder = task.sessionID, holder != sessionID, liveSessionIDs.contains(holder) { return false }
         _ = try await update(id, patch: BackendTaskValues.object([("sessionId", .string(sessionID)), ("process", .string("running"))])); return true
     }
     public func release(_ id: String, process: String = "exited") async throws {
-        _ = try await update(id, patch: BackendTaskValues.object([("sessionId", .null), ("process", .string(process)), ("keepOpenUntil", .null)]))
+        _ = try await update(id, patch: BackendTaskValues.object([("sessionId", .null), ("process", .string(process)), ("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(false))]))
     }
     public func moveToTrash(_ id: String) async throws {
         try requireStarted(); try persistence.writable(); guard let record = tasks[id] else { throw NativeRPCError.invalidArguments("That task no longer exists.") }

@@ -25,7 +25,8 @@ public enum BackendRemoteProtocol {
     public static let version = 1
     public static let capabilities = ["localhost", "create", "close", "rename", "upload", "credential", "github", "host.control",
         "devserver", "copilot", "routines", "copilot.files", "web", "controls", "usage", "send", "account", "logins", "devices",
-        "settings", "windows", "hostwindows", "watch", "folders.pick", "files", "git", "panels", "browser.profiles", "browser.control"]
+        "settings", "windows", "hostwindows", "watch", "folders.pick", "files", "git", "panels", "browser.profiles", "browser.control",
+        "device.access", "hoot.events"] + panels.map { "panels." + $0 }
     public static let closeCodes = ["normal": 1000, "goingAway": 1001, "protocolError": 1002, "unsupportedData": 1003,
         "policyViolation": 1008, "messageTooBig": 1009, "internalError": 1011, "tryAgainLater": 1013]
     public static let errorCodes: Set<String> = ["bad-message", "unauthenticated", "unauthorized", "unknown-session", "too-large", "unavailable", "version"]
@@ -36,7 +37,8 @@ public enum BackendRemoteProtocol {
     public static let serverSettings = ["agents.defaultProvider", "general.restoreSessions"]
     public static let controlIDs = ["model", "effort", "fast", "permission"]
     public static let usageWants = ["plan", "refresh", "context"]
-    public static let panels = ["artifacts", "store", "readiness", "mcp"]
+    public static let panels = ["artifacts", "store", "readiness", "mcp", "tasks", "goals", "memory", "plugins", "staysfixed",
+        "settings", "ai-apps", "simulators", "github", "hooks", "servers"]
     /// Recognition is not implementation. Default advertisement is empty.
     public static func advertisedCapabilities(implemented: Set<String> = []) -> [String] { capabilities.filter { implemented.contains($0) } }
 
@@ -81,9 +83,11 @@ public enum BackendRemoteProtocol {
     public static func parseClientMessage(_ raw: NativeRPCValue) -> BackendRemoteClientParse {
         if case .bytes = raw { return .refused(.init("binary frame")) }
         guard raw.fields != nil else { return .refused(.init("not an object")) }
-        guard let type = raw["t"].string else { return .refused(.init("unknown message type")) }
+        guard let incomingType = raw["t"].string else { return .refused(.init("unknown message type")) }
+        let type = RNMHootWireCompatibility.incomingClientType(incomingType)
+        let normalized = RNMHootWireCompatibility.incomingClientEnvelope(raw)
         do {
-            let reader = BackendRemoteReader(raw, type: type)
+            let reader = BackendRemoteReader(normalized, type: type)
             let value: NativeRPCValue?
             if let result = try parseSession(reader) { value = result }
             else if let result = try parseFilesAndPanels(reader) { value = result }

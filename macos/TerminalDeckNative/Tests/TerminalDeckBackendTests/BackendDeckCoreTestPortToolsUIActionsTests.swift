@@ -78,7 +78,7 @@ final class BackendDeckCoreTestPortToolsUIActionsTests: XCTestCase {
     // TSCASE actions/fixed.test.ts:24
     func testFixedActionsL24EveryChannelNamesRealFixedTool() throws { let ids = Set(try BackendDeckToolsAppMetadata.entries().filter { $0.module == "fixed-tools" }.map { $0.spec.id }); for row in fixed { XCTAssertNil(row.skip,row.action); XCTAssertNotNil(row.tools,row.action); for id in row.tools ?? [] { XCTAssertTrue(ids.contains(id),row.action+id) } } }
     // TSCASE actions/fixed.test.ts:34
-    func testFixedActionsL34JoinedIntoCoverageAreas() throws { let value = try BackendDeckCoreCatalogueCoverage.answer(.object([])).value; XCTAssertEqual(value["counts"]["fixed"]["actions"].number,Double(fixed.count)) }
+    func testFixedActionsL34JoinedIntoCoverageAreas() throws { let value = try BackendDeckCoreCatalogueCoverage.answer(.object([])).value; XCTAssertEqual(value["counts"]["fixed"]["actions"].number,Double(BackendStaysFixedChannels.channels.count + BackendSFXSetupChannels.channels.count)) }
     // TSCASE actions/ui.test.ts:53
     func testUIActionsL53BelievableSourceCommands() throws { XCTAssertGreaterThan(try Source.uiCommands().count,40) }
     // TSCASE actions/ui.test.ts:57

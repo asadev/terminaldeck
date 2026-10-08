@@ -616,10 +616,11 @@ enum WireCapability {
      * merely *asks for* — `create`,
      * `localhost`, `upload`, `devserver`, `usage`, `account`,
      * `controls` — are gated by what the desktop advertised, so claiming them
-     * would say nothing. This is the same list `CLAIMED_CAPABILITIES` carries in
-     * `pwa/src/protocol-client.ts`.
+     * would say nothing. Panel metadata is claimed for every domain this phone
+     * can render; hosts still advertise only their actually installed providers.
      */
-    static let claimed: [String] = [github, devices, settings, watch]
+    static let claimed: [String] = [github, devices, settings, watch, "device.access", "hoot.events"]
+        + PanelKind.allCases.map(\.capability)
 }
 
 /**
@@ -1255,7 +1256,7 @@ enum ClientMessage: Equatable {
      * question and somebody else's question get the **same** answer, so probing
      * for another device's ids learns nothing.
      */
-    case copilotAnswer(id: String, approved: Bool)
+    case copilotAnswer(id: String, approved: Bool, answers: HootAnswers? = nil)
 
     /**
      * Watch the copilot. **Tier: read.**
@@ -1650,6 +1651,8 @@ enum EnrollMethod: String, Equatable {
 }
 
 enum ServerMessage: Equatable {
+    case phoneAccess(PhoneAccessGrant?)
+    case hootEvents(HootEventBatch)
     /**
      * `capabilities` is read defensively and defaults to empty: it is not in
      * protocol v1, and a desktop that does not send it is telling the truth

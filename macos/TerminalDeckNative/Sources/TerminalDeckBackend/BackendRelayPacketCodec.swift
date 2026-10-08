@@ -69,7 +69,7 @@ public enum BackendRelayPacketCodec {
     /// leave frame limits to their caller and remain byte-for-byte above.
     public static func decodeBoundedHostPacket(_ frame: Data) -> Envelope? {
         guard frame.count <= envelopeHeaderBytes + maximumPayloadBytes else { return nil }
-        return decode(frame, allowed: [1, 2, 3, 0x10, 0x11, 0x12, 0x13])
+        return decode(frame, allowed: [1, 2, 3, 0x10, 0x11, 0x12, 0x13, 0x21, 0x23]) // RCV
     }
     private static func decode(_ frame: Data, allowed: Set<UInt8>) -> Envelope? {
         guard frame.count >= 17, let type = frame.first, allowed.contains(type) else { return nil }

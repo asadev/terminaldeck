@@ -100,8 +100,8 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
             tickets = tickets.filter { !$0.value.native.cancellation.isCancelled }
             if let existing = tickets.values.first(where: { $0.native.cancellation === native.cancellation }) { return existing.context }
             var capabilities: Set<String> = []
-            if core.caller.tiers.contains(.read) { capabilities.formUnion(["files.read", "git.read", "projects.read", "dev.read"]) }
-            if core.caller.tiers.contains(.act) || core.caller.tiers.contains(.alter) { capabilities.formUnion(["files.write", "git.write", "projects.write", "dev.start"]) }
+            if core.caller.tiers.contains(.read) { capabilities.formUnion(["files.read", "git.read", "projects.read", "dev.read", "apps.read", "docker.read"]) }
+            if core.caller.tiers.contains(.act) || core.caller.tiers.contains(.alter) { capabilities.formUnion(["files.write", "git.write", "projects.write", "dev.start", "apps.write", "docker.write"]) }
             // Page keeps filesystem limits enforced; a keyed/session caller is
             // never translated into nativeApp/internalEngine owner authority.
             let rpc = NativeRPCContext(caller: .page, ownerID: "core-call:" + core.callID, capabilities: capabilities)
@@ -127,7 +127,9 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
     public func authorize(_ native: BackendMCPCallContext, tool: String, arguments: NativeRPCValue, tier: BackendMCPTier,
                           sentence: String, ownerMustAnswer: Bool = false) async throws {
         let core = try await resolve(native)
-        guard core.native.allowedTiers.contains(tier), core.native.allowedTools.contains(tool) || core.native.allowedTools.contains(tool.replacingOccurrences(of: ".", with: "_")) else {
+        guard core.native.allowedTiers.contains(tier),
+              RNMHootMCPCompatibility.permits(tool, granted: core.native.allowedTools) ||
+              RNMHootMCPCompatibility.permits(tool.replacingOccurrences(of: ".", with: "_"), granted: core.native.allowedTools) else {
             throw NativeRPCError(code: "access-denied", message: "The current core caller is not granted this operation")
         }
         try await gate.authorize(core, tool, arguments, tier, sentence, ownerMustAnswer)
@@ -172,7 +174,11 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
     }
     public func knownFolder(_ folder: String, native: BackendMCPCallContext) async throws -> String {
         let core = try await resolve(native), allowed = try await allowedFolders(core)
-        guard state.listProjects().contains(where: { $0["path"].string == folder }), allowed.contains(where: { Self.within(folder, $0) }) else {
+        let ownedWorkspace: Bool
+        if core.caller.kind == .session, let id = core.caller.sessionID, let session = prepared.manager.list().first(where: { $0.id == id && $0.exitCode == nil }) {
+            ownedWorkspace = BackendTAGTaskProjectScope.isOwnedWorkspace(folder, caller: core.caller, cwd: session.cwd)
+        } else { ownedWorkspace = false }
+        guard state.listProjects().contains(where: { $0["path"].string == folder }) || ownedWorkspace, allowed.contains(where: { Self.within(folder, $0) }) else {
             throw NativeRPCError(code: "access-denied", message: "That project is outside this caller's current project grant")
         }
         return folder
@@ -184,8 +190,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
         case .key: return core.caller.folders.map { granted in projects.filter { folder in granted.contains { Self.within(folder, $0) } } } ?? projects
         case .session:
             guard let id = core.caller.sessionID, let session = prepared.manager.list().first(where: { $0.id == id && $0.exitCode == nil }) else { throw unavailable("the caller's live session") }
-            let root = core.caller.projectRoot ?? session.cwd
-            return projects.filter { Self.within($0, root) }
+            return try BackendTAGTaskProjectScope.folders(openProjects: projects, caller: core.caller, cwd: session.cwd)
         case .remote:
             guard let remote else { throw unavailable("the remote caller's current folder grants") }
             let scope = try await remote.filesystem(core)

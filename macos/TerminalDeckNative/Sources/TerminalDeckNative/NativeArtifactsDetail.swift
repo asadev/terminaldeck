@@ -44,7 +44,7 @@ struct ArtifactDetail: View {
                 Toggle(isOn: Binding(get: { model.showHistory }, set: { _ in model.toggleHistory() })) {
                     Text(model.showHistory ? "Show the file" : historyLabel)
                 }
-                .toggleStyle(.button)
+                .toggleStyle(.button).nativeUIGGreyControl()
 
                 if artifact.onDisk != nil {
                     Button(ArtifactRules.openLabel(previewKind)) { model.open(artifact) }
@@ -68,7 +68,7 @@ struct ArtifactDetail: View {
                         Text("Preview").tag(PageMode.preview)
                         Text("Source").tag(PageMode.source)
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.segmented).nativeUIGGreyControl()
                     .labelsHidden()
                     .fixedSize()
                 }

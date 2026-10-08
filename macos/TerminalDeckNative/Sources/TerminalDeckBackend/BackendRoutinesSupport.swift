@@ -13,7 +13,7 @@ public enum BackendRoutinesPaths {
     }
     public static func routinesDirFor(_ userData: URL) -> URL { userData.appendingPathComponent("routines", isDirectory: true) }
     public static func runtimeStateFileFor(_ userData: URL) -> URL { userData.appendingPathComponent("routine-state.json") }
-    public static func copilotDirFor(_ userData: URL) -> URL { userData.appendingPathComponent("copilot", isDirectory: true) }
+    public static func copilotDirFor(_ userData: URL) -> URL { RNMHootPaths(dataRoot: userData).home }
     public static var routinesDir: URL { routinesDirFor(userData) }
     public static var copilotDir: URL { copilotDirFor(userData) }
     public static func routinesDirFor(_ userData: String) -> String { routinesDirFor(URL(fileURLWithPath: userData)).path }

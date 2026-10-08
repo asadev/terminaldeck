@@ -37,7 +37,7 @@ struct InspectPanel: View {
                         Text(title(section)).tag(section)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).nativeUIGGreyControl()
                 .labelsHidden()
                 Group {
                     switch model.section {

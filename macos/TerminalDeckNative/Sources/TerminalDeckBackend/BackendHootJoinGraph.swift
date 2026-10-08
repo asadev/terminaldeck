@@ -56,7 +56,7 @@ public final class BackendHootJoinGraph: BackendHootRegistrationGraphJoins, @unc
             throw NativeRPCError.invalidArguments("Hoot's joins need the app's absolute data and storage folders.")
         }
         // The same process-wide sink Home's appendAction already writes through.
-        sink = try BackendHootJoinRawSink.shared(directory: dataRoot.standardizedFileURL.appendingPathComponent("copilot-log", isDirectory: true))
+        sink = try BackendHootJoinRawSink.shared(directory: RNMHootPaths(dataRoot: dataRoot).log)
         homeScope = BackendCopilotSessionRuntime.homeScope(userData: dataRoot.standardizedFileURL.path, storageDir: storageRoot.standardizedFileURL.path)
         self.runtime = runtime; self.manager = manager; self.mcpDoor = mcpDoor; self.actionLog = actionLog
         self.boundary = boundary; self.authority = authority; self.evidence = evidence

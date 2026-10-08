@@ -23,7 +23,9 @@ public actor BackendDeckCoreSessionEndpoint: BackendMCPToolEndpoint {
         let mode: BackendMCPImplementation = await control.tools().contains { $0.tool.implementation == .suppliedSourceBridge } ? .suppliedSourceBridge : .native
         return try BackendMCPEndpointDescription(url: endpoint.url, implementation: mode)
     }
-    public func catalogue() async throws -> [BackendMCPTool] { await control.tools().map(\.tool) }
+    public func catalogue() async throws -> [BackendMCPTool] {
+        await control.tools().filter { BackendUIGMemoryDiscovery.showsTool($0.tool) }.map(\.tool)
+    }
     public func register(token: String, grant: BackendMCPCallerGrant) async throws -> BackendMCPRegistration {
         guard let endpoint = await server.currentEndpoint(), token.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
               !grant.allowedTools.isEmpty else { throw BackendSessionFailure.invalidInput("The session MCP caller is not ready for registration.") }
@@ -46,7 +48,7 @@ public actor BackendDeckCoreSessionEndpoint: BackendMCPToolEndpoint {
         let permitted = await entry.grant.permitted()
         guard permitted, let current = entries[id], current.sessionID == session, !current.cancellation.isCancelled else { return .init(kind: .session, tiers: []) }
         return .init(kind: .session, tiers: current.grant.allowedTiers, sessionID: session, machineID: current.machineID,
-                     projectRoot: current.grant.projectRoot)
+                     projectRoot: current.grant.projectRoot, taskProject: current.grant.taskProject)
     }
     public func bind(_ registration: BackendMCPRegistration, sessionID: String, machineID: String) throws {
         guard !sessionID.isEmpty, var entry = entries[registration.id], !entry.cancellation.isCancelled else {

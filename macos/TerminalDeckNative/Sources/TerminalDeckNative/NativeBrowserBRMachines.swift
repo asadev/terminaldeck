@@ -168,7 +168,7 @@ struct NativeBrowserMachinePicker: View {
                         Text(label).font(.caption).lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
                     }
-                    .foregroundStyle(selected == BRMachines.thisMachine ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+                    .foregroundStyle(selected == BRMachines.thisMachine ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.primary))
                     .padding(.horizontal, 6)
                     .frame(height: 26)
                 }

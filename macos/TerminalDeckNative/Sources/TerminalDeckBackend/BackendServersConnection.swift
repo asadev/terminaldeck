@@ -69,6 +69,8 @@ public protocol BackendServersSFTP: AnyObject, Sendable {
 }
 public protocol BackendServersConnection: AnyObject, Sendable {
     func exec(command: String, stdin: Data?, timeoutMilliseconds: Int, maximumOutputBytes: Int) async throws -> BackendServersRunResult
+    /// Docker's fixed byte transport over this already authenticated connection.
+    func dockerDialStdio() async throws -> any BackendServersDuplex
     func follow(command: String) async throws -> any BackendServersFollow
     func shell(size: BackendServersTerminalSize) async throws -> any BackendServersShell
     func openSFTP() async throws -> any BackendServersSFTP
@@ -209,6 +211,11 @@ public actor BackendServersConnections {
         if let client = entry.ready { client.close() } else { Task { if let client = try? await entry.client.value { client.close() } } }
     }
     public func isOpen(_ serverID: String) -> Bool { live[serverID] != nil }
+    /// Recovery pins the exact existing generation; a lease cannot authorize
+    /// a reconnect or silently attach to a replacement server connection.
+    public func isCurrent(_ lease: BackendServersConnectionLease) -> Bool {
+        live[lease.serverID]?.token == lease.token && live[lease.serverID]?.ready != nil
+    }
     /// Forget/revocation evicts every hold and any pending dial for this ID.
     public func closeServer(_ serverID: String) {
         guard let entry = live.removeValue(forKey: serverID) else { return }
@@ -222,6 +229,16 @@ public actor BackendServersConnections {
         let client = try await entry.client.value
         try Task.checkCancellation()
         return try await body(client)
+    }
+    /// Use a previously acquired generation without acquisition or redial.
+    /// The holder already owns the reference and releases it after its scope.
+    public func withConnection<T: Sendable>(_ lease: BackendServersConnectionLease,
+                                           body: @Sendable (any BackendServersConnection) async throws -> T) async throws -> T {
+        guard let entry = live[lease.serverID], entry.token == lease.token, let connection = entry.ready else {
+            throw CancellationError()
+        }
+        try Task.checkCancellation()
+        return try await body(connection)
     }
     public func run(_ serverID: String, argv: [String]) async throws -> BackendServersRunResult {
         guard !argv.isEmpty else { throw BackendServersProblem("lost", "There was no command to run.") }

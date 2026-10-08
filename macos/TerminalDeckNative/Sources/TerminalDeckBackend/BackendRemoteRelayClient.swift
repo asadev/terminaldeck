@@ -117,6 +117,9 @@ public actor BackendRemoteRelayClient {
         for waiter in readyWaiters.values { waiter.resume(returning: true) }; readyWaiters = [:]
         announce()
         if mcp != nil { try? await envelope(.mcpReach, channel: BackendRelayPacketCodec.noRequest, payload: Data()) }
+        if host != nil { await BackendRCVRelayLink.shared.opened { [weak self] type, channel, payload in
+            try await self?.receiverEnvelope(type, channel: channel, payload: payload, epoch: epoch)
+        } } // RCV
         heartbeat = Task { [weak self] in
             while !Task.isCancelled { try? await Task.sleep(for: .seconds(20)); guard !Task.isCancelled else { return }; await self?.ping(epoch) }
         }
@@ -145,6 +148,11 @@ public actor BackendRemoteRelayClient {
         case 3: await closeChannel(packet.channel)
         case 0x10: await mcpRequest(packet.channel, payload: packet.payload)
         case 0x12: mcpPending.removeValue(forKey: packet.channel)?.cancel()
+        case 0x21, 0x23:
+            if host != nil {
+                let type = packet.type, channel = packet.channel, payload = packet.payload
+                Task { await BackendRCVRelayLink.shared.frame(type: type, channel: channel, payload: payload) }
+            } // RCV
         default: break
         }
     }
@@ -223,6 +231,14 @@ public actor BackendRemoteRelayClient {
         queuedBytes += data.count; defer { queuedBytes -= data.count }
         try await socket.send(.data(data))
     }
+    /// RCV: output remains bound to the actual current relay connection.
+    func receiverEnvelope(_ type: UInt8, channel: Data, payload: Data, epoch: UUID) async throws {
+        guard epoch == generation, BackendRCVWire.isFrame(type), let socket, connected, payload.count <= 98304,
+              queuedBytes + payload.count <= 8 * 1024 * 1024 else { throw NativeRPCError(code: "relay-output", message: "The relay output is unavailable or backed up") }
+        let data = try BackendRelayPacketCodec.encodeEnvelope(type: type, channel: channel, payload: payload)
+        queuedBytes += data.count; defer { queuedBytes -= data.count }
+        try await socket.send(.data(data))
+    }
     private func drop(_ why: String, retrying: Bool = true) async {
         generation = UUID(); connected = false
         connectDeadline?.cancel(); connectDeadline = nil; pongDeadline?.cancel(); pongDeadline = nil; heartbeat?.cancel(); heartbeat = nil; receiver?.cancel(); receiver = nil
@@ -231,6 +247,7 @@ public actor BackendRemoteRelayClient {
         for channel in channels.values { channel.chain?.cancel(); if let endpoint = channel.endpoint { await host?.closed(endpoint) } }
         channels = [:]
         for task in mcpPending.values { task.cancel() }; mcpPending = [:]
+        if host != nil { await BackendRCVRelayLink.shared.closed() } // RCV
         reason = why
         if !stopped && retrying {
             attempts += 1

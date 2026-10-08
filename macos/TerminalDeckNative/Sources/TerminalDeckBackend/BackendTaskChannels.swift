@@ -51,7 +51,7 @@ extension BackendTaskDetailService: BackendTaskDetailCalling {
 public enum BackendTaskChannels {
     public static func register(registry: NativeChannelRegistry, ownerID: String, view: BackendTaskStateView, local: BackendTaskLocalService,
                                 engine: BackendTaskEngine, detail: any BackendTaskDetailCalling, dependencies: BackendTaskChannelDependencies) async throws -> [String] {
-        let channels = ["tasks:state", "tasks:agent-save", "tasks:agent-status", "tasks:agent-remove", "tasks:connection-save", "tasks:connection-remove", "tasks:local-create", "tasks:local-update", "tasks:local-delete", "tasks:local-restore", "tasks:local-reply", "tasks:local-detail", "tasks:close-session", "tasks:goal-save", "tasks:goal-remove", "tasks:inventory", "tasks:connection-create"]
+        let channels = ["tasks:state", "tasks:agents-import", "tasks:agent-save", "tasks:agent-status", "tasks:agent-remove", "tasks:connection-save", "tasks:connection-remove", "tasks:local-create", "tasks:local-update", "tasks:local-delete", "tasks:local-restore", "tasks:local-reply", "tasks:local-detail", "tasks:close-session", "tasks:goal-save", "tasks:goal-remove", "tasks:inventory", "tasks:connection-create"]
         for channel in channels {
             try await registry.register(channel, ownerID: ownerID, policy: { ctx in guard ctx.caller == .nativeApp else { throw NativeRPCError(code: "access-denied", message: "tasks: only the app’s own window may change tasks or goals") } }) { context, args in
                 if channel == "tasks:state" { return try await view.state() }
@@ -68,6 +68,12 @@ public enum BackendTaskChannels {
                     func text(_ index: Int) throws -> String { try context.argument(index, in: args).requireString("id", nonempty: true) }
                     let raw = context.argument(0, in: args)
                     switch channel {
+                    case "tasks:agents-import":
+                        extra = try await view.config.importAgents(folder: text(0))
+                        let added = Int(extra["imported"].number ?? 0), updated = Int(extra["updated"].number ?? 0), errors = extra["errors"].elements ?? []
+                        var message = "Imported \(added) agents. Updated \(updated)."
+                        if !errors.isEmpty { message += " \(errors.count) files need attention. " + (errors.first?["message"].string ?? "Check the source files.") }
+                        extra = extra.setting("message", .string(message))
                     case "tasks:agent-save": _ = try await view.config.saveAgent(raw)
                     case "tasks:agent-status": _ = try await view.config.setStatus(text(0), action: text(1))
                     case "tasks:agent-remove": try await view.config.removeAgent(text(0))

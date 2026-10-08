@@ -60,7 +60,10 @@ import TerminalDeckNativeCore
             if self.failStart { throw NativeRPCError(code: "unavailable", message: "Start unavailable.") }
             self.own.status = "running"; self.own.sessionID = "hoot-1"; return nil
         }, say: { id, text in
-            if self.failSay { throw NativeRPCError(code: "unavailable", message: "PTY unavailable.") }; self.said.append((id, text))
+            try await MainActor.run {
+                if self.failSay { throw NativeRPCError(code: "unavailable", message: "PTY unavailable.") }
+                self.said.append((id, text))
+            }
         }, watchChat: { cwd, id, update in
             self.watched.append((cwd, id)); self.update = update; let token = BackendHootFakeCancel(); self.watcher = token; return token
         }, sessions: { self.sessions }, isHoot: { $0 == "hoot-1" },
@@ -135,10 +138,15 @@ final class BackendHootMenuBarTests: XCTestCase {
     }
     @MainActor func testMessageSubmissionAndTranscriptLifecycle() async throws {
         let r = BackendHootMenuRig(); try r.bar.apply()
-        XCTAssertEqual(r.bar.say(.string("  hello  "))["ok"], .bool(true)); XCTAssertEqual(r.said.first?.0, "hoot-1"); XCTAssertEqual(r.said.first?.1, "hello")
-        _ = r.bar.say(.string(String(repeating: "a", count: 5000))); XCTAssertEqual(r.said.last?.1.utf16.count, 4000)
-        r.failSay = true; XCTAssertEqual(r.bar.say(.string("hello"))["message"], .string("Hoot did not take that message."))
-        r.own.status = "stopped"; XCTAssertEqual(r.bar.say(.string("hello"))["message"], .string("Hoot isn’t running."))
+        let sent = await r.bar.say(.string("  hello  "))
+        XCTAssertEqual(sent["ok"], .bool(true)); XCTAssertEqual(r.said.first?.0, "hoot-1"); XCTAssertEqual(r.said.first?.1, "hello")
+        _ = await r.bar.say(.string(String(repeating: "a", count: 5000))); XCTAssertEqual(r.said.last?.1.utf16.count, 4000)
+        r.failSay = true
+        let refused = await r.bar.say(.string("hello"))
+        XCTAssertEqual(refused["message"], .string("Hoot did not take that message."))
+        r.own.status = "stopped"
+        let stopped = await r.bar.say(.string("hello"))
+        XCTAssertEqual(stopped["message"], .string("Hoot isn’t running."))
         let started = await r.bar.startHoot(); XCTAssertEqual(started["ok"], .bool(true)); _ = r.bar.openPanel()
         XCTAssertEqual(r.watched.first?.0, "/copilot")
         let rows: [NativeRPCValue] = (0..<20).map { .object([.init("id", .string(String($0))), .init("text", .string("line")), .init("role", .string("agent"))]) }

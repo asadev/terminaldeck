@@ -72,6 +72,9 @@ public enum BackendMacAppWindowsTitleBar {
     }
     public func stop() async { await subscription?.cancelAndWait(); subscription = nil }
     @discardableResult public func dispatch(_ command: String) async throws -> Bool {
+        guard UIGMemoryVisibility.showsCommand(command) else {
+            throw NativeRPCError(code: "unavailable", message: UIGMemoryVisibility.unavailableTitle)
+        }
         if try route(command) { return true }
         return try await host.sendMain(command: command)
     }
@@ -99,6 +102,7 @@ public enum BackendMacAppWindowsTitleBar {
         }
     }
     private func addCommand(_ menu: NSMenu, _ id: String, keyOverride: String? = nil) {
+        guard UIGMemoryVisibility.showsCommand(id) else { return }
         if Self.gated.contains(id) && hidden.contains(id) { return }
         let command = known(id), item = NSMenuItem(title: command.title, action: #selector(chosen(_:)), keyEquivalent: keyOverride ?? command.key ?? "")
         item.keyEquivalentModifierMask = command.shift ? [.command, .shift] : [.command]; item.target = self; item.representedObject = id

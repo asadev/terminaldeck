@@ -385,7 +385,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     }
     func screenshot(_ id: String) async throws -> (path: String, width: Int, height: Int, masked: Int) {
         let shot = try await privacySnapshotPNG(id)
-        let file = try savePNG(shot.bytes, folder: dataRoot.appendingPathComponent("copilot/screenshots", isDirectory: true), prefix: "page")
+        let file = try savePNG(shot.bytes, folder: RNMHootPaths(dataRoot: dataRoot).screenshots, prefix: "page")
         return (file.path, shot.width, shot.height, shot.masked)
     }
     func privacySnapshotPNG(_ id: String) async throws -> (bytes: Data, width: Int, height: Int, masked: Int) {
