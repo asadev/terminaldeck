@@ -1,0 +1,159 @@
+/* ============================================================================
+   File tree — one indented row per entry, colours from tokens.css only.
+
+   As a page sidebar it is a list of rows and nothing else: no rules between
+   them, no box around them. Selection is a fill with a rounded corner, which
+   is the same shape the shell's sidebar uses for the same job.
+   ============================================================================ */
+
+.file-tree {
+  --tree-row-height: 26px;
+  --tree-pad: var(--sp-2);
+  --tree-indent: var(--sp-3);
+
+  height: 100%;
+  overflow: auto;
+  padding: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+  user-select: none;
+  outline: none;
+}
+
+/* The container is the tab stop, so its focus ring has to be visible. */
+.file-tree:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+.file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  height: var(--tree-row-height);
+  padding-right: var(--sp-2);
+  padding-left: calc(var(--tree-pad) + var(--tree-indent) * var(--depth, 0));
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.file-tree-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-tree-row.selected {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+/* Virtual cursor: the row the keyboard is on, which is not always the selected
+   row — hence a ring rather than a fill, and it keeps the accent because it is
+   the tree's focus rather than its selection. The two states can co-occur, so
+   they have to be told apart at a glance.
+
+   Drawn only while the tree itself has focus. The cursor starts on row one so
+   the keyboard works the moment you Tab in, and the ring was painted from that
+   first frame — so opening Files put a bright accent rectangle around `.github`
+   before anything had been clicked, reading as an open or selected file while
+   the viewer beside it said "No file open". Two panes, one screen, opposite
+   claims. A focus mark for a container nobody is in is not a focus mark, it is
+   a selection nobody made. `:focus` rather than `:focus-visible`: clicking into
+   the tree really does put the keyboard in it, and the cursor has to be visible
+   for the arrow keys that follow. */
+.file-tree:focus .file-tree-row[data-focused='true'] {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.file-tree-row.blocked {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.file-tree-twisty {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.file-tree-twisty svg {
+  width: 10px;
+  height: 10px;
+}
+
+.file-tree-twisty.open {
+  transform: rotate(90deg);
+}
+
+.file-tree-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+}
+
+.file-tree-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* A folder icon is heavier than a file icon; that difference is the signal, so
+   it does not also need a colour. */
+.file-tree-row[data-kind='dir'] .file-tree-icon {
+  color: var(--text-secondary);
+}
+
+.file-tree-row.selected .file-tree-icon,
+.file-tree-row:hover .file-tree-icon {
+  color: currentColor;
+}
+
+/* min-width:0 is what lets a flex item shrink past its text; without it the
+   automatic minimum size pins the row to the full name, the ellipsis below can
+   never fire and long names force the whole tree to scroll sideways. */
+.file-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "link", on a symlinked entry. A quiet fill rather than an outlined badge:
+   it qualifies the name next to it, it does not compete with it. */
+.file-tree-tag {
+  flex: none;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  line-height: 16px;
+}
+
+.file-tree-msg {
+  margin: var(--sp-05) 0;
+  padding: var(--sp-05) var(--sp-2) var(--sp-05)
+    calc(var(--tree-pad) + var(--tree-indent) * var(--depth, 0) + 18px);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.file-tree-msg.error {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------- density -- */
+
+[data-density='compact'] .file-tree {
+  --tree-row-height: 22px;
+}

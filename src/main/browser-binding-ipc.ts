@@ -1,0 +1,1210 @@
+/**
+ * The wiring between the binding store, the window that draws it, and the
+ * shim that asks it questions.
+ *
+ * `browser-binding.ts` is a map and some arithmetic on purpose, so this is the
+ * file that knows about Electron: it registers the channels a window reports
+ * through, pushes the view back, builds the native attach menu, and hands
+ * `browser-route.ts` the two things it needs — a page it can steer and a
+ * renderer it can ask for a window.
+ *
+ * The same split `browser-drive-ipc.ts` uses, for the same reason: the decision
+ * is testable without a window, and the part that cannot be is small enough to
+ * read in one go.
+ */
+
+import { Menu, type BrowserWindow, type IpcMain, type MenuItemConstructorOptions } from 'electron'
+import { BRAND } from '../shared/brand'
+import type { LinkRoute, LinkTabRequest } from '../shared/types'
+import {
+  attach,
+  bindingFor,
+  detach,
+  ownerOf,
+  slotName,
+  subscribe,
+  view,
+  windowClosed,
+  windowMoved,
+  type BoundWindow,
+} from './browser-binding'
+import { routeOpen, type OpenedReply, type SteerablePage } from './browser-route'
+import { browserTabContents } from './browser-tab'
+import { LINK_TAB_CHANNEL, openSystemUrl } from './link-open'
+import type { OpenAnswer } from './hook-server'
+import { thisMachineName } from './platform/host'
+
+/**
+ * Every browser window this renderer has told us about, bound or not.
+ *
+ * Separate from the binding map, and deliberately: the binding map holds the
+ * *relation*, and an unattached window is not in a relation. The menu still has
+ * to list it — *"Attach a window"* over a list of what is actually open is the
+ * whole gesture — and listing it greyed, or not listing it, is the "screen that
+ * quietly shows a subset" failure `agent-target.ts` exists to stop.
+ */
+export interface KnownWindow {
+  tabId: string
+  viewId: string | null
+  url: string
+  title: string
+  /**
+   * Which machine is really serving this page. Empty for this computer.
+   *
+   * Derived by the window from the tunnel it opened, not from the address bar:
+   * a page reached on his PC wears a `localhost` address on **this** machine, so
+   * the URL is exactly the thing that cannot answer the question. *"We always
+   * need a truth."*
+   */
+  machineId: string
+  machineName: string
+  /** True while this is the page on screen, so the menu can say which one it is. */
+  visible: boolean
+  /**
+   * This window's own number — the `5` in `W5`.
+   *
+   * Four windows on the start page are four rows reading `New tab`, which is
+   * what Asad was looking at when he said he could not attach an existing one —
+   * the menu was full of windows and none of them was distinguishable from the
+   * next. Allocated on first sight and never reused, so the number a window
+   * wears does not change under him when another one closes.
+   *
+   * It reaches every menu row rather than only the nameless ones, which is the
+   * half that was missing: a start page is not nameless, it is called `New tab`,
+   * so a number kept as a *fallback* for a window with no title never appeared
+   * on his screen at all. See {@link windowNumber}.
+   */
+  w: number
+}
+
+const known = new Map<string, KnownWindow>()
+
+/**
+ * How to end a drive on a window, once something has told us.
+ *
+ * Module-level and set at registration, beside `known` and for the same reason:
+ * the three places a window can be disconnected — the toolbar's own control, the
+ * browser-side checklist and the session-side one — are a channel handler and
+ * two menu templates, and only one of them is ever handed `deps`. A parameter
+ * threaded through all three would be a third spelling of the same fact in the
+ * file whose entire argument is that there is one.
+ */
+let endDrive: ((browserTabId: string) => void) | null = null
+
+/**
+ * Break the relation between a window and its session, everywhere at once.
+ *
+ * **The** disconnect. Every door — the `B1` control on the browser's toolbar,
+ * the ticked row in either menu — comes through here, so that "is this browser
+ * connected" has one answer and ending it has one meaning: the binding goes,
+ * the strip's chip and the rail's row lose it in the same publish, and anything
+ * the copilot was doing in that window stops there.
+ */
+function disconnect(browserTabId: string): void {
+  detach(browserTabId)
+  endDrive?.(browserTabId)
+}
+
+/** The last window number handed out. Never decremented; see `KnownWindow.w`. */
+let windowSeq = 0
+
+/** Requests out on {@link LINK_TAB_CHANNEL} that are still waiting for an answer. */
+const pending = new Map<string, (reply: OpenedReply) => void>()
+
+let requestSeq = 0
+
+/**
+ * How long the renderer is given to open a window and name it.
+ *
+ * The renderer's side of this is synchronous — it mints the id, adds the tab and
+ * answers in the same handler — so this is not a budget for the work, it is a
+ * bound on how long an agent's `curl` is held open when the window is gone,
+ * mid-reload, or otherwise not listening. Comfortably inside the shim's own
+ * three seconds so that the shim's fallback is never the thing that fires first.
+ */
+const OPEN_WINDOW_TIMEOUT_MS = 2000
+
+export interface BindingIpcDeps {
+  /** Push to the window that draws the strip. */
+  send(channel: string, payload: unknown): void
+  /** The window a native menu should be popped over. */
+  window(): BrowserWindow | null
+  /**
+   * Whether this app started that session.
+   *
+   * Asked of the pty manager, which is the only thing that knows. It is what
+   * separates a session of ours that has no window yet — which should get one,
+   * and which is the very first `open` of every session — from an id belonging
+   * to somebody else's shell, which must not put a page in a browser holding his
+   * logins. The hook and the shim are on the machine, not on this app, so the
+   * second case arrives regularly and is not hypothetical.
+   */
+  knowsSession(sessionId: string, machineId: string): boolean
+  /**
+   * Which machine this app believes a session is running on, or null when it
+   * has never heard of the id.
+   *
+   * The empty string for a session on this computer, a machine id for one on a
+   * paired device, a server id for a shell on a server — the same vocabulary
+   * the binding key already uses.
+   *
+   * It exists because two callers name a session and genuinely cannot name its
+   * machine. The copilot's `browser.open` is handed a session id by a model,
+   * and the shim's `POST /open` is handed one by a `curl` inside a shell. Both
+   * used to write the empty string there, which is not "unknown" — it is a
+   * positive claim that the session is on this computer, and for a session on
+   * his PC it is false. A window opened under a false key is a window the
+   * session it was opened for can never name, which is precisely the shape of
+   * `browser.open` refusing *"that session has no window by that name"* over a
+   * page it had just opened.
+   *
+   * Absent leaves the old behaviour exactly as it was: an unnamed machine means
+   * this computer. Every test that builds these deps by hand predates it.
+   */
+  machineOfSession?(sessionId: string): string | null
+  /**
+   * End whatever the copilot was doing in a window that has just been
+   * disconnected.
+   *
+   * A dependency rather than a call into `browser-drive-ipc.ts`, for the reason
+   * every other handle on this interface is one: what this file decides has to
+   * be readable without a drive, a window or an Electron app. Absent in a build
+   * with no drive wired, and then disconnecting is exactly what it was before —
+   * the relation ends and nothing else has to happen.
+   *
+   * It exists because Disconnect is meant to be the whole truth of the
+   * connection: *"we should be have a button here to disconnect also, or it
+   * should only this way."* Without it, breaking the relation mid-drive leaves
+   * the debugger attached and the banner over the page still saying the copilot
+   * is driving, until the agent's next call happens to be refused.
+   */
+  endDrive?(browserTabId: string): void
+  /**
+   * Why the session in this row could not act on this window if it were
+   * attached to it, or null when it could.
+   *
+   * ## The row this closes
+   *
+   * A shell on a server has been offered here since the servers feature learnt
+   * to be a session. Pressing it attached a window, gave it a `B1`, drew the
+   * chip on the strip — and there was nothing at all behind it, because the
+   * agent in that shell is a process on somebody else's Linux box and the window
+   * is a `WebContentsView` in this one. A control that completes, names what it
+   * made and does nothing is the defect this whole round is about, and this menu
+   * was carrying one.
+   *
+   * It is closed from both ends. `servers/window-drive.ts` makes most such rows
+   * *work*; this is the other half, for the ones that still cannot — the switch
+   * beside that server is off, it has no `claude`, its SSH settings will not
+   * open a port — and it says which at the moment somebody is choosing, in the
+   * words of the file that decided it.
+   *
+   * Absent leaves every row exactly as it was. Null is the answer for every
+   * session in this window and for every id this app has no opinion about, and
+   * both mean the same thing: say nothing.
+   */
+  whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
+  /**
+   * For a computer that dialled **in**: what it is called here, and whether it
+   * has been allowed to act on browser windows in this app. Null for everything
+   * else.
+   *
+   * Null is the answer for a session in this window, for a machine this desktop
+   * dialled out to, and for a shell on a server — three id spaces this has no
+   * opinion about, and a row offered against the wrong one would be a tick that
+   * grants nothing.
+   *
+   * It exists because the grant it reports defaults to **off** and always will:
+   * a browser holds this account's signed-in mail, bank and source control, and
+   * nothing has ever been able to drive it from another computer. So the first
+   * time anybody attaches a window to a session on a computer that dialled in —
+   * which is the whole reason those rows are in this menu — the verb that
+   * follows is refused. Saying so afterwards, on the other machine, in the
+   * middle of an agent's turn, is a trip somebody has to make.
+   *
+   * Absent leaves the menu exactly as it was.
+   */
+  windowGrantFor?(machineId: string): { name: string; allowed: boolean } | null
+  /**
+   * Turn that grant on or off for one computer, from this menu.
+   *
+   * Here rather than only in Settings → Remote because this is where the person
+   * already is and it is the same keyboard — which is the whole of what that
+   * panel's argument protects. It is not a widening: the tick is explicit, it
+   * names the computer, and it is the same store the panel writes, read per call
+   * by `window-serve.ts`, so unticking it here stops the next verb rather than
+   * the next connection.
+   */
+  setWindowGrant?(machineId: string, allowed: boolean): void
+}
+
+/**
+ * Every caller waiting for a window to report the view inside it.
+ *
+ * A shell tab id exists the moment the renderer mints it — that is what makes
+ * the answer to `open <url>` fast — and the `WebContentsView` inside it arrives
+ * a beat later on `browser:window-opened`. Anything that needs to *steer* the
+ * page has to wait for the second event, and until now the only way to do that
+ * was to poll {@link windowsOf}, which `browser-tools.ts` does on a 60ms timer.
+ *
+ * A waiter rather than a second poller because this one is on the path of
+ * `browser.open`, which is a tool call somebody's turn is blocked on.
+ */
+const viewWaiters = new Map<string, Set<(viewId: string) => void>>()
+
+/**
+ * A browser pane belonging to nobody — the pane the copilot's own tab lives in.
+ *
+ * ## Why the copilot may not be given any pane that happens to be open
+ *
+ * Measured on 2026-08-20, two calls from a cold start: a session was given a
+ * window, `B1`, which is a **pane** in the shell — one row in the sidebar, one
+ * page. A plain `browser.open` from the copilot then went out on
+ * `browser:drive-open`, which is a broadcast, and the only mounted
+ * `BrowserWorkspace` was `B1`'s. It claimed the request, opened a page inside
+ * itself, made that page the active one, and reported the new view upward as
+ * `B1`'s view — so the page the person was looking at was replaced by the
+ * copilot's, was in no strip anywhere, and the binding map now pointed the
+ * session's own window at the copilot's page. Two slots, one page.
+ *
+ * The panel's own tab strip is gone (see `BrowserWorkspace`'s `onTitle`), so
+ * "the copilot opens a tab in the panel" is not a thing that can happen any
+ * more: a pane is one page, and putting a second one in it hides the first.
+ *
+ * So the copilot gets a pane **of its own**, opened through the same channel
+ * the globe and every link use, appearing in the sidebar where it can be seen
+ * and closed. It is never a pane somebody else opened — not a session's, and
+ * not one the person is reading — because the only pane it will use is one it
+ * asked for.
+ *
+ * Null when no window would open one: the browser switched off in Features is a
+ * real state, `App.tsx` answers it with a sentence, and the tool says so rather
+ * than inventing a page.
+ */
+export function openBarePane(
+  send: (channel: string, payload: unknown) => void,
+  url: string,
+): Promise<string | null> {
+  return askRenderer(send, { url }).then((reply) => ('tabId' in reply ? reply.tabId : null))
+}
+
+/**
+ * Is this pane still open, and still nobody's?
+ *
+ * Two questions in one answer because the caller does the same thing either
+ * way: a pane that has been closed and a pane the person has attached to a
+ * session are both panes the copilot must stop using, and it stops using them
+ * by asking for a new one. Attaching is a deliberate act made by hand in the
+ * window's own menu; if he does it to the copilot's pane, that pane is the
+ * session's from that moment and the copilot moves out.
+ */
+export function paneIsFree(tabId: string): boolean {
+  return known.has(tabId) && ownerOf(tabId) === null
+}
+
+/**
+ * Every browser window the shell has reported, bound or not — a snapshot.
+ *
+ * Exported for a caller that is not a menu. A phone driving this machine's
+ * browser (`machine-browser-desktop.ts`) has to list what is open before
+ * it can navigate, attach or photograph any of it, and {@link known} is the only
+ * thing on this side that holds the whole set: the binding map holds the
+ * *relation*, so an unattached window is not in it at all, and `browser-tab.ts`
+ * holds views rather than windows. The two menus above already read it for the
+ * same reason and through the same map.
+ *
+ * A copy rather than the map, because the caller iterates it across an `await`
+ * and a window can close mid-list. Reading it a second time out of a listener on
+ * `browser:window-opened` is the alternative that was refused: a second map of
+ * this same relation is how the pane bar and the phone come to disagree about
+ * which page an agent is steering — the argument this file's header makes about
+ * the renderer, one wire further out.
+ */
+export function knownWindows(): readonly KnownWindow[] {
+  return [...known.values()]
+}
+
+/**
+ * The view inside a pane, waiting up to `timeoutMs` for one to appear.
+ *
+ * Answers straight away when the window has already reported one. Null on the
+ * deadline, which is a real state and is reported rather than guessed at — a
+ * pane whose renderer never mounted has no page to drive and saying otherwise
+ * would hand an agent a handle to nothing.
+ */
+export function paneView(tabId: string, timeoutMs: number): Promise<string | null> {
+  const now = known.get(tabId)?.viewId ?? null
+  if (now !== null) return Promise.resolve(now)
+  return new Promise<string | null>((resolve) => {
+    let settled = false
+    const finish = (viewId: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      viewWaiters.get(tabId)?.delete(finish)
+      resolve(viewId)
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    timer.unref?.()
+    const waiting = viewWaiters.get(tabId) ?? new Set()
+    waiting.add(finish)
+    viewWaiters.set(tabId, waiting)
+  })
+}
+
+/**
+ * One request out on {@link LINK_TAB_CHANNEL}, and the one answer to it.
+ *
+ * Shared by {@link askForWindow} and {@link openBarePane} so that a window for a
+ * session and a pane for the copilot are opened by the same handshake with the
+ * same timeout — two copies of this is how one of them would end up waiting
+ * forever on a renderer that had already answered.
+ */
+function askRenderer(
+  send: (channel: string, payload: unknown) => void,
+  request: { url: string; sessionId?: string; machineId?: string },
+): Promise<OpenedReply> {
+  requestSeq += 1
+  const requestId = `open:${Date.now()}:${requestSeq}`
+
+  return new Promise<OpenedReply>((settle) => {
+    let done = false
+    const finish = (reply: OpenedReply): void => {
+      if (done) return
+      done = true
+      pending.delete(requestId)
+      settle(reply)
+    }
+    pending.set(requestId, finish)
+
+    const timer = setTimeout(
+      () =>
+        finish({
+          refused: `No ${BRAND.name} window answered — opening it in your default browser.`,
+        }),
+      OPEN_WINDOW_TIMEOUT_MS,
+    )
+    timer.unref?.()
+
+    const payload: LinkTabRequest = {
+      url: request.url,
+      requestId,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      ...(request.machineId ? { machineId: request.machineId } : {}),
+    }
+    send(LINK_TAB_CHANNEL, payload)
+  })
+}
+
+/**
+ * Ask the renderer for a browser window, and hear back either way.
+ *
+ * The timeout answers `refused` with a sentence rather than resolving to
+ * nothing, because the caller is going to print whatever comes back: silence
+ * here would reach a person as a link that vanished.
+ */
+function askForWindow(
+  deps: BindingIpcDeps,
+  request: { url: string; sessionId: string; machineId: string },
+): Promise<OpenedReply> {
+  return askRenderer((channel, payload) => deps.send(channel, payload), request)
+}
+
+/**
+ * The one routing call, shared by the shim and by a click in a terminal.
+ *
+ * Exported so `index.ts` can hand it to the hook server as `onOpen` without
+ * rebuilding the dependencies, and so both entrances provably use the same
+ * answer — two copies of this is how the shim would land in the right window
+ * and the terminal click in Safari again.
+ */
+export function openForSession(
+  deps: BindingIpcDeps,
+  request: { url: string; sessionId: string | null; machineId?: string; newWindow?: boolean },
+): Promise<OpenAnswer> {
+  /*
+   * An absent machine is a question; an empty one is an answer.
+   *
+   * `''` means "this computer" everywhere in this feature, so a caller that
+   * writes it has said where the session is. A caller that leaves the field out
+   * has not, and this is where that gets resolved rather than silently read as
+   * the local machine — see {@link BindingIpcDeps.machineOfSession} for the two
+   * callers that cannot know and for what the old default did to them.
+   */
+  const machineId =
+    request.machineId ??
+    (request.sessionId === null ? '' : (deps.machineOfSession?.(request.sessionId) ?? ''))
+  return routeOpen({ ...request, machineId }, {
+    // `browserTabContents` answers null for an id it does not know, for a view
+    // that has gone and for one its renderer took down with it — all three of
+    // which mean the same thing here, and all three of which are handled by
+    // minting a window rather than by pretending one was navigated.
+    pageFor: (viewId) => browserTabContents(viewId) as unknown as SteerablePage | null,
+    knowsSession: (sessionId, machineId) => deps.knowsSession(sessionId, machineId),
+    openWindow: (ask) => askForWindow(deps, ask),
+  })
+}
+
+/**
+ * Attach one window to one session — the body behind `browser:bind`.
+ *
+ * Exported for the copilot's window tool (`deck-control/browser-window-tools.ts`),
+ * so that an attach asked for from another application is the same attach the
+ * window's own menu makes: the same slot numbering, the same publish, the same
+ * hook line the session's agent is handed. Null when there is nothing to attach
+ * — no window id, no session id — which the channel answered with silence and
+ * the tool answers with a sentence.
+ */
+export function bindWindow(input: {
+  tabId: string
+  sessionId: string
+  machineId: string
+}): BoundWindow | null {
+  if (!input.tabId || !input.sessionId) return null
+  const entry = known.get(input.tabId)
+  return attach({
+    sessionId: input.sessionId,
+    machineId: input.machineId,
+    browserTabId: input.tabId,
+    viewId: entry?.viewId ?? null,
+    url: entry?.url ?? '',
+    title: entry?.title ?? '',
+    hostMachineId: entry?.machineId ?? '',
+    hostMachineName: entry?.machineName ?? '',
+  })
+}
+
+/**
+ * **The** disconnect, for a caller that is not one of this file's three doors —
+ * the body behind `browser:unbind`. See {@link disconnect}: the binding goes and
+ * anything an agent was doing in that window stops, in one call.
+ */
+export function unbindWindow(tabId: string): void {
+  if (tabId) disconnect(tabId)
+}
+
+/* ------------------------------------------------------------------ menu -- */
+
+/**
+ * What the page has said about itself, or nothing at all.
+ *
+ * Deliberately allowed to be empty. Everything that draws a row puts a number
+ * in front of it — see {@link windowNumber} — so a page that has told us nothing
+ * still produces a row that can be told from the next one, and nothing here has
+ * to invent a title no page ever had.
+ */
+function windowSays(entry: KnownWindow): string {
+  return entry.title || entry.url
+}
+
+/**
+ * `W3` — the number a window wears in a menu when the session has no name for
+ * it.
+ *
+ * ## Why every row carries one, and not only the nameless ones
+ *
+ * It used to read `entry.title || entry.url || \`Window ${entry.w}\`` — the
+ * number as a *last* resort, for a page that had told us nothing. Rendered, the
+ * number never appeared once, because a browser window sitting on the start page
+ * does not tell us nothing: it tells us its title is `New tab`. So the fallback
+ * could not fire, and Asad's menu was the same list of identical rows it was
+ * when he filmed it:
+ *
+ * > *"So let's say I connected this one, and I cannot connect actually this one.
+ * > This is also a problem. I can only start a new one. See here."*
+ *
+ * Two windows on the start page are two rows reading `New tab`. He was not
+ * unable to *press* one — either press attaches something — he was unable to
+ * press the one he meant, which is the same thing from where he was sitting.
+ *
+ * So the number leads unconditionally. `W5   New tab` and `W6   New tab` are two
+ * rows; `New tab` and `New tab` are one row written twice.
+ *
+ * ## Why `W` and not `B`
+ *
+ * They are different facts and the app must not spell them the same. `B2` is a
+ * slot **inside one session** — the word he says out loud and the word the agent
+ * was handed — and a window that this session does not hold has no such slot;
+ * printing one would name something the agent has never been told. `W5` is the
+ * window's own identity, allocated on first sight and never reused, so it is
+ * stable while he reads down the list and does not shift when another window
+ * closes. An attached row leads with its `B`, an unattached row with its `W`,
+ * and the two numbers are never the same number wearing two letters.
+ */
+function windowNumber(entry: KnownWindow): string {
+  return `W${entry.w}`
+}
+
+/**
+ * One row: the number, then whatever the page calls itself.
+ *
+ * The gap is three spaces because a native menu has no columns; it is the same
+ * separation `B1   Stripe` already used, so the two kinds of row line up.
+ */
+function menuRow(lead: string, said: string): string {
+  return said === '' ? lead : `${lead}   ${said}`
+}
+
+/**
+ * How a machine is named in a menu heading. Empty id means this computer.
+ *
+ * By its hostname, like every other heading on the same menu. It read "This
+ * computer" above a group whose sibling heading read "DESKTOP-DDGMNCV", which is
+ * one phrase among names in a list whose whole job is telling machines apart —
+ * the same shape that had three different computers all called "This machine" on
+ * the browser bar: *"I don't know what to trust."*
+ *
+ * The phrase survives as the fallback for a computer whose hostname could not be
+ * read, because a heading has to say something and a made-up name is worse than
+ * a true phrase.
+ */
+function machineLabel(machineId: string, machineName: string): string {
+  if (machineId === '') return thisMachineName() || 'This computer'
+  return machineName || machineId
+}
+
+/**
+ * Machine ids in the order their groups should be drawn: the machine this menu
+ * is *about* first, then the rest in the order they were first seen.
+ *
+ * ## Why `home` leads rather than this computer always leading
+ *
+ * Asad: *"if I open any browser here and if I connect it to, let's say, desktop,
+ * now this is in desktop, it should come under this table, under the desktop
+ * sessions. So all the desktop browser, including session, should be at one
+ * place."*
+ *
+ * The grouping already existed; what it did not do was put **his** machine at
+ * the top. Opening *Connect browser* from a session running on his PC listed
+ * this Mac's windows first and the PC's — the ones that belong with that session
+ * — underneath, so the pairing he asked to see was the second thing on the menu.
+ * Read from the other end it is the same sentence: a browser window that is on
+ * the PC, asked which session it belongs to, should offer that machine's
+ * sessions first.
+ *
+ * `home` is the empty string in the ordinary case, which is exactly the rule
+ * this replaced, so nothing moves on a one-machine setup.
+ *
+ * A heading is a label, not a sentence, so it survives the rule about prose on
+ * screen; and it is absent in the one-machine case, where it would be a heading
+ * over the only group there is.
+ */
+function machineOrder(keys: Iterable<string>, home: string): string[] {
+  const ordered = [...keys]
+  const at = ordered.indexOf(home)
+  if (at <= 0) return ordered
+  ordered.splice(at, 1)
+  ordered.unshift(home)
+  return ordered
+}
+
+/** The windows, grouped and ordered by {@link machineOrder}. */
+function byMachine(
+  entries: KnownWindow[],
+  home: string,
+): { label: string; windows: KnownWindow[] }[] {
+  const groups = new Map<string, KnownWindow[]>()
+  for (const entry of entries) {
+    const list = groups.get(entry.machineId)
+    if (list) list.push(entry)
+    else groups.set(entry.machineId, [entry])
+  }
+  return machineOrder(groups.keys(), home).map((machineId) => ({
+    label: machineLabel(machineId, groups.get(machineId)?.[0]?.machineName ?? ''),
+    windows: groups.get(machineId) ?? [],
+  }))
+}
+
+/**
+ * The attach/detach menu for one session.
+ *
+ * A **native** menu, and that is not a style preference. A `WebContentsView`
+ * composites above the entire renderer — the whole subject of `overlay-watch.ts`
+ * — so an HTML menu would be hidden behind the browser page in exactly the
+ * situation this feature exists for. `link-open.ts`'s `showLinkMenu` made the
+ * same call for the same reason.
+ */
+export function showBindMenu(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): boolean {
+  const window = deps.window()
+  if (!window || window.isDestroyed()) return false
+
+  Menu.buildFromTemplate(bindMenuItems(deps, request)).popup({ window })
+  return true
+}
+
+/**
+ * The same items, for a menu that is not only about the browser.
+ *
+ * The sidebar's ⋯ menu hangs these under one **Connect browser** entry — Asad
+ * could not find the attach control at all, and said where he expected it:
+ * *"three dot, then connect browser button. Then I can have the full list of the
+ * browser. I can choose which ones to connect with this session."* That list is
+ * this one, so it is built once and handed to both callers rather than written a
+ * second time in the shape of a submenu. Two spellings of "which windows are
+ * attached" is how the pane bar and the rail come to disagree about the same
+ * window.
+ */
+/**
+ * One row of the bind menu as data, for a window that draws its own menus (the
+ * native macOS window, whose engine has no window to pop an Electron menu into).
+ *
+ * The same rows, order and words as {@link bindMenuItems} — both are made by
+ * {@link bindMenuModel} in one pass. What choosing a row does travels as `act`
+ * and goes back through the channels that already exist: `browser:bind`
+ * ({ tabId, sessionId, machineId }), `browser:unbind` (tabId), and, for the new
+ * window, `browser:bind-new-window` ({ sessionId, machineId }).
+ */
+export interface BindMenuRow {
+  type: 'item' | 'checkbox' | 'separator'
+  label: string
+  enabled: boolean
+  checked: boolean
+  act: { kind: 'bind'; tabId: string } | { kind: 'unbind'; tabId: string } | { kind: 'new-window' } | null
+}
+
+export function bindMenuModel(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): { template: MenuItemConstructorOptions[]; rows: BindMenuRow[] } {
+  const machineId = request.machineId ?? ''
+  const binding = bindingFor(request.sessionId, machineId)
+  const template: MenuItemConstructorOptions[] = []
+  const rows: BindMenuRow[] = []
+
+  const windows = [...known.values()]
+
+  if (windows.length === 0) {
+    template.push({ label: 'No browser windows are open.', enabled: false })
+    rows.push({ type: 'item', label: 'No browser windows are open.', enabled: false, checked: false, act: null })
+  }
+
+  const groups = byMachine(windows, machineId)
+  for (const group of groups) {
+    if (groups.length > 1) {
+      template.push({ label: group.label, enabled: false })
+      rows.push({ type: 'item', label: group.label, enabled: false, checked: false, act: null })
+    }
+    for (const entry of group.windows) {
+      const bound = binding?.windows.find((window) => window.browserTabId === entry.tabId)
+      const label = menuRow(bound ? slotName(bound.n) : windowNumber(entry), windowSays(entry))
+      template.push({
+        type: 'checkbox',
+        checked: bound !== undefined,
+        label,
+        click: () => {
+          if (bound) disconnect(entry.tabId)
+          else
+            attach({
+              sessionId: request.sessionId,
+              machineId,
+              browserTabId: entry.tabId,
+              viewId: entry.viewId,
+              url: entry.url,
+              title: entry.title,
+              hostMachineId: entry.machineId,
+              hostMachineName: entry.machineName,
+            })
+        },
+      })
+      rows.push({
+        type: 'checkbox',
+        label,
+        enabled: true,
+        checked: bound !== undefined,
+        act: bound ? { kind: 'unbind', tabId: entry.tabId } : { kind: 'bind', tabId: entry.tabId },
+      })
+    }
+  }
+
+  template.push({ type: 'separator' })
+  rows.push({ type: 'separator', label: '', enabled: false, checked: false, act: null })
+  template.push({
+    label: 'New window, attached',
+    click: () => openNewBoundWindow(deps, request.sessionId, machineId),
+  })
+  rows.push({ type: 'item', label: 'New window, attached', enabled: true, checked: false, act: { kind: 'new-window' } })
+
+  return { template, rows }
+}
+
+/** "New window, attached": a browser window, opened already attached to the session. */
+function openNewBoundWindow(deps: BindingIpcDeps, sessionId: string, machineId: string): void {
+  void openForSession(deps, { url: '', sessionId, machineId, newWindow: true })
+}
+
+export function bindMenuItems(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): MenuItemConstructorOptions[] {
+  return bindMenuModel(deps, request).template
+}
+
+/** {@link bindMenuItems} as data: the `browser:bind-menu-items` answer. */
+export function bindMenuRows(
+  deps: BindingIpcDeps,
+  request: { sessionId: string; machineId?: string },
+): BindMenuRow[] {
+  return bindMenuModel(deps, request).rows
+}
+
+export interface SessionChoice {
+  sessionId: string
+  /** Empty for a session on this computer. */
+  machineId?: string
+  /** What the rail calls it. */
+  name: string
+  /** What that machine is called. Empty for this computer. */
+  machineName?: string
+}
+
+/**
+ * The other direction: which **session** this browser window belongs to.
+ *
+ * Asad, looking at a browser window with no way to attach it from where he was
+ * standing:
+ *
+ * > *"from the browser directly, I cannot connect to any session. It should be
+ * > either here or somewhere. So I can actually directly choose a session to
+ * > connect to the browser instead of from session to a browser. Both sides
+ * > should be the option."*
+ *
+ * Both sides, **one relation**. This reads and writes the same map
+ * `bindMenuItems` does and holds no state of its own, so a window ticked here is
+ * ticked there in the same frame — two models of "which windows are attached" is
+ * how the rail and the pane bar came to disagree about the same window before.
+ *
+ * It is a checklist for the same reason, read the other way round: the ticked
+ * row is the session this window is attached to. Ticking another moves it, which
+ * is what {@link attach} does and what the session-side menu has always done;
+ * unticking the one that is ticked detaches.
+ *
+ * ## The Disconnect row — 2026-08-21
+ *
+ * Unticking is not an affordance. It is a gesture you have to already know, on a
+ * row that says the opposite of what pressing it does, and on the tab he filmed
+ * there was nothing ticked at all — so the only way out of a connection was
+ * invisible and, on that window, unreachable:
+ *
+ *   > *"when we connect any browser, and we should be have a button here to
+ *   > disconnect also, or it should only this way."*
+ *
+ * So a window that is attached gets a first row that says the word, above a
+ * separator, before the list. It is drawn only when there is something to
+ * disconnect — a permanently greyed `Disconnect` at the top of every menu is the
+ * dead control this round is about — and it goes through the same
+ * {@link disconnect} the tick does, because two ways out that do different
+ * amounts of work is how a drive carries on under a window nothing is holding.
+ * The toolbar carries the same act as a button of its own; see
+ * `ConnectSessionButton` in `BindChip.tsx`.
+ *
+ * Sessions are grouped under the machine they run on, and the machine **this
+ * window is on** leads — which is the other half of *"if I connect it to, let's
+ * say, desktop, now this is in desktop, it should come under this table, under
+ * the desktop sessions. So all the desktop browser, including session, should be
+ * at one place."* A window on his PC asked which session it belongs to now
+ * offers that PC's sessions first, instead of listing this Mac's and putting the
+ * pairing he described second.
+ */
+export function connectMenuItems(
+  request: {
+    browserTabId: string
+    sessions: SessionChoice[]
+    /** See {@link BindingIpcDeps.whyNotDrive}. Absent leaves every row as it was. */
+    whyNotDrive?(session: { sessionId: string; machineId: string }): string | null
+    /** See {@link BindingIpcDeps.windowGrantFor}. Absent draws no grant rows. */
+    windowGrantFor?(machineId: string): { name: string; allowed: boolean } | null
+    /** See {@link BindingIpcDeps.setWindowGrant}. */
+    setWindowGrant?(machineId: string, allowed: boolean): void
+  },
+): MenuItemConstructorOptions[] {
+  const entry = known.get(request.browserTabId)
+  const owner = ownerOf(request.browserTabId)
+  const items: MenuItemConstructorOptions[] = []
+
+  /*
+   * The way out, first and in words. See the note above; the slot leads because
+   * `B1` is the name on the tab, in the rail and in the agent's own context.
+   */
+  const held = owner?.windows.find((window) => window.browserTabId === request.browserTabId)
+  if (owner && held) {
+    items.push({
+      label: `Disconnect ${slotName(held.n)}`,
+      click: () => disconnect(request.browserTabId),
+    })
+    items.push({ type: 'separator' })
+  }
+
+  if (request.sessions.length === 0) {
+    // Still after the Disconnect row: a window attached to a session whose
+    // process has gone is exactly the case where the only thing left to do is
+    // let go of it.
+    items.push({ label: 'No sessions are open.', enabled: false })
+    return items
+  }
+
+  const groups = new Map<string, SessionChoice[]>()
+  for (const session of request.sessions) {
+    const key = session.machineId ?? ''
+    const list = groups.get(key)
+    if (list) list.push(session)
+    else groups.set(key, [session])
+  }
+  // The machine this window's page is really served by, first. An unknown
+  // window and a window on this computer both give `''`, which is the order this
+  // menu already had.
+  const keys = machineOrder(groups.keys(), entry?.machineId ?? '')
+
+  for (const key of keys) {
+    const sessions = groups.get(key) ?? []
+    if (keys.length > 1) {
+      items.push({ label: machineLabel(key, sessions[0]?.machineName ?? ''), enabled: false })
+    }
+    for (const session of sessions) {
+      const sessionMachine = session.machineId ?? ''
+      const holds =
+        owner !== null && owner.sessionId === session.sessionId && owner.machineId === sessionMachine
+      const bound = holds
+        ? owner.windows.find((window) => window.browserTabId === request.browserTabId)
+        : undefined
+      /*
+       * Why this session could not act on this window, said on the row rather
+       * than discovered afterwards.
+       *
+       * The row stays **enabled**, and that is deliberate: attaching is still a
+       * real and useful thing to do — it is what puts the page in the rail
+       * beside that terminal and what the person points at when they talk about
+       * it — and a greyed row would take away something that works in order to
+       * warn about something that does not. What it must not do is complete
+       * silently and hand back a `B1` with nothing behind it.
+       */
+      const why =
+        request.whyNotDrive?.({ sessionId: session.sessionId, machineId: sessionMachine }) ?? null
+      const named = bound ? `${slotName(bound.n)}   ${session.name}` : session.name
+      items.push({
+        type: 'checkbox',
+        checked: holds,
+        // The slot this window has *in that session* leads when it has one, so
+        // the row reads as the same fact the strip's chip and the agent's own
+        // context are stating.
+        //
+        // The mark goes in the **label**, not only in the sublabel: `sublabel`
+        // draws on macOS and is ignored on Windows and Linux, so a warning that
+        // lived only there would be a warning two thirds of the people who ship
+        // this never see. Four words, because a menu row is not a paragraph —
+        // the sentence itself is one hover away and is the same string.
+        label: why === null ? named : `${named}   ·   cannot drive it`,
+        ...(why === null ? {} : { sublabel: why, toolTip: why }),
+        click: () => {
+          if (holds) disconnect(request.browserTabId)
+          else
+            attach({
+              sessionId: session.sessionId,
+              machineId: sessionMachine,
+              browserTabId: request.browserTabId,
+              viewId: entry?.viewId ?? null,
+              url: entry?.url ?? '',
+              title: entry?.title ?? '',
+              hostMachineId: entry?.machineId ?? '',
+              hostMachineName: entry?.machineName ?? '',
+            })
+        },
+      })
+    }
+  }
+
+  /*
+   * And the one permission this menu can hand over itself, at the bottom.
+   *
+   * ## Why it is here rather than only in Settings
+   *
+   * Because the sessions on a computer that dialled in are in this menu, and the
+   * grant that lets one of them act on the window is off by default and always
+   * will be. Without this row the sequence is: tick a session here, walk to the
+   * other computer, watch its agent be refused, read a sentence naming a panel,
+   * walk back, open Settings → Remote, find the device, tick it, walk back
+   * again. Every step of that is real and every step of it is somebody being
+   * told to go somewhere else.
+   *
+   * It is not a widening of who may grant it. That panel's argument is that the
+   * browser on this screen holds this account's signed-in mail, bank and source
+   * control, so the tick belongs to *this keyboard* — and this menu is popped
+   * from this keyboard. What it must not become is implicit: attaching does not
+   * grant, the row says the computer's name, and the tick is a tick.
+   *
+   * ## Why a checkbox rather than an action
+   *
+   * A row that says "Allow…" and closes leaves nothing behind that says it
+   * worked — the defect this round is about, wearing a helpful label. A checkbox
+   * carries the state it is in, so the next time this menu opens it is the
+   * answer to "did that land", and the same row turns it off again.
+   *
+   * ## Why one row per computer and only for computers with a row above
+   *
+   * The set is derived from the sessions this menu is already listing, so it
+   * cannot offer a permission for a machine nobody is looking at, and a computer
+   * running four sessions gets one row rather than four.
+   */
+  const grants = new Map<string, { name: string; allowed: boolean }>()
+  if (request.windowGrantFor) {
+    for (const session of request.sessions) {
+      const machineId = session.machineId ?? ''
+      if (machineId === '' || grants.has(machineId)) continue
+      const grant = request.windowGrantFor(machineId)
+      if (grant !== null) grants.set(machineId, grant)
+    }
+  }
+  if (grants.size > 0) {
+    items.push({ type: 'separator' })
+    for (const [machineId, grant] of grants) {
+      items.push({
+        type: 'checkbox',
+        checked: grant.allowed,
+        label: `Let ${grant.name} act on browser windows here`,
+        // Drawn even with no way to write it, and disabled rather than hidden:
+        // a build whose preload has the read and not the write would otherwise
+        // show a permission that silently does nothing when pressed.
+        enabled: request.setWindowGrant !== undefined,
+        click: () => request.setWindowGrant?.(machineId, !grant.allowed),
+      })
+    }
+  }
+
+  return items
+}
+
+/** Pop {@link connectMenuItems} over the app window. */
+export function showConnectMenu(
+  deps: BindingIpcDeps,
+  request: { browserTabId: string; sessions: SessionChoice[] },
+): boolean {
+  const window = deps.window()
+  if (!window || window.isDestroyed()) return false
+  Menu.buildFromTemplate(
+    // Taken from the deps here rather than sent up by the renderer, because the
+    // only thing that can answer it is the main process — `servers/ipc.ts` knows
+    // which terminals it armed and why the rest were not.
+    connectMenuItems({
+      ...request,
+      ...(deps.whyNotDrive ? { whyNotDrive: deps.whyNotDrive } : {}),
+      ...(deps.windowGrantFor ? { windowGrantFor: deps.windowGrantFor } : {}),
+      ...(deps.setWindowGrant ? { setWindowGrant: deps.setWindowGrant } : {}),
+    }),
+  ).popup({ window })
+  return true
+}
+
+/* ------------------------------------------------------------------- ipc -- */
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+/**
+ * Register every channel this relation needs. Call once from `registerIpc()`.
+ *
+ * The pushes go out on `browser:bindings`, shaped like `machines:state` — the
+ * whole view every time, because the view is a handful of rows and a diff
+ * protocol for a handful of rows is a second thing to keep correct.
+ */
+export function registerBrowserBindingIpc(ipcMain: IpcMain, deps: BindingIpcDeps): () => void {
+  endDrive = deps.endDrive ?? null
+
+  ipcMain.on('browser:window-opened', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const tabId = str(input.tabId)
+    if (!tabId) return
+    const before = known.get(tabId)
+    // Allocated once per window and never handed back. A number that shifted
+    // when another window closed would rename the row he is reaching for; see
+    // `KnownWindow.w`, and `SessionBinding.next` for the same argument made
+    // about `B2`.
+    if (!before) windowSeq += 1
+    const entry: KnownWindow = {
+      tabId,
+      viewId: typeof input.viewId === 'string' ? input.viewId : (before?.viewId ?? null),
+      url: str(input.url),
+      title: str(input.title),
+      machineId: str(input.machineId),
+      machineName: str(input.machineName),
+      visible: input.visible === true,
+      w: before?.w ?? windowSeq,
+    }
+    known.set(tabId, entry)
+    /*
+     * Anything blocked on this pane having a page can go now.
+     *
+     * Fired here rather than after `windowMoved` because a waiter is asking
+     * about the *window*, and a window that is nobody's — the copilot's own
+     * pane — is not in the binding map at all and never will be.
+     */
+    if (entry.viewId !== null) {
+      const waiting = viewWaiters.get(tabId)
+      if (waiting) {
+        viewWaiters.delete(tabId)
+        for (const resolve of waiting) resolve(entry.viewId)
+      }
+    }
+    // Only what the window reported is passed on. A field the renderer left out
+    // must not become an empty string in a hook answer an agent will read as
+    // fact.
+    windowMoved(tabId, {
+      ...(input.viewId !== undefined ? { viewId: entry.viewId } : {}),
+      ...(input.url !== undefined ? { url: entry.url } : {}),
+      ...(input.title !== undefined ? { title: entry.title } : {}),
+      ...(input.machineId !== undefined ? { hostMachineId: entry.machineId } : {}),
+      ...(input.machineName !== undefined ? { hostMachineName: entry.machineName } : {}),
+    })
+  })
+
+  ipcMain.on('browser:window-closed', (_event, raw: unknown) => {
+    const tabId = str(raw)
+    if (!tabId) return
+    known.delete(tabId)
+    windowClosed(tabId)
+  })
+
+  ipcMain.on('browser:bind', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    bindWindow({
+      tabId: str(input.tabId),
+      sessionId: str(input.sessionId),
+      machineId: str(input.machineId),
+    })
+  })
+
+  ipcMain.on('browser:unbind', (_event, raw: unknown) => {
+    unbindWindow(str(raw))
+  })
+
+  ipcMain.on('link:opened', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const settle = pending.get(str(input.requestId))
+    if (!settle) return
+    const tabId = str(input.tabId)
+    if (tabId) settle({ tabId })
+    else
+      settle({
+        refused:
+          str(input.refused) ||
+          `${BRAND.name} could not open a window for that link — opening it in your default browser.`,
+      })
+  })
+
+  ipcMain.removeHandler('browser:bindings')
+  ipcMain.handle('browser:bindings', () => view())
+
+  ipcMain.removeHandler('browser:bind-menu')
+  ipcMain.handle('browser:bind-menu', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const sessionId = str(input.sessionId)
+    if (!sessionId) return false
+    return showBindMenu(deps, { sessionId, machineId: str(input.machineId) })
+  })
+
+  /*
+   * The same menu as data, for the native window (its engine has no window to pop
+   * a menu into, so `browser:bind-menu` answers false there). Null for no session.
+   */
+  ipcMain.removeHandler('browser:bind-menu-items')
+  ipcMain.handle('browser:bind-menu-items', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const sessionId = str(input.sessionId)
+    if (!sessionId) return null
+    return bindMenuRows(deps, { sessionId, machineId: str(input.machineId) })
+  })
+
+  /* "New window, attached", chosen from the data menu above. */
+  ipcMain.on('browser:bind-new-window', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const sessionId = str(input.sessionId)
+    if (!sessionId) return
+    openNewBoundWindow(deps, sessionId, str(input.machineId))
+  })
+
+  /*
+   * The same relation, asked from the browser's end.
+   *
+   * The sessions arrive in the request rather than being looked up here,
+   * because the names are the renderer's — the argument is the one
+   * `session-row-menu.ts` makes for its own labels. Everything that *decides*
+   * anything still happens against the one map in `browser-binding.ts`.
+   */
+  ipcMain.removeHandler('browser:connect-menu')
+  ipcMain.handle('browser:connect-menu', (_event, raw: unknown) => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const browserTabId = str(input.tabId)
+    if (!browserTabId) return false
+    const rows = Array.isArray(input.sessions) ? input.sessions : []
+    const sessions: SessionChoice[] = []
+    for (const row of rows) {
+      const one = (row ?? {}) as Record<string, unknown>
+      const sessionId = str(one.sessionId)
+      if (!sessionId) continue
+      sessions.push({
+        sessionId,
+        machineId: str(one.machineId),
+        name: str(one.name) || sessionId,
+        machineName: str(one.machineName),
+      })
+    }
+    return showConnectMenu(deps, { browserTabId, sessions })
+  })
+
+  /*
+   * A link clicked inside a terminal.
+   *
+   * The half of Asad's report that was a one-line defect: `TerminalView` loaded
+   * `WebLinksAddon` with no handler, so xterm's default called `window.open()`
+   * with no argument, the app's window-open handler denied it, and the URL was
+   * discarded while a blank tab opened in its place. It arrives here now, with
+   * the session it was printed in, and goes wherever that session's other links
+   * go.
+   */
+  ipcMain.removeHandler('link:open')
+  ipcMain.handle('link:open', async (_event, raw: unknown): Promise<LinkRoute> => {
+    const input = (raw ?? {}) as Record<string, unknown>
+    const url = str(input.url)
+    if (!url) return 'refused'
+    const answer = await openForSession(deps, {
+      url,
+      sessionId: str(input.sessionId) || null,
+      machineId: str(input.machineId),
+    })
+    if (answer.route === 'tab') return 'tab'
+    /*
+     * The one place this differs from the shim, and it has to.
+     *
+     * When the shim is told `system` it runs the real opener itself, so this
+     * process must not also open the page — that would put it on screen twice.
+     * A click in a terminal has no such second half: if nothing here opens it,
+     * the URL is simply gone, which is the defect being fixed rather than a new
+     * shape of it.
+     */
+    openSystemUrl(url)
+    return 'system'
+  })
+
+  return subscribe((next) => deps.send('browser:bindings', next))
+}
+
+/** Test seam, and the reset a renderer replacement needs. Nothing else calls it. */
+export function forgetKnownWindows(): void {
+  known.clear()
+  pending.clear()
+  viewWaiters.clear()
+  /*
+   * `windowSeq` too, and for the same reason `SessionBinding.next` restarts on
+   * an empty session.
+   *
+   * The one caller is a renderer replacement — ⌘R, a dev rebuild — where every
+   * browser window this app had is genuinely gone and `hostReset()` drops every
+   * binding in the same breath. The number is no-reuse so that a row he is
+   * reading cannot be renamed under him by another window closing; with nothing
+   * left open there is no such row, and marching on would put `W47   New tab` in
+   * front of him after a morning of reloads.
+   */
+  windowSeq = 0
+}

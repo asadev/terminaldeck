@@ -1,0 +1,185 @@
+/**
+ * Settings → Tasks.
+ *
+ * The window's own vocabulary does most of the work — rows, switches, the
+ * profile list, the confirm strip, the badges — so this file names only what
+ * that vocabulary has no word for: an item's edit area, a labelled field, a
+ * two-column run of short fields, the list boxes and the one-time secret.
+ *
+ * Fills, never surfaces, for the reason `settings-surface.test.ts` enforces,
+ * and separation by space first, then by a tint — no rules between rows.
+ */
+
+.tasks-quiet {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* An agent's or a connection's controls, opened under its name. */
+.tasks-edit {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.tasks-edit .settings-actions,
+.tasks-edit .settings-confirm,
+.tasks-edit .settings-notice {
+  margin: 0;
+}
+
+.tasks-new {
+  margin-top: var(--sp-4);
+}
+
+.tasks-new > .settings-explain-title {
+  margin: 0;
+}
+
+/* The item after an open one stands further off, so the open controls read as
+   belonging to the item above them. */
+.settings-profiles > .tasks-item[data-open] + .tasks-item {
+  margin-top: var(--sp-8);
+}
+
+.tasks-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* One labelled control: its name, the control, and the line under it. */
+.tasks-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  min-width: 0;
+}
+
+.tasks-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Short fields side by side, folding to one column in a narrow sheet. */
+.tasks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--sp-4) var(--sp-3);
+}
+
+.tasks-grid .settings-input,
+.tasks-grid .settings-select-wrap,
+.tasks-grid .settings-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.tasks-number {
+  min-width: 84px;
+}
+
+.tasks-grid .tasks-number {
+  width: 84px;
+}
+
+.tasks-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+/* A list, one entry per line. */
+.tasks-lines {
+  width: 100%;
+  height: auto;
+  min-height: 72px;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+
+/* The secret, shown once. Mono and selectable, and wrapped rather than cut. */
+.tasks-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.tasks-secret-value {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* A picker's choices so far: one pill each, with its own remove button. */
+.tasks-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tasks-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-1) 1px var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+/* Saved before, not found on this Mac now: kept, and said so. */
+.tasks-chip[data-missing] {
+  color: var(--text-secondary);
+}
+
+.tasks-chip-remove {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tasks-chip-remove:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* A picker's menu: as wide as a field, with its arrow inside it, wherever it sits. */
+.tasks-picker-select {
+  align-self: flex-start;
+  width: min(100%, 420px);
+}
+
+.tasks-picker-select .settings-select {
+  width: 100%;
+}
+
+/* The archived list is its own group, not the last active agent's tail. */
+.tasks-archived-title {
+  margin-top: var(--sp-5);
+}

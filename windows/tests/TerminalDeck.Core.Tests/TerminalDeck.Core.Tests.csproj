@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <Using Include="Xunit" />
+    <!-- Pure navigation/geometry contracts run on Mac without compiling the WinUI app. -->
+    <Compile Include="../../src/TerminalDeck.App/Views/Settings/SettingsNavigation.cs" Link="Settings/SettingsNavigation.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Settings/SettingsPanelBounds.cs" Link="Settings/SettingsPanelBounds.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Settings/SettingsWindowPlacement.cs" Link="Settings/SettingsWindowPlacement.cs" />
+    <None Update="Fixtures/*.cjs" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

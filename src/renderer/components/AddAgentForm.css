@@ -1,0 +1,101 @@
+/* ============================================================================
+   Add an agent — the form behind the plus button in the New-session picker.
+
+   It replaces the agent list inside the same dialog rather than opening a
+   second one, and that is a constraint rather than a preference: `Modal` binds
+   Escape to `window`, so a dialog opened from inside another dialog dismisses
+   both, throwing away whatever the person was doing underneath. The note at the
+   bottom of `ProviderPicker.tsx` records where that was found out.
+
+   Full-width fields stacked in one column, because every one of them takes a
+   command line or a sentence — the label-left/control-right row that Settings
+   uses is for controls that are a switch or a short number, and squeezing a
+   `--system-prompt "…"` into the right-hand half of a row would give the person
+   a 200px window onto the thing they most need to read back.
+   ============================================================================ */
+
+.aa {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-top: var(--sp-1);
+}
+
+.aa-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.aa-label {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.aa-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.aa-input:focus-visible {
+  outline: none;
+  /* An inset ring rather than an outline, so the field does not grow by two
+     pixels the moment it is focused and shift every field under it. */
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* The command and both argument lines. Machine text: what is typed here is
+   what gets executed, so it is spaced like a terminal and — see
+   `styles/verbatim.css` — drawn without ligatures, because `-->` in an argument
+   has to look like three characters. */
+.aa-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+/* The parse, and what the field is for. Reads under the field, not beside it. */
+.aa-hint {
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* Colour and nothing else — no icon, no bar down the side. One field is wrong
+   and the sentence says which and why; a second signal would only compete with
+   the sentence. */
+.aa-problem {
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--color-critical);
+}
+
+/* The field itself says so too, because a person tabbing through with the
+   error line off screen has nothing else to go on. */
+.aa-field[data-invalid='true'] .aa-input {
+  box-shadow: inset 0 0 0 1.5px var(--color-critical);
+}
+
+/* Separated by space, then by a tint — never by a rule. It is a statement about
+   the whole form, so it sits under all of it with room above. */
+.aa-note {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}

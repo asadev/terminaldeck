@@ -1,0 +1,330 @@
+/* ============================================================================
+   Composer — one box, and everything lives inside it.
+
+   The old shape was a single-line field with a plus on one side and a
+   microphone on the other, and then three more rows stacked underneath it: four
+   pickers, a sentence about them, and a usage readout. Five bands of chrome
+   under a one-line box, which is how a chat pane came to look like a control
+   panel with a text field bolted on.
+
+   This is the other way round. The box is the centre of gravity — tall enough
+   to read as somewhere you write a paragraph — and it carries its own controls:
+   attachments above the text, one row of controls below it, all inside the same
+   frame. Underneath the box there is nothing at all.
+
+   The row is now three things: the plus, the microphone and send. The model and
+   permission pickers and the Options panel that used to sit between them were
+   copies of what the window's own bar carries — *"since we have it on top we
+   actually don't need them here"* — and they are drawn there, over every
+   session, including the ones shown as a terminal, which never had them here at
+   all. `chat/controls/one-home.test.ts` is what stops a control losing both
+   homes at once.
+
+   `.cc-chip` is the shape a labelled control in that row wears. Only the plus
+   wears it today; the class stays a family rather than becoming "the plus
+   button", because the one thing this row keeps being asked for is that
+   whatever lands on it looks like the rest of it.
+   ============================================================================ */
+
+.chat-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  /* Same measure and same axis as the conversation above it, so the pane reads
+     as one document instead of a narrow column with a full-bleed bar under it. */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--content-measure) + var(--sp-6) * 2);
+  align-self: center;
+  margin-inline: auto;
+  padding: var(--sp-2) var(--sp-6) var(--sp-5);
+  /*
+    No background. This element is the padding around the box, and it used to
+    paint `var(--bg-primary)` — an opaque, square-cornered rectangle 48px wider
+    and 28px taller than the rounded box inside it, sitting directly behind it:
+
+      > "there is a square sharp-corner box and then under this we have this
+      > round-corner box separately with blue line. The other one should not be
+      > there… Overall it should be the same colour as surface of back."
+
+    Measured in the running app rather than judged by eye, because the whole
+    complaint is that it is barely visible. On a session's pane the surface
+    behind it is `--bg-primary` too, so the two matched by coincidence and the
+    rectangle was invisible: dark `#191919` on `#191919`, light `#ffffff` on
+    `#ffffff`. On the copilot's pane the surface is `--terminal-bg`, and there
+    the coincidence runs out — dark `#191919` on `#191919` still, but light
+    `#ffffff` on `#e8e8e8`, which is a square block of a barely-different colour
+    behind a rounded one. Exactly what he described.
+
+    Transparent is not "the same value written once instead of twice": it is the
+    only version that cannot be wrong. A wrapper that inherits whatever it is
+    over agrees with every pane, in every theme, and stays agreeing after the
+    next token change. Matching by value agreed with two of the four and had
+    already stopped agreeing with the third.
+
+    Nothing was relying on the paint. `.cv-stage` is a flex sibling that stops
+    where this begins, so no conversation scrolls under this box and there is
+    nothing here to hide.
+  */
+}
+
+/* The field. Depth by layering rather than by outline: it is a surface lifted
+   off the pane, with a hairline only to catch its own edge. */
+.cc-box {
+  /* The anchor for the "More" panel (`.ac-sheet`, chat/controls). It is pinned
+     to the box rather than to the control that opens it so it can be capped at
+     `max-width: 100%` — the box's width, which is the only measurement that
+     keeps a 360px panel inside a narrow pane. Anchored to the button, it was
+     capped against the *viewport*, and a pane made narrow by the sidebar let it
+     run off the right-hand edge of the window. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: var(--bg-secondary);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.cc-box:hover {
+  border-color: var(--border-strong);
+}
+
+/* Focus rings the whole box rather than the textarea inside it — the frame is
+   the field's edge, so that is where the ring belongs. A tinted border and a
+   soft halo rather than a hard outline: the box is 20px round and a 2px
+   rectangle sitting a pixel outside it never quite followed the corner. */
+.cc-box:has(.cc-input:focus-visible) {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.cc-box-off {
+  background: var(--bg-primary);
+}
+
+/* A file is being dragged over the box.
+
+   The same accent border and halo as focus, because it is the same claim — this
+   is where what you are doing will land — and a second visual language for it
+   would be a second thing to learn. It has to be visible: without any feedback,
+   a drop that misses the box replaces the whole window with the dropped file,
+   and the only warning anybody had was the cursor. */
+.cc-box-drop {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  /* Not a colour of its own: the fill lifts a step so the target reads at a
+     glance in both themes without introducing a tint that means nothing
+     elsewhere in the app. */
+  background: var(--bg-tertiary);
+}
+
+.cc-input {
+  min-width: 0;
+  /* Three lines and a little, before a word is typed. The auto-grow in
+     ChatComposer.tsx writes an explicit height on every keystroke, and
+     `min-height` is what stops it from collapsing the box back to one line —
+     the floor lives here rather than in the measuring code so the two cannot
+     disagree. */
+  min-height: 76px;
+  max-height: 40vh;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  resize: none;
+  overflow-y: auto;
+}
+
+.cc-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* The ring is drawn by the box above; a second one inside it would read as two
+   controls. */
+.cc-input:focus-visible {
+  outline: none;
+}
+
+.cc-input:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------- the row -- */
+
+.cc-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* The left half gives way first; the right half holds two fixed-width controls
+   that must never move.
+
+   It still wraps, even though only the plus is left in it. The rule was written
+   against a measured failure — in a 520px pane this row wanted 214px inside
+   174px, and a flex row that cannot wrap does not scroll, it overlaps, so the
+   Options button ended up underneath the Permission chip refusing every click —
+   and the reason it stays is that the failure was never about how many controls
+   there were. It was about a row that cannot give way. Anything added back here
+   inherits the fix instead of rediscovering it. */
+.cc-foot-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.cc-foot-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+/* A labelled control on that row. Quiet at rest — no border, no fill — because
+   the send button is the only thing in this view that should look like an
+   action; it grows a background when you point at it, which is the promise
+   that it does something. */
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  height: var(--control-h);
+  /* Free to shrink, so a long value inside it gives way before the row does. */
+  min-width: 0;
+  /* Matches the textarea's own horizontal padding, so a label on this row and
+     the first character of the message start on the same vertical line. */
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.cc-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.cc-chip[aria-expanded='true'] {
+  background: var(--bg-active);
+}
+
+.cc-chip:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cc-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cc-chip svg {
+  display: block;
+}
+
+/* The microphone: the one control here that stays a glyph, because it is one of
+   the two the corner of a message box has meant for twenty years. It says what
+   it is on hover and to a screen reader — see DictateButton.tsx. */
+.cc-tool {
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.cc-tool:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cc-tool-on {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.cc-tool:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cc-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cc-tool svg {
+  display: block;
+}
+
+/* The one filled control in this view, and it is earned — it is the action. */
+.cc-send {
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.cc-send:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.cc-send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+/* Nothing to send yet: it recedes into the box rather than sitting there as a
+   dimmed accent, which reads as broken. */
+.cc-send:disabled {
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cc-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cc-send svg {
+  display: block;
+}
+
+/* Where the attach menu would have been, when it cannot be offered.
+
+   Muted caption weight, no border and no button shape: it is an explanation
+   standing where a control used to be, and anything that looked pressable here
+   would be worse than the plus that quietly vanished. See `noAttachReason`. */
+.cc-no-attach {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+  line-height: 1.3;
+  color: var(--text-muted);
+}

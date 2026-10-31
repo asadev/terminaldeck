@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/asadev/terminaldeck/security/advisories/new
+    about: >
+      Report privately. Please do not open a public issue for a security
+      problem — see SECURITY.md for what is in scope.
+  - name: Question or idea
+    url: https://github.com/asadev/terminaldeck/discussions
+    about: >
+      For "how do I…" and half-formed ideas. Enable Discussions on the repo
+      first, or delete this entry.

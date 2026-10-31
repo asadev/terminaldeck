@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType><Platforms>x64</Platforms><RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <Compile Include="../../src/TerminalDeck.App/Diagnostics/*.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Chat/*.cs" Link="Chat/%(Filename)%(Extension)" />
+    <Compile Include="../../src/TerminalDeck.App/Views/BrandIcon.cs" Link="BrandIcon.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Agents/NewSessionPicker.cs" Link="NewSessionPicker.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Projects/ProjectAgentUi.cs" Link="ProjectAgentUi.cs" />
+    <Compile Include="../../src/TerminalDeck.App/ViewModels/Projects/ProjectsViewModel.cs" Link="ProjectsViewModel.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Windows/WorkspaceIcons.cs" Link="WorkspaceIcons.cs" />
+    <Page Include="../../src/TerminalDeck.App/Styles/DeckResources.xaml" Link="Styles/DeckResources.xaml" />
+    <Content Include="../../src/TerminalDeck.App/Assets/icons/*.svg" Link="Assets/icons/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

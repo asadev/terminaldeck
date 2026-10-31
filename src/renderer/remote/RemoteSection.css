@@ -1,0 +1,430 @@
+/* ============================================================================
+   Remote — every device paired with this machine.
+
+   Only what the shared settings controls do not already cover: the ways in, the
+   pairing code and the layout around it, and the device, connection and tunnel
+   rows. Everything else in this section is a `settings-*` class, so it keeps
+   matching the rest of the window when that changes. The machines this desktop
+   can reach are the same section and their own file, `machines/machines.css`.
+
+   Nothing here is boxed. A group of rows is one soft fill with space between
+   the rows; a status is a word in a meaningful colour rather than an outline
+   around one.
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- paths -- */
+
+/* The ways in. Usually one row — the relay — and two on the machines that also
+   have a direct route.
+
+   A list rather than one combined verdict because the two fail independently,
+   and because the second row is drawn only when it exists: a route this machine
+   does not have is not a route that is down, and a permanent grey row saying so
+   is how this panel came to report the absence of an optional faster path as a
+   fault in the product. See RemoteSection.tsx. */
+
+.remote-paths {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.remote-path {
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* Nothing here is clickable, so nothing here reacts to a pointer. */
+.remote-path-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.remote-path-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.remote-path-blurb,
+.remote-path-note {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The state, and the one thing on this panel most likely to be believed without
+   being read. It is drawn from `connected` alone — never from "we asked it to
+   start" — so the three tones mean exactly three things. The colour is on the
+   word; the chip is a neutral fill, because an outline in a status colour reads
+   as a control you can press. */
+.remote-pill {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.remote-pill[data-state='ok'] {
+  color: var(--status-completed);
+}
+
+/*
+  Neutral, not amber.
+
+  It was `--color-warning`, and it was the loudest thing on an otherwise
+  blue-and-grey settings page — a warm pill in the corner of Remote reading "Not
+  connected". Amber was the wrong claim as well as the wrong weight: a relay
+  that has not been dialled, or is between attempts, is a *fact about where
+  things stand*, not a fault anybody has to act on, and the path it belongs to
+  already recedes (`.remote-path[data-state='down']`). Red is reserved for
+  something broken, amber for something that wants attention, and this is
+  neither — so it reads in the quiet ink, like the "Off" beside it.
+*/
+.remote-pill[data-state='down'] {
+  color: var(--text-secondary);
+}
+
+/* A path that is not up recedes, so the one that works is what the eye lands
+   on first. */
+.remote-path[data-state='down'],
+.remote-path[data-state='off'] {
+  background: var(--fill-quaternary);
+}
+
+/* There was a `.remote-fact` here — a label-and-value row for the host id, the
+   fingerprint, the tailnet address and the tailnet IP. All four are gone from
+   this panel and the rules went with them, rather than being left behind as
+   dead selectors for the next reader to wonder about. The fingerprint still
+   appears once, beside a live pairing code, and it has its own `.remote-check`
+   block below because that is a comparison rather than a fact sheet. */
+
+/* ----------------------------------------------------------- the pairing -- */
+
+/* Two halves, in the order somebody does them: show a code here, type one from
+   there. They sit on one row because a person pairing is standing between two
+   keyboards and needs both instructions in one glance — and they wrap onto two
+   rows in a narrow window rather than shrinking, because the six boxes on the
+   right have a floor.
+
+   There was a QR code here, 260 square, with a copyable `terminaldeck://pair`
+   link beside it. Both are gone: the QR could only be read by a phone, which
+   left a second desktop with nothing to do, and the link was a live bearer token
+   in a string whose only route between two machines was a chat app. The rules
+   for both went with them — a stylesheet that keeps the class for something the
+   markup no longer has is where a deleted feature comes back. */
+.remote-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: var(--sp-5);
+  margin: var(--sp-3) 0 var(--sp-1);
+}
+
+.remote-pair-half {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+/* Brighter title, dimmer body: the treatment the brief asks for wherever an
+   option needs a paragraph, and the same one `Explain` uses. */
+.remote-pair-title {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.remote-pair-half .settings-prose {
+  margin: 0;
+  max-width: 42ch;
+}
+
+/* ------------------------------------------------------------- the code -- */
+
+/* The six digits, and the largest thing in the section.
+
+   It is read off this screen from a step back and typed into a device held in
+   the other hand, so it is set the way a terminal sets things: mono, tracked
+   out, tabular, full contrast. `--font-mono` puts JetBrains Mono in front of
+   Menlo, which is the reason the digits are unmistakable — a zero with a dot in
+   it, a one with a base, a seven that cannot be read as a one.
+
+   Selectable, because the code is occasionally copied by hand; there is a Copy
+   button beside it as well. */
+.remote-code {
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.18em;
+  /* The tracking above adds space after the last digit too, which reads as a
+     code that is off-centre in its own block. */
+  text-indent: 0.18em;
+  color: var(--text-primary);
+  user-select: text;
+}
+
+.remote-countdown {
+  margin: 0 0 var(--sp-15);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Muted rather than red: an expired code is the system working, not a fault. */
+.remote-countdown-done {
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------- the fingerprint ---- */
+
+/* The one check a person can make with their eyes, so it is given the room to
+   be compared character by character rather than glanced at. */
+.remote-check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.remote-check-label {
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.remote-check-note {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* Tabular and spaced: this is read out loud and compared against a phone held
+   in the other hand. */
+.remote-fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------- devices and links -- */
+
+/* One soft block per list, and the space inside a row is what separates it from
+   the next one. */
+.remote-list {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.remote-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: none;
+}
+
+.remote-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-row-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.remote-row-note {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* A revoked device stays in the list — the record of it is the point — but it
+   is not something you can act on, so it recedes. */
+.remote-row-revoked .remote-row-name,
+.remote-row-revoked .remote-row-note {
+  color: var(--text-muted);
+}
+
+.remote-state {
+  flex-shrink: 0;
+  width: 96px;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.remote-row-pending .remote-state {
+  color: var(--status-input);
+}
+
+/* ------------------------------------------------------------- attached -- */
+
+/* The one loud thing on the panel. Something typing into this machine right now
+   should not look like another row of settings, so it lifts off the block it
+   sits in and keeps the label and the pulsing dot — the only place in this file
+   that uses colour to mean anything.
+
+   A phone with pages open on this Mac's ports needs a second line, and the row
+   is a single flex line ending in Disconnect, so it wraps: the tunnel list
+   simply takes a line of its own. */
+.remote-row-live {
+  flex-wrap: wrap;
+  margin: 0 var(--sp-2);
+  padding: var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+/* In dark the page colour is the darker surface, so "lifted" has to be the
+   lighter one — the same move the segmented control makes. */
+[data-theme='dark'] .remote-row-live {
+  background: var(--bg-tertiary);
+}
+
+.remote-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  flex-shrink: 0;
+  width: 96px;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--status-working);
+}
+
+.remote-live-dot {
+  width: var(--settings-dot, 7px);
+  height: var(--settings-dot, 7px);
+  border-radius: var(--radius-pill);
+  background: var(--status-working);
+  animation: remote-pulse 2s ease-in-out infinite;
+}
+
+@keyframes remote-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* The dot still reads as present without the pulse; only the motion goes. */
+@media (prefers-reduced-motion: reduce) {
+  .remote-live-dot {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------- tunnels -- */
+
+/* Pages a phone has open on this Mac's ports, nested inside its attached row.
+
+   `flex-basis: 100%` is what puts them on their own line inside that row rather
+   than as a fourth column squeezed against Disconnect. Space, not a rule, is
+   what holds them apart from the row above — a line inside a card that is
+   already inside a block is the third fence in a row. */
+.remote-tunnels {
+  flex-basis: 100%;
+  /* `flex-basis: 100%` is not enough on its own. A flex item also keeps
+     `min-width: auto`, which is its *content's* minimum — so this list sized
+     itself to the widest port row and overflowed the card rather than the text
+     inside it ellipsising, pushing Stop out past the right edge. */
+  min-width: 0;
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  border-top: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.remote-tunnel {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* `min-width: 0` on both, or the flex default of `auto` lets a long line push
+   the Stop button off the right edge instead of ellipsizing. */
+.remote-tunnel-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-tunnel-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The port is the whole point of the row, so it is the one thing given a chip:
+   monospace, full-contrast, and lifted off the row behind it by a fill. */
+.remote-tunnel-port {
+  flex-shrink: 0;
+  padding: 1px var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* And on the ellipsised text itself, for the same reason: every flex ancestor
+   between it and the card has to be allowed to shrink, or the widest one wins
+   and the ellipsis never appears. */
+.remote-tunnel-what,
+.remote-tunnel .remote-row-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-tunnel-what {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}

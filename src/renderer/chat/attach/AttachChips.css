@@ -1,0 +1,84 @@
+/* Attachments riding along with the next message: pills above the text, inside
+   the box, in the system fill rather than an outlined box each. */
+
+.at-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-15);
+  /* Only the inset that lines the first chip up with the first character of the
+     message. The space below belongs to the box's own gap — carrying it here
+     too left a double gap on the one row that has chips and none on the rest. */
+  padding: 0 var(--sp-2);
+}
+
+.at-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  max-width: 240px;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  line-height: var(--lh-tight);
+}
+
+/* The kind is carried by a glyph, not by colour: a row of coloured chips reads
+   as a row of warnings, and colour in this app means selection or status. */
+.at-chip-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+.at-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "outside" — a word, not a colour. The chips row is read for its content, and
+   the app's colours already mean selection and status; a fourth meaning
+   assigned to a tint would be a legend nobody has. Same treatment as the
+   picker's "added" tag, which is the other small word that qualifies a row. */
+.at-chip-out {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.at-chip-x {
+  display: grid;
+  place-items: center;
+  width: var(--sp-4);
+  height: var(--sp-4);
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.at-chip-x:hover {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+.at-chip-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.at-chips-notice {
+  color: var(--color-warning);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+}

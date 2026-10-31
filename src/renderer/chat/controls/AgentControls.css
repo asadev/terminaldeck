@@ -1,0 +1,681 @@
+/* ============================================================================
+   The agent's controls, drawn inside the chat box.
+
+   They used to be a strip under it: four pickers on one line, a sentence under
+   those, and a usage readout under that — three rows of chrome below the thing
+   you were actually typing into. Now the two that get used sit on the box's own
+   bottom row wearing `cc-chip` (defined in ChatComposer.css, so the plus, the
+   pickers and the send button are one family), and all four of them — plus the
+   usage readout — live in a glass panel that opens upward from one chip called
+   Options. The panel holds everything, not the remainder: a button whose
+   contents are not named is how the folded controls came to be reported as
+   deleted.
+
+   Nothing in here draws a strip, a border or a surface of its own. The panel is
+   the app's glass — the same material every dialog, menu and popover wears.
+   ============================================================================ */
+
+.agent-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  /* A flex child's default `min-width: auto` refuses to shrink below its own
+     content, which in a narrow pane pushed the send button off the box. */
+  min-width: 0;
+}
+
+/* Wraps for the same reason `.cc-foot-left` does: a flex row that cannot wrap
+   does not scroll when it runs out of room, it overlaps — and the control that
+   loses is the last one, which here is the button holding everything else. */
+.ac-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-05);
+  min-width: 0;
+}
+
+/* -------------------------------------------------------------- button -- */
+
+.ac-picker {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.ac-name {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The value is the only thing on this row allowed to be long — a model reads
+   back as "Opus 5 (1M context) (default)" — so it is the only thing that gives
+   way, first to its own ceiling and then, in a narrow pane, to whatever room is
+   left. The button's own tooltip still carries the whole of it.
+
+   `min-width: 0` is what makes the second half work at all: a flex child
+   refuses by default to shrink below its own text, which is how a long model
+   name pushed the send button off the right-hand end of the box. */
+.ac-value {
+  flex: 0 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 16ch;
+  font-weight: var(--w-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An unread value is muted and italic, so a glance separates "this is what it
+   is" from "we could not find out". Colour is not used: nothing is wrong. */
+.ac-value-unknown {
+  font-style: italic;
+  font-weight: var(--w-regular);
+  color: var(--text-muted);
+}
+
+/* A chip whose control cannot act right now, and knows why.
+
+   Drawn back rather than switched off — the reason lives in the tooltip and in
+   the menu, and both need the chip to keep receiving pointer events. See the
+   note beside `aria-disabled` in ControlPicker.tsx for why this is not the
+   `disabled` attribute. */
+.cc-chip[data-blocked] {
+  color: var(--text-muted);
+}
+
+.cc-chip[data-blocked] .ac-value {
+  font-weight: var(--w-regular);
+}
+
+/* -------------------------------------------------------------- toggle -- */
+
+/*
+  A two-state control, drawn as a switch inside the chip its neighbours wear.
+
+  *"then here also now think we don't need, just one to select is enough."*
+  Fast mode used to be a picker over `Off` and `On`; the whole argument for
+  collapsing it is in `ControlToggle.tsx`.
+
+  It keeps `.ac-picker`'s positioning because it still opens a popover in the
+  two states where it has no position to draw, and it keeps `.cc-chip` because
+  the row is one family and a bespoke shape here would read as a control that
+  came from somewhere else.
+
+  The caret follows the chip rather than the control, which is the distinction
+  this comment used to get wrong. It said flatly "there is no caret: this one
+  does not open, it flips" — true of the switch and untrue of the other two,
+  which have always opened a popover and, since the repair in
+  `ControlToggle.tsx`, open one with the two settings in it. So: no caret on the
+  switch, where drawing one would promise a menu that is not there; a caret on
+  the refusal and on the unread chip, where withholding it hid a popover that
+  is. Both directions are the same false affordance, and the second one cost
+  more — an unread fast mode looked like a dead chip and was treated as one.
+*/
+.ac-toggle {
+  flex: 0 0 auto;
+}
+
+/* Slightly tighter than a picker's gap because the track that follows the name
+   is a fixed 26px object rather than a word that can be as long as
+   `Opus 5 (1M context)`. At the picker's own `--sp-1` the pair read as two
+   unrelated things sharing a border. */
+.ac-toggle-chip {
+  gap: var(--sp-15);
+}
+
+/*
+  The track *is* the value, so it is sized like a word rather than like a
+  form control: 26 × 14 sits inside the chip's cap height, which is what keeps
+  the chip the same height as the Model and Effort chips beside it. A settings
+  switch is half as tall again and would have made this one chip on the row
+  taller than the others — the kind of difference nobody can name and everybody
+  sees.
+*/
+.ac-toggle-track {
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* Selection is the one thing the accent is for in this app — the same sentence
+   `.ac-item-current` is written under, and the same token, so a switch that is
+   on and a menu row that is ticked are visibly the same claim. */
+.ac-toggle-track[data-on] {
+  background: var(--accent);
+}
+
+.ac-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  /* Not `--text-primary`: the knob has to read against `--accent` on one side
+     and `--fill-secondary` on the other, and only the accent's own foreground
+     token is guaranteed against the first. */
+  background: var(--accent-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ac-toggle-track[data-on] .ac-toggle-knob {
+  transform: translateX(12px);
+}
+
+/* Off, the knob would vanish into the track: both are un-inked surfaces. It
+   borrows the same ink the value beside it uses so that "off" is legible as a
+   *position* rather than as an empty track. */
+.ac-toggle-track:not([data-on]) .ac-toggle-knob {
+  background: var(--text-secondary);
+  box-shadow: none;
+}
+
+.ac-caret {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-muted);
+}
+
+/* The chip that opens the panel. Named for what it does rather than for the
+   word on it: `.ac-options` is already taken, further down, by the radiogroup
+   *inside* the panel — and two rules with one name is how this button briefly
+   inherited `flex-direction: column` and drew its caret under its label. */
+.ac-open {
+  gap: var(--sp-1);
+  color: var(--text-secondary);
+}
+
+.ac-open[aria-expanded='true'] {
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------- menu -- */
+
+/*
+  `--ac-label` is the distance from the panel's inner edge to where an option's
+  *words* start: a row's own left padding, plus the tick column, plus the gap
+  after it. Everything in a menu that is not a row — a section's heading line, a
+  caption over a run of rows, the `Working…` line — is set to that instead of to
+  the row's padding, because otherwise it hangs 18px to the left of every label
+  it is describing, which is what "Effort" was doing above "Auto". Alignment is
+  the thing that makes an app feel amateur when nobody can name why.
+*/
+.ac-menu,
+.ac-sheet,
+/* The chrome's own panel wears the same inner blocks — `.ac-section`,
+   `.ac-options`, `.ac-reach` — so it has to set the same label offset they are
+   all aligned to. Listed here rather than restated in SessionControls.css:
+   two spellings of one measurement is how the two panels would come to
+   disagree about where a word starts. */
+.sc-sheet {
+  --ac-label: calc(var(--sp-2) + var(--sp-3) + var(--sp-15));
+}
+
+.ac-menu {
+  position: absolute;
+  left: 0;
+  z-index: 20;
+  min-width: 240px;
+  max-width: 304px;
+  padding: var(--sp-1);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+/*
+  Hung from the chip's *right* edge, for a chip near the window's right edge.
+
+  *"see this window is going out of the frame. This one also going out of the
+  frame."* — 2026-08-20, on the session bar, where Model, Effort and the
+  permission toggle all sit within 300px of the glass. `left: 0` against a chip
+  there opens a 304px panel with a third of it outside the window.
+
+  A flip rather than a nudge: the panel keeps one edge on one edge of the chip
+  that opened it, which is the relationship that says the two belong together.
+  `right: 0` and `left: auto` in that order, because `left: 0` is still on the
+  base rule above and one of the two has to be given back.
+
+  Which chips get this is decided in `menu-side.ts` and applied by the two
+  components that draw this panel — the class is only ever added when the
+  measurement says the menu would otherwise leave the window.
+*/
+.ac-menu-right {
+  left: auto;
+  right: 0;
+}
+
+.ac-menu-above {
+  bottom: calc(100% + var(--sp-15));
+}
+
+.ac-menu:not(.ac-menu-above) {
+  top: calc(100% + var(--sp-15));
+}
+
+.ac-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-15);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  /* Concentric with the panel, not merely rounded. The panel is 12px and the
+     row is inset by the panel's 4px of padding, so the row's own radius has to
+     be 12 − 4 = 8 or its corners cut across the panel's curve — which is what a
+     6px radius was doing, poking square-ish shoulders past the first and last
+     rows of an `overflow: visible` panel. */
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* `:not(:disabled)` because one of these menus now has rows that can be locked:
+   the unread two-state popover disables its pair while a change is settling, so
+   that a second `/fast` cannot race the first into the same pty. A row that
+   cannot act must not light up under the pointer — that is the dead affordance
+   this repository is audited for, and `.ac-option:hover` further down in this
+   file is already written this way. Nothing else changes: the
+   picker's rows are never disabled, so the guard is a no-op there. */
+.ac-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+/* Locked, not refused: this is a row waiting for a command that is already on
+   its way, so it is drawn back rather than marked wrong. The same treatment
+   `.ac-option:disabled` gives the panel's rows, for the same few hundred
+   milliseconds. */
+.ac-item:disabled {
+  color: var(--text-muted);
+}
+
+.ac-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Selection is the one thing the accent is for in this app. */
+.ac-item-current {
+  background: var(--accent-soft);
+}
+
+.ac-tick {
+  width: var(--sp-3);
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.ac-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ac-item-label {
+  line-height: var(--lh-tight);
+}
+
+.ac-item-hint {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  color: var(--text-muted);
+}
+
+/* What is left of the foot of a section: one word, `Working…`, while a command
+   is in flight. Space sets it apart from the options; it needs no rule.
+
+   It used to be three lines — the current value, where it was read from, and
+   how far a change reaches — under every section of the folded sheet. The value
+   was the tick six rows above it, the source note is the section's `title` now,
+   and the reach is the CLI's own confirmation quoted into the notice after the
+   press. `ControlToggle` still uses the box for its own one-line reach inside a
+   popover, which is why the rule stays. */
+.ac-reach {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: var(--sp-2);
+  padding: 0 var(--sp-2) var(--sp-1) var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+.ac-reach-now {
+  color: var(--text-secondary);
+}
+
+.ac-blocked {
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The sentence a two-state control shows when it has not read a position yet.
+
+   Same box as `.ac-blocked` above and a different colour, because it is a
+   different kind of claim and the two were briefly indistinguishable — see the
+   long note in `ControlToggle.tsx`. A refusal is the answer: the control cannot
+   act and this is why, so it is set in the same ink as the rows a menu would
+   otherwise be showing. This one is not the answer, it is the *caption over* the
+   answer — the two rows sit directly beneath it and are the thing to press — so
+   it takes `--text-muted`, which is the ink this cluster already uses for "we
+   could not find out" (`.ac-value-unknown`, `.ac-item-hint`, `.ac-reach`).
+   Colour is not used for either: nothing is wrong in either state. */
+.ac-unread-note {
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* Another control living at the end of a menu — today the fast-mode switch under
+   the model rows, and nothing else anywhere.
+
+   A rule, and not merely space, which is this file breaking its own habit on
+   purpose. The window separates with space first, then a tint, then a line, and
+   `.ac-option-group` above is the tint — but what that caption introduces is a
+   *weaker claim about the same question* ("Earlier models", still models). What
+   sits under this line is a different question with a different kind of answer,
+   and a switch that reads as a twelfth model is exactly the confusion the move
+   into this menu could have caused. A line is what says "the list ended here".
+
+   `--material-hairline` rather than `--border-subtle`: this is a line drawn on
+   glass, inside a surface whose own edge is that token, and the opaque border
+   reads as a seam between two panels rather than as a division within one. */
+.ac-menu-nested {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--material-hairline);
+}
+
+/* The caption inside it already has the rule for separation, so it gives back
+   the space `.ac-option-group` reserves for standing alone on nothing but air. */
+.ac-menu-nested .ac-option-group {
+  margin-top: 0;
+}
+
+/* A switch row: the name leads, the track trails, and there is no tick gutter at
+   all.
+
+   Every row above it opens with `.ac-tick`'s empty column, so a row whose first
+   character is a word does not line up with them — deliberately, and only here.
+   Elsewhere in this cluster a broken column would be a bug; this is the one row
+   that has to be told apart from its neighbours at a glance, and the eye finds a
+   ragged left edge before it finds anything else. `space-between` puts the
+   position on the trailing edge, where a switch belongs and where no selection
+   in this menu has ever been drawn. */
+.ac-item-switch {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+/* --------------------------------------------------------------- panel -- */
+
+/* Opens upward: the composer sits at the bottom of the window, so downwards has
+   nowhere to go.
+
+   Positioned against `.cc-box` (ChatComposer.css sets it relative for exactly
+   this) rather than against the button that opens it. Two things fall out of
+   that, and both were bugs first: it cannot jump sideways when the model's name
+   gets longer, and `max-width: 100%` now means "no wider than the box" — capped
+   against the viewport instead, a pane narrowed by the sidebar let the panel
+   hang off the right-hand edge of the window. */
+.ac-sheet {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  width: 360px;
+  max-width: 100%;
+  /* Two caps, and the second one is arithmetic rather than a guess.
+
+     560px is taste: the panel scrolls whatever this says — four controls and a
+     usage readout are taller than any cap worth setting — so the number only
+     decides how much is in view before anyone has to move, and 560 is the first
+     two sections and the head of the third.
+
+     The other cap is the space that actually exists above the box. It used to
+     be a fraction of the viewport, and a fraction cannot know how tall the
+     composer under it is: at 50vh the panel hung off the top of any window
+     shorter than 640px, and raising it to 60vh moved that line to 800px, which
+     is an ordinary window. `100%` here is the height of `.cc-box` — the
+     containing block, since that is what this is positioned against — so
+     `100vh - 100% - the two gaps` is the room between the top of the window and
+     the top of the box, exactly, at any composer height. Measured in the
+     composer harness at 820px tall, where the fraction clipped it by 4px and
+     this does not. */
+  max-height: min(560px, calc(100vh - 100% - var(--sp-2) - var(--sp-6)));
+  padding: var(--sp-4) var(--sp-3);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+/* A title and its rows, with air around the block — the treatment the settings
+   window gives the same kind of thing. Space separates the sections; there is
+   no rule between them.
+
+   There is no description any more. `.ac-section-desc` was a line of grey prose
+   under every heading in this panel and it is deleted with the markup that drew
+   it: *"don't put any single statement in anywhere… Let the smart people use
+   it."* What survives of it is behind the ⓘ, for the one control whose
+   description says something a reader cannot deduce — see `controlNote` in
+   `catalog.ts`. */
+.ac-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The heading's own line: the name, and the ⓘ where there is one.
+
+   A row rather than a bare `<h4>` because the dot has to sit *on* the line, at
+   the end of the word, and baseline-aligned to it — an ⓘ that sits a pixel or
+   two high next to a semibold title is the kind of thing nobody can name and
+   everybody sees. The label offset moves here from `.ac-section-name` for the
+   same reason it was ever on it: every word in this panel starts where an
+   option's words start. */
+.ac-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+}
+
+.ac-section-name {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+
+/* Air under the heading, which the description used to bring with it.
+
+   Set on the block that follows rather than on the head, so a section whose
+   rows are a switch and a section whose rows are a radiogroup keep the same
+   gap without either of them knowing about the other. */
+.ac-section-head + * {
+  margin-top: var(--sp-2);
+}
+
+.ac-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/*
+  Where a two-state control sits in a section instead of a radiogroup.
+
+  Indented to `--ac-label` — the same offset every word in this panel starts at,
+  and the reason that variable exists at all: a switch flush against the panel's
+  padding would sit 18px to the left of the description above it and the source
+  note below it, which is what "Effort" was doing over "Auto" before the
+  variable was introduced. A control is a word for this purpose.
+*/
+.ac-section-toggle {
+  display: flex;
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2) 0 var(--ac-label);
+}
+
+.ac-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-15);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ac-option:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ac-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ac-option-current {
+  background: var(--accent-soft);
+}
+
+.ac-option:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.ac-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ac-option-label {
+  line-height: var(--lh-tight);
+}
+
+.ac-option-hint {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  color: var(--text-muted);
+}
+
+/* The caption that starts a run of rows making a weaker claim than the ones
+   above — today only "Earlier models", under the models the CLI's own picker
+   offers. See `ControlOption.group`.
+
+   Space above and a quieter colour, and no rule: this window separates with
+   space first, then a tint, and only then a line, and a caption *is* the tint.
+   The left padding lines its first letter up with the option labels rather than
+   with their tick column, so the eye reads one column of words. Used by both the
+   panel's sections and the chip menus, which is why it sits between the two
+   blocks rather than inside either — and `--ac-label` is set identically on
+   both, so one rule lines it up in both. */
+.ac-option-group {
+  margin: var(--sp-2) 0 var(--sp-05);
+  padding-left: var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+/* The first caption in a list needs no space above it: the heading it sits
+   under already brought its own. */
+.ac-option-group:first-child {
+  margin-top: 0;
+}
+
+/* `.ac-sheet-note` and `.ac-sheet-foot` were declared here and both are gone.
+   The foot was *"Every change here is typed into this session, exactly as you
+   would type it."* under the last section of the folded sheet, and it went with
+   every other standing sentence in this panel on 2026-08-20. The note had
+   already lost its markup. A class with nothing drawing it is a paragraph
+   waiting to be written again. */
+
+/* The usage readout is written as the last line of a wide pane — one centred
+   row of items capped to the reading measure. In here it is a column 344px
+   wide, so the page-level part of its layout is unwound and the items stack.
+   Done from this side because the panel is what imposes the shape; the strip
+   still owns how each figure is written. */
+.ac-sheet .usage-strip,
+.ac-sheet .usage-strip-empty {
+  max-width: none;
+  margin: 0;
+  /* `--ac-label`, not zero: every other block in this panel starts where an
+     option's words start, and the readout was beginning 50px to the left of the
+     "This session" heading directly above it. Nobody can name that when they
+     see it; they just read the panel as two things stapled together. */
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+  /* It paints the pane's own background, because it used to be the bottom band
+     of the pane. On the glass that reads as a solid slab dropped into the
+     panel — the one thing a frosted surface must never contain. */
+  background: none;
+}
+
+.ac-sheet .us-items {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+}
+
+/* -------------------------------------------------------------- notice -- */
+
+/* Feedback on a change the user just made, on the line above the controls.
+   Inside the box, because that is where the control that caused it is. */
+.ac-notice {
+  margin: 0;
+  padding: 0 var(--sp-15);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.ac-notice-bad {
+  color: var(--color-warning);
+}

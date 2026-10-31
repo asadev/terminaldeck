@@ -1,0 +1,378 @@
+/*
+  The account chip's own additions to the chip menu.
+
+  `shell.css` owns `.folder-menu*` and `.account-menu-item` — the shapes the
+  folder chip and this one share. What is here is only what renaming an account
+  in place needed, and it lives beside the component rather than at the end of a
+  1400-line stylesheet because it is this component's and nothing else's.
+
+  Every value is a token. `tokens.css` is the system; a raw pixel or hex here
+  would be a second opinion about the same thing.
+*/
+
+/* ------------------------------------------------- a shell with no agent in it */
+
+/*
+  the Run button, in the slot the account picker occupies once there is an account
+  to pick. Built on `.folder-chip-button` — the same 18px pill the folder chip
+  and the account chip are, because it is the same row and a control that sized
+  itself would step out of the line the other two hold.
+
+  The one difference is the colour. This is the only thing on the row that
+  *does* something rather than opening a menu, and on a plain shell it is the
+  only offer on screen; `--text-secondary` over `--text-muted` is one step
+  brighter, which is enough to read as a suggestion without becoming a second
+  primary button in a window that has one.
+*/
+.run-agent-button {
+  color: var(--text-secondary);
+}
+
+.run-agent-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.run-agent-button:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+
+/* The prompt glyph is `❯` (U+276F), not `>`. Verified against real captured
+   output — it is the same character Claude Code draws its own prompt with, and
+   the reason this button reads as "typing at the terminal for you". */
+.run-agent-glyph {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
+/*
+  The pill expanding to reveal the account picker.
+
+  Played only on the render where the picker takes the button's place — see
+  `revealing` in AccountChip.tsx — because the two are different elements and
+  there is nothing for a transition to interpolate between them. Width is
+  animated from zero rather than opacity alone: what he described was the pill
+  *expanding*, and a control that fades in over a gap it was already holding
+  open has not expanded, it has appeared.
+
+  `--dur` on `--ease-emphasis`: the flat-then-settle curve the rest of the app's
+  surfaces arrive on. Under `prefers-reduced-motion` every duration token
+  collapses to 0.01ms, so this becomes an instant swap without a media query of
+  its own.
+*/
+@keyframes account-chip-reveal {
+  from {
+    max-width: 0;
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    max-width: 30ch;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.account-chip.is-revealing {
+  overflow: hidden;
+  animation: account-chip-reveal var(--dur) var(--ease-emphasis);
+}
+
+/* --------------------------------------------------------- who, not which */
+
+/*
+  An address the agent's own CLI named, versus a state this app composed.
+
+  The chip prints whichever of the two it has — see `accountIdentity` — and they
+  are not the same kind of claim: "app.imatch.ae@gmail.com" was read out of
+  `claude auth status --json`, while "Checking…" and "Not signed in" are this
+  app describing itself. Separated by weight and by one step of colour rather
+  than by a badge or a border, which is the same distinction the menu already
+  draws between a name and its right-hand column.
+
+  Specificity 0,2,0 so it beats `.account-chip-name` in `shell.css` whichever
+  order the two sheets end up in — stylesheet order across two files is a
+  bundler's decision, not a design one, and a rule that only wins by accident is
+  a rule that will lose one day.
+*/
+.account-chip .account-chip-name[data-verified] {
+  color: var(--text-secondary);
+  font-weight: var(--w-medium);
+}
+
+/*
+  An address is longer than a name. 18ch cuts "app.imatch.ae@gmail.com" at
+  "app.imatch.ae@gma…", which is the half that identifies nobody; 26ch carries
+  an ordinary address whole and still stops well short of the mode switch on the
+  other side of the bar. Longer than that is still ellipsised, and the whole
+  thing is in the chip's title either way.
+*/
+.account-chip .account-chip-name {
+  max-width: 26ch;
+}
+
+/*
+  The tick's slot, drawn or not.
+
+  Fixed width so every name in the list starts on the same x — a mark that
+  indents only its own row turns a scannable column into a ragged one, which
+  costs more than the mark gains.
+*/
+.account-menu-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ renaming */
+
+/*
+  A row is now the account plus a Rename button, so the button needs somewhere
+  to sit that is not inside the account's own hit area — a click on Rename must
+  not also start a session under that account.
+
+  The button is drawn only on hover and focus. Six accounts each carrying a
+  permanently visible "Rename" would make the list read as a settings screen,
+  and picking an account is what this menu is for; renaming is the thing you
+  occasionally also want while you are here.
+*/
+.account-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.account-menu-row > .account-menu-item {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+  The inherited-install note, when there is one — see `inheritedInstallNote`.
+
+  `flex-shrink: 0` because the item beside it is `flex: 1` with `min-width: 0`,
+  and a dot sized in `em` is still a flex item: without this the row would win
+  the width negotiation and squash the ⓘ to nothing on a long login address,
+  which is the one row it is ever drawn on.
+*/
+.account-menu-row > .hovernote-dot {
+  flex-shrink: 0;
+}
+
+.account-menu-rename-button {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.account-menu-row:hover .account-menu-rename-button,
+.account-menu-rename-button:focus-visible {
+  opacity: 1;
+}
+
+.account-menu-rename-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/*
+  Keyboard reachability, not decoration: the button is invisible until hover, so
+  without this it would be a control a keyboard can focus and cannot see.
+*/
+.account-menu-rename-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The row while it is a field. Same padding as the row it replaces, so the list
+   does not shift under the pointer when the field opens. */
+.account-menu-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.account-menu-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+}
+
+.account-menu-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.account-menu-input:disabled {
+  opacity: 0.6;
+}
+
+/*
+  Why the name did not take, directly under the field it was typed into.
+
+  A collision — two accounts of one agent with the same name — is refused by the
+  main process, and the only thing that crosses back is a rejected `invoke`. Put
+  at the foot of the menu, as it was, the sentence sat below three other
+  people's accounts and read as a fact about the list rather than about the box
+  the cursor is still in. `--color-critical` because it is a refusal; the row
+  above it keeps its field, its focus and everything typed into it.
+*/
+.account-menu-problem {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  font-size: var(--t-caption);
+  line-height: 1.4;
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------ nothing on the right --- */
+
+/*
+  The dot between the folder and the account, when there is no account.
+
+  `.toolbar-chips` is a row of three: the folder, a 3px separator, and this
+  component — and the separator is written by the two bars that mount us
+  (`WindowToolbar` via App, and `PaneBar`), which cannot know in advance whether
+  we are going to draw anything. We return null in two real states: while the
+  presence reading has not arrived, and — since the Run button started naming
+  the agent the person actually chose — for the whole life of a plain shell on a
+  machine whose default coding tool *is* the plain shell, where there is no
+  agent to offer and no account to pick.
+
+  Left alone that leaves `demoproj ·` with a dot hanging off the end of it,
+  which is not a small thing on a bar this quiet: a separator with nothing after
+  it reads as a value that failed to load. Hiding it here rather than in the two
+  bars keeps the fact in one place — the separator is dangling *because this
+  component drew nothing*, and this is the file that knows that.
+*/
+.toolbar-chips > .toolbar-chip-sep:last-child {
+  display: none;
+}
+
+/*
+  The account this session is waiting to become.
+
+  Drawn one step back from the name beside it, and that hierarchy is the honest
+  one: the chip's job is to say what this session *is* running as, and the
+  incoming account has not happened yet. Making the two equal weight would read
+  as the switch already having taken, which is the single claim this feature is
+  not allowed to make early.
+
+  Narrower than the name for the same reason, and ellipsised rather than wrapped
+  — the chip sits on a one-line bar and a second line would push the terminal
+  down every time somebody armed a switch.
+*/
+.account-chip .account-chip-pending {
+  /* The fallback was carrying this on its own, and it landed on the wrong
+     colour. `--text-tertiary` is not a token — the third rung of ink is
+     `--text-muted`; see `tokens.css` — so the `var()` always fell through to
+     `--text-secondary`, which is exactly what `.account-chip-name[data-verified]`
+     wears. The pending account was therefore drawn in the *same* colour as the
+     account it has not become, separated only by weight. That is the one claim
+     the note above says this feature is not allowed to make early, made every
+     time somebody armed a switch. One step back from `--text-secondary` is
+     `--text-muted`, which is what "one step back from the name beside it"
+     means here; the fallback goes with it, because a fallback that always
+     fires is a comment pretending to be code. */
+  color: var(--text-muted);
+  font-weight: var(--w-regular, 400);
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * "Switched to …" — the one thing a switch made in place says.
+ *
+ * Asad: *"Only account should be changing."* So nothing else moves: no sheet,
+ * no new tab, no restart. This line, under the chip, is the whole of the
+ * feedback, and it clears itself. Drawn like the machine switch's answer beside
+ * it (`.machine-switch-problem`), in ordinary ink because it is news, not a
+ * warning.
+ */
+.account-switch-note {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(360px, calc(100vw - var(--sp-6)));
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+/* Under way: the same line, in quieter ink, from the click until it lands. */
+.account-switch-note[data-state='working'] {
+  color: var(--text-secondary);
+}
+
+/* Landed: a tick in the accent, then the account's name. */
+.account-switch-note[data-state='done'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-switch-note-mark {
+  flex: none;
+  color: var(--accent);
+}
+
+/*
+ * The account name, lit once where the change happened — the chip is what he
+ * was looking at when nothing seemed to change.
+ */
+.account-chip.is-just-switched .account-chip-name {
+  border-radius: 4px;
+  animation: account-chip-landed 1.6s ease-out;
+}
+
+@keyframes account-chip-landed {
+  0% {
+    color: var(--accent);
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  60% {
+    color: var(--accent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-chip.is-just-switched .account-chip-name {
+    animation: none;
+    color: var(--accent);
+  }
+}

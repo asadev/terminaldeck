@@ -1,0 +1,41 @@
+/*
+  One screen in a window of its own (`ScreenPage.tsx`): a view or a terminal
+  filling the window, on the app's own canvas — no side panel, no tab strip.
+*/
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+/* The view scrolls itself, as it does in the main window. */
+.screen-panel {
+  overflow: auto;
+}
+
+/* The terminal takes every pixel; the pty is sized to this window. */
+.screen-session {
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+/* What a window says when it has nothing else to show: one plain sentence,
+   centred, never a blank window. */
+.screen-message {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  padding: var(--sp-6);
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  text-align: center;
+}
+
+.screen-message p {
+  margin: 0;
+}

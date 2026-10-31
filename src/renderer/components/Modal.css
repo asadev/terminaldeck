@@ -1,0 +1,264 @@
+/* ============================================================================
+   Modal shell — scrim, sheet, and the large sheet Settings sits in.
+
+   Apple's sheet: it slides up a few points, it wears the same glass as the
+   chrome, and the scrim behind it is a blur rather than a blackout. Three
+   sizes, and all three are dialogs — `md` and `lg` for a question, `xl` for
+   the large sheet Settings sits in. There is no full-window size any more;
+   see the `xl` block for why that was the wrong shape for Settings.
+   ============================================================================ */
+
+:root,
+[data-theme='light'] {
+  --modal-scrim: color-mix(in srgb, var(--text-primary) 38%, transparent);
+}
+
+[data-theme='dark'] {
+  --modal-scrim: color-mix(in srgb, #000 52%, transparent);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  /* Flex, not grid: a centred grid row sizes itself to the panel's content,
+     which makes the panel's own max-height percentage resolve against that
+     content and never clamp. A flex line resolves it against the viewport. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-10) var(--sp-6);
+  background: var(--modal-scrim);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: modal-scrim-in var(--dur-fast) var(--ease);
+}
+
+/* Stepped aside for a native panel — see `hidden` in Modal.tsx.
+
+   `display: none` rather than `opacity: 0` or `visibility: hidden`, because the
+   dialog has to be gone in every sense while a system window is up: no scrim
+   tinting the workspace behind the picker, nothing in the tab order, nothing in
+   the accessibility tree. The subtree stays mounted, so every choice already
+   made in the dialog is still there when it comes back. */
+.modal-overlay[data-hidden='true'] {
+  display: none;
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: 460px;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-xl);
+  /* The same glass as the sidebar and the toolbar, one step more opaque:
+     a sheet has to be readable over whatever it covers. */
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  animation: modal-panel-in var(--dur) var(--ease-emphasis);
+}
+
+.modal-panel[data-size='lg'] {
+  width: 620px;
+}
+
+/* ------------------------------------------------------------ the sheet -- */
+
+/* Settings. Still a dialog — scrim, corners, the workspace visible around it —
+   just a large one, because it has a rail of twelve sections down its left and
+   one of them is the whole remote-access panel.
+
+   It replaced a `page` size that filled the window edge to edge with no scrim
+   at all. That read as *navigating away*: ⌘, blanked the work and put a
+   full-screen surface in its place, so coming back felt like coming back rather
+   than like closing something. The whole promise of "close it and you are
+   exactly where you were" is easier to keep by never taking the window away.
+
+   Sized in vw/vh with a cap so it is a sheet on a large display and very nearly
+   the window on a laptop, without ever growing past the room it has. */
+.modal-panel[data-size='xl'] {
+  width: min(1040px, 92vw);
+  height: min(760px, 88vh);
+  max-height: 100%;
+}
+
+/* Whatever goes in an xl body brings its own layout and its own scrolling —
+   Settings puts two independently scrolling columns in here — so the shell
+   contributes neither padding nor a scrollbar of its own. */
+.modal-panel[data-size='xl'] > .modal-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+/*
+  The header and the footer of the sheet: a tint, not a rule.
+
+  Settings had three 1px lines in it — under the header, down the side of the
+  rail, above the footer — for a job the brief gives an order of preference for:
+  *separate with space, then with a tint, and only then with a line*. The rail
+  was already tinted `--bg-secondary`; giving the header and the footer the same
+  fill makes the chrome one continuous frame around the white reading column, so
+  the boundary is a change of surface rather than three hairlines drawn across
+  one dialog.
+
+  The corners have to be restated because `.modal-panel` cannot clip its
+  children — it must not, or a focus ring on the last control in the footer
+  would be cut off — so an opaque band inside a rounded sheet would otherwise
+  square off its top and bottom edges.
+*/
+.modal-panel[data-size='xl'] > .modal-header {
+  align-items: center;
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-5);
+  background: var(--bg-secondary);
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
+}
+
+.modal-panel[data-size='xl'] > .modal-header .modal-title {
+  font-size: var(--t-title3);
+}
+
+.modal-panel[data-size='xl'] > .modal-footer {
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg-secondary);
+  border-bottom-left-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-xl);
+}
+
+/* The panel takes focus on open; it is a container, so no ring for it. */
+.modal-panel:focus {
+  outline: none;
+}
+
+.modal-panel :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-5) var(--sp-3);
+}
+
+.modal-heading {
+  min-width: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
+}
+
+.modal-description {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.modal-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.modal-close:hover {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+.modal-close svg {
+  display: block;
+}
+
+/* ------------------------------------------------------------ body/footer -- */
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-5) var(--sp-5);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+}
+
+/* macOS push button: 28px tall, 8px radius, quiet fill, no border. */
+.modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.modal-btn:hover {
+  background: var(--fill-secondary);
+}
+
+.modal-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modal-btn.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.modal-btn.primary:hover {
+  background: var(--accent-dim);
+}
+
+/* ------------------------------------------------------------- animation -- */
+
+@keyframes modal-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-panel {
+    animation: none;
+  }
+}

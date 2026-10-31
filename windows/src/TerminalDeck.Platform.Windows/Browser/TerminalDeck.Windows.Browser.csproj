@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3719.77" /><ProjectReference Include="../TerminalDeck.Platform.Windows.csproj" /></ItemGroup>
+  <Target Name="UseOnlyNativeWebView2Core" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup><Reference Remove="@(Reference)" Condition="$([System.String]::Copy('%(Reference.Identity)').EndsWith('Microsoft.Web.WebView2.Wpf.dll')) Or $([System.String]::Copy('%(Reference.Identity)').EndsWith('Microsoft.Web.WebView2.WinForms.dll'))" /></ItemGroup>
+  </Target>
+</Project>

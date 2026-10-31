@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" /></ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../docs/contracts/deck-tools-windows-integration.json" LogicalName="Contracts.deck-tools-windows-integration.json" />
+    <EmbeddedResource Include="../../docs/contracts/deck-tools-static-source.json" LogicalName="Contracts.deck-tools-static-source.json" />
+    <EmbeddedResource Include="../../docs/contracts/deck-tools-runtime-source.json" LogicalName="Contracts.deck-tools-runtime-source.json" />
+  </ItemGroup>
+</Project>

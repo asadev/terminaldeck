@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <ApplicationManifest>../../src/TerminalDeck.App/app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/TerminalDeck.App/Diagnostics/*.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Tasks/**/*.cs" Link="Views/Tasks/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../../src/TerminalDeck.App/ViewModels/Tasks/**/*.cs" Link="ViewModels/Tasks/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Projects/ProjectAgentUi.cs" Link="Views/ProjectAgentUi.cs" />
+    <Page Include="../../src/TerminalDeck.App/Styles/DeckResources.xaml" Link="Styles/DeckResources.xaml" />
+    <Compile Include="../../src/TerminalDeck.App/Views/BrandIcon.cs" Link="Shared/BrandIcon.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Chat/ChatAppearance.cs" Link="Shared/ChatAppearance.cs" />
+    <Content Include="../../src/TerminalDeck.App/Assets/icons/hoot.svg" Link="Assets/icons/hoot.svg" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Windows/WorkspaceIcons.cs" Link="Shared/WorkspaceIcons.cs" />
+  </ItemGroup>
+</Project>

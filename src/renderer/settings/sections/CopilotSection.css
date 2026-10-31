@@ -1,0 +1,273 @@
+/**
+ * Settings → Copilot.
+ *
+ * The sheet is one surface per theme — rail, pane and content the same colour,
+ * no cards, grouping by spacing and heading weight. So almost everything this
+ * pane needs is already in `SettingsWindow.css`, and what is here is only the
+ * shapes that file has no name for: a numbered list of startup files, a log
+ * row, a chip.
+ *
+ * **Nothing here paints a `--bg-*`.** `settings-surface.test.ts` fails a
+ * section stylesheet that does, and the reason is worth restating because it is
+ * the trap this pane would fall into first: a surface token names a *colour*,
+ * so on a flat sheet it can come to name the same colour as the page behind it
+ * — which is exactly how `SetupSection`'s hook blocks became invisible when the
+ * pane moved from `--bg-primary` to `--bg-secondary`. A `--fill-*` is defined
+ * as a lift off whatever is behind it and cannot make that mistake, in either
+ * theme, without a second rule.
+ */
+
+/* Nothing in this file styles a path, a chip, a numbered startup row or a memory
+   fact any more, because none of those is on the pane. They went in two passes —
+   the memory list and the startup list on 2026-08-17, the credential chips and
+   the refused-path list on 2026-08-18 — and the rules went with them rather than
+   being left behind as selectors that match nothing. A stylesheet full of dead
+   classes is a stylesheet nobody trusts to describe the screen. */
+
+/* ---------------------------------------------------------------- headings */
+
+/* The one line under a block's heading, holding the rhythm the flat sheet
+   groups by: 8px under the heading, 8px to whatever it introduces, against the
+   20px that separates two entries in the list below. A heading has to be nearer
+   what it names than what it names is to itself, or it floats between two
+   groups belonging to neither. `.settings-explain-body` supplies the ink and the
+   62-character measure; only the spacing is this pane's. */
+.copilot-says {
+  margin: 0 0 var(--sp-2);
+}
+
+/* ---------------------------------------------------------------- editors */
+
+/* The box a person edits their copilot's files in — its instructions, one
+   memory, one routine. One shape for all three, from `CopilotEditor.tsx`.
+
+   `--fill-tertiary`, never a `--bg-*`. The rule at the top of this file is the
+   whole reason: a surface token names a colour and can come to name the colour
+   of the page behind it, and an editable box that is exactly the colour of the
+   sheet is a box nobody can see the edges of — which for a *text field* is worse
+   than for a static block, because the affordance is the edge. A fill is defined
+   as a lift off whatever is behind it and cannot lose that fight in either
+   theme. */
+.copilot-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.copilot-editor-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  /* Mono, because all three files are configuration a parser reads: a `when:`
+     line, a front-matter block, an indented example. In a proportional face the
+     alignment that makes those readable is gone. */
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  /* Vertical only. A routine file's prompt is prose that should wrap, and a
+     horizontal scrollbar under a text box is a second axis nobody uses. */
+  resize: vertical;
+  /* Tabs in these files are one indent level, not eight columns of it. */
+  tab-size: 2;
+}
+
+.copilot-editor-box:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.copilot-editor-box:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.copilot-editor-box:disabled {
+  opacity: 0.6;
+}
+
+/* A file that could not be read at all. Held apart from the ordinary prose line
+   so that "there is no CLAUDE.md yet" does not sit flush against the label
+   above it as though it were that label's help text. */
+.copilot-editor-problem {
+  margin-top: var(--sp-2);
+}
+
+/* ------------------------------------------------------------ action log */
+
+.copilot-actions {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+}
+
+.copilot-actions > * + * {
+  margin-top: var(--sp-3);
+}
+
+/* A log row is a time, then everything else. The time column is fixed so the
+   rows form a readable edge — this is the one list in the pane a person scans
+   vertically rather than reads. */
+.copilot-action {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding-left: var(--sp-3);
+  /* The only mark that separates one row from the next, and it carries the
+     outcome. A rule between rows would be the "line before space" order the
+     design brief forbids; a 2px edge on the row itself is the row's own status,
+     which is a different thing from a divider. */
+  border-left: 2px solid var(--border-subtle);
+}
+
+.copilot-action[data-outcome='refused'] {
+  border-left-color: var(--status-waiting);
+}
+
+.copilot-action[data-outcome='error'] {
+  border-left-color: var(--status-input);
+}
+
+.copilot-action[data-outcome='ok'] {
+  border-left-color: var(--status-completed);
+}
+
+.copilot-action-time {
+  flex-shrink: 0;
+  width: 84px;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+.copilot-action-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+  flex: 1;
+}
+
+.copilot-action-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  flex-wrap: wrap;
+}
+
+.copilot-action-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------- routines */
+
+/* A routine's controls are a switch and three buttons, which is more than fits
+   beside a three-line description on a narrow sheet. They wrap and stay right,
+   rather than squeezing the description to nothing — and they sit at the top of
+   the entry, because a paused routine's entry is four lines and a notice tall
+   and a vertically-centred control cluster ends up beside the middle of a
+   paragraph instead of beside the name it belongs to. */
+.copilot-routine-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-self: flex-start;
+}
+
+/* Written through the list, deliberately.
+   `.settings-path-row` sets `align-items: center` and `padding: 0` in
+   `SettingsWindow.css`, which loads after this file — a bare `.copilot-routine`
+   rule ties on specificity and loses on order, which is how an earlier version
+   of this pane drew a coloured edge with no padding behind it. */
+.settings-paths .copilot-routine {
+  align-items: flex-start;
+}
+
+/* A routine the engine stopped after repeated failures must not look like one
+   that has simply been quiet, and that distinction is carried by the badge's
+   colour and by the notice inside the entry — not by a rule down its side.
+   A 2px edge would need padding to clear it, and that padding indents every
+   routine name away from the headings and rows above it, which is the orphan
+   inset the flat sheet spent a pass removing. Space, then a tint, then a line:
+   this never gets past the tint. */
+/* Three selectors deep for the same reason the row rule above is: the badge
+   carries `.quiet` so that a state with no colour of its own still reads as a
+   badge, and `.settings-badge.quiet` is declared in a stylesheet that loads
+   after this one. Two class selectors would tie and lose. */
+.settings-paths .settings-badge[data-routine-state='armed'],
+.settings-paths .settings-badge[data-routine-state='running'] {
+  background: var(--fill-tertiary);
+  color: var(--status-completed);
+}
+
+.settings-paths .settings-badge[data-routine-state='paused'],
+.settings-paths .settings-badge[data-routine-state='stale'] {
+  background: var(--fill-tertiary);
+  color: var(--status-waiting);
+}
+
+.settings-paths .settings-badge[data-routine-state='broken'] {
+  background: var(--fill-tertiary);
+  color: var(--status-input);
+}
+
+/* --------------------------------------------------------------- statuses */
+
+/* The status badge beside "Status" borrows the pill from the sheet and only
+   changes its ink, so a running copilot reads as running at a glance without a
+   second shape being invented for it. */
+.settings-badge[data-copilot-status='running'] {
+  background: var(--fill-tertiary);
+  color: var(--status-completed);
+}
+
+.settings-badge[data-copilot-status='starting'] {
+  background: var(--fill-tertiary);
+  color: var(--status-working);
+}
+
+.settings-badge[data-copilot-status='stopped'] {
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+}
+
+.settings-badge[data-copilot-status='unavailable'] {
+  background: var(--fill-tertiary);
+  color: var(--status-input);
+}
+
+/* ------------------------------------------------------- rows that open -- */
+
+/* A row's buttons stay level with its heading, not with the middle of what it
+   opened.
+
+   `.settings-path-row` is `align-items: center`, which is right for a row whose
+   text is two lines and whose actions are one button. It stops being right the
+   moment a row can *grow*: pressing Edit on the instruction file adds a
+   twenty-row textarea to the left column, and the Close button beside it then
+   floats to the vertical centre of that box — a control that has visibly drifted
+   away from the thing it belongs to.
+
+   Only the rows in this pane's own lists are touched, and only their action
+   column, so nothing else in the window moves. Measured on the rendered pane:
+   with `start` the button sits on the same baseline as the row's label, which is
+   where it was before the box opened and where the eye goes back to. */
+.settings-paths > .settings-path-row {
+  align-items: start;
+}
+
+/* The buttons are a control height and the label is a line of text, so without
+   this nudge the two read as misaligned by about three pixels in the other
+   direction. `--sp-05` is the token reserved for exactly this kind of optical
+   correction. */
+.settings-paths > .settings-path-row > .settings-path-actions {
+  margin-top: calc(var(--sp-05) * -1);
+}

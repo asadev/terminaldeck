@@ -1,0 +1,201 @@
+/* ============================================================================
+   First run.
+
+   The first surface anyone sees, so it is the one that has to feel expensive:
+   a large calm title, a single measure of text, and a lot of air. There are no
+   boxes on this screen — the readiness rows are told apart by their own
+   spacing and by the one dot that carries meaning, and the only filled thing
+   is the single primary button at the bottom.
+   ============================================================================ */
+
+:root {
+  /* The readiness dot, the same size as `.status-dot` in app.css — it says the
+     same kind of thing. */
+  --onboarding-dot-size: 7px;
+}
+
+.onboarding {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: var(--bg-primary);
+}
+
+.onboarding-inner {
+  width: min(560px, 100%);
+  padding: var(--sp-16) var(--sp-8) var(--sp-12);
+}
+
+.onboarding h1 {
+  margin: 0 0 var(--sp-3);
+  font-family: var(--font-display);
+  font-size: var(--t-largetitle);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--t-largetitle-ls);
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+
+.onboarding-lede {
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-regular);
+  letter-spacing: var(--t-title3-ls);
+  line-height: var(--lh-loose);
+  color: var(--text-secondary);
+}
+
+/* The rhythm of the page: one large step between the parts of it. */
+.onboarding section {
+  margin-top: var(--sp-12);
+}
+
+/* Sentence case and quiet, the way a group label is set in System Settings —
+   the tracked-out uppercase this used to be competed with the title. */
+.onboarding h2 {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
+.onboarding-note {
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+/* No frame and no dividers: three rows of two lines each are already a list. */
+.onboarding-list {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+}
+
+.onboarding-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+}
+
+/* The one place colour is allowed here, and it means something: ready, waiting
+   on a sign-in, or absent. */
+.onboarding-dot {
+  width: var(--onboarding-dot-size);
+  height: var(--onboarding-dot-size);
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.state-ready .onboarding-dot {
+  background: var(--status-completed);
+}
+.state-installed-not-authed .onboarding-dot {
+  background: var(--status-waiting);
+}
+.state-missing .onboarding-dot {
+  background: var(--status-idle);
+}
+
+.onboarding-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.onboarding-version {
+  margin-left: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+  color: var(--text-muted);
+}
+
+/* Not a version number — see `.settings-tool-version-none`. */
+.onboarding-version[data-none] {
+  font-family: var(--font-ui);
+  font-style: italic;
+}
+
+.onboarding-purpose {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.onboarding-state {
+  flex-shrink: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Underlined rather than tinted: the underline is what says "link", and this
+   palette spends its one colour on selection and focus. */
+.onboarding-link {
+  flex-shrink: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.onboarding-link:hover {
+  color: var(--text-primary);
+}
+
+.onboarding-link:focus-visible,
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* A tint carrying the waiting colour, not a framed callout — this is the same
+   fact the amber dot above it states, said in a sentence. */
+.onboarding-callout {
+  margin: var(--sp-8) 0 0;
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.onboarding-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-12);
+}
+
+/* Everything beside the one filled button is text with a hit area. */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

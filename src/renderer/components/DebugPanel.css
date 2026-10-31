@@ -1,0 +1,270 @@
+/* ============================================================================
+   Debug panel
+
+   Instrument panel, not a document: dense rows, monospace numbers in tabular
+   figures so a column of timings can be scanned. The boxes are gone — a table
+   is separated from the page by the fill under its header row and by the space
+   around it, not by an outline drawn around every section of the window. The
+   only colour is on a failure or a slow call; everything else stays neutral, or
+   the eye has nothing left to catch when something is actually wrong.
+   ============================================================================ */
+
+.debug {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  min-height: 0;
+  max-width: 82rem;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.debug-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-6);
+}
+
+.debug-title {
+  margin: 0;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
+}
+
+.debug-subtitle {
+  max-width: 68ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* -------------------------------------------------------------- sections -- */
+
+.debug-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.debug-section-title {
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+}
+
+.debug-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+}
+
+.debug-hint {
+  max-width: 78ch;
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+.debug-empty {
+  margin: 0;
+  padding: var(--sp-3) 0;
+  font-size: var(--t-body);
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------- controls -- */
+
+.debug-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.debug-button:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.debug-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Paused is a state you must be able to see at a glance — a trace that has
+   silently stopped updating reads as an app that has hung. */
+.debug-button[data-active] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.debug-filter {
+  width: 11rem;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.debug-filter:hover {
+  border-color: var(--border-strong);
+}
+
+.debug-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.debug-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* ---------------------------------------------------------------- tables -- */
+
+/* Wide traces scroll inside their own frame rather than pushing the page. */
+.debug-scroll {
+  max-height: 20rem;
+  overflow: auto;
+  border-radius: var(--radius-lg);
+}
+
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-callout);
+}
+
+/* The header row is told from the body by its fill — which it needs anyway,
+   since it is sticky and the rows scroll under it. */
+.debug-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-secondary);
+  text-align: left;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.debug-table td {
+  padding: var(--sp-15) var(--sp-3);
+  color: var(--text-secondary);
+  vertical-align: baseline;
+}
+
+.debug-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.debug-summary {
+  margin-bottom: var(--sp-3);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.debug-channel,
+.debug-number,
+.debug-path {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+.debug-channel {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.debug-number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.debug-path {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-result {
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A call that failed, and a call slow enough to be the reason someone opened
+   this panel.
+
+   The colour lands on the cell that carries the news and a wash behind the
+   row, not on every cell: a fully red row makes the timestamp and the channel
+   shout as loudly as the failure, and two red rows then read as an app on
+   fire rather than as two calls that failed. */
+.debug-table tr[data-bad] {
+  background: color-mix(in srgb, var(--color-critical) 7%, transparent);
+}
+
+.debug-table tr[data-bad] td:last-child,
+.debug-table td[data-bad] {
+  color: var(--color-critical);
+}
+
+.debug-table td[data-slow] {
+  color: var(--color-warning);
+}
+
+/* ------------------------------------------------------------------ text -- */
+
+.debug-pre {
+  max-height: 22rem;
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+@media (max-width: 620px) {
+  .debug-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-15);
+  }
+
+  .debug-filter {
+    width: 9rem;
+  }
+}

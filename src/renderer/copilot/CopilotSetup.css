@@ -1,0 +1,284 @@
+/* ============================================================================
+   The copilot's setup flow.
+
+   Five screens in one dialog, and the dialog is already the app's — the glass,
+   the scrim, the buttons and the focus ring all come from `Modal.css`. What is
+   here is one question per screen and the controls under it.
+
+   Held to the same rules as the New-session dialog, because it is the same kind
+   of surface: nothing is boxed, nothing is ruled off, and the parts are told
+   apart by space and by a fill. Every value is a token.
+   ============================================================================ */
+
+.cs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-1);
+  /* A floor, so the four question screens are one size and the dialog does not
+     flinch as somebody moves between them.
+
+     Measured rather than guessed, and re-measured after the 2026-08-17 trimming
+     pass took a paragraph off three of the four screens and deleted the fifth
+     entirely: the questions now come out at 116, 183, 125 and 147 pixels in the
+     running app, so the floor is the tallest of them. It was 236 — the height of
+     the summary card that no longer exists — which left every question sitting
+     over fifty pixels of empty air, and an emptier dialog is exactly what a
+     shortened dialog must not become. */
+  min-height: 184px;
+}
+
+.cs-question {
+  margin: 0;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/* The sentence that has to be read. Full measure, body leading. */
+.cs-says {
+  margin: 0;
+  max-width: var(--content-measure);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The one under the control: true, and quieter than the question. */
+.cs-quiet {
+  margin: 0;
+  max-width: var(--content-measure);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* A tint, not a frame — the same call `.ns-problem` makes for the same job. */
+.cs-problem {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------- the fields -- */
+
+.cs-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.cs-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+/* The word `optional`, beside the one field people stop at.
+
+   Quiet on purpose — it is permission, not an instruction, and it sits next to
+   a field whose sibling above it carries no tag at all. Separated by space and
+   then by weight, never by a pill or a rule: this is a label line, and the
+   brief's order is space, then a tint, then only then a line. */
+.cs-optional {
+  font-weight: var(--w-regular);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.cs-input {
+  box-sizing: border-box;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.cs-input:hover {
+  background: var(--fill-secondary);
+}
+
+.cs-input::placeholder {
+  color: var(--text-muted);
+}
+
+.cs-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* ------------------------------------------------------------- the folder -- */
+
+.cs-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cs-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Whose folder it is. A word, not a badge with a border. */
+.cs-whose {
+  flex-shrink: 0;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ the accounts -- */
+
+.cs-accounts {
+  display: flex;
+  flex-direction: column;
+  /* No rule between rows — the brief's first preference, and the reason this
+     list has no borders anywhere in it. */
+  gap: var(--sp-05);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.cs-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.cs-choice:hover {
+  background: var(--bg-hover);
+}
+
+.cs-choice[data-selected='true'] {
+  background: var(--accent-soft);
+}
+
+/* Covers the row so the whole thing is the hit target, and stays focusable —
+   only the native rendering is hidden. The same idiom as `.ns-choice`. */
+.cs-choice input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.cs-mark {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+/* An inset ring rather than a child element: one box-shadow draws the dot. */
+.cs-choice[data-selected='true'] > .cs-mark {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+.cs-choice input:focus-visible ~ .cs-mark {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cs-choice-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cs-choice-name {
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+}
+
+.cs-choice-note {
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* A link is a word, not a button. Used once, to undo a choice. */
+.cs-link {
+  align-self: flex-start;
+  padding: var(--sp-05) var(--sp-1);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--t-footnote);
+}
+
+.cs-link:hover {
+  background: var(--bg-hover);
+}
+
+/* The summary card's own rules — `.cs-review`, `.cs-review-row` and
+   `.cs-preview` — were deleted with the screen they styled. *"This is what it
+   will be — this whole card is not required. Let's remove this card overall.
+   Just Start."* Dead CSS is the quietest kind of rot: nothing fails, and the
+   next person reading this file believes there is a fifth screen. */
+
+/* --------------------------------------------------------------- the dots -- */
+
+/* Where you are, in the footer beside the buttons rather than over the
+   question: the count is reassurance, and reassurance does not go first. */
+.cs-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-right: auto;
+}
+
+.cs-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  transition: background var(--dur-fast) var(--ease), width var(--dur-fast) var(--ease);
+}
+
+.cs-dot[data-state='done'] {
+  background: var(--accent-dim);
+}
+
+/* The one you are on is a capsule rather than a brighter dot: it reads at a
+   glance without the row turning into five accent marks. */
+.cs-dot[data-state='here'] {
+  width: 16px;
+  background: var(--accent);
+}

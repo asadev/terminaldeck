@@ -1,0 +1,332 @@
+/* ============================================================================
+   Command palette / quick open
+
+   Spotlight, not a dropdown. One glass slab high in the window: a big quiet
+   field with no border of its own, then rows of one control-height each,
+   separated by nothing but the space around them. The only mark on a row is
+   the selection fill, which is why the fill can afford to be gentle.
+
+   Every colour derives from a foundation token, including the scrim: a
+   `color-mix` against an existing surface keeps both themes correct without
+   hardcoding a black that would be invisible on the light one.
+   ============================================================================ */
+
+/* Bare `:root` carries the light values, matching tokens.css: if the theme
+   attribute is ever missing, the scrim then agrees with the palette it is
+   drawn over instead of dimming a white app towards white. */
+:root,
+[data-theme='light'] {
+  --palette-scrim: color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+
+:root {
+  /* The lane the category sits in, so every command title starts on the same
+     x. Wide enough for the longest group this app has ("Session"). */
+  --palette-group-lane: 52px;
+}
+
+[data-theme='dark'] {
+  --palette-scrim: color-mix(in srgb, #000 52%, transparent);
+}
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  /* Without this the panel inherits `stretch` and is always 62vh tall, with a
+     dead slab of empty surface under a three-row result list. */
+  align-items: flex-start;
+  /* Sits high in the window: the list grows downward into empty space rather
+     than pushing the field around as results arrive. */
+  padding: 12vh var(--sp-6) var(--sp-6);
+  background: var(--palette-scrim);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: palette-fade var(--dur-fast) var(--ease);
+}
+
+/* The same glass every floating surface in the app wears — rule 7. */
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: 62vh;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--material-hairline);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  animation: palette-rise var(--dur) var(--ease-emphasis);
+}
+
+/* ----------------------------------------------------------------- field -- */
+
+/* No rule under it and no box around it. The field is already the top of the
+   panel and the only thing that takes text, so a border would be drawing a
+   line the eye does not need — the space below it does the separating. */
+.palette-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: 0 var(--sp-5);
+  min-height: calc(var(--control-h-lg) + var(--sp-5));
+}
+
+.palette-glyph {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* Always focused while the palette is open, so a ring around it would be
+   permanent noise — the caret is the focus indicator here. */
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+}
+
+.palette-input::placeholder {
+  color: var(--text-muted);
+}
+
+.palette-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+/* The list inset plus each row's own padding comes to `--sp-5`, so a row's
+   text starts on the same x as the search field above it. */
+.palette-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Symmetry, once there is enough to scroll. The scrollbar is styled rather
+     than left to the platform (see `app.css`), which on a Mac set to "always
+     show scrollbars" makes it take 11px out of the content box — on the right
+     only. The highlight was then inset 10px on its left and 20px on its right
+     in the same list, which reads as a rounding bug rather than as a scrollbar.
+     Reserving the gutter on both edges keeps the rows centred whether the list
+     scrolls or not. */
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+}
+
+.palette-list:empty {
+  display: none;
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The row under the cursor — pointer or keyboard, they drive the same state.
+   A fill and nothing else: an inset rail beside it was a second mark for one
+   piece of information. */
+.palette-row.is-active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.palette-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+}
+
+/* Only a filename yields space to the path beside it. A command title has
+   nothing to its right but its shortcut, so it may use the whole row. */
+.palette-name:has(+ .palette-dir) {
+  flex-shrink: 0;
+  max-width: 62%;
+}
+
+.palette-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* A long path loses its head, not its tail: `…/components/primitives/` is
+     what tells two files of the same name apart, so the ellipsis belongs at
+     the front. `direction: rtl` is what moves it there. */
+  direction: rtl;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* The path is wrapped in exactly one element, which is then forced back to
+   left-to-right. It has to be one: sibling ltr runs inside an rtl box are each
+   placed right-to-left, which renders a highlighted path as `itives/ prim ui/`.
+   A bare text node is no good either — rtl reorders its trailing slash. */
+.palette-dir-text {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+/* Says which part of the app a command belongs to, and says it quietly: this
+   is context for the title beside it, not a heading of its own. The chevron it
+   used to end in was punctuation standing in for the space that now does the
+   same job. */
+.palette-group {
+  flex-shrink: 0;
+  min-width: var(--palette-group-lane);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+}
+
+/* `<kbd>` already, so the chip comes from app.css. */
+.palette-shortcut {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* A fuzzy match scatters single characters through a name, so the matched
+   glyphs are picked out with weight and ink rather than a tint — a run of
+   one-character highlights reads as noise. (The whole-term highlight in the
+   search panel is a different problem and does take a tint.) */
+.palette-hit {
+  background: none;
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* -------------------------------------------------------- session hits -- */
+
+/*
+  A hit from a past session is a sentence, not a name, so it is set as one:
+  smaller than a filename, allowed the full width of the row, and clipped with
+  an ellipsis rather than wrapped — a palette row that grew to three lines
+  would push the rest of the list off the bottom of the sheet.
+
+  It keeps `.palette-name`'s ellipsis and shrinking behaviour and overrides
+  only the size and the flex basis, so the highlight, the truncation and the
+  active-row colour all keep working exactly as they do for a filename.
+*/
+.palette-snippet {
+  flex: 1 1 auto;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+.palette-row.is-active .palette-snippet {
+  color: var(--text-primary);
+}
+
+/* A sub-agent's chatter is real and worth finding, and worth marking as not
+   the main conversation. */
+.palette-sub {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.palette-when {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- states -- */
+
+.palette-empty {
+  margin: 0;
+  padding: var(--sp-5) var(--sp-5) var(--sp-6);
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  text-align: center;
+}
+
+/* Key hints, not a status bar: no rule above them and no fill behind them. The
+   space above is what separates them from the row the list is clipping. */
+.palette-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.palette-footer kbd {
+  margin-right: var(--sp-05);
+}
+
+.palette-footer-hint {
+  margin-left: auto;
+}
+
+/* Announced, never shown — the visible list is the sighted equivalent. */
+.palette-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- animation -- */
+
+@keyframes palette-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes palette-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .palette-backdrop,
+  .palette {
+    animation: none;
+  }
+}

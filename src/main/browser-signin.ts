@@ -1,0 +1,323 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { shell, type IpcMain } from 'electron'
+import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
+import { loginPath } from './providers'
+import { launchSpec } from './tool-probe'
+import {
+  diagnoseSignIn,
+  handoverFor,
+  type Handover,
+  type SignInTrouble,
+  type SignInTroubleKind,
+} from './browser-signin-diagnose'
+
+/*
+ * The pure diagnosis and handover plan moved to `browser-signin-diagnose.ts` so
+ * the headless host and the phone can read a Google refusal with no Electron
+ * under them — see that file's header. Re-exported here so every existing
+ * `./browser-signin` importer, and this file's own `registerBrowserSignInIpc`,
+ * keep working unchanged.
+ */
+export { diagnoseSignIn, handoverFor }
+export type { Handover, SignInTrouble, SignInTroubleKind }
+
+const run = promisify(execFile)
+
+/**
+ * Sign-ins that do not work, said out loud instead of failing quietly.
+ *
+ * ## The four he hit, and what each one actually is
+ *
+ * From the recorded review of 2026-08-17, of the in-app browser:
+ *
+ *   > *"Claude's QR appeared then stopped; the flow pushed him to an external
+ *   > browser; the verification link **gets stuck**; Google sign-in refuses.
+ *   > Gemini reports 'authentication successful' while the app shows nothing,
+ *   > then fails with 'this client is no longer supported to Gemini Code
+ *   > Assist… migrate to the Gravity suite.'"*
+ *
+ * They are three separate faults wearing one complaint, and each was reproduced
+ * on this machine on 2026-08-18 rather than reasoned about:
+ *
+ *  1. **The QR, the external browser and the stuck link are one bug**, and it is
+ *     not in this file. Every `window.open` from a guest page was answered
+ *     `deny`, so the page's own handle came back `null` and it waited forever
+ *     for a message from a window it never got. `browser-popup.ts` is the fix
+ *     and carries the measurements.
+ *  2. **Google routes an embedded browser down a different flow.** Measured:
+ *     the same authorisation URL loaded with Electron's default user agent gets
+ *     `flowName=GeneralOAuthLite` and a `/signin/oauth/legacy/consent`
+ *     continuation; with the shell's token removed it gets `GeneralOAuthFlow`
+ *     and the ordinary consent page. `browser-user-agent.ts` removes the token,
+ *     which is honest — the engine really is that Chromium — and this file
+ *     handles what happens when it is not enough.
+ *  3. **The Gemini message is not about the browser at all.** See
+ *     {@link staleAgentCli}: it is a server-side refusal of an out-of-date CLI,
+ *     and no browser can fix it.
+ *
+ * ## Why the handover is deliberate rather than a fallback
+ *
+ * His instruction, in as many words: if it cannot be fixed from inside, the app
+ * must *"hand the sign-in to the system browser deliberately and come back with
+ * the token, rather than appearing to try and dying silently."*
+ *
+ * Coming back with the token is real here, and it is worth saying how, because
+ * it is not obvious that it could be. This app already ships `cookie-import.ts`,
+ * which reads a Chromium profile's cookie database — decrypting it through the
+ * OS keychain — and writes the cookies into the guest session, filtered to named
+ * domains. So the round trip is: open the sign-in in the browser the person
+ * already uses, let them finish it there where nothing is refused, then bring
+ * *that site's* cookies back. The session that returns is the real one; nothing
+ * is simulated and no password passes through this app.
+ *
+ * {@link handoverFor} works out which domains to ask for. Getting that set right
+ * is the whole difference between a working handover and an import that brings
+ * back the identity provider's cookies but not the site's.
+ */
+
+/* ------------------------------------------------- the agent CLI finding -- */
+
+/**
+ * The Gemini message, run down to its cause.
+ *
+ * *"This client is no longer supported to Gemini Code Assist… migrate to the
+ * Gravity suite"* is a **server-side refusal of an out-of-date client**, and it
+ * is why the browser could say "authentication successful" while the session
+ * showed nothing: the OAuth round trip really did succeed, and the first API
+ * call afterwards was turned away. No browser change can fix that, and no amount
+ * of retrying will either — which is what makes it worth naming rather than
+ * leaving somebody to loop.
+ *
+ * Checked on this machine on 2026-08-18:
+ *
+ *   - installed: `gemini --version` → **0.32.1**, from Homebrew.
+ *   - Homebrew's own formula: *"gemini-cli: 0.32.1 → stable 0.46.0. Deprecated
+ *     because it is not supported upstream! It will be disabled on 2026-12-18.
+ *     Replacement: brew install --cask antigravity-cli"*.
+ *   - npm `@google/gemini-cli`: latest **0.55.1**.
+ *
+ * So the installed client is twenty-three minor versions behind a moving
+ * server, on a packaging route its own maintainers have marked for removal, and
+ * "Gravity" in the error is Antigravity — the suite Google moved the tool into.
+ * The fix is an upgrade, and it is a fix a person can perform, which is the
+ * whole test of whether this is worth showing at all.
+ *
+ * The floor is deliberately the version Homebrew *offers*, not the newest on
+ * npm. Telling somebody on Homebrew to install a version their package manager
+ * does not have is a dead end, and a check that fires on a machine that is as
+ * current as it can be is a check people learn to ignore.
+ */
+export const GEMINI_SUPPORTED_FROM = '0.46.0'
+
+export interface AgentCliVersion {
+  /** The command asked, so a person can run the same thing themselves. */
+  command: string
+  /** What it answered, or null when it is not installed or would not say. */
+  version: string | null
+  /** True only when a version was read *and* it is below the floor. */
+  stale: boolean
+  /** What to do about it. Empty when there is nothing to do. */
+  advice: string
+}
+
+/**
+ * Compare two dotted versions numerically.
+ *
+ * String comparison gets this wrong in the direction that matters: `'0.9.0' >
+ * '0.46.0'` is true alphabetically and false in fact, so a lexical check would
+ * clear every version between 0.5 and 0.9 while failing 0.46 itself.
+ */
+export function isBelow(candidate: string, floor: string): boolean {
+  const parts = (value: string): number[] =>
+    value
+      .replace(/^v/, '')
+      .split(/[.-]/)
+      .map((piece) => Number.parseInt(piece, 10))
+      .map((n) => (Number.isFinite(n) ? n : 0))
+  const a = parts(candidate)
+  const b = parts(floor)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const left = a[i] ?? 0
+    const right = b[i] ?? 0
+    if (left !== right) return left < right
+  }
+  return false
+}
+
+/** The first dotted number in whatever a CLI printed for `--version`. */
+export function parseVersion(output: string): string | null {
+  const match = /(\d+\.\d+\.\d+)/.exec(output)
+  return match ? match[1] : null
+}
+
+/**
+ * Ask one CLI what version it is.
+ *
+ * Never throws and never reports `stale` from a check that failed: a binary that
+ * is not installed, or that answered something unparseable, is `version: null`,
+ * which sends a person somewhere completely different from "yours is too old".
+ * The same discipline `gemini-signin.ts` applies to its keychain probe.
+ */
+export async function readCliVersion(
+  command: string,
+  floor: string,
+  advice: string,
+  /*
+   * The login shell's PATH, not this process's — and that is not a detail.
+   *
+   * A GUI app launched from Finder or the Dock inherits `/usr/bin:/bin:
+   * /usr/sbin:/sbin` and nothing else, so every agent CLI in `/opt/homebrew/bin`
+   * or a Node version manager is simply not there. `run(command, …)` would throw
+   * ENOENT, this function would answer `version: null, stale: false` — which is
+   * correct for "not installed" and catastrophic here, because the whole point
+   * of the check is to *warn*, and a silent no-warning is indistinguishable from
+   * a clean bill of health.
+   *
+   * Found by looking rather than by reasoning: the Accounts pane showed the
+   * installed version as current (that check goes through `loginPath`) while
+   * this one, two inches above it, read a different binary. In a packaged build
+   * started the ordinary way it would have read no binary at all, and the row
+   * this feeds would never have appeared for anybody. `CLAUDE.md` states the
+   * rule outright — "a GUI app cannot see `claude` on PATH".
+   *
+   * `withPath` rather than `{ ...process.env, PATH }`: on Windows the literal
+   * key leaves the child holding both `Path` and `PATH`, and which one it reads
+   * is undefined. See `platform/host.ts`.
+   *
+   * `launchSpec` rather than the bare name — the second half of the same
+   * lesson, and the one this function shipped without.
+   *
+   * What answers a PATH lookup for `gemini` on Windows is `gemini.cmd`, an
+   * npm shim, and Node has refused to spawn a `.cmd`/`.bat` without
+   * `shell: true` since 18.20.2/20.12.2 (the CVE-2024-27980 fix): `execFile`
+   * throws EINVAL before the process is created. The `catch` below then does
+   * exactly what the paragraph above calls catastrophic — it answers
+   * `version: null, stale: false`, which is the same answer as "your CLI is
+   * fine". So on Windows this check could not fire at all: the one warning that
+   * exists to stop somebody signing in successfully and then watching every
+   * request fail was silently disabled on the platform, not by a decision, by a
+   * default argument. `tool-probe.ts:launchSpec` was written for this exact
+   * failure and already carries the quoting half of it (a resolved path with a
+   * space in it splits inside `cmd /d /s /c`), so this routes through it rather
+   * than re-deriving the rule here — `prerequisites.ts:version` and
+   * `usage-probe.ts` reach it the same way.
+   *
+   * `resolved` is passed as `null` deliberately. We have not paid for a
+   * `where.exe` here and guessing would be worse than not knowing: with `null`
+   * `launchSpec` takes the command processor, which runs a shim and a real
+   * `.exe` alike, so the answer is right either way. `usage-probe.ts:713` makes
+   * the same call for the same reason.
+   */
+  exec: (cmd: string, args: string[]) => Promise<{ stdout: string }> = async (cmd, args) => {
+    const platform = currentPlatform()
+    const launch = launchSpec(cmd, null, platform)
+    return run(launch.command, args, {
+      timeout: 5000,
+      windowsHide: true,
+      shell: launch.shell,
+      env: withPath(process.env, await loginPath(platform), platform),
+    })
+  },
+): Promise<AgentCliVersion> {
+  try {
+    const { stdout } = await exec(command, ['--version'])
+    const version = parseVersion(stdout)
+    if (version === null) return { command, version: null, stale: false, advice: '' }
+    const stale = isBelow(version, floor)
+    return { command, version, stale, advice: stale ? advice : '' }
+  } catch {
+    return { command, version: null, stale: false, advice: '' }
+  }
+}
+
+/**
+ * What to tell somebody to type, on the machine they are actually sitting at.
+ *
+ * The sentence used to lead with `brew upgrade gemini-cli` unconditionally.
+ * Homebrew is not a Windows package manager — there is no `brew` on a stock
+ * Windows PC, and there is no supported way to get one — so a Windows user who
+ * did get this warning was handed a command that cannot run as the *first*
+ * thing to try, with the one that does work relegated to "or". Advice a reader
+ * has to filter is advice they stop reading.
+ *
+ * npm is the common half: the Homebrew formula and the npm package are the same
+ * CLI, and `npm install -g @google/gemini-cli@latest` is exactly right on
+ * Windows (it is how the `.cmd` shim got there in the first place). So Windows
+ * gets that line alone rather than a reworded one — nothing is lost by dropping
+ * a route that does not exist, and inventing a winget/choco line for a package
+ * nobody here has checked is published would be the same mistake pointing the
+ * other way.
+ *
+ * Pure and exported so both spellings can be pinned from a Mac, which is the
+ * only machine this repo is written on.
+ */
+export function staleGeminiAdvice(platform: Platform = currentPlatform()): string {
+  const opening =
+    'Google turns away builds this old after you sign in — the sign-in succeeds and the first request fails. Upgrade it:'
+  const npm = '`npm install -g @google/gemini-cli@latest`'
+  if (isWindows(platform)) return `${opening} ${npm}.`
+  return `${opening} \`brew upgrade gemini-cli\`, or ${npm}.`
+}
+
+/**
+ * Every agent CLI whose sign-in is known to fail on an old build.
+ *
+ * A list of one, and it stays a list. The next CLI to start refusing old clients
+ * needs a row here and nothing else, and a list of one is what a second entry
+ * gets appended to rather than the shape somebody has to invent under pressure.
+ *
+ * `platform` is a parameter rather than a read of `process.platform` inside,
+ * for the reason `platform/host.ts` gives at length: a branch written inline is
+ * a branch only the machine it was written on can ever exercise, and CI here is
+ * macOS-only.
+ */
+export async function staleAgentCli(
+  platform: Platform = currentPlatform(),
+): Promise<AgentCliVersion[]> {
+  const gemini = await readCliVersion('gemini', GEMINI_SUPPORTED_FROM, staleGeminiAdvice(platform))
+  return [gemini].filter((entry) => entry.stale)
+}
+
+/* -------------------------------------------------------------- register -- */
+
+/**
+ * Open a sign-in in the machine's own browser, where it works — the body behind
+ * `browser-signin:handover`. Null when there is nothing to hand over.
+ *
+ * Exported for the copilot's `browser.signin` tool, so a sign-in handed over
+ * from another application goes through the same plan and the same scheme
+ * check as the banner's button.
+ */
+export async function handOverSignIn(url: unknown): Promise<Handover | null> {
+  if (typeof url !== 'string') return null
+  const trouble = diagnoseSignIn(url)
+  const plan = handoverFor(url, trouble ? trouble.domains : [])
+  if (!plan) return null
+  // `shell.openExternal` and not `link-open.ts`'s guard, because the scheme
+  // has already been checked above: `handoverFor` returns null for anything
+  // that is not http or https, which is the same gate for a narrower purpose.
+  await shell.openExternal(plan.url)
+  return plan
+}
+
+/**
+ * Wire the sign-in helpers. Call once from `registerIpc()`:
+ *
+ *     import { registerBrowserSignInIpc } from './browser-signin'
+ *     registerBrowserSignInIpc(ipcMain)
+ *
+ * Channels:
+ * - `browser-signin:diagnose` (invoke, url)  → {@link SignInTrouble} | null
+ * - `browser-signin:handover` (invoke, url)  → {@link Handover} | null, and opens the browser
+ * - `browser-signin:agents`   (invoke)       → {@link AgentCliVersion}[], only the stale ones
+ */
+export function registerBrowserSignInIpc(ipcMain: IpcMain): void {
+  ipcMain.handle('browser-signin:diagnose', (_event, url: unknown) =>
+    typeof url === 'string' ? diagnoseSignIn(url) : null,
+  )
+
+  ipcMain.handle('browser-signin:handover', (_event, url: unknown) => handOverSignIn(url))
+
+  ipcMain.handle('browser-signin:agents', () => staleAgentCli())
+}

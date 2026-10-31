@@ -1,0 +1,2757 @@
+/**
+ * The server room, assembled and wired to the window.
+ *
+ * This is the only thing the renderer calls (§8.2's B→C seam). It owns four
+ * things and delegates everything else:
+ *
+ *  - **the room** — the cached view of each server, built from A's facts and
+ *    `classify.ts`'s inventory, with `actions.ts` deciding what each card may
+ *    do;
+ *  - **the way back on disk** — the record a `kept` action writes before it
+ *    changes anything, kept on *this* computer because a record on the server
+ *    is gone in exactly the situation it exists for;
+ *  - **the terminal** — an interactive shell per press, opened on request and
+ *    closed by the surface that opened it, never by a different page letting go
+ *    of the same server (see `servers:close`);
+ *  - **the grant** — the copilot's per-server permission, which is asked for
+ *    here and nowhere else.
+ *
+ * ## When it connects, and when it does not
+ *
+ * §5.4, which is where Asad's standing **events, not polling** rule is actually
+ * paid. Opening a server's page opens one connection; closing it closes the
+ * connection. There is no background connection, no timer, no keep-alive sweep,
+ * and no connection at all to a server nobody is looking at. Facts are gathered
+ * **once per connection** and cached with `measuredAt`, and a page showing an
+ * hour-old sentence with its age on screen is the correct behaviour rather than
+ * a bug to fix.
+ *
+ * The one long-lived thing is the terminal, and only while it is on screen. A
+ * pty is inherently a stream; that is not polling.
+ *
+ * Two surfaces can be looking at one server at once — its page in Machines and
+ * the Servers settings pane — so *closing* is reference-counted and *only* the
+ * connection is. A terminal is owned by the surface that opened it and outlives
+ * every page: `servers:close` carries the whole argument, and it is the bug that
+ * paragraph exists to record.
+ *
+ * ## Why the transport arrives as a dependency
+ *
+ * `connection.ts` is agent A's file and this is agent B's. Taking `run`,
+ * `shell` and `download` as arguments rather than importing them does three
+ * things at once: the two halves can be built in parallel against a written
+ * seam, the permission and way-back logic is exercisable with a plain object
+ * and no `ssh2` anywhere near it — the same argument `deck-control/surface.ts`
+ * makes at length — and the headless host, which has no window, can register
+ * the identical handlers against its own desk. `remote/machines/ipc.ts` is the
+ * precedent and takes its pairing desk the same way.
+ *
+ * ## Errors do not cross as exceptions
+ *
+ * Every handler that can fail answers a discriminated result rather than
+ * rejecting. A rejected `ipcMain.handle` reaches the renderer as
+ * `Error: Error invoking remote method '…': …`, which mangles the one thing
+ * this feature must deliver intact: the sentence `actions.ts` wrote. §4.3 has
+ * three surfaces rendering one string, and a transport that rewrites it would
+ * break that quietly.
+ */
+
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import type { InvokeRegistrar } from '../ipc-seam'
+import { writeSecretFile } from '../remote/secret-file'
+import {
+  ACTION_IDS,
+  ActionFailed,
+  ActionRefused,
+  DEFAULT_LOG_LINES,
+  MAX_LOG_LINES,
+  availableActions,
+  perform,
+  previewOf,
+  type ActionDeps,
+  type CommandResult,
+  type ActionId,
+  type ActionOutcome,
+  type ActionPreview,
+  type AbsentAction,
+  type DownloadFromServer,
+  type ListServerFolder,
+  type PutFileOnServer,
+  type OpenServerShell,
+  type RunOnServer,
+  type ServerRoom,
+  type ServerShell,
+  type ServerSummary,
+  type ServerView,
+  type WayBack,
+  type WayBackJournal,
+} from './actions'
+import {
+  cannotOf,
+  classify,
+  emptySurvey,
+  howOf,
+  parseSurvey,
+  waybackScript,
+  type ServerCard,
+  type WayBackSurvey,
+} from './classify'
+import { ServerProblem } from './connection'
+import { KeyFileOffers, type KeyFileOffer } from './keyfiles'
+import type { AgentFact, AgentId, AgentInstallRoom, ServerFacts } from './facts'
+import type { ForwardingConnection } from './forward'
+/*
+ * The one narrow exception to §7's "installing software" non-goal, which §7
+ * itself now names: one program, into the account's own home, no administrator
+ * access, with a way back, driven by a person pressing a button. It is wired
+ * here and it is deliberately **not** wired into `tools.ts` — §6.1, and
+ * `no-run-tool.test.ts` pins the copilot's tool list at three names. Since
+ * 0.16.0 `deck-control/server-room-tools.ts` reaches these handlers too, as an
+ * `alter` call a person answers; the button is then the dialog.
+ */
+import {
+  ServerSetups,
+  SETUP_AGENTS,
+  agentOn,
+  agentSetup,
+  installConsequence,
+  signOutConsequence,
+  whyNoSignOut,
+  whyNotInstall,
+  type SetupState,
+} from './setup'
+/*
+ * The second program this app is allowed to install on a server, under the same
+ * §7 exception the agents go in under — and the one that turns a server into a
+ * machine you can open a session on. See `host.ts` for why the package travels
+ * with the app instead of being fetched from npm.
+ */
+import {
+  ServerHosts,
+  hostConsequence,
+  channelsOf,
+  hostIdOf,
+  hostLine,
+  reachLine,
+  removeConsequence,
+  whyNotHost,
+  type HostLook,
+  type HostOnServer,
+  type HostRoom,
+  type HostState,
+  type LinkOutcome,
+} from './host'
+import { NO_PACKAGE, type HostPackage } from './host-package'
+/*
+ * The two halves of *a session on a server drives the window attached to it*.
+ * Both are wired here because this is the file that opens the shell, and the
+ * `PATH` line has to be typed into it before anybody can type `claude`.
+ */
+import { WHY_NOT, WindowDrives, type ArmOutcome, type Belonging, type ReachKind } from './window-drive'
+import {
+  openWindowReach,
+  type LocalEnd,
+  type ReachResult,
+  type ReverseConnection,
+} from './window-reach'
+import type { RemoteAppContext } from '../app-context'
+import type { PreparedElsewhere } from '../deck-control/session-tools'
+import { NO_SECURE_STORE, credentialFromDraft, type ServerCredential, type SignInDraft } from './credentials'
+import { DEFAULT_GRANT_MS, MAX_GRANT_MS, GrantRefused, ServerGrants, type GrantState } from './grants'
+/*
+ * The same two functions the window's own bar drives, pointed at a shell on a
+ * server. See {@link SHELL_CONTROLS} below for why that is honest rather than a
+ * hopeful reuse, and `ControlScope` for the one thing that has to change.
+ */
+import { applyControl, readControls, type ApplyResult, type ControlsReading } from '../agent-controls'
+// The shadow terminal every local session already keeps. A server shell is a
+// real pty — `client.shell({ term: 'xterm-256color' })` — so the same emulator
+// reads it, which is the whole of what makes the controls reach one.
+import { ActivityTracker } from '../session-activity'
+// One list of control names for the whole main process. Imported rather than
+// restated because this handler narrows an IPC argument against it and a second
+// copy is a second thing to forget when a control is added.
+import { CONTROL_IDS, MAX_UPLOAD_BYTES } from '../remote/protocol'
+import { byteSize } from '../../shared/byte-size'
+
+/* ------------------------------------------------------------- channels -- */
+
+export const SERVERS_SHELL_OUTPUT_CHANNEL = 'servers:shell:output'
+export const SERVERS_SHELL_CLOSED_CHANNEL = 'servers:shell:closed'
+/** Where a server's setup has got to. Pushed, because it changes without a press. */
+export const SERVERS_SETUP_CHANNEL = 'servers:setup:changed'
+/**
+ * Where a server's headless-host install has got to. Pushed for the same reason
+ * the setup channel is: an install that takes two minutes does not end at a
+ * moment this side could have asked about.
+ */
+export const SERVERS_HOST_CHANNEL = 'servers:host:changed'
+
+/**
+ * One agent's row in the setup pane: what is there, and what could be.
+ *
+ * Three of these go to the renderer on every look, in a fixed order, whether or
+ * not the server has any of them. That is the shape of the rule rather than an
+ * implementation detail — a pane that returned only the agents already
+ * installed would show a Claude-only machine a Claude-only screen, which is the
+ * thing being fixed.
+ */
+export interface SetupRow {
+  agentId: AgentId
+  /** The agent's own name, from the table beside the work. */
+  label: string
+  installed: AgentFact | null
+  canInstall: boolean
+  why: string | null
+  consequence: string
+  /** What signing out would do, said before it is done. */
+  signOutConsequence: string
+  /** Why this one cannot be signed out from here, or null when it can. */
+  whyNoSignOut: string | null
+  state: SetupState
+}
+
+/**
+ * One coding login on the account a server terminal signed in as.
+ *
+ * `account` is null where the agent has a login and no address to put on it —
+ * an API key rather than a sign-in, which is a real state of two of the three
+ * and is drawn as *signed in* with nothing after it rather than as a guess.
+ */
+export interface ShellLogin {
+  agentId: AgentId
+  account: string | null
+}
+
+/**
+ * What a terminal on a server can be told about the logins under it.
+ *
+ * Three fields and no fourth, because the bar has four sentences to choose
+ * between and these are what choose: whether the question could be put at all,
+ * how many coding agents are on that account, and which of them have a login.
+ * A shape that answered only the logins would leave *"no agent here"* and
+ * *"agents here, none signed in"* indistinguishable, and they are the two that
+ * lead somewhere different.
+ */
+export type ShellAccountAnswer =
+  | { known: 'yes'; agents: number; logins: ShellLogin[] }
+  | { known: 'cannot'; why: string }
+
+/**
+ * What one server can say about the headless host: what is there, and what
+ * putting one there would cost.
+ *
+ * Every sentence on it is written in `host.ts`, beside the code that performs
+ * the work — §4.3 — including the two refusals. The renderer draws them and
+ * composes none of them, so a machine that cannot take a host says why in the
+ * words of the file that decided it could not.
+ */
+export interface HostOffer {
+  host: HostOnServer
+  room: HostRoom
+  /** True only when this build carries a package **and** the server can take it. */
+  canInstall: boolean
+  /** Why there is no Install button, or null when there is one. */
+  why: string | null
+  /** The standing line for the section. */
+  line: string
+  /** Whether it will still be there tomorrow, or null when there is no host. */
+  reach: string | null
+  /** The sentence shown before the press. */
+  consequence: string
+  /** What removing it would leave behind, for each answer to the data question. */
+  removes: { keepData: string; withData: string }
+  /**
+   * Can this build link a host to this computer at all?
+   *
+   * False on a build with no Machines list, where `ServerHosts.link` falls back
+   * to *showing* the code. The panel reads this so it never draws a button
+   * labelled "Link this computer" that would put a code on screen instead —
+   * §4.1 again, and the exact shape of the bug this whole change is about.
+   */
+  canLink: boolean
+  /**
+   * What this computer already calls that host in its Machines list, or null
+   * when it has never been linked to it.
+   *
+   * Decided here, from two facts that already exist: the host id that server's
+   * own `status` prints, and the machine rows this desktop holds — which are
+   * keyed by host id. A panel that could not ask this would have to offer to
+   * link a machine it may already be linked to, which is a button whose honest
+   * label nobody could write.
+   */
+  linkedAs: string | null
+  /**
+   * True when there is a row for that host here and **nothing is reaching it**.
+   *
+   * The field that stops this panel from looking finished over a host no client
+   * has touched. Measured, and it is why this exists: an office PC running the
+   * host for two hours, on the relay, with a device of his approved in its own
+   * list — `channels 0`, nothing connected, and a panel whose only sentence was
+   * *"This computer is linked to it … sessions, folders and the terminal work
+   * there the way they do for any other machine."* Every word of that was false
+   * and none of it was a guess this app had to make: the contradiction is
+   * between two facts it already had on screen.
+   *
+   * A redial is fired for it before this is answered, so the ordinary version of
+   * this state repairs itself between one look and the next; what is left when
+   * it does not is drawn as a sentence and a press.
+   */
+  linkedButNotConnected: boolean
+  /**
+   * What **this build** is, so the panel can say whether that host is behind it.
+   *
+   * On the offer rather than read where the button is drawn, because the version
+   * is a fact only the main process holds — `app.getVersion()` — and the
+   * renderer has no bridge for it. It used to be read as `BRAND.version` inside
+   * `hostUpdateAvailable`, which does not exist: `BRAND` carries the name, the
+   * id, the bundle id and the tagline and has never carried a version. Nothing
+   * said so because the repository's root `tsconfig.json` has `include: []`, so
+   * a bare `tsc --noEmit` typechecks nothing at all; `npm run typecheck` is the
+   * real gate, and it caught this along with a dozen others the moment it ran.
+   */
+  mine: string
+  state: HostState
+}
+
+/** Whether an unknown off the wire names one of the three rows. */
+function isSetupAgent(value: unknown): value is AgentId {
+  return typeof value === 'string' && (SETUP_AGENTS as readonly string[]).includes(value)
+}
+
+/* --------------------------------------------------------------- results -- */
+
+/**
+ * What every fallible handler answers.
+ *
+ * `sentence` is the person's answer and `detail` is the server's own words,
+ * kept apart for the reason `ActionFailed` keeps them apart: one goes on a card
+ * and the other goes behind a disclosure.
+ */
+export type ServerResult<T> =
+  | ({ ok: true } & T)
+  | {
+      ok: false
+      sentence: string
+      detail: string
+      /** A's own {@link ServerProblem} kind, when the failure was the connection. */
+      kind?: string
+      /** Both fingerprints, when the server answered with a different identity. */
+      identity?: { expected: string; offered: string }
+    }
+
+function failed(error: unknown): Extract<ServerResult<never>, { ok: false }> {
+  if (error instanceof ActionRefused) return { ok: false, sentence: error.sentence, detail: '' }
+  if (error instanceof ActionFailed) return { ok: false, sentence: error.sentence, detail: error.detail }
+  /*
+   * Anything else is the transport: a host key that changed, an address that
+   * did not answer, a sign-in refused. `connection.ts` maps those to the
+   * sentences in §4.5 and throws them; what arrives here is already a sentence,
+   * and re-wording it would be this layer inventing copy about a failure it did
+   * not diagnose.
+   *
+   * `kind` and `identity` are carried through rather than flattened, and the
+   * reason is one specific failure. A host key that changed is not a failure to
+   * try again — §3.6: *"the connection stops and nothing is offered but the
+   * fingerprint and a way to cancel."* The window can only draw that if it can
+   * tell this failure from the eight that merely need another go, and the two
+   * fingerprints are the whole of what makes the check worth having: a person
+   * can go and compare them against any other tool.
+   */
+  if (error instanceof ServerProblem) {
+    return {
+      ok: false,
+      sentence: error.sentence,
+      detail: '',
+      kind: error.kind,
+      ...(error.identity === undefined ? {} : { identity: error.identity }),
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return { ok: false, sentence: message === '' ? 'Something went wrong reaching that server.' : message, detail: '' }
+}
+
+/* ---------------------------------------------------------- the journal -- */
+
+const WAYBACK_FILE = 'server-waybacks.json'
+const FORMAT_VERSION = 1
+
+/**
+ * The ways back, on this computer, written atomically.
+ *
+ * Through `writeSecretFile` for the same reason `folder-grants.ts` uses it for
+ * a list of folder paths: not because the contents are a secret — an image
+ * digest and a commit hash are not — but because the two properties that
+ * function exists for are exactly the ones wanted here. **All-or-nothing
+ * replacement**, so a crash mid-write cannot leave a half-written record that
+ * parses into a rollback pointing at nothing. And **never following a symlink
+ * into somewhere else**, so the file cannot be aimed at another program's state.
+ *
+ * A second hand-rolled atomic write is how two writers eventually disagree
+ * about which steps mattered, and this one is the record that has to survive
+ * the failure it is a record of.
+ */
+export class FileJournal implements WayBackJournal {
+  private rows: Record<string, WayBack> = {}
+  readonly file: string
+
+  constructor(private readonly dir: string) {
+    this.file = join(dir, WAYBACK_FILE)
+    try {
+      const raw: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
+      if (typeof raw === 'object' && raw !== null) {
+        const stored = (raw as { rows?: unknown }).rows
+        if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
+          this.rows = stored as Record<string, WayBack>
+        }
+      }
+    } catch {
+      // No file, an unreadable one, or one written by something else. An
+      // unreadable journal means no rollback is offered, which is the safe
+      // direction: the button is absent rather than pointing at a record we
+      // could not parse.
+      this.rows = {}
+    }
+  }
+
+  private key(serverId: string, cardId: string): string {
+    return `${serverId} ${cardId}`
+  }
+
+  async put(serverId: string, cardId: string, record: WayBack): Promise<void> {
+    this.rows[this.key(serverId, cardId)] = record
+    this.flush()
+  }
+
+  async get(serverId: string, cardId: string): Promise<WayBack | null> {
+    return this.rows[this.key(serverId, cardId)] ?? null
+  }
+
+  async clear(serverId: string, cardId: string): Promise<void> {
+    delete this.rows[this.key(serverId, cardId)]
+    this.flush()
+  }
+
+  private flush(): void {
+    mkdirSync(this.dir, { recursive: true })
+    /*
+     * The **whole path**, not the basename. `writeSecretFile` builds its temp
+     * file as `${file}.${pid}.tmp` and renames that to `file`, so a bare name
+     * is resolved against the process's working directory — which for a
+     * packaged app is wherever it happened to be launched from.
+     *
+     * This was written wrong first, and the way it failed is worth recording
+     * because it is silent in both directions: the write succeeded, the
+     * in-memory copy answered every read, and every test that used the
+     * in-memory journal passed. The file simply landed somewhere else, so the
+     * *next launch* would read an empty journal from `<userData>/servers/` and
+     * offer no way back for anything updated before it. `ipc.test.ts` catches
+     * it by reading the file off disk rather than asking the object.
+     */
+    writeSecretFile(this.dir, this.file, `${JSON.stringify({ version: FORMAT_VERSION, rows: this.rows }, null, 2)}\n`)
+  }
+}
+
+/* ------------------------------------------------------------------ deps -- */
+
+export interface ServersIpcDeps {
+  /** Where `server-waybacks.json` and the backup folder live. `<userData>/servers`. */
+  storageDir: string
+  /** The list of servers. A's `store.ts`; never a credential — §3.7. */
+  servers(): ServerSummary[]
+  /**
+   * The stored list itself, for adding, renaming and forgetting.
+   *
+   * Optional, because a host that is only *reading* servers — the headless
+   * build, a test — has no business being able to change the list, and an
+   * absent store answers "this build cannot add a server" honestly rather than
+   * throwing inside a handler.
+   */
+  store?: ServerListStore
+  /** Where a sign-in is kept. A's `credentials.ts`, backed by the OS secure store. */
+  credentials?: ServerCredentialStore
+  /** A's `connection.ts`: connect if needed, run the §3.2 probe once, answer the record. */
+  facts(serverId: string): Promise<ServerFacts>
+  /** A's `connection.ts`. */
+  run: RunOnServer
+  /** A's `connection.ts`. One script, one round trip — how the survey is asked. */
+  runScript(serverId: string, script: string): Promise<CommandResult>
+  /** A's `connection.ts`. Absent means no terminal — the page says so rather than drawing one. */
+  openShell?: OpenServerShell
+  /**
+   * A's `connection.ts`, over SFTP. Absent means the folder picker offers no
+   * list and the person types the path — which is a smaller picker, not a
+   * broken one, and is the same fallback a server with no SFTP subsystem gets.
+   */
+  listFolder?: ListServerFolder
+  /**
+   * Put a file from this computer onto the server, over the same SFTP channel.
+   *
+   * Optional like `listFolder`, and its absence is answered the same way: a
+   * sentence, so the surface that wanted to hand a session a file says it cannot
+   * rather than handing over a path on the wrong computer. That is not a
+   * hypothetical — a path on this laptop typed at a prompt on somebody's server
+   * is a file the agent goes looking for, does not find, and reports missing to
+   * a person who is looking straight at it on their own screen.
+   */
+  putFile?: PutFileOnServer
+  /**
+   * The headless-host package this build carries, or null when it carries none.
+   *
+   * Optional, and absent is a first-class answer rather than a gap: a build
+   * packaged before `out/headless-package` existed has none, and so does a
+   * checkout where nobody has run `npm run dist:headless`. The server page then
+   * draws **no** Install button and says why — §4.1 — rather than offering to
+   * fetch a package from a registry that holds a name reservation.
+   */
+  hostPackage?(): HostPackage | null
+  /**
+   * Redeem a pairing code this app read out of a server's own terminal, and
+   * keep the machine it names. `MachinesIpc.linkWithCode`.
+   *
+   * Optional for the same reason `hostPackage` is: a build with no machine
+   * channels cannot redeem anything, and `host.ts` answers that by showing the
+   * code instead of pretending to spend it. The security argument for a code
+   * this app supplies to itself is written where it is spent —
+   * `ServerHosts.link`.
+   */
+  linkThisComputer?(code: string): Promise<LinkOutcome>
+  /**
+   * What this build is — `app.getVersion()`, injected the way everything
+   * Electron-shaped is injected here so the tests do not need an `app`.
+   *
+   * It rides onto every `HostOffer` so the panel can say whether the host on
+   * that server is behind this build, which is the whole of *"whenever there is
+   * a new update for headless… it should show the update button."*
+   */
+  appVersion(): string
+  /**
+   * Wait until this desktop's link to a machine it has just paired with is
+   * carrying. `MachinesIpc.whenReaching`.
+   *
+   * What stops an install that worked from accusing itself. The channel comes up
+   * a beat after the far end approves this computer, and the panel behind that
+   * install now asks the host how many channels it has open.
+   */
+  whenReaching?(machineId: string, ceilingMs: number): Promise<boolean>
+  /**
+   * Is this desktop paired to the machine behind that host id, what does it call
+   * it, and is that link up now? `MachinesIpc.linkStanding`.
+   *
+   * What makes the panel able to say "already linked" instead of offering a
+   * second link, which is the difference between a screen that reports the world
+   * and one that offers a button and hopes. `online` is the half that keeps the
+   * first sentence honest: a row says this computer paired once, and this says
+   * whether anything is reaching that machine at this moment.
+   */
+  linkStanding?(hostId: string): { name: string; online: boolean } | null
+  /**
+   * Dial that machine now. `MachinesIpc.redial`.
+   *
+   * The panel's own remedy for the one contradiction it can see by itself — a
+   * machine row here and a host over there with nothing connected to it. Called
+   * instead of printing a sentence about it, because a reconnection costs one
+   * handshake and a sentence costs somebody a decision.
+   */
+  redial?(hostId: string): void
+  /**
+   * Copy a file off the server. **Absent today**, and its absence is a stated
+   * fact rather than a gap: `connection.ts` exposes `run`, `runScript`, `probe`
+   * and `shell`, and no file transfer. Until it does, every Backup button is
+   * absent with the reason written on the card, and a database container gets
+   * no Update button either — §4.1, an update whose way back does not lead all
+   * the way back is not a `kept` action.
+   */
+  download?: DownloadFromServer
+  /**
+   * Hold the connection open while a page is looking at this server, and let go
+   * when it closes. §5.4.
+   *
+   * A's pool reference-counts, so these must be paired. Optional because a host
+   * without a pool — a test, the headless build — is not a reason to refuse to
+   * register.
+   */
+  acquire?(serverId: string): Promise<void>
+  release?(serverId: string): void
+  /**
+   * Borrow the live connection, for the one thing that needs the connection
+   * itself rather than a command on it: carrying a sign-in's redirect back down
+   * to the server's own listener. `reach.ts` takes the identical seam.
+   *
+   * Absent means the seamless sign-in is not available and the person is offered
+   * the address to open themselves — which is one paste more, and is said on
+   * screen rather than degraded to silently.
+   */
+  withConnection?<T>(
+    serverId: string,
+    /*
+     * Both shapes, because two features borrow the same connection for two
+     * opposite things: `forward.ts` asks it to reach *out* to a port on the
+     * server, and `window-reach.ts` asks it to listen *there* and hand the
+     * connections back here. An `ssh2` `Client` satisfies both, and naming both
+     * is what keeps either from being widened by a cast at a call site.
+     */
+    fn: (client: ForwardingConnection & ReverseConnection) => Promise<T>,
+  ): Promise<T>
+  /**
+   * Open a web address in the person's own browser.
+   *
+   * Their browser and not this app's, deliberately. The app's bound browser
+   * records every navigation as `BoundWindow.url`, and the navigation that
+   * finishes a sign-in *is* the authorization code — so routing it through there
+   * would put a one-time code in an in-memory field and a history, which
+   * `ACCOUNT-MODEL.md` does not have a "briefly" exception for.
+   */
+  openInBrowser?(url: string): Promise<void>
+  /** Pushes a channel to every window. */
+  broadcast(channel: string, payload: unknown): void
+  /**
+   * Where this computer keeps its SSH keys. `~/.ssh` unless a host says
+   * otherwise, and a test says otherwise.
+   */
+  keyFolder?: string
+  /**
+   * Open a native panel for a key file, or null when the person closed it.
+   *
+   * Injected for the reason `copilot-folder.ts` splits the same way: a panel
+   * needs a window to be a sheet on, windows live in `index.ts`, and a module
+   * that reached for one could not be tested at all. Absent means the app
+   * offers the keys it found and the paste box, and no panel — which is a
+   * smaller screen, not a broken one.
+   */
+  pickKeyFile?(): Promise<string | null>
+  /**
+   * The port `deck-control` is listening on, on **this** machine, or 0.
+   *
+   * Zero is a real and ordinary state rather than a gap: the control server
+   * binds a few hundred milliseconds after the window is built, and a terminal
+   * opened inside that window is opened without the verbs and told so
+   * ({@link WHY_NOT.endpoint}). A function rather than a number because it is
+   * not known when these deps are built.
+   */
+  controlPort?(): number
+  /**
+   * This run's hook endpoint, or null when it has not started.
+   *
+   * The address a server's forward is joined to, and the token a `curl` over
+   * there has to present. Both come from the one place that has them, and both
+   * are read at the moment they are needed rather than captured: the endpoint
+   * binds a few hundred milliseconds after the window is built, and a terminal
+   * opened in that gap simply gets no belonging half.
+   */
+  hookEndpoint?(): { socketPath: string; token: string } | null
+  /**
+   * The documents and the map a session on a named server should be given.
+   *
+   * `app-context.ts` composes them; this file only knows which server a shell is
+   * on and what its arm managed to install. Optional for the reason every other
+   * capability here is: a build with none — the headless host — must register the
+   * same handlers and answer honestly.
+   */
+  remoteContext?(serverName: string, opensInApp: boolean): RemoteAppContext | null
+  /**
+   * Mint a token and a caller for a session this process will never spawn.
+   *
+   * `deck-control/session-tools.ts`'s `prepareElsewhere`. Optional for the
+   * reason every other capability here is: a build with no control endpoint —
+   * the headless host — must register the same handlers and answer honestly,
+   * not fail to register.
+   */
+  mintSessionTools?(grant: { allowed(): boolean }): PreparedElsewhere | null
+  now?: () => number
+}
+
+/**
+ * The slice of A's `ServerStore` this file uses.
+ *
+ * Named narrowly rather than importing the class so that the registration can
+ * be exercised against a plain object — the same reason `ipc-seam.ts` exists,
+ * and the same reason A's own connection pool takes its store as a constructor
+ * argument.
+ */
+export interface ServerListStore {
+  add(candidate: { name: string; address: string; port?: number; username: string }): { id: string }
+  /**
+   * Record *which kind* of sign-in this server has, never the sign-in.
+   *
+   * The list is where the window reads it from, and without this call it stays
+   * at its default of `none` for the life of the server — so the sign-in
+   * section says "this build did not say" about a password the person typed one
+   * screen earlier.
+   */
+  setCredentialKind(id: string, credential: 'password' | 'key' | 'none'): boolean
+  rename(id: string, name: unknown): boolean
+  forget(id: string): boolean
+  /**
+   * The folder a session on this server starts in when nothing names one.
+   *
+   * Written as `{ startIn }` rather than as a bare string so that A's own
+   * `get` satisfies it unchanged — the store answers a whole row, and naming
+   * one field of it here is what keeps this interface a *slice* rather than a
+   * second shape to keep in step with `store.ts`.
+   */
+  get(id: string): { startIn: string | null } | null
+  /** Remember that folder, or clear it with null. See A's `setStartIn`. */
+  setStartIn(id: string, path: string | null): boolean
+  /**
+   * May sessions on this server drive browser windows in this app?
+   *
+   * Optional, and an absent pair reads as a permanent `false`. That is the
+   * honest degradation rather than a gap: a host whose store predates this
+   * cannot record the answer, so the switch is never on, so nothing is ever
+   * armed — which is exactly what every server did before this existed.
+   */
+  drivesWindows?(id: string): boolean
+  /** Say whether it may, and answer what is now true. See A's `setDrivesWindows`. */
+  setDrivesWindows?(id: string, allowed: boolean): boolean
+}
+
+/** The slice of A's `ServerCredentials` this file uses. */
+export interface ServerCredentialStore {
+  available(): boolean
+  save(serverId: string, credential: ServerCredential): { ok: boolean; message: string }
+  /**
+   * Use this sign-in until the app closes, and never write it down.
+   *
+   * Not an optional extra. It is the *only* place a credential lives in the two
+   * cases where {@link save} does not run — somebody who ticked "don't
+   * remember" on a borrowed computer, and a machine whose OS has no secure
+   * store to save into — and without it both of those people get a server that
+   * is added and then cannot connect, with the sentence blaming their password.
+   */
+  holdForSession(serverId: string, credential: ServerCredential): void
+  forget(serverId: string): { ok: boolean; message: string }
+}
+
+/**
+ * What the window sends when somebody adds a server.
+ *
+ * Three things anyone can answer — address, username, and a password or a
+ * pasted key — with nothing configured in advance. §2.1. The field names are
+ * the ones `AddServer.tsx` sends, deliberately: a shape agreed in two places
+ * is a shape that drifts, and `contract.test.ts` records three shipping bugs at
+ * exactly this seam, none of which was a type error.
+ *
+ * The credential travels **inbound only**. It is typed once, saved into the
+ * operating system's secure store by `credentials.ts`, and never crosses back:
+ * `renderer/machines/types.ts` already states the rule for paired devices —
+ * *"a screen that held one would be a screenshot away from publishing it"* —
+ * and it holds identically here.
+ *
+ * `remember: false` is §3.7's "don't save" option, and it is honoured by simply
+ * not writing anything. Somebody trying this out on a borrowed machine should
+ * not have to trust us to be careful.
+ */
+export interface AddServerDraft extends SignInDraft {
+  address: string
+  username: string
+  name?: string
+  port?: number
+  remember?: boolean
+}
+
+/**
+ * Why adding a server did not work, in the closed set the window renders.
+ *
+ * Every one of these is a *different thing to do next*, which is the whole
+ * reason it is not one string: a locked key means show a passphrase field, a
+ * refused sign-in means check the username, and an address that does not
+ * resolve means check for a typo. `AddServer.tsx` branches on this.
+ */
+export type AddServerFailure =
+  | 'needs-passphrase'
+  | 'bad-passphrase'
+  | 'key-unreadable'
+  | 'sign-in-refused'
+  | 'no-such-address'
+  | 'no-answer'
+  | 'not-a-server'
+  | 'said-nothing'
+  | 'nothing-in-common'
+  | 'unknown'
+
+export interface ServersIpc {
+  /**
+   * Which server a shell id belongs to, or null for an id nothing here opened.
+   *
+   * A shell on a server is a *session* everywhere else in the app — it has a
+   * tab, a row in the rail and, since this round, browser windows of its own —
+   * and the session↔browser map keys those windows `<machineId>\0<sessionId>`
+   * with the server standing in for the machine. Nothing outside this file can
+   * answer which server a shell is on, so the one thing that can, does.
+   *
+   * Read rather than parsed out of the id. The id happens to begin with the
+   * server's, and a reader that split on the space would be one server name
+   * with a space in it away from binding a window to a machine that does not
+   * exist.
+   */
+  serverOfShell(shellId: string): string | null
+  /**
+   * Why the session in this shell cannot act on a browser window, or null.
+   *
+   * Null covers two states on purpose — a shell that *can* and an id this file
+   * has never heard of — because the honest thing to say about the second is
+   * nothing. What earns a sentence is the case where this app positively knows
+   * that the row somebody is about to press has nothing behind it: a server
+   * shell offered in the browser's connect menu, given a `B1`, and unable to do
+   * anything with it. `browser-binding-ipc.ts` puts this on the row.
+   */
+  whyNotDrive(shellId: string): string | null
+  /**
+   * What a session in this shell should be told about where it is, or null.
+   *
+   * Null for a shell this file never armed, and null for a shell whose belonging
+   * half could not be arranged — both mean the same thing to the one caller,
+   * `index.ts`'s `contextFor`, which then answers exactly as it did before this
+   * existed. See `servers/window-belong.ts` for what a non-null answer buys.
+   */
+  belongingOf(shellId: string): Belonging | null
+  /** The room, for `tools.ts`. */
+  room: ServerRoom
+  /** The copilot's per-server permission, for `tools.ts` and for a settings screen. */
+  grants: ServerGrants
+  /**
+   * Every terminal open on a server right now, oldest first — the window's and
+   * a tool's alike, since both are opened by `servers:shell:open`.
+   *
+   * For `deck-control/server-room-tools.ts`, which has to be able to say which
+   * terminals exist before it can read one. Read off the same maps the handlers
+   * keep, so a shell that closed is gone from here the moment it is gone there.
+   */
+  openShells(): Array<{ shellId: string; serverId: string; openedAt: number | null }>
+  /**
+   * What is on one terminal's screen now, or null for one that is not open.
+   *
+   * The shadow terminal each shell already has — the one the agent controls
+   * read the model and effort off — handed out rather than built a second time
+   * beside it: *"one shadow terminal per session, read by everyone — a second one
+   * fed the same bytes would drift the moment a resize was missed."*
+   */
+  shellScreen(shellId: string): Promise<string | null>
+  /** Close every shell and drop every connection. For shutdown. */
+  stop(): void
+}
+
+/* ------------------------------------------------------------ registration -- */
+
+export function registerServersIpc(ipcMain: InvokeRegistrar, deps: ServersIpcDeps): ServersIpc {
+  const now = deps.now ?? Date.now
+  const backupDir = join(deps.storageDir, 'backups')
+  const journal = new FileJournal(deps.storageDir)
+  const views = new Map<string, ServerView>()
+  /**
+   * The probe's whole answer, kept beside the view it built.
+   *
+   * `ServerView.facts` is deliberately the narrow slice the action layer needs,
+   * so the agent rows and the install room — which nothing on a card reads —
+   * would otherwise be thrown away the moment the view was assembled, and asking
+   * for them again would be a second round trip to a machine that already said.
+   */
+  const probed = new Map<string, ServerFacts>()
+  /**
+   * Throw away what we measured about one server, both halves together.
+   *
+   * A helper rather than two lines at five call sites, because the second line
+   * is the one that gets left out — and a probe record that outlived the view it
+   * built would answer a setup question about a server whose page has since said
+   * it needs measuring again.
+   */
+  const forgetMeasurements = (serverId: string): void => {
+    views.delete(serverId)
+    probed.delete(serverId)
+  }
+  const shells = new Map<string, ServerShell>()
+  /** Which server each open shell is on. See {@link ServersIpc.serverOfShell}. */
+  const shellServers = new Map<string, string>()
+  /**
+   * When this window opened each shell, on **this** computer's clock.
+   *
+   * The one fact that lets a conversation on that server be attributed to the
+   * terminal in front of you rather than to whichever `claude` on the box typed
+   * most recently. A transcript that began before this shell opened cannot be
+   * this shell's, and one that began before the *next* shell on the same server
+   * opened could not have been written by that one — the same rule
+   * `renderer/session-transcript.ts` applies to a local tab.
+   *
+   * Kept here rather than asked of the far end because the far end has no idea
+   * this app exists. Nothing over there records that a shell was opened; the
+   * only witness is this side, at the moment it opened one.
+   */
+  const shellOpenedAt = new Map<string, number>()
+  /**
+   * One shadow terminal per open server shell, keyed the same way.
+   *
+   * ## Why a server shell can have controls at all
+   *
+   * A server is not a machine running this app, so `CAPABILITY.controls` — the
+   * frame pair a paired desktop answers — has nobody to answer it. What a server
+   * shell *does* have is the one thing `agent-controls.ts` actually needs: a real
+   * pty. `connection.ts` opens it with `client.shell({ term: 'xterm-256color' })`
+   * and the bytes come back through `SERVERS_SHELL_OUTPUT_CHANNEL`, so they can
+   * be written into the same emulator every local session is read from, and the
+   * same reader that finds Claude Code's banner, its composer and its footer on
+   * a local screen finds them on this one.
+   *
+   * ## And why that does not put `/model` into somebody's `sh`
+   *
+   * Because the two gates that already stand in front of every local press stand
+   * in front of this one, and neither of them is a guess about the far machine:
+   *
+   *  - `refuseByProvider` is handed `undefined` — this app did not launch
+   *    whatever is in that terminal and does not pretend to know — which makes
+   *    the *screen* decisive. A plain `sh` prompt carries none of Claude Code's
+   *    markers, so the answer is the sentence "nothing on this session's screen
+   *    says Claude Code is running in it" and nothing is written.
+   *  - `refuseToType` then refuses anyway, because a shell prompt is not the
+   *    CLI's composer: `readComposer` cannot find the box, and the refusal is
+   *    "this session's prompt is not on screen, so there is nowhere to type that
+   *    could be checked first."
+   *
+   * So `/model: command not found` is not a risk that is being accepted here; it
+   * is a thing two independent readers of the screen have to both fail to notice
+   * before a byte is written.
+   *
+   * ## What is deliberately *not* read
+   *
+   * This machine's `~/.claude/settings.json`, its transcripts, and this
+   * process's environment — see `ControlScope`. They describe this laptop and
+   * the session is on somebody's server, so every one of them would be a
+   * confident wrong answer. A server shell is read from its screen or it reports
+   * nothing, and nothing is what the bar draws as "Unknown".
+   */
+  const screens = new Map<string, ActivityTracker>()
+
+  /* ------------------------- driving a browser window from that server -- */
+
+  /**
+   * One reference-counted way in to this app's control endpoint per server.
+   *
+   * Per **server** rather than per shell, because the port is one listener on
+   * one SSH connection and every terminal on that machine can share it — what
+   * is per shell is the token and the config file naming it, which is what makes
+   * a verb resolve to *that* session's windows and no other's.
+   *
+   * The connection is held for exactly as long as the port is wanted, by holding
+   * A's own `withConnection` open around a promise nothing settles until the last
+   * terminal has gone. That is the pool's existing reference count doing the
+   * work rather than a second lifetime to keep in step with it, and it means a
+   * server nobody has a terminal on has no connection, no listener and no
+   * timer — §5.4, and his standing **events, not polling** rule.
+   */
+  const reaches = new Map<
+    string,
+    { users: number; opening: Promise<ReachResult>; close(): void }
+  >()
+
+  /**
+   * One key per (server, endpoint), because there are now two endpoints.
+   *
+   * `deck-control` serves the browser verbs and the hook endpoint serves the
+   * `open` route and every answer an agent's own hooks are given — two separate
+   * listeners on this Mac, so two forwards on that server, each reference-counted
+   * on its own. A single key would have handed the second caller the first one's
+   * port, which is a tunnel to the wrong endpoint and would fail as a 404 at the
+   * far end of somebody's SSH connection.
+   */
+  const reachKey = (serverId: string, kind: ReachKind): string => `${serverId}\u0000${kind}`
+
+  /** A promise somebody else settles. Two of them are what hold a reach open. */
+  function deferred<T>(): { promise: Promise<T>; settle(value: T): void } {
+    let settle: (value: T) => void = () => undefined
+    const promise = new Promise<T>((resolve) => {
+      let done = false
+      settle = (value: T): void => {
+        if (done) return
+        done = true
+        resolve(value)
+      }
+    })
+    return { promise, settle }
+  }
+
+  function openReach(serverId: string, local: LocalEnd): {
+    opening: Promise<ReachResult>
+    close(): void
+  } {
+    const opened = deferred<ReachResult>()
+    const finished = deferred<void>()
+    void (async (): Promise<void> => {
+      try {
+        await deps.withConnection?.(serverId, async (client) => {
+          const result = await openWindowReach(client, {
+            local,
+            runScript: (script) => deps.runScript(serverId, script),
+          })
+          opened.settle(result)
+          if (!result.ok) return
+          // Nothing settles this until the last terminal using the port closes,
+          // so the connection — and the listener on it — lives exactly that long.
+          await finished.promise
+          result.reach.close()
+        })
+      } catch (error) {
+        // The transport's own sentence, which `connection.ts` already wrote —
+        // re-wording it here would be this layer inventing copy about a failure
+        // it did not diagnose. See {@link failed} on the line above this one.
+        opened.settle({ ok: false, message: failed(error).sentence })
+      } finally {
+        // A connection that died under us has taken the forward with it, so
+        // anybody still waiting to let go is let go of here.
+        finished.settle()
+        opened.settle({ ok: false, message: WHY_NOT.endpoint })
+      }
+    })()
+    return { opening: opened.promise, close: () => finished.settle() }
+  }
+
+  /** Which endpoint on this machine one kind of reach lands on, or null. */
+  function endpointFor(kind: ReachKind): LocalEnd | null {
+    if (kind === 'control') {
+      const port = deps.controlPort?.() ?? 0
+      return port > 0 ? { port } : null
+    }
+    // A path rather than a port, and there is no port to fall back to: the hook
+    // endpoint deliberately holds none. See `hook-server.ts`.
+    const socketPath = deps.hookEndpoint?.()?.socketPath ?? ''
+    return socketPath === '' ? null : { socketPath }
+  }
+
+  async function reachFor(serverId: string, kind: ReachKind): Promise<ReachResult> {
+    const local = endpointFor(kind)
+    if (local === null || deps.withConnection === undefined) {
+      return { ok: false, message: WHY_NOT.endpoint }
+    }
+    const key = reachKey(serverId, kind)
+    let held = reaches.get(key)
+    if (held === undefined) {
+      held = { users: 0, ...openReach(serverId, local) }
+      reaches.set(key, held)
+    }
+    held.users += 1
+    const result = await held.opening
+    // An open that failed hands its own reference back, so a caller never has to
+    // remember to release something it was never given.
+    if (!result.ok) letGoOfReach(serverId, kind)
+    return result
+  }
+
+  function letGoOfReach(serverId: string, kind: ReachKind): void {
+    const key = reachKey(serverId, kind)
+    const held = reaches.get(key)
+    if (held === undefined) return
+    held.users -= 1
+    if (held.users > 0) return
+    reaches.delete(key)
+    held.close()
+  }
+
+  /**
+   * Which terminals on which servers were given the browser verbs.
+   *
+   * Everything it decides lives in `window-drive.ts` so that it is exercisable
+   * without `ipcMain`, a socket or a server; what is here is the four things it
+   * needs from this file's transport.
+   */
+  const windowDrives = new WindowDrives({
+    allowed: (serverId) => deps.store?.drivesWindows?.(serverId) === true,
+    claudeOn: async (serverId) => agentOn(await measured(serverId), 'claude'),
+    run: (serverId, argv) => deps.run(serverId, argv),
+    runScript: (serverId, script) => deps.runScript(serverId, script),
+    reach: reachFor,
+    letGo: letGoOfReach,
+    mint: (grant) => deps.mintSessionTools?.(grant) ?? null,
+    // Only the token crosses. The socket path is this side's business and is
+    // read straight out of `endpointFor` above; a path on this Mac written into
+    // a script on somebody's server would be a path that names nothing there.
+    hookEndpoint: () => {
+      const live = deps.hookEndpoint?.()
+      return live === undefined || live === null ? null : { token: live.token }
+    },
+    /*
+     * The name the person gave this server, because that is what the documents
+     * call the machine the session is running on.
+     *
+     * Read per call off the same list every other screen reads, never cached
+     * here: a server renamed between two terminals should not be described by
+     * the name it had when the first one opened.
+     */
+    remoteContext: (serverId, opensInApp) => {
+      const server = deps.servers().find((row) => row.id === serverId)
+      if (server === undefined) return null
+      return deps.remoteContext?.(server.name, opensInApp) ?? null
+    },
+  })
+
+  /**
+   * The probe's answer for one server, asked once and then remembered.
+   *
+   * `probed` is filled by every `look`, so a person who has opened the server's
+   * page has already paid for this; a terminal opened from the rail without ever
+   * looking at the page has not, and asks. Either way it is one measurement per
+   * server rather than one per terminal.
+   */
+  async function measured(serverId: string): Promise<ServerFacts> {
+    const already = probed.get(serverId)
+    if (already !== undefined) return already
+    const facts = await deps.facts(serverId)
+    probed.set(serverId, facts)
+    return facts
+  }
+
+  /**
+   * The session layer `agent-controls.ts` asks for, over an SSH channel.
+   *
+   * Two methods, the same two a local `PtyManager` supplies, which is the whole
+   * reason that module was written against a two-method seam in the first place:
+   * *"kept tiny so it is trivially faked"* — and a server shell turns out to be
+   * the second real implementation rather than a fake.
+   */
+  const shellControls = {
+    write: (shellId: string, data: string): void => {
+      shells.get(shellId)?.write(data)
+    },
+    screen: async (shellId: string): Promise<string | null> => {
+      const tracker = screens.get(shellId)
+      if (tracker === undefined) return null
+      try {
+        return await tracker.settledText()
+      } catch {
+        /*
+         * The shell closed while this read was in flight.
+         *
+         * `settledText` writes an empty string into the emulator and waits for
+         * the parser's callback, and a terminal disposed between those two steps
+         * has nothing left to call it back. Null is what the caller already
+         * understands as "there is no such session", which is exactly what has
+         * just become true — and it is the answer `agent-controls.ts` turns into
+         * "That session is no longer running" rather than into a hung promise.
+         */
+        return null
+      }
+    },
+  }
+
+  /**
+   * Close one server shell and forget everything held for it.
+   *
+   * A helper rather than three lines repeated at five call sites, because the
+   * emulator is the line that would be left out: a tracker that is not disposed
+   * keeps an `xterm` instance and its scrollback alive for the life of the app,
+   * once per terminal anybody ever opened on a server.
+   */
+  function dropShell(shellId: string, close: boolean): void {
+    if (close) shells.get(shellId)?.close()
+    shells.delete(shellId)
+    shellServers.delete(shellId)
+    screens.get(shellId)?.dispose()
+    screens.delete(shellId)
+    /*
+     * The conversation outlives the shell, and only the shell.
+     *
+     * `close` is true when this window took the tab off the list, which is the
+     * one act that means "I am finished with this" — everything held for it goes.
+     * It is false when the far end went away on its own, and the tab is still
+     * there with its scrollback in it. A pane that keeps showing what the
+     * terminal printed and stops being able to show what was *said* would be
+     * half a session, so the reader stays and the transcript is still readable
+     * — the server wrote it and it is still lying there.
+     */
+    if (close) shellOpenedAt.delete(shellId)
+    /*
+     * A setup runs its sign-in *in* one of these terminals, so the terminal
+     * going away is the sign-in going away — and the listener on this Mac and
+     * the scratch folder on their server have to go with it. Leaving either
+     * behind is the one failure this whole flow is written not to have.
+     */
+    const space = shellId.indexOf(' ')
+    if (space > 0) void setups.cancel(shellId.slice(0, space))
+    /*
+     * And the token this terminal was holding, the folder on the server, and
+     * this app's share of the port that reaches back here. The token goes first
+     * — see `WindowDrives.disarm` — because a removal that failed on the far end
+     * must not leave a config file naming a bearer token that still works.
+     */
+    windowDrives.disarm(shellId)
+  }
+  const grants = new ServerGrants({ now, knows: (id) => deps.servers().some((server) => server.id === id) })
+
+  const actionDeps = (lines?: number): ActionDeps => ({
+    run: deps.run,
+    journal,
+    download: deps.download,
+    backupDir: deps.download === undefined ? undefined : backupDir,
+    now,
+    logLines: lines,
+  })
+
+  /**
+   * Build the whole view of one server: facts, cards, and what each card may do.
+   *
+   * Two round trips at most and never more, whatever else happens on the page.
+   * The first is A's probe (§3.2, measured at 179 ms); the second is the
+   * way-back survey, which asks only what a `kept` action would need and whose
+   * failure costs an Update button rather than a page.
+   */
+  const look = async (serverId: string): Promise<ServerView> => {
+    await deps.acquire?.(serverId)
+    const facts = await deps.facts(serverId)
+    let survey: WayBackSurvey = emptySurvey()
+    const script = waybackScript(facts)
+    try {
+      const result = await deps.runScript(serverId, script)
+      if (result.code === 0) survey = parseSurvey(result.stdout)
+    } catch {
+      /*
+       * Deliberately swallowed. The survey is an extra: without it every card
+       * is still drawn and every Safe and Reversible action still works, and
+       * the only thing lost is the Update button — which is exactly the thing
+       * that should be lost when we cannot establish a way back.
+       */
+    }
+    const cards = classify(facts, survey)
+    const offered: Record<string, ActionId[]> = {}
+    const absent: Record<string, AbsentAction[]> = {}
+    for (const card of cards) {
+      const availability = availableActions(card, facts, {
+        canDownload: deps.download !== undefined,
+        composeAvailable: survey.compose_available,
+      })
+      offered[card.id] = availability.offered
+      absent[card.id] = availability.absent
+    }
+    const view: ServerView = {
+      cards,
+      facts,
+      composeAvailable: survey.compose_available,
+      offered,
+      absent,
+      how: howOf(facts),
+      cannot: cannotOf(facts),
+      measuredAt: facts.measuredAt,
+    }
+    views.set(serverId, view)
+    probed.set(serverId, facts)
+    return view
+  }
+
+  const cardOf = (view: ServerView, cardId: string): ServerCard => {
+    const card = view.cards.find((row) => row.id === cardId)
+    if (card === undefined) throw new ActionRefused('That isn’t on this server any more. Refresh the page.')
+    return card
+  }
+
+  const room: ServerRoom = {
+    list: () => deps.servers(),
+    knows: (serverId) => deps.servers().some((server) => server.id === serverId),
+    look,
+    cached: (serverId) => views.get(serverId) ?? null,
+    preview: async (serverId, cardId, actionId) => {
+      const view = views.get(serverId) ?? (await look(serverId))
+      return previewOf(actionId, { serverId, card: cardOf(view, cardId), facts: view.facts }, view.composeAvailable)
+    },
+    act: async (serverId, cardId, actionId) => {
+      const view = views.get(serverId) ?? (await look(serverId))
+      const card = cardOf(view, cardId)
+      /*
+       * The availability check runs again here, against the same facts the
+       * dialog was built from. `tools.ts` already prechecks it and the card
+       * already draws from it; this is the third place and it is the one that
+       * actually gates the command. The two above it decide what a person is
+       * *shown*, and a rule enforced only where something is shown is a rule the
+       * next caller does not have.
+       */
+      const availability = availableActions(card, view.facts, {
+        canDownload: deps.download !== undefined,
+        composeAvailable: view.composeAvailable,
+      })
+      if (actionId !== 'go-back' && !availability.offered.includes(actionId)) {
+        const stated = availability.absent.find((row) => row.actionId === actionId)
+        throw new ActionRefused(stated?.because ?? `That isn’t something this app can do to ${card.name}.`)
+      }
+      const outcome = await perform(actionDeps(), actionId, { serverId, card, facts: view.facts })
+      /*
+       * Anything that changed the server invalidates the view. Not by
+       * re-measuring — that would be a fetch nobody asked for, and §5.4 is
+       * clear that a refresh is a press — but by dropping the cache, so the
+       * next look is a real one and the page never draws a stopped service as
+       * running because we remembered it that way.
+       */
+      if (actionId !== 'logs' && actionId !== 'open' && actionId !== 'copy-address') forgetMeasurements(serverId)
+      return outcome
+    },
+    logs: async (serverId, cardId, lines) => {
+      const view = views.get(serverId) ?? (await look(serverId))
+      const card = cardOf(view, cardId)
+      const outcome = await perform(actionDeps(lines), 'logs', { serverId, card, facts: view.facts })
+      const value = outcome.value as { lines?: string[] } | undefined
+      return { lines: value?.lines ?? [] }
+    },
+  }
+
+  /* --------------------------------------------------------- the handlers -- */
+
+  ipcMain.handle('servers:list', (): ServerSummary[] => deps.servers())
+
+  ipcMain.handle('servers:look', async (_event, serverId: unknown): Promise<ServerResult<{ view: ServerView }>> => {
+    if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+    try {
+      return { ok: true, view: await look(serverId) }
+    } catch (error) {
+      return failed(error)
+    }
+  })
+
+  ipcMain.handle(
+    'servers:preview',
+    async (
+      _event,
+      serverId: unknown,
+      cardId: unknown,
+      actionId: unknown,
+    ): Promise<ServerResult<{ preview: ActionPreview }>> => {
+      if (typeof serverId !== 'string' || typeof cardId !== 'string' || !isActionId(actionId)) {
+        return { ok: false, sentence: 'That isn’t something this app can do.', detail: '' }
+      }
+      try {
+        return { ok: true, preview: await room.preview(serverId, cardId, actionId) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:act',
+    async (
+      _event,
+      serverId: unknown,
+      cardId: unknown,
+      actionId: unknown,
+    ): Promise<ServerResult<{ outcome: ActionOutcome }>> => {
+      if (typeof serverId !== 'string' || typeof cardId !== 'string' || !isActionId(actionId)) {
+        return { ok: false, sentence: 'That isn’t something this app can do.', detail: '' }
+      }
+      try {
+        return { ok: true, outcome: await room.act(serverId, cardId, actionId) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:logs',
+    async (
+      _event,
+      serverId: unknown,
+      cardId: unknown,
+      lines: unknown,
+    ): Promise<ServerResult<{ lines: string[] }>> => {
+      if (typeof serverId !== 'string' || typeof cardId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const want = typeof lines === 'number' && Number.isFinite(lines) ? Math.trunc(lines) : DEFAULT_LOG_LINES
+      try {
+        const result = await room.logs(serverId, cardId, Math.min(Math.max(want, 1), MAX_LOG_LINES))
+        return { ok: true, lines: result.lines }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * The page has been closed. Let go of *this page's* connection — and nothing
+   * else.
+   *
+   * This is the other half of §5.4 and it is the half that is easy to forget.
+   * Opening a connection when a page opens is obvious; closing it when the page
+   * closes is what stops a person who visited six servers this morning from
+   * holding six sockets open all afternoon.
+   *
+   * ## What this used to do, and the terminals it killed
+   *
+   * It also swept every shell whose id began with this server's, unconditionally
+   * — while the release beside it was a *reference count*. Two surfaces now ask
+   * to look at one server: the server's own page in Machines, and the Servers
+   * settings pane, which auto-dials `servers[0]` the moment it opens. So merely
+   * opening Settings → Servers and then moving off it ran this handler, the
+   * connection survived on the other holder's reference, and every live terminal
+   * on that machine was closed under it — an install script, an agent session,
+   * whatever was running. Moving the pill from one server to another did the same
+   * to the `ServerSetup` / `ServerHost` terminal on the server being left.
+   *
+   * The connection was never the part at risk. The terminal was.
+   *
+   * ## Why the fix is not "drop them once the reference count reaches zero"
+   *
+   * Because that condition can never be observed here, and would be the wrong
+   * question if it could:
+   *
+   *  - **A shell is itself a holder.** `ServerConnections.shell` acquires and
+   *    only `ServerShell.close` releases (its own comment says so: *"a terminal
+   *    is the one long-lived thing this feature has"*). So while there is a shell
+   *    to drop, the count is at least one, and a gate on zero is a gate that
+   *    never opens — dead code pretending to be a rule.
+   *  - **The page-side count is not a count of surfaces.** `look()` acquires on
+   *    every call, and `ServerPage` calls it again on Refresh, after every action
+   *    that changes the machine, and after granting or revoking the copilot;
+   *    `preview`, `act` and `logs` call it again on a cache miss. One `close`
+   *    answers all of them. A number that drifts up and never comes back down
+   *    would gate the sweep off permanently, which is a leak wearing a rule's
+   *    clothes.
+   *  - **The terminal's owner never holds a page reference at all.** A shell
+   *    opened from a server's page becomes a workspace tab
+   *    (`ServerSessionPane`, *"mounted for as long as the tab exists"*), and that
+   *    tab calls neither `servers:look` nor `servers:close`. So the page count
+   *    reaching zero is exactly the state in which somebody's terminal is still
+   *    running — pressing **Back to machines** would end it.
+   *
+   * ## So the drop is scoped to the shells this surface opened, which is none
+   *
+   * `useServerRoom` is the only caller of this channel and it opens no shells;
+   * the surfaces that do open one — `ServerSessionPane`, `ServerSetup`,
+   * `ServerHost` — close their own on unmount through `servers:shell:close`,
+   * which is the press this feature already treats as *"I am finished with
+   * this"*. A shell is therefore ended by exactly one of four things, all of them
+   * the shell's own: its terminal going away, the far end hanging up
+   * (`shell.onClose`), the server being forgotten, and the app stopping. Not by
+   * a different screen closing.
+   *
+   * The cached measurements *are* dropped, and that is not the same kind of act:
+   * losing them costs the other surface one round trip on its next press
+   * (§5.4's *"a refresh is a press"*), where losing a shell costs somebody the
+   * work that was running in it.
+   */
+  ipcMain.handle('servers:close', (_event, serverId: unknown): { closed: boolean } => {
+    if (typeof serverId !== 'string') return { closed: false }
+    forgetMeasurements(serverId)
+    deps.release?.(serverId)
+    return { closed: true }
+  })
+
+  /* ------------------------------------------------------ adding and forgetting -- */
+
+  /**
+   * Add a server: an address, a username, and a password or a pasted key.
+   *
+   * The sign-in is saved through the operating system's own secure store and is
+   * never answered back. Where there is no secure store — a Linux box with no
+   * keyring — the server is still added and the sentence says what happened, so
+   * a person can connect by pasting a key each time rather than being refused
+   * outright with no explanation.
+   */
+  /**
+   * Add a server, and prove it is reachable before saying it was added.
+   *
+   * The order is the point. A row in the list that has never connected is a row
+   * whose first failure arrives later, on a different screen, with none of the
+   * three things the person just typed in front of them — so the connection is
+   * attempted **here**, and a server that could not be reached is rolled back
+   * out of the list rather than left as a broken entry to puzzle over.
+   *
+   * The key is checked locally first, because that check is free and its three
+   * outcomes are the ones with the most useful next step: *"that key is locked,
+   * what is its passphrase"* is a field appearing, not an error.
+   *
+   * Where there is no secure store — a Linux box with no keyring — the server is
+   * still added and the sentence says what happened, so a person can work by
+   * pasting a key each launch rather than being refused with no explanation.
+   */
+  ipcMain.handle(
+    'servers:add',
+    async (
+      _event,
+      draft: unknown,
+    ): Promise<
+      { ok: true; id: string; savedSignIn: boolean; note: string } | { ok: false; kind: AddServerFailure; sentence: string }
+    > => {
+      const store = deps.store
+      if (store === undefined) {
+        return { ok: false, kind: 'unknown', sentence: 'This copy of the app can’t add a server.' }
+      }
+      if (typeof draft !== 'object' || draft === null) {
+        return { ok: false, kind: 'unknown', sentence: 'That isn’t a server we can add.' }
+      }
+      const row = draft as AddServerDraft
+      const signIn = credentialFromDraft(row)
+      if (!signIn.ok) {
+        return {
+          ok: false,
+          kind: signIn.problem === 'nothing-typed' ? 'unknown' : signIn.problem,
+          sentence: signIn.sentence,
+        }
+      }
+
+      let added: { id: string }
+      try {
+        added = store.add({
+          name: row.name ?? row.address,
+          address: row.address,
+          port: row.port,
+          username: row.username,
+        })
+      } catch (error) {
+        // `store.ts` refuses an address it could not dial and says why in a
+        // sentence written for a person. Relayed, never re-worded.
+        return { ok: false, kind: 'unknown', sentence: sentenceOf(error) }
+      }
+
+      const secure = deps.credentials
+      let savedSignIn = false
+      let note = ''
+      /*
+       * Two of these three branches do not write anything down, and both of
+       * them must still hand the sign-in to the connection — otherwise the
+       * `acquire` a few lines below dials with no credential at all and the
+       * person is told their sign-in was refused, on the strength of a password
+       * they typed correctly and we then threw away.
+       */
+      if (secure === undefined || !secure.available()) {
+        note = NO_SECURE_STORE
+        secure?.holdForSession(added.id, signIn.credential)
+      } else if (row.remember === false) {
+        note = 'This sign-in is kept only until you close the app.'
+        secure.holdForSession(added.id, signIn.credential)
+      } else {
+        const saved = secure.save(added.id, signIn.credential)
+        savedSignIn = saved.ok
+        if (!saved.ok) {
+          note = saved.message
+          // The disk refused it; the connection still needs it. Falling back to
+          // the session-only hold means "we couldn't save this for next time"
+          // rather than "we couldn't sign you in", which is what actually
+          // happened and is a much smaller thing to have gone wrong.
+          secure.holdForSession(added.id, signIn.credential)
+        }
+      }
+
+      /*
+       * Dial once, then let go. `acquire`/`release` is A's own pool, so this is
+       * the same connection path every later action takes rather than a second
+       * one written for this screen — which is how the two eventually disagree
+       * about which host keys are acceptable.
+       */
+      if (deps.acquire !== undefined) {
+        try {
+          await deps.acquire(added.id)
+          deps.release?.(added.id)
+        } catch (error) {
+          store.forget(added.id)
+          secure?.forget(added.id)
+          return { ok: false, kind: failureKind(error), sentence: sentenceOf(error) }
+        }
+      }
+      /*
+       * The kind, written down once the sign-in has somewhere to live. After
+       * the dial rather than before it, so a server whose sign-in was refused —
+       * and which is about to be forgotten again a few lines up — never leaves
+       * a claim behind about a credential that turned out not to work.
+       */
+      store.setCredentialKind(added.id, signIn.credential.kind)
+      return { ok: true, id: added.id, savedSignIn, note }
+    },
+  )
+
+  ipcMain.handle('servers:rename', (_event, serverId: unknown, name: unknown): { renamed: boolean } => {
+    if (typeof serverId !== 'string' || deps.store === undefined) return { renamed: false }
+    forgetMeasurements(serverId)
+    return { renamed: deps.store.rename(serverId, name) }
+  })
+
+  /**
+   * Forget a server. **Nothing on the server changes.**
+   *
+   * §5.3 is explicit about why this sentence has to be exact: *"'forget' beside
+   * a list of the person's websites will read as 'delete' to somebody who does
+   * not know better."* So this removes what *this app* holds — the row, the
+   * saved sign-in, the recorded host key, and the ways back — and touches the
+   * far end not at all. It does not even connect.
+   *
+   * The ways back go with it deliberately. A rollback record naming a server
+   * this app no longer knows is a row that can never be acted on and that
+   * carries an image digest from somebody's machine indefinitely.
+   *
+   * ## Why the sweep below is right here and wrong in `servers:close`
+   *
+   * The two handlers look alike — a loop over this server's shells, then a
+   * `release` — and they are not the same act. `servers:close` means *this page
+   * has stopped looking*, which is one surface's opinion about a machine other
+   * surfaces may still be working on. This means *the server is going*: the row,
+   * the saved sign-in and the recorded host key all go with it, so a terminal on
+   * it has nothing left to be a terminal on, and every surface loses it at once
+   * whether it asked or not.
+   *
+   * The `release` is the same decrement in both, and here it is deliberately not
+   * paired with an `acquire` of this handler's own: the pool is keyed by server
+   * id and drops the entry at zero, so a decrement against a server that is
+   * being forgotten either ends a connection nobody can use again or is a no-op.
+   */
+  ipcMain.handle('servers:forget', async (_event, serverId: unknown): Promise<{ forgotten: boolean }> => {
+    if (typeof serverId !== 'string' || deps.store === undefined) return { forgotten: false }
+    for (const shellId of [...shells.keys()]) {
+      if (shellId.startsWith(`${serverId} `)) dropShell(shellId, true)
+    }
+    const view = views.get(serverId)
+    if (view !== undefined) {
+      for (const card of view.cards) await journal.clear(serverId, card.id).catch(() => undefined)
+    }
+    forgetMeasurements(serverId)
+    grants.revoke(serverId)
+    deps.release?.(serverId)
+    deps.credentials?.forget(serverId)
+    return { forgotten: deps.store.forget(serverId) }
+  })
+
+  /* --------------------------------------------------- the keys on this computer -- */
+
+  /*
+   * Three channels so that adding a server with a key is *picking a name*
+   * rather than being told to open a file in a text editor.
+   *
+   * `keyfiles.ts` carries the argument and the measurements. What matters here
+   * is the shape: the list and the panel are the only two ways a path becomes
+   * readable, and `offers` remembers which ones it handed out. A path the
+   * window invents is refused — otherwise `servers:key-read` is "read any file
+   * on this computer" with the renderer's word for which one, and the renderer
+   * is the surface that runs other people's web pages in this app.
+   */
+  const offers = new KeyFileOffers()
+  const keyFolder = deps.keyFolder ?? join(homedir(), '.ssh')
+
+  ipcMain.handle('servers:keys', (): KeyFileOffer[] => offers.list(keyFolder))
+
+  ipcMain.handle('servers:key-pick', async (): Promise<KeyFileOffer | null> => {
+    if (deps.pickKeyFile === undefined) return null
+    const path = await deps.pickKeyFile()
+    if (path === null) return null
+    return offers.chose(path)
+  })
+
+  ipcMain.handle(
+    'servers:key-read',
+    (_event, path: unknown): { ok: true; key: string } | { ok: false; sentence: string } => {
+      if (typeof path !== 'string') {
+        return { ok: false, sentence: 'That file could not be read. Choose it again.' }
+      }
+      return offers.read(path)
+    },
+  )
+
+  /* ------------------------------------------------------------ the grant -- */
+
+  ipcMain.handle(
+    'servers:grant',
+    (_event, serverId: unknown, forMs: unknown): ServerResult<{ grant: GrantState }> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      const want = typeof forMs === 'number' && Number.isFinite(forMs) ? forMs : DEFAULT_GRANT_MS
+      try {
+        /*
+         * `{ kind: 'local' }` is not an assumption. An `ipcMain.handle` is
+         * answered for a window on this machine — there is no path from the
+         * relay into this channel, because the remote protocol has no server
+         * frame at all. `grants.ts` refuses a remote asker anyway, which is the
+         * check that keeps holding if that ever stops being true.
+         */
+        return { ok: true, grant: grants.grant(serverId, { kind: 'local' }, Math.min(want, MAX_GRANT_MS)) }
+      } catch (error) {
+        if (error instanceof GrantRefused) return { ok: false, sentence: error.message, detail: '' }
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle('servers:revoke', (_event, serverId: unknown): { revoked: boolean } => {
+    if (typeof serverId !== 'string') return { revoked: false }
+    grants.revoke(serverId)
+    return { revoked: true }
+  })
+
+  ipcMain.handle('servers:grant-state', (_event, serverId: unknown): GrantState | null =>
+    typeof serverId === 'string' ? grants.state(serverId) : null,
+  )
+
+  /* --------------------------------------------------------- the terminal -- */
+
+  /**
+   * A real shell on that server, one click from the page.
+   *
+   * §4.6: this is the honest floor. Everything else on the page is a named
+   * action with a known consequence; this is a shell, and a shell has no
+   * consequence sentence — which is exactly why it lives one door further in,
+   * in zone three, and why the copilot has no tool that reaches it (§6.1).
+   *
+   * It reuses the terminal surface this app already has. The renderer draws it
+   * through the same `@xterm/*` stack every session uses; nothing new is needed
+   * on either side, which is the whole reason the design document could put a
+   * full shell behind one click without inventing a second terminal.
+   */
+  ipcMain.handle(
+    'servers:shell:open',
+    async (
+      _event,
+      serverId: unknown,
+      cols: unknown,
+      rows: unknown,
+      startIn: unknown,
+    ): Promise<ServerResult<{ shellId: string }>> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      if (deps.openShell === undefined) {
+        return { ok: false, sentence: 'This copy of the app can’t open a terminal on a server.', detail: '' }
+      }
+      const size = { cols: clampSize(cols, 120), rows: clampSize(rows, 30) }
+      /*
+       * A folder the caller named, or this server's own default, or nowhere.
+       *
+       * The fallback is the whole of *"I can make one of them as default or
+       * something so you can always start seamlessly a new session."* It is
+       * resolved **here**, in the one place every door goes through, rather
+       * than in each of them: the server page's *Open a terminal*, the New
+       * session dialog, and the rail's plus on a server group are three presses
+       * that pass three different things, and a default honoured by two of them
+       * would be a default that looks broken from the third.
+       *
+       * Which means "no folder named" and "the default" are the same request
+       * for a server that has one. Landing wherever the sign-in lands is still
+       * reachable — by clearing the default, which is a control the picker
+       * draws — and that is deliberately the same act as saying you no longer
+       * want one, because a person who has chosen a default has said where
+       * their work is.
+       */
+      const named = typeof startIn === 'string' && startIn !== '' ? startIn : null
+      const folder = named ?? deps.store?.get(serverId)?.startIn ?? undefined
+      /*
+       * The id is minted before anything is opened, because the browser verbs
+       * are arranged **against it** and they have to be arranged *first*.
+       *
+       * `--mcp-config` is read once, at exec, and nothing here composes the
+       * command line — a person types `claude` into this terminal themselves. So
+       * the way in is a wrapper on that shell's `PATH` (`window-drive.ts`), and
+       * the line that puts it there has to be the first thing in the shell or
+       * there is a window in which they type `claude` and get an agent that
+       * quietly cannot see the window they attached. `session-verbs.ts` is a
+       * page about that exact failure.
+       *
+       * It costs a few hundred milliseconds on the first terminal for a server —
+       * one `claude --help` there, one script, one port — and nothing at all for
+       * a server whose switch is off, which is every server until somebody turns
+       * one on.
+       */
+      const shellId = `${serverId} ${randomUUID()}`
+      /*
+       * One connection for the whole sequence. Without it the help query, the
+       * script and the shell would each dial and hang up in turn; the pool
+       * reference-counts, so this is the same socket for all three.
+       *
+       * The flag is what pairs it. `release` is a decrement, so calling it after
+       * an `acquire` that threw — or on a host that has one and not the other —
+       * would take a reference somebody else is holding.
+       */
+      let holding = false
+      if (deps.acquire !== undefined && deps.release !== undefined) {
+        try {
+          await deps.acquire(serverId)
+          holding = true
+        } catch {
+          // Not a reason to refuse a terminal: `openShell` dials for itself, and
+          // a dial that is going to fail should fail there, where the sentence
+          // about it is already written.
+        }
+      }
+      let armed: ArmOutcome
+      try {
+        armed = await windowDrives.arm(serverId, shellId)
+      } catch (error) {
+        // Never a reason not to open the terminal. A person asked for a shell.
+        armed = { ok: false, why: failed(error).sentence }
+      }
+      try {
+        const shell = await deps.openShell(serverId, size, folder)
+        /*
+         * `onData` and `onClose` hand back an unsubscribe function. They are
+         * dropped on purpose: this app is the shell's only listener and the
+         * shell is closed rather than merely un-listened-to, so keeping the
+         * unsubscribers would be two references to tidy where one already does
+         * the job. `close()` is what ends it, on every path.
+         */
+        /*
+         * The bytes go two places, and the second one is what gives this
+         * terminal a model chip.
+         *
+         * `setWatched(false)` immediately afterwards, because the tracker's other
+         * job — classifying a session as idle or working on a timer — belongs to
+         * the sessions in the rail and nothing here reads it. Unwatched still
+         * writes every chunk into the emulator, which is the half that must never
+         * be skipped: a gap in what it was fed is a screen that no longer matches
+         * the real terminal, and no later byte repairs it.
+         */
+        const tracker = new ActivityTracker(shellId, () => {}, size.cols, size.rows)
+        tracker.setWatched(false)
+        screens.set(shellId, tracker)
+        shell.onData((chunk) => {
+          // Read out of the map rather than closed over, so a chunk that arrives
+          // between `close()` and the far end actually stopping is dropped
+          // instead of being written into a disposed emulator.
+          screens.get(shellId)?.push(chunk)
+          deps.broadcast(SERVERS_SHELL_OUTPUT_CHANNEL, { shellId, data: chunk })
+        })
+        shell.onClose(() => {
+          dropShell(shellId, false)
+          deps.broadcast(SERVERS_SHELL_CLOSED_CHANNEL, { shellId })
+        })
+        shells.set(shellId, shell)
+        shellServers.set(shellId, serverId)
+        // Before the first byte, because the question this answers is *which
+        // conversations could possibly be this one's* and a conversation that
+        // began between the shell opening and this line is one of them. It is
+        // also before the line below is typed, which is the first byte.
+        shellOpenedAt.set(shellId, now())
+        /*
+         * Typed into the shell, and echoed by it.
+         *
+         * The precedent is `connection.ts`'s `startIn`: SSH has no "start here"
+         * either, so the app types the `cd` a person would have typed. The line
+         * is visible in the scrollback with a comment on it saying what it is,
+         * which is the honest property rather than a cost — nothing this app
+         * does to somebody's terminal should be invisible in that terminal.
+         */
+        if (armed.ok) shell.write(armed.line)
+        return { ok: true, shellId }
+      } catch (error) {
+        // The shell did not open, so nothing is going to type `claude` into it.
+        windowDrives.disarm(shellId)
+        return failed(error)
+      } finally {
+        if (holding) deps.release?.(serverId)
+      }
+    },
+  )
+
+  /**
+   * The switch: may sessions on this server act on browser windows here?
+   *
+   * The same shape `machines:drive-windows` has for a paired computer, because
+   * it is the same question asked of a different kind of machine, and answering
+   * with the stored value rather than with `true` is what stops the tick showing
+   * a state nothing behind it holds.
+   *
+   * Turning it **off** does two things and needs both. The stored answer is what
+   * every future tool call is checked against — `session-tools.ts` asks it per
+   * call, never captures it — and `revoke` takes the tokens away from the
+   * terminals that are already open, closes their folders on the server and lets
+   * go of the port. `ServerGrants` argues for exactly this doubling: one guards
+   * the grant existing, one guards it being used.
+   */
+  ipcMain.handle(
+    'servers:drive-windows',
+    (_event, serverId: unknown, allowed: unknown): { drivesWindows: boolean } => {
+      if (typeof serverId !== 'string' || typeof allowed !== 'boolean') {
+        return { drivesWindows: false }
+      }
+      const now = deps.store?.setDrivesWindows?.(serverId, allowed) ?? false
+      if (!now) windowDrives.revoke(serverId)
+      return { drivesWindows: now }
+    },
+  )
+
+  /**
+   * Put a file on the server and answer **its** path for it.
+   *
+   * Answers `{ ok, path }` / `{ ok, message }` rather than this file's own
+   * `ServerResult`, and the difference is deliberate: the one consumer is
+   * `renderer/session-transfer.ts`, which reads exactly that shape from
+   * `machines:upload` as well, and one reader over two channels is what keeps a
+   * file going to a server and a file going to a paired PC from drifting into
+   * two behaviours. `readHandover` over there refuses an `ok` with no path,
+   * which is the one wrong answer either channel could give.
+   *
+   * The size is checked here, before anything is dialled, for the reason
+   * `upload-send.ts` checks it before announcing anything: an over-size file
+   * should be one sentence rather than a connection and then a sentence.
+   */
+  ipcMain.handle(
+    'servers:upload',
+    async (
+      _event,
+      serverId: unknown,
+      filePath: unknown,
+    ): Promise<{ ok: true; path: string } | { ok: false; message: string }> => {
+      if (typeof serverId !== 'string' || typeof filePath !== 'string' || filePath === '') {
+        return { ok: false, message: 'That is not a server and a file.' }
+      }
+      if (deps.putFile === undefined) {
+        return { ok: false, message: 'This copy of the app cannot put a file on a server.' }
+      }
+      let size = 0
+      try {
+        size = statSync(filePath).size
+      } catch {
+        return { ok: false, message: 'That file is not there any more.' }
+      }
+      if (size > MAX_UPLOAD_BYTES) {
+        return { ok: false, message: `That file is larger than ${byteSize(MAX_UPLOAD_BYTES)}.` }
+      }
+      try {
+        return { ok: true, path: await deps.putFile(serverId, filePath, basename(filePath)) }
+      } catch (error) {
+        const answer = failed(error)
+        return { ok: false, message: answer.sentence || 'That file did not send.' }
+      }
+    },
+  )
+
+  ipcMain.handle('servers:shell:write', (_event, shellId: unknown, data: unknown): { written: boolean } => {
+    if (typeof shellId !== 'string' || typeof data !== 'string') return { written: false }
+    const shell = shells.get(shellId)
+    if (shell === undefined) return { written: false }
+    shell.write(data)
+    return { written: true }
+  })
+
+  /**
+   * Columns first, then rows — the same order as `shell({ cols, rows })`.
+   *
+   * `ssh2` reverses them between `shell()` and `setWindow(rows, cols, …)`, in
+   * the same library on the same channel. Getting it wrong produces a terminal
+   * that works until the window is resized and then wraps every line at the
+   * wrong column, which reads as a rendering bug rather than as a swapped pair
+   * of arguments. This port keeps one order everywhere so the flip lives in
+   * exactly one adapter, in `connection.ts`, where a test can stand on it.
+   */
+  ipcMain.handle(
+    'servers:shell:resize',
+    (_event, shellId: unknown, cols: unknown, rows: unknown): { resized: boolean } => {
+      if (typeof shellId !== 'string') return { resized: false }
+      const shell = shells.get(shellId)
+      if (shell === undefined) return { resized: false }
+      const size = { cols: clampSize(cols, 120), rows: clampSize(rows, 30) }
+      shell.resize(size)
+      // The shadow terminal has to track the real one or its viewport is the
+      // wrong shape and the readers look at the wrong lines — `PtyManager.resize`
+      // carries the same pairing for the same reason.
+      screens.get(shellId)?.resize(size.cols, size.rows)
+      return { resized: true }
+    },
+  )
+
+  /* ---------------------------------------------------------- the folders -- */
+
+  /**
+   * What is inside one folder on that server.
+   *
+   * The one question a folder picker asks, answered over SFTP by
+   * `connection.ts`. Everything here is narrowing and a sentence: this file
+   * writes no path, resolves no `..` and never assembles a home directory —
+   * the server answers with the absolute path it resolved, and that answer is
+   * what the next call is made with.
+   *
+   * ## Refusals are answers, not failures
+   *
+   * A folder an ordinary account may not read is the *normal* case for half of
+   * a Linux root, and a picker that treated it as an error would put a page
+   * into a dead state for doing the thing it invites. So it comes back as an
+   * ordinary `{ ok: false }` carrying the sentence A wrote, the same shape
+   * every other fallible handler here answers with, and the picker draws the
+   * sentence and stays where it was.
+   */
+  ipcMain.handle(
+    'servers:folder',
+    async (
+      _event,
+      serverId: unknown,
+      path: unknown,
+    ): Promise<ServerResult<{ path: string; entries: readonly { name: string; kind: string }[] }>> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      if (deps.listFolder === undefined) {
+        return {
+          ok: false,
+          sentence: 'This copy of the app cannot list folders on a server. You can still type the path.',
+          detail: '',
+        }
+      }
+      // An absent or unusable path is the account's own login directory, which
+      // is where SSH would have put them. It is never `/` — starting a stranger
+      // at the root of their machine is a picker that opens on the one folder
+      // nobody keeps their work in.
+      const where = typeof path === 'string' ? path : ''
+      try {
+        const listing = await deps.listFolder(serverId, where)
+        return { ok: true, path: listing.path, entries: listing.entries }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Which folder this server starts a session in when nothing names one.
+   *
+   * A read of a file this process already has in hand — it asks the server
+   * nothing and connects to nothing, which is why the picker may call it the
+   * moment it is drawn without breaking the rule that a folder listing waits
+   * until somebody actually opens the browser.
+   */
+  ipcMain.handle('servers:start-in', (_event, serverId: unknown): { path: string | null } => {
+    if (typeof serverId !== 'string' || deps.store === undefined) return { path: null }
+    return { path: deps.store.get(serverId)?.startIn ?? null }
+  })
+
+  /**
+   * Remember that folder, or clear it.
+   *
+   * Null and the empty string both clear it, because an emptied box and a
+   * *Clear default* press are the same intention arriving in two shapes.
+   * Nothing is checked against the server: see `store.ts`'s `setStartIn` for
+   * why a folder that exists now proves nothing about the next session.
+   */
+  ipcMain.handle(
+    'servers:start-in:set',
+    (_event, serverId: unknown, path: unknown): { saved: boolean } => {
+      if (typeof serverId !== 'string' || deps.store === undefined) return { saved: false }
+      const folder = typeof path === 'string' && path !== '' ? path : null
+      return { saved: deps.store.setStartIn(serverId, folder) }
+    },
+  )
+
+  /**
+   * The model, the effort and fast mode of whatever is running in a server's
+   * terminal.
+   *
+   * ## Why these exist at all, given a server does not run this app
+   *
+   * Asad, on the recording of 2026-08-18, about both remote surfaces at once:
+   *
+   *   > *"I still don't see all of these things inside like this header with
+   *   > model, high effort and all of these things — I don't see it in server
+   *   > sessions and in the remote sessions both."*
+   *
+   * A paired machine answers that with the `controls` frames, because it is
+   * running this app and has its own copy of `agent-controls.ts`. A server has
+   * none of that. What it has is the only thing the mechanism actually requires:
+   * a pty whose bytes arrive here. So this is not a second implementation — it
+   * is `readControls` and `applyControl`, unchanged, against a `SessionAccess`
+   * whose two methods reach an SSH channel instead of a `node-pty`.
+   *
+   * ## The one thing that had to change, and it is the honest half
+   *
+   * `ControlScope`. Every non-screen source that module reads is *this* laptop's
+   * — `~/.claude/settings.json`, the transcripts, `CLAUDE_CODE_EFFORT_LEVEL` —
+   * and answering a question about somebody's server with this machine's
+   * configuration is the exact class of confident wrong answer the whole controls
+   * layer is arranged against. `onThisMachine: false` turns all of them off, so a
+   * server shell is read from its screen or it reports nothing.
+   *
+   * ## And the shell that has no agent in it is the ordinary case
+   *
+   * It is refused twice and neither refusal is a guess: `refuseByProvider` finds
+   * no Claude Code markers on the screen and says so, and `refuseToType` finds no
+   * composer to type into and says that. The window draws the sentence in the
+   * place the menu would have been, which is the same thing it does for a local
+   * shell nobody has started an agent in. See {@link screens} for the argument in
+   * full.
+   *
+   * `provider` is deliberately never passed. This app did not launch whatever is
+   * in that terminal and has no record to consult; `undefined` is the value that
+   * means "ask the screen", and the screen is the only witness there is.
+   */
+  ipcMain.handle('servers:controls:read', (_event, shellId: unknown): Promise<ControlsReading> | null => {
+    if (typeof shellId !== 'string') return null
+    return readControls(shellControls, shellId, undefined, undefined, { onThisMachine: false })
+  })
+
+  ipcMain.handle(
+    'servers:controls:apply',
+    (_event, shellId: unknown, control: unknown, value: unknown): Promise<ApplyResult> | ApplyResult => {
+      const unread = { value: null, label: null, source: null }
+      if (typeof shellId !== 'string') {
+        return { ok: false, message: 'No terminal was named.', reading: unread }
+      }
+      /*
+       * Narrowed against the list rather than cast, because everything past this
+       * line composes a slash command and types it at somebody's prompt, and an
+       * `ipcMain.handle` argument is whatever the renderer put in it however the
+       * type says otherwise. `applyControl` checks the *value* against the CLI's
+       * own accepted levels and model shapes; this checks the name of the branch.
+       */
+      const named = CONTROL_IDS.find((name) => name === control)
+      if (named === undefined || typeof value !== 'string' || value === '') {
+        return { ok: false, message: 'That is not a control this app can set.', reading: unread }
+      }
+      return applyControl(shellControls, {
+        sessionId: shellId,
+        control: named,
+        value,
+        scope: { onThisMachine: false },
+      })
+    },
+  )
+
+  /* ----------------------------------------------- the conversation, over there -- */
+
+  /**
+   * Which server a shell is on, including one whose shell has already ended.
+   *
+   * `shellServers` is dropped the moment a shell goes, and a conversation is
+   * still readable after that — the transcript is a file on their disk and it is
+   * still lying there. The id itself is the fallback and is not a guess:
+   * `servers:shell:open` mints it as `<serverId> <uuid>` and `dropShell` above
+   * already reads the server back out of it the same way.
+   */
+  const serverOf = (shellId: string): string | null => {
+    const live = shellServers.get(shellId)
+    if (live !== undefined) return live
+    const space = shellId.indexOf(' ')
+    return space > 0 ? shellId.slice(0, space) : null
+  }
+
+  /**
+   * Which coding logins a terminal on a server has under it.
+   *
+   * ## What this is a fact about, said exactly
+   *
+   * Not the session's account. Every other bar in this app can name the account
+   * its session runs under because this app started that session; nothing on the
+   * SSH side carries it. A transcript line records `cwd`, `gitBranch`, `version`
+   * and its own `sessionId` and nothing whatever about a login, and this app did
+   * not spawn whatever somebody has typed into that terminal.
+   *
+   * What *is* true, and what this answers, is a fact about **the account that
+   * shell signed in as**: which coding agents are installed in the home it
+   * landed in and which of them have a login. That is the login any `claude`,
+   * `codex` or `gemini` started in that terminal will run as, unless somebody
+   * changes `HOME` or signs in again — and it is asked in the way that shell
+   * would ask it, through the login shell, so a `CODEX_HOME` or a
+   * `GEMINI_API_KEY` set in somebody's `.profile` is honoured rather than
+   * missed. See `agent-signin.ts`.
+   *
+   * ## Why it answers a list and not one name
+   *
+   * Because it used to answer the first agent it found with an address on it,
+   * and on a server with two signed-in agents that is a coin toss printed as a
+   * fact — the bar would say *Claude Code* over a terminal somebody runs Codex
+   * in. All of them are reported and the bar names them.
+   *
+   * ## And why it never answers nothing
+   *
+   * It used to answer `null` for four different situations — a server nobody
+   * has opened, a server that would not answer, a server with no agent on it,
+   * and a server whose agents are all signed out — and the bar drew nothing for
+   * all four. Nothing is the one thing that is never true: *"no coding login on
+   * this server"* is a fact somebody can act on, and *"we could not ask"* is a
+   * different fact that must not look like it. Four situations, four sentences,
+   * composed on the bar out of the three fields below.
+   *
+   * ## And it costs no round trip of its own
+   *
+   * Read out of the probe this server has already answered, exactly as
+   * `setupRoom` reads its install room from it. A server nobody has looked at
+   * yet is measured once, here, and every later ask is free — rather than an SSH
+   * probe every time a bar is drawn. What makes it *current* rather than merely
+   * cheap is that a sign-in through this app forgets that measurement when it
+   * finishes, so the next ask is a fresh one.
+   */
+  ipcMain.handle(
+    'servers:shell:account',
+    async (_event, shellId: unknown): Promise<ShellAccountAnswer> => {
+      if (typeof shellId !== 'string') return { known: 'cannot', why: 'No terminal was named.' }
+      const serverId = serverOf(shellId)
+      if (serverId === null) return { known: 'cannot', why: 'That terminal is not open any more.' }
+      try {
+        if (!probed.has(serverId)) await look(serverId)
+      } catch {
+        // A server that will not answer has nothing to say about its sign-ins,
+        // and the terminal beside this bar is already saying so far more loudly.
+        return { known: 'cannot', why: 'This server did not answer.' }
+      }
+      const facts = probed.get(serverId)
+      if (facts === undefined) return { known: 'cannot', why: 'This server has not been looked at yet.' }
+      if (facts.agents.known === 'cannot') return { known: 'cannot', why: facts.agents.why }
+      const found = facts.agents.known === 'yes' ? facts.agents.value : []
+      return {
+        known: 'yes',
+        agents: found.length,
+        logins: found
+          .filter((agent) => agent.signedIn === 'yes')
+          .map((agent) => ({ agentId: agent.id, account: agent.account })),
+      }
+    },
+  )
+
+  ipcMain.handle('servers:shell:close', (_event, shellId: unknown): { closed: boolean } => {
+    if (typeof shellId !== 'string') return { closed: false }
+    if (!shells.has(shellId)) return { closed: false }
+    dropShell(shellId, true)
+    return { closed: true }
+  })
+
+  /* ------------------------------------------------- setting an agent up -- */
+
+  /**
+   * The setup flow, wired to the same transport everything else here uses.
+   *
+   * `withConnection` is optional on the deps and required by the flow, so a host
+   * that has none is given one that refuses — which the flow already handles by
+   * falling through to the address the person opens themselves, with a sentence
+   * saying so. That is the honest degradation; silently doing nothing is not.
+   */
+  const setups = new ServerSetups({
+    runScript: (serverId, script) => deps.runScript(serverId, script),
+    withConnection: async (serverId, fn) => {
+      if (deps.withConnection === undefined) {
+        throw new ServerProblem('lost', 'This copy of the app cannot carry a sign-in.')
+      }
+      return deps.withConnection(serverId, fn)
+    },
+    openInBrowser: deps.openInBrowser,
+    broadcast: (next) => {
+      /*
+       * A finished setup makes every measurement of this server stale.
+       *
+       * Not a tidy-up: `servers:shell:account` and `servers:setup:look` both
+       * read the probe record, so without this the bar over a terminal on that
+       * server goes on saying *not signed in* about a login the person has just
+       * finished, until the app is relaunched. `done` is a sign-in that
+       * succeeded and `idle` is an install that was taken back off; both change
+       * what is on that machine, and both are pushed through here.
+       */
+      if (next.step === 'done' || next.step === 'idle') forgetMeasurements(next.serverId)
+      deps.broadcast(SERVERS_SETUP_CHANNEL, next)
+    },
+  })
+
+  /**
+   * The room a setup needs, or the sentence saying which part of it is missing.
+   *
+   * Read from `probed` rather than from the cached view, because `ServerView`
+   * declares only the slice `actions.ts` acts on and the agent rows are not in
+   * it. Same measurement, same round trip — this is the whole record the probe
+   * already answered, kept beside the view rather than asked for again.
+   */
+  const setupRoom = async (
+    serverId: string,
+  ): Promise<{ ok: true; facts: ServerFacts } | Extract<ServerResult<never>, { ok: false }>> => {
+    try {
+      if (!probed.has(serverId)) await look(serverId)
+      const facts = probed.get(serverId)
+      if (facts === undefined) {
+        return { ok: false, sentence: 'This server has not been looked at yet.', detail: '' }
+      }
+      return { ok: true, facts }
+    } catch (error) {
+      return failed(error)
+    }
+  }
+
+  ipcMain.handle(
+    'servers:setup:state',
+    (_event, serverId: unknown, agentId: unknown): SetupState | null =>
+      typeof serverId === 'string' && isSetupAgent(agentId)
+        ? setups.stateOf(serverId, agentId)
+        : null,
+  )
+
+  /**
+   * What this server has, for each of the three agents, and what it would take
+   * to change that.
+   *
+   * One round trip and three rows, rather than one row about the agent this app
+   * happens to be built by. The probe has always found all three; until
+   * 2026-08-20 this handler threw two of them away, which is the shape he
+   * overruled — *"where we can have an option between Claude, Codex, Gemini, in
+   * those places don't name only Claude."*
+   *
+   * The consequence sentence and every refusal come from `setup.ts`, beside the
+   * code that would perform the work — §4.3. The renderer draws them and writes
+   * none of them.
+   */
+  ipcMain.handle(
+    'servers:setup:look',
+    async (_event, serverId: unknown): Promise<ServerResult<{ rows: SetupRow[] }>> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const name = deps.servers().find((server) => server.id === serverId)?.name ?? 'this server'
+      /*
+       * A `cannot` about the room is not a reason with a button attached — it is
+       * not knowing, and §3.1 is explicit that a control that cannot act is
+       * removed rather than drawn hopefully. So no button, and the page says
+       * what it could not check rather than offering an install on a guess.
+       */
+      const roomFact = seen.facts.agentInstall
+      const install: AgentInstallRoom | null = roomFact.known === 'yes' ? roomFact.value : null
+      return {
+        ok: true,
+        rows: SETUP_AGENTS.map((agentId) => {
+          const why = install === null ? null : whyNotInstall(agentId, install)
+          return {
+            agentId,
+            label: agentSetup(agentId).label,
+            installed: agentOn(seen.facts, agentId),
+            canInstall: install !== null && why === null,
+            why,
+            consequence: installConsequence(agentId, name),
+            /*
+             * Both written in `setup.ts` beside the work — §4.3 — so the pane
+             * draws a sentence about signing out rather than composing one, and
+             * an agent that cannot be signed out from here carries the reason
+             * instead of a button.
+             */
+            signOutConsequence: signOutConsequence(agentId, name),
+            whyNoSignOut: whyNoSignOut(agentId),
+            state: setups.stateOf(serverId, agentId),
+          }
+        }),
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:setup:install',
+    async (
+      _event,
+      serverId: unknown,
+      agentId: unknown,
+      shellId: unknown,
+    ): Promise<ServerResult<{ state: SetupState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string' || !isSetupAgent(agentId)) {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const where = seen.facts.agentInstall
+      if (where.known !== 'yes') {
+        return { ok: false, sentence: where.known === 'cannot' ? where.why : 'This server did not answer.', detail: '' }
+      }
+      const name = deps.servers().find((server) => server.id === serverId)?.name ?? 'this server'
+      try {
+        return { ok: true, state: await setups.install(serverId, agentId, shell, where.value, name) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:setup:signin',
+    async (
+      _event,
+      serverId: unknown,
+      agentId: unknown,
+      shellId: unknown,
+    ): Promise<ServerResult<{ state: SetupState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string' || !isSetupAgent(agentId)) {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const agent = agentOn(seen.facts, agentId)
+      if (agent === null || agent.version === '') {
+        return {
+          ok: false,
+          sentence: `${agentSetup(agentId).label} is not ready on this server yet.`,
+          detail: '',
+        }
+      }
+      try {
+        return { ok: true, state: await setups.signIn(serverId, agentId, shell, agent.path) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Sign one agent out on a server, in the terminal that is already open.
+   *
+   * Keyed on a shell for the same reason the install and the sign-in are: it
+   * runs a real command in a terminal the person is watching, rather than
+   * invisibly over a second channel. The pane that offers it is the pane that
+   * said this could not be done — see `setup.ts`'s `signOut` for what was
+   * measured to establish that it can.
+   */
+  ipcMain.handle(
+    'servers:setup:signout',
+    async (
+      _event,
+      serverId: unknown,
+      agentId: unknown,
+      shellId: unknown,
+    ): Promise<ServerResult<{ state: SetupState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string' || !isSetupAgent(agentId)) {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const agent = agentOn(seen.facts, agentId)
+      if (agent === null || agent.version === '') {
+        return {
+          ok: false,
+          sentence: `${agentSetup(agentId).label} is not ready on this server yet.`,
+          detail: '',
+        }
+      }
+      try {
+        return { ok: true, state: await setups.signOut(serverId, agentId, shell, agent.path) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle('servers:setup:cancel', async (_event, serverId: unknown): Promise<{ cancelled: boolean }> => {
+    if (typeof serverId !== 'string') return { cancelled: false }
+    await setups.cancel(serverId)
+    return { cancelled: true }
+  })
+
+  ipcMain.handle(
+    'servers:setup:remove',
+    async (_event, serverId: unknown, agentId: unknown): Promise<ServerResult<{ state: SetupState }>> => {
+      if (typeof serverId !== 'string' || !isSetupAgent(agentId)) {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const seen = await setupRoom(serverId)
+      if (!seen.ok) return seen
+      const agent = agentOn(seen.facts, agentId)
+      if (agent === null) {
+        return { ok: false, sentence: 'There is nothing here for this app to remove.', detail: '' }
+      }
+      try {
+        const next = await setups.remove(serverId, agentId, agent.path)
+        // The card is drawn from the facts, and the facts have just changed.
+        forgetMeasurements(serverId)
+        return { ok: true, state: next }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /* ------------------------------------------------- the host on a server -- */
+
+  /**
+   * The headless host, installed and removed from the page that is already
+   * looking at the server.
+   *
+   * A new set of steps on a screen that exists, deliberately — this is the same
+   * page, the same connection and the same terminal the agent setup uses. A
+   * second screen for "servers you can also run the host on" would have been a
+   * second list of the same machines.
+   */
+  const hosts = new ServerHosts({
+    runScript: (serverId, script) => deps.runScript(serverId, script),
+    /*
+     * Read once here rather than forwarded as a closure over `deps`, so that a
+     * host with no SFTP is `undefined` at construction — which is the shape
+     * `host.ts` refuses on, with a sentence, before it copies anything.
+     */
+    putFile: deps.putFile,
+    // Read once, like `putFile` above and for the same reason: a build that
+    // cannot redeem a code is `undefined` at construction, which is the shape
+    // `host.ts` falls back on — showing the code — rather than a failure
+    // discovered half way through an install.
+    linkThisComputer: deps.linkThisComputer,
+    // Read once for the same reason, and absent means the flow does not wait:
+    // a build that cannot redeem a code has no link to wait for either.
+    whenReaching: deps.whenReaching,
+    // Null when this build carries no package, which is answered as an absent
+    // button with a sentence rather than as a failure part-way through.
+    hostPackage: () => deps.hostPackage?.() ?? null,
+    broadcast: (next) => deps.broadcast(SERVERS_HOST_CHANNEL, next),
+  })
+
+  /** One offer, composed from one round trip and the sentences in `host.ts`. */
+  const hostOffer = (look: HostLook, serverId: string, serverName: string): HostOffer => {
+    const carried = deps.hostPackage?.() ?? null
+    const why = carried === null ? NO_PACKAGE : whyNotHost(look.room)
+    const standing = linkStandingOf(look.host.status)
+    return {
+      host: look.host,
+      room: look.room,
+      canInstall: why === null,
+      why,
+      // Both written in `host.ts`, beside the work — §4.3. The renderer draws
+      // them and composes nothing.
+      line: hostLine(look.host),
+      reach: reachLine(look.host),
+      consequence: hostConsequence(serverName, look.room),
+      removes: {
+        keepData: removeConsequence(look.host, false),
+        withData: removeConsequence(look.host, true),
+      },
+      canLink: deps.linkThisComputer !== undefined,
+      /*
+       * Null unless *both* halves answer: a host that is not connected to the
+       * relay prints no host id, and a build with no machine channels has no
+       * roster to ask. Either way the honest answer is "not known to be
+       * linked", which draws the Link button — a press that mints its own fresh
+       * code and can only ever succeed or say why.
+       */
+      linkedAs: standing?.name ?? null,
+      linkedButNotConnected: standing !== null && !standing.reaching,
+      mine: deps.appVersion(),
+      state: hosts.stateOf(serverId),
+    }
+  }
+
+  /**
+   * That host's row here, by the id it prints in its own `status`, and whether
+   * anything is actually reaching it.
+   *
+   * Two sources, and the far one can only ever take the answer away. `online` is
+   * what *this* process believes about a socket it is holding; `channels` is what
+   * *that host* counted a second ago, in its own words, in the status this panel
+   * already prints verbatim. A socket that died in somebody's NAT table is
+   * online here and absent there, and the host is the one that is right — so a
+   * zero from the far end overrides a yes from this one.
+   *
+   * Null `channels` is not a zero and is not read as one: a host whose relay is
+   * off prints no channel line at all, and taking that absence for "nothing is
+   * connected" would turn a host that is deliberately not dialling out into a
+   * broken link.
+   */
+  const linkStandingOf = (status: string): { name: string; reaching: boolean } | null => {
+    const hostId = hostIdOf(status)
+    if (hostId === '') return null
+    const standing = deps.linkStanding?.(hostId) ?? null
+    if (standing === null) return null
+    return { name: standing.name, reaching: standing.online && channelsOf(status) !== 0 }
+  }
+
+  const nameOf = (serverId: string): string =>
+    deps.servers().find((server) => server.id === serverId)?.name ?? 'this server'
+
+  ipcMain.handle(
+    'servers:host:look',
+    async (_event, serverId: unknown): Promise<ServerResult<{ offer: HostOffer }>> => {
+      if (typeof serverId !== 'string') return { ok: false, sentence: 'No server was named.', detail: '' }
+      try {
+        const look = await hosts.look(serverId)
+        const offer = hostOffer(look, serverId, nameOf(serverId))
+        /*
+         * Noticed and acted on, in that order, and this is the whole of "the app
+         * can see this itself".
+         *
+         * A row for that host here and nothing reaching it over there is a
+         * contradiction between two answers this call already holds. The useful
+         * response to it is not a sentence — it is a dial. So one is fired, and
+         * the sentence the panel draws is what is left when that has not worked
+         * yet. Not awaited: a handshake is not something a panel should open
+         * behind, and the next look reads the result.
+         */
+        if (offer.linkedButNotConnected) deps.redial?.(hostIdOf(look.host.status))
+        return { ok: true, offer }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:host:state',
+    (_event, serverId: unknown): HostState | null =>
+      typeof serverId === 'string' ? hosts.stateOf(serverId) : null,
+  )
+
+  ipcMain.handle(
+    'servers:host:install',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        // Looked at again rather than trusted from the press: the button was
+        // drawn from an answer that may be minutes old, and installing on the
+        // strength of it would be acting on a machine that has since changed.
+        const look = await hosts.look(serverId)
+        return { ok: true, state: await hosts.install(serverId, shell, look, nameOf(serverId)) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * A code, for a phone, minted because somebody asked for one.
+   *
+   * Its own channel and its own press, kept apart from `servers:host:link`
+   * below: one of them puts a live secret on a screen for a person to carry to
+   * another device, and the other spends one in this process without ever
+   * drawing it. Folding them together would mean one control whose behaviour
+   * depended on which machine you meant, which is the shape of thing nobody can
+   * label honestly.
+   */
+  ipcMain.handle(
+    'servers:host:pair',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        if (look.host.command === '') {
+          return { ok: false, sentence: 'There is no host on this server to pair with.', detail: '' }
+        }
+        return { ok: true, state: await hosts.pairDevice(serverId, shell, look.host.command) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  /**
+   * Link **this** computer to a host that is already on that server.
+   *
+   * The same step an install now ends with, available on its own for the case
+   * an install cannot cover: a host that was put there some other way, or one
+   * this app installed before it could link. Without it the only way to link a
+   * running host to this computer would be to remove it and install it again.
+   *
+   * The authority is the same and it is not widened by having a channel of its
+   * own: this reaches `ServerHosts.link`, which mints the code *on that server*,
+   * through the shell named here, and reads it back off the same connection. A
+   * caller cannot name a machine — only a server this window already has a
+   * terminal open on.
+   */
+  ipcMain.handle(
+    'servers:host:link',
+    async (_event, serverId: unknown, shellId: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string' || typeof shellId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      const shell = shells.get(shellId)
+      if (shell === undefined) {
+        return { ok: false, sentence: 'That terminal is not open any more.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        if (look.host.command === '') {
+          return { ok: false, sentence: 'There is no host on this server to link to.', detail: '' }
+        }
+        return { ok: true, state: await hosts.link(serverId, shell, look.host.command) }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'servers:host:remove',
+    async (_event, serverId: unknown, alsoData: unknown): Promise<ServerResult<{ state: HostState }>> => {
+      if (typeof serverId !== 'string') {
+        return { ok: false, sentence: 'No server was named.', detail: '' }
+      }
+      try {
+        const look = await hosts.look(serverId)
+        // `true` and nothing else. An unknown off the wire that is not literally
+        // the answer "yes" is the answer "no" for a question whose wrong answer
+        // deletes somebody's pairings.
+        const next = await hosts.uninstall(serverId, look.host, alsoData === true)
+        forgetMeasurements(serverId)
+        return { ok: true, state: next }
+      } catch (error) {
+        return failed(error)
+      }
+    },
+  )
+
+  ipcMain.handle('servers:host:cancel', async (_event, serverId: unknown): Promise<{ cancelled: boolean }> => {
+    if (typeof serverId !== 'string') return { cancelled: false }
+    await hosts.cancel(serverId)
+    return { cancelled: true }
+  })
+
+  return {
+    serverOfShell: (shellId) => shellServers.get(shellId) ?? null,
+    whyNotDrive: (shellId) => windowDrives.whyNot(shellId),
+    belongingOf: (shellId) => windowDrives.belonging(shellId),
+    room,
+    grants,
+    openShells: () =>
+      [...shells.keys()].map((shellId) => ({
+        shellId,
+        serverId: shellServers.get(shellId) ?? '',
+        openedAt: shellOpenedAt.get(shellId) ?? null,
+      })),
+    shellScreen: (shellId) => shellControls.screen(shellId),
+    stop: () => {
+      /*
+       * The setups first, and this ordering is the rule rather than tidiness:
+       * every one of them may be holding a sign-in open on somebody else's
+       * machine, and dropping the shells out from under it would leave that
+       * login running with nothing left to stop it.
+       */
+      void setups.cancelAll()
+      // And the host installs, for the same reason and in the same order: one
+      // of them may be sitting on a pairing prompt in a terminal about to go.
+      void hosts.cancelAll()
+      for (const shellId of [...shells.keys()]) dropShell(shellId, true)
+      // After the shells, because each of those disarms its own and this is only
+      // for anything a shell that closed some other way left behind.
+      windowDrives.stop()
+      for (const serverId of views.keys()) deps.release?.(serverId)
+      views.clear()
+      probed.clear()
+      grants.revokeAll()
+    },
+  }
+}
+
+/** A's own problem kind, narrowed to the closed set the window renders. */
+function failureKind(error: unknown): AddServerFailure {
+  const known: readonly AddServerFailure[] = [
+    'sign-in-refused',
+    'no-such-address',
+    'no-answer',
+    'not-a-server',
+    'said-nothing',
+    'nothing-in-common',
+    'key-unreadable',
+  ]
+  const kind = (error as { kind?: unknown }).kind
+  return known.find((entry) => entry === kind) ?? 'unknown'
+}
+
+function sentenceOf(error: unknown): string {
+  const said = error instanceof Error ? error.message : String(error)
+  return said === '' ? 'That did not work, and the server did not say why.' : said
+}
+
+function isActionId(value: unknown): value is ActionId {
+  return typeof value === 'string' && (ACTION_IDS as readonly string[]).includes(value)
+}
+
+/**
+ * A terminal size that cannot be nonsense.
+ *
+ * Agent CLIs and pagers render against the reported width, so a zero or a
+ * negative produces a garbled screen that survives the next correct resize.
+ * The same clamp `registerDevServerIpc` applies for the same reason.
+ */
+function clampSize(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(Math.max(Math.trunc(value), 1), 1000)
+}

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI><WindowsPackageType>None</WindowsPackageType>
+    <Platforms>x64</Platforms><RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/TerminalDeck.App/Diagnostics/*.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <ProjectReference Include="../../src/TerminalDeck.Platform.Windows/TerminalDeck.Platform.Windows.csproj" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Receiver/*.cs" Link="Views/%(Filename)%(Extension)" />
+    <Compile Include="../../src/TerminalDeck.App/ViewModels/Receiver/*.cs" Link="ViewModels/%(Filename)%(Extension)" />
+    <Page Include="../../src/TerminalDeck.App/Styles/DeckResources.xaml" Link="Styles/DeckResources.xaml" />
+  </ItemGroup>
+</Project>

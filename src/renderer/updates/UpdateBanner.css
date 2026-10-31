@@ -1,0 +1,282 @@
+/* ============================================================================
+   The update strip.
+
+   It sits above the work on every launch that has news, so its whole job is to
+   be readable in one glance and then get out of the way. It used to be a
+   three-line block with a thick coloured rule down its left edge — a banner
+   shouting at somebody who is mid-session.
+
+   Now: one line, a quiet tint that says which kind of news it is, and the
+   actions on the right. The tint is mixed from the semantic token for the
+   phase, so the colour still carries meaning without a border carrying it.
+   ============================================================================ */
+
+/* An inset card, not a full-bleed strip.
+   Edge to edge it read as a second toolbar — a grey slab with a hairline top
+   and bottom, on every screen in the app, and the flattest thing in the
+   window. Apple floats this kind of standing notice: it wears the chrome's
+   own glass, it is inset from the window so the page continues past it, and
+   its corners are what separate it from the work rather than a rule. */
+.upd-banner {
+  flex-shrink: 0;
+  margin: var(--sp-3) var(--sp-4) 0;
+  padding: var(--sp-15) var(--sp-15) var(--sp-15) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-sm), inset 0 0 0 0.5px var(--material-hairline);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+}
+
+/* Phase tints, kept deliberately faint, and painted as a wash *over* the
+   sheen rather than instead of it — replacing the background would take the
+   glass with it. Mixed rather than hardcoded so both themes stay in step. */
+.upd-banner[data-phase='available'],
+.upd-banner[data-phase='downloading'],
+.upd-banner[data-phase='ready'] {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      color-mix(in srgb, var(--accent) 12%, transparent)
+    ),
+    var(--material-sheen);
+}
+
+.upd-banner[data-phase='error'] {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-critical) 13%, transparent),
+      color-mix(in srgb, var(--color-critical) 13%, transparent)
+    ),
+    var(--material-sheen);
+}
+
+/* No tint at all: "this build cannot update itself" is a standing fact about
+   the build, not a warning about something that just happened, and it is on
+   screen from launch until it is dismissed. */
+.upd-banner[data-phase='unsupported'] {
+  background-image: var(--material-sheen);
+}
+
+.upd-banner[data-phase='unsupported'] .upd-title {
+  color: var(--text-secondary);
+  font-weight: var(--w-regular);
+}
+
+.upd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--control-h);
+}
+
+/* One line where it fits, wrapping rather than clipping where it does not. */
+.upd-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-05) var(--sp-3);
+}
+
+.upd-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.upd-detail {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.upd-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.upd-link:hover {
+  text-decoration: underline;
+}
+
+.upd-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.upd-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.upd-btn:hover {
+  background: var(--fill-secondary);
+}
+
+.upd-btn[data-tone='primary'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.upd-btn[data-tone='primary']:hover {
+  background: var(--accent-dim);
+}
+
+.upd-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upd-dismiss {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.upd-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- progress -- */
+
+.upd-progress {
+  margin-top: var(--sp-2);
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  overflow: hidden;
+}
+
+.upd-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+/* No percentage to show: a stripe that travels, so the bar still says "busy"
+   rather than "nothing is happening". */
+.upd-progress-fill[data-indeterminate='true'] {
+  width: 35%;
+  animation: upd-slide 1.4s var(--ease) infinite;
+}
+
+@keyframes upd-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upd-progress-fill[data-indeterminate='true'] {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+/* ----------------------------------------------------------------- notes -- */
+
+.upd-notes {
+  margin-top: var(--sp-2);
+}
+
+.upd-notes > summary {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  cursor: pointer;
+  list-style: none;
+}
+
+.upd-notes > summary::-webkit-details-marker {
+  display: none;
+}
+
+.upd-notes > summary::before {
+  content: '›';
+  display: inline-block;
+  margin-right: var(--sp-15);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.upd-notes[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.upd-notes > summary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.upd-notes-body {
+  max-width: var(--content-measure);
+  max-height: 12rem;
+  margin-top: var(--sp-1);
+  padding: var(--sp-3);
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.upd-notes-body > :first-child {
+  margin-top: 0;
+}
+
+.upd-notes-body > :last-child {
+  margin-bottom: 0;
+}
+
+.upd-notes-body code,
+.upd-notes-plain {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+.upd-notes-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ------------------------------------------------------------- half-wired -- */
+
+.upd-note {
+  max-width: var(--content-measure);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.upd-note-bad {
+  color: var(--color-critical);
+}

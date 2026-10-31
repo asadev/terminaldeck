@@ -1,0 +1,530 @@
+/* ============================================================================
+   Git panel
+
+   A page of rows: a branch line, then four labelled runs of files with space
+   between them and no rules anywhere. It is capped at a measure rather than
+   run to the window's edge, because a row whose name is at the left margin and
+   whose +/− counts are 1400px away is two rows as far as the eye is concerned.
+
+   Status colours are aliased from the foundation tokens rather than restated,
+   so a theme swap in tokens.css moves this panel with everything else.
+   ============================================================================ */
+
+.git-panel {
+  --git-added: var(--status-completed);
+  /*
+    Neutral, and deliberately not the warning amber it used to be.
+
+    A working tree mid-change is *nothing to worry about* — it is the normal
+    state of a repository somebody is working in — and painting every modified
+    file with the colour this app uses for a warning produced a column of about
+    thirty orange-brown markers down the left of the page. Measured at
+    rgb(143,88,0), it was by a distance the loudest thing in a window that is
+    otherwise grey and one blue, and it said "careful" thirty times about a fact
+    that means "you have been working".
+
+    The letter is the information; the colour was never carrying it. Added and
+    deleted keep theirs, because green-for-gained and red-for-gone are the two
+    every reader already knows and there are rarely thirty of either at once.
+  */
+  --git-modified: var(--text-primary);
+  --git-deleted: var(--color-critical);
+  /* --status-working, not --accent: a rename is a status like the four around
+     it, and the blue in this app means focus rather than "renamed". */
+  --git-renamed: var(--status-working);
+  --git-untracked: var(--text-secondary);
+  --git-conflicted: var(--status-input);
+  --git-row-height: 28px;
+  --git-measure: 900px;
+  /* Wide enough for a long filename plus the status word and the ± counts, and
+     no wider: everything past it is the diff's. */
+  --git-list-w: 420px;
+  --git-diff-add: var(--status-completed);
+  --git-diff-del: var(--color-critical);
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  user-select: none;
+}
+
+/* ----------------------------------------------------------------- head -- */
+
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  width: 100%;
+  max-width: var(--git-measure);
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.git-head-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.git-branch {
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A detached HEAD is a state worth noticing before you commit into it. */
+.git-branch[data-detached='true'] {
+  color: var(--color-warning);
+}
+
+.git-track {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.git-head-spacer {
+  flex: 1;
+}
+
+.git-count {
+  flex-shrink: 0;
+  min-width: 20px;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+.git-refresh {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.git-refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-refresh:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.git-refresh svg {
+  display: block;
+}
+
+/* --------------------------------------------------------------- groups -- */
+
+/* ------------------------------------------------------------------ body -- */
+
+/*
+   The list and the change it selects, side by side.
+
+   The page used to be the list alone, capped at `--git-measure`, because a
+   click on a row left for the Files page and there was nothing else to make
+   room for. Now the row's whole purpose is the pane on the right, so the cap
+   moves from the page to the list: `--git-list-w` is what a filename, a word
+   and two counts need, and everything past it belongs to the diff.
+
+   Separated by space, not by a rule — the diff has its own fill, which is the
+   second step of "space, then a tint, then a line" and reaches the answer
+   before the line.
+*/
+.git-body {
+  display: flex;
+  flex: 1;
+  gap: var(--sp-5);
+  min-height: 0;
+  width: 100%;
+}
+
+.git-body[data-diff] .git-groups {
+  flex: 0 0 var(--git-list-w);
+  max-width: var(--git-list-w);
+}
+
+/* One column again below the width where two would each be too narrow to read.
+   The list keeps its height; the diff scrolls under it. */
+@media (max-width: 900px) {
+  .git-body {
+    flex-direction: column;
+  }
+  .git-body[data-diff] .git-groups {
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: 40%;
+  }
+}
+
+.git-groups {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  max-width: var(--git-measure);
+  overflow-y: auto;
+  padding-bottom: var(--sp-10);
+}
+
+/* The gap is what separates one run of files from the next. */
+.git-group + .git-group {
+  margin-top: var(--sp-6);
+}
+
+.git-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-1);
+}
+
+/* The group a dashboard count sent you to. A tint rather than a rule: it has
+   to say "this run, here" for a second without becoming a box. */
+.git-group[data-focused] .git-group-label,
+.git-group[data-focused] .git-group-count {
+  color: var(--text-primary);
+}
+
+.git-group[data-focused] .git-list {
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+/* Sentence case, as the component writes it — "Conflicts", "Staged". */
+.git-group-label {
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.git-group-count {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.git-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ row -- */
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  height: var(--git-row-height);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  text-align: left;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.git-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-row[data-selected='true'] {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.git-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The change, in a word. It was 16px of monospace holding one letter — the size
+   and the face a status *code* wants. A word wants a column of its own and the
+   app's own type, and every row gets the same column so the filenames beside
+   them still form a straight edge. 66px is the widest word here, "Untracked",
+   at the footnote size. */
+.git-code {
+  flex-shrink: 0;
+  width: 66px;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.git-code[data-kind='added'] {
+  color: var(--git-added);
+}
+.git-code[data-kind='modified'] {
+  color: var(--git-modified);
+}
+.git-code[data-kind='deleted'] {
+  color: var(--git-deleted);
+}
+.git-code[data-kind='renamed'],
+.git-code[data-kind='copied'],
+.git-code[data-kind='typechange'] {
+  color: var(--git-renamed);
+}
+.git-code[data-kind='untracked'] {
+  color: var(--git-untracked);
+}
+
+/* Conflicts keep the loudest colour. The extra width they used to get was for
+   porcelain's two-letter XY pair; every row is a word in one column now. */
+.git-code[data-kind='conflicted'] {
+  color: var(--git-conflicted);
+}
+
+.git-name {
+  flex-shrink: 0;
+  max-width: 55%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The folder is what tells two files of the same name apart, so it is real
+   information rather than decoration and has to stay legible — but it gives up
+   its width first, because the name is what you scan for. */
+.git-dir {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Green added, red removed: the one place in this panel where colour is the
+   information rather than the decoration. */
+.git-stat {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-15);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.git-plus {
+  color: var(--git-added);
+}
+
+.git-minus {
+  color: var(--git-deleted);
+}
+
+.git-binary {
+  color: var(--text-muted);
+}
+
+/* Reads as a note, not a row: there is nothing here to click. */
+.git-overflow {
+  height: var(--git-row-height);
+  padding: 0 var(--sp-3);
+  line-height: var(--git-row-height);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- diff pane -- */
+
+/*
+   The change itself, which is the reason a row is worth clicking.
+
+   A fill with a radius, not an outline — the card rule from the design notes.
+   It is what separates this half of the page from the list without drawing a
+   line down the middle of the window.
+*/
+.git-diff {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.git-diff-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  flex: none;
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+}
+
+.git-diff-path {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-subhead);
+  font-weight: var(--w-semibold);
+}
+
+.git-diff-meta {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.git-diff-open,
+.git-diff-retry {
+  flex: none;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.git-diff-open:hover,
+.git-diff-retry:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-diff-open:focus-visible,
+.git-diff-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.git-diff-failed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+
+.git-diff-body {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: var(--sp-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+  user-select: text;
+}
+
+/* `width: max-content` with `min-width: 100%` keeps a short removed line tinted
+   all the way across a hunk that scrolls sideways — the same reasoning as the
+   artifact diff, which hit this exact ragged-stripes bug first. */
+.git-diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: max-content;
+  min-width: 100%;
+  padding: 0 var(--sp-4);
+  white-space: pre;
+  color: var(--text-secondary);
+}
+
+/* Low tints: a hunk is mostly context, and a fifty-line diff must not be two
+   solid slabs of colour. The ink carries the meaning. */
+.git-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--git-diff-add) 12%, transparent);
+}
+
+.git-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--git-diff-del) 12%, transparent);
+}
+
+.git-diff-line[data-kind='add'] .git-diff-text,
+.git-diff-line[data-kind='del'] .git-diff-text {
+  color: var(--text-primary);
+}
+
+/* The `@@` line is the only piece of git's furniture that is worth reading —
+   it is what says where in the file you are. */
+.git-diff-line[data-kind='hunk'] {
+  margin-top: var(--sp-2);
+  color: var(--text-muted);
+}
+
+/* `diff --git`, `index …`, the `+++`/`---` pair: the file's own name, repeated.
+   Kept rather than stripped, because a reader checking the pane against a
+   terminal wants to see the same text — but quiet enough to read past. */
+.git-diff-line[data-kind='meta'] {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.git-diff-mark {
+  flex: none;
+  width: 1ch;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.git-diff-line[data-kind='add'] .git-diff-mark {
+  color: var(--git-diff-add);
+}
+
+.git-diff-line[data-kind='del'] .git-diff-mark {
+  color: var(--git-diff-del);
+}
+
+.git-diff-more {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4) 0;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+}
+
+/* -------------------------------------------------------------- messages -- */
+
+/* "Working tree clean.", "Not a git repository.", "Reading repository…" — the
+   states where the page has nothing to list. One plain sentence, placed the
+   way the shell places its own empty states rather than left hanging in the
+   top corner of an otherwise blank window. */
+/* `.git-message` was here — "Reading repository…", "Working tree clean" and
+   "Git is not available" all as one centred paragraph. A clean tree is a page
+   with nothing on it and now wears the app's `PageEmpty`; the read in progress
+   is a `PageNote`, parked at the same height so the answer does not move when
+   it arrives. */
+
+/* ------------------------------------------------------------- density -- */
+
+[data-density='compact'] .git-panel {
+  --git-row-height: 24px;
+}

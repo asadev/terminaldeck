@@ -1,0 +1,537 @@
+/* ============================================================================
+   AI readiness — a score, and the worklist behind it.
+
+   Two columns now that there is room for two: the score stands on its own at
+   the left, the checks run down the right. Nothing is boxed. A check is a row,
+   and rows are told apart by the space between them; the only ones that take a
+   fill are the ones holding the score down, because that is a fact about the
+   project rather than a decoration.
+
+   Band colours alias the foundation tokens, so a theme swap moves this panel
+   with everything else.
+   ============================================================================ */
+
+.readiness {
+  --readiness-pass: var(--status-completed);
+  --readiness-warn: var(--color-warning);
+  --readiness-fail: var(--color-critical);
+  --readiness-skip: var(--text-muted);
+
+  display: grid;
+  grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr);
+  /* Column gap only. The right-hand column is three separate elements — two
+     banners and the list — so a row gap would space them by grid row, and the
+     score column spanning those rows would then push the list down the page by
+     its own height. They carry their own margins instead. */
+  column-gap: var(--sp-10);
+  align-items: start;
+  min-height: 0;
+  max-width: 82rem;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+/* The score column. It was a horizontal bar with a rule under it; a rule that
+   spans the window to separate a number from a list is a line doing work that
+   a column of white space does better. */
+/* Spans every row the other column can produce, so the list starts level with
+   the score instead of below it. There are six: the agent pills, an error, the
+   cap banner, the machine-level notice, the list and the hidden-row footer.
+
+   It is a count and not `1 / -1`, which was tried and is wrong here: `-1` names
+   the last line of the *explicit* grid, and this grid declares no rows at all,
+   so `1 / -1` resolves to a single row — the score column then only covers the
+   first thing in the right-hand column and everything after it is pushed below
+   the whole 350px header. Add a row to the right column and this number moves
+   with it. */
+.readiness-head {
+  grid-column: 1;
+  grid-row: 1 / span 6;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-4);
+}
+
+.readiness-headline {
+  min-width: 0;
+}
+
+.readiness-heading {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.readiness-band {
+  margin: 0;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
+}
+
+.readiness-band[data-band='at-risk'] {
+  color: var(--readiness-fail);
+}
+
+.readiness-summary {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+}
+
+/* Which agent this page is graded for — the first row of the right-hand
+   column. `.page-pill` in shell.css does the chips themselves: one pill in this
+   app, per `components/Pill.tsx`. */
+.readiness > .page-pills {
+  grid-column: 2;
+  margin-bottom: var(--sp-4);
+}
+
+/* The target, under the count. A caption rather than a second heading: it is
+   the same fact the pressed pill below carries, said for somebody reading the
+   header rather than scanning the row of controls. */
+.readiness-target {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+}
+
+/* The seam in the list where the counted rows stop. Space and a caption, no
+   rule: a line across the page to separate two runs of rows is the thing
+   CLAUDE.md's design note names outright. */
+.readiness-aside {
+  margin: var(--sp-5) 0 var(--sp-1);
+  /* Lined up with the row titles beside it: a row is `--sp-3` of padding, then
+     an `--sp-5` glyph, then an `--sp-3` gap. */
+  padding-left: calc(var(--sp-3) + var(--sp-5) + var(--sp-3));
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.readiness-rescan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.readiness-rescan:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.readiness-rescan:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.readiness-rescan:focus-visible,
+.readiness-fix:focus-visible,
+.readiness-cancel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ ring -- */
+
+.readiness-ring {
+  position: relative;
+  flex-shrink: 0;
+  width: calc(var(--sp-16) + var(--sp-12));
+  height: calc(var(--sp-16) + var(--sp-12));
+  /* Band colour drives the arc, so the number and the ring never disagree.
+     The bands read from the status palette rather than the accent: this is a
+     score, and the arc is the largest thing on the page. */
+  --ring-color: var(--status-idle);
+}
+
+.readiness-ring[data-band='strong'] {
+  --ring-color: var(--readiness-pass);
+}
+.readiness-ring[data-band='fair'] {
+  --ring-color: var(--status-working);
+}
+.readiness-ring[data-band='weak'] {
+  --ring-color: var(--readiness-warn);
+}
+.readiness-ring[data-band='at-risk'] {
+  --ring-color: var(--readiness-fail);
+}
+
+.readiness-ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Start the arc at twelve o'clock rather than three. */
+  transform: rotate(-90deg);
+}
+
+.readiness-ring-track {
+  fill: none;
+  stroke: var(--fill-tertiary);
+  stroke-width: 5;
+}
+
+.readiness-ring-arc {
+  fill: none;
+  stroke: var(--ring-color);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease-emphasis), stroke var(--dur) var(--ease);
+}
+
+/* The number is the headline of the page, so it is set like one. */
+.readiness-ring-value {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: var(--t-largetitle);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-largetitle-ls);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- banners -- */
+
+/* A wash rather than an outline: the message is already red, and a border
+   around red text is the second time the same thing is said. */
+.readiness-error,
+.readiness-cap {
+  grid-column: 2;
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--readiness-fail) 10%, transparent);
+  max-width: 78ch;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.readiness-cap strong {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* The machine-level block (a stale agent CLI). A plain grid cell in the right
+   column; it draws nothing at all when there is nothing to say, and an empty
+   cell costs no height. */
+.readiness-machine {
+  grid-column: 2;
+}
+
+/* The shared empty block, told to ignore the two-column grid it lands in —
+   otherwise it renders inside the 13rem score column. */
+.readiness > .page-blank,
+.readiness > .page-blank-line {
+  grid-column: 1 / -1;
+}
+
+/* ------------------------------------------------------------------ rows -- */
+
+/*
+  One measure for the whole list, not one per paragraph.
+
+  The measure used to live on `.readiness-detail`, which capped the *text* at
+  74ch and left the row itself running the full width of the pane — so a row's
+  Fix button sat about 45px to the right of the description column it belongs
+  to, hanging off the block it is an action for. Capping the list puts the
+  button's right edge and the prose's right edge on the same line, whether or
+  not a given row has a button.
+*/
+.readiness-list {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: 0;
+  padding: 0;
+  max-width: 84ch;
+  list-style: none;
+}
+
+.readiness-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+}
+
+/* The gate is the one row that changes the score for every other row, so when
+   it is unclean it takes a wash. Still no border: the tint is the emphasis. */
+.readiness-row[data-gate][data-status='fail'],
+.readiness-row[data-gate][data-status='warn'] {
+  background: color-mix(in srgb, var(--readiness-fail) 9%, transparent);
+}
+
+.readiness-glyph {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border-radius: var(--radius-pill);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-bold);
+  line-height: 1;
+}
+
+.readiness-row[data-status='pass'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-pass) 18%, transparent);
+  color: var(--readiness-pass);
+}
+.readiness-row[data-status='warn'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-warn) 20%, transparent);
+  color: var(--readiness-warn);
+}
+.readiness-row[data-status='fail'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-fail) 20%, transparent);
+  color: var(--readiness-fail);
+}
+.readiness-row[data-status='skip'] .readiness-glyph {
+  background: var(--fill-tertiary);
+  color: var(--readiness-skip);
+}
+
+.readiness-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.readiness-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.readiness-title {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+
+.readiness-row[data-status='skip'] .readiness-title {
+  color: var(--text-secondary);
+}
+
+.readiness-gate-tag {
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--readiness-fail) 16%, transparent);
+  color: var(--readiness-fail);
+  font-size: var(--t-footnote);
+}
+
+.readiness-detail {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* Which files the fix on this row will touch, always, before it is pressed.
+
+   Quiet and one line: it sits under the finding it belongs to and must not
+   compete with it, so the label is a small caps-ish lead-in and the names are
+   mono, because they are filenames and everything else on the row is prose. */
+.readiness-touches {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  /* `var(--t-caption-2)` until 2026-08-21, which is not a rung `tokens.css` has
+     ever defined — there is one caption, not two. An undefined custom property
+     is an invalid value at computed-value time rather than an error, so this
+     line did nothing and the row was drawn at whatever it inherited. It is the
+     smallest thing on the panel, which is exactly what `--t-caption` is for. */
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  /* `var(--text-tertiary)` until 2026-08-21, and inert for the same reason the
+     size above it was: this app's third rung of ink is `--text-muted`, and the
+     name it asked for has never been defined. Nothing in this stylesheet sets a
+     colour on any ancestor of this row, so it inherited the window's ink — and
+     `.readiness-detail`, the prose line it sits directly beneath, is
+     `--text-secondary`. The quiet footnote was drawn no quieter than the
+     finding it belongs to, and by inheritance a step louder, which is the one
+     thing the note above says it must not do. */
+  color: var(--text-muted);
+}
+
+.readiness-touches-label {
+  font-family: var(--font-ui);
+  /* No colour, on purpose. This read `var(--text-quaternary, var(--text-tertiary))`
+     and neither name exists, so both halves were invalid and the lead-in has
+     always just inherited the row — which turns out to be the right answer. The
+     ink scale stops at three rungs where the fill scale runs to four (see
+     `tokens.css`), the row is already sitting on the quietest of the three, and
+     what actually separates "Changes" from the filenames after it is the family
+     swap on the line above: UI against mono. A fourth grey would only have said
+     that a second time, more faintly. */
+}
+
+/* What a fix will do, shown while it waits for a second confirmation. */
+.readiness-fix-description {
+  max-width: 74ch;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.readiness-result {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--readiness-warn);
+}
+
+.readiness-result[data-ok='true'] {
+  color: var(--readiness-pass);
+}
+
+/* ------------------------------------------------------------ put away -- */
+
+/* Quiet on purpose. It is a footnote about rows that are not on screen, and it
+   must not compete with the rows that are. */
+.readiness-hidden {
+  grid-column: 2;
+  margin: var(--sp-3) 0 0;
+  max-width: 84ch;
+  font-size: var(--t-callout);
+  /* Was `var(--text-tertiary)`, which is not a token — see `tokens.css`. So
+     this inherited the panel's ink rather than receding from it, and a footnote
+     about rows that are not on screen was drawn no quieter than the rows that
+     are, which is exactly what the note above forbids. */
+  color: var(--text-muted);
+}
+
+.readiness-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.readiness-link:hover {
+  text-decoration: underline;
+}
+
+.readiness-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------------------- actions -- */
+
+.readiness-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.readiness-fix,
+.readiness-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.readiness-fix:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.readiness-fix:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Confirming a destructive fix is the one moment this panel raises its voice. */
+.readiness-fix[data-confirming] {
+  background: var(--readiness-fail);
+  color: var(--accent-fg);
+}
+
+.readiness-fix[data-confirming]:hover:not(:disabled) {
+  background: var(--readiness-fail);
+  color: var(--accent-fg);
+  filter: brightness(1.08);
+}
+
+.readiness-cancel {
+  background: none;
+  color: var(--text-secondary);
+}
+
+.readiness-cancel:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* One column below the width where two would leave the checks in a gutter. The
+   threshold counts the sidebar and the page's own padding, not just the grid:
+   at a 1000px window the checks column was 350px wide and every detail line
+   broke after four words. */
+@media (max-width: 1180px) {
+  .readiness {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .readiness-head {
+    grid-row: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-5);
+    margin-bottom: var(--sp-6);
+  }
+
+  .readiness-headline {
+    flex: 1;
+  }
+
+  .readiness > .page-pills,
+  .readiness-error,
+  .readiness-cap,
+  .readiness-machine,
+  .readiness-list,
+  .readiness-hidden {
+    grid-column: 1;
+  }
+}

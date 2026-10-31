@@ -1,0 +1,318 @@
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { currentPlatform, type Platform } from '../main/platform/host'
+import {
+  callControl,
+  clearDaemonRecord,
+  controlPaths,
+  encodeRequest,
+  parseDaemonRecord,
+  parseRequest,
+  parseResponse,
+  processAlive,
+  readDaemonRecord,
+  serveControl,
+  tokenMatches,
+  writeDaemonRecord,
+  type ControlServer,
+} from './control'
+
+const made: string[] = []
+const servers: ControlServer[] = []
+
+/**
+ * The platform this file is running on, for the half of it that genuinely binds.
+ *
+ * The pure cases below pin both platforms as values from either machine, which
+ * is the point of `controlPaths` taking a platform at all. The live cases cannot
+ * do that: they open a listener, and only one of the two kinds of listener
+ * exists on any given machine.
+ */
+const PLATFORM: Platform = currentPlatform()
+
+/** A short-lived directory per test, so two tests never share a channel name. */
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'td-control-'))
+  made.push(dir)
+  return dir
+}
+
+/**
+ * The channel name for a directory, in this machine's own spelling.
+ *
+ * `join(dir, 'host.sock')` written out by hand is what made this whole block
+ * unrunnable on Windows: libuv maps `listen(path)` to a named pipe there, a
+ * filename is not a pipe name, and the runner answered `EACCES` on every case.
+ * `hook-server.test.ts` carries the same note for the same reason.
+ */
+function channel(dir: string): string {
+  return controlPaths(dir, PLATFORM).socket
+}
+
+afterEach(async () => {
+  for (const server of servers.splice(0)) await server.close()
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+describe('controlPaths', () => {
+  it('keeps the socket beside the state rather than in /tmp', () => {
+    // /tmp is shared and world-writable, and a control socket a stranger can
+    // pre-create is a control socket a stranger can answer.
+    const { socket, record } = controlPaths('/home/asad/.local/share/terminaldeck', 'linux')
+    expect(socket).toBe('/home/asad/.local/share/terminaldeck/host.sock')
+    expect(record).toBe('/home/asad/.local/share/terminaldeck/host.json')
+  })
+
+  it('uses a named pipe on Windows, unique to the install', () => {
+    const one = controlPaths('C:\\Users\\Asad\\AppData\\Roaming\\terminaldeck', 'win32').socket
+    const two = controlPaths('D:\\other\\terminaldeck', 'win32').socket
+    expect(one.startsWith('\\\\.\\pipe\\terminaldeck-')).toBe(true)
+    expect(one).not.toBe(two)
+  })
+})
+
+describe('the daemon record', () => {
+  it('round-trips, and is written 0600', () => {
+    // It holds a bearer token. It does not get a weaker file than the relay
+    // identity beside it.
+    const dir = tempDir()
+    writeDaemonRecord(dir, {
+      pid: 4242,
+      socket: join(dir, 'host.sock'),
+      token: 'abc',
+      startedAt: 7,
+      version: '0.1.8',
+    })
+    const read = readDaemonRecord(dir)
+    expect(read?.pid).toBe(4242)
+    expect(read?.token).toBe('abc')
+    // Checked where the check means something. Windows has no POSIX permission
+    // bits — `fs` reports 0666 for any read-write file — so asserting 0600 there
+    // would assert a falsehood about a synthesised number.
+    //
+    // This record holds the daemon's control TOKEN, and on Windows that token is
+    // the *whole* boundary: a named pipe has no owner and mode the way a Unix
+    // socket does, which is why the token exists at all. It is protected there
+    // by an NTFS ACL granting this account only, applied by `writeSecretFile` to
+    // the state directory and to the file before the rename, and a record that
+    // cannot be locked down is not written at all. Pinned with a stand-in for
+    // `icacls` in `main/remote/secret-file.test.ts`, because the tool cannot run
+    // on the Mac this suite is written on.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'host.json')).mode & 0o777).toBe(0o600)
+    }
+  })
+
+  it('reads a missing record as "no host has run here"', () => {
+    expect(readDaemonRecord(tempDir())).toBeNull()
+  })
+
+  it('reads a corrupt record the same way rather than throwing', () => {
+    // Reporting "not running" for an unreadable record is both true and
+    // actionable; throwing on it would make `status` fail on a file nobody can
+    // see.
+    const dir = tempDir()
+    writeDaemonRecord(dir, { pid: 1, socket: 's', token: 't', startedAt: 0, version: 'v' })
+    rmSync(join(dir, 'host.json'))
+    expect(readDaemonRecord(dir)).toBeNull()
+  })
+
+  it('refuses a record missing any field it will be trusted for', () => {
+    expect(parseDaemonRecord({ pid: 1, socket: 's', token: 't', startedAt: 0 })).toBeNull()
+    expect(parseDaemonRecord({ pid: 0, socket: 's', token: 't', startedAt: 0, version: 'v' })).toBeNull()
+    expect(parseDaemonRecord({ pid: 1, socket: '', token: 't', startedAt: 0, version: 'v' })).toBeNull()
+    expect(parseDaemonRecord(null)).toBeNull()
+  })
+
+  it('clears the record and the socket file together', () => {
+    const dir = tempDir()
+    writeDaemonRecord(dir, { pid: 1, socket: join(dir, 'host.sock'), token: 't', startedAt: 0, version: 'v' })
+    clearDaemonRecord(dir, 'linux')
+    expect(readDaemonRecord(dir)).toBeNull()
+  })
+})
+
+describe('processAlive', () => {
+  it('says yes about this process and no about one that cannot exist', () => {
+    // Telling "the daemon is running" from "the daemon died and left its record
+    // behind" is the difference between `status` reporting not-running and
+    // `status` hanging on a socket nobody is listening to.
+    expect(processAlive(process.pid)).toBe(true)
+    expect(processAlive(0x7ffffff0)).toBe(false)
+  })
+})
+
+describe('the token', () => {
+  it('matches only itself, and does not throw on a different length', () => {
+    expect(tokenMatches('abcdef', 'abcdef')).toBe(true)
+    expect(tokenMatches('abcdef', 'abcdeg')).toBe(false)
+    expect(tokenMatches('abcdef', 'abc')).toBe(false)
+    expect(tokenMatches('', '')).toBe(true)
+  })
+})
+
+describe('framing', () => {
+  it('round-trips a request', () => {
+    const line = encodeRequest({ token: 't', cmd: 'status', args: [] })
+    expect(line.endsWith('\n')).toBe(true)
+    expect(parseRequest(line.trim())).toEqual({ token: 't', cmd: 'status', args: [] })
+  })
+
+  it('refuses anything that is not a request', () => {
+    expect(parseRequest('not json')).toBeNull()
+    expect(parseRequest('[]')).toBeNull()
+    expect(parseRequest('{"cmd":"status"}')).toBeNull()
+    expect(parseRequest('{"token":"t","cmd":"status","args":[1]}')).toBeNull()
+  })
+
+  it('turns anything unreadable from the host into a sentence', () => {
+    expect(parseResponse('garbage')).toEqual({
+      ok: false,
+      error: 'The host answered with something that is not a message.',
+    })
+    expect(parseResponse('{"ok":false}').ok).toBe(false)
+  })
+})
+
+/*
+ * The cases that genuinely BIND — on whichever channel this machine has.
+ *
+ * They are the ones that prove framing, tokens and refusals against a real
+ * listener rather than a fake, and they used to run on POSIX only: they pinned
+ * `platform: 'linux'` and spelled the address `join(dir, 'host.sock')`, so on
+ * Windows the whole block failed with `listen EACCES … \td-control-…\host.sock`
+ * — the runner faithfully doing what it was told, in a place Windows has no such
+ * thing — and was skipped there rather than fixed.
+ *
+ * Skipping it left the one thing that most needed proving unproven. `controlPaths`
+ * pins the *name* of the Windows channel, `\\.\pipe\<brand>-<tag>`, and a name is
+ * not a channel: until something bound it, nothing in this repository had ever
+ * opened the transport that `terminaldeck status`, `address` and `stop` use on
+ * Windows. The address now comes from {@link channel}, which asks
+ * `controlPaths` for this machine's answer, so the Windows runner exercises the
+ * named pipe end to end and the Mac exercises the Unix socket — the same tests,
+ * each on the thing it actually has.
+ */
+describe('a live control channel', () => {
+  it('carries a command and its answer', async () => {
+    const dir = tempDir()
+    const socket = channel(dir)
+    servers.push(
+      await serveControl({
+        socket,
+        token: 'secret',
+        platform: PLATFORM,
+        handle: async (cmd, args) => ({ cmd, args }),
+      }),
+    )
+
+    const answer = await callControl({ socket, token: 'secret', cmd: 'status', args: ['"x"'] })
+    expect(answer).toEqual({ ok: true, value: { cmd: 'status', args: ['"x"'] } })
+  })
+
+  it('refuses a caller with the wrong token, in the same words as a missing one', async () => {
+    const dir = tempDir()
+    const socket = channel(dir)
+    servers.push(
+      await serveControl({ socket, token: 'secret', platform: PLATFORM, handle: async () => 'no' }),
+    )
+
+    const wrong = await callControl({ socket, token: 'guess', cmd: 'stop' })
+    const empty = await callControl({ socket, token: '', cmd: 'stop' })
+    expect(wrong).toEqual({ ok: false, error: 'This host did not recognise that caller.' })
+    expect(empty).toEqual(wrong)
+  })
+
+  it('sends a thrown message back rather than dropping the connection', async () => {
+    const dir = tempDir()
+    const socket = channel(dir)
+    servers.push(
+      await serveControl({
+        socket,
+        token: 't',
+        platform: PLATFORM,
+        handle: async () => {
+          throw new Error('no such folder')
+        },
+      }),
+    )
+    expect(await callControl({ socket, token: 't', cmd: 'folders' })).toEqual({
+      ok: false,
+      error: 'no such folder',
+    })
+  })
+
+  /*
+   * The sentence is for a person; the `reason` is for `main.ts`.
+   *
+   * Both are asserted here because the CLI turns exactly this answer into "not
+   * running" — deleting the stale record and, for `pair`, starting a host. It
+   * can only do that if the failure is told apart by its code rather than by
+   * matching on prose, so a `reason` quietly dropped from this response would
+   * bring back the bug it was added for: on a WSL distribution that has
+   * restarted, a record naming a reused pid made `status` exit 1 and made `pair`
+   * refuse to start anything.
+   */
+  it('says "no host is listening" rather than a syscall name, and codes it', async () => {
+    const dir = tempDir()
+    const answer = await callControl({
+      // A channel nothing has ever bound, named the way this machine names one:
+      // a socket file that is not on disk, or a pipe that was never created.
+      // Both answer ENOENT, which is the code this case is about.
+      socket: channel(join(dir, 'never-served')),
+      token: 't',
+      cmd: 'status',
+      timeoutMs: 500,
+    })
+    expect(answer).toEqual({
+      ok: false,
+      error: 'No host is listening here.',
+      reason: 'no-listener',
+    })
+  })
+
+  /*
+   * The one case in this block that is genuinely about POSIX rather than about
+   * the control channel, so it is the one case still pinned to `linux`.
+   *
+   * A Unix socket is a file, and a power cut leaves it behind; a named pipe is
+   * a kernel object that goes away with the process that made it, so there is
+   * nothing on Windows for a dead host to leave and nothing for the next start
+   * to take over. Running it there would assert a hazard that platform does not
+   * have.
+   */
+  it.skipIf(PLATFORM === 'win32')('takes over a socket file a dead host left behind', async () => {
+    // A power cut leaves the file, and `listen` then fails with EADDRINUSE
+    // however dead the process behind it is. Without this a host never starts
+    // again after one.
+    const dir = tempDir()
+    const socket = join(dir, 'host.sock')
+    servers.push(
+      await serveControl({ socket, token: 't', platform: 'linux', handle: async () => 'one' }),
+    )
+    await servers.pop()?.close()
+    servers.push(
+      await serveControl({ socket, token: 't', platform: 'linux', handle: async () => 'two' }),
+    )
+    expect(await callControl({ socket, token: 't', cmd: 'status' })).toEqual({ ok: true, value: 'two' })
+  })
+
+  it('writes the record with the socket it is actually listening on', async () => {
+    const dir = tempDir()
+    const socket = channel(dir)
+    servers.push(
+      await serveControl({ socket, token: 'tok', platform: PLATFORM, handle: async () => 'ok' }),
+    )
+    writeDaemonRecord(dir, { pid: process.pid, socket, token: 'tok', startedAt: 0, version: 'v' })
+    const record = readDaemonRecord(dir)
+    expect(record).not.toBeNull()
+    if (record === null) return
+    expect(JSON.parse(readFileSync(join(dir, 'host.json'), 'utf8')).socket).toBe(socket)
+    expect(await callControl({ socket: record.socket, token: record.token, cmd: 'status' })).toEqual({
+      ok: true,
+      value: 'ok',
+    })
+  })
+})

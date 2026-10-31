@@ -1,0 +1,83 @@
+--- a/src/TerminalDeck.App/Views/ShellWindow.xaml.cs
++++ b/src/TerminalDeck.App/Views/ShellWindow.xaml.cs
+@@ -63,6 +63,7 @@
+     SessionList.ItemsSource = Model.Sessions;
+     browser = new BrowserPane(root, SendBrowserContextAsync);
+     settings = new SettingsPane(Model, Runtime);
++    InitializeSettingsPanel();
+     Projects = new(new(Runtime.Projects, Runtime.Agents, Runtime.ProjectSessions, Runtime.Accounts), this);
+     Agents = new(new(Runtime.Agents, Runtime.Projects, Runtime.Accounts), this);
+     Runtime.ProjectAgentPages = this;
+@@ -98,6 +99,7 @@
+           }
+           return System.Text.Json.JsonSerializer.SerializeToElement(new { page = Model.Page.ToString(), selected = Model.Selected?.Id, split = Model.Split.ToString(), theme = Root.RequestedTheme.ToString(), settings = settings.SelectedSection });
+         });
++        RegisterSettingsPanelTools();
+         tools = new(Runtime.Door, dataRoot); Runtime.LocalToolAddress = tools.Address; await Runtime.StartHootToolConnectionAsync();
+         renderedPage = null; Refresh();
+         SyncSessions(); Model.Notice = ""; ready.TrySetResult();
+@@ -137,6 +139,8 @@
+     RefreshAccountChip();
+     EmptySidebar.Visibility = Model.Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+     if (rendering || proofChatVisible) return;
++    if (Model.Page == ShellPage.Settings) { ShowSettingsPanel(); return; }
++    if (settingsOverlay is not null) DetachSettingsPanel();
+     var unchanged = renderedPage == Model.Page && renderedSplit == Model.Split &&
+       (Model.Page != ShellPage.Sessions || (Model.Selected is null ? visibleSessions.Count == 0 : visibleSessions.Contains(Model.Selected.Id)));
+     if (unchanged) return;
+@@ -250,7 +253,12 @@
+     else Model.Notice = "Page context is kept as an unsent draft.";
+   }
+   internal Task WaitForTerminalsAsync() => Task.WhenAll(sessionPanes.Values.Where(p => p.Draft.Presentation == SessionPresentation.Terminal).Select(p => p.Ready));
+-  public void SetTheme(ElementTheme theme) => Root.RequestedTheme = theme;
++  public void SetTheme(ElementTheme theme)
++  {
++    try { SaveSettingsTheme(theme); }
++    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
++    { Model.Notice = "The appearance could not be saved. Please try again."; }
++  }
+   private void QueueSurfaceTheme()
+   {
+     // WebView2 also handles inherited theme events. Apply after its controls finish
+@@ -318,9 +326,9 @@
+   private void SplitSessions_Click(object sender, RoutedEventArgs e) { Model.Split = SplitPresentation.Sessions; Model.Page = ShellPage.Sessions; }
+   private void SplitBrowser_Click(object sender, RoutedEventArgs e) { Model.Split = SplitPresentation.Browser; Model.Page = ShellPage.Sessions; }
+   private void OnePane_Click(object sender, RoutedEventArgs e) => Model.Split = SplitPresentation.None;
+-  private void SystemTheme_Click(object sender, RoutedEventArgs e) => Root.RequestedTheme = ElementTheme.Default;
+-  private void LightTheme_Click(object sender, RoutedEventArgs e) => Root.RequestedTheme = ElementTheme.Light;
+-  private void DarkTheme_Click(object sender, RoutedEventArgs e) => Root.RequestedTheme = ElementTheme.Dark;
++  private void SystemTheme_Click(object sender, RoutedEventArgs e) => SetTheme(ElementTheme.Default);
++  private void LightTheme_Click(object sender, RoutedEventArgs e) => SetTheme(ElementTheme.Light);
++  private void DarkTheme_Click(object sender, RoutedEventArgs e) => SetTheme(ElementTheme.Dark);
+   private async void Account_Click(object sender, RoutedEventArgs e) => await ShowAccountAsync();
+   internal void OpenCodingAIs() { settings.SelectSection(0); Model.Page = ShellPage.Settings; }
+   internal void DismissAccountSheet() => accountSheet?.Hide();
+--- a/docs/contracts/deck-tools-windows-integration.json
++++ b/docs/contracts/deck-tools-windows-integration.json
+@@ -183,8 +183,24 @@
+               "coding-ais",
+               "accounts",
+               "devices",
+-              "mcp"
+-            ]
++              "mcp",
++              "appearance",
++              "outside-ai-apps",
++              "advanced",
++              "about"
++            ]
++          },
++          "settingsPresentation": {
++            "type": "string",
++            "enum": [
++              "panel",
++              "window",
++              "closed",
++              "shortcuts"
++            ]
++          },
++          "settingsSearch": {
++            "type": "string"
+           }
+         },
+         "additionalProperties": false

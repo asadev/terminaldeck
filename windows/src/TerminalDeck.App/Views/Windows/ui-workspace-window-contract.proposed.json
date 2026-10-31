@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "action": { "type": "string", "enum": ["select", "rename", "move", "split", "one", "close-pane", "resize", "close", "pop-out", "dock", "pop-session", "new-browser", "attach-session", "sidebar"] },
+    "windowId": { "type": "string" },
+    "otherWindowId": { "type": "string" },
+    "ownerSessionId": { "type": "string" },
+    "sessionId": { "type": "string" },
+    "hostId": { "type": "string" },
+    "title": { "type": "string", "maxLength": 120 },
+    "index": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "ratio": { "type": "number", "minimum": 0.15, "maximum": 0.85 },
+    "vertical": { "type": "boolean" },
+    "visible": { "type": "boolean" }
+  },
+  "required": ["action"],
+  "additionalProperties": false
+}

@@ -1,0 +1,450 @@
+/* ============================================================================
+   The machines half of Remote — the desktops this one can reach.
+
+   This used to be a page of its own, `MachinesPanel.css`, sized for a window:
+   82rem wide, its own button treatment, its own type scale. It lives inside the
+   Remote section now, so everything that had a settings equivalent has been
+   dropped rather than restyled — buttons are `settings-btn`, paragraphs are
+   `settings-prose`, and a row is dressed exactly like the `.remote-path` rows
+   further up the same screen. What is left here is the handful of things the
+   settings controls have no answer for: a machine row, the sessions under it,
+   the six boxes a pairing code is typed into, and the terminal pane.
+
+   Everything set in mono is data that is exact and countable — the pairing
+   code, the key fingerprint, session titles' folders. Nothing else is.
+   ============================================================================ */
+
+/* ------------------------------------------------------- typing a code -- */
+
+.machine-entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+}
+
+/* Six boxes rather than one field, and the gap in the middle is not decoration:
+   it is the only thing on screen that says how the code is grouped. A single
+   run of six identical boxes is a number to count; two groups of three is a
+   shape to copy. */
+.machine-entry-boxes {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+}
+
+.machine-entry-box {
+  width: 2.5rem;
+  height: var(--control-h-lg);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  /* Mono and tabular for the same reason the code on the other screen is: every
+     digit occupies the same width, so six boxes hold six digits that line up
+     with the six the other machine is showing. */
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-title3);
+  text-align: center;
+}
+
+.machine-entry-box:focus-visible,
+.machine-entry-box:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.machine-entry-box:disabled {
+  opacity: 0.5;
+}
+
+/* ---------------------------------------------------------------- list -- */
+
+.machines-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+}
+
+/* The same soft block as a `.remote-path` row above it, on purpose: a machine
+   and a route into this machine are both "one thing with a state", and drawing
+   them differently would make one section read as two. */
+.machines-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.machines-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+/* One dot, coloured by state. The only colour in a row, so the eye finds the
+   machine that needs something without reading a word. */
+.machines-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  align-self: center;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+}
+
+.machines-row[data-state='online'] .machines-dot {
+  background: var(--status-completed);
+}
+
+.machines-row[data-state='connecting'] .machines-dot {
+  background: var(--status-working);
+}
+
+.machines-row[data-state='awaiting-approval'] .machines-dot {
+  background: var(--status-waiting);
+}
+
+.machines-row[data-state='error'] .machines-dot {
+  background: var(--color-critical);
+}
+
+.machines-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* Both sit beside the machine rather than at the far edge of the row: read as
+   one phrase — dot, name, kind, state — it scans in a glance. */
+.machines-kind,
+.machines-state {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-reason,
+.machines-note {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The key, in the form a person compares with the other screen. Data, so mono;
+   quiet, because it is only read when somebody is checking. */
+.machines-key {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: text;
+}
+
+/* The build the far machine is running, and whether it is a desktop or a
+   server. A fact to read, not a control — quiet, one line, no chevron — because
+   there is nothing on this wire to press: a host is replaced on the SSH and
+   desktop plane, never from here. */
+.machines-version {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ sessions -- */
+
+.machines-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The row a person presses to open that session in the window, and — where
+   there is no window around this page — the same three facts with no press on
+   them. One layout block for both, because the difference between them is what
+   happens on a click and must not also be a difference in where the text sits.
+   Everything below that promises interaction stays on the button alone. */
+.machines-session-open,
+.machines-session-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* Everything that promises a press is on the button and nowhere else — the
+   cursor included, which is the first of the four a person meets. A hover state
+   is a promise, and so is a hand. */
+.machines-session-open {
+  cursor: pointer;
+}
+
+.machines-session-open:hover {
+  background: var(--bg-hover);
+}
+
+.machines-session-open:active {
+  background: var(--bg-active);
+}
+
+.machines-session-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.machines-session-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* A path is exact and countable, so it is mono. The label beside it is not. */
+.machines-session-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-session-status {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------- localhost, over there -- */
+
+/* What the far machine is serving.
+
+   A tinted block rather than a bordered one, and it is the only tinted thing in
+   a machine's row — which is exactly the separation the design brief asks for:
+   space, then a tint, and only then a line. What it separates is worth the
+   tint, because it is the one part of this row that is not about sessions and
+   the rows inside it look, character for character, like the localhost list on
+   this desktop's own start page. */
+.machines-ports {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.machines-ports-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  min-height: var(--row-h);
+}
+
+.machines-ports-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* Quiet, because it is a *second* way to get a list that arrives by itself.
+   A button drawn like the section's own action would be claiming the list is
+   not already there. */
+.machines-ports-refresh,
+.machines-port-open {
+  flex: none;
+  padding: var(--sp-05) var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--t-footnote);
+  cursor: pointer;
+}
+
+.machines-ports-refresh:hover,
+.machines-port-open:hover {
+  background: var(--bg-hover);
+}
+
+.machines-ports-refresh:focus-visible,
+.machines-port-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The machine's own silhouette, beside every port. Muted rather than accented:
+   it is an identity, not an action, and an accent here would compete with the
+   Open beside it. */
+.machines-glyph {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.machines-portlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.machines-port {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  min-height: var(--row-h);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+}
+
+.machines-port:hover {
+  background: var(--bg-hover);
+}
+
+/* A port number and a process name are exact and countable, so mono — the same
+   promise the session's path makes one block up. */
+.machines-port-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------- actions -- */
+
+.machines-actions {
+  margin-top: var(--sp-1);
+}
+
+.machines-confirm {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+/* ----------------------------------------------------------- terminal -- */
+
+/* A `.machines-pane` and its head — title, folder, Close — stood here, styling
+   the terminal this panel used to draw under the list. That was the app's second
+   in-session view and it is gone; `MachineLinks.tsx` carries why. What is left
+   is the terminal's own body, which is still this file's because
+   `RemoteTerminal` is still a machines component — the window mounts it, in
+   `.remote-pane` (see `shell/shell.css`), and keeps it mounted. */
+.machines-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-2);
+}
+
+/*
+ * What the far machine said about a switch that did not happen.
+ *
+ * Below the title line beside the account chip, and only after a press. It is
+ * not a caption and must never become one: the standing rule from the
+ * 2026-08-20 review is that nothing on screen explains itself, and the same
+ * review is equally firm that a press must never produce nothing at all. This is
+ * the second of those — an answer, transient, cleared on its own — and the words
+ * in it are the far machine's own about its own account.
+ *
+ * A floating panel rather than a line in the row, and the reason is measured:
+ * inline, at the width a 48px bar can spare, "That account has never signed in
+ * on this computer." drew as "That account has never signed in on this…" — the
+ * half that says what to do about it cut off, with nowhere to read it. This is
+ * `.sc-notice`'s shape, which is the same kind of thing one chip cluster to the
+ * right, so a refusal reads the same wherever on this bar it comes from.
+ *
+ * The host is zero-width on purpose: the panel hangs out of the flow, so the
+ * chips beside it must not move when one appears.
+ */
+.machine-switch-host {
+  position: relative;
+  display: inline-flex;
+  width: 0;
+  align-self: stretch;
+}
+
+.machine-switch-problem {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(360px, calc(100vw - var(--sp-6)));
+  margin: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--color-warning);
+}
+
+/*
+ * The one grant on a machine card.
+ *
+ * A checkbox and its sentence on one line, indented to the same rule the ports
+ * list and the session rows sit against, so the card reads as one column rather
+ * than as a form dropped into it. It is not in `.machines-actions` because that
+ * row is verbs — Connect, Forget — and this is a state somebody sets and leaves.
+ */
+.machines-grant {
+  margin: 8px 0 0;
+}
+
+.machines-grant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* `--t-sm` has never existed in this app; the fallback was doing all the
+     work and the declaration was decoration. 12px is the footnote rung. */
+  font-size: var(--t-footnote);
+  /* Was `var(--text-2, inherit)`. `--text-2` has never been defined either, so
+     the row took its parent colour and the declaration said nothing. This is a
+     secondary line under a control, which is what `--text-secondary` is for. */
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.machines-grant-row input {
+  margin: 0;
+  flex: none;
+}

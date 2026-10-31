@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework></PropertyGroup>
+  <ItemGroup><Compile Remove="Tests/**/*.cs" /><Compile Remove="Proof/**/*.cs" /><Compile Remove="Browser/**/*.cs" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../TerminalDeck.Core/TerminalDeck.Core.csproj" /></ItemGroup>
+</Project>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);SHELL_WORKSPACE_TESTS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Settings/SettingsPanelBounds.cs" Link="SettingsPanelBounds.cs" />
+    <Compile Include="../WorkspaceState.cs" Link="WorkspaceState.cs" />
+    <Compile Include="../WorkspaceText.cs" Link="WorkspaceText.cs" />
+    <Compile Include="../../../ViewModels/ShellViewModel.cs" Link="ShellViewModel.cs" />
+    <ProjectReference Include="../../../../TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <Compile Include="../ShellCommands.cs" Link="ShellCommands.cs" />
+    <Compile Include="../SessionStatus.cs" Link="SessionStatus.cs" />
+    <Compile Include="../WorkspaceWindowBounds.cs" Link="WorkspaceWindowBounds.cs" />
+    <Compile Include="../SidebarState.cs" Link="SidebarState.cs" />
+    <Compile Include="../SidebarHistory.cs" Link="SidebarHistory.cs" />
+    <Compile Include="../WorkspaceTabSizing.cs" Link="WorkspaceTabSizing.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5"><PrivateAssets>all</PrivateAssets></PackageReference>
+  </ItemGroup>
+</Project>

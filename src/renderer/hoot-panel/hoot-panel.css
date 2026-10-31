@@ -1,0 +1,524 @@
+/*
+  Hoot's island — the page in the window `main/hoot-menubar.ts` hangs from the
+  top centre of the screen.
+
+  The window is fixed and transparent; the island is one surface clipped out of
+  it — `clip-path: path(…)`, the outline from `shared/hoot-island.ts`. It moves
+  by CSS transitions on that outline, on the shadow's transform and on the
+  words' opacity (set inline by `HootPanel.tsx` from `TIMING`), so nothing is
+  laid out again while it moves. The grown panel's contents are laid out once,
+  at the grown size, and the outline reveals them.
+
+  ## One piece
+
+  Grown, the panel is one surface from the top edge of the screen down. The
+  conversation is one text area running the full height, top edge to the box;
+  the "Hoot" tab and the session chips float over it on small solid pills of
+  their own, and that is all that is up there — between and around the pills
+  the text passing under them shows. There is no band, fade, line or change of
+  shade where the menu bar ends. Asad, 2026-10-04: *"text should keep going
+  even behind both of the pills, and even if there are more pills."*
+
+  ## The app's own colours
+
+  The island wears the app's theme, live: the page sets `data-theme` from what
+  the main process says the theme is. Its ground is `--bg-primary`, which in
+  the dark theme is the terminal's own colour, and in the light theme the
+  app's white surface — Asad, 2026-10-04: *"the color of this should be same as
+  the terminal dark color mode… when it is white, overall it should be also
+  white accordingly"*. A hairline in `--border-strong` keeps its edge on a
+  menu bar of the same colour.
+
+  The one fixed colour is Hoot's orange — the owl's body in `HootMark.tsx`,
+  fixed brand art rather than chrome — named once below.
+*/
+
+html.hoot-panel-page,
+html.hoot-panel-page body,
+html.hoot-panel-page #root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+/*
+  The page itself stays out of the theme's colour scheme: a document whose
+  scheme differs from the one it is shown in can get an opaque canvas, and
+  everything around the shape must be see-through. The island takes the
+  scheme instead, for its box and its scroll bar.
+*/
+html.hoot-panel-page {
+  color-scheme: normal;
+}
+
+.hoot-island {
+  --island-ground: var(--bg-primary);
+  --island-owl: #f7882f;
+
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color-scheme: light;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+[data-theme='dark'] .hoot-island {
+  color-scheme: dark;
+}
+
+/* Nothing shows until the pill's words are measured: the first frame is the right shape. */
+.hoot-island:not([data-ready]) {
+  visibility: hidden;
+}
+
+/* A corner in his hand: the shape follows the pointer, with nothing easing behind it. */
+.hoot-island[data-dragging] * {
+  transition: none !important;
+}
+
+/* ------------------------------------------------------------ the surface -- */
+
+/* The grown panel's shape, blurred under it; scaled down to the pill and faded out at rest. */
+.hoot-island-shadow {
+  position: absolute;
+  top: 0;
+  box-shadow: var(--shadow-md);
+  transform-origin: 50% 0;
+  will-change: transform, opacity;
+}
+
+.hoot-island-edge,
+.hoot-island-ground {
+  position: absolute;
+  inset: 0;
+  will-change: clip-path;
+}
+
+.hoot-island-edge {
+  background: var(--border-strong);
+}
+
+.hoot-island-ground {
+  overflow: hidden;
+  background: var(--island-ground);
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------- at rest -- */
+
+.hoot-island-rest {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: opacity;
+}
+
+/* Centred, with the pill's own padding: 8 before the owl, 12 after the words. */
+.hoot-island-pill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 4px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/*
+  Beside a notch: the owl, and the first of the counts, at the outer edge of the
+  left ear; the rest of the words at the outer edge of the right one.
+*/
+.hoot-island-ear {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.hoot-island-label {
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.hoot-island-measure {
+  position: absolute;
+  top: -100px;
+  left: -1000px;
+  visibility: hidden;
+}
+
+.hoot-island-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--island-owl);
+}
+
+/* ----------------------------------------------------------------- grown -- */
+
+.hoot-island-full {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 14px;
+  will-change: opacity;
+}
+
+/* At rest the panel is drawn but out of reach, so nothing on it takes the pointer through the pill. */
+.hoot-island:not([data-expanded]) .hoot-island-full {
+  pointer-events: none;
+}
+
+/* The pills along the top: floating over the conversation, which scrolls on behind them. */
+.hoot-island-head {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+  pointer-events: none;
+}
+
+.hoot-island-head .hoot-island-tab,
+.hoot-island-head .hoot-island-chips {
+  pointer-events: auto;
+}
+
+.hoot-island-side {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.hoot-island-side[data-side='right'] {
+  justify-content: flex-end;
+}
+
+/* Solid, not see-through: the text passing behind must not show through the words on top. */
+.hoot-island-tab {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 10px 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 0.5px var(--border);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+}
+
+/*
+  The open sessions: small chips in a row that scrolls sideways when there are
+  many, its far end fading out rather than cutting a chip in half.
+*/
+.hoot-island-chips {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 18px 0 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* Only the mask's opacity counts; its colour does nothing. */
+  mask-image: linear-gradient(to right, black calc(100% - 22px), transparent);
+}
+
+.hoot-island-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.hoot-island-chip {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+  height: 20px;
+  margin: 1px 0;
+  padding: 0 8px 0 7px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 0.5px var(--border);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-caption);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The app's hover tint laid over the solid pill, so it stays solid. */
+.hoot-island-chip:hover {
+  background: linear-gradient(var(--bg-active), var(--bg-active)), var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* "No sessions running": in the same place the sessions will be, and nothing to press. */
+.hoot-island-chip[data-quiet] {
+  padding: 0 9px;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.hoot-island-chip[data-quiet]:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.hoot-island-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hoot-island-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hoot-island-status {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.hoot-island-status[data-status='input'] {
+  background: var(--island-owl);
+}
+
+.hoot-island-status[data-status='working'] {
+  background: var(--text-primary);
+}
+
+/* The conversation: the whole panel above the box, from the top edge down, centred and wide. */
+.hoot-island-chat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.hoot-island-log {
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 680px;
+  min-height: 0;
+  margin: 0 auto;
+  padding-bottom: 4px;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.hoot-island-msg {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hoot-island-msg[data-role='you'] {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 3px 10px;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+}
+
+.hoot-island-quiet {
+  margin: auto 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.hoot-island-off {
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.hoot-island-off .hoot-island-quiet {
+  margin: 0;
+}
+
+/* Neutral, not the app's blue: on the island the owl is the only colour. */
+.hoot-island .hoot-island-start {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  background: var(--text-primary);
+  color: var(--island-ground);
+  font-size: var(--t-footnote);
+}
+
+.hoot-island-problem {
+  margin: 6px auto 0;
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+}
+
+/* "Ask Hoot…" along the bottom, across the width. */
+.hoot-island-ask {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 680px;
+  margin: 10px auto 0;
+}
+
+.hoot-island-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  outline: none;
+}
+
+.hoot-island-input::placeholder {
+  color: var(--text-muted);
+}
+
+.hoot-island-input:focus-visible {
+  box-shadow: 0 0 0 1.5px var(--island-owl);
+}
+
+/*
+  The grips: the bottom corners, inside the curve. Two short strokes each, faint
+  until the panel is under the pointer. Both corners, because it is centred:
+  either one widens it on both sides.
+*/
+.hoot-island-grip {
+  position: absolute;
+  bottom: 6px;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) linear;
+  touch-action: none;
+}
+
+.hoot-island-full:hover .hoot-island-grip {
+  opacity: 0.55;
+}
+
+.hoot-island-grip:hover {
+  opacity: 1 !important;
+}
+
+.hoot-island-grip[data-side='right'] {
+  right: 6px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 4px 4px / 10px 10px no-repeat,
+    linear-gradient(135deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 8px 8px / 6px 6px no-repeat;
+}
+
+.hoot-island-grip[data-side='left'] {
+  left: 6px;
+  cursor: nesw-resize;
+  background:
+    linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 4px / 10px 10px no-repeat,
+    linear-gradient(45deg, transparent 0 46%, var(--text-muted) 46% 54%, transparent 54% 100%) 0 8px / 6px 6px no-repeat;
+}
+
+/* Every session, in place of the conversation while the sessions row is
+   hovered. The chat's own room, scrolling when there are more than fit. */
+.hoot-island-all {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 8px;
+}
+
+.hoot-island-all-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hoot-island-all-row:hover,
+.hoot-island-all-row:focus-visible {
+  background: var(--bg-tertiary);
+}
+
+.hoot-island-all-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoot-island-all-what {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+}
+

@@ -1,0 +1,101 @@
+name: Feature request
+description: Suggest something Terminal Deck should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: please skim
+        [ROADMAP.md](https://github.com/asadev/terminaldeck/blob/main/ROADMAP.md).
+        A lot is already planned and sequenced, and knowing where your idea sits
+        against it makes this much easier to answer.
+
+        The most useful requests describe **the problem**, not the solution. The
+        solution is usually the easy part, and often turns out to be something
+        different from what either of us first pictured.
+
+  - type: checkboxes
+    id: checked-roadmap
+    attributes:
+      label: Prior art
+      options:
+        - label: I checked ROADMAP.md and the open issues, and this is not already there
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the problem
+      description: >
+        What are you trying to do, and what happens today when you try? Concrete
+        beats abstract — describe the last time it actually bit you.
+      placeholder: |
+        I run five sessions across three repos. When one finishes I have no way
+        to tell which without clicking every tab, so I miss finished work for
+        ten minutes at a time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do
+      description: If you have a specific idea, put it here. It is fine to leave this blank.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What are you doing instead right now
+      description: >
+        The workaround matters. If there is a decent one, that is a strong hint
+        about how big this should be.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app
+      multiple: true
+      options:
+        - Sessions and terminals
+        - Status detection
+        - Cost, context and the inspector
+        - Git, files and search
+        - GitHub panel
+        - Dashboard, board and widgets
+        - Embedded browser
+        - MCP
+        - Hooks
+        - Profiles and settings
+        - Keyboard and shortcuts
+        - Packaging, install and updates
+        - Something else / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: agent
+    attributes:
+      label: Which agent CLI does this concern
+      description: >
+        Claude Code, Codex, Gemini, all of them, or none. Some features only
+        make sense where the underlying CLI exposes the data.
+      placeholder: "Claude Code"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you like to build it
+      description: >
+        Entirely optional, and the honest answer is fine. See
+        [CONTRIBUTING.md](https://github.com/asadev/terminaldeck/blob/main/CONTRIBUTING.md) —
+        for anything beyond a small fix, please agree the approach on this issue
+        before writing code.
+      options:
+        - label: I would be up for opening a pull request for this
+          required: false

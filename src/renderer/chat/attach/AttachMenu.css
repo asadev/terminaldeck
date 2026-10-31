@@ -1,0 +1,126 @@
+/* The attach popover: three rows on one surface, and it is the app's glass — the
+   same material every dialog, menu and tooltip wears.
+
+   It used to have three faces: this menu, a project-scoped file picker with a
+   search field, and a connector list. Both of the others are gone — the picker
+   because *"it should open our file manager instead of staying inside"*, the
+   connector list because the window's own bar carries a Connectors chip — so
+   everything below the popover itself is one list of rows. */
+
+/* Centred, not bottom-aligned: the button sits on the composer's control row
+   now rather than beside a one-line field, and every control on that row is
+   centred on the same line. */
+.at-host {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Anchored to the button and grown upwards — the composer sits at the bottom
+   of the window, so downwards has nowhere to go. */
+.at-pop {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  width: 336px;
+  max-width: min(336px, calc(100vw - var(--sp-8)));
+  padding: var(--sp-15);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+/* ------------------------------------------------------------- the menu -- */
+
+.at-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.at-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.at-item:hover {
+  background: var(--bg-hover);
+}
+
+.at-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.at-item-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--sp-6);
+  height: var(--sp-6);
+  color: var(--text-secondary);
+}
+
+.at-item-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.at-item-label {
+  line-height: var(--lh-tight);
+}
+
+.at-item-hint {
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+}
+
+/*
+  Waiting for the operating system's panel to come up.
+
+  It is not instant — the main process resolves the window and AppKit builds the
+  sheet — and the previous version of this menu opened an in-app list, where the
+  same click felt immediate. So the row has to say something in that gap, or it
+  reads as a dead control: the exact complaint this whole pass is answering, and
+  a click people repeat.
+
+  The pressed row keeps full contrast and its neighbours dim, rather than the
+  other way round. What is happening belongs to the row that was pressed.
+*/
+.at-item:disabled {
+  cursor: default;
+}
+
+.at-item:disabled:not([data-busy]) {
+  opacity: 0.45;
+}
+
+.at-item[data-busy] {
+  background: var(--bg-active);
+}
+
+.at-item[data-busy] .at-item-hint {
+  color: var(--text-secondary);
+}

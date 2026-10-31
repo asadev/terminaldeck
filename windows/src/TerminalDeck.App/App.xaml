@@ -1,0 +1,26 @@
+<Application x:Class="TerminalDeck.App.App"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+        <ResourceDictionary Source="Styles/DeckResources.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <Style TargetType="FontIcon"><Setter Property="FontFamily" Value="{StaticResource DeckIconFontFamily}"/></Style>
+      <!-- Every control template reads this key; plain text blocks get the same family below. -->
+      <StaticResource x:Key="ContentControlThemeFontFamily" ResourceKey="DeckTextFontFamily"/>
+      <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource DeckTextFontFamily}"/></Style>
+      <Style TargetType="RichTextBlock"><Setter Property="FontFamily" Value="{StaticResource DeckTextFontFamily}"/></Style>
+      <Style x:Key="SurfaceCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource DeckCardBrush}" />
+        <Setter Property="CornerRadius" Value="{StaticResource DeckCardRadius}" />
+        <Setter Property="BorderThickness" Value="0" />
+      </Style>
+      <Style x:Key="SurfaceGridStyle" TargetType="Grid">
+        <Setter Property="Background" Value="{ThemeResource DeckCardBrush}" />
+        <Setter Property="CornerRadius" Value="{StaticResource DeckCardRadius}" />
+      </Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

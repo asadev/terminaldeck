@@ -1,0 +1,718 @@
+/* ============================================================================
+   New session dialog.
+
+   Five decisions in one panel, so the panel has to read as five decisions and
+   not as a form. Nothing here is boxed and nothing is ruled off: the sections
+   are told apart by the space between them, the choices by a fill, and the one
+   that is selected by the accent. Every value comes from tokens.css.
+   ============================================================================ */
+
+:root {
+  /* The radio's dot. Small enough to read as a control, large enough to hit. */
+  --ns-mark: 14px;
+  /* The pop-up button's lane, so the row does not resize as logins change. */
+  --ns-select-min: 168px;
+  /* And its ceiling, now that a login is named by its email address rather
+     than by a profile key. "Default (Gemini CLI)" was as wide as this control
+     could ever get; an address has no such limit, and a pop-up that grows with
+     one would squeeze the line beside it and then push the dialog. Wide enough
+     for an ordinary address, and the ones past it end in an ellipsis with the
+     whole thing still in the list when it is opened. */
+  --ns-select-max: 264px;
+}
+
+/* 20px between sections, not 24.
+
+   Five sections in a panel that has to fit a 900px window: the four pixels a
+   gap gives back are worth having when they decide whether the last control is
+   on screen, and at this density 20px still separates the sections without a
+   rule — which is the rule this app holds itself to. */
+.ns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding-top: var(--sp-1);
+}
+
+/* Space, not a rule. A `border-top` per section drew four lines across a panel
+   whose sections were already obvious from their headings. */
+.ns-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.ns-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+/* Sentence case and quiet — the tracked-out uppercase this used to be shouted
+   over the choices underneath it. */
+.ns-section-title {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
+.ns-hint {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* A tint rather than a box. Both of these are a sentence about what the panel
+   can and cannot do, and a sentence does not need a frame. */
+.ns-error,
+.ns-problem {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* A blocked start is a fact about the machine, not an alarm — it borrows the
+   critical colour at the strength of a tint, so it reads as "cannot", not
+   "danger". */
+.ns-problem {
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------- shared -- */
+
+/* Covers its row so the whole thing is the hit target, and stays focusable —
+   only the native rendering is hidden. */
+.ns-project input,
+.ns-agent input,
+.ns-choice input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.ns-mark {
+  flex-shrink: 0;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin-top: var(--sp-05);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+/* An inset ring rather than a child element: one box-shadow draws the dot. */
+[data-selected='true'] > .ns-mark {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+[data-available='false'] > .ns-mark {
+  border-color: var(--border);
+}
+
+.ns input:focus-visible ~ .ns-mark {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A project row has no `.ns-mark` to hang a ring on, and its radio is
+   `opacity: 0` — so before this it took keyboard focus with nothing at all on
+   screen to show where focus had gone. The row itself is the indicator. */
+.ns-project:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ns-link {
+  padding: var(--sp-05) var(--sp-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--accent);
+}
+
+.ns-link:hover {
+  background: var(--bg-hover);
+}
+
+/* --------------------------------------------------------------- project -- */
+
+/* A shortlist, not a browser: it scrolls at about five rows so the four
+   decisions below it stay on screen without the dialog growing a second
+   scrollbar of its own. No frame around it — the rows are the list. */
+.ns-projects {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--control-h-lg) * 5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Clears the selected row's own corners from the scroll edge. */
+  margin: 0 calc(-1 * var(--sp-3));
+  padding: 0 var(--sp-3);
+}
+
+/* The row is the label plus whatever acts on it. The label still fills the row
+   — it is the hit target for choosing the folder — and Remove sits on top of
+   its right end rather than beside it, so a list of eight folders is still a
+   list of eight names and not a column of buttons. */
+.ns-project-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ns-project {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: var(--control-h-lg);
+  padding: var(--sp-15) var(--sp-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ns-project:hover {
+  background: var(--bg-hover);
+}
+
+/* Quiet until it is wanted: shown on hover, on keyboard focus, and while its
+   own confirm is open. A destructive action that is visible on all eight rows
+   at rest turns a shortlist into a control panel — and this one is reached by
+   pointing at the row you mean, which is how the sidebar's ✕ works too. */
+.ns-project-btn {
+  flex-shrink: 0;
+  padding: var(--sp-05) var(--sp-2);
+  margin-left: var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.ns-project-row:hover .ns-project-btn,
+.ns-project-btn:focus-visible,
+.ns-project-confirm .ns-project-btn {
+  opacity: 1;
+}
+
+.ns-project-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ns-project-btn.danger:hover {
+  color: var(--color-critical);
+}
+
+.ns-project-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.ns-project[data-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.ns-project-name {
+  flex-shrink: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* The tail of a long path is the part worth losing — the leading `/Users/...`
+   is what tells two same-named folders apart at a glance. */
+.ns-project-path,
+.ns-chosen-path {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ns-chosen-path {
+  margin: var(--sp-2) 0 0;
+}
+
+.ns-empty {
+  margin: 0;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+/* The folder filter, which only exists past eight projects. A fill and no
+   border, like the first-message field, so the panel keeps one control
+   language; the native search decorations are dropped for the same reason. */
+.ns-filter {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.ns-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.ns-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ns-filter::-webkit-search-decoration,
+.ns-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* ----------------------------------------------------------------- agent -- */
+
+/* Two columns, not four stacked cards.
+
+   Measured, not preferred: as one column this panel was 820px tall inside a
+   900px window, so the primary button, the first message and the whole
+   Conversation section were below a fold — in a dialog whose entire job is to
+   show you the decision before you commit to it. The agents alone were 340 of
+   those pixels. Paired, the same four rows are 172 and everything fits with
+   room to spare.
+
+   `auto-fit` with a floor rather than a hard `1fr 1fr`, so a narrower window
+   drops it back to one column instead of squeezing two unreadable ones. */
+.ns-agents,
+.ns-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  /* Every card the same height, not just the two sharing a row.
+
+     `align-items: stretch` is the default and it only ever equalised *within* a
+     grid row, so the four agents came out as two tall cards over two short
+     ones — purely because one agent's description runs to a second line and
+     another's does not. Four cards of three different heights is what a form
+     looks like when nobody laid it out; `1fr` rows make the block a block. */
+  grid-auto-rows: 1fr;
+  gap: var(--sp-1);
+  align-items: stretch;
+}
+
+/* A fill, not an outline. Nine bordered cards in one dialog read as a form
+   made of boxes; the same nine as quiet fills read as a list you choose from.
+   Selected is the accent tint, with a hairline of the same accent and nothing
+   else — the mark inside already says which one it is. */
+.ns-agent,
+.ns-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  /* Tighter up and down than across. Twelve all round was 24px of air per row
+     of cards, which is what put the last control of the panel past the bottom
+     of a 900px window; eight still reads as a card and not as a table row. */
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.ns-agent:hover[data-available='true'],
+.ns-choice:hover:not([data-available='false']) {
+  background: var(--fill-tertiary);
+}
+
+.ns-agent[data-selected='true'],
+.ns-choice[data-selected='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* Dimmed but legible: the reason it is dimmed is written inside it. */
+.ns-agent[data-available='false'],
+.ns-choice[data-available='false'] {
+  cursor: default;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ------------------------------------------------ adding and removing one -- */
+
+/* The last card in the grid, wearing the same fill as the others so it reads as
+   the end of the list rather than as a control parked beside it. A `<button>`
+   has to be told all of this: it does not inherit the font, the colour or the
+   alignment a `<label>` gets for free. */
+.ns-agent-add {
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+.ns-agent-add:hover {
+  background: var(--fill-tertiary);
+}
+
+.ns-agent-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The same box the radio dot occupies, so the text of every card in the grid
+   starts on one vertical line. Square rather than round, because it is not one
+   of the choices. */
+.ns-add-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin-top: var(--sp-05);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: 1;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.ns-agent-add:hover .ns-add-mark {
+  color: var(--accent);
+}
+
+/* Sits above the radio input, which covers the whole card so the card is the hit
+   target; without a stacking context of its own the click lands on the input and
+   selects the agent being removed. */
+.ns-agent-remove {
+  position: relative;
+  z-index: 1;
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: var(--sp-05) var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--t-caption);
+  cursor: pointer;
+  /* Out of sight until the card is under the pointer or the keyboard is on it.
+     A Remove standing permanently beside every added agent turns a list somebody
+     reads into a list somebody has to be careful in. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ns-agent:hover .ns-agent-remove,
+.ns-agent-remove:focus-visible {
+  opacity: 1;
+}
+
+.ns-agent-remove:hover {
+  background: var(--fill-secondary);
+  color: var(--color-critical);
+}
+
+.ns-agent-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ns-agent-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.ns-agent-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+[data-available='false'] .ns-agent-label {
+  color: var(--text-secondary);
+}
+
+.ns-tag {
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  color: var(--text-muted);
+}
+
+.ns-install {
+  margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- profile -- */
+
+.ns-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.ns-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.ns-row-label {
+  display: block;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* The config directory sits here, and it is long — it must truncate rather
+   than push the select off the panel. */
+.ns-row-text .ns-hint {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ns-select-wrap {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Drawn rather than an image: the CSP forbids remote assets. */
+.ns-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+/* macOS pop-up button: control height, a quiet fill, no border. */
+.ns-select {
+  appearance: none;
+  min-width: var(--ns-select-min);
+  max-width: var(--ns-select-max);
+  text-overflow: ellipsis;
+  height: var(--control-h);
+  padding: 0 var(--sp-6) 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ns-select:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.ns-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A limit on what the control above can actually do. Muted rather than walled
+   off behind a rail: nothing has gone wrong, the wiring simply is not there. */
+.ns-caveat {
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- prompt -- */
+
+.ns-optional {
+  margin-left: var(--sp-15);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
+/* A field is a fill here too, so the dialog has one control language. */
+.ns-prompt {
+  display: block;
+  width: 100%;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+
+.ns-prompt::placeholder {
+  color: var(--text-muted);
+}
+
+.ns-prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ns-preview {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+.ns-preview strong {
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- outcomes -- */
+
+/* Adjustments the resolver made, said out loud. Muted on purpose: a fallback
+   that worked is information, not a warning. */
+.ns-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ns-notice {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.ns-remember {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  cursor: pointer;
+}
+
+/* Native rendering kept — a tick is a tick, and restyling it would add a
+   second control language to the same dialog. */
+.ns-remember input {
+  flex-shrink: 0;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin: var(--sp-05) 0 0;
+  accent-color: var(--accent);
+}
+
+.ns-footer-hint {
+  margin-right: auto;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ where -- */
+
+/*
+  Which machine the session runs on.
+
+  A row of cards rather than a column, because there are usually two of them and
+  a column of two full-width cards reads as a list that will grow — which is
+  exactly the impression to avoid on the one step most people will never use.
+  It wraps rather than scrolls: a household with four machines gets two lines,
+  and a horizontal scroller inside a modal is a control people do not find.
+
+  The cards are `.ns-choice`, the same class the Agent rows use, so this borrows
+  the fill, the selected tint and the ring rather than restating them. What is
+  added here is only what is genuinely different: these rows are one line of
+  text, so they centre rather than top-align, and they do not stretch.
+*/
+.ns-where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.ns-where-row {
+  align-items: center;
+  /* Content-width, so "this Mac" is not a card the width of the panel. The two
+     answers are of very different lengths and equal columns would make the
+     shorter one look like a placeholder. */
+  flex: 0 1 auto;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.ns-where-row .ns-mark {
+  /* The Agent rows nudge their mark down to meet the first line of a
+     three-line card; this row has one line and the nudge would sit it low. */
+  margin-top: 0;
+}
+
+/* The machine's own mark, and only on a machine. `this Mac` deliberately does
+   not wear one: the row is about *where*, and a mark on every option would stop
+   the mark meaning "somewhere else". */
+.ns-where-glyph {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.ns-where-name {
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  white-space: nowrap;
+}

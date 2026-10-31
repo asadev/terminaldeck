@@ -1,0 +1,828 @@
+/* ============================================================================
+   The usage bar, in the chrome.
+
+   Two readings and one control, beside the account they belong to, for a
+   terminal session as much as a chat one:
+
+     - the **context figure** — a number and a unit, always on screen, because
+       reading it is a bounded file read of what the agent already wrote;
+     - the **plan icon** — one glyph, no words, opening a panel that lists the
+       five-hour, weekly and per-model windows.
+
+   The split is Asad's, on 2026-08-19 — *"no lets keep it in the dropdown and
+   keep context outside"* — and it is a cost rather than a taste. `UsageBar.tsx`
+   and `useUsageBar.ts` carry the measurements that settled it.
+
+   Almost nothing new is invented here. The control is `cc-chip`, the shape
+   every control in this app wears, and the panel is the same glass as the
+   cluster's folded sheet next to it. What is below is the two elements on the
+   bar, the meter — the one piece of data on a bar of controls — and the handful
+   of rules that come from living on a row 48 pixels tall and shared with five
+   other things.
+   ============================================================================ */
+
+.usage-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* Gives way before its neighbours do: the pickers beside it have values that
+     cannot be shortened past a word, and this one degrades gracefully — the
+     renewal clause ellipsises long before either number does. */
+  min-width: 0;
+  /* Both bars are window drag regions, and a drag region covers its children's
+     pixels too, so every control on one subtracts its own rectangle back out or
+     pressing it moves the window instead. */
+  -webkit-app-region: no-drag;
+}
+
+/* ------------------------------------------------------- the context figure */
+
+/*
+  The reading that lives outside the dropdown.
+
+  Not a chip. It became a real control on 2026-08-19, when the paragraph behind
+  it turned into a panel that has to be reachable by keyboard, and its
+  appearance did not move an inch with it: dressing data as a chip would be the
+  affordance-with-nothing-behind-it this app refuses everywhere, and what is
+  behind this one is a disclosure rather than an action. So it keeps the *value*
+  treatment — the same tabular monospace every number in this cluster wears — and
+  it is the type colour rather than a chip's fill that tells a reader it is data.
+
+  `font-variant-numeric: tabular-nums` matters more here than anywhere else on
+  this bar: the figure is re-read while the agent is printing, so its digits
+  change several times a minute in place. Proportional digits make the icon
+  beside it jog left and right on a row somebody is trying to read.
+*/
+.ub-context {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  /* A drag region covers its children, so anything with a tooltip on this bar
+     has to subtract itself back out or hovering it moves the window. */
+  -webkit-app-region: no-drag;
+}
+
+/*
+  The gap to the icon, spelled as padding on this element rather than as a gap
+  on the row, and the reason is arithmetic rather than taste.
+
+  `naturalWidth` in `control-room.ts` adds up the boxes it finds and charges one
+  *cluster* gap between them. It has no way to know about a gap declared inside
+  one of those boxes, so a `gap` here would make every measurement of the row
+  four pixels short — and that function is only allowed to be wrong in the other
+  direction. Padding is inside the box and is therefore counted.
+
+  Not applied to the tight arrangement, where the figure is inside the button
+  and the button's own padding is the spacing: the child combinator is what
+  keeps the two cases apart.
+*/
+.usage-bar > .ub-context {
+  padding-right: var(--sp-1);
+}
+
+/* `--accent-warning` and `--accent-danger` were written here and never existed
+   anywhere in the app, so both levels resolved to the empty string and inherited
+   plain body text — the two alert levels drew identically. The tokens this app
+   actually has are `--color-warning` and `--color-critical`, which is what the
+   strip's own fill below has always used. */
+.ub-context[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.ub-context[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+/*
+  It is a control now, and it still must not look like one.
+
+  It became a `<button>` when the breakdown behind it did — hovering opens the
+  panel, pressing holds it open — and everything that would make it *look*
+  pressable is deliberately left off: no border, no fill, no hover chip. What it
+  keeps is the app's one focus idiom, from `app.css`, because a control a
+  keyboard can reach and cannot see is worse than one that is merely quiet.
+
+  The button reset in `app.css` already strips padding, border and background, so
+  what is above this rule is the whole of its appearance and it is unchanged from
+  when it was a span.
+*/
+.ub-context:focus-visible {
+  border-radius: var(--radius-sm);
+}
+
+/*
+  And what it draws now that it draws a proportion rather than a count.
+
+  The fill is square-ended inside a rounded, clipped track — the same treatment
+  as `.ub-cx-bar` below, and it matters at this size for a reason a screenshot
+  made obvious and reasoning would not have: a pill-shaped fill at 19% of 40px
+  is 7.7 pixels wide and 6 tall, which is a *dot*. Square ends let the clip give
+  it the track's left curve and nothing else, so a small reading still reads as
+  a short bar.
+
+  `inline-flex` because the element is a `<button>` whose whole content is one
+  block: without it the bar sits on the text baseline and rides a few pixels
+  below the icon beside it, on a row where everything else is centred.
+
+  The width is a fixed 40px rather than a share of the row, and that is a
+  measurement rather than a preference: `naturalWidth` in `control-room.ts` adds
+  up these boxes to decide whether the cluster folds, so an element that sized
+  itself from its container would make the row's own width depend on the row's
+  own width. 40 is what the figure it replaces measured (`154.1k` is 39.6), so
+  every fold point the cluster was measured at still holds.
+*/
+.ub-cx-strip {
+  display: block;
+  width: 40px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  /* The same track the panel's own bar uses, so the strip and the panel it
+     opens are visibly one reading rather than two drawings of it. */
+  background: var(--fill-tertiary);
+}
+
+.ub-cx-strip-fill {
+  display: block;
+  height: 100%;
+  background: var(--status-working);
+}
+
+.ub-cx-strip[data-level='warning'] .ub-cx-strip-fill {
+  background: var(--color-warning);
+}
+
+.ub-cx-strip[data-level='critical'] .ub-cx-strip-fill {
+  background: var(--color-critical);
+}
+
+/*
+  Narrower where the cluster is folded and the bar shares a chip with the ring.
+
+  Sixteen is arithmetic, not taste. Measured through `.harness/controls.html` at
+  the app's own 720px minimum with a long session name, the cluster is clamped to
+  106 pixels and the folded controls chip beside this takes 72 of them, so this
+  whole element has 32 to spend — and it spent exactly 32 back when the tight
+  arrangement was the strip *alone* at 28 inside 2+2 of chip padding. Putting the
+  ring back in beside it costs 15 (a 13-pixel glyph and the gap), and this is
+  where those 15 come from: 12 off the strip, 2 off the chip's padding and 1 off
+  the gap. `1 + 16 + 1 + 13 + 1 = 32`, so every fold point the cluster was ever
+  measured at still holds to the pixel.
+
+  Which is the right place to take it from. The strip is a *proportion* and stays
+  legible as one at any width — a fill is short or it is long — while the ring is
+  the mark Asad picked for this reading and gets less like itself with every pixel
+  taken off, and the chip beside it clips its own caret if it is squeezed at all.
+*/
+.usage-bar[data-fit='tight'] .ub-cx-strip {
+  width: 16px;
+}
+
+/* ---------------------------------------------------------- the plan icon */
+
+/*
+  One glyph, and the chip sized down to it.
+
+  `cc-chip` is built around a label; this one has none, so the horizontal
+  padding drops to a square's worth and the width comes from the glyph. What it
+  keeps is everything that says it is a control — the border, the hover fill,
+  the focus ring — because the *only* thing distinguishing it from a decorative
+  mark is that it looks pressable.
+*/
+.cc-chip.ub-plan {
+  flex: 0 0 auto;
+  gap: 0;
+  padding-left: var(--sp-1);
+  padding-right: var(--sp-1);
+  /*
+    The arc's colour, and only the arc's — the track below keeps its own grey.
+
+    Blue at rest rather than the row's own text colour, because the mark he
+    pointed at is a *progress* ring and not a grey outline: *"give it a maybe
+    ring icon will be better, just like cloud, like this ring."* Claude's is a
+    blue arc on a neutral track. Same token as the context strip's fill two
+    elements to the left, so the two readings on this bar are one visual
+    language rather than two drawings that happen to share a row.
+  */
+  color: var(--status-working);
+}
+
+.ub-plan-glyph {
+  display: block;
+}
+
+/*
+  The track is neutral at every level; the arc is the only thing that carries a
+  colour.
+
+  Both were `currentColor` before — the track at 0.32 of it — which meant the
+  chip's level tinted the whole ring and left the arc nothing to be read
+  against. Split, so a ring at 81% is an amber arc on the same grey circle it
+  wears at 4%, and the *change* is what the eye catches.
+*/
+.ub-plan-track {
+  stroke: var(--text-muted);
+  opacity: 0.34;
+}
+
+.ub-plan-arc {
+  stroke: currentColor;
+}
+
+/*
+  The colour of the worst window, so the icon can say "you are near something"
+  without being opened.
+
+  This is the job `extraAlert` used to do on the bar. With every window behind
+  one control the hazard it was written for is worse rather than better: a
+  `Current week (Opus)` at 97% is invisible unless something on the closed
+  control shows it.
+*/
+.cc-chip.ub-plan[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.cc-chip.ub-plan[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+/*
+  An account with no subscription limits, muted rather than hidden.
+
+  Hidden would be wrong for the reason this component keeps repeating: a control
+  that is absent and a control that has nothing to report are indistinguishable,
+  and only one of them is true here. The panel behind it says which in a
+  sentence.
+*/
+.cc-chip.ub-plan[data-status='no-limits'],
+.cc-chip.ub-plan[data-status='unwired'],
+/*
+  And a session that is not on this computer, muted for the same reason and by
+  the same amount.
+
+  Deliberately not a fourth appearance. The three states share one fact — there
+  is no figure behind this control and there is a sentence saying why — and the
+  bar's own rule is that the shape does not change between a local session and a
+  remote one. A distinct colour here would be this element announcing "remote"
+  on a toolbar where the session's machine is already stated twice.
+*/
+.cc-chip.ub-plan[data-status='withheld'] {
+  opacity: 0.5;
+}
+
+/*
+  A refresh is running.
+
+  A pulse rather than a spinner, because a spinner is a shape and this control
+  is already a shape. `prefers-reduced-motion` drops it to a flat dim — the
+  state still reads, and the panel says "Checking with Claude Code…" in words
+  the moment it is open, which is the only place the animation is visible from
+  anyway.
+*/
+.cc-chip.ub-plan[data-status='reading'] {
+  animation: ub-plan-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ub-plan-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-chip.ub-plan[data-status='reading'] {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* --------------------------------------------------------------- the meter */
+
+/*
+  The track is sized by where it is drawn, not once for both places.
+
+  Every width rule below therefore names its context. The first version set the
+  chip's width on the bare class and the panel's on `.ub-row .ub-meter`, and the
+  narrow rule — `.usage-bar[data-fit] .ub-meter` — then outranked the panel's
+  by one class and shrank the meters *inside the open panel* to 30 pixels. Seen
+  in a screenshot, not in a test: a 300px card with three-centimetre bars in it.
+*/
+.ub-meter {
+  display: block;
+  position: relative;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  overflow: hidden;
+}
+
+.ub-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--status-working);
+  transition: width var(--dur) var(--ease);
+}
+
+.ub-meter[data-level='warning'] .ub-meter-fill {
+  background: var(--color-warning);
+}
+
+.ub-meter[data-level='critical'] .ub-meter-fill {
+  background: var(--color-critical);
+}
+
+/*
+  An aged reading: real, measured, and older than a twelfth of its own window.
+
+  Drawn back rather than dropped. Claude Code reports its limits only when it is
+  asked, so a `/usage` reading goes aged twenty-five minutes later and would
+  otherwise make the bar disappear while the session carried on — which teaches
+  a reader that the feature is broken rather than that the number is old. The
+  fetch that will replace it is already on its way (see `auto-usage.ts`), and
+  the age is printed in the panel, so the dimming is a hint and not the claim.
+*/
+.ub-meter[data-state='aged'] {
+  opacity: 0.5;
+}
+
+/* --------------------------------------------------------------- the panel */
+
+/*
+  Opens downward, like the cluster's folded sheet beside it, and for the same
+  reason: this hangs off a bar at the *top* of a pane, where upward is the title
+  bar or another pane's terminal. Anchored right so it grows back across the
+  window rather than off the edge — the cluster lives at the end of the bar, so
+  its left is where the room is.
+*/
+.ub-sheet {
+  position: absolute;
+  top: calc(100% + var(--sp-15));
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 300px;
+  max-width: calc(100vw - var(--sp-6));
+  /* The design height, or the room there actually is under this panel — see
+     `sheet-room.ts`, which publishes `--sheet-room` when the sheet opens. The
+     fallback is the old formula, which is right on any window tall enough for
+     the cap to bind and wrong below it: `100%` in a `max-height` resolves
+     against the containing block's *height*, never against how far down the
+     window that block sits. */
+  max-height: min(460px, var(--sheet-room, calc(100vh - 100% - var(--sp-8))));
+  padding: var(--sp-3);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+  /* A pane's bar dims when the pane is not focused, and a panel you have just
+     opened must not be dimmed with it. */
+  opacity: 1;
+  text-align: left;
+}
+
+/*
+  The few pixels between the bar and the sheet, made crossable.
+
+  Asad's panels now open on hover as well as on a press, and a hover panel that
+  disappears while you move the pointer into it is worse than no hover panel.
+  The sheet is a *child* of `.usage-bar`, so `pointerleave` on the bar does not
+  fire while the pointer is over the sheet — the whole subtree counts as the bar.
+  The one hole in that is the `--sp-15` gap this rule fills.
+
+  A pseudo-element rather than a timer: there is nothing to cancel on unmount,
+  nothing to fire late, and no interaction with the app's standing rule against
+  scheduled callbacks. It exists only while a panel is open, and it is the width
+  of the bar itself — the straight-down path from either trigger — rather than
+  the width of the sheet, so it covers as little of the pane beneath it as the
+  job allows.
+
+  The `::before` alternative, on the sheet, does not work: `.ub-sheet` sets
+  `overflow-y: auto`, which clips a child positioned above its own top edge.
+*/
+.usage-bar[data-open]::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: var(--sp-15);
+}
+
+/* Whose reading this is: the agent's mark and name, then the login. Separated
+   with space and a tint rather than a rule — the house rule for this app's
+   chrome, stated in CLAUDE.md in his own words. */
+.ub-whose {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.ub-whose-agent {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.ub-whose-account {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.ub-whose-account::before {
+  content: '· ';
+}
+
+/* ------------------------------------------------------------- one window */
+
+.ub-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+}
+
+.ub-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.ub-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ub-row-value {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.ub-row-value[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.ub-row-value[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+/* Full width in the panel, where there is room for the bar to be read rather
+   than glanced at. */
+.ub-row .ub-meter {
+  width: 100%;
+  height: 5px;
+}
+
+.ub-row-detail,
+.ub-row-reset {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.ub-row-reset {
+  color: var(--text-secondary);
+}
+
+/*
+  The one sentence a screen reader still gets, and the only one anybody gets
+  without asking for it.
+
+  Clipped to nothing rather than merely dimmed. `.ub-running` and `.ub-failed`
+  used to be here — two of the nine statements Asad counted in this cluster on
+  2026-08-20 — and the states they described did not go with them: the ring
+  pulses while a check runs, and a failed one puts its sentence behind the ⓘ in
+  the panel's header. What a colour cannot do is announce itself, so the running
+  state keeps a live region with no pixels.
+
+  The same technique `HoverNote.css` uses for the paragraph behind its dot, and
+  for the same reason: in the document, out of the layout, never a box that
+  reserves a line of space it then draws nothing in.
+*/
+.ub-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+  The ⓘ at the end of the panel's header row.
+
+  It exists only in the states with no figure, so it is never beside a working
+  reading, and it is pushed to the far end of the row so the agent and the login
+  keep reading as one phrase. `HoverNote` draws its own dot; this only places it.
+*/
+.ub-whose-note {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/*
+  The one action in this panel, and only in the one state that has stopped.
+
+  A quiet text target rather than a filled button, for the reason `.sc-open`
+  states beside the connector list: nothing else in this popover is pressable, so
+  a bordered button would be the loudest thing in a panel whose job is to state
+  facts. Pulled back by its own padding so its first letter sits on the same
+  vertical line as the sentence above it.
+*/
+.ub-retry {
+  align-self: flex-start;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ub-retry:hover {
+  background: var(--bg-hover);
+}
+
+/* A window that has rolled over keeps its sentence and loses its number, so the
+   sentence is the whole row and is worth the ordinary text colour. */
+.ub-row[data-state='expired'] .ub-row-detail,
+.ub-row[data-state='no-reset'] .ub-row-detail {
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------- the context breakdown -- */
+
+/*
+  The panel behind the context figure, built out of the plan panel's own parts.
+
+  Asad's ask was *"this clean and visual"*, holding this app's hover next to
+  Claude Code's `/context` — a header row, a segmented bar, then labelled rows
+  with a count and a share. It reuses `.ub-row-head`, `.ub-row-name` and
+  `.ub-row-value` on purpose: the two panels hang off controls four pixels apart
+  and a reader should not be able to tell that two people built them.
+
+  What it does not reuse is `.ub-meter`, and the reason is honesty rather than
+  style. A meter is one fill in a track — a fraction of something. This is a bar
+  divided into named lengths that add up to the window, and each length has a row
+  under it with its own count. Two elements, because they are two claims.
+*/
+.ub-cx {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* A rule only when something follows it — which is the folded arrangement, where
+   one control carries both readings and its panel therefore carries both. Space
+   first, then a tint, and only then a line: this is the one place in the panel
+   where two whole readings meet and the line is what keeps them apart. */
+.ub-cx:not(:last-child) {
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/*
+  The bar: lengths laid end to end, not a fill inside a track.
+
+  Six pixels — a pixel taller than the plan meters below it, because this one is
+  the headline of its own panel rather than one of a list. Rounded as a whole
+  with `overflow: hidden`, so the two segments meet square in the middle and only
+  the outside ends are curved, which is what makes a segmented bar read as one
+  object rather than as two pills.
+*/
+.ub-cx-bar {
+  display: flex;
+  height: 6px;
+  margin: var(--sp-05) 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--fill-tertiary);
+}
+
+.ub-cx-seg {
+  display: block;
+  height: 100%;
+}
+
+/*
+  Used takes the colour every meter in this app takes at that level, so one
+  session's occupancy is the same colour on the bar, in this panel and in the
+  chat pane. Free takes the track colour, which is what it is: the part nothing
+  has been written into.
+*/
+.ub-cx-seg[data-seg='used'] {
+  background: var(--status-working);
+}
+
+.ub-cx-bar[data-level='warning'] .ub-cx-seg[data-seg='used'] {
+  background: var(--color-warning);
+}
+
+.ub-cx-bar[data-level='critical'] .ub-cx-seg[data-seg='used'] {
+  background: var(--color-critical);
+}
+
+.ub-cx-seg[data-seg='free'] {
+  background: var(--fill-secondary);
+}
+
+/*
+  One length, as a row: a key with the bar's own colour beside it, the count, and
+  the share.
+
+  Three columns rather than two so the counts line up under each other and the
+  shares line up under each other — the figures are `--font-mono` tabular through
+  `.ub-row-value`, and columns are the only reason that font is here.
+*/
+.ub-cx-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.ub-cx-key {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* The legend, which is what makes the bar above readable without a caption. */
+.ub-cx-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+}
+
+.ub-cx-row[data-seg='used'] .ub-cx-dot {
+  background: var(--status-working);
+}
+
+/* The share column, drawn back from the count beside it: the count is the fact
+   and the share is the way of holding it. */
+.ub-cx-share {
+  min-width: 3.2em;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+/*
+  The provenance, as lines.
+
+  This is the paragraph he objected to — one run-on sentence that said which
+  transcript, that the transcript was guessed at, and when it was written, with
+  the first of those said twice. Every fact survives; what changed is that a key
+  column carries the question and the value column carries the answer, so a
+  reader can find the one they came for without reading the other two.
+*/
+.ub-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-05) var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.ub-fact {
+  display: contents;
+}
+
+.ub-fact-key {
+  color: var(--text-muted);
+}
+
+.ub-fact-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/*
+  The sentence that says why the row list is two rows.
+
+  Set below the facts and quieter than them, because it is not a reading — it is
+  the account of a reading that is absent, and it must not compete with the
+  numbers it is explaining. `--text-muted` and a step down in size put it where
+  a footnote goes; the line height is loosened because it wraps to two lines in
+  a 300px panel and two tight lines read as one block of grey.
+*/
+/* --------------------------------------------------------------- folded -- */
+
+/*
+  What survives as the room runs out.
+
+  Almost everything, now. The reading that used to be squeezed here — two named
+  lines, two meters and a renewal clause — is inside the panel, and what is left
+  on the bar is a short number and a 13-pixel glyph. There is no tier at which
+  either of them has to be given up, which is the point of the change rather
+  than a side effect of it: a *reading* that is hidden is indistinguishable from
+  one that was never reported, and that is the one thing this component exists
+  to keep apart.
+
+  `tight` therefore tightens rather than removes. Measured through
+  `.harness/controls.html`; `SessionControls.tsx` holds the sweep beside the
+  line that picks the tier.
+*/
+.usage-bar[data-fit='tight'] {
+  gap: var(--sp-05);
+}
+
+.usage-bar[data-fit='tight'] .cc-chip.ub-plan {
+  padding-left: var(--sp-05);
+  padding-right: var(--sp-05);
+}
+
+/*
+  Two marks in one chip at this width — the strip and the ring — so it needs the
+  gap the chip otherwise sets to zero for a lone glyph, and it gives back the
+  three pixels the strip above could not.
+
+  A literal 1px rather than a token, because the spacing scale starts at 2 and
+  this is the last pixel in a budget that is counted out to the pixel; see the
+  arithmetic beside `.ub-cx-strip`. Nothing else in the app is allowed to reach
+  for a number this way, which is why it is spelled out here rather than added to
+  the scale.
+*/
+.usage-bar[data-fit='tight'] .cc-chip.ub-plan-figure {
+  gap: 1px;
+  padding-left: 1px;
+  padding-right: 1px;
+}
+
+/*
+  …and in this one state it stops giving way, because there is nothing left to
+  give.
+
+  Everywhere else this control shrinks with the row on purpose. That argument
+  does not reach the narrowest tier: both children are `flex: 0 0 auto` and
+  neither has a word in it that could ellipsise, so sharing a shortfall out
+  proportionally would clip a digit rather than shorten a caption — and half a
+  digit is a different number, which is the one failure this control is least
+  allowed.
+
+  `max-width` keeps the promise at widths below that, which a long session name
+  at the app's 720px minimum genuinely produces. Twenty-seven is the controls
+  chip's own tight floor plus the gap, so this can never take so much of the row
+  that the chip beside it is pushed past its own edge.
+*/
+.session-controls .usage-bar[data-fit='tight'] {
+  flex-shrink: 0;
+  max-width: calc(100% - 27px);
+}
+
+/* ----------------------------------------------------- inside a pane's bar */
+
+/*
+  A pane's bar is set at `--t-caption` and dims to 0.55 when the pane is not
+  focused. The control inherits the dimming, which is right — it is that pane's
+  chrome — but not the smaller type, because it is a control and this app draws
+  every control at `--t-footnote`. Stated rather than left to inheritance, for
+  the same reason `SessionControls.css` states it beside this.
+*/
+.pane-cell-slot .usage-bar {
+  font-size: var(--t-footnote);
+  overflow: visible;
+}

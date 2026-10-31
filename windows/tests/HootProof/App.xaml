@@ -1,0 +1,8 @@
+<Application x:Class="TerminalDeck.Hoot.Proof.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
+    <ResourceDictionary.ThemeDictionaries>
+      <ResourceDictionary x:Key="Light"><AcrylicBrush x:Key="DeckGlassBrush" TintColor="#FAFAFA" TintOpacity="0.82" FallbackColor="#FAFAFA" /></ResourceDictionary>
+      <ResourceDictionary x:Key="Dark"><AcrylicBrush x:Key="DeckGlassBrush" TintColor="#282828" TintOpacity="0.82" FallbackColor="#282828" /></ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+  </ResourceDictionary></Application.Resources>
+</Application>

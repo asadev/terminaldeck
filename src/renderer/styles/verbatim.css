@@ -1,0 +1,484 @@
+/* ============================================================================
+   Verbatim text — the surfaces that must show the characters that are there
+
+   `--font-mono` puts JetBrains Mono in front of Menlo, and on this machine it
+   *is* what renders: 'SF Mono' is not a family macOS exposes to a web engine
+   unless the developer has installed Apple's separate download, so the stack
+   falls straight through to the copy bundled in `assets/fonts`. JetBrains Mono
+   ships programming ligatures switched on in `liga`/`calt`. Nothing in this
+   repository had ever switched them off, so the file viewer was drawing
+
+       <!-- CSP is applied …                    as    ←!— CSP is applied …
+       … inline preamble. -->                   as    … inline preamble. ⟶
+       </head>  </div>  </script>  <br />       as    ⟨/head⟩ … with the slash
+                                                      welded to the bracket
+
+   — verified on screen against `src/renderer/index.html`, not deduced.
+
+   In a font meant for writing code that is a feature. In a pane whose whole
+   job is to show a reader what a file or a process actually contains it is a
+   correctness bug, and a nastier one than it looks: the glyph is a lie the
+   reader cannot detect. Selecting the line and copying it yields the real
+   bytes, so the screen and the clipboard disagree with no warning, and anyone
+   transcribing what they see by hand — into a bug report, into a chat message,
+   into another editor — writes down characters that were never in the file.
+
+   ## Why the whole mono stack, and not a hand-picked list of "code" panes
+
+   Every rule below was found mechanically: it is every selector in every
+   stylesheet under `src/renderer` that sets `font-family: var(--font-mono)`,
+   plus the three that reach for the same stack from TypeScript instead of CSS.
+   (Not written with a glob: a `*` followed by a `/` ends a CSS comment, which
+   is a way to lose a stylesheet inside its own explanation.)
+   That is deliberate, and `verbatim.test.ts` re-derives the same list on every
+   run so the two cannot drift.
+
+   The alternative — deciding case by case which panes are "really" verbatim —
+   fails on contact with the actual list. A file path is verbatim (macOS allows
+   `->` in a filename, and `ls -l` prints one for every symlink). A shell
+   command offered for copying is verbatim, and `curl … 2>&1 | tee` is full of
+   pairs this font welds. A JSON field the user types into is verbatim twice
+   over: what is shown has to equal what was typed *and* what will be sent. A
+   diff, a CI log, an MCP payload, a git ref, an SSH fingerprint, a version
+   range like `>=0.2.0`, a CSS selector like `.a > .b` — all verbatim. Not one
+   surface in this app sets the mono face because ligatures were wanted there;
+   it is set because the text is machine text, and machine text is exactly the
+   text nobody may re-draw.
+
+   Ordinary UI text is untouched. It is `--font-ui` / `--font-display` — SF Pro
+   and Hanken Grotesk — and it keeps its `fi`/`ffi` ligatures, which are the
+   kind a reader is supposed to have.
+
+   ## Why `font-variant-ligatures: none` and nothing else
+
+   It is the high-level property, so it says what it means and one line covers
+   `liga`, `clig`, `dlig`, `hlig` and `calt` — `calt` matters because that is
+   the feature JetBrains Mono actually hangs most of its arrows off, and the
+   low-level `font-feature-settings: 'liga' 0` alone would leave them running.
+
+   What `none` does *not* switch off is `rlig`, required ligatures, which is
+   what Arabic and the Indic scripts need in order to be legible at all. That
+   is the correct line: a script that cannot be written without a ligature
+   keeps it, and a font that welds two ASCII characters together for looks does
+   not. Terminal output is not always Latin, so this distinction is load-
+   bearing rather than pedantic.
+   ============================================================================ */
+
+/* ------------------------------------------------------------ terminals -- */
+/*
+   xterm's DOM renderer does not ligate today, and the reason is an accident
+   worth writing down so nobody deletes this line believing it is dead.
+
+   It sizes every cell itself and then corrects the leftover sub-pixel drift by
+   putting a `letter-spacing` on each run — on this machine, `-0.00986842px` on
+   the span and `7.8px` on the row container. Blink drops ligatures whenever
+   letter-spacing is non-zero, so the correction suppresses them as a side
+   effect. Measured, not assumed: rendering `-->` to a canvas in the renderer at
+   `letterSpacing: 0` produces different pixels from drawing `-`, `-`, `>` at
+   cell pitch, and at `letterSpacing: -0.0099px` produces identical pixels.
+
+   That means the terminal is one rounding away from lying about a process's
+   output. xterm only writes the inline spacing when it differs from the row's
+   default (`M !== this.defaultSpacing`), so a font and size whose natural
+   advance lands exactly on the cell width would leave a run at zero spacing and
+   the arrows would appear — in a pane whose entire contract is that it shows
+   what the process printed. Settings lets the user choose both the font and the
+   size, which is to say the user can walk into that case. Saying it outright
+   costs one declaration.
+
+   `.xterm` and `.xterm-rows` both carry it because `TerminalView.tsx` and
+   `machines/RemoteTerminal.tsx` set `fontFamily` on the xterm instance from
+   `--font-mono` in JavaScript, so no CSS rule here names that font stack and
+   the sweep in `verbatim.test.ts` would never see them.
+*/
+.xterm,
+.xterm-rows,
+
+/* The specimen under Appearance → Terminal font. It exists to show what a
+   session will look like, so it has to be wrong in none of the ways a session
+   is not. Its family comes from an inline style in `AppearanceSection.tsx`. */
+.settings-font-preview,
+
+/* ------------------------------------------- file viewer, diffs, patches -- */
+.file-viewer-badge,
+.file-viewer-doc,
+.artifact-diff,
+.artifacts-detail-path,
+.artifact-change-tool,
+/* Four surfaces that arrived with the Artifacts and Source-control rebuilds.
+   Both panes stopped showing a path over raw markdown and started showing the
+   artifact rendered, with the change record behind a switch — which created
+   new mono surfaces rather than reusing the old ones. `.artifact-plain` is a
+   file shown as-is when it is not markdown; `.artifact-doc code` is the inline
+   code inside one that is; `.git-diff-path` is the filename heading now that
+   the diff lives beside the list; `.git-diff-body` is the hunk text itself,
+   which is the single worst place in the app to redraw a character — a diff
+   whose `!=` reads as `≠` is a diff nobody can trust. */
+.artifact-plain,
+.artifact-doc code,
+.git-diff-path,
+.git-diff-body,
+.git-track,
+.git-stat,
+.widget-branch-name,
+
+/* --------------------------------------------- code blocks and inline code -- */
+.cv-rich code,
+.cv-code > summary,
+.help-inline-code,
+.help-code code,
+.at-note code,
+.gh-note code,
+.gh-failure-action code,
+.gh-conn-source code,
+.gh-conn-note code,
+.gh-device-body code,
+.gh-asks-body code,
+.settings-account-blocked code,
+.settings-code,
+/* The stale-CLI row on AI readiness and on Accounts, and the sign-in dialog's
+   warning. All three quote a machine back at the reader: a command name and a
+   version in the title (`gemini 0.32.1`), and in the detail the upgrade line
+   read from brew or npm — `npm install -g @google/gemini-cli@latest`, which
+   this font would weld at the `@`-adjacent pairs and at `--`. A command a
+   person is about to retype is the plainest case in this whole file. */
+.agent-cli-title code,
+.agent-cli-detail code,
+.add-account-warn code,
+/* A port on a remote machine's localhost list — `127.0.0.1:5199`, and the path
+   beside it. A redrawn character in an address is an address that does not
+   resolve, and the reader cannot see why. */
+/* The chip beside the padlock naming which machine served this page and on
+   which port — `Asads-MacBook-Pro-21 :5266`. A hostname and a port number are
+   both machine text: a host can hold `->` and a redrawn digit in a port is an
+   address that goes somewhere else. It qualifies the address bar, so it has to
+   be as literal as the address bar. */
+.bw-served,
+
+/* The filenames a readiness fix will touch, listed under the finding before
+   anybody presses it. He asked that every not-ready row say what pressing it
+   does; a filename is the most load-bearing half of that answer, and a font
+   that welds `.` to `/` or redraws a `-->` inside a name would be answering a
+   different question. */
+.readiness-touches,
+.machines-port-label,
+
+/*
+   The box in Settings → Copilot that edits the copilot's `CLAUDE.md`, one of
+   its memories, or a routine file. Verbatim twice over, which is the case this
+   whole file's header calls the strongest one there is: what is drawn has to
+   equal what is on disk *and* what will be written back when Save is pressed.
+
+   A redrawn glyph in a read-only pane is a lie the reader cannot detect. In an
+   editable one it is worse, because the reader will act on it — a routine
+   header is `key: value` and a prompt is prose the agent is handed literally,
+   and somebody retyping a line they misread has changed the file to match the
+   font. The bytes never change (the value is React state, not the glyph), so
+   the screen and the file would disagree with nothing on screen saying so.
+*/
+.copilot-editor-box,
+.remote-code,
+.ns-install,
+.picker-install,
+.bw-dev-cmd,
+.mcp-server-command,
+.page-blank-body code,
+.page-blank-line code,
+.page-blank-hint code,
+.upd-notes-body code,
+.upd-notes-plain,
+
+/* ------------------------------------------- logs, transcripts, payloads -- */
+
+/*
+   The copilot's consent dialog, and it is the strictest case in this file.
+
+   `.cc-arg dd` holds the *arguments the copilot is asking permission to use* —
+   a session title it wants to set, a line it wants typed into a terminal, the
+   value it wants written into a setting. `.cc-tool-id` is the name of the tool
+   it wants to call. The whole dialog exists so that a person reads those and
+   decides; the app has no other question to ask them.
+
+   So a redrawn glyph here is not a cosmetic wrong, it is consent obtained for
+   something other than what was shown. The `=>` in a line the agent wants typed
+   is the difference between `x => y` and a shell heredoc; the `</` in a snippet
+   is the difference between opening and closing a tag. `CopilotConsent.tsx`
+   already refuses to hand this text to a parser for the same reason it is
+   refused a ligature: everything on that dialog is quoted, never interpreted.
+*/
+.cc-arg dd,
+.cc-tool-id,
+
+/* The name of the tool or action in the copilot's action log — `sessions.start`,
+   `settings.set`. Machine text, and it is read against the tool ids on the
+   consent dialog above, so the two must draw the same characters. */
+.copilot-action-name,
+
+/* The last lines a server printed, fetched once and shown under a card. This is
+   the same case as the driving quote below, arriving from further away still:
+   text produced by a program on somebody else's computer, drawn under this
+   app's chrome with the claim that it is what the server said. Log lines are
+   made of exactly the pairs this font welds — `=>` in a stack trace, `!=` in a
+   failed check, `2>&1` and `->` in a command a service logged before running
+   it — and a person reads them here precisely because something is wrong and
+   they intend to act on what they see. */
+.servers-log-body,
+
+/* The quote on a driving-mode stop, in the panel while a tour plays and in the
+   recap afterwards. The strictest case in this file after the consent dialog's
+   arguments, and for the same reason turned up a notch: this is text lifted
+   verbatim off *another agent's* screen, drawn under this app's chrome, with a
+   box around it and the claim that it is what was there. A welded `=>` or `!=`
+   in a stack trace or a diff hunk is the app re-drawing evidence — and the whole
+   feature rests on the quote being checked against the real source before it is
+   shown, which is worth nothing if the glyphs then change on the way to the eye. */
+.dp-quote,
+.tr-quote,
+
+/* The element the copilot's browser driver resolved, in the panel beside the
+   page it is working on. The same case as the driving quote above, arriving from
+   further away: this is a label read off *somebody else's website* — a button's
+   own text, or the CSS selector that found it — rendered under this app's chrome
+   as the app's account of what it just clicked. A welded `=>` or `!=` in a
+   selector like `[data-x!=y]` would make the panel name an element that is not
+   the one the click landed on, which is the single claim this whole panel
+   exists to make. */
+.bw-step-on,
+
+.debug-pre,
+.debug-channel,
+.debug-number,
+.debug-path,
+.gh-failure-detail pre,
+.mcp-pre,
+.mcp-args code,
+.mcp-item-name,
+.mcp-field-name,
+.mcp-input-json,
+
+/* The MCP store's four mono surfaces, and each of them is machine text a
+   person is being asked to check before they press a button.
+
+   `.mcp-store-name` is the name the server is written into another
+   application's configuration under — it is typed by hand in `claude mcp add`
+   afterwards. `.mcp-store-ask-head > b` is that same name again, in the sentence
+   the ask opens with, and it has to look like the same string as the row's
+   heading rather than like an English word. `.mcp-store-facts code` is the exact
+   command line that will be written, placeholders and all, which is the row's
+   whole disclosure: a welded `=>` inside `-e KEY=value` would show a pair that
+   is not the pair being written. `.mcp-store-runtimes code` is `npx`, `uvx`,
+   `docker` and the absolute path each was found at. */
+.mcp-store-name,
+.mcp-store-ask-head > b,
+.mcp-store-facts code,
+.mcp-store-runtimes code,
+
+/* The command and argument boxes on the Add-an-agent form. Verbatim for the
+   same reason `.mcp-input-json` is: what is shown has to equal what was typed
+   *and* what will be run, and this one is executed rather than sent. */
+.aa-mono,
+
+.setup-probe,
+.setup-event-name,
+.si-row-index,
+.si-chip,
+.si-tool-chip,
+.si-list-lead,
+.panel-error-detail,
+
+/* -------------------------------------------------- paths, names, addresses -- */
+.folder-title,
+.folder-menu-path,
+.hooks-file,
+.profiles-path,
+.picker-path,
+.ns-project-path,
+.ns-chosen-path,
+.machines-session-path,
+.machine-entry-box,
+.machines-key,
+
+/* The box a private key is pasted into when signing in to a server. It is the
+   one field in this app whose contents are checked *by eye* before they are
+   used: the whole reason it wears the mono face is so somebody can see that the
+   `-----BEGIN` and `-----END` lines came along with the middle. A key's base64
+   body can hold `//` and `==`, and its header holds `-----`, which is five
+   hyphens JetBrains Mono is happy to draw as a rule. Redrawing any of that
+   turns "your paste is incomplete" into a puzzle with no visible cause. */
+.servers-key,
+/* The names of the key files found on this computer, in the list that replaced
+   "open the key file in any text editor". A filename is machine text somebody
+   matches against what they see in Finder or `ls`, and these are exactly the
+   names ligatures reach: `id_ed25519` is fine, `key--prod`, `www-data=>old` and
+   a downloaded `server..pem` are not. It is also the string a person compares
+   character by character when two keys differ by one. */
+.servers-keylist-name,
+.df-folder-path,
+/* And the same path again under the per-session choice beside it — the folder a
+   running session is in, printed so two agents with the same title can be told
+   apart. Same argument as the folder grant above it: a path is machine text
+   somebody matches against what they see in Finder, and `--` and `=>` inside a
+   directory name are exactly what ligatures reach. */
+.ds-session-path,
+/* The copilot setup flow: the folder it will work in. `.cs-preview` used to be
+   listed here too — the block of instructions the summary screen showed byte for
+   byte — and that screen was deleted on 2026-08-17 (*"this whole card is not
+   required… Just Start"*), so the selector went with it rather than sitting here
+   as a rule for an element nothing renders. */
+.cs-path,
+.settings-path,
+/* `.settings-profile-path` was here — the config directory under each account
+   in Settings → Coding AI. That line moved behind the row's ⓘ on 2026-08-19
+   (*"remove big descriptions under each account… folder link"*), so the
+   selector went with it, exactly as `.cs-preview` did above. */
+.settings-url-address,
+.bw-start-address,
+.bw-capture-url,
+.bw-shot code,
+.bw-shot-path code,
+.bw-custom input,
+.bw-selector,
+.bw-step-selector,
+.bw-facts code,
+.bw-domains code,
+.bw-unwired-list,
+.at-chip-kind,
+
+/* ------------------------------------------ identifiers, versions, counters -- */
+
+/*
+   Three surfaces that reach for the mono face to line a column up rather than
+   to quote anything, listed anyway. Worth saying why, because the temptation on
+   reading the failing test was to add six lines without looking at what is in
+   them.
+
+   `.copilot-ordinal` is `{index + 1}` — decimal digits and nothing else, and
+   `aria-hidden` at that. `.ub-row-value` is `39%` or the words `Not reported`,
+   and `.ub-context` is `154.1k` — a token count with a unit on it, in tabular
+   figures so the digits do not jog the icon beside them as they change.
+   None of the three can contain a pair this font welds today. `.copilot-action-time` is
+   the one that can: `whenIso` formats a parsed timestamp for the reader, and
+   falls back to printing the stored string *verbatim* when `Date.parse` cannot
+   read it — so a malformed record shows its own bytes, which is precisely the
+   case where redrawing them would send somebody chasing a timestamp that was
+   never written.
+
+   The other two are here because the rule this sheet enforces is about the
+   face, not about today's content: the mono face is where machine text goes, so
+   anything wearing it is promised verbatim, and a promise that holds only while
+   nobody changes the string is not one. Registering costs a line; discovering
+   later that a counter grew a `->` in it costs a bug nobody can see.
+*/
+.copilot-ordinal,
+.copilot-action-time,
+.ub-row-value,
+.ub-context,
+
+.remote-fingerprint,
+/* The same six groups, on the screen where a person actually compares them
+   against a phone. `.remote-fingerprint` is the row in the device roster; this
+   is the one inside the approval flow, and a fingerprint whose ligatures were
+   left on is a string that redraws itself while somebody is reading it
+   character by character — which is the one job it has. */
+.da-fingerprint,
+.remote-tunnel-port,
+.bw-start-port-num,
+.bw-zoom-value,
+.bw-applied,
+.bw-badge,
+.gh-scope,
+.gh-device-code,
+/* `.dc-code` — the copilot connect code — was registered here and is gone with
+   the panel that drew it. Reaching the copilot is no longer a second connection
+   with a code of its own: a device paired as "My device" carries the copilot,
+   a guest never does. Nothing on any screen types six digits at a copilot any
+   more, so there is no face rule left to state about it. */
+.join-input-code,
+.join-input-pin,
+.join-note-ok,
+.onboarding-version,
+.settings-tool-version,
+.settings-about-version,
+.settings-about-build,
+.help-about-row dd,
+.help-count,
+.board-title-id,
+.palette-count,
+.sb-qualifier,
+.sheet-count,
+.us-value,
+.run-agent-glyph,
+.widget-note.mono,
+.widget-row-main.mono,
+.widget-row-side.mono,
+.srvpick-path,
+.srvpick-window-path,
+.srvpick-input,
+.tooltip-label[data-mono],
+/* Added 2026-08-21 with the review's own screens: a login named on an
+   account row, the address a stored server lives at, and the folder each
+   Project page now says it is reporting on. All three are machine text. */
+.settings-addmenu-login,
+.settings-server-where,
+.page-scope-path,
+/* Added 2026-08-21 with the tools store and the server host panel: a store
+   tool's version, the pairing code a freshly installed host prints, and the
+   host's own status output. All three are machine text and two of them are
+   read aloud off the screen to be typed somewhere else. */
+.bw-store-version,
+/* What a store tool may reach, listed before you install it. Capabilities
+   being enumerated, not prose — and the one list in this app where a font
+   joining two characters could change what a permission appears to say. */
+.bw-zoom-reset,
+.bw-scrape-reach,
+/* The pairing code the setup pane prints for a server, added 2026-08-22.
+   Same reason as the host code beside it: it exists to be read off this
+   screen and typed into another, so a ligature joining two characters is
+   the difference between a code that works and one that does not. */
+.servers-setup-code-value,
+.servers-host-code-value,
+/* The server address a host prints, added 2026-08-22. Not read aloud — it is
+   a hundred and eighty characters — but it is compared by eye against what a
+   phone shows, and a ligature welding two characters into one glyph is exactly
+   the difference somebody would be looking for. */
+.servers-host-address-value,
+/* Added 2026-08-24 with the terminal colour editor. Three surfaces, all of
+   them machine text and one of them literally a terminal: the preview line
+   inside a scheme card is shell output and has to be redrawn exactly as a
+   session would draw it, the hex field holds a value that is compared
+   character by character against a palette somebody copied, and the paste box
+   holds JSON — where a ligature welding `=>` or `!=` into one glyph is the
+   difference between a scheme that parses and one that does not. */
+.scheme-preview-line,
+.settings-input.colour-hex,
+.scheme-paste,
+/* Added with the Community department. Three surfaces, and all three are
+   somebody else's machine text rather than ours: the version a publisher put on
+   a release, the counts read off GitHub's API, and the absolute paths the
+   install sheet lists before it writes into any of them. The paths are the one
+   that matters most — a folder is compared by eye against what is on the disk,
+   and a ligature welding two characters into one glyph is exactly the
+   difference somebody would be looking for. */
+.cs-store-version,
+.cs-store-github,
+.cs-sheet-paths code,
+/* An AI app's access key, shown once to be copied into another app. Read by
+   eye and typed elsewhere if the clipboard is not to hand, so a key containing
+   `->` or `==` must show those characters, not one glyph standing for two. */
+.ai-secret-value,
+.tasks-mono,
+.tasks-lines,
+.tasks-chip,
+.tasks-secret-value,
+.mem-path,
+.mem-note-path,
+.mem-write-where,
+/* Stays Fixed. A value before and after a change is the program's own output,
+   compared character by character — `->` drawn as one arrow would hide the very
+   difference the page exists to show. The fix line is a command somebody may
+   type by hand. */
+.sf-value-text,
+.sf-fix-text,
+.servers-host-status pre {
+  font-variant-ligatures: none;
+}

@@ -1,0 +1,126 @@
+/* ============================================================================
+   Join a remote session.
+
+   The notice at the top is the whole point of the screen, so it is the only
+   element with a fill of its own. Everything below it is an ordinary form that
+   happens to end in a button that cannot be pressed — and its fields are
+   fills rather than outlines, so the panel has one control language.
+   ============================================================================ */
+
+.join {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-top: var(--sp-1);
+}
+
+/* Tinted rather than framed, and neutral rather than warned: this is not an
+   error, and colouring it like one would suggest something went wrong rather
+   than that a feature has not arrived. */
+.join-unavailable {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.join-unavailable strong {
+  display: block;
+  margin-bottom: var(--sp-05);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------ field -- */
+
+.join-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.join-label {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.join-input {
+  width: 100%;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+}
+
+/* Monospaced and tracked out: these are read aloud character by character, and
+   a proportional font makes 8 and B a guess. */
+.join-input-code,
+.join-input-pin {
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.join-input-pin {
+  text-transform: none;
+}
+
+.join-input::placeholder {
+  color: var(--text-muted);
+  letter-spacing: 0.14em;
+}
+
+.join-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The one place a line still earns its keep: a rejected value has to be
+   distinguishable from an empty one at a glance, and the note below it is not
+   always on screen. Inset so the field does not grow by a pixel. */
+.join-input[aria-invalid='true'] {
+  box-shadow: inset 0 0 0 1px var(--color-critical);
+}
+
+.join-note {
+  margin: 0;
+  min-height: var(--sp-4);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  color: var(--color-critical);
+}
+
+/* The same line carries guidance and complaint, so the neutral case has to opt
+   out of the complaint colour rather than the other way round. */
+.join-note-ok {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ----------------------------------------------------------------- action -- */
+
+.join-submit {
+  align-self: flex-start;
+  margin-top: var(--sp-05);
+}
+
+.join-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Not styled as an error: nothing has failed, the feature simply is not here. */
+.join-status {
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
