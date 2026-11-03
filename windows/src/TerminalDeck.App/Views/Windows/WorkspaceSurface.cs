@@ -257,7 +257,19 @@ internal sealed partial class WorkspaceSurface : Grid
       TabInk(); select.ActualThemeChanged += (_, _) => TabInk();
       ToolTipService.SetToolTip(select, tab.Title + " · " + tab.Kind + (BrowserIdentity?.Invoke(tab) is { } identity ? "\n" + identity.Address + "\n" + identity.Status : "")); AutomationProperties.SetName(select, TabAccessibility(tab)); tabButtons[tab.Id] = select; AutomationProperties.SetHelpText(select, tab.Kind + " window. Right-click for split, rename and move actions.");
       select.SizeChanged += (_, _) => select.Clip = new RectangleGeometry { Rect = new(0, 0, Math.Max(0, select.ActualWidth), select.ActualHeight) };
-      select.Click += (_, _) => Select(tab.Id);
+      // Selected as the button goes down (above), but the pane takes keyboard focus
+      // only once the button is released or a drag ends: focus leaving the tab
+      // while it is held releases its pointer capture and cancels the drag that
+      // reorders tabs. Keyboard activation (Enter, Space) focuses at once.
+      var focusPending = false;
+      void Settle() { if (!focusPending) return; focusPending = false; FocusPane(tab.Id); }
+      select.Click += (_, _) =>
+      {
+        var held = select.IsPressed || (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.LeftButton) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        focusPending = held; Select(tab.Id, moveFocus: !held);
+      };
+      select.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) => Settle()), true);
+      select.KeyUp += (_, _) => Settle();
       chip.Children.Add(select);
       // Like Chrome: the selected tab always shows its ×, at every width; other tabs
       // show it on hover (or focus). Middle-click closes any tab.
@@ -324,7 +336,7 @@ internal sealed partial class WorkspaceSurface : Grid
       select.ContextFlyout = menu;
       select.CanDrag = true; select.AllowDrop = true;
       select.DragStarting += (_, args) => { args.Data.Properties["deck-workspace"] = tab.Id; args.Data.SetText("deck-window:" + tab.Id); args.Data.RequestedOperation = DataPackageOperation.Move; };
-      select.DropCompleted += (_, args) => { if (args.DropResult == DataPackageOperation.None) DragOutside?.Invoke(tab.Id); };
+      select.DropCompleted += (_, args) => { if (args.DropResult == DataPackageOperation.None) DragOutside?.Invoke(tab.Id); Settle(); };
       select.DragOver += (_, args) => { if (args.DataView.Properties.ContainsKey("deck-workspace")) args.AcceptedOperation = DataPackageOperation.Move; };
       select.Drop += async (_, args) =>
       {
@@ -653,7 +665,7 @@ internal sealed partial class WorkspaceSurface : Grid
     return tab.Title;
   }
   private int Index(WorkspaceTab tab) => state.Tabs.Where(t => t.Host == tab.Host).ToList().IndexOf(tab);
-  private void Select(string id)
+  private void Select(string id, bool moveFocus = true)
   {
     // Selecting publishes a layout change and focusing the owner changes the
     // shell's scope; batched, the window renders once instead of twice.
@@ -663,7 +675,7 @@ internal sealed partial class WorkspaceSurface : Grid
       state.Select(id); owner = state.Get(id).Owner; focus(owner, id);
     }
     if (Batch is { } batch) batch(Switch); else Switch();
-    FocusPane(id);
+    if (moveFocus) FocusPane(id);
   }
   internal void FocusInput(string id) => FocusPane(id);
   private void FocusPane(string id) => Guard(async () =>
