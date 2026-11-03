@@ -38,16 +38,21 @@ public sealed class SessionDraft(string title, string provider, string folder, S
   public bool IsHoot { get; private set; }
   public bool HasProject => ProjectId is { Length: > 0 } id && id != TerminalDeck.Core.Projects.ProjectIdentity.IndependentId;
   public string DisplaySubtitle { get; private set; } = TerminalDeck.Core.Agents.AgentSeats.ProviderName(provider.ToLowerInvariant());
+  // A terminal names its shell (Command Prompt, PowerShell 7) rather than the generic "PowerShell".
+  private string? shell;
+  public string? Shell { get => shell; init { shell = value; AgentName = DisplaySubtitle = ProviderLabel; } }
+  private string ProviderLabel => Provider.ToLowerInvariant() == "shell" ? TerminalDeck.Core.Sessions.TerminalShells.Label(Shell) : TerminalDeck.Core.Agents.AgentSeats.ProviderName(Provider.ToLowerInvariant());
   public string ProviderMark => Provider.ToLowerInvariant() switch { "claude" => "✳", "codex" => "◎", "gemini" => "✦", _ => ">_" };
   public string? PicturePath { get; private set; }
   public string? PictureUri => PicturePath is { } path ? new Uri(path).AbsoluteUri : null;
   public void SetAppearance(string projectName, string? picturePath, string agentLabel, string? projectId = null, string? agentIcon = null, bool hoot = false)
   {
+    var ai = ProviderLabel;
+    if (agentLabel == TerminalDeck.Core.Agents.AgentSeats.ProviderName(Provider.ToLowerInvariant())) agentLabel = ai;
     ProjectInitial = Initial(string.IsNullOrWhiteSpace(projectName) ? Title : projectName);
     ProjectId = projectId; AgentName = agentLabel; AgentIcon = agentIcon ?? "person";
     HasAgent = agentIcon is not null || hoot; IsHoot = hoot;
     PicturePath = picturePath; Subtitle = agentLabel + " · " + State;
-    var ai = TerminalDeck.Core.Agents.AgentSeats.ProviderName(Provider.ToLowerInvariant());
     DisplaySubtitle = agentLabel == ai ? ai : agentLabel + " · " + ai;
     foreach (var name in new[] { nameof(HasAgent), nameof(IsHoot), nameof(HasProject), nameof(ProjectId), nameof(AgentName), nameof(AgentIcon), nameof(DisplaySubtitle), nameof(ProjectInitial), nameof(PicturePath), nameof(PictureUri), nameof(Subtitle), nameof(State) }) PropertyChanged?.Invoke(this, new(name));
   }
@@ -118,7 +123,7 @@ public sealed class ShellViewModel : INotifyPropertyChanged
       if (draft is null)
       {
         draft = new(row.Definition.Title, row.Definition.Provider, row.Definition.Cwd, SessionPresentation.Terminal)
-        { Id = row.Definition.Id, IsLive = true, State = row.State.ToString().ToLowerInvariant() };
+        { Id = row.Definition.Id, IsLive = true, State = row.State.ToString().ToLowerInvariant(), Shell = row.Definition.Shell };
         Sessions.Add(draft);
       }
       else draft.Update(row);

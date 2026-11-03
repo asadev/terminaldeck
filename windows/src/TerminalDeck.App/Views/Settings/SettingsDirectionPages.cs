@@ -49,6 +49,27 @@ public sealed partial class SettingsPane
       rows.Add(SettingsPanel.SettingRow("Confirm before closing a session", "Asks before a working session is closed. “Don’t ask again” turns this off; turn it back on here.", Toggle(ReadCloseConfirmation(), SaveCloseConfirmation)));
     rows.Add(SettingsPanel.SettingRow("Copy on select", "Selecting text in a session copies it.", Toggle(current.CopyOnSelect, value => runtime.General.Save(runtime.General.Read() with { CopyOnSelect = value }))));
     {
+      // The shell new terminal tabs open. PowerShell 7 can be picked only when it is installed.
+      var shells = TerminalDeck.Core.Sessions.TerminalShells.All;
+      var pwsh = TerminalDeck.Platform.Windows.WindowsProviderLaunchPlanner.FindPowerShell7(TerminalDeck.Platform.Windows.Accounts.WindowsAiEnvironment.Read()) is not null;
+      var chosenShell = current.TerminalShell ?? TerminalDeck.Core.Sessions.TerminalShells.WindowsPowerShell;
+      var picker = new ComboBox { MinWidth = 220 };
+      foreach (var shell in shells)
+      {
+        var missing = shell == TerminalDeck.Core.Sessions.TerminalShells.PowerShell7 && !pwsh;
+        picker.Items.Add(new ComboBoxItem { Content = TerminalDeck.Core.Sessions.TerminalShells.Name(shell) + (missing ? " · not installed" : ""), IsEnabled = !missing || shell == chosenShell });
+      }
+      picker.SelectedIndex = Math.Max(0, Array.IndexOf(shells, chosenShell));
+      picker.SelectionChanged += async (_, _) =>
+      {
+        if (picker.SelectedIndex < 0) return;
+        var chosen = shells[picker.SelectedIndex];
+        await DirectionRunAsync(() => { runtime.General.Save(runtime.General.Read() with { TerminalShell = chosen == TerminalDeck.Core.Sessions.TerminalShells.WindowsPowerShell ? null : chosen }); return Task.CompletedTask; });
+      };
+      AutomationProperties.SetName(picker, "Shell for new terminal tabs");
+      rows.Add(SettingsPanel.SettingRow("Terminal shell", "New terminal tabs open this shell. Open tabs keep theirs.", picker));
+    }
+    {
       // One default for new chats. Each AI offers only the modes it really supports; an unset choice means Bypass (Auto where the AI has it).
       var modes = Enum.GetValues<TerminalDeck.Core.Mcp.AiPermissionMode>().Where(m => new[] { "claude", "codex", "gemini" }.Any(p => TerminalDeck.Core.Chats.ChatPermissionModes.Supported(p).Contains(m))).ToArray();
       var picker = new ComboBox { MinWidth = 220, ItemsSource = modes.Select(m => TerminalDeck.Core.Chats.ChatPermissionModes.Label(m)).ToArray() };

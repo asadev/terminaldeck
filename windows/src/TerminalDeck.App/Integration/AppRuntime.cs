@@ -45,7 +45,8 @@ public sealed partial class AppRuntime : IAsyncDisposable
     Root = root;
     General = new(new JsonStateStore<TerminalDeck.Core.Settings.GeneralPreferences>(root, "general-settings"));
     TerminalDeck.App.Views.Agents.NewSessionPicker.Services = new(RecentFolders,
-      provider => TerminalDeck.Core.Settings.LaunchDefaults.For(provider, General.Read()), provider => General.NewChatPermission(provider));
+      provider => TerminalDeck.Core.Settings.LaunchDefaults.For(provider, General.Read()), provider => General.NewChatPermission(provider),
+      () => TerminalDeck.Core.Sessions.TerminalShells.Label(General.Read().TerminalShell));
     WindowsPrivateDirectory.Ensure(root.DirectoryPath);
     var keeperBundle = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "keeper-location.txt")).Trim();
     if (keeperBundle.Length != 17 || !keeperBundle.All(char.IsAsciiDigit)) throw new IOException("The keeper bundle is missing.");
@@ -121,7 +122,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     if (Chats is not null) await Chats.RefreshAsync();
     Agents.ReconcileSessions(ProjectSessions()); TaskSessionsChanged(); Changed?.Invoke();
   }
-  public async Task<SessionRecord> StartAsync(string provider, string folder, string? accountId = null, string? title = null)
+  public async Task<SessionRecord> StartAsync(string provider, string folder, string? accountId = null, string? title = null, string? shell = null)
   {
     if (!Directory.Exists(folder)) throw new ArgumentException("Choose an existing folder.");
     AccountProfile? account = null;
@@ -132,13 +133,15 @@ public sealed partial class AppRuntime : IAsyncDisposable
       if (account.Provider != provider) throw new ArgumentException("Choose an account for the selected AI.");
       account = await Accounts.RequireSignedInAsync(account.Id);
     }
-    var response = await Keeper.CreateAsync(new(Guid.NewGuid().ToString(), provider, folder, title ?? (provider == "shell" ? "PowerShell" : provider), account?.Id, account?.HomeId));
+    if (provider != "shell") shell = null;
+    var response = await Keeper.CreateAsync(new(Guid.NewGuid().ToString(), provider, folder, title ?? (provider == "shell" ? TerminalDeck.Core.Sessions.TerminalShells.Label(shell) : provider), account?.Id, account?.HomeId, Shell: shell));
     await RefreshSessionsAsync(); return response.Session ?? throw new IOException("The session could not start.");
   }
   public async Task<SessionRecord> StartShellForProjectAsync(string folder, string projectId)
   {
     _ = Projects.Get(projectId);
-    var row = await StartAsync("shell", folder);
+    // Terminals the user opens use the shell chosen in Settings → General.
+    var row = await StartAsync("shell", folder, shell: General.Read().TerminalShell);
     Projects.BindSession(row.Definition.Id, projectId); return row;
   }
   public Func<string, bool, Task>? InstallAiRequested { get; set; }

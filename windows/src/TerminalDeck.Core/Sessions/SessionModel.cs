@@ -4,7 +4,7 @@ namespace TerminalDeck.Core.Sessions;
 
 public enum SessionState { Starting, Running, Held, Exited }
 public sealed record SessionDefinition(string Id, string Provider, string Cwd, string Title, string? AccountId = null,
-  string? AccountHome = null, string? ConversationId = null, string? DeviceId = null, string? Purpose = null, string? InitialPrompt = null, string? Model = null, string? Effort = null, string? Permission = null, string? ServerId = null)
+  string? AccountHome = null, string? ConversationId = null, string? DeviceId = null, string? Purpose = null, string? InitialPrompt = null, string? Model = null, string? Effort = null, string? Permission = null, string? ServerId = null, string? Shell = null)
 {
   public void Validate()
   {
@@ -12,6 +12,8 @@ public sealed record SessionDefinition(string Id, string Provider, string Cwd, s
       string.IsNullOrWhiteSpace(Cwd) || Cwd.Contains('\0') || Title.Length > 120 || Title.Any(char.IsControl) ||
       Purpose is not (null or "sign-in") || InitialPrompt is { Length: > 8000 } || InitialPrompt?.Contains('\0') == true || Model is { Length: > 128 } || Effort is not (null or "low" or "medium" or "high" or "xhigh" or "max") || Permission is not (null or "ask" or "plan" or "auto" or "acceptEdits" or "bypass") || ConversationId is { Length: > 128 } || AccountId is { Length: > 128 })
       throw new ArgumentException("Choose a valid session, folder and provider.");
+    if (Shell is not null && (Provider != "shell" || ServerId is not null || !TerminalShells.IsKnown(Shell)))
+      throw new ArgumentException("Choose Windows PowerShell, PowerShell 7 or Command Prompt for a terminal.");
   }
 }
 

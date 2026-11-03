@@ -6,13 +6,31 @@ namespace TerminalDeck.Platform.Windows;
 
 public sealed class WindowsProviderLaunchPlanner(AppDataRoot root, string toolsDirectory)
 {
+  // The shell a terminal tab runs (TerminalShells). Each session keeps the one it
+  // started with; null, and anything an agent or tool starts, is Windows PowerShell.
+  private static ProcessLaunch Shell(string? shell, Dictionary<string, string> environment, string cwd)
+  {
+    var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+    return shell switch
+    {
+      TerminalShells.CommandPrompt => new(Path.Combine(system, "cmd.exe"), [], environment, cwd),
+      TerminalShells.PowerShell7 => new(FindPowerShell7(environment) ?? throw new ArgumentException("PowerShell 7 is not installed. Install it, or choose another terminal shell under Settings → General."), ["-NoLogo", "-NoProfile"], environment, cwd),
+      _ => new(Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoLogo", "-NoProfile"], environment, cwd)
+    };
+  }
+  // PowerShell 7 is not part of Windows: look on PATH first, then where its installer puts it.
+  public static string? FindPowerShell7(IReadOnlyDictionary<string, string> environment)
+  {
+    var folders = environment.TryGetValue("PATH", out var path) ? path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(Path.IsPathFullyQualified) : [];
+    var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+    return folders.Append(Path.Combine(programFiles, "PowerShell", "7")).Select(folder => Path.Combine(folder, "pwsh.exe")).FirstOrDefault(File.Exists);
+  }
   public ProcessLaunch Plan(SessionRecord session, bool resume)
   {
     var definition = session.Definition; definition.Validate();
     if (!Directory.Exists(definition.Cwd)) throw new ArgumentException("Choose an existing working folder.");
     var environment = Accounts.WindowsAiEnvironment.Read();
-    if (definition.Provider == "shell")
-      return new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoLogo", "-NoProfile"], environment, definition.Cwd);
+    if (definition.Provider == "shell") return Shell(definition.Shell, environment, definition.Cwd);
     if (definition.AccountId is null || !Guid.TryParseExact(definition.AccountId, "N", out _))
       throw new ArgumentException("Choose an isolated account before starting this AI.");
     // Core keeps a stable account row while deduplicating a newly signed-in

@@ -5,8 +5,9 @@ using TerminalDeck.Core.Storage;
 
 namespace TerminalDeck.Core.Settings;
 
+// TerminalShell is the shell new terminal tabs open (TerminalShells); null is Windows PowerShell.
 public sealed record GeneralPreferences(bool AutoNameSessions = true, bool CopyOnSelect = false, bool KeepAwake = false, AiPermissionMode? DefaultPermission = null,
-  LaunchModelChoice[]? LaunchModels = null);
+  LaunchModelChoice[]? LaunchModels = null, string? TerminalShell = null);
 // The app-wide model and effort every new session starts with (Settings → Coding AIs).
 public sealed record LaunchModelChoice(string Provider, string Model, string? Effort);
 

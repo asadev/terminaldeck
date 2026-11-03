@@ -17,7 +17,7 @@ public static class NewSessionPicker
   internal static ContentDialog? ActiveDialogForProof { get; private set; }
   // App-wide inputs the many callers do not carry: recently used folders, the
   // app-wide model/effort (Settings → Coding AIs) and the permission default.
-  internal sealed record PickerServices(Func<IEnumerable<string>> RecentFolders, Func<string, (string Model, string? Effort)> Launch, Func<string, AiPermissionMode> Permission);
+  internal sealed record PickerServices(Func<IEnumerable<string>> RecentFolders, Func<string, (string Model, string? Effort)> Launch, Func<string, AiPermissionMode> Permission, Func<string>? ShellLabel = null);
   internal static PickerServices? Services { get; set; }
   public static async Task ShowAsync(XamlRoot root, IAgents agents, IProjects projects, AccountService? accounts,
     IProjectsAgentsNavigation navigation, string? projectId = null, string? agentId = null, string mode = "chat", CancellationToken cancellationToken = default, Func<string, string, Task>? terminalStart = null, bool requireJob = false)
@@ -27,7 +27,7 @@ public static class NewSessionPicker
     var initialProject = NewSessionProjects.Selection(initialProjects, projectId ?? (agentId is null ? null : agents.Get(agentId).ProjectId) ?? projects.ActiveProjectId);
     var project = Choice("Project · optional", initialProjects.Select(p => (p.Id, p.Name + (p.HomeFolder is { } home ? " · " + home : ""))).Append((NewSessionProjects.CreateId, "New project…")), initialProject);
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(project, "session.project");
-    var agent = Choice("Agent", [], ""); var provider = Choice("AI", terminalStart is null ? Providers : Providers.Append(("shell", "PowerShell")));
+    var agent = Choice("Agent", [], ""); var provider = Choice("AI", terminalStart is null ? Providers : Providers.Append(("shell", Services?.ShellLabel?.Invoke() ?? "PowerShell")));
     var account = Choice("Account", [], ""); var folder = Field("Working folder", NewSessionProjects.Folder(projects.Get(Picked(project)), homeFolder));
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(folder, "session.folder");
     var presentation = Choice("Open as", new[] { ("chat", "Chat"), ("terminal", "Terminal") }, mode);
