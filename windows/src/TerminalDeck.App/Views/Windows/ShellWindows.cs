@@ -56,7 +56,7 @@ public sealed partial class ShellWindow
     browser.ShellChanged += () => { SyncWindows(); QueueVisibleBrowserViews(); };
     browser.ShellSelected += RevealBrowserWindow;
     windowState.Changed += () => { if (!syncingWindows) { RenderWindows(); UpdateSidebarSessions(); } };
-    _ = new WorkspaceTitleBar(this, Root, TitleDragRegion, CaptionSpace);
+    _ = new WorkspaceTitleBar(this, Root, TitleBarRow, CaptionSpace);
     AppWindow.Closing += (_, args) =>
     {
       CloseSettingsPanel();
@@ -486,7 +486,7 @@ public sealed partial class ShellWindow
     var caption = new Grid { Width = 138 }; Grid.SetColumn(caption, 3); header.Children.Add(caption);
     root.Children.Add(header); Grid.SetRow(surface, 1); root.Children.Add(surface); window.Content = root;
     RememberWindow(window, geometryId, 1000, 720);
-    _ = new WorkspaceTitleBar(window, root, drag, caption);
+    _ = new WorkspaceTitleBar(window, root, header, caption);
     var child = new DetachedWorkspace(host, owner, window, root, surface); detached.Add(host, child);
     InitializeShellCommands(root, host);
     window.Closed += async (_, _) =>
