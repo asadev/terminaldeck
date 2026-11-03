@@ -58,6 +58,7 @@ public sealed partial class SessionPane : Grid
     {
       ActualThemeChanged += async (_, _) => await ApplyTerminalThemeAsync();
       terminal = new WebView2 { DefaultBackgroundColor = Microsoft.UI.Colors.Transparent }; BuildTerminalActions(area); area.Children.Add(terminal); InitializeSessionNotices(area);
+      if (session.IsLive) session.PropertyChanged += DraftStateChanged;
       Loaded += async (_, _) =>
       {
         if (initialized || disposed) return;
@@ -98,6 +99,7 @@ public sealed partial class SessionPane : Grid
                   else ready.TrySetResult();
                   break;
                 case "input" when runtime is not null && draft.IsLive:
+                  if (ended) { ShowEnded(true); break; }
                   var text = body.GetProperty("data").GetString()!;
                   if (Encoding.UTF8.GetByteCount(text) <= 65536) await runtime.SendAsync(draft.Id, text);
                   break;
@@ -179,12 +181,14 @@ public sealed partial class SessionPane : Grid
         await using var attachment = await runtime!.Keeper.AttachAsync(draft.Id, stop.Token);
         Post(new { type = "replay", data = attachment.Snapshot.Replay });
         ready.TrySetResult();
-        ShowSessionNotice("");
+        ShowSessionNotice(""); ShowEnded(attachment.Snapshot.Session.State == TerminalDeck.Core.Sessions.SessionState.Exited);
         await foreach (var change in attachment.Events(stop.Token))
         {
           if (change.Kind == "data") Post(new { type = "data", data = change.Text });
           if (change.Kind == "reset") Post(new { type = "replay", data = change.Text ?? "" });
-          if (change.Kind is "exit" or "status") await runtime.RefreshSessionsAsync();
+          // A process that exits on its own arrives as a reset carrying the
+          // worker's final replay, so refresh then too, or the tab stays "running".
+          if (change.Kind is "exit" or "status" or "reset") await runtime.RefreshSessionsAsync();
         }
       }
       catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }
@@ -230,6 +234,6 @@ public sealed partial class SessionPane : Grid
     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyUp\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
   }
-  public void DisposeView() { if (runtime is not null) runtime.General.Changed -= ApplyCopyOnSelect; disposed = true; stop.Cancel(); terminal?.Close(); }
+  public void DisposeView() { if (runtime is not null) runtime.General.Changed -= ApplyCopyOnSelect; draft.PropertyChanged -= DraftStateChanged; disposed = true; stop.Cancel(); terminal?.Close(); }
 
 }
