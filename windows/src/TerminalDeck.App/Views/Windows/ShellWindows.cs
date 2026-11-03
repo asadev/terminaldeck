@@ -30,6 +30,8 @@ public sealed partial class ShellWindow
   private bool syncingWindows;
   private bool renderingWindows;
   private string renderedWindowsStructure = "";
+  private string renderedTabsStructure = "";
+  private int renderBatch;
   private bool closingShell;
   private bool mainWindowHidden;
   private bool sidebarVisible = true;
@@ -87,6 +89,7 @@ public sealed partial class ShellWindow
     var surface = new WorkspaceSurface(windowState, host, WindowView, FocusWindow, CloseWindowAsync, RenameWindowAsync, PopTab, DockTab, DockOwner, (owner, kind) => CreateWindowAsync(owner, kind, host), WindowAccountLabel, WindowLocationLabel, tab => Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject), ShowWindowAccountAsync, StopWindowAsync, message => Model.Notice = message);
     surface.SessionMenu = tab => Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject) is { } row ? SessionMenu(row) : new MenuFlyout();
     surface.SaveTitle = SaveWindowTitleAsync;
+    surface.Batch = work => { renderBatch++; try { work(); } finally { if (--renderBatch == 0) RenderWindows(); } };
     surface.IsModalOpen = () => host == "main" ? IsShellModalOpen(Root.XamlRoot) : detached.TryGetValue(host, out var child) && IsShellModalOpen(child.Root.XamlRoot);
     surface.BrowserIdentity = tab => tab.Kind == "browser" ? browser.ShellIdentity(tab.Subject) : null;
     surface.ProjectIdentity = tab => Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.ProjectId is { } id && Runtime.Projects.List().FirstOrDefault(p => p.Id == id) is { } project
@@ -298,14 +301,29 @@ public sealed partial class ShellWindow
 
   private void RenderWindows()
   {
-    if (!Ready.IsCompletedSuccessfully || mainSurface is null || renderingWindows || syncingWindows || proofChatVisible || closingShell || Model.Page == ShellPage.Settings) return;
-    var structure = JsonSerializer.Serialize(new { scope = Scope, page = Model.Page, tabs = windowState.Tabs, identities = Model.Sessions.Select(s => new { s.Id, s.ProjectId, s.PictureUri, colour = Runtime.Projects.List().FirstOrDefault(p => p.Id == s.ProjectId)?.Colour, badge = windowState.Tabs.FirstOrDefault(t => t.Subject == s.Id) is { } tab ? WindowAccountBadge(tab) : null }), roots = windowState.Layouts.Select(l => new { l.Owner, l.Host, l.Root }), browserIdentity = windowState.Tabs.Where(t => t.Kind == "browser").Select(t => browser.ShellIdentity(t.Subject)) });
+    if (!Ready.IsCompletedSuccessfully || mainSurface is null || renderingWindows || syncingWindows || renderBatch > 0 || proofChatVisible || closingShell || Model.Page == ShellPage.Settings) return;
+    // What the tab chips show, apart from which one is selected.
+    var tabsStructure = JsonSerializer.Serialize(new { page = Model.Page, tabs = windowState.Tabs, identities = Model.Sessions.Select(s => new { s.Id, s.ProjectId, s.PictureUri, colour = Runtime.Projects.List().FirstOrDefault(p => p.Id == s.ProjectId)?.Colour, badge = windowState.Tabs.FirstOrDefault(t => t.Subject == s.Id) is { } tab ? WindowAccountBadge(tab) : null }), browserIdentity = windowState.Tabs.Where(t => t.Kind == "browser").Select(t => browser.ShellIdentity(t.Subject)) });
+    var structure = JsonSerializer.Serialize(new { scope = Scope, roots = windowState.Layouts.Select(l => new { l.Owner, l.Host, l.Root }) }) + tabsStructure;
     if (renderedWindowsStructure == structure) { mainSurface.UpdateFocus(); foreach (var child in detached.Values) child.Surface.UpdateFocus(); QueueVisibleBrowserViews(); return; }
-    renderedWindowsStructure = structure;
+    // A tab switch changes the scope or layout but not the tabs: rebuilding every
+    // chip (icons, menus, pictures) on each click made switching visibly slow.
+    var panesOnly = renderedWindowsStructure.Length > 0 && renderedTabsStructure == tabsStructure && Model.Page is (ShellPage.Sessions or ShellPage.Browser) && Workspace.Children.Contains(mainSurface);
+    renderedWindowsStructure = structure; renderedTabsStructure = tabsStructure;
     renderingWindows = true;
     try
     {
       mainSurface.ReleaseViews(); foreach (var child in detached.Values) child.Surface.ReleaseViews();
+      if (panesOnly)
+      {
+        mainSurface.RenderPanes(Scope); renderedPage = Model.Page;
+        foreach (var child in detached.Values.ToArray())
+        {
+          child.Surface.RenderPanes(child.Owner);
+          child.Window.Title = windowState.Layout(child.Owner, child.Host).Active is { } active ? windowState.Get(active).Title : TerminalDeck.Core.Brand.Name;
+        }
+        return;
+      }
       WorkspaceHeader.Visibility = Visibility.Visible; PageTitle.Visibility = Visibility.Collapsed;
       if (!Workspace.Children.Contains(mainSurface)) { Workspace.Children.Clear(); Workspace.Children.Add(mainSurface); }
       mainSurface.Render(Scope); renderedPage = Model.Page;

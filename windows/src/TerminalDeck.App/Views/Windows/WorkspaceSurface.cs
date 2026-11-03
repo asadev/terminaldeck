@@ -24,6 +24,8 @@ internal sealed partial class WorkspaceSurface : Grid
   public Action? BeginManualSplit { get; set; }
   public Func<WorkspaceTab, MenuFlyout>? SessionMenu { get; set; }
   public Func<WorkspaceTab, string, Task>? SaveTitle { get; set; }
+  // Runs a tab switch as one change, so the host renders the window once at the end.
+  public Action<Action>? Batch { get; set; }
   private readonly WorkspaceState state;
   private readonly Func<WorkspaceTab, FrameworkElement> view;
   private readonly Action<string, string> focus;
@@ -55,6 +57,8 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly Dictionary<string, Grid> tabFrames = [];
   private readonly Dictionary<string, Button> tabButtons = [];
   private readonly Dictionary<string, TextBlock> tabTitles = [];
+  // Restyles a tab chip for the current selection without rebuilding it.
+  private readonly Dictionary<string, Action> chipStyles = [];
   public WorkspaceSurface(WorkspaceState state, string host, Func<WorkspaceTab, FrameworkElement> view,
     Action<string, string> focus, Func<string, Task> close, Func<string, Task> rename,
     Action<string> pop, Action<string> dock, Action<string> dockOwner, Func<string, string, Task> create, Func<WorkspaceTab, string> accountLabel, Func<WorkspaceTab, string> folder, Func<WorkspaceTab, TerminalDeck.App.ViewModels.SessionDraft?> session, Func<WorkspaceTab, FrameworkElement, Task> account, Func<WorkspaceTab, Task> stop, Action<string> notice)
@@ -123,9 +127,18 @@ internal sealed partial class WorkspaceSurface : Grid
   }
   public void Render(string scope)
   {
-    owner = scope; paneFrames.Clear(); accountButtons.Clear();
+    owner = scope;
     var layout = state.Layout(owner, Host);
     RenderHeader(layout.ActiveEmpty ?? layout.Active);
+    RenderPanes(scope);
+  }
+  // Switching tabs changes the selection and often the owner (whose layout the
+  // panes show) but not the tabs, so the host re-renders only the panes and the
+  // existing tab chips are restyled in place.
+  public void RenderPanes(string scope)
+  {
+    owner = scope; paneFrames.Clear(); accountButtons.Clear();
+    var layout = state.Layout(owner, Host);
     body.Children.Clear();
     if (layout.Root is { } root) body.Children.Add(RenderNode(root, layout));
     else
@@ -135,11 +148,12 @@ internal sealed partial class WorkspaceSurface : Grid
       empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
       var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); body.Children.Add(empty);
     }
+    UpdateFocus();
   }
   public void RenderHeader(string? active)
   {
     headerActive = active;
-    strip.Children.Clear(); strip.ColumnDefinitions.Clear(); tabFrames.Clear(); tabTitles.Clear(); tabButtons.Clear();
+    strip.Children.Clear(); strip.ColumnDefinitions.Clear(); tabFrames.Clear(); tabTitles.Clear(); tabButtons.Clear(); chipStyles.Clear();
     foreach (var tab in state.Tabs.Where(t => t.Host == Host))
     {
       strip.ColumnDefinitions.Add(new() { Width = new(WorkspaceTabSizing.Minimum), MinWidth = WorkspaceTabSizing.Minimum });
@@ -148,14 +162,15 @@ internal sealed partial class WorkspaceSurface : Grid
       chip.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); chip.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
       chip.SetResourceReference(BackgroundProperty, "DeckTransparentBrush");
       // The flared bottom shares the opaque page fill and reaches its top edge.
-      var selected = headerActive == tab.Id;
+      bool Selected() => headerActive == tab.Id;
+      var selected = Selected();
       var flare = (double)Application.Current.Resources["DeckTabFlare"];
       var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = selected ? Visibility.Visible : Visibility.Collapsed };
       shape.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, "DeckCanvasBrush");
       SetColumnSpan(shape, 2); chip.Children.Add(shape);
       void Shape() => shape.Data = WorkspaceTabShape.Outline(chip.ActualWidth, chip.Height, (double)Application.Current.Resources["DeckTabCorner"], flare);
       chip.SizeChanged += (_, _) => Shape();
-      chip.PointerEntered += (_, _) => { if (!selected) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
+      chip.PointerEntered += (_, _) => { if (!Selected()) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
       chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
       var divider = new Border { Width = 1, Height = 14, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
       divider.Visibility = selected ? Visibility.Collapsed : Visibility.Visible;
@@ -205,8 +220,8 @@ internal sealed partial class WorkspaceSurface : Grid
       var x = IconButton("Close " + tab.Title, "\uE711", () => Guard(() => close(tab.Id))); x.Width = 24; x.MinWidth = 24; x.Height = 24; x.MinHeight = 0; x.Padding = new(4); x.Opacity = selected ? 1 : 0;
       void CloseButton()
       {
-        x.Visibility = closable && (selected || hovering || !narrow) ? Visibility.Visible : Visibility.Collapsed;
-        x.Opacity = selected || hovering ? 1 : 0;
+        x.Visibility = closable && (Selected() || hovering || !narrow) ? Visibility.Visible : Visibility.Collapsed;
+        x.Opacity = Selected() || hovering ? 1 : 0;
       }
       chip.PointerEntered += (_, _) => { hovering = true; CloseButton(); }; chip.PointerExited += (_, _) => { hovering = false; CloseButton(); };
       chip.GotFocus += (_, _) => { hovering = true; CloseButton(); }; chip.LostFocus += (_, _) => { hovering = false; CloseButton(); }; SetColumn(x, 1); chip.Children.Add(x);
@@ -215,7 +230,7 @@ internal sealed partial class WorkspaceSurface : Grid
         if (closable && e.GetCurrentPoint(chip).Properties.IsMiddleButtonPressed) { e.Handled = true; Guard(() => close(tab.Id)); }
       }), true);
       chip.Loaded += (_, _) => { if (headerActive == tab.Id) RevealActiveTab(); };
-      chip.SizeChanged += (_, _) =>
+      void Fit()
       {
         var detail = WorkspaceTabSizing.ForWidth(chip.ActualWidth);
         narrow = !detail.Close; CloseButton();
@@ -224,24 +239,42 @@ internal sealed partial class WorkspaceSurface : Grid
         // Keep one identity at the icon-only floor. Project/account decoration
         // yields first, and every tab stays the same width.
         for (var i = 0; i < icons.Length; i++) icons[i].Visibility = detail.ProjectPicture || i == icons.Length - 1 ? Visibility.Visible : Visibility.Collapsed;
-        if (selected && closable && chip.ActualWidth < WorkspaceTabSizing.Minimum + 24) foreach (var icon in icons) icon.Visibility = Visibility.Collapsed; // too small for icon + ×
+        if (Selected() && closable && chip.ActualWidth < WorkspaceTabSizing.Minimum + 24) foreach (var icon in icons) icon.Visibility = Visibility.Collapsed; // too small for icon + ×
         if (accountBadge is not null) accountBadge.Visibility = chip.ActualWidth >= 176 ? Visibility.Visible : Visibility.Collapsed;
         label.ColumnSpacing = detail.Title ? 6 : 0;
         label.HorizontalAlignment = detail.Title ? HorizontalAlignment.Stretch : HorizontalAlignment.Center;
         title.MaxWidth = double.PositiveInfinity;
+      }
+      chip.SizeChanged += (_, _) => Fit();
+      chipStyles[tab.Id] = () =>
+      {
+        var on = Selected();
+        shape.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        divider.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        if (on) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
+        title.FontWeight = on ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
+        TabInk(); CloseButton();
+        if (chip.ActualWidth > 0) Fit();
       };
       var menu = new MenuFlyout();
-      if (tab.Kind != "page") Add(menu, "Rename…", () => Guard(() => rename(tab.Id)));
-      var currentLayout = state.Layout(owner, Host);
-      if (tab.Kind != "page" && currentLayout.ActiveEmpty is null && currentLayout.Active is { } current && state.Tabs.Any(candidate => candidate.Id == current && candidate.Kind != "page") && current != tab.Id && !(currentLayout.Root?.Tabs.Contains(tab.Id) ?? false))
+      // Rebuilt as it opens: the split items depend on the current owner's
+      // layout, which a tab switch changes without rebuilding this chip.
+      void MenuItems()
       {
-        Add(menu, "Open in Split View", () => Split(tab.Id, false));
-        Add(menu, "Open below active pane", () => Split(tab.Id, true));
+        menu.Items.Clear();
+        if (tab.Kind != "page") Add(menu, "Rename…", () => Guard(() => rename(tab.Id)));
+        var currentLayout = state.Layout(owner, Host);
+        if (tab.Kind != "page" && currentLayout.ActiveEmpty is null && currentLayout.Active is { } current && state.Tabs.Any(candidate => candidate.Id == current && candidate.Kind != "page") && current != tab.Id && !(currentLayout.Root?.Tabs.Contains(tab.Id) ?? false))
+        {
+          Add(menu, "Open in Split View", () => Split(tab.Id, false));
+          Add(menu, "Open below active pane", () => Split(tab.Id, true));
+        }
+        Add(menu, "Move left", () => state.Move(tab.Id, Index(tab) - 1));
+        Add(menu, "Move right", () => state.Move(tab.Id, Index(tab) + 1));
+        Add(menu, Host == "main" ? "Open in New Window" : "Move back to main window", () => { if (Host == "main") pop(tab.Id); else dock(tab.Id); });
+        if (closable) Add(menu, "Close Tab", () => Guard(() => close(tab.Id)));
       }
-      Add(menu, "Move left", () => state.Move(tab.Id, Index(tab) - 1));
-      Add(menu, "Move right", () => state.Move(tab.Id, Index(tab) + 1));
-      Add(menu, Host == "main" ? "Open in New Window" : "Move back to main window", () => { if (Host == "main") pop(tab.Id); else dock(tab.Id); });
-      if (closable) Add(menu, "Close Tab", () => Guard(() => close(tab.Id)));
+      MenuItems(); menu.Opening += (_, _) => MenuItems();
       CloseButton();
       select.ContextFlyout = menu;
       select.CanDrag = true; select.AllowDrop = true;
@@ -565,8 +598,7 @@ internal sealed partial class WorkspaceSurface : Grid
       AutomationProperties.SetName(button, "Account for " + state.Get(id).Title + ": " + label);
     }
     foreach (var (id, frame) in paneFrames) frame.BorderBrush = (Brush)ShellTheme.Resource(frame, active == id ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");
-    foreach (var (id, title) in tabTitles) title.FontWeight = active == id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
-    foreach (var (id, button) in tabButtons) button.Foreground = (Brush)ShellTheme.Resource(button, active == id ? "DeckInkBrush" : "DeckSecondaryInkBrush");
+    foreach (var style in chipStyles.Values) style();
     if (changed) RevealActiveTab();
   }
   private string TabAccessibility(WorkspaceTab tab)
@@ -578,9 +610,15 @@ internal sealed partial class WorkspaceSurface : Grid
   private int Index(WorkspaceTab tab) => state.Tabs.Where(t => t.Host == tab.Host).ToList().IndexOf(tab);
   private void Select(string id)
   {
-    if (state.Layout(owner, Host).ActiveEmpty is { } empty && state.Get(id).Kind != "page")
-    { state.FillEmpty(owner, Host, empty, id); focus(owner, id); FocusPane(id); return; }
-    state.Select(id); owner = state.Get(id).Owner; focus(owner, id); FocusPane(id);
+    // Selecting publishes a layout change and focusing the owner changes the
+    // shell's scope; batched, the window renders once instead of twice.
+    void Switch()
+    {
+      if (state.Layout(owner, Host).ActiveEmpty is { } empty && state.Get(id).Kind != "page") { state.FillEmpty(owner, Host, empty, id); focus(owner, id); return; }
+      state.Select(id); owner = state.Get(id).Owner; focus(owner, id);
+    }
+    if (Batch is { } batch) batch(Switch); else Switch();
+    FocusPane(id);
   }
   internal void FocusInput(string id) => FocusPane(id);
   private void FocusPane(string id) => Guard(async () =>
