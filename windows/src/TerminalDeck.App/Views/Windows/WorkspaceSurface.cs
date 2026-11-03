@@ -40,7 +40,7 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly Func<WorkspaceTab, TerminalDeck.App.ViewModels.SessionDraft?> session;
   private readonly Func<WorkspaceTab, FrameworkElement, Task> account;
   private readonly Func<WorkspaceTab, Task> stop;
-  private readonly Dictionary<string, Button> accountButtons = [];
+  private Dictionary<string, Button> accountButtons = [];
   private readonly Action<string> notice;
   private string owner = "";
   private string? headerActive;
@@ -53,7 +53,17 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly Grid strip = new() { ColumnSpacing = 0, MinWidth = 0 };
   private readonly ScrollViewer stripViewport = new() { HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, MinWidth = 0, ZoomMode = ZoomMode.Disabled };
   private readonly Grid body = new();
-  private readonly Dictionary<string, Border> paneFrames = [];
+  private Dictionary<string, Border> paneFrames = [];
+  // Like browser tabs, each owner's rendered panes stay in `body` (hidden) while
+  // another owner shows. Switching back only changes visibility, so terminals
+  // and pages are not pulled out of their panes and redrawn on every switch. A
+  // set is rebuilt when its owner's pane tree changes, and all are dropped when
+  // the tabs themselves change (Render, ReleaseViews).
+  private sealed record PaneSet(string Key, FrameworkElement Tree, Dictionary<string, Border> Frames, Dictionary<string, Button> Accounts, List<(ContentControl Holder, string Tab)> Holders);
+  private readonly Dictionary<string, PaneSet> paneSets = [];
+  private List<(ContentControl Holder, string Tab)> holders = [];
+  // Which holder shows each view; a view moves only when another set needs it.
+  private readonly Dictionary<UIElement, ContentControl> viewHolders = [];
   private readonly Dictionary<string, Grid> tabFrames = [];
   private readonly Dictionary<string, Button> tabButtons = [];
   private readonly Dictionary<string, TextBlock> tabTitles = [];
@@ -123,13 +133,15 @@ internal sealed partial class WorkspaceSurface : Grid
         else Release(child);
       }
     }
-    Release(body); body.Children.Clear();
+    Release(body); body.Children.Clear(); paneSets.Clear(); viewHolders.Clear();
   }
   public void Render(string scope)
   {
     owner = scope;
     var layout = state.Layout(owner, Host);
     RenderHeader(layout.ActiveEmpty ?? layout.Active);
+    foreach (var set in paneSets.Values) DropPanes(set);
+    paneSets.Clear();
     RenderPanes(scope);
   }
   // Switching tabs changes the selection and often the owner (whose layout the
@@ -137,18 +149,48 @@ internal sealed partial class WorkspaceSurface : Grid
   // existing tab chips are restyled in place.
   public void RenderPanes(string scope)
   {
-    owner = scope; paneFrames.Clear(); accountButtons.Clear();
+    owner = scope;
     var layout = state.Layout(owner, Host);
-    body.Children.Clear();
-    if (layout.Root is { } root) body.Children.Add(RenderNode(root, layout));
+    var key = System.Text.Json.JsonSerializer.Serialize(layout.Root);
+    if (paneSets.TryGetValue(owner, out var set) && set.Key == key)
+    {
+      paneFrames = set.Frames; accountButtons = set.Accounts;
+      foreach (var (holder, tab) in set.Holders) if (state.Tabs.Any(t => t.Id == tab)) Show(holder, view(state.Get(tab)));
+    }
     else
     {
-      var empty = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-      empty.Children.Add(new TextBlock { Text = scope == "swarm" ? "No sessions yet" : "Empty pane", FontSize = 20 });
-      empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
-      var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); body.Children.Add(empty);
+      if (set is not null) DropPanes(set);
+      paneFrames = []; accountButtons = []; holders = [];
+      FrameworkElement tree;
+      if (layout.Root is { } root) tree = RenderNode(root, layout);
+      else
+      {
+        var empty = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        empty.Children.Add(new TextBlock { Text = scope == "swarm" ? "No sessions yet" : "Empty pane", FontSize = 20 });
+        empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
+        var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); tree = empty;
+      }
+      set = new(key, tree, paneFrames, accountButtons, holders); paneSets[owner] = set; body.Children.Add(tree);
     }
+    foreach (var other in paneSets.Values) other.Tree.Visibility = ReferenceEquals(other, set) ? Visibility.Visible : Visibility.Collapsed;
     UpdateFocus();
+  }
+  private void DropPanes(PaneSet set)
+  {
+    foreach (var (holder, _) in set.Holders)
+      if (holder.Content is UIElement content) { holder.Content = null; if (viewHolders.TryGetValue(content, out var shown) && shown == holder) viewHolders.Remove(content); }
+    body.Children.Remove(set.Tree);
+  }
+  private ContentControl Holder(string tab, UIElement content)
+  {
+    var holder = new ContentControl { Tag = "workspace-view", HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+    Show(holder, content); holders.Add((holder, tab)); return holder;
+  }
+  private void Show(ContentControl holder, UIElement content)
+  {
+    if (ReferenceEquals(holder.Content, content)) return;
+    if (viewHolders.TryGetValue(content, out var current) && current != holder && ReferenceEquals(current.Content, content)) current.Content = null;
+    holder.Content = content; viewHolders[content] = holder;
   }
   public void RenderHeader(string? active)
   {
@@ -207,7 +249,8 @@ internal sealed partial class WorkspaceSurface : Grid
         SetColumn(child, label.ColumnDefinitions.Count);
         label.ColumnDefinitions.Add(new() { Width = ReferenceEquals(child, title) ? new(1, GridUnitType.Star) : GridLength.Auto });
       }
-      var select = new Button { Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 4, 4, 4), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 35 };
+      // Like Chrome, a tab is chosen as the button goes down, not when it comes back up.
+      var select = new Button { Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], ClickMode = ClickMode.Press, Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 4, 4, 4), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 35 };
       void TabInk() => select.Foreground = (Brush)ShellTheme.Resource(select, headerActive == tab.Id ? "DeckInkBrush" : "DeckSecondaryInkBrush");
       TabInk(); select.ActualThemeChanged += (_, _) => TabInk();
       ToolTipService.SetToolTip(select, tab.Title + " · " + tab.Kind + (BrowserIdentity?.Invoke(tab) is { } identity ? "\n" + identity.Address + "\n" + identity.Status : "")); AutomationProperties.SetName(select, TabAccessibility(tab)); tabButtons[tab.Id] = select; AutomationProperties.SetHelpText(select, tab.Kind + " window. Right-click for split, rename and move actions.");
@@ -357,7 +400,7 @@ internal sealed partial class WorkspaceSurface : Grid
         var remove = new Button { Content = "Close this pane" }; remove.Click += (_, _) => ClosePaneView(tab.Id); placeholder.Children.Add(remove);
         return placeholder;
       }
-      if (tab.Kind == "page") return new ContentControl { Tag = "workspace-view", Content = view(tab), HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+      if (tab.Kind == "page") return Holder(tab.Id, view(tab));
       var pane = new Grid { RowSpacing = 0 };
       pane.RowDefinitions.Add(new() { Height = GridLength.Auto }); pane.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
       var splitPane = layout.Root?.Tab is null;
@@ -537,7 +580,7 @@ internal sealed partial class WorkspaceSurface : Grid
         terminal.HeaderElement.Visibility = Visibility.Collapsed;
         foreach (var area in terminal.Children.OfType<FrameworkElement>().Where(child => GetRow(child) == 1)) area.Margin = new(0);
       }
-      var holder = new ContentControl { Tag = "workspace-view", Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+      var holder = Holder(id, content);
       SetRow(holder, 1); pane.Children.Add(holder);
       var frame = new Border { Child = pane, BorderThickness = new(layout.Root?.Tab is null ? 1 : 0), CornerRadius = new(0) };
       frame.SetResourceReference(Border.BorderBrushProperty, layout.ActiveEmpty is null && layout.Active == id ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");

@@ -313,7 +313,6 @@ public sealed partial class ShellWindow
     renderingWindows = true;
     try
     {
-      mainSurface.ReleaseViews(); foreach (var child in detached.Values) child.Surface.ReleaseViews();
       if (panesOnly)
       {
         mainSurface.RenderPanes(Scope); renderedPage = Model.Page;
@@ -324,6 +323,7 @@ public sealed partial class ShellWindow
         }
         return;
       }
+      mainSurface.ReleaseViews(); foreach (var child in detached.Values) child.Surface.ReleaseViews();
       WorkspaceHeader.Visibility = Visibility.Visible; PageTitle.Visibility = Visibility.Collapsed;
       if (!Workspace.Children.Contains(mainSurface)) { Workspace.Children.Clear(); Workspace.Children.Add(mainSurface); }
       mainSurface.Render(Scope); renderedPage = Model.Page;
