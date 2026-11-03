@@ -268,7 +268,39 @@ internal sealed partial class WorkspaceSurface : Grid
         var held = select.IsPressed || (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.LeftButton) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
         focusPending = held; Select(tab.Id, moveFocus: !held);
       };
-      select.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) => Settle()), true);
+      // Like Chrome, pressing a tab and moving along the strip slides it; the
+      // tabs it passes glide aside and it drops into place on release. Moving
+      // off the strip hands it to a system drag instead (out to its own window,
+      // or into another window's strip).
+      Windows.Foundation.Point? pressedAt = null; var sliding = false;
+      select.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
+      {
+        var point = e.GetCurrentPoint(strip);
+        pressedAt = point.Properties.IsLeftButtonPressed ? point.Position : null; sliding = false;
+      }), true);
+      select.AddHandler(PointerMovedEvent, new PointerEventHandler(async (_, e) =>
+      {
+        if (pressedAt is not { } start || !e.Pointer.IsInContact) return;
+        var point = e.GetCurrentPoint(strip);
+        var dx = point.Position.X - start.X;
+        if (point.Position.Y < -12 || point.Position.Y > strip.ActualHeight + 24)
+        {
+          pressedAt = null; sliding = false; EndSlide(tab.Id, commit: false);
+          try { await select.StartDragAsync(e.GetCurrentPoint(select)); }
+          catch (Exception ex) when (ex is not OutOfMemoryException) { notice("This tab could not be dragged out."); }
+          return;
+        }
+        if (!sliding && Math.Abs(dx) < 4) return;
+        sliding = true; Slide(tab.Id, dx);
+      }), true);
+      select.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) =>
+      {
+        if (sliding) EndSlide(tab.Id, commit: true);
+        pressedAt = null; sliding = false; Settle();
+      }), true);
+      // The button releases its capture before the release reaches the handler
+      // above; only cancel a slide that no release followed.
+      select.PointerCaptureLost += (_, _) => DispatcherQueue.TryEnqueue(() => { if (!sliding) return; sliding = false; pressedAt = null; EndSlide(tab.Id, commit: false); });
       select.KeyUp += (_, _) => Settle();
       chip.Children.Add(select);
       // Like Chrome: the selected tab always shows its ×, at every width; other tabs
@@ -334,7 +366,7 @@ internal sealed partial class WorkspaceSurface : Grid
       MenuItems(); menu.Opening += (_, _) => MenuItems();
       CloseButton();
       select.ContextFlyout = menu;
-      select.CanDrag = true; select.AllowDrop = true;
+      select.AllowDrop = true;
       select.DragStarting += (_, args) => { args.Data.Properties["deck-workspace"] = tab.Id; args.Data.SetText("deck-window:" + tab.Id); args.Data.RequestedOperation = DataPackageOperation.Move; };
       select.DropCompleted += (_, args) => { if (args.DropResult == DataPackageOperation.None) DragOutside?.Invoke(tab.Id); Settle(); };
       select.DragOver += (_, args) => { if (args.DataView.Properties.ContainsKey("deck-workspace")) args.AcceptedOperation = DataPackageOperation.Move; };
@@ -663,6 +695,43 @@ internal sealed partial class WorkspaceSurface : Grid
     if (session(tab) is { } row) return tab.Title + ", " + row.DisplaySubtitle + ", " + SessionStatus.From(row.State).Label + (row.Unread ? ", unread output" : "") + ", " + row.Folder;
     if (BrowserIdentity?.Invoke(tab) is { } browser) return tab.Title + ", " + browser.Binding + (browser.Loading ? ", loading" : "") + ", " + browser.Address;
     return tab.Title;
+  }
+  // Strip columns follow this host's tab order, so a column is also the index
+  // WorkspaceState.Move takes.
+  private int slideTo = -1;
+  private void Slide(string id, double dx)
+  {
+    if (!tabFrames.TryGetValue(id, out var chip)) return;
+    var chips = strip.Children.OfType<Grid>().ToArray();
+    var from = GetColumn(chip); var width = strip.ColumnDefinitions[from].ActualWidth;
+    if (width <= 0) return;
+    var offset = Math.Clamp(dx, -from * width, (chips.Length - 1 - from) * width);
+    var to = Math.Clamp((int)Math.Round(from + offset / width), 0, chips.Length - 1);
+    Canvas.SetZIndex(chip, 1); chip.TranslationTransition = null; chip.Translation = new((float)offset, 0, 0);
+    foreach (var other in chips)
+    {
+      if (ReferenceEquals(other, chip)) continue;
+      var column = GetColumn(other);
+      var shift = from < to && column > from && column <= to ? -width : from > to && column < from && column >= to ? width : 0;
+      other.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+      other.Translation = new((float)shift, 0, 0);
+    }
+    slideTo = to;
+  }
+  private void EndSlide(string id, bool commit)
+  {
+    var to = slideTo; slideTo = -1;
+    if (commit && to >= 0 && tabFrames.TryGetValue(id, out var moved) && GetColumn(moved) != to)
+    {
+      // The move re-renders the strip in its new order.
+      try { state.Move(id, to); return; }
+      catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { notice("This tab could not move."); }
+    }
+    foreach (var chip in strip.Children.OfType<Grid>())
+    {
+      chip.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+      chip.Translation = default; Canvas.SetZIndex(chip, 0);
+    }
   }
   private int Index(WorkspaceTab tab) => state.Tabs.Where(t => t.Host == tab.Host).ToList().IndexOf(tab);
   private void Select(string id, bool moveFocus = true)
