@@ -635,7 +635,7 @@ internal sealed partial class WorkspaceSurface : Grid
   }
   internal static Button IconButton(string name, string glyph, Action action)
   {
-    var button = new Button { Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], Content = new TerminalDeck.App.Views.DeckIcon { Glyph = glyph, FontSize = 14 }, Width = 28, Height = 32, MinHeight = 28, Padding = new(4), BorderThickness = new(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+    var button = new Button { Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], Content = new TerminalDeck.App.Views.DeckIcon { Glyph = glyph, FontSize = 16 }, Width = 28, Height = 32, MinHeight = 28, Padding = new(4), BorderThickness = new(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
     AutomationProperties.SetName(button, name); ToolTipService.SetToolTip(button, name); button.Click += (_, _) => action(); return button;
   }
 }
