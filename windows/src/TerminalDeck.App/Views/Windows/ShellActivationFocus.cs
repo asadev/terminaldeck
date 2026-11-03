@@ -22,6 +22,10 @@ public sealed partial class ShellWindow
       // Low priority: a click that activated the window moves focus first.
       window.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
       {
+        // A click that activated the window decides focus itself. Moving focus
+        // while its button is still held would also make a pressed tab let go of
+        // the pointer and cancel dragging it.
+        if (ButtonHeld(Windows.System.VirtualKey.LeftButton) || ButtonHeld(Windows.System.VirtualKey.RightButton) || ButtonHeld(Windows.System.VirtualKey.MiddleButton)) return;
         if (root.XamlRoot is not { } xamlRoot || IsShellModalOpen(xamlRoot)) return;
         if (VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot).Any(popup => popup.Child is not ToolTip)) return;
         if (FocusManager.GetFocusedElement(xamlRoot) is TextBox or PasswordBox or RichEditBox or AutoSuggestBox) return;
@@ -31,4 +35,6 @@ public sealed partial class ShellWindow
         surface.FocusInput(tab.Id);
       });
     };
+  private static bool ButtonHeld(Windows.System.VirtualKey button) =>
+    (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(button) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
 }
