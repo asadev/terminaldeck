@@ -54,10 +54,11 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly ScrollViewer stripViewport = new() { HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, MinWidth = 0, ZoomMode = ZoomMode.Disabled };
   private readonly Grid body = new();
   private Dictionary<string, Border> paneFrames = [];
-  // Like browser tabs, each owner's rendered panes stay in `body` (hidden) while
-  // another owner shows. Switching back only changes visibility, so terminals
-  // and pages are not pulled out of their panes and redrawn on every switch. A
-  // set is rebuilt when its owner's pane tree changes, and all are dropped when
+  // Like browser tabs, rendered panes stay in `body` (hidden) while another tab
+  // shows. Switching back only changes visibility, so terminals and pages are
+  // not pulled out of their panes and redrawn on every switch. One set is kept
+  // per owner and set of tabs shown (an owner's single tabs, or a split); it is
+  // rebuilt when that pane tree changes shape or ratio, and all are dropped when
   // the tabs themselves change (Render, ReleaseViews).
   private sealed record PaneSet(string Key, FrameworkElement Tree, Dictionary<string, Border> Frames, Dictionary<string, Button> Accounts, List<(ContentControl Holder, string Tab)> Holders);
   private readonly Dictionary<string, PaneSet> paneSets = [];
@@ -152,7 +153,8 @@ internal sealed partial class WorkspaceSurface : Grid
     owner = scope;
     var layout = state.Layout(owner, Host);
     var key = System.Text.Json.JsonSerializer.Serialize(layout.Root);
-    if (paneSets.TryGetValue(owner, out var set) && set.Key == key)
+    var slot = owner + "|" + string.Join(",", layout.Root?.Tabs ?? []) + "|" + string.Join(",", layout.Root?.EmptyIds ?? []);
+    if (paneSets.TryGetValue(slot, out var set) && set.Key == key)
     {
       paneFrames = set.Frames; accountButtons = set.Accounts;
       foreach (var (holder, tab) in set.Holders) if (state.Tabs.Any(t => t.Id == tab)) Show(holder, view(state.Get(tab)));
@@ -170,7 +172,7 @@ internal sealed partial class WorkspaceSurface : Grid
         empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
         var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); tree = empty;
       }
-      set = new(key, tree, paneFrames, accountButtons, holders); paneSets[owner] = set; body.Children.Add(tree);
+      set = new(key, tree, paneFrames, accountButtons, holders); paneSets[slot] = set; body.Children.Add(tree);
     }
     foreach (var other in paneSets.Values) other.Tree.Visibility = ReferenceEquals(other, set) ? Visibility.Visible : Visibility.Collapsed;
     UpdateFocus();
