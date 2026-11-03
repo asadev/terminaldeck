@@ -139,11 +139,15 @@ public sealed partial class AppRuntime : IAsyncDisposable
   }
   public async Task<SessionRecord> StartShellForProjectAsync(string folder, string projectId)
   {
-    _ = Projects.Get(projectId);
-    // Terminals the user opens use the shell chosen in Settings → General.
-    var row = await StartAsync("shell", folder, shell: General.Read().TerminalShell);
+    var project = Projects.Get(projectId);
+    // Terminals the user opens use the shell chosen in Settings → General and are
+    // named after their project, or their folder outside one; the tab's icon
+    // shows the shell.
+    var name = project.Id != TerminalDeck.Core.Projects.ProjectIdentity.IndependentId ? project.Name : TerminalFolderName(folder);
+    var row = await StartAsync("shell", folder, title: name.Length > 120 ? name[..120] : name, shell: General.Read().TerminalShell ?? TerminalDeck.Core.Sessions.TerminalShells.WindowsPowerShell);
     Projects.BindSession(row.Definition.Id, projectId); return row;
   }
+  private static string TerminalFolderName(string folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } leaf ? leaf : folder;
   public Func<string, bool, Task>? InstallAiRequested { get; set; }
   public Func<string, string, Task<JsonElement>>? InstallFlowRequested { get; set; }
   public Func<string, string, Task<JsonElement>>? SignInFlowRequested { get; set; }

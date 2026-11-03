@@ -62,6 +62,8 @@ public sealed class SessionPicture : Grid
         tile.Child = new DeckIcon { Glyph = Glyph(symbol), FontSize = size * 0.52, FontFamily = TerminalDeck.App.Views.DeckFonts.Icons, Foreground = Ink(ColourBrush(colour)) };
       Children.Add(tile);
     }
+    else if (row.Provider == "shell" && ShellIcons.For(row.Shell) is { } program)
+      Children.Add(new Image { Source = program, Width = size * 0.62, Height = size * 0.62, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
     else Children.Add(new DeckIcon { Glyph = WorkspaceIcons.For(row.Presentation == SessionPresentation.Chat ? "chat" : "terminal"), FontSize = size * 0.58, FontFamily = TerminalDeck.App.Views.DeckFonts.Icons, Foreground = Ink(OnAccent ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush") });
     if (!row.HasProject) return;
     var badge = Math.Round(size * 0.52);

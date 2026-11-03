@@ -171,7 +171,7 @@ internal sealed partial class WorkspaceSurface : Grid
       else if (session(tab) is { } row)
       {
         if (ProjectIdentity?.Invoke(tab) is { } project) label.Children.Add(project);
-        label.Children.Add(new TerminalDeck.App.Views.BrandIcon { Kind = row.Provider, Width = 14, Height = 14 });
+        label.Children.Add(new TerminalDeck.App.Views.BrandIcon { Kind = row.Provider, Shell = row.Shell, Width = 14, Height = 14 });
       }
       else label.Children.Add(new TerminalDeck.App.Views.DeckIcon { Glyph = WorkspaceIcons.For(tab.Kind == "page" ? tab.Subject : tab.Kind), FontSize = 13 });
       var title = new TextBlock { Text = tab.Title, FontWeight = active == tab.Id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal, FontSize = 12, LineHeight = 13, LineStackingStrategy = LineStackingStrategy.BlockLineHeight, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }; label.Children.Add(title); tabTitles[tab.Id] = title;
