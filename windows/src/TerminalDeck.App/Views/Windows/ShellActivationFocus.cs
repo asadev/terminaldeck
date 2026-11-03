@@ -15,17 +15,23 @@ public sealed partial class ShellWindow
   // put it on the active tab's input: the terminal, a chat composer or the
   // browser. Focus stays where it is when it already sits in a text field, a
   // dialog or menu is open, or the window shows a page rather than tabs.
-  private void FocusInputOnActivation(Window window, FrameworkElement root, string host) =>
+  private void FocusInputOnActivation(Window window, FrameworkElement root, string host)
+  {
+    // A click that activated the window decides focus itself. Moving focus while
+    // its button is still held would also make a pressed tab let go of the
+    // pointer and cancel dragging it. (Keyboard key state does not report mouse
+    // buttons for pointer input, so track presses here.)
+    var pressed = false;
+    root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => pressed = true), true);
+    root.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, _) => pressed = false), true);
+    root.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler((_, _) => pressed = false), true);
     window.Activated += (_, args) =>
     {
-      if (args.WindowActivationState == WindowActivationState.Deactivated) return;
+      if (args.WindowActivationState == WindowActivationState.Deactivated) { pressed = false; return; }
       // Low priority: a click that activated the window moves focus first.
       window.DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
       {
-        // A click that activated the window decides focus itself. Moving focus
-        // while its button is still held would also make a pressed tab let go of
-        // the pointer and cancel dragging it.
-        if (ButtonHeld(Windows.System.VirtualKey.LeftButton) || ButtonHeld(Windows.System.VirtualKey.RightButton) || ButtonHeld(Windows.System.VirtualKey.MiddleButton)) return;
+        if (pressed) return;
         if (root.XamlRoot is not { } xamlRoot || IsShellModalOpen(xamlRoot)) return;
         if (VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot).Any(popup => popup.Child is not ToolTip)) return;
         if (FocusManager.GetFocusedElement(xamlRoot) is TextBox or PasswordBox or RichEditBox or AutoSuggestBox) return;
@@ -35,6 +41,5 @@ public sealed partial class ShellWindow
         surface.FocusInput(tab.Id);
       });
     };
-  private static bool ButtonHeld(Windows.System.VirtualKey button) =>
-    (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(button) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+  }
 }
