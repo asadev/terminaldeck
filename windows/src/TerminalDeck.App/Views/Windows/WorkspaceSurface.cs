@@ -586,6 +586,7 @@ internal sealed partial class WorkspaceSurface : Grid
   private void FocusPane(string id) => Guard(async () =>
   {
     if (IsModalOpen?.Invoke() == true) return;
+    await PaneLoaded(id);
     if (!paneFrames.TryGetValue(id, out var frame))
     {
       if (state.Get(id).Kind == "page" && FocusManager.FindFirstFocusableElement(view(state.Get(id))) is Control pageInput) pageInput.Focus(FocusState.Programmatic);
@@ -600,6 +601,21 @@ internal sealed partial class WorkspaceSurface : Grid
     else if (content.OfType<TextBox>().FirstOrDefault(input => input.AcceptsReturn && !input.IsReadOnly) is { } composer) composer.Focus(FocusState.Programmatic);
     else if (FocusManager.FindFirstFocusableElement(frame) is Control input) input.Focus(FocusState.Programmatic);
   });
+  // Selecting a tab can rebuild the panes, so the frame found for it may be
+  // brand new: until it is loaded it has no template and no WebView2 in its
+  // tree, and focus would land nowhere. Wait for it (a later rebuild may
+  // replace it again, hence the short loop).
+  private async Task PaneLoaded(string id)
+  {
+    for (var wait = 0; wait < 3 && paneFrames.TryGetValue(id, out var frame) && !frame.IsLoaded; wait++)
+    {
+      var loaded = new TaskCompletionSource();
+      void Done(object sender, RoutedEventArgs e) => loaded.TrySetResult();
+      frame.Loaded += Done;
+      try { await Task.WhenAny(loaded.Task, Task.Delay(1000)); }
+      finally { frame.Loaded -= Done; }
+    }
+  }
   private void ClosePaneView(string id)
   {
     state.ClosePane(owner, Host, id); var layout = state.Layout(owner, Host);

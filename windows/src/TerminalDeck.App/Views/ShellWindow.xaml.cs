@@ -82,6 +82,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     settings.ReadCloseConfirmation = () => sidebar.Read.ConfirmDelete;
     settings.SaveCloseConfirmation = value => sidebar.AskBeforeDelete(value);
     WindowMaterials.Attach(this, Root, TitleBarRow);
+    FocusInputOnActivation(this, Root, "main");
     RoundedContentClip.Attach(ContentCard, topLeftOnly: true);
     Projects = new(new(Runtime.Projects, Runtime.Agents, Runtime.ProjectSessions, Runtime.Accounts), this);
     Agents = new(new(Runtime.Agents, Runtime.Projects, Runtime.Accounts), this);

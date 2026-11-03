@@ -94,6 +94,8 @@ public sealed partial class SessionPane : Grid
                 case "ready":
                   PostTerminalTheme();
                   ApplyCopyOnSelect();
+                  // Focused while the page was still loading (a new tab): put the cursor in it now.
+                  if (terminal is { FocusState: not FocusState.Unfocused }) Post(new { type = "focus" });
                   if (runtime is not null && draft.IsLive) _ = FollowAsync();
                   else ready.TrySetResult();
                   break;

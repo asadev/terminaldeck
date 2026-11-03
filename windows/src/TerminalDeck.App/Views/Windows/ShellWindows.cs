@@ -489,6 +489,7 @@ public sealed partial class ShellWindow
     _ = new WorkspaceTitleBar(window, root, drag, caption);
     var child = new DetachedWorkspace(host, owner, window, root, surface); detached.Add(host, child);
     InitializeShellCommands(root, host);
+    FocusInputOnActivation(window, root, host);
     window.Closed += async (_, _) =>
     {
       surface.ReleaseViews(); detached.Remove(host);
