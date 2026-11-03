@@ -1,0 +1,7 @@
+// Synthetic loopback fixture. No external network or user files.
+const http = require('node:http')
+const server = http.createServer((request, response) => {
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+  response.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="color-scheme" content="light dark"><title>Windows UI fixture</title><style>body{font:16px/1.6 system-ui;margin:8%;color:light-dark(#30343b,#e8e9ed);background:light-dark(#f7f8fa,#22252a)}h1{font-size:36px;font-weight:600}main{max-width:650px}button,input{font:inherit;padding:10px 16px;margin:4px;border-radius:8px;border:1px solid #8884}label{display:block;margin-top:20px}p{opacity:.7}button{background:#3079de;color:white;border:0}</style><main><p>LOCAL BROWSER CHECK</p><h1>Your work, a little closer.</h1><p>This page is served only on this PC. It lets the UI lane check browser navigation, viewport sizes and safe recorded steps without signing in anywhere.</p><button type="button">Try an example</button><label>Example entry <input aria-label="Example entry" placeholder="A draft note"></label><label>Password entry <input type="password" aria-label="Password entry" autocomplete="new-password" placeholder="Values are never recorded"></label><p>Use Size to change the viewport. Use Record to keep an ordered list of clicks and entries.</p><a href="/next">Open the next local page</a></main></html>`)
+})
+server.listen(18765, '127.0.0.1')

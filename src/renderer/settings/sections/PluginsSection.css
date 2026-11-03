@@ -1,0 +1,68 @@
+/**
+ * Settings → Plugins.
+ *
+ * The window's own vocabulary carries the list — profiles, badges, the confirm
+ * strip, rows and switches — so this file names only what it has no word for:
+ * the quiet line, the list of what a plugin asks for, and the allow area under
+ * a row. Fills, never surfaces, and space before a tint, as `TasksSection.css`.
+ */
+
+.plugins-quiet {
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* What a plugin asks for: one line each, the allowed ones in the brighter ink. */
+.plugins-caps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugins-cap {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+.plugins-cap[data-granted] {
+  color: var(--text-secondary);
+}
+
+/* The allow area, opened under a plugin's name. */
+.plugins-edit {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.plugins-edit .settings-actions {
+  margin: var(--sp-2) 0 0;
+}
+
+.plugins-choice {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The projects under a project-scoped capability, set in from it. */
+.plugins-projects {
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--sp-6);
+}
+
+/* A folder that cannot be used as a plugin reads quieter than the ones that can. */
+.plugins-item[data-state='broken'] .settings-profile-name {
+  color: var(--text-secondary);
+}

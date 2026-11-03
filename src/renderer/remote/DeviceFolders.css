@@ -1,0 +1,133 @@
+/* ============================================================================
+   Per-device folder grants.
+
+   Only what the shared settings controls do not already cover: the list of
+   devices, and under each one the folders somebody chose for it. Everything
+   else on this panel is a `settings-*` class or a `Button`, exactly like
+   `RemoteSection.css` beside it, so both keep matching the rest of the settings
+   window when that changes rather than drifting into their own look.
+
+   Nothing here is boxed and nothing here has a border. A device is a soft fill
+   with space inside it; a folder is a row on that fill. That is the same
+   treatment `.remote-list` gives the device roster one group up — the two lists
+   are read one after the other and a different shape between them would suggest
+   a difference that is not there.
+   ============================================================================ */
+
+/* ------------------------------------------------------------- the list -- */
+
+.df-list {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Deliberately larger than the gap between folders inside a device. The two
+     nestings are one visual hierarchy, and if a folder sat as far from the
+     folder above it as it does from the next device, the reader would have to
+     use the indentation alone to work out which device a row belongs to — on a
+     screen whose entire job is saying which folders belong to which device. */
+  gap: var(--sp-3);
+}
+
+.df-device {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* --------------------------------------------------------------- a head -- */
+
+/* Name over note rather than side by side. The note is a whole sentence in two
+   of the three states — "Not chosen — this device can start a session in
+   whichever project is open on this Mac" — and a sentence competing for one
+   line with a device name that the user typed themselves ends with one of them
+   ellipsised. The state is the thing being read here; it gets the room. */
+.df-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.df-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* Title bright, description dim, space between them: the same treatment the
+   settings rows use for a label and its help text, because this is the same
+   relationship. */
+.df-note {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------- the folders -- */
+
+.df-folders {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.df-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  /* No hover, no pointer, no fill. The row is not clickable — the Remove button
+     on it is — and a row that lit up under the cursor would be promising an
+     action it does not have. */
+}
+
+.df-folder-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  /* Both of these, together, are what stop a long path shouldering the Remove
+     button off the end of the row. `min-width: 0` is the one that actually
+     matters: a flex item's default minimum is its content, so without it the
+     path refuses to shrink and the button is pushed outside the fill instead of
+     the text ellipsising. */
+  flex: 1;
+  min-width: 0;
+}
+
+.df-folder-name {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* The full path under the name, because two projects can share a last segment
+   and the row has to be unmistakably the one the person meant.
+
+   Monospaced and ellipsised, never wrapped. A path that wraps mid-segment reads
+   as two paths, and this list can hold several of them; one clipped line each
+   keeps the device's rows scannable.
+
+   The clipping is why the element carries a `title` in the component. A browser
+   does not add a tooltip to text it has ellipsised — that is a thing people
+   assume and it has never been true — so without the attribute the end of a
+   deep path would be unreachable rather than merely hidden, on the one screen
+   whose job is telling two similar folders apart. */
+.df-folder-path {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------- action -- */
+
+.df-actions {
+  margin-top: var(--sp-3);
+}

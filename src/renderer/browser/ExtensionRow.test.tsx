@@ -1,0 +1,366 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import { ExtensionRow } from './ExtensionRow'
+import type { StoreExtension } from './extensions-bridge'
+
+/**
+ * An extension row, actually rendered.
+ *
+ * The row is where this feature can most easily start lying, so it is the thing
+ * that gets rendered and read. Three ways it could:
+ *
+ *  - **A button over something that cannot work.** A row this app measured
+ *    failing has no download pinned, so an Install could only ever refuse.
+ *  - **A switch over something that is not running.** "On" is the live session's
+ *    answer, not the disk's, and a checked box above a program that threw at
+ *    load is exactly the control this app's brief forbids.
+ *  - **A reach nobody was shown before pressing Install.** What an extension may
+ *    read is the whole of what somebody is agreeing to, so it cannot arrive after
+ *    the agreement. It is safe for the row to state the catalogue's answer only
+ *    because `browser-extensions.ts` refuses any release whose manifest reaches
+ *    wider than the row said — so the two are the same thing or neither happens.
+ *
+ * There is no DOM in this project's test setup, so this renders through
+ * `react-dom/server` the way `ToolRow.test.tsx` does. The panel around this
+ * row loads through an effect, which SSR never runs, so the row is where
+ * everything worth asserting lives.
+ */
+
+function row(over: Partial<StoreExtension> = {}): StoreExtension {
+  return {
+    id: 'dark-reader',
+    name: 'Dark Reader',
+    summary: 'Turns every site dark.',
+    homepage: 'https://github.com/darkreader/darkreader',
+    licence: 'MIT',
+    version: '4.9.129',
+    category: 'appearance',
+    tags: [],
+    needs: [],
+    cost: 'free',
+    costNote: '',
+    works: 'works',
+    measured: 'Watched working: a white page came back with background rgb(24, 26, 27).',
+    logo: 'dark-reader',
+    url: 'https://example.com/a.zip',
+    sha256: 'a'.repeat(64),
+    bytes: 100,
+    state: 'available',
+    installedVersion: '',
+    installedAt: 0,
+    enabled: false,
+    reach: [],
+    mayAsk: [],
+    everywhere: false,
+    missing: [],
+    provides: [],
+    inert: [],
+    rulesetsSwitchedOn: 0,
+    popup: '',
+    optionsPage: '',
+    sideloaded: false,
+    origin: '',
+    crxId: '',
+    staticRulesets: false,
+    message: '',
+    ...over,
+  }
+}
+
+function render(over: Partial<StoreExtension> = {}, props: Partial<Parameters<typeof ExtensionRow>[0]> = {}) {
+  return renderToStaticMarkup(
+    <ExtensionRow
+      extension={row(over)}
+      busy={false}
+      said=""
+      canOpenPopup
+      canOpenOptions
+      onAct={() => {}}
+      onEnable={() => {}}
+      onOpenPopup={() => {}}
+      onOpenOptions={() => {}}
+      {...props}
+    />,
+  )
+}
+
+describe('every row', () => {
+  it('shows what this app measured, whatever the verdict', () => {
+    // A verdict with no observation behind it is an opinion.
+    expect(render()).toContain('rgb(24, 26, 27)')
+  })
+
+  it('names the licence and where it comes from, so the row is not this app’s word for it', () => {
+    const html = render()
+    expect(html).toContain('MIT')
+    expect(html).toContain('github.com/darkreader/darkreader')
+  })
+})
+
+describe('what will be fetched, and what was', () => {
+  it('says the exact URL, the exact byte count and the fingerprint before Install is pressed', () => {
+    // This is the disclosure. A store that fetches programs and will not say
+    // from where, or says "verified" without saying against what, is asking
+    // for the trust it exists to replace.
+    const html = render()
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('100 bytes, exactly')
+    expect(html).toContain('a'.repeat(64))
+    expect(html).toContain('must match this, or nothing is saved')
+  })
+
+  it('answers "where did this program come from" on an installed row, past tense', () => {
+    const html = render({ state: 'installed', enabled: true })
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('matched this before it was unpacked')
+  })
+
+  it('offers provenance on every row, because every row has bytes to fetch', () => {
+    /*
+     * This replaces a test that rendered a row with no download and checked that
+     * no URL was printed under it. Such a row cannot exist any more, so what is
+     * worth pinning is the opposite: the fetch is disclosed before the button,
+     * not after it.
+     */
+    const html = render()
+    expect(html).toContain('https://example.com/a.zip')
+    expect(html).toContain('sha256')
+  })
+})
+
+/*
+ * `describe('a row this app measured failing')` used to be here — three tests
+ * over a row with no Install and an **Open project** link in its place. The
+ * catalogue cannot hold such a row now, so the rendering they described is gone
+ * along with `linkOut` and `linkOutLabel`. Asad: *"we should not offer tools
+ * that don't work with our architecture."*
+ */
+
+describe('a row that can be installed', () => {
+  it('offers Install and says so on the button', () => {
+    expect(render()).toContain('Install')
+  })
+
+  it('states what it reaches while Install is still the button on it', () => {
+    /*
+     * Reach is the single fact somebody is agreeing to when they press Install,
+     * so it cannot wait until afterwards. It is safe to print the catalogue's
+     * answer because `browser-extensions.ts` refuses any release whose manifest
+     * reaches wider than this line — the row and the program agree or neither
+     * happens.
+     */
+    const html = render({ reach: ['<all_urls>'], everywhere: true })
+    expect(html).toContain('every page you open in this profile')
+    expect(html).toContain('Install')
+  })
+})
+
+describe('a row that is installed', () => {
+  it('says what it actually reaches, in words rather than in patterns', () => {
+    const html = render({ state: 'installed', enabled: true, everywhere: true, reach: ['<all_urls>'] })
+    expect(html).toContain('every page you open in this profile')
+  })
+
+  it('draws the switch, and Remove beside it', () => {
+    // Off and gone are different things and a person means one of them.
+    const html = render({ state: 'installed', enabled: true })
+    expect(html).toContain('checkbox')
+    expect(html).toContain('Remove')
+  })
+
+  it('shows the switch unchecked when the browser did not load it', () => {
+    /*
+     * The one that matters most. The store writes `enabled: true` and the
+     * browser can still refuse; the main process folds the live answer in and
+     * the row draws that, with the reason.
+     */
+    const html = render({
+      state: 'installed',
+      enabled: false,
+      message: 'It is switched on but the browser did not load it: it threw.',
+    })
+    expect(html).not.toContain('checked=""')
+    expect(html).toContain('did not load it')
+  })
+
+  it('names the chrome.* it asks for that is not here', () => {
+    const html = render({ state: 'installed', enabled: true, missing: ['contextMenus', 'webNavigation'] })
+    expect(html).toContain('chrome.contextMenus')
+    expect(html).toContain('chrome.webNavigation')
+  })
+
+  it('says outright when its rules are static rulesets that are not in force', () => {
+    // Nothing else on the row would show it: the extension installs, loads,
+    // draws its button and blocks nothing.
+    const html = render({ state: 'installed', enabled: true, staticRulesets: true })
+    expect(html).toContain('not in force')
+  })
+})
+
+describe('the panel button', () => {
+  it('is drawn only for an extension that has one and is running', () => {
+    // A button opening the popup of a program that is not loaded has nothing to
+    // show, and one for an extension with no `default_popup` has no page at all.
+    expect(render({ state: 'installed', enabled: true, popup: 'popup.html' })).toContain('Open panel')
+    expect(render({ state: 'installed', enabled: false, popup: 'popup.html' })).not.toContain('Open panel')
+    expect(render({ state: 'installed', enabled: true, popup: '' })).not.toContain('Open panel')
+  })
+
+  it('is not drawn when the preload cannot open one', () => {
+    expect(
+      render({ state: 'installed', enabled: true, popup: 'popup.html' }, { canOpenPopup: false }),
+    ).not.toContain('Open panel')
+  })
+})
+
+describe('a damaged install', () => {
+  it('says what is wrong and offers Remove', () => {
+    const html = render({
+      state: 'damaged',
+      message: 'it was installed from a different release than this version of the app offers',
+    })
+    expect(html).toContain('different release')
+    expect(html).toContain('Remove')
+  })
+})
+
+describe('the compatibility layer, on the row', () => {
+  it('names what this app filled in and what is still not there', () => {
+    /*
+     * The layer rewrites files inside a program somebody just agreed to install.
+     * An app that does that and does not say so is keeping a secret it has no
+     * reason to keep — and one that says "works" without naming what is inert is
+     * the row version of a button that does nothing.
+     */
+    const html = render(
+      row({
+        state: 'installed',
+        enabled: true,
+        provides: ['contextMenus', 'webNavigation'],
+        inert: ['its right-click menu entries are not shown'],
+      }),
+    )
+    expect(html).toContain('Filled in by this app')
+    expect(html).toContain('chrome.contextMenus')
+    expect(html).toContain('Still not there')
+    expect(html).toContain('right-click menu entries are not shown')
+  })
+
+  it('stops warning about static rulesets once it has switched them on', () => {
+    const warned = render(row({ state: 'installed', staticRulesets: true, rulesetsSwitchedOn: 0 }))
+    expect(warned).toContain('are not in force')
+    const handled = render(row({ state: 'installed', staticRulesets: true, rulesetsSwitchedOn: 6 }))
+    expect(handled).not.toContain('are not in force')
+    expect(handled).toContain('switched its 6 on')
+  })
+
+  it('says nothing about a layer for a row nobody has installed', () => {
+    // Before an install there is no manifest, so there is nothing measured to
+    // say. A row that guessed would be guessing about somebody else's release.
+    const html = render(row({ state: 'available' }))
+    expect(html).not.toContain('Filled in by this app')
+  })
+})
+
+describe('what it costs', () => {
+  it('is on the row before anything is pressed, in the catalogue’s own sentence', () => {
+    /*
+     * Every extension in a browser store is a free download, which is why this
+     * cannot be left to the licence field: 1Password's row is a free download of
+     * a thing with no free plan, and a store that stayed quiet would be letting
+     * *free to install* stand in for *free to use*.
+     */
+    const html = render({
+      cost: 'paid',
+      costNote: '1Password has no free plan; the extension does nothing without a subscription.',
+    })
+    /*
+     * On the shelf and unfolded, which is the part that matters and the part
+     * that survived the density pass: the facts list this used to sit in is now
+     * behind a `details` — see `store/StoreRowMore.tsx` — and a price a person
+     * has to press something to see is a price they will read after installing.
+     *
+     * It carries no *What it costs* label any more. The catalogue's sentence
+     * already reads as a price and the chip beside the name already names one,
+     * so the label was the third spelling of the same thing on one row.
+     */
+    const note = html.indexOf('has no free plan')
+    expect(note, 'the price sentence is not on the row').toBeGreaterThan(-1)
+    expect(note, 'the price sentence was folded away').toBeLessThan(
+      html.indexOf('store-more-summary'),
+    )
+    expect(html).toContain('Paid')
+  })
+
+  it('draws a price on every row, free ones included', () => {
+    expect(render({ cost: 'free', costNote: '' })).toContain('Free')
+    expect(render({ cost: 'metered', costNote: 'Free to a limit.' })).toContain(
+      'Free to a limit, then paid',
+    )
+  })
+
+  it('says nothing extra about a row that is simply free', () => {
+    /*
+     * One unfolded line on such a row — what it reaches — and no second one.
+     * *Free.* under a chip that already says *Free* is the padding that teaches
+     * people to stop reading, and on a shelf of twenty rows it is a line each.
+     */
+    const html = render({ cost: 'free', costNote: '' })
+    expect(html.split('class="store-rowline"').length - 1).toBe(1)
+    expect(html).toContain('Reaches')
+  })
+})
+
+describe('editing one you added', () => {
+  const OWN = { sideloaded: true, state: 'installed' as const, enabled: true, origin: '/Users/me/code/thing' }
+  const noop = (): void => {}
+
+  it('offers Reload and Rename only on a row somebody added', () => {
+    /*
+     * A catalogue row has neither, and for two different reasons. There is no
+     * local source to reload from — its `origin` is a download URL and
+     * re-fetching it is what Install already does — and its name is the
+     * catalogue's, so editing it would leave a row that no longer matches the
+     * entry every claim on it was measured against.
+     */
+    const own = render(OWN, { onReload: noop, onStartRename: noop })
+    expect(own).toContain('>Reload<')
+    expect(own).toContain('>Rename<')
+
+    const catalogue = render({ state: 'installed', enabled: true }, { onReload: noop, onStartRename: noop })
+    expect(catalogue).not.toContain('>Reload<')
+    expect(catalogue).not.toContain('>Rename<')
+  })
+
+  it('draws neither when this build has no channel for them', () => {
+    // Absent rather than disabled, the standing rule for this whole menu.
+    const markup = render(OWN)
+    expect(markup).not.toContain('>Reload<')
+    expect(markup).not.toContain('>Rename<')
+  })
+
+  it('replaces both with the rename box while it is open', () => {
+    // The two answers to an open question are the only things that should be
+    // beside it.
+    const markup = render(OWN, {
+      onReload: noop,
+      onStartRename: noop,
+      onRenameDraft: noop,
+      onRename: noop,
+      renaming: true,
+      renameDraft: 'My build',
+    })
+    expect(markup).toContain('My build')
+    expect(markup).toContain('>Save<')
+    expect(markup).toContain('>Cancel<')
+    expect(markup).not.toContain('>Reload<')
+    expect(markup).not.toContain('>Rename<')
+  })
+
+  it('still says where it came from, and that nothing was measured about it', () => {
+    // Reload and Rename change nothing about what this row is allowed to claim.
+    const markup = render(OWN, { onReload: noop, onStartRename: noop })
+    expect(markup).toContain('/Users/me/code/thing')
+    expect(markup).toContain('Added by you')
+  })
+})

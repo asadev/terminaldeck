@@ -1,0 +1,162 @@
+/* ============================================================================
+   Swarm mode — every running session on screen at once.
+
+   A grid of cards on the app's ground: a fill and a corner, no outline. The
+   focused cell is the only thing wearing the accent, and it wears it as the
+   app's one focus idiom — a 2px ring, inset so nothing moves by a pixel when
+   focus changes. Colour comes only from tokens.css; the locals below are
+   geometry.
+   ============================================================================ */
+
+.swarm-grid {
+  --swarm-gap: var(--sp-2);
+  --swarm-head: var(--control-h);
+  /* How far an unfocused cell recedes. Enough to make the focused one obvious
+     at a glance, not so far that the others become unreadable — the whole
+     point of the mode is watching them all. Measured against a rendered grid:
+     below ~0.4 the scrim is invisible on a dark surface, and a white scrim
+     flattens text faster than a black one, so light needs less of it. */
+  --swarm-dim: 0.45;
+
+  display: grid;
+  gap: var(--swarm-gap);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--swarm-gap);
+  overflow: hidden;
+  /* The desk the cards lie on. It has to be darker than the cells, because a
+     cell's body is the terminal's own `--bg-primary`: on a `--bg-primary`
+     ground the light theme lost every cell edge and the grid read as three
+     header strips floating on one white page. */
+  background: var(--bg-sunken);
+}
+
+[data-theme='dark'] .swarm-grid {
+  --swarm-dim: 0.55;
+}
+
+.swarm-grid-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ----------------------------------------------------------------- cells -- */
+
+.swarm-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  transition: outline-color var(--dur-fast) var(--ease);
+  /* Declared unfocused so the focused ring has something to transition from. */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+.swarm-cell[data-focused='true'] {
+  outline-color: var(--accent);
+}
+
+/* A label, not a title bar: no rule under it, no fill of its own. */
+.swarm-cell-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  flex-shrink: 0;
+  height: var(--swarm-head);
+  padding: 0 var(--sp-3);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  text-align: left;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.swarm-cell[data-focused='true'] .swarm-cell-head {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.swarm-cell-head:hover {
+  color: var(--text-primary);
+}
+
+.swarm-cell-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+.swarm-cell-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Positioned so an absolutely-filled child (the terminal host) stays inside
+   the cell and below the head.
+
+   The ground here is the page colour and not the card's, because the terminal
+   paints `--bg-primary` inside its own padding (see TerminalView's theme). On
+   the card colour that padding became a visible margin and the cell read as a
+   white rectangle floating in a grey box — one separation the card does not
+   need, since the head above it is already a different tint. */
+.swarm-cell-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* Everything that is not the focused session recedes behind a scrim of the
+   page background — it dims in the dark theme and washes out in the light one.
+   The scrim covers the body only: the title and status dot stay at full
+   contrast, because reading status across all of them at once is the entire
+   reason for this mode. */
+.swarm-cell:not([data-focused='true']) .swarm-cell-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: var(--bg-primary);
+  opacity: var(--swarm-dim);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+/* ------------------------------------------------- leftover grid slots -- */
+
+/* The same card, emptier. A dashed outline around a hole draws more attention
+   than the sessions do, which is backwards. */
+.swarm-spare {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.swarm-spare-add {
+  display: grid;
+  place-items: center;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.swarm-spare-add:hover {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}

@@ -1,0 +1,30 @@
+{
+  "name": "terminaldeck",
+  "version": "0.0.1",
+  "description": "Name reservation for Terminal Deck, a desktop app for running AI coding agents. This package is not the app — get that from https://terminaldeck.dev",
+  "license": "MIT",
+  "author": {
+    "name": "Asad Iqbal",
+    "url": "https://terminaldeck.dev"
+  },
+  "homepage": "https://terminaldeck.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asadev/terminaldeck.git",
+    "directory": "packages/name-claim"
+  },
+  "bugs": {
+    "url": "https://github.com/asadev/terminaldeck/issues"
+  },
+  "keywords": [
+    "terminaldeck",
+    "terminal-deck",
+    "placeholder",
+    "name-reservation",
+    "desktop-app"
+  ],
+  "files": [
+    "README.md",
+    "LICENSE"
+  ]
+}

@@ -1,0 +1,113 @@
+/* ============================================================================
+   A session that is over, said on the session's own screen.
+
+   Two rules do the work and the first one is the important one: the frozen
+   frame is faded, so the agent composer, the placeholder, the effort chip and
+   the permission footer left in it read as a photograph rather than as an
+   invitation. The card below covers the composer itself, which is the part that
+   invited a keystroke.
+
+   Not one colour here is a literal, and not one is defined only inside a
+   dark-theme block — the rule stated at the top of servers.css, which this
+   follows because both appearances have to be first-class without a second copy
+   of the design.
+   ============================================================================ */
+
+/*
+ * The dead frame, faded.
+ *
+ * `opacity` on the surface rather than a scrim over it, for one reason worth
+ * writing down: a scrim is a layer, and a layer over a terminal takes the text
+ * selection with it. Everything the session printed stays selectable and
+ * copyable through this — which is the whole argument for keeping an ended
+ * session's tab open at all.
+ *
+ * Saturation as well as opacity, because a Claude Code frame is mostly colour:
+ * an orange spinner, a green diff, the accent on `⏵⏵`. Fading alone leaves
+ * those reading as live state at half strength; draining them is what makes the
+ * frame read as a record of one.
+ */
+[data-ended='true'] .terminal-surface {
+  opacity: 0.45;
+  filter: saturate(0.25);
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+
+.session-ended {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  /* Over the composer, and over the fade above it: the card's own ground has to
+     reach the pane's edges or the frozen footer shows through beside it and the
+     two read as one live screen again. */
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--terminal-bg) var(--sp-4),
+    var(--terminal-bg) 100%
+  );
+  pointer-events: none;
+}
+
+.session-ended-card {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+/*
+ * The left edge says which of the two kinds of over this is, before a word is
+ * read: the work is still running somewhere, or it is not.
+ *
+ * A stripe rather than a dot, because this card is a paragraph wide and a dot
+ * at the start of it is a bullet. Info rather than positive for the live case —
+ * nothing has gone right, something is merely still there.
+ */
+.session-ended-card::before {
+  content: '';
+  align-self: stretch;
+  flex: 0 0 3px;
+  border-radius: 2px;
+  background: var(--status-idle);
+}
+
+.session-ended-card[data-alive]::before {
+  background: var(--color-info);
+}
+
+.session-ended-said {
+  flex: 1 1 22ch;
+  min-width: 0;
+}
+
+.session-ended-title {
+  margin: 0;
+  font-size: var(--t-callout);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.session-ended-detail {
+  margin: 2px 0 0;
+  font-size: var(--t-caption);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  /* The sentence is the substance, so it wraps rather than clipping. A pane can
+     be a third of a window wide and an ellipsis here would remove the half that
+     says what to do about it. */
+  overflow-wrap: anywhere;
+}
+
+.session-ended-do {
+  flex: 0 0 auto;
+}

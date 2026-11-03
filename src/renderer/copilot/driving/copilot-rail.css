@@ -1,0 +1,220 @@
+/* ============================================================================
+   The copilot's side panel, in the rail's own column.
+
+   It replaced `browser-watch.css` on 2026-08-21, and the sheet is short for the
+   reason the panel is: it no longer floats. The old one was `position: fixed`
+   at `width: var(--sidebar-width)` — a static 264px token — over a rail whose
+   real width is an inline style, and the mismatch is what he filmed:
+
+     > *"this should actually replace with this instead of coming in front of it
+     > somehow."*
+
+   This element is a child of `<aside class="sidebar">` and a flex item in its
+   column, so it *is* the rail's width, at whatever the seam was last dragged
+   to, with nothing of the rail left showing beside it and no gap between it and
+   the page. There is no width declared here at all, and that absence is the fix.
+
+   Every value is a token. Both themes come out of the same declarations;
+   nothing here is defined only inside [data-theme='dark'].
+   ============================================================================ */
+
+/*
+  Below the New session header, down to the foot of the rail.
+
+  *"It will be starting from the first pill of commander, not from the top with
+  the top header also should not be covering it."* The sidebar draws this in
+  place of its scroll region, which begins directly under the actions row — so
+  the traffic lights and New session stay where they are and stay clickable,
+  and this starts exactly where the Commander row would have been.
+*/
+.copilot-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /*
+    The rail suppresses selection, because a list of nav rows that highlights
+    blue when a drag passes over it looks broken. This is a conversation in that
+    column, and a reply somebody cannot copy is a reply they have to retype.
+  */
+  user-select: text;
+  animation: copilot-rail-in var(--dur) var(--ease-emphasis);
+}
+
+@keyframes copilot-rail-in {
+  from {
+    transform: translateX(-10px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copilot-rail {
+    animation: none;
+  }
+}
+
+.cr-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+}
+
+.cr-head-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+}
+
+/*
+  Whose conversation this is.
+
+  The session's own name, not the word "Copilot": *"whatever the session is
+  connected, that session's chatbox should come in the side panel, not only the
+  commander."* It is the picker's label, so it is the same words the rest of the
+  window uses for that session.
+*/
+.cr-name {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--t-subhead);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  Collapse.
+
+  A chevron pointing at the rail rather than the old round dot: it is folding
+  *into* something now — the Commander row, which shows where it went and brings
+  it back — and a direction is the only glyph that can say so. An ✕ would still
+  be wrong; the drive is live either way.
+*/
+.cr-fold {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cr-fold:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/*
+  The page this conversation is about.
+
+  Wrapped rather than ellipsised: a path is read from the end as often as from
+  the start, and a truncated one answers neither question.
+*/
+.cr-where {
+  margin: 0;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------- the conversation -- */
+
+.cr-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/*
+  The chat pane, at rail width.
+
+  Every rule below narrows a measurement that was set for a pane 900px wide.
+  None of them changes what the pane *is* — it is the same `ChatView` reading
+  the same transcript, so a message here and a message in the full window are
+  one conversation rather than two renderings that can drift.
+*/
+.copilot-rail .chat-view {
+  flex: 1;
+  min-width: 0;
+  /* The rail's glass is the surface. An opaque fill here would draw a square
+     panel inside a rounded one, which is the exact complaint the composer's own
+     background note records. */
+  background: transparent;
+}
+
+.copilot-rail .cv-scroll {
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+}
+
+.copilot-rail .cv-column {
+  max-width: none;
+}
+
+.copilot-rail .cv-empty {
+  padding: var(--sp-4) var(--sp-3);
+}
+
+.copilot-rail .chat-composer {
+  max-width: none;
+  padding: var(--sp-2);
+}
+
+.copilot-rail .cc-box {
+  gap: var(--sp-15);
+  padding: var(--sp-2);
+  border-radius: var(--radius-lg);
+}
+
+/*
+  One small typing box.
+
+  The pane's composer stands three lines tall before a word is typed, which is
+  right in a window and is a third of this column. *"only one small typing box
+  and send button"* — so it starts at one line and still grows with what is
+  typed, because the auto-grow writes an explicit height over this floor.
+*/
+.copilot-rail .cc-input {
+  min-height: 22px;
+  max-height: 30vh;
+}
+
+/* ------------------------------------------------------------ the notices -- */
+
+/*
+  The two states that are a sentence rather than a conversation, and the one
+  that is a failed send. Quiet prose, like the rest of this panel: none of them
+  is a warning, and a tinted block with a rule down its side would read as one.
+*/
+.cr-nobody,
+.cr-elsewhere .cr-note,
+.cr-problem {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--t-footnote);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.cr-elsewhere {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.cr-problem {
+  flex: none;
+  color: var(--status-input);
+}

@@ -1,0 +1,4212 @@
+/* ============================================================================
+   Terminal Deck — browser client
+
+   Mobile-first, and it wears whichever appearance the reader asked for. The
+   values match the desktop's `src/renderer/styles/tokens.css`; they are restated
+   rather than imported because that file's @font-face rules point at paths
+   relative to the renderer, and pulling it in whole would break this build over
+   a font URL. `src/renderer/styles/tokens.test.ts` holds the two sheets against
+   each other so the restatement cannot drift.
+
+   Three layout rules do most of the work here:
+
+     1. The page never scrolls. It is a fixed frame with one scrolling region
+        inside it, because a terminal that rubber-bands the whole document
+        under a finger is unusable.
+     2. The bottom of the frame is wherever the keyboard is not. See
+        --dock-safe, which main.ts drives from visualViewport.
+     3. The frame is the window, at every width. What is capped is the column a
+        given screen reads in, never the frame around it — see "wider" at the
+        foot of this file, which is where that argument is made in full.
+
+   ---------------------------------------------------------------- appearance
+
+   **Three states, and this sheet carries two of them.** The person can choose
+   light, can choose dark, or can leave it to follow the system — which is the
+   default and the one clients forget. `theme.ts` owns that decision and stamps
+   the resolved answer on `<html data-theme="light|dark">`, because the *terminal*
+   can only be re-coloured from JavaScript: xterm.js takes a colour object, not a
+   stylesheet, and a page that themed its chrome from a media query and left the
+   emulator alone would be a black terminal in a white window.
+
+   So the cascade below is in three parts and the order is load bearing:
+
+     1. `:root` is the **dark** palette. It is the base, it is this client's
+        historical look, and it is what a browser paints before any script has
+        run.
+     2. The media query is the **first paint on a light machine**, and only that:
+        it is guarded on `:not([data-theme])`, so it stands down the instant
+        `theme.ts` stamps an answer and can never fight an explicit choice.
+     3. `:root[data-theme='light']` is the light palette proper, and it wins
+        whatever the system says, because a person who chose light on a machine
+        set to dark has said something this sheet must not overrule.
+
+   Parts 2 and 3 are the same list of colours written twice. That is a copy, and
+   a copy needs a mechanism rather than a promise: `pwa/tests/theme-tokens.test.ts`
+   reads both blocks and fails if they stop agreeing, the same way tokens.test.ts
+   holds this file against the desktop's.
+
+   Dark is `:root` rather than light — the desktop's sheet is the other way round
+   — for two reasons. It is what this client shipped with, and it is the palette
+   somebody reading a terminal at night lands on if every question above them
+   goes unanswered.
+   ============================================================================ */
+
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../../src/renderer/assets/fonts/hanken-grotesk.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('../../src/renderer/assets/fonts/jetbrains-mono.woff2') format('woff2');
+}
+
+:root {
+  --bg-primary: #191919;
+  --bg-secondary: #202020;
+  --bg-tertiary: #252525;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.085);
+
+  --text-primary: #d4d4d4;
+  --text-secondary: #9b9b9b;
+  /* Was #6f6f6f, which is 3.5:1 on --bg-primary and 3.1:1 on --bg-tertiary —
+     under AA, on a phone, often outdoors. 4.7:1 at worst here. */
+  --text-muted: #8f8f8f;
+
+  /* The desktop's accent, which is the application icon's own blue (the top
+     stop of the spine gradient in build/art/icon.mjs). This was #529cca, a
+     steel blue that belonged to nothing: it matched neither the icon nor the
+     desktop app, and white on it is 3.0:1 — under AA on the one button the
+     phone client has. The dark ink is the icon's tile black and clears 5.7:1,
+     the same trade the desktop theme makes and for the same reason: no single
+     blue can be readable as text on charcoal *and* carry white text. */
+  --accent: #3b8fee;
+  --accent-soft: rgba(59, 143, 238, 0.14);
+  --accent-fg: #0f1114;
+
+  --border: rgba(255, 255, 255, 0.094);
+  --border-subtle: rgba(255, 255, 255, 0.055);
+
+  /* Same ramp as the desktop's dark theme, so a session showing "working" on
+     the Mac shows the same colour on the phone. --status-input keeps its
+     orange — it is the one state that has to be seen from across a room. */
+  --status-working: #64a6e8;
+  --status-waiting: #ddb04a;
+  --status-input: #f0913f;
+  --status-completed: #5fbf95;
+  --status-idle: #8f8f8f;
+  --color-critical: #ff6f60;
+  /* The sixth of `PROFILE_COLORS` in `profiles.ts`, and the only one this
+     palette did not already have. An account whose colour is a property name
+     nothing here defines draws no dot at all, so all six have to resolve. */
+  --color-warning: #ddb04a;
+
+  /* The terminal's own paper, which in this theme is the page's. It has its own
+     token because the light theme's is *not* the page's — see the note there —
+     and because the emulator is painted from JavaScript: `terminal.ts` carries
+     the same two colours as a xterm theme object, and the suite holds the two
+     copies against each other. */
+  --terminal-bg: #191919;
+  --terminal-fg: #d4d4d4;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* How wide a screen's content may get, by what is on it.
+
+     Three numbers rather than one, because the three kinds of screen in this
+     client want different things from a wide window and giving them all the
+     same number is what produced the narrow strip down the middle of a monitor.
+
+     --column   a list. Rows are scannable well past a paragraph's width, and
+                the session list and the port list both read as "the app is
+                using the window" at this size on a laptop.
+     --form     the pair screen. A six-digit field and one primary button, and
+                `.button` is width:100% — stretched to --column that is a form
+                nobody can aim at.
+     --prose    anything somebody reads a sentence at a time. Roughly 75
+                characters, which is where a line stops being comfortable
+                whatever the container does.
+
+     The terminal is on none of this list and is deliberately uncapped: an
+     emulator's job is columns, and a terminal that leaves two thirds of a
+     monitor empty is the thing this is fixing. */
+  --column: 72rem;
+  --form: 30rem;
+  --prose: 46rem;
+
+  /* Home-indicator padding, dropped to zero while the keyboard covers it. */
+  --dock-safe: env(safe-area-inset-bottom, 0px);
+
+  color-scheme: dark;
+}
+
+/* ------------------------------------------------------- light, first paint */
+
+/* The light palette, for the moments before `theme.ts` has said anything.
+   Guarded on `:not([data-theme])` so it stands down the instant a choice is
+   stamped — including a stamped *dark* on a light machine, which is the case a
+   `:not([data-theme='dark'])` guard would get right and a bare `:root` would
+   get wrong.
+
+   It cannot be folded into the rule below it, because that one has to apply
+   whatever the system says. Two copies of one palette, held together by
+   `pwa/tests/theme-tokens.test.ts` rather than by hope. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-tertiary: #ededed;
+    --bg-hover: rgba(56, 56, 56, 0.055);
+    --bg-active: rgba(56, 56, 56, 0.09);
+
+    --text-primary: #1c1c1c;
+    --text-secondary: #545454;
+    --text-muted: #666666;
+
+    --accent: #1a66c4;
+    --accent-soft: rgba(26, 102, 196, 0.1);
+    --accent-fg: #ffffff;
+
+    --border: rgba(56, 56, 56, 0.1);
+    --border-subtle: rgba(56, 56, 56, 0.055);
+
+    --status-working: #1667c8;
+    --status-waiting: #8f5800;
+    --status-input: #b83c08;
+    --status-completed: #19714a;
+    --status-idle: #666666;
+    --color-critical: #bd3a2c;
+    --color-warning: #8f5800;
+
+    --terminal-bg: #e8e8e8;
+    --terminal-fg: #141414;
+
+    color-scheme: light;
+  }
+}
+
+/* ------------------------------------------------------------------- light */
+
+/* The light theme, as chosen — by the person, or by `theme.ts` on their
+   machine's behalf.
+
+   Every value is the desktop's own light theme, not a second vocabulary
+   invented here: the accent is the icon's blue walked down its own hue line
+   until it can be read as text on paper, the three inks clear AA on the darkest
+   paper in the sheet rather than only on white, and the status ramp is
+   desaturated so a column of dots reads as information rather than as alarm.
+   The argument for each of them is written out at length in
+   `src/renderer/styles/tokens.css`, which is where they come from.
+
+   The one value that is a decision of this sheet's own is `--terminal-bg`. In
+   the dark theme the terminal is the page; on paper it must not be, or the
+   session stops being a terminal and becomes an empty document with a cursor in
+   it. A 23-level step below white makes it read as a panel let into the window,
+   and its ink is darker than the app's body text because a terminal's whole
+   promise is that the characters are exact. */
+:root[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #ededed;
+  --bg-hover: rgba(56, 56, 56, 0.055);
+  --bg-active: rgba(56, 56, 56, 0.09);
+
+  --text-primary: #1c1c1c;
+  --text-secondary: #545454;
+  --text-muted: #666666;
+
+  --accent: #1a66c4;
+  --accent-soft: rgba(26, 102, 196, 0.1);
+  --accent-fg: #ffffff;
+
+  --border: rgba(56, 56, 56, 0.1);
+  --border-subtle: rgba(56, 56, 56, 0.055);
+
+  --status-working: #1667c8;
+  --status-waiting: #8f5800;
+  --status-input: #b83c08;
+  --status-completed: #19714a;
+  --status-idle: #666666;
+  --color-critical: #bd3a2c;
+  --color-warning: #8f5800;
+
+  --terminal-bg: #e8e8e8;
+  --terminal-fg: #141414;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* No tap-highlight anywhere: every control here gives its own :active feedback,
+   and the default blue flash on a key-bar button reads as a rendering fault. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* The frame is the visual viewport, not the layout viewport.
+   iOS does not shrink the layout viewport when the soft keyboard opens, so a
+   bar at the bottom of a 100dvh frame ends up underneath it. main.ts sizes this
+   from `window.visualViewport`, which excludes the keyboard; the dvh values are
+   the fallback for a browser without that API. */
+#app {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ------------------------------------------------------------------ header */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.header__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px is the smallest reliable touch target; below it people miss. */
+  width: 44px;
+  height: 44px;
+  margin-left: -10px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+.header__back:active {
+  background: var(--bg-active);
+}
+/* `display: flex` above outranks the UA rule that `hidden` relies on, so the
+   back chevron sat on the pair screen pointing at nothing. */
+.header__back[hidden] {
+  display: none;
+}
+
+.header__titles {
+  min-width: 0;
+  flex: 1;
+}
+
+.header__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which machine you are looking at, when there is more than one.
+
+   The subtitle already named the machine, so this is the same line made
+   pressable rather than a new control — the smallest thing that turns a label
+   into a way to the screen where machines are managed. It is drawn only when
+   there are two or more; one machine is not a choice, which is the same rule the
+   folder picker and the tab strip follow.
+
+   The name and the chevron are separate nodes so the name can ellipsise without
+   taking the affordance with it: a nickname is up to twenty-four characters and
+   a phone header is not. */
+.header__machine {
+  max-width: 100%;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.header__machine:active {
+  color: var(--text-primary);
+}
+
+.header__machine-mark {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  transform: rotate(90deg) translateX(1px);
+}
+
+/* -------------------------------------------------------------- appearance */
+
+/* One icon in the header, on every screen.
+
+   In the header rather than in a settings block at the foot of the session list,
+   and that is the whole of the placement argument: the appearance is the one
+   preference a person changes *because of what is on the screen right now* —
+   the sun came out, or the room went dark — and the pair screen, which is the
+   first thing a new reader sees, has no settings block to put it in.
+
+   It used to be three pills, one per state, on the reasoning that three answers
+   need three affordances. He looked at it and said no:
+
+     "On the top header bar I still see the same three separate — Auto, Light,
+      Dark. You can just give one small icon for switching."
+
+   He is right about the trade. The three pills took about 150 of a 390px header
+   — measured on a screenshot, where they had squeezed a session's title down to
+   "Rework the localhost sc…" — for a control most people touch twice in the life
+   of an install. One button that cycles costs 28 points, keeps all three states
+   reachable, and is what the marketing site's header does, so a reader who has
+   seen one recognises the other.
+
+   The cost of a cycling control is that the current state is no longer visible
+   as a *selection*; it is visible as the picture. That is what the three icons
+   in `theme.ts` are for, and why "system" is a half-filled circle rather than a
+   gear: it shows both states at once, which is what following the device means.
+
+   No fill, no border, no pill. This is a chrome control at the end of a bar and
+   it should be quiet until it is under a finger — the same treatment the back
+   chevron next to it gets, for the same reason. */
+.appearance {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* For the invisible tap target below, which is absolutely positioned. */
+  position: relative;
+  /* 28 for the ink, and the invisible padding below takes the tap target to the
+     44 a thumb needs. A 28px hit area in the corner of a phone is a control
+     people miss, and missing it means pressing whatever is behind it. */
+  width: 28px;
+  height: 28px;
+  margin-right: -4px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+/* The tap target, without the paint. `::after` rather than a bigger button,
+   because the button is 28px of visible ink and growing it would put a hover
+   fill the size of a session row in the corner of the header.
+
+   Centred on the button rather than left where the static position puts it. Its
+   default origin is the content box's top-left, so an uncentred 44px square
+   grows sixteen points *right and down only* — half of it off the right edge of
+   a phone, and none of it on the side a right thumb approaches from. Two
+   properties and a transform buy a hit area that is actually around the thing it
+   is for. */
+.appearance::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* Hover only where there is a pointer. On a touch screen `:hover` is applied on
+   tap and stays applied, so a phone would keep a filled chip in the corner of
+   the header until something else was touched — a control that looks permanently
+   pressed. */
+@media (hover: hover) {
+  .appearance:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+.appearance:active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/* The glyph inherits the button's ink through `currentColor`, which is what lets
+   one icon serve both themes with no second colour written down anywhere. */
+.appearance svg {
+  display: block;
+}
+
+/* ------------------------------------------------------------------ banner */
+
+/* The connection banner is never hidden while anything is wrong. It is the
+   difference between this client and one that lies about being connected. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.banner--online {
+  display: none;
+}
+
+.banner--rejected,
+.banner--incompatible {
+  color: var(--color-critical);
+}
+
+.banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner__action {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.banner__action:active {
+  background: var(--bg-active);
+}
+
+/* -------------------------------------------------------------------- ask */
+
+/* A machine asked this browser for a GitHub login and this browser refused —
+   see pwa/src/credential.ts for why refusing is the honest answer here and not
+   an unfinished one.
+
+   It sits under the banner and above the content, so it is readable from the
+   terminal as well as from the session list: a push is asked for from inside a
+   session, which is where somebody is looking when it fails. It is not styled
+   as an error, deliberately. Nothing went wrong; a question was asked and this
+   client is the one client that cannot answer it. */
+.ask {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--accent-soft);
+}
+.ask[hidden] {
+  display: none;
+}
+
+/* Both paragraphs give up the browser's default 1em margins, so the only
+   spacing in this card is the `gap` above — otherwise the two stack and the
+   card is half again as tall as it needs to be for the same three lines. */
+.ask__headline {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.ask__why {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* `.button` is `display: block; width: 100%` because every other button in this
+   client is the primary action of its screen. This one is a way out, not an
+   action: full width would make Dismiss look like the thing to do about a
+   machine asking for a GitHub login, which it is not. */
+.ask .button {
+  width: auto;
+  margin-top: 2px;
+  padding-inline: 16px;
+}
+
+/* -------------------------------------------------------------------- tabs */
+
+/* Sessions | Localhost. Two places to be, not two switches.
+
+   It shares the header's fill so the two read as one band of chrome rather than
+   as a second bar bolted under the first — the separation is the space around
+   the pills, then the tint on the current one, and there is no line anywhere.
+   That is the house rule in order.
+
+   Hidden outright when there is nothing to switch to: on the pair screen, inside
+   a terminal, and against any desktop that did not advertise `localhost`. The
+   `[hidden]` rule is not optional — `display: flex` outranks the UA rule that
+   `hidden` relies on, which is the same trap `.header__back` documents. */
+.tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+}
+.tabs[hidden] {
+  display: none;
+}
+
+.tab {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.tab:active {
+  background: var(--bg-hover);
+}
+
+.tab--here {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- content */
+
+/* A flex column, not a plain block. The terminal screen is `flex: 1` and needs
+   a flex parent to stretch into; as a block container this sized itself to
+   xterm's rows and left a third of the phone empty under the key bar. */
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* A screen is as wide as the window allows and as wide as its content wants,
+   whichever is smaller. `width: 100%` because a flex item's max-width caps a
+   stretch rather than replacing it, and `margin-inline: auto` because an auto
+   margin in flexbox's cross axis is what absorbs the leftover and centres it. */
+.screen {
+  width: 100%;
+  max-width: var(--column);
+  margin-inline: auto;
+  padding: 16px 16px calc(24px + var(--dock-safe));
+}
+
+.screen--form {
+  max-width: var(--form);
+}
+
+/* Sentences stop at a readable measure inside a wide screen. The container may
+   be a thousand pixels; a paragraph across a thousand pixels is one your eye
+   loses its place in on the way back to the left.
+
+   `.screen__lead` and `.steps` used to be on this list and no longer exist:
+   they were the lead paragraph and the three numbered steps on the pair screen,
+   and both are behind the ⓘ now. Their rules went with them rather than being
+   left as dead selectors — a stylesheet that still styles what nothing draws is
+   a stylesheet nobody can read the shape of the app out of. */
+.note,
+.start__note,
+.lifetime__note {
+  max-width: var(--prose);
+}
+
+.screen h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.note {
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* The pairing field.
+
+   It used to keep the browser's own 2px inset border — a hard light rectangle
+   in a screen where every other surface is a borderless fill, and the only
+   outlined thing on the pair screen. Depth here comes from layering, so the
+   border goes and the focus ring is the accent, which is also the state a field
+   with no border needs in order to still answer a keyboard. */
+input[type='text'] {
+  border: none;
+  outline: none;
+}
+
+input[type='text']:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Six digits, read off another screen and typed here.
+
+   It used to borrow `.button--quiet`, which meant it wore the *secondary* text
+   colour — right for a button that is a way out, wrong for the one field on the
+   screen, where what somebody has typed has to be the most legible thing on the
+   page. The spacing and the tabular figures were inline styles in `main.ts`; a
+   presentation decision written there is one this stylesheet cannot be held to.
+   `code-field.ts` still owns every *behavioural* attribute, and says why. */
+.code-field {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  text-align: center;
+  letter-spacing: 0.35em;
+  /* So the field does not reflow by a pixel as the digits change — a 1 is
+     narrower than an 8 in most faces, and six of them moving under a thumb
+     reads as the field twitching. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The same question, restated after pairing, where the answer can be changed.
+
+   It carried its own 16px gutter while it lived at the foot of the edge-to-edge
+   session list. It is on the Settings screen now, which has a gutter of its own,
+   and the two together indented it visibly further than the group above it —
+   measured on a render. */
+.lifetime {
+  margin: 0;
+}
+
+.lifetime__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lifetime .button {
+  width: auto;
+}
+
+/* ------------------------------------------------------- remember this? -- */
+
+/* The one question this client asks that the phone clients do not: whether the
+   pairing about to be minted should outlive the tab. See `rememberChoice` in
+   main.ts for why it exists at all.
+
+   Drawn as two rows of equal weight, not as an option with a default styled to
+   look preferable. Both answers are correct on some computer, the reader is the
+   only one who knows which computer this is, and a screen that visually
+   recommends one of them is a screen that gets tapped through.
+
+   No box around the group. Space separates it from the field above, which is the
+   house rule — the rows themselves are filled because each is a tap target and a
+   tap target has to look like a surface. */
+.remember {
+  /* Space, not a rule, and enough of it that the question reads as its own
+     step rather than as a caption hanging off the field above. */
+  margin: 22px 0 0;
+  padding: 0;
+  border: none;
+}
+
+.remember__legend {
+  padding: 0;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.remember__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  /* The whole row is the label, so the whole row is the target. A radio on a
+     phone is a 13px circle, and a person aiming at one of those on a screen
+     they are holding one-handed misses. */
+  cursor: pointer;
+}
+
+.remember__option:active {
+  background: var(--bg-tertiary);
+}
+
+.remember__option input {
+  /* Aligned to the title's cap height rather than to the row, so it sits with
+     the first line of text instead of floating above two lines of it. */
+  margin-top: 2px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.remember__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* Brighter title, dimmer description, space between — the treatment the design
+   brief asks for wherever an option needs a paragraph to explain itself. */
+.remember__title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+}
+.button:active {
+  filter: brightness(0.9);
+}
+
+.button--quiet {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* A button waiting on the desktop stops looking pressable, and stops taking the
+   press — the click handler refuses a second one, and a control that still
+   lights up under a finger while refusing it is the small lie that makes people
+   tap four times. */
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.button:disabled:active {
+  filter: none;
+}
+
+/* ----------------------------------------------------------- new session */
+
+/* The session list is edge-to-edge, so this block carries its own gutter rather
+   than the screen carrying one for it. The bottom of it is a real gap: with four
+   pixels there, the last folder and the first session row read as one list, and
+   the seam between two different kinds of thing is exactly where a phone screen
+   has to be unambiguous. */
+.start {
+  padding: 12px 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Where the session is about to start, under the button that starts it. It sits
+   close to the button on purpose — it is that button's second line, not a note. */
+.start__where {
+  display: flex;
+  gap: 6px;
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  /* The path is mono and the two words in front of it are not. A bare path under
+     a button reads as easily as "you are here"; the label is what makes it a
+     promise about what the tap will do. */
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* `min-width: 0` because a flex item refuses to shrink below its content by
+   default, and a nested project path is easily wider than a phone — without it
+   the ellipsis never happens and the path runs off the side of the screen. */
+.start__where span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.start__where-label,
+.start__caption {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+}
+
+.start__caption {
+  margin: 14px 2px 6px;
+  font-size: 12px;
+}
+
+/* The desktop has shared nothing with this device. Not an error colour: nothing
+   has gone wrong, and the sentence names the machine and the screen where that
+   is changed. */
+.start__note {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.start__folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each choice sits on its own surface. As bare text on the page these read as a
+   caption under the button rather than as three things you can tap — and the
+   list below them is made of rows, so a row that is not drawn like one is the
+   only unpressable-looking thing on the screen. */
+.start__folder {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 6px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.start__folder:active {
+  background: var(--bg-active);
+}
+
+.start__folder--path {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------ session list */
+
+.sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+}
+.session:active {
+  background: var(--bg-hover);
+}
+
+.session__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+.session__dot--working {
+  background: var(--status-working);
+}
+.session__dot--waiting {
+  background: var(--status-waiting);
+}
+.session__dot--input {
+  background: var(--status-input);
+}
+.session__dot--completed {
+  background: var(--status-completed);
+}
+.session__dot--exited,
+.session__dot--unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+
+.session__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.session__title {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__meta {
+  display: flex;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The folder the session is running in, on its own line and in mono.
+
+   It used to be the third clause of the meta line — `Working · 4m ago ·
+   …/two/parts` — where it was the first thing to be ellipsised away and read as
+   more prose. It is not prose: it is a path, and monospace is the promise that
+   the characters are exact and countable. Its own line also means the row can
+   show more of it before the ellipsis, and `main.ts` puts the whole thing in the
+   row's `title` for the deep ones. */
+.session__where {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which agent is in there — `claude`, `codex`, `shell`. A chip rather than
+   another clause in the meta line, because it is a *name* and the rest of that
+   line is a state and a time; two kinds of fact reading as one sentence is what
+   made the old row hard to scan. */
+.session__provider {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.session__chevron {
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* The row and its menu button, side by side.
+
+   The rule used to live on `.session` itself, which was the whole `<li>`. It has
+   moved out here because the row is no longer alone on the line: a second
+   control inside a 60-point tappable area is a control people hit by accident
+   and a row people fail to open. The separator belongs to the line so both
+   halves sit above one continuous edge. */
+.session-line {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.session-line .session {
+  border-bottom: none;
+}
+
+/* Same three dots as a port row, in the same place on every row, for the same
+   reason — a menu that moves is a menu people miss. It is only ever drawn
+   against a machine that advertised `close` or `rename`, and each row inside it
+   is drawn only for the one it belongs to; there is no greyed-out state, because
+   a disabled control still invites the ask. */
+.session__more {
+  flex: none;
+  min-width: 44px;
+  color: var(--text-muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.session__more:active {
+  background: var(--bg-active);
+}
+
+/* The row's menu and its rename field, given the row's own margins.
+
+   Both are appended to the `<li>`, and the `<li>` has no padding of its own —
+   the session button carries it — so without this a menu item began at the very
+   edge of the screen and the name field had its rounded corners cut off by both
+   of them, under a row that is indented. `.session-confirm` below already
+   carried its own padding for exactly this reason; this is the same
+   measurement, shared by the two blocks that did not have one. The rule under
+   it closes the band, so what is on it reads as belonging to the row above
+   rather than floating between two rows. */
+.session-strip {
+  padding: 2px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The confirmation, in the row, under the session it names.
+
+   Tinted rather than outlined, and the tint is the critical ink at low alpha:
+   this block is the only thing in the client that ends somebody's work, and it
+   has to read as a different kind of thing from the row above it without a
+   border drawing a box around a list. */
+.session-confirm {
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--color-critical) 9%, transparent);
+}
+
+.session-confirm__ask {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* Side by side, so the sentence above stays the widest thing in the block. The
+   buttons are `.button`, which is full-width by default; the flex row is what
+   takes that back. */
+.session-confirm__actions {
+  display: flex;
+  gap: 8px;
+}
+.session-confirm__actions .button {
+  flex: 1;
+  margin-top: 10px;
+}
+
+/* Filled, not merely red text. A menu item can wear the critical ink and stay
+   an item in a list; this is the press that stops a process, and it is the one
+   control in the client that should look like it means it. */
+.button--danger {
+  background: var(--color-critical);
+  color: var(--accent-fg);
+}
+
+.empty {
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------- localhost */
+
+/* What the machine is serving, and how to get to it. `localhost.ts` explains
+   what this screen can honestly do from a browser tab, and `browse.ts` owns the
+   rule for where a typed address can be sent. */
+
+/* ------------------------------------------------------------- browse bar */
+
+/* The address bar, above the list, and it is the reason the list has a reason:
+
+     "I still cannot open the localhost of any of them, so there is no reason to
+      give the list here… Maybe we can have one browse bar here and something to
+      browse it, or maybe another kind of link to open in our normal browser."
+
+   It sits at the top of the screen rather than at the foot of it because it is
+   what this screen is *for*: the list answers "what is running" and this is how
+   you reach it, and a way in underneath nine collapsed groups is a way in nobody
+   finds.
+
+   Its own gutter and its own bottom line, like `.start` on the session screen —
+   the list below is edge to edge, and the seam between a control and a list of
+   things it acts on is exactly where a phone screen has to be unambiguous. */
+.browse {
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Field, chooser, button — one line, and the field is the part that gives.
+
+   `flex-wrap` is deliberate rather than a fallback: with a device chooser
+   holding a name like "On Studio Mac", 390 points cannot hold all three at a
+   readable size, and a field squeezed to sixty pixels is worse than a button on
+   the next line. The field's `min-width` is what forces the wrap rather than the
+   squeeze. */
+.browse__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+
+/* The address itself. Mono, because an address is exact and countable — the same
+   promise the port rows make — and the same tertiary fill every other field in
+   this client sits in, so it reads as a field without needing a border. */
+.browse__field {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.browse__field::placeholder {
+  color: var(--text-muted);
+}
+
+/* Which device it opens on, drawn only when there is more than one.
+
+   A native `<select>`, so a phone gets its own wheel or sheet and a desktop gets
+   its own menu, which is one less control for anybody to learn. `appearance` is
+   left alone on purpose — the platform's own chevron and metrics are what make
+   it recognisable as a menu, and re-drawing them here would be inventing a
+   control that looks like a menu and is not one. */
+.browse__where {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because every
+   other button in this client is the primary action of its screen. This one sits
+   at the end of a line. */
+.browse__go {
+  flex: none;
+  width: auto;
+  margin: 0;
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+/* Under about 30rem the three do not fit, and *how* they stop fitting matters.
+   Left to itself, flex wraps the last item, which put Open alone on a line under
+   a field and a chooser — an orphan, and the widest thing on the row was the one
+   with the least to say. Giving the field the whole first row instead puts the
+   two controls together on the second, which is the shape every browser's own
+   bar takes when it runs out of width.
+
+   After the three rules it narrows, and that ordering is load-bearing rather
+   than tidy: `.browse__field` sets the `flex` *shorthand*, which resets the
+   basis, so this block written above it is a query that silently does nothing.
+   It was written above it once, and the screenshot showed the orphan unchanged. */
+@media (max-width: 30rem) {
+  .browse__field {
+    flex-basis: 100%;
+  }
+  .browse__where {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+}
+
+/* Where the page will appear, in one line under the bar. It is the bar's second
+   line rather than a note about the screen, which is why it is close to it and
+   not in a `.note` box. */
+.browse__note {
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* The answer to an open that was not one of the rows' — a hand-typed address.
+   A row's own answer is drawn under that row, where it can be read against the
+   thing it is about. */
+.browse__result {
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+.browse__result--ok {
+  color: var(--status-completed);
+}
+
+/* Nowhere to send an address, so there is no field to type one into.
+
+   This is the whole standing rule of this product, drawn: a control that cannot
+   act is not disabled and greyed, it is absent, and the sentence that replaces
+   it says which of the two reasons it is. */
+.browse__none {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* Refresh, on its own line above the groups.
+
+   The gutter is small on purpose. It used to be 12 above and 4 below, which was
+   right when this was the first thing on the screen; with the browse bar above
+   it and its own dividing line, that much air left the button floating in an
+   empty band with nothing to belong to. It belongs to the list, so it sits on
+   it. */
+.localhost__head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 16px 0;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because
+   every other button in this client is the primary action of its screen. This
+   one sits beside a heading. */
+.localhost__refresh {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* The list is edge to edge, so the paragraphs around it carry their own gutter
+   — the same arrangement `.start` and `.lifetime` use on the session screen. The
+   last one is also the bottom of the screen, and the screen's own bottom padding
+   went with the edge-to-edge layout, so the home-indicator strip is paid for
+   here or it is not paid for at all. */
+.localhost__note {
+  margin: 16px 16px calc(16px + var(--dock-safe));
+}
+
+/* The answer to the public-address question, and it is prose rather than a
+   `.note` card.
+
+   The two notes above it are *operational* — what the groups mean, how old the
+   list is — and they are boxed because they are things about the screen you are
+   looking at. This one is an answer to a design question somebody asks once, and
+   a third bordered card under two others is the explanation wall this product
+   keeps being told off for. Plain text, muted, at the very bottom, where it is
+   read by the person who has already scrolled the list and wondered. */
+.localhost__answer {
+  margin: 16px 16px calc(16px + var(--dock-safe));
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: var(--prose);
+}
+
+.ports {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One row, whichever kind it is — a listening port or a project's dev server.
+   They share the list item because they are one list answering one question, and
+   a `ready` dev server is joined to its own port row rather than drawn beside it.
+
+   No line between rows. There was one, and with the rows now grouped under
+   headers it was a rule inside a rule inside a screen whose complaint was noise —
+   the group is the separation, and inside a group the space is. */
+.port {
+  padding: 10px 16px 12px;
+}
+
+.port__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+}
+
+/* Mono, because a port number is exact and countable — the same promise the
+   folder rows make. `min-width: 0` so a long process name ellipsises instead of
+   pushing the row's controls off the side of a phone. */
+.port__label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Once somebody has named a port, the name leads and it is not mono: monospace
+   is a promise that the characters are exact and countable, which is true of
+   `localhost:3000` and false of "client billing app". It is also heavier,
+   because a named row is a row its owner said matters. */
+.port__label--named {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Whatever is left that identifies the row — the address a name replaced, or the
+   process holding it. Omitted rather than guessed at when the machine could not
+   name the owner, which is what `guessed` means. */
+.port__detail {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Open, and Check beside it. The same control, with the accent on the one most
+   people came here to press: opening the page on the machine is the answer to
+   "the whole reason localhost exists is to drive them", and Check is the
+   diagnostic you reach for when it does not. */
+.port__open,
+.port__check {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.port__open {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.port__open:active,
+.port__check:active {
+  background: var(--bg-active);
+}
+.port__open:disabled,
+.port__check:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A row's Open is a `<button>` when the page opens on the machine and an `<a>`
+   when it opens in this browser — two elements, because one sends a frame and
+   the other is a navigation, and a link is what makes cmd-click, middle-click
+   and "open in background tab" work. An anchor has no `:disabled`, so the same
+   state is `aria-disabled` and the href is removed with it. Both spellings are
+   written here or the disabled half is only true of one of them. */
+.port__open[aria-disabled='true'],
+.browse__go[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* An anchor is not a button and does not inherit its centring, its line box or
+   its lack of underline. Written out so the two spellings of Open are the same
+   control on screen. */
+a.port__open,
+a.browse__go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* The answer sits under the port it is about, not at the foot of the list —
+   three ports in, nobody can tell which one "it answered" refers to. */
+.port__result {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* The one green in this client, and it is earned: a check that answered means
+   the desktop really opened a connection to that port a second ago. Everything
+   else on this screen is a refusal or a silence, and those stay muted. */
+.port__result--ok {
+  color: var(--status-completed);
+}
+
+/* ------------------------------------------------------------- dev servers */
+
+/* A project's dev server, as one row of the list above rather than a list of its
+   own. `dev-server.ts` owns every word and every rule here; this is only how they
+   sit, and what changed is where they sit — `port-catalog.ts` puts a dev server
+   in its own group, or joins it to the port row it is proven to be serving on.
+
+   A project whose package.json declares no dev script has no row at all — not a
+   row with a disabled button, which is a promise that some future press might
+   work.
+
+   `.dev__caption`, `.dev`, `.dev__row` and `.dev__head` are gone with the second
+   list they belonged to. The row is `.port` now and the head is `.port__line`,
+   which is what makes a project and a port line up in one column instead of
+   nearly lining up. */
+
+/* The same dot vocabulary as the session list, because it is the same question
+   — is this thing alive, and does it want me — and a second set of colours for
+   it would be a second thing to learn. */
+.dev__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+/* The one moving thing in this client, and it is earned: a dev server takes
+   seconds to tens of seconds, and this is the state that was asked for in those
+   words — "if it's not quick then we can show some animation, loading or
+   activating". It is a heartbeat rather than a progress bar, because a
+   percentage would be a number this client made up. */
+.dev__dot--busy {
+  background: var(--status-waiting);
+  animation: dev-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dev-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Somebody who has asked their system not to animate things has asked this one
+   too. The dot stays, at full strength, which is the state that says the most. */
+@media (prefers-reduced-motion: reduce) {
+  .dev__dot--busy {
+    animation: none;
+  }
+}
+.dev__dot--ready {
+  background: var(--status-completed);
+}
+.dev__dot--failed {
+  background: var(--color-critical);
+}
+
+.dev__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The project's own name, when the person has given its port one of theirs. A
+   chip rather than a second line, and beside the name rather than replacing it:
+   the name says which server this is to them, and this says which project it is
+   on the machine. The same treatment the session rows give the agent's name, for
+   the same reason — it is a name, and the line it sits on is a state. */
+.dev__project {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* The command, the progress line, the port or the failure — whichever this row
+   is. Indented to the dot's column so the rows read as a list rather than as
+   four paragraphs. */
+.dev__line {
+  margin: 2px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: var(--prose);
+}
+
+/* The command that will be typed. Mono, because the characters are exact and
+   countable — the same promise the port labels and the folder paths make, and
+   the same reason. `dev-server.ts` decides which lines get it; a failure message
+   is a sentence and must not be dressed as a command. */
+.dev__line--exact {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* The dev server's own latest output line. Untrusted text, drawn as text and
+   nothing else — never parsed, never interpreted, never turned into a
+   percentage this client made up. */
+.dev__note {
+  margin: 4px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: var(--prose);
+  /* One line, whatever the process printed. A build tool that emits a hundred
+     columns of progress bar must not push the row down the screen. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The address, and it is deliberately not a link — see `DevRowView.address`.
+   That URL means the *desktop's* loopback, and a browser following it would go
+   to the reader's own machine. */
+.dev__address {
+  margin: 4px 0 0 19px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* --------------------------------------------------------------- terminal */
+
+.terminal-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* A file is over the session and this pane will take it.
+
+   An inset ring and nothing else — no overlay, no word, no icon. The rule this
+   round is that nothing explains itself on screen, and a drop target that says
+   "Drop files here" is the clearest example of the thing being removed
+   everywhere else. `inset` so the ring is drawn inside the pane rather than
+   growing it, which would reflow the terminal under the cursor mid-drag. */
+.terminal-screen[data-drop='on'] {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* The terminal's paper is `--terminal-bg`, not the page's canvas, and the
+   difference only exists in the light theme: there the emulator sits a step
+   below the chrome so the session reads as a panel let into the window rather
+   than as an empty document with a cursor in it. `terminal.ts` paints the same
+   colour into xterm's own theme object, so this fill and the canvas meet without
+   a seam. */
+.terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 4px 8px;
+  background: var(--terminal-bg);
+}
+
+/* Not connected: dimmed, and the cursor stops blinking (terminal.ts). A live
+   cursor over frozen output is the most convincing part of a lie. */
+.terminal--stale {
+  opacity: 0.45;
+}
+
+.terminal .xterm {
+  height: 100%;
+}
+
+/* xterm.css paints the scrolling viewport black, and the strip of it either
+   side of the canvas read as a border drawn around the terminal. The theme
+   colour is what the canvas itself uses, so this makes the seam disappear. */
+.terminal .xterm-viewport {
+  background-color: var(--terminal-bg);
+}
+
+/* ---------------------------------------------------------------- key bar */
+
+.keybar-dock {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  /* The home-indicator gap, which main.ts zeroes while the keyboard is up —
+     the keyboard is already covering that strip, and paying for it twice
+     lifts the bar off the keys by a visible third of a key. */
+  padding-bottom: var(--dock-safe);
+}
+
+/* Gone where there is a real keyboard, and gone completely.
+
+   `physical-keyboard.ts` decides — from `(hover: hover) and (pointer: fine)`,
+   which is the browser reporting the hardware attached right now rather than a
+   user-agent string guessing at it — and main.ts sets `hidden` from the answer,
+   live, because an iPad leaves its keyboard mid-session.
+
+   Not shrunk, not floated, not tucked into a corner: eleven buttons duplicating
+   eleven keys under somebody's fingers are worth zero pixels, and the space they
+   were taking is four more rows of terminal. The rule has to exist because
+   `flex: none` above outranks the UA rule `hidden` relies on — the same trap
+   `.header__back` documents, which shipped once already. */
+.keybar-dock[hidden] {
+  display: none;
+}
+
+.keybar {
+  display: flex;
+  gap: 3px;
+  padding: 5px 4px;
+}
+
+.keybar__key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  /* Held, not tapped, is the common mistake on a moving train — make the
+     pressed state obvious enough to see out of the corner of an eye. */
+  transition: background 60ms linear;
+}
+.keybar__key:active {
+  background: var(--accent-soft);
+}
+
+/* Eleven keys across a 390px phone leaves 30px each, and "ctrl" is wider than
+   that at any legible size — the word ran out of its own button. The three
+   word keys take a larger share; the eight single glyphs do not need it. */
+.keybar__key--esc,
+.keybar__key--tab,
+.keybar__key--ctrl {
+  flex: 1.3 1 0;
+}
+
+.keybar__key--ctrl.is-armed {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ------------------------------------------------------------------ groups */
+
+/* A folded group of ports, and the header that folds it.
+
+   The header is the whole hit target rather than a chevron beside it, because a
+   12px chevron is not a touch target and the row is already the shape of one.
+   The count is on it because a folded group has to be worth opening before
+   anybody opens it — "Other services 9" answers that where "Other services" does
+   not.
+
+   No line between the header and its rows, and none between one group and the
+   next: the separation is the space, then the tint on the header's own text.
+   That is the house rule in order, and on a screen whose whole complaint was
+   visual noise it is the rule that matters most. */
+.portgroup {
+  display: block;
+  padding-top: 10px;
+}
+
+.portgroup__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+.portgroup__head:active {
+  background: var(--bg-hover);
+}
+
+/* The disclosure mark is the group's state and nothing else.
+
+   One glyph turned, rather than two glyphs swapped. Rendered both ways: `›` and
+   `⌄` have different metrics and different baselines in this face, so the header
+   shifted by a pixel and the mark sat visibly low when a group was open. A
+   rotation cannot do that, and it is also the only thing on this screen worth
+   animating — the group opening under a finger is the one moment the reader needs
+   to be told which control did it. */
+.portgroup__mark {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  transition: transform var(--fold-turn, 140ms) ease;
+}
+
+.portgroup__mark--open {
+  transform: rotate(90deg);
+}
+
+/* Somebody who has asked their system not to animate things has asked this one
+   too. The mark still turns; it simply arrives. */
+@media (prefers-reduced-motion: reduce) {
+  .portgroup__mark {
+    transition: none;
+  }
+}
+
+.portgroup__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Mono, because it is a count — the same promise the port numbers make. */
+.portgroup__count {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------- row actions -- */
+
+/* The row's own verb — Start, Try again, Open session — on a line of its own.
+
+   Check and the three dots are not here: they are the same two controls on every
+   row and they sit on the identity line, where a flexible label keeps them beside
+   the thing they act on at any width. This is for the control whose label is a
+   different length on every row and whose meaning is about the project rather
+   than about the port. */
+.port__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 19px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because every
+   other button in this client is the primary action of its screen. These sit in
+   a row of their own. */
+.port__action {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* Start and Try again are **not** the accent's filled button, and that is the
+   house rule rather than restraint for its own sake: one accent, for the single
+   primary action of a screen. With eight projects on this list, eight filled
+   blue buttons would be the loudest thing in the client and none of them would be
+   the primary anything. A tint instead, at the same weight as Check beside it. */
+.port__action:not(.button--quiet) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.port__action:not(.button--quiet):active {
+  filter: none;
+  background: var(--bg-active);
+}
+
+/* The three dots. Pushed to the trailing edge so it is in the same place on
+   every row whatever else that row is offering — a menu that moves is a menu
+   people miss. */
+.port__more {
+  flex: none;
+  min-width: 40px;
+  min-height: 34px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.port__more:active {
+  background: var(--bg-active);
+}
+
+/* The menu itself, opened in the row rather than over it.
+
+   A popover would be the desktop's answer; in a fixed frame with one scrolling
+   region inside it, an absolutely-positioned menu has to be dismissed,
+   repositioned on a resize and kept inside the viewport. This costs one row of
+   height and cannot be misplaced. */
+.port__menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.port__menu-item {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.port__menu-item:active {
+  background: var(--bg-active);
+}
+
+/* Forget, and nothing else. Not a filled red button — it is one item in a menu,
+   not the action of the screen — but its ink says what it is. */
+.port__menu-item--warn {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------- renaming -- */
+
+/* The one field this client has besides the pairing code, shared by all three
+   renames — a port, a machine, a session. The line above it says what is being
+   named, because a bare field in a list of nine rows is a field somebody has to
+   remember the target of. */
+.rename {
+  margin-top: 10px;
+}
+
+.rename__about {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rename__field {
+  display: block;
+  width: 100%;
+  max-width: var(--form);
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+/*
+ * The line under a rename field, on the one rename that needs one.
+ *
+ * Wraps, unlike `.rename__about` above the field: that one names a path and is
+ * ellipsised on purpose, this one is a sentence and a sentence cut off at the
+ * right edge is a sentence that has not been said.
+ */
+.rename__note {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rename__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rename__actions .button {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 16px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- settings -- */
+
+/* A card holding rows, and the caption over it.
+
+   The design brief again: separate with space, then with a tint, and only then
+   with a line — so a group is a fill with a radius and there is no line anywhere
+   on this screen. */
+.group {
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.caption {
+  margin: 24px 2px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 16px;
+  color: var(--text-primary);
+  font-size: 16px;
+  text-align: left;
+}
+.setting:active {
+  background: var(--bg-hover);
+}
+
+/* A row that is a control rather than a way somewhere else takes no press state
+   of its own — the stepper inside it has one, and a whole row lighting up when
+   somebody aims at a small button inside it reads as having hit the wrong thing. */
+.setting--static:active {
+  background: none;
+}
+
+.setting__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the row currently is — the count of machines, the size in pixels. It is
+   the whole point of a settings row: a row that always read "Machines" would
+   have to be opened to find out nothing had changed. */
+.setting__value {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* A value somebody reads a character at a time and compares against one they
+   were told — the build number in About, and nothing else so far. Mono for the
+   same reason the port numbers and the host ids are: digits that have to be
+   matched exactly want a face where 1, l and I are three shapes. 13px rather
+   than 14, because JetBrains Mono runs larger on the body than Hanken Grotesk
+   does and the two values sat unevenly against each other at the same size. */
+.setting__value--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.setting__mark {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.setting__stepper {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.setting__step {
+  width: 40px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1;
+}
+.setting__step:active {
+  background: var(--bg-active);
+}
+.setting__step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.setting__step:disabled:active {
+  background: var(--bg-tertiary);
+}
+
+/* A paragraph that is a paragraph rather than a boxed aside. `.note` wears a
+   border because on the pair screen and under the port list it is a distinct
+   block; the ones on the settings screen are the text under a group and belong
+   to it. */
+.note--plain {
+  margin: 8px 2px 0;
+  padding: 0;
+  border: none;
+}
+
+/* ------------------------------------------------------------ this server -- */
+
+/* The two settings the machine owns, on the Settings screen. Its own section
+   rather than a plain group because the provider picker is a row of choices, not
+   a single value — it does not fit the one-line `.setting` shape the rows above
+   it use. Drawn only when the host advertised `settings`, so nothing here is
+   ever an empty box. */
+.srvset {
+  display: block;
+}
+
+/* The default-tool picker: its label on one line, the choices wrapping under it.
+   Padded like a `.setting` so it sits flush with the toggle in the same group. */
+.srvset__row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.srvset__title {
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+.srvset__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* One coding tool. A chip rather than a radio dot, because the touch target has
+   to be a finger wide and the label ("Claude Code") is the value. */
+.srvset__option {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.srvset__option:active {
+  background: var(--bg-active);
+}
+
+/* The one in force: accent-filled and disabled, because pressing the current
+   choice again would be a no-op apply and should not invite the press. */
+.srvset__option--on {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.srvset__option:disabled {
+  opacity: 0.5;
+}
+.srvset__option--on:disabled {
+  opacity: 1;
+}
+
+/* While an apply is in flight. Named rather than a spinner: two writes never
+   race into one store, so the other control is locked and this says why. */
+.srvset__working {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* The restore-sessions toggle reuses the one-line `.setting` shape; its value
+   ("On" / "Off") is its state, like every other value on this screen. */
+.srvset__toggle:active {
+  background: var(--bg-hover);
+}
+
+/* The machine's own sentence about an apply — muted for a confirmation, critical
+   for a refusal. The far end's words, never composed here. */
+.srvset__notice {
+  margin: 8px 2px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.srvset__notice--bad {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------- machines -- */
+
+.machines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One machine, as a card. Cards rather than the session list's full-bleed rows
+   because a machine row is three lines and sometimes five — with a menu open or
+   a name being typed — and at that height a list with no gaps reads as one
+   block of text. */
+.machine {
+  margin-bottom: 10px;
+  padding: 12px 12px 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.machine__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The name is the target for switching; the dots beside it are the target for
+   everything else. Two hit areas, because one of them is a thing people do
+   twenty times a day and the other is a thing they do once and regret. */
+.machine__choose {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  text-align: left;
+}
+.machine__choose:active {
+  opacity: 0.7;
+}
+
+/* The dot is the connection, and it is filled only for the machine this browser
+   is actually talking to. An outline everywhere else is deliberate: a solid dot
+   on a row whose state nobody has checked is the lie this client exists not to
+   tell — see the note on one socket at a time in `machines.ts`. */
+.machine__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+
+.machine__dot--here {
+  background: var(--status-completed);
+  box-shadow: none;
+}
+
+.machine__name {
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The endpoint. Mono because it is data, and wrapped to two lines rather than
+   truncated: the summary is a host id, a relay and how it is protected, and cut
+   at either end it loses one of the three. This is a screen with room. */
+.machine__where {
+  margin: 6px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.machine__state {
+  margin: 5px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Adding a machine is the only action on this screen that is not attached to a
+   row, so it is tinted rather than grey — the same treatment a dev server's Start
+   gets, and for the same reason: it reads as an action without becoming the
+   loudest thing on a page that is mostly somebody's list of computers. */
+.machines__add {
+  width: auto;
+  margin: 4px 0 0;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.machines__add:active {
+  filter: none;
+  background: var(--bg-active);
+}
+
+/* --------------------------------------------------------------- devices -- */
+
+/* The device roster, cards like the machines list and for the same reason: a
+   row is four lines — name, standing, when it was last here, fingerprint — and
+   sometimes six with the Remove confirm open, and at that height a gapless list
+   reads as one block of text. */
+.devices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.device {
+  margin-bottom: 10px;
+  padding: 12px 12px 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.device__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The dot is the live socket, filled only for a device connected right now and
+   an outline otherwise — the same honesty rule the machine dot follows: a solid
+   dot on a device nobody is talking to would be a claim this client cannot back. */
+.device__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+.device__dot--live {
+  background: var(--status-completed);
+  box-shadow: none;
+}
+
+.device__name {
+  min-width: 0;
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The "This device" tag, quiet and tinted so it reads as a label on the row
+   rather than a second name. */
+.device__tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.device__standing {
+  margin: 6px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.device__state {
+  margin: 3px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Mono, because it is a value to be compared character by character against the
+   one the device itself shows — the same treatment a host id gets. */
+.device__print {
+  margin: 3px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.device__remove {
+  width: auto;
+  margin: 10px 0 0 19px;
+}
+
+/* The confirm and its Cancel, side by side. Always rendered together — the
+   screen swaps the single Remove for this pair rather than hiding one — so there
+   is no [hidden] state on this flex row to declare. */
+.device__actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0 19px;
+}
+.device__confirm,
+.device__cancel {
+  width: auto;
+}
+
+/* ---------------------------------------------------------------- toast -- */
+
+/* One sentence, said and then not said. The only floating thing in this client.
+
+   Fixed to the frame rather than to the scrolling region, because the row that
+   raised it may be anywhere in a long list — and `pointer-events: none` because
+   it is an aside and must never be the thing a finger lands on. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--dock-safe));
+  z-index: 10;
+  max-width: min(92vw, var(--prose));
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.toast[hidden] {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ wider */
+
+/* A tablet or a desktop browser.
+
+   ## What was here, and why it was wrong
+
+   `#app { max-width: 900px; margin: 0 auto }`, with a hairline down each side.
+   It is the obvious way to make a phone layout survive a monitor, and on this
+   client it produced the complaint that started this: "this is not full page …
+   and it's not terminal experience as well". It was right about both. A frame
+   capped at 900px puts a *terminal* in a strip down the middle of a 27" screen
+   with grey either side, and 900px is about 110 columns — so the emulator was
+   throwing away most of the window it had been given, on the one screen in this
+   product whose entire job is columns.
+
+   ## What replaces it
+
+   Nothing caps the frame. The frame is the window at every width, and the cap
+   moved onto the *content of a screen*, per kind — `--column` for a list,
+   `--form` for the pair screen, `--prose` for anything read a sentence at a
+   time. The terminal is capped by nothing at all, which is the point.
+
+   This is responsive rather than "desktop mode": the same rules run on a phone,
+   where every one of those caps is larger than the viewport and therefore does
+   nothing. There is no width at which the layout changes shape — only widths at
+   which a screen stops growing, and a terminal that never does.
+
+   ## The key bar is not here
+
+   It was, in the sense that this breakpoint was the closest thing to "is this a
+   computer". It is not that question and never was: a 1024px viewport is an iPad
+   in landscape with no keys, and a 780px window on a MacBook has a full one.
+   `physical-keyboard.ts` asks about the hardware instead. What stays here is the
+   part that really is about width — eleven keys stretched across a wide screen
+   are eleven very wide keys. */
+@media (min-width: 700px) {
+  .keybar__key {
+    flex: 0 0 64px;
+  }
+
+  /* New session stops being a banner.
+
+     `.button` is `width: 100%` because on a phone every one of them is the
+     primary action of its screen and a thumb should not have to aim. Across a
+     1280px window the same rule paints a 1150px blue bar above the session list,
+     which was measured on a screenshot and is by a distance the loudest thing on
+     the page — louder than the sessions it is sitting on top of.
+
+     Only this one. The pair screen's button is already capped by `--form`, and
+     every other `.button` in the client sets its own width because it is a
+     secondary action. */
+  .start > .button {
+    width: auto;
+    min-width: 200px;
+    padding-inline: 24px;
+  }
+
+  /* Breathing room the phone cannot spare. The left inset was always 8px for
+     xterm's own gutter; the right one is new, and without it the last column of
+     output sits against the edge of the window. */
+  .terminal {
+    padding: 6px 12px 6px 12px;
+  }
+}
+
+/* Which machine a new session starts on, above which folder it starts in.
+
+   A row of chips rather than a list: there are usually two, and a column would
+   read as a list that will grow — the wrong impression for the one step most
+   people will never use. It wraps rather than scrolls, because a horizontal
+   scroller inside a block on a phone is a control people do not find. */
+/* The switcher standing on its own, at the top of the copilot and the localhost
+   screens rather than inside the New-session block. Both of those pages are
+   edge-to-edge, so the gutters that came from `.start` have to come from here —
+   and the rule under it is the same divider `.start` draws, so the three screens
+   put the control in the same place with the same weight. That is the point of
+   it being one control: "same switch like the first time we had." */
+.start__switch {
+  padding: 2px 16px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Inside the New-session block it is already inside `.start`'s padding, so it
+   contributes none of its own and draws no second line. */
+.start .start__switch {
+  padding: 0;
+  border-bottom: none;
+}
+
+.start__machines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.start__machine {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* The one it is on wears the accent and is not pressable — pressing it would
+   drop a live socket and dial the machine it is already on. Marked rather than
+   dimmed: a disabled chip that looked unavailable would say the opposite of
+   what is true, which is that this is the one you have. */
+.start__machine--here {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+  opacity: 1;
+  cursor: default;
+}
+
+.start__machine:disabled:not(.start__machine--here) {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ========================================================== the copilot ==== */
+
+/* The row that holds the content and, on any screen that is not the copilot's
+   own, the copilot beside it.
+
+   A flex row rather than the content being a direct child of the frame, because
+   the panel has to sit *next to* what is on screen without resizing it out of
+   its own scroll position. On a phone it stacks — see the width query at the
+   foot of this block — and on a window with room it is a real column.
+
+   The name of the frame's own selector is deliberately not written here:
+   `layout.test.ts` reads everything past the first width query as text and
+   refuses to find it, which is what stops a max-width creeping back onto the
+   frame inside a media query. A comment is text like any other. */
+.body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The panel, and the whole of the layout rule he stated twice: it exists on any
+   screen except the copilot's own, where the copilot *is* the page.
+
+   `main.ts` hides it with the attribute, and `display: flex` in an author
+   stylesheet outranks the UA's `hidden` rule — the trap `.header__back` shipped
+   with once and carries a comment about. */
+.dock {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+.dock[hidden] {
+  display: none;
+}
+
+.dock__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 6px;
+}
+
+.dock__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* The dot beside the name, which is the control rather than an indicator.
+   44px of hit area around an 11px mark: the smallest reliable touch target is
+   the target, not the paint. */
+.dock__dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 32px;
+  margin-right: -10px;
+  color: var(--text-muted);
+}
+.dock__dot::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.dock__dot:active::before {
+  background: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- the body -- */
+
+.copilot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px calc(20px + var(--dock-safe));
+}
+
+/* Two states, side by side, each naming its own subject.
+
+   They were two sentences — "The copilot is not running at the machine." over
+   "This browser has its own run" — which were both true, about two different
+   copilots, and read as a contradiction. A chip says what it is about before it
+   says what it is doing, so the pair cannot be read as one. */
+.copilot-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.copilot-state__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.copilot-state__chip b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.copilot-state__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* The neutral answer, and the one every unknown state falls back to. */
+  background: var(--text-muted);
+}
+
+.copilot-state__chip[data-state='running'] .copilot-state__dot {
+  background: var(--status-completed);
+}
+
+.copilot-state__chip[data-state='starting'] .copilot-state__dot {
+  background: var(--status-working);
+}
+
+.copilot-status__facts {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Why a control cannot act, in the machine's own words. Amber rather than red:
+   nothing is broken, something is not set up. */
+.copilot-status__why {
+  margin: 6px 0 0;
+  color: var(--status-waiting);
+  font-size: 13px;
+}
+
+.copilot-note,
+.copilot-notice {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------- the scan --- */
+
+.copilot-scan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.copilot-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.copilot-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.copilot-scan__go {
+  width: auto;
+  min-width: 160px;
+  padding-inline: 20px;
+}
+
+.copilot-scan__none {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* The one line under the controls while a scan is running. It is the only place
+   that says *why* it stopped, which matters more at machine speed than it did at
+   reading speed — the person will not have seen which of their own gestures
+   did it. */
+.copilot-playhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.copilot-playhead__text {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.copilot-playhead .button {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+/* `.button` sets `display: block`, which outranks the UA rule the attribute
+   relies on — the same trap `.header__back` shipped with once. Carry on is drawn
+   for the whole scan and shown only while it is held, because a control that
+   appears between a pointerdown and its own click is a control that cannot be
+   pressed; `paintScan` in main.ts carries the measurement. */
+.copilot-playhead__resume[hidden] {
+  display: none;
+}
+
+.copilot-playhead__bar {
+  flex: 1 0 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+/* How much of the fleet has been visited — `seen / count`, not time passing.
+   The bar fills because the scan is getting through the sessions. */
+.copilot-playhead__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur, 200ms) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copilot-playhead__fill {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------- the fleet rows -- */
+
+.copilot-fleet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The rows the focus box is measured from. A fill with a radius, never an
+   outline: separate with space, then with a tint, and only then with a line. */
+.copilot-fleet__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+/* Visited. A tint rather than a tick, because the whole list fills in as the
+   scan gets through it and a column of ticks would read as a checklist somebody
+   has to finish. */
+.copilot-fleet__row.scan-seen {
+  background: var(--bg-secondary);
+}
+
+/* Where the machine is looking, right now — on whichever list is on screen.
+
+   The two marks are generic rather than named after the copilot's own list,
+   because the scan walks *sessions* and both lists draw the same sessions: the
+   panel is over the session list on every screen but the copilot's own, and the
+   row a person is watching there is the one that has to be marked.
+
+   The ring is CSS rather than canvas for two reasons: a border the browser paints
+   is crisper than one a canvas draws, and it scrolls with the row for free. The
+   canvas's job is the opposite one — everything the focus is *not*. */
+.scan-here {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The session row is a full-bleed button with a hairline under it rather than a
+   card, so the mark has to be drawn without giving it a box it does not have.
+   An inset ring does that: no reflow, no border appearing and pushing the row
+   below it down by two pixels four times a second. */
+.session.scan-here {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* The machine's own word for what the session is doing. Sentence case rather
+   than the small-caps it started as: the reason now comes from `statusLabel`,
+   which is the same string the session list prints six pixels away, and shouting
+   one copy of it made two readings of one fact look like two facts. */
+.copilot-fleet__why {
+  flex: none;
+  min-width: 84px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.copilot-fleet__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.copilot-fleet__title {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-fleet__note {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------- the answer -- */
+
+/* One structured response, read at whatever pace the reader likes, in one place.
+   A card is a fill with a radius, not an outline. */
+.answer {
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.answer__head {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.answer__count {
+  margin: 2px 0 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.answer__session {
+  margin-bottom: 12px;
+}
+
+.answer__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.answer__line {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+/* A stop a visible scan was stopped before it got to. Dimmed rather than hidden:
+   the count above says how many were shown, and a line that vanished would make
+   the two disagree. */
+.answer__line--missed {
+  opacity: 0.55;
+}
+
+.answer__why {
+  margin-right: 8px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.answer__note {
+  color: var(--text-primary);
+}
+
+/* The machine's own line about a real call. Mono, because it is quoted rather
+   than written — and it is drawn only when there is one. */
+.answer__quote {
+  margin-top: 3px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.answer__missed {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.answer__from {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.answer__ask {
+  width: auto;
+  margin-top: 10px;
+  padding-inline: 16px;
+}
+
+/* --------------------------------------------------------------- the chat -- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat__bubble {
+  max-width: min(100%, var(--prose));
+  padding: 9px 12px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat__bubble--you {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.chat__bubble--agent {
+  align-self: flex-start;
+  background: var(--bg-secondary);
+}
+
+.chat__more {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* A message this browser has sent and the machine has not echoed back. The same
+   bubble on the same side in the same colour — it is not a different message, it
+   is this message drawn early — with one quiet line under it. Anything that made
+   it look like a separate kind of row would show a person their sentence twice
+   with nothing saying which one counted. */
+.chat__unsaid {
+  margin-top: 4px;
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
+/* What the copilot actually did, as it does it — the frame that makes a refusal
+   visible rather than silent. */
+.trail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.trail__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.trail__tool {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.trail__detail {
+  color: var(--text-secondary);
+}
+
+/* A call the grant did not cover. Its own colour, because "it was stopped" and
+   "it happened" must never look the same. */
+.trail__row--refused .trail__detail,
+.trail__row--error .trail__detail {
+  color: var(--color-critical);
+}
+
+.trail__refusal {
+  color: var(--color-critical);
+}
+
+/* ----------------------------------------------------------- the composer -- */
+
+.composer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer__field {
+  flex: 1 1 200px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  resize: vertical;
+}
+
+.composer__field:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.composer__send,
+.composer__start {
+  width: auto;
+  min-width: 110px;
+  padding-inline: 18px;
+}
+
+/* Confirmations waiting at the machine, which this connection may not answer.
+   No button, ever: one would always be refused. */
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending__row {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.pending__tool {
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pending__where {
+  display: block;
+  margin-top: 2px;
+  color: var(--status-waiting);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------- the sheet --- */
+
+/* A confirmation this connection may answer. Over everything, because a decision
+   about somebody's machine is not something to be scrolled past. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.sheet[hidden] {
+  display: none;
+}
+
+.sheet__card {
+  width: 100%;
+  max-width: var(--form);
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.sheet__title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sheet__summary {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.sheet__tool,
+.sheet__origin {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+/* Every argument, in the tool's own order, verbatim. This is the field that
+   turns a prompt from a shape into a decision. */
+.sheet__args {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.sheet__args dt {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sheet__args dd {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.sheet__args dd:last-child {
+  margin-bottom: 0;
+}
+
+/* It expires into a *refusal*, so this is not decoration. */
+.sheet__countdown {
+  margin: 0 0 12px;
+  color: var(--status-waiting);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Refusing is at least as easy as accepting: Refuse is first and full width,
+   Allow is the quieter of the two. The safe answer is never the harder gesture. */
+.sheet__refuse {
+  background: var(--color-critical);
+  color: #ffffff;
+}
+
+/* ------------------------------------------------------------- the field --- */
+
+/* The dots. Over the page and under nothing that can be pressed: the whole point
+   is that the focused row stays clear and everything else is dulled, and a
+   canvas that swallowed a tap would take the interruption gesture with it. */
+.scan-field {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+/* On a window with room, the copilot is a real column beside the page rather
+   than a strip under it. Below this it stacks, because a 390px phone has no
+   column to give: a 100px panel is not a panel, it is a rumour of one. */
+@media (min-width: 900px) {
+  .dock {
+    flex: none;
+    width: 360px;
+    max-height: none;
+    border-top: none;
+    border-left: 1px solid var(--border-subtle);
+  }
+}
+
+@media (max-width: 899px) {
+  .dock {
+    max-height: 46vh;
+  }
+  .body {
+    flex-direction: column;
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* The session bar — usage, context, account.                                */
+/*                                                                           */
+/* Three chips and no words. Each one is drawn only when the far machine      */
+/* answered with a figure, so an older desktop leaves this row empty and the  */
+/* row collapses rather than explaining what it is missing. See              */
+/* `session-bar.ts`.                                                          */
+/* ------------------------------------------------------------------------ */
+.sbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Collapsed to nothing, borders included, when there is nothing to say — an
+   older desktop, or a session nothing has answered for yet. A 1px line above a
+   terminal with no content behind it is a rule that reads as a rendering fault.
+
+   The rule exists because this is a flex container and a flex container ignores
+   `hidden` outright; `tests/layout.test.ts` is what makes every flex block here
+   answer that question rather than discover it on a screen. */
+.sbar[hidden] {
+  display: none;
+}
+
+/* The ring he asked for, four figures into this one number: "give it a maybe
+   ring icon will be better, just like cloud, like this ring". */
+.sbar__ring,
+.sbar__acct {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  /* 44px is the touch target this whole client is built to; the visible chip is
+     smaller and the tappable box is not. */
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.sbar__ring:active,
+.sbar__acct:active,
+.sbar__row:active {
+  background: var(--bg-active);
+}
+
+.sbar__ring[data-busy='yes'],
+.sbar__acct[data-busy='yes'] {
+  opacity: 0.55;
+}
+
+.sbar__ring svg {
+  width: 18px;
+  height: 18px;
+  /* Twelve o'clock, which is where a ring is read from. SVG angles start at
+     three. */
+  transform: rotate(-90deg);
+}
+
+.sbar__track,
+.sbar__used {
+  fill: none;
+  stroke-width: 3;
+}
+
+.sbar__track {
+  stroke: var(--border);
+}
+
+.sbar__used {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+/* The context window as a bar rather than a number — "context window should be
+   a bar instead of numbers. It should be a bar." The figure stays beside it so
+   the phone and the Mac can be compared; one number is not a statement. */
+.sbar__ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.sbar__ctx > i {
+  display: block;
+  width: 64px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.sbar__ctx > i > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.sbar__ctx > i > i[data-level='warning'] {
+  background: var(--status-waiting);
+}
+
+.sbar__ctx > i > i[data-level='critical'] {
+  background: var(--color-critical);
+}
+
+.sbar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  flex: none;
+}
+
+.sbar__acct {
+  margin-left: auto;
+  max-width: 45%;
+}
+
+.sbar__acct > span,
+.sbar__row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchored to the chip and clamped to the pane, because a popover with no room
+   check is the defect this review found twice on the desktop. */
+.sbar__sheet {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 8px;
+  left: auto;
+  z-index: 40;
+  max-width: calc(100vw - 24px);
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sbar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbar__row[data-chosen='yes'] {
+  background: var(--accent-soft);
+}
+
+/* A login belonging to a different agent than this session runs. It is listed
+   because the menu names every account this machine has, and it is inert
+   because the machine refuses that switch — with a sentence this bar does not
+   draw. Dimmed and not pressable, never removed: a row that vanishes reads as
+   an account that is gone. */
+.sbar__row[data-inert='yes'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sbar__row[data-inert='yes']:active {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------------ */
+/* The session's control cluster — model, effort, fast mode, permission.    */
+/*                                                                          */
+/* The phone's copy of the cluster the desktop wears on every pane, fed by  */
+/* the same `controls.read` / `controls.apply` frames. Values only, never a */
+/* control's name on a chip; the sheets carry the desktop's own option      */
+/* vocabulary. See `session-controls.ts`.                                   */
+/* ------------------------------------------------------------------------ */
+.sctl {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* A flex container ignores `hidden` outright — the escape hatch `.sbar` and
+   every hidden flex block here carry, held to by `tests/layout.test.ts`. The
+   row is hidden whenever there is nothing honest to draw: no reading yet, a
+   machine without `controls`, a plain shell. */
+.sctl[hidden] {
+  display: none;
+}
+
+.sctl__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  min-height: 28px;
+  max-width: 40%;
+  cursor: pointer;
+}
+
+.sctl__chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sctl__chip:active {
+  background: var(--bg-active);
+}
+
+.sctl__chip[data-busy='yes'] {
+  opacity: 0.55;
+}
+
+/* Barred by the far end — its own sentence is behind the press, so the chip is
+   drawn back but stays pressable: a menu that opens onto the reason, never a
+   dead one. */
+.sctl__chip[data-blocked='yes'] {
+  opacity: 0.45;
+}
+
+/* Genuinely waiting its turn while another control is mid-change. */
+.sctl__chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sctl__caret {
+  display: inline-flex;
+  color: var(--text-muted);
+  flex: none;
+}
+
+/* Anchored under the row and clamped to the pane, like the account sheet
+   above — a popover with no room check is the defect this bar was reviewed
+   for twice. */
+.sctl__sheet {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  right: auto;
+  z-index: 40;
+  min-width: 220px;
+  max-width: calc(100vw - 24px);
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sctl__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sctl__row:active {
+  background: var(--bg-active);
+}
+
+.sctl__row[data-chosen='yes'] {
+  background: var(--accent-soft);
+}
+
+/* The tick column keeps the labels aligned whether or not a row carries one. */
+.sctl__tick {
+  width: 14px;
+  flex: none;
+  font-style: normal;
+  color: var(--accent);
+}
+
+.sctl__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sctl__text > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tag, not a description — "your account's default", "this session only",
+   "off if you switch model". The desktop's rule, kept: a fact the row cannot
+   state about itself, never prose. */
+.sctl__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* "Earlier models" — the caption that separates what the account is offered
+   today from what the CLI will still parse and may refuse. */
+.sctl__group {
+  margin: 6px 4px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* The far end's own sentence for a control that is barred, printed where the
+   rows would be. */
+.sctl__blocked {
+  margin: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* The fast-mode switch at the end of the model sheet. */
+.sctl__switch .sctl__text {
+  flex: 1;
+}
+
+.sctl__track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border);
+  flex: none;
+  transition: background 120ms ease;
+}
+
+.sctl__track[data-on='yes'] {
+  background: var(--accent);
+}
+
+.sctl__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  transition: left 120ms ease;
+}
+
+.sctl__track[data-on='yes'] .sctl__knob {
+  left: 16px;
+}
+
+/* What the session said about the last change — the CLI's own words. A
+   confirmation clears itself; a failure stays until dismissed, because an
+   error that tidies itself away is an error nobody read. */
+.sctl__notice {
+  flex-basis: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sctl__notice[data-bad='yes'] {
+  color: var(--color-critical);
+}
+
+.sctl__notice > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.sctl__close {
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------ */
+/* The chat view.                                                            */
+/*                                                                           */
+/* "my message should start from the right… the left side will be the agent…  */
+/*  no need to give a name actually on both sides… just the text only and     */
+/*  time only will be good enough. And give the copy button." Right, left,    */
+/*  time, copy, no names — and nothing else on the screen. See `chat-view.ts`.*/
+/* ------------------------------------------------------------------------ */
+.chatv {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  background: var(--terminal-bg);
+}
+
+.chatv__row {
+  display: flex;
+  flex-direction: column;
+  /* The side is the whole of whose message this is. There is no label above it
+     and no name inside it, which is why the alignment has to be unambiguous. */
+  align-items: flex-start;
+  max-width: 88%;
+  align-self: flex-start;
+}
+
+.chatv__row[data-role='you'] {
+  align-items: flex-end;
+  align-self: flex-end;
+}
+
+.chatv__bubble {
+  padding: 8px 11px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+  /* A transcript carries its own line breaks and its own code blocks. Preserved
+     rather than collapsed, and wrapped rather than scrolled, because a bubble
+     that scrolls sideways on a phone is a bubble nobody reads the end of. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatv__row[data-role='you'] .chatv__bubble {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.chatv__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chatv__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chatv__copy:active {
+  background: var(--bg-active);
+}
+
+/* Two seconds of a tick, on the button itself. A toast saying "Copied" would be
+   a sentence about something the finger already knows it did. */
+.chatv__copy[data-done='yes'] {
+  color: var(--status-completed);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The composer, under the conversation.                                     */
+/*                                                                           */
+/* The chat view shipped read-only, which made chat mode a detour: read the   */
+/* answer here, go back to the terminal to type one line. This is the same    */
+/* channel the key bar writes into — see `ChatComposer`.                     */
+/* ------------------------------------------------------------------------ */
+.chatc {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  /* The home-indicator gap, the same variable the key bar takes and which
+     main.ts zeroes while the keyboard is up — the keyboard already covers that
+     strip and paying for it twice lifts the row off the keys. */
+  padding-bottom: calc(8px + var(--dock-safe));
+}
+
+.chatc__field {
+  flex: 1;
+  min-width: 0;
+  /* One row to start, six at most, then it scrolls. A composer that can grow
+     without limit is a composer that eats the answer it is replying to. */
+  max-height: 132px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+}
+
+/* 16px or iOS Safari zooms the whole page on focus, and a page zoomed to fit a
+   text field is a terminal nobody can read on the way back. The rule is on the
+   coarse pointer only, so a desktop keeps the size the rest of the sheet uses. */
+@media (pointer: coarse) {
+  .chatc__field {
+    font-size: 16px;
+  }
+}
+
+.chatc__field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.chatc__send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.chatc__send:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.chatc__send:not(:disabled):active {
+  background: var(--bg-active);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The ⓘ — the only place an explanation lives.                              */
+/*                                                                           */
+/* "Don't put any single statement in anywhere… just if somewhere it's very   */
+/*  required, give the i icon like other ones." A popup rather than a         */
+/*  disclosure: a disclosure pushes everything under it down the page, so     */
+/*  reading the second explanation moves the third somewhere else.            */
+/* ------------------------------------------------------------------------ */
+.info {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.info__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* The 44px tap target the rest of this client uses, around a 16px glyph. */
+  width: 44px;
+  height: 44px;
+  margin: -14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Safari draws its own triangle from a pseudo-element the `list-style` above
+   does not reach, which put a disclosure arrow beside every ⓘ in this client. */
+.info__dot::-webkit-details-marker {
+  display: none;
+}
+
+.info__dot:hover,
+.info[open] .info__dot {
+  color: var(--text-primary);
+}
+
+.info__body {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  /* Anchored to the dot's left edge and capped, then pulled back inside the
+     frame by the viewport clamp below. A popup that leaves the screen on a
+     390px phone is a popup nobody can read the end of. */
+  left: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* The heading a dot sits beside: the title and the ⓘ on one baseline. */
+.screen__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.screen__heading h2 {
+  margin: 0;
+}
+
+/* ------------------------------------------------------- sign in to a server */
+
+/* The Add-server form: three fields, a choice, and a button.
+
+   The one form in this client with more than a single field on it, which is why
+   it carries a label per row where the pairing screen carries none. A six-digit
+   field on a screen whose only act is typing six digits needs no label; three
+   boxes that take an address, a login and a secret are ambiguous without one,
+   and the design brief's bar is a screen somebody who has never seen it can
+   read. The labels are one or two words each — a label is not prose, and the
+   paragraph that explains the whole thing is behind the ⓘ where the pair
+   screen's is. */
+.form__row {
+  margin-top: 14px;
+}
+
+.form__label {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* The same fill and height as the rename field, because they are the same
+   interaction — a box somebody types into — and two shapes of text field in one
+   client is how one of them ends up without a focus ring. The border reset lives
+   with `input[type='text']` further up; a textarea and a password field need it
+   too, and both are declared here rather than there so this block is readable on
+   its own. */
+.form__field {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  /* A textarea is resizable by default and drags out of the column. The row
+     count is the height, and it is chosen per field. */
+  resize: vertical;
+}
+
+.form__field:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* An address and a PEM are exact, countable characters — the same promise the
+   port list's paths and the machines list's endpoints make in this face. */
+.form__field--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* What is wrong with the field directly above it, and never anywhere else. A
+   message printed above one field and below another is a form people hunt
+   around. Warning rather than critical: nothing has failed yet — this is the
+   form declining to send something the machine would refuse. */
+.form__problem {
+  margin: 6px 0 0;
+  color: var(--color-warning);
+  font-size: 13px;
+}
+
+/* How the machine refused, in the machine's own words. Under the button rather
+   than under a field, because it is not about any one of them. */
+.form__failure {
+  max-width: var(--prose);
+  margin: 14px 0 0;
+  color: var(--color-critical);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.form__methods {
+  display: flex;
+  gap: 8px;
+}
+
+/* Two of them, so neither is a picker with one item in it. The chosen one is
+   tinted and not pressable — pressing the answer you already gave costs a
+   re-render and changes nothing, the same rule the machine switcher follows. */
+.form__method {
+  flex: 1;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+.form__method--here {
+  background: var(--accent-soft);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.form__method:disabled {
+  cursor: default;
+}
+
+/* The install command, shown only where a machine with no server on it is
+   actually the explanation — see `add-server.ts`, which decides that from what
+   the machine said rather than from a guess. */
+.install {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.install__note {
+  max-width: var(--prose);
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.install__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Selectable by hand as well as copyable by button: a clipboard write needs a
+   secure context and, in some browsers, a permission, and a command nobody can
+   select is a command somebody has to retype. It scrolls inside its own box
+   rather than wrapping, because a wrapped shell line invites a paste with a
+   newline in the middle of it. */
+.install__command {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre;
+  user-select: all;
+}
+
+.install__copy {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------- terminal colours -- */
+
+/*
+ * The scheme picker on the Settings screen.
+ *
+ * Two rules, the same two the desktop's sheet states, because it is the same
+ * control: a card is drawn in the scheme's own colours rather than named — a
+ * list of names is a list nobody can choose from — and nothing here paints a
+ * surface of its own, so the grid sits on the screen's ground with a hairline
+ * round each card instead of becoming a third grey.
+ */
+.schemes-block {
+  margin-top: 8px;
+}
+
+.schemes {
+  display: grid;
+  /* One column on a phone, two the moment there is room. The two preview lines
+     are 25 and 27 characters of mono at 11px and stop fitting under about
+     210px, which is where a second column would start truncating them. */
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.scheme {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.scheme:active {
+  background: var(--bg-hover);
+}
+
+/* The chosen card is the accent rather than a fill: a fill over a screen this
+   dark is a twenty-level difference nobody can see on a phone in daylight. */
+.scheme[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.scheme__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scheme__tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.scheme__note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scheme__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.scheme__line {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheme__cursor {
+  display: inline-block;
+  min-width: 0.6em;
+}
+
+.scheme__swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  margin-top: 4px;
+}
+
+/* A hairline inside each swatch, so a slot painted the same colour as the
+   ground it sits on is still visibly a slot — two schemes here set ANSI black
+   to their own background, which is what their authors published. */
+.scheme__swatch {
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.3);
+}
+
+.scheme-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.scheme-actions .button {
+  flex: none;
+  width: auto;
+  padding: 0 14px;
+}
+
+.scheme-import {
+  margin-top: 10px;
+}
+
+.scheme-paste {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  resize: vertical;
+}
+
+.scheme-edit {
+  margin-top: 12px;
+}
+
+.scheme-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 2px 16px;
+  margin-top: 8px;
+}
+
+.scheme-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.scheme-row__label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The native colour well, stripped of the frame the platform draws round it so
+   it reads as a swatch rather than as a button with a swatch inside it. Wider
+   than the desktop's: this one is a touch target. */
+.scheme-chip {
+  flex: none;
+  width: 44px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: none;
+}
+
+.scheme-chip::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.scheme-chip::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+.scheme-hex {
+  flex: none;
+  box-sizing: border-box;
+  width: 12ch;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* A hex that is not one yet — half typed, or pasted with a stray character.
+   Said on the field, because the field is where the character is. */
+.scheme-hex--bad {
+  border-color: var(--color-critical);
+}
+
+/* The one refusal this block can produce: a paste that is not a scheme, or a
+   clipboard the browser would not hand over. */
+.note--warn {
+  margin: 8px 2px 0;
+  padding: 0;
+  border: none;
+  color: var(--color-critical);
+}

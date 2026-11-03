@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+TestResults/
+.artifacts/
+.scratch/
+.vs/
+*.user
+*.download.sh
+.DS_Store

@@ -1,0 +1,764 @@
+[
+  {
+    "id": "filesystem",
+    "name": "filesystem",
+    "summary": "Connect filesystem tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "category": "files",
+    "version": "2026.7.10",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-filesystem ${ROOT}",
+    "inputs": [
+      {
+        "key": "ROOT",
+        "label": "Directory it may touch",
+        "hint": "Supply the ROOT value for this server.",
+        "kind": "path",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": null
+  },
+  {
+    "id": "memory",
+    "name": "memory",
+    "summary": "Connect memory tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    "category": "thinking",
+    "version": "2026.7.4",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-memory",
+    "inputs": [],
+    "cost": "free",
+    "caveat": null
+  },
+  {
+    "id": "sequential-thinking",
+    "name": "sequential-thinking",
+    "summary": "Connect sequential-thinking tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "category": "thinking",
+    "version": "2026.7.4",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-sequential-thinking",
+    "inputs": [],
+    "cost": "free",
+    "caveat": null
+  },
+  {
+    "id": "everything",
+    "name": "everything",
+    "summary": "Connect everything tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+    "category": "utility",
+    "version": "2026.8.18",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-everything",
+    "inputs": [],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "git",
+    "name": "git",
+    "summary": "Connect git tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+    "category": "code",
+    "version": "2026.8.18",
+    "runtime": "python",
+    "command": "uvx mcp-server-git --repository ${REPO}",
+    "inputs": [
+      {
+        "key": "REPO",
+        "label": "Repository",
+        "hint": "Supply the REPO value for this server.",
+        "kind": "path",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "fetch",
+    "name": "fetch",
+    "summary": "Connect fetch tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+    "category": "web",
+    "version": "2026.8.18",
+    "runtime": "python",
+    "command": "uvx mcp-server-fetch",
+    "inputs": [],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "time",
+    "name": "time",
+    "summary": "Connect time tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+    "category": "utility",
+    "version": "2026.8.18",
+    "runtime": "python",
+    "command": "uvx mcp-server-time",
+    "inputs": [],
+    "cost": "free",
+    "caveat": null
+  },
+  {
+    "id": "playwright",
+    "name": "playwright",
+    "summary": "Connect playwright tools to your coding agents.",
+    "homepage": "https://github.com/microsoft/playwright-mcp",
+    "category": "browser",
+    "version": "0.0.79",
+    "runtime": "node",
+    "command": "npx -y @playwright/mcp@latest",
+    "inputs": [],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "github",
+    "name": "github",
+    "summary": "Connect github tools to your coding agents.",
+    "homepage": "https://github.com/github/github-mcp-server",
+    "category": "code",
+    "version": "ghcr.io/github/github-mcp-server:latest",
+    "runtime": "docker",
+    "command": "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+    "inputs": [
+      {
+        "key": "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "label": "Personal access token",
+        "hint": "Supply the GITHUB_PERSONAL_ACCESS_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "notion",
+    "name": "notion",
+    "summary": "Connect notion tools to your coding agents.",
+    "homepage": "https://github.com/makenotion/notion-mcp-server",
+    "category": "knowledge",
+    "version": "2.5.1",
+    "runtime": "node",
+    "command": "npx -y @notionhq/notion-mcp-server",
+    "inputs": [
+      {
+        "key": "NOTION_TOKEN",
+        "label": "Integration token",
+        "hint": "Supply the NOTION_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": null
+  },
+  {
+    "id": "context7",
+    "name": "context7",
+    "summary": "Connect context7 tools to your coding agents.",
+    "homepage": "https://github.com/upstash/context7",
+    "category": "knowledge",
+    "version": "4.0.3",
+    "runtime": "node",
+    "command": "npx -y @upstash/context7-mcp",
+    "inputs": [
+      {
+        "key": "CONTEXT7_API_KEY",
+        "label": "API key",
+        "hint": "Supply the CONTEXT7_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": false
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "tavily",
+    "name": "tavily",
+    "summary": "Connect tavily tools to your coding agents.",
+    "homepage": "https://github.com/tavily-ai/tavily-mcp",
+    "category": "web",
+    "version": "0.2.22",
+    "runtime": "node",
+    "command": "npx -y tavily-mcp",
+    "inputs": [
+      {
+        "key": "TAVILY_API_KEY",
+        "label": "API key",
+        "hint": "Supply the TAVILY_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "firecrawl",
+    "name": "firecrawl",
+    "summary": "Connect firecrawl tools to your coding agents.",
+    "homepage": "https://github.com/firecrawl/firecrawl-mcp-server",
+    "category": "web",
+    "version": "3.24.0",
+    "runtime": "node",
+    "command": "npx -y firecrawl-mcp",
+    "inputs": [
+      {
+        "key": "FIRECRAWL_API_KEY",
+        "label": "API key",
+        "hint": "Supply the FIRECRAWL_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "stripe",
+    "name": "stripe",
+    "summary": "Connect stripe tools to your coding agents.",
+    "homepage": "https://github.com/stripe/ai/tree/main/tools/modelcontextprotocol",
+    "category": "business",
+    "version": "0.3.3",
+    "runtime": "node",
+    "command": "npx -y @stripe/mcp",
+    "inputs": [
+      {
+        "key": "STRIPE_SECRET_KEY",
+        "label": "Secret key",
+        "hint": "Supply the STRIPE_SECRET_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "hubspot",
+    "name": "hubspot",
+    "summary": "Connect hubspot tools to your coding agents.",
+    "homepage": "https://developers.hubspot.com/mcp",
+    "category": "business",
+    "version": "0.4.0",
+    "runtime": "node",
+    "command": "npx -y @hubspot/mcp-server",
+    "inputs": [
+      {
+        "key": "PRIVATE_APP_ACCESS_TOKEN",
+        "label": "Private app token",
+        "hint": "Supply the PRIVATE_APP_ACCESS_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "sentry",
+    "name": "sentry",
+    "summary": "Connect sentry tools to your coding agents.",
+    "homepage": "https://github.com/getsentry/sentry-mcp",
+    "category": "cloud",
+    "version": "0.37.0",
+    "runtime": "node",
+    "command": "npx -y @sentry/mcp-server",
+    "inputs": [
+      {
+        "key": "SENTRY_ACCESS_TOKEN",
+        "label": "Auth token",
+        "hint": "Supply the SENTRY_ACCESS_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      },
+      {
+        "key": "SENTRY_HOST",
+        "label": "Self-hosted host",
+        "hint": "Supply the SENTRY_HOST value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": false
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "azure",
+    "name": "azure",
+    "summary": "Connect azure tools to your coding agents.",
+    "homepage": "https://github.com/microsoft/mcp",
+    "category": "cloud",
+    "version": "3.0.0-beta.37",
+    "runtime": "node",
+    "command": "npx -y @azure/mcp@latest server start",
+    "inputs": [],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "cloudflare",
+    "name": "cloudflare",
+    "summary": "Connect cloudflare tools to your coding agents.",
+    "homepage": "https://github.com/cloudflare/mcp-server-cloudflare",
+    "category": "cloud",
+    "version": "0.1.43",
+    "runtime": "node",
+    "command": "npx -y mcp-remote https://bindings.mcp.cloudflare.com/mcp",
+    "inputs": [],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "supabase",
+    "name": "supabase",
+    "summary": "Connect supabase tools to your coding agents.",
+    "homepage": "https://github.com/supabase/mcp",
+    "category": "data",
+    "version": "0.11.0",
+    "runtime": "node",
+    "command": "npx -y @supabase/mcp-server-supabase --read-only --project-ref ${PROJECT_REF}",
+    "inputs": [
+      {
+        "key": "SUPABASE_ACCESS_TOKEN",
+        "label": "Personal access token",
+        "hint": "Supply the SUPABASE_ACCESS_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      },
+      {
+        "key": "PROJECT_REF",
+        "label": "Project reference",
+        "hint": "Supply the PROJECT_REF value for this server.",
+        "kind": "text",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "mongodb",
+    "name": "mongodb",
+    "summary": "Connect mongodb tools to your coding agents.",
+    "homepage": "https://github.com/mongodb-js/mongodb-mcp-server",
+    "category": "data",
+    "version": "2.1.0",
+    "runtime": "node",
+    "command": "npx -y mongodb-mcp-server --readOnly",
+    "inputs": [
+      {
+        "key": "MDB_MCP_CONNECTION_STRING",
+        "label": "Connection string",
+        "hint": "Supply the MDB_MCP_CONNECTION_STRING value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "postgres-mcp",
+    "name": "postgres-mcp",
+    "summary": "Connect postgres-mcp tools to your coding agents.",
+    "homepage": "https://github.com/crystaldba/postgres-mcp",
+    "category": "data",
+    "version": "0.3.0",
+    "runtime": "python",
+    "command": "uvx postgres-mcp --access-mode=restricted",
+    "inputs": [
+      {
+        "key": "DATABASE_URI",
+        "label": "Connection string",
+        "hint": "Supply the DATABASE_URI value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "airtable",
+    "name": "airtable",
+    "summary": "Connect airtable tools to your coding agents.",
+    "homepage": "https://github.com/domdomegg/airtable-mcp-server",
+    "category": "data",
+    "version": "1.14.0",
+    "runtime": "node",
+    "command": "npx -y airtable-mcp-server",
+    "inputs": [
+      {
+        "key": "AIRTABLE_API_KEY",
+        "label": "Personal access token",
+        "hint": "Supply the AIRTABLE_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "bigquery",
+    "name": "bigquery",
+    "summary": "Connect bigquery tools to your coding agents.",
+    "homepage": "https://github.com/LucasHild/mcp-server-bigquery",
+    "category": "data",
+    "version": "0.3.2",
+    "runtime": "python",
+    "command": "uvx mcp-server-bigquery --project ${PROJECT} --location ${LOCATION}",
+    "inputs": [
+      {
+        "key": "PROJECT",
+        "label": "Project id",
+        "hint": "Supply the PROJECT value for this server.",
+        "kind": "text",
+        "into": "arg",
+        "required": true
+      },
+      {
+        "key": "LOCATION",
+        "label": "Location",
+        "hint": "Supply the LOCATION value for this server.",
+        "kind": "text",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "google-analytics",
+    "name": "google-analytics",
+    "summary": "Connect google-analytics tools to your coding agents.",
+    "homepage": "https://github.com/googleanalytics/google-analytics-mcp",
+    "category": "data",
+    "version": "0.7.0",
+    "runtime": "python",
+    "command": "uvx analytics-mcp",
+    "inputs": [
+      {
+        "key": "GOOGLE_APPLICATION_CREDENTIALS",
+        "label": "Credentials file",
+        "hint": "Supply the GOOGLE_APPLICATION_CREDENTIALS value for this server.",
+        "kind": "path",
+        "into": "env",
+        "required": false
+      },
+      {
+        "key": "GOOGLE_PROJECT_ID",
+        "label": "Google Cloud project",
+        "hint": "Supply the GOOGLE_PROJECT_ID value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": false
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "google-workspace",
+    "name": "google-workspace",
+    "summary": "Connect google-workspace tools to your coding agents.",
+    "homepage": "https://github.com/taylorwilsdon/google_workspace_mcp",
+    "category": "messaging",
+    "version": "1.25.0",
+    "runtime": "python",
+    "command": "uvx workspace-mcp --tool-tier core",
+    "inputs": [
+      {
+        "key": "GOOGLE_OAUTH_CLIENT_ID",
+        "label": "OAuth client id",
+        "hint": "Supply the GOOGLE_OAUTH_CLIENT_ID value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": true
+      },
+      {
+        "key": "GOOGLE_OAUTH_CLIENT_SECRET",
+        "label": "OAuth client secret",
+        "hint": "Supply the GOOGLE_OAUTH_CLIENT_SECRET value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "figma",
+    "name": "figma",
+    "summary": "Connect figma tools to your coding agents.",
+    "homepage": "https://github.com/GLips/Figma-Context-MCP",
+    "category": "design",
+    "version": "0.13.2",
+    "runtime": "node",
+    "command": "npx -y figma-developer-mcp --stdio",
+    "inputs": [
+      {
+        "key": "FIGMA_API_KEY",
+        "label": "Personal access token",
+        "hint": "Supply the FIGMA_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "atlassian",
+    "name": "atlassian",
+    "summary": "Connect atlassian tools to your coding agents.",
+    "homepage": "https://www.atlassian.com/platform/remote-mcp-server",
+    "category": "work",
+    "version": "0.1.43",
+    "runtime": "node",
+    "command": "npx -y mcp-remote https://mcp.atlassian.com/v1/sse",
+    "inputs": [],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "linear",
+    "name": "linear",
+    "summary": "Connect linear tools to your coding agents.",
+    "homepage": "https://linear.app/docs/mcp",
+    "category": "work",
+    "version": "0.1.43",
+    "runtime": "node",
+    "command": "npx -y mcp-remote https://mcp.linear.app/mcp",
+    "inputs": [],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "exa",
+    "name": "exa",
+    "summary": "Connect exa tools to your coding agents.",
+    "homepage": "https://github.com/exa-labs/exa-mcp-server",
+    "category": "web",
+    "version": "0.1.43",
+    "runtime": "node",
+    "command": "npx -y mcp-remote https://mcp.exa.ai/mcp",
+    "inputs": [],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "apify",
+    "name": "apify",
+    "summary": "Connect apify tools to your coding agents.",
+    "homepage": "https://github.com/apify/apify-mcp-server",
+    "category": "web",
+    "version": "0.1.43",
+    "runtime": "node",
+    "command": "npx -y mcp-remote https://mcp.apify.com",
+    "inputs": [],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "perplexity",
+    "name": "perplexity",
+    "summary": "Connect perplexity tools to your coding agents.",
+    "homepage": "https://github.com/perplexityai/modelcontextprotocol",
+    "category": "web",
+    "version": "0.1.3",
+    "runtime": "node",
+    "command": "npx -y server-perplexity-ask",
+    "inputs": [
+      {
+        "key": "PERPLEXITY_API_KEY",
+        "label": "API key",
+        "hint": "Supply the PERPLEXITY_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "paid",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "sqlite",
+    "name": "sqlite",
+    "summary": "Connect sqlite tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
+    "category": "data",
+    "version": "2025.4.25",
+    "runtime": "python",
+    "command": "uvx mcp-server-sqlite --db-path ${DB}",
+    "inputs": [
+      {
+        "key": "DB",
+        "label": "Database file",
+        "hint": "Supply the DB value for this server.",
+        "kind": "path",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "postgres",
+    "name": "postgres",
+    "summary": "Connect postgres tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres",
+    "category": "data",
+    "version": "0.6.2",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-postgres ${DATABASE_URL}",
+    "inputs": [
+      {
+        "key": "DATABASE_URL",
+        "label": "Connection string",
+        "hint": "Supply the DATABASE_URL value for this server.",
+        "kind": "text",
+        "into": "arg",
+        "required": true
+      }
+    ],
+    "cost": "free",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "slack",
+    "name": "slack",
+    "summary": "Connect slack tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack",
+    "category": "messaging",
+    "version": "2025.4.25",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-slack",
+    "inputs": [
+      {
+        "key": "SLACK_BOT_TOKEN",
+        "label": "Bot token",
+        "hint": "Supply the SLACK_BOT_TOKEN value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      },
+      {
+        "key": "SLACK_TEAM_ID",
+        "label": "Team id",
+        "hint": "Supply the SLACK_TEAM_ID value for this server.",
+        "kind": "text",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "brave-search",
+    "name": "brave-search",
+    "summary": "Connect brave-search tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/brave-search",
+    "category": "web",
+    "version": "0.6.2",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-brave-search",
+    "inputs": [
+      {
+        "key": "BRAVE_API_KEY",
+        "label": "API key",
+        "hint": "Supply the BRAVE_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "google-drive",
+    "name": "google-drive",
+    "summary": "Connect google-drive tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+    "category": "files",
+    "version": "2025.1.14",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-gdrive",
+    "inputs": [
+      {
+        "key": "GDRIVE_CREDENTIALS_PATH",
+        "label": "Saved credentials file",
+        "hint": "Supply the GDRIVE_CREDENTIALS_PATH value for this server.",
+        "kind": "path",
+        "into": "env",
+        "required": true
+      },
+      {
+        "key": "GDRIVE_OAUTH_PATH",
+        "label": "OAuth keys file",
+        "hint": "Supply the GDRIVE_OAUTH_PATH value for this server.",
+        "kind": "path",
+        "into": "env",
+        "required": false
+      }
+    ],
+    "cost": "account",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  },
+  {
+    "id": "google-maps",
+    "name": "google-maps",
+    "summary": "Connect google-maps tools to your coding agents.",
+    "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/google-maps",
+    "category": "web",
+    "version": "0.6.2",
+    "runtime": "node",
+    "command": "npx -y @modelcontextprotocol/server-google-maps",
+    "inputs": [
+      {
+        "key": "GOOGLE_MAPS_API_KEY",
+        "label": "API key",
+        "hint": "Supply the GOOGLE_MAPS_API_KEY value for this server.",
+        "kind": "secret",
+        "into": "env",
+        "required": true
+      }
+    ],
+    "cost": "metered",
+    "caveat": "Review this server's runtime and permission requirements before installing."
+  }
+]

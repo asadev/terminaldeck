@@ -1,0 +1,97 @@
+/* ============================================================================
+   The tooltip.
+
+   One bubble, portalled under <body>, drawn by the app instead of by the OS.
+
+   It is chrome, so it is Apple: the system face, one type size, glass rather
+   than a box, a hairline rather than an outline, and a shadow doing the work a
+   border would otherwise be asked to do. The only thing in it that is allowed
+   to be terminal is a bare path — that is data, and `pathLike()` in tooltip.ts
+   is what decides so, all-or-nothing, never mid-sentence.
+
+   Motion is the smallest amount that explains where the bubble came from: it
+   fades and rises two pixels out of the control it belongs to, over
+   `--dur-fast`, on Apple's own ease. `data-side` flips the direction so it
+   always appears to come *from* its anchor. Under
+   `prefers-reduced-motion` the duration tokens are already 0.01ms, so this
+   costs a reduced-motion reader nothing and needs no second rule.
+   ============================================================================ */
+
+.tooltip {
+  position: fixed;
+  /* Above the modals and the command palette, both of which sit at 100 under
+     <body>. A tooltip inside a dialog is the case that decides this: at 100 it
+     would be a coin toss with the sheet it is drawn on top of. */
+  z-index: 200;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  max-width: 320px;
+  padding: 5px var(--sp-2);
+  border-radius: var(--radius-sm);
+
+  background: var(--material-bg-strong);
+  backdrop-filter: var(--material-filter);
+  -webkit-backdrop-filter: var(--material-filter);
+  /* A hairline, not a border: enough to keep the glass from dissolving into a
+     pale surface behind it, not enough to read as a box. */
+  box-shadow:
+    inset 0 0 0 1px var(--material-hairline),
+    var(--shadow-md);
+
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-subhead);
+  font-weight: var(--w-medium);
+  line-height: var(--lh-tight);
+
+  /* It is a label about something else; it must never be the thing the pointer
+     hits, or the hover it is describing ends the moment it appears. */
+  pointer-events: none;
+  /* Hidden until `placeTip` has measured it — see the note on data-placed in
+     Tooltips.tsx. `visibility` rather than `display`, because a bubble that is
+     not laid out cannot be measured. */
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.tooltip[data-side='below'] {
+  transform: translateY(-2px);
+}
+
+.tooltip[data-side='above'] {
+  transform: translateY(2px);
+}
+
+.tooltip[data-placed] {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Wrapping is allowed — several titles in this app are a sentence — but a path
+   is one token and would otherwise force the bubble to its full 320px and then
+   overflow it anyway. */
+.tooltip-label {
+  overflow-wrap: anywhere;
+}
+
+.tooltip-label[data-mono] {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+}
+
+/* The chord, set the way a menu sets one: same size, dimmer, and pushed to the
+   end so the eye reads the label first. Not mono — a ⌘ is a symbol on a key,
+   not a countable character of data. */
+.tooltip-chord {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-weight: var(--w-regular);
+  white-space: nowrap;
+}

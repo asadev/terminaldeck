@@ -1,0 +1,1872 @@
+{
+  "note": "Static source contracts only. No handlers implemented or advertised by this file. Different factories can override a static schema/tier; consult runtimeSources before W1(d).",
+  "sourceRevision": "e700ddbe5b61aaef42b084fbbe50a818ca34c174",
+  "sourceHashes": {
+    "BackendDeckCoreCatalogueLiterals.swift": "d9a1ca7315f0023205921e42ee7e68d62ec37f5e5109d6705a25affbf348dc2a",
+    "BackendDeckCoreEventsToolDefinitions.swift": "b7cf68fdff5fe2d02dcf2ff00d823675bef4426dd9afc66aae71f58cc3cc374d",
+    "BackendDeckToolsSessionsCatalogue.swift": "cb7cd6ad4be8d88c5c2ea0133f3ba30b7d507f9ec569e619f1a4ee5a6d17d8b6",
+    "BackendDeckToolsMachinesCatalogue.swift": "b5d40c7e069beb49fac155dfbc3beced305868c21a833f9a5459059404eaba2d",
+    "BackendDeckToolsAppMetadata.swift": "8861becde29b4ac8c046814f5aa4c2e2587404e8b58945ba30f8dd184b3196cc"
+  },
+  "runtimeSources": [
+    "BackendBrowserFactories.swift",
+    "BackendBrowserScrapingMCP.swift",
+    "BackendBrowserRecipes.swift",
+    "BackendINT2PhoneAccessMCP.swift",
+    "BackendDeckCoreSecurityControl.swift",
+    "BackendMCPTools.swift"
+  ],
+  "entries": [
+    {
+      "id": "accounts.create",
+      "wire": "accounts_create",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What it is called, e.g. Work."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Which agent it is a login of. Default claude."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.delete",
+      "wire": "accounts_delete",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          },
+          "deleteFiles": {
+            "type": "boolean",
+            "description": "Also delete its folder on disk. Default false."
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.list",
+      "wire": "accounts_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "description": "Only this agent’s accounts: claude, codex or gemini."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "An open folder: also say which account it would use."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.rename",
+      "wire": "accounts_rename",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.set_default",
+      "wire": "accounts_set_default",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "Omit to clear the choice."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "An open folder. Omit for the default everywhere."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.share_history",
+      "wire": "accounts_share_history",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          },
+          "share": {
+            "type": "boolean",
+            "description": "true to share, false to stop."
+          }
+        },
+        "required": [
+          "accountId",
+          "share"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.sign_in",
+      "wire": "accounts_sign_in",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          },
+          "folder": {
+            "type": "string",
+            "description": "An open folder to run the session in. See projects.list."
+          }
+        },
+        "required": [
+          "accountId",
+          "folder"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.sign_out",
+      "wire": "accounts_sign_out",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "accounts.status",
+      "wire": "accounts_status",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "installation": { "type": "boolean", "description": "Also read the installed CLI version without signing in or sending a model request." },
+          "accountId": {
+            "type": "string",
+            "description": "The account id, from accounts.list."
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "Ask the CLI again."
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "agents.controls",
+      "wire": "agents_controls",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "A session on this computer, from sessions.list."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "agents.models",
+      "wire": "agents_models",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "A session on this computer, from sessions.list."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "agents.set_control",
+      "wire": "agents_set_control",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "control": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "fast",
+              "permission"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "description": "model: a model name from agents.models, such as sonnet or opus, or \"default\". effort: low, medium, high, xhigh, max, ultracode, auto. fast: on, off. permission: auto, manual, acceptEdits, plan, bypass."
+          }
+        },
+        "required": [
+          "sessionId",
+          "control",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "browser.extract",
+      "wire": "browser_extract",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "Which installed tool to run. Omit to list the tools that are installed."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Whose window. Omit for your own."
+          },
+          "window": {
+            "type": "string",
+            "description": "Window name, like B1. Omit for the first one."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Most rows to bring back, up to 2000."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsAppMetadata.swift"
+    },
+    {
+      "id": "browser.lift_request",
+      "wire": "browser_lift_request",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The profile whose signed-in session you are asking to have copied — its name as the person and the panel say it."
+          },
+          "into": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Worker names to copy it into, from browser.workers. Omit to ask for every worker."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One line the person reads beside the ask: why you need these workers signed in. They decide on it, so say the real reason."
+          }
+        },
+        "required": [
+          "from"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "browser.store",
+      "wire": "browser_store",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "install",
+              "remove"
+            ],
+            "description": "Default list."
+          },
+          "tool": {
+            "type": "string",
+            "description": "For install and remove: the tool id from the list."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsAppMetadata.swift"
+    },
+    {
+      "id": "browser.worker",
+      "wire": "browser_worker",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "take",
+              "release",
+              "renew"
+            ],
+            "description": "take: hold one worker and serve its wait before answering. release: hand it back. renew: keep it a while longer."
+          },
+          "worker": {
+            "type": "string",
+            "description": "The worker’s name, from browser.workers. Omit on take to be given whichever has been idle longest."
+          },
+          "holdMs": {
+            "type": "number",
+            "description": "How long the hold lasts before it lapses on its own. Default 120000, max 600000."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "browser.workers",
+      "wire": "browser_workers",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "chats.insights",
+      "wire": "chats_insights",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "An open project folder."
+          },
+          "transcriptPath": {
+            "type": "string",
+            "description": "One from chats.list. Omit for the newest."
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "chats.list",
+      "wire": "chats_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "An open project folder."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Default 20, max 100."
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "chats.read",
+      "wire": "chats_read",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "An open project folder."
+          },
+          "transcriptPath": {
+            "type": "string",
+            "description": "One from chats.list. Omit for the newest."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Messages, newest last. Default 40, max 200."
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "devices.annotations",
+      "wire": "devices_annotations",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many rounds, newest first. Default 1, at most 10."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device",
+              "browser"
+            ],
+            "description": "Only rounds made on a device screen, or only on a browser page."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.button",
+      "wire": "devices_button",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "button": {
+            "type": "string",
+            "enum": [
+              "home",
+              "back",
+              "overview",
+              "lock",
+              "volume-up",
+              "volume-down",
+              "action"
+            ]
+          },
+          "rotate": {
+            "type": "string",
+            "enum": [
+              "portrait",
+              "landscape-left",
+              "landscape-right",
+              "portrait-upside-down"
+            ],
+            "description": "Turn the device to this orientation."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.find",
+      "wire": "devices_find",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the element says or is labelled, matched whole and ignoring case unless partial is true."
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Its accessibility identifier or test id."
+          },
+          "role": {
+            "type": "string",
+            "description": "Plain words such as button or text field, or the platform’s own role."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "Match name anywhere inside the element’s text."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "visible",
+              "full"
+            ],
+            "description": "As in devices.tree. Default visible."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.list",
+      "wire": "devices_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.open",
+      "wire": "devices_open",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.screenshot",
+      "wire": "devices_screenshot",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.shutdown",
+      "wire": "devices_shutdown",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.swipe",
+      "wire": "devices_swipe",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "from": {
+            "type": "object",
+            "description": "A point as fractions of the screen: {\"x\": 0..1 from the left, \"y\": 0..1 from the top}.",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            }
+          },
+          "to": {
+            "type": "object",
+            "description": "A point as fractions of the screen: {\"x\": 0..1 from the left, \"y\": 0..1 from the top}.",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            }
+          },
+          "durationMs": {
+            "type": "number",
+            "description": "How long the finger takes, 50 to 5000. Default 300."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ],
+            "description": "Instead of from and to: the way the finger travels. up shows what is further down a list."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.tap",
+      "wire": "devices_tap",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "x": {
+            "type": "number",
+            "description": "Across, from 0 (left edge) to 1 (right edge)."
+          },
+          "y": {
+            "type": "number",
+            "description": "Down, from 0 (top edge) to 1 (bottom edge)."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the element says or is labelled, matched whole and ignoring case unless partial is true."
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Its accessibility identifier or test id."
+          },
+          "role": {
+            "type": "string",
+            "description": "Plain words such as button or text field, or the platform’s own role."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "Match name anywhere inside the element’s text."
+          },
+          "holdMs": {
+            "type": "number",
+            "description": "Hold this long. 400 or more is a long press; at most 5000."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.tree",
+      "wire": "devices_tree",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "visible",
+              "full"
+            ],
+            "description": "interactive: only what can be acted on. visible (default): what is on screen. full: also what is scrolled away."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Most elements listed. Default 150, at most 400."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "devices.type",
+      "wire": "devices_type",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device’s id from devices.list, such as ios:… or android:…."
+          },
+          "text": {
+            "type": "string",
+            "description": "Typed into the focused field. Up to 2000 characters."
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "delete",
+              "return",
+              "enter",
+              "tab",
+              "escape",
+              "arrow-up",
+              "arrow-down",
+              "arrow-left",
+              "arrow-right",
+              "select-all"
+            ],
+            "description": "A key pressed after the text, if any."
+          },
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "command",
+                "shift",
+                "option",
+                "control"
+              ]
+            },
+            "description": "Held while key is pressed."
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "mcp.open",
+      "wire": "mcp_open",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "serverId": { "type": "string", "maxLength": 4096 },
+          "section": { "type": "string", "enum": ["general", "tools", "secrets", "log"] }
+        },
+        "required": ["serverId"],
+        "additionalProperties": false
+      },
+      "source": "Windows MCP server editor"
+    },
+    {
+      "id": "mcp.add",
+      "wire": "mcp_add",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Letters, numbers, dots, dashes, underscores."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "local"
+            ],
+            "description": "user: every project for this Windows user. local: one project, only this Windows user. Shared project configuration is not available."
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "stdio",
+              "http",
+              "sse"
+            ],
+            "description": "stdio runs a command; http/sse is a URL."
+          },
+          "command": {
+            "type": "string",
+            "description": "stdio: the command line that starts it, e.g. npx -y @scope/server."
+          },
+          "url": {
+            "type": "string",
+            "description": "http/sse: the server URL."
+          },
+          "env": {
+            "type": "object",
+            "description": "stdio: environment variables, name → value."
+          },
+          "headers": {
+            "type": "object",
+            "description": "http/sse: request headers, name → value."
+          },
+          "projectPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "transport"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.call",
+      "wire": "mcp_call",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "serverId": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object",
+            "description": "The tool’s arguments, per its input schema."
+          },
+          "projectPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId",
+          "tool"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.connect",
+      "wire": "mcp_connect",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "test": { "type": "boolean", "description": "Test a temporary connection without changing saved on/off policy or retaining a connection." },
+          "serverId": {
+            "type": "string",
+            "description": "The id from mcp.list, like user:github."
+          },
+          "projectPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.disconnect",
+      "wire": "mcp_disconnect",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "serverId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.edit",
+      "wire": "mcp_edit",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The server as it is now."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "project",
+              "local"
+            ]
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "next": {
+            "type": "object",
+            "properties": {
+              "envSet": { "type": "object", "description": "Set named protected environment values, keeping other saved values hidden and unchanged." },
+              "headersSet": { "type": "object", "description": "Set named protected request headers, keeping other saved values hidden and unchanged." },
+              "enabled": { "type": "boolean", "description": "Saved on/off policy. Turning off disconnects this server." },
+              "disabledTools": { "type": "array", "items": { "type": "string" }, "description": "Tool names blocked for every caller. Replaces the disabled list." },
+              "name": {
+                "type": "string",
+                "description": "Letters, numbers, dots, dashes, underscores."
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "project",
+                  "local"
+                ],
+                "description": "user: every folder. project: shared in the folder’s .mcp.json. local: this folder, only you."
+              },
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "stdio",
+                  "http",
+                  "sse"
+                ],
+                "description": "stdio runs a command; http/sse is a URL."
+              },
+              "command": {
+                "type": "string",
+                "description": "stdio: the command line that starts it, e.g. npx -y @scope/server."
+              },
+              "url": {
+                "type": "string",
+                "description": "http/sse: the server URL."
+              },
+              "env": {
+                "type": "object",
+                "description": "stdio: environment variables, name → value."
+              },
+              "headers": {
+                "type": "object",
+                "description": "http/sse: request headers, name → value."
+              }
+            },
+            "description": "What it becomes."
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.export",
+      "wire": "mcp_export",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "project",
+              "local"
+            ]
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "The open folder, for project and local scope."
+          }
+        },
+        "required": [
+          "name",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.import",
+      "wire": "mcp_import",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The file’s contents."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.install",
+      "wire": "mcp_install",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The row id from mcp.store."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "project",
+              "local"
+            ]
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object",
+            "description": "Input key → value."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.list",
+      "wire": "mcp_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "An open folder, to include its own servers."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.remove",
+      "wire": "mcp_remove",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "project",
+              "local"
+            ]
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "The open folder, for project and local scope."
+          }
+        },
+        "required": [
+          "name",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "mcp.store",
+      "wire": "mcp_store",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "refreshEnvironment": {
+            "type": "boolean"
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "An open folder, for project-scoped installs."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreEventsToolDefinitions.swift"
+    },
+    {
+      "id": "remote.manage",
+      "wire": "remote_manage",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "do": {
+            "type": "string",
+            "enum": [
+              "start",
+              "open-web",
+              "stop",
+              "show-code",
+              "cancel-code",
+              "approve",
+              "revoke",
+              "deny",
+              "rename",
+              "set-folders",
+              "set-accounts",
+              "set-sessions",
+              "set-windows",
+              "disconnect",
+              "stop-tunnel",
+              "keep-awake"
+            ]
+          },
+          "openBrowser": {"type": "boolean"},
+          "deviceId": {
+            "type": "string",
+            "description": "approve, revoke, rename and the set- verbs. From remote.status."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "rename: the device's new name."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mine",
+              "guest"
+            ],
+            "description": "approve."
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "approve (guest) and set-folders: absolute folders on this computer."
+          },
+          "loginShare": {
+            "type": "string",
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "description": "approve (guest) and set-accounts."
+          },
+          "logins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Login ids, when loginShare is selected."
+          },
+          "sessionShare": {
+            "type": "string",
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "description": "set-sessions."
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Session ids, when sessionShare is selected."
+          },
+          "allowed": {
+            "type": "boolean",
+            "description": "set-windows."
+          },
+          "connectionId": {
+            "type": "string",
+            "description": "disconnect and stop-tunnel."
+          },
+          "tunnelId": {
+            "type": "string",
+            "description": "stop-tunnel."
+          },
+          "on": {
+            "type": "boolean",
+            "description": "keep-awake."
+          }
+        },
+        "required": [
+          "do"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "remote.status",
+      "wire": "remote_status",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tailscale": {
+            "type": "boolean",
+            "description": "Also report the optional Tailscale route. Default false."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsMachinesCatalogue.swift"
+    },
+    {
+      "id": "sessions.account",
+      "wire": "sessions_account",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "show",
+              "plan",
+              "switch",
+              "later",
+              "cancel",
+              "armed"
+            ]
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Needed for everything except \"armed\"."
+          },
+          "account": {
+            "type": "string",
+            "description": "The account to switch to, by name or id. For plan, switch, later."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.get",
+      "wire": "sessions_get",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.held",
+      "wire": "sessions_held",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "retry",
+              "forget"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "description": "Which held session, from the list. Needed for retry and forget."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.keys",
+      "wire": "sessions_keys",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "In order, e.g. [\"down\", \"enter\"] or [\"2\"]."
+          }
+        },
+        "required": [
+          "sessionId",
+          "keys"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.list",
+      "wire": "sessions_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "Only sessions in this folder. Omit for all of them."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.rename",
+      "wire": "sessions_rename",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "Up to 120 characters, one line. \"\" resets it."
+          }
+        },
+        "required": [
+          "sessionId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.result",
+      "wire": "sessions_result",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "One session. Omit for every session, which is the overnight report."
+          },
+          "sinceMinutes": {
+            "type": "integer",
+            "description": "Only sessions active in the last N minutes. Ignored when sessionId is given. Omit for all of them."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many sessions to read. Default 8, max 25."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.screen",
+      "wire": "sessions_screen",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.search",
+      "wire": "sessions_search",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "An open project folder. See projects.list."
+          },
+          "query": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "all"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "user",
+                "assistant",
+                "tool"
+              ]
+            },
+            "description": "Only these speakers. Omit for all."
+          },
+          "caseSensitive": {
+            "type": "boolean"
+          },
+          "regex": {
+            "type": "boolean"
+          },
+          "maxHits": {
+            "type": "integer",
+            "description": "Default 20, max 100."
+          }
+        },
+        "required": [
+          "cwd",
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "sessions.send",
+      "wire": "sessions_send",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "Printable characters only, 4000 max."
+          },
+          "submit": {
+            "type": "boolean",
+            "description": "Press return afterwards. Default true."
+          }
+        },
+        "required": [
+          "sessionId",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.start",
+      "wire": "sessions_start",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string",
+            "description": "An open project folder (projects.list)."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Project id; \"independent\" keeps the session separate from its folder."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "gemini",
+              "shell"
+            ]
+          },
+          "account": {
+            "type": "string",
+            "description": "Login to run as, by name or id; omit for the default. It also decides the agent when provider is left out."
+          },
+          "resume": {
+            "type": "boolean",
+            "description": "Continue the folder's most recent conversation."
+          },
+          "conversation": {
+            "type": "string",
+            "description": "Continue exactly this conversation id instead."
+          },
+          "brief": {
+            "type": "string",
+            "description": "The scoped brief: repo, base branch, what to change, what counts as done, what not to touch. 40–8000 characters; needs title."
+          },
+          "title": {
+            "type": "string",
+            "description": "A few words naming the brief; becomes its filename."
+          },
+          "job": {
+            "type": "string",
+            "description": "Kind of job (playbook.read): its playbook row supplies the AI, model, effort, permission and standing instructions. Default: the title, then the default row."
+          },
+          "differ": {
+            "type": "object",
+            "description": "Only to differ from the playbook: {model, effort, permission (ask|plan|auto), instructions, reason}. reason is required. Bypass only comes from the playbook."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "terminal",
+              "chat"
+            ],
+            "description": "chat: default for Claude, Codex and Gemini; supports send, wait, screen and transcript. Use terminal only when needed."
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.stop",
+      "wire": "sessions_stop",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.transcript",
+      "wire": "sessions_transcript",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many messages to return, newest last. Default 40, max 200."
+          },
+          "windowBytes": {
+            "type": "integer",
+            "description": "How many bytes from the end of the transcript to parse. Default 262144, max 4194304."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckCoreCatalogueLiterals.swift"
+    },
+    {
+      "id": "sessions.wait",
+      "wire": "sessions_wait",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "description": "How long to wait. Default 40, max 240."
+          },
+          "after": {
+            "type": "number",
+            "description": "The `sentAt` from sessions.send or sessions.keys. Answers older than this are not counted."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "usage.cost",
+      "wire": "usage_cost",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "An open folder. See projects.list."
+          },
+          "transcriptPath": {
+            "type": "string",
+            "description": "One of that folder’s transcripts, for one session."
+          },
+          "limit": {
+            "type": "number",
+            "description": "How many transcripts to list. Default 20, max 100."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsAppMetadata.swift"
+    },
+    {
+      "id": "usage.read",
+      "wire": "usage_read",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "A session from sessions.list. Omit for every login."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsAppMetadata.swift"
+    },
+    {
+      "id": "usage.refresh",
+      "wire": "usage_refresh",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Ask even when the figures are recent. Default false."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsAppMetadata.swift"
+    },
+    {
+      "id": "windows.dock",
+      "wire": "windows_dock",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "From windows.list or sessions.list."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "windows.list",
+      "wire": "windows_list",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    },
+    {
+      "id": "windows.pop_out",
+      "wire": "windows_pop_out",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "From sessions.list."
+          },
+          "display": {
+            "type": "string",
+            "description": "Optional. A display id (as text) or name from windows.list, or \"main\"."
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "source": "BackendDeckToolsSessionsCatalogue.swift"
+    }
+  ]
+}

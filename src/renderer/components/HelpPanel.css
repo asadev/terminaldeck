@@ -1,0 +1,408 @@
+/* ============================================================================
+   Help — a reading surface.
+
+   Reading matter set like reading matter: one measure, generous leading, and
+   headings that separate by weight and space rather than by a rule under every
+   one. The section rail on the left is the only navigation, and the search
+   field replaces it entirely while a query is active — two ways to filter at
+   once is how a help panel starts feeling like a database.
+
+   The same component is the ⌘? dialog and the Help section of Settings, so
+   nothing in here may reach outside its own box: no negative margins onto a
+   parent's padding, and no sticky offsets tuned to one of the two frames.
+   ============================================================================ */
+
+.help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  max-width: var(--content-measure);
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- search -- */
+
+/* A macOS search field: a filled capsule, no border, the glyph inside it. */
+.help-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.help-search:focus-within {
+  background: var(--fill-secondary);
+}
+
+.help-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+}
+
+.help-input::placeholder {
+  color: var(--text-muted);
+}
+
+.help-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.help-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ body -- */
+
+.help-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-6);
+}
+
+.help-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex-shrink: 0;
+  width: 148px;
+}
+
+.help-nav-item {
+  display: flex;
+  align-items: center;
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-regular);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.help-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.help-nav-item[data-active] {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.help-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.help-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.help-section-hint {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- topics -- */
+
+/* Space between topics, not a rule. A page of help with a line under every
+   heading reads as a form. */
+.help-topic {
+  margin-bottom: var(--sp-8);
+}
+
+.help-topic:last-child {
+  margin-bottom: 0;
+}
+
+.help-topic-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+}
+
+.help-text,
+.help-steps,
+.help-bullets {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--t-body);
+  line-height: var(--lh-loose);
+  color: var(--text-secondary);
+}
+
+.help-steps,
+.help-bullets {
+  padding-left: var(--sp-5);
+}
+
+.help-steps li,
+.help-bullets li {
+  margin-bottom: var(--sp-1);
+}
+
+.help-steps li::marker,
+.help-bullets li::marker {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An aside. A fill and a corner, and nothing drawn around it. */
+.help-note {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
+  color: var(--text-secondary);
+}
+
+/* A command inside a sentence. Tinted, not boxed — a border on every one of
+   these turns a paragraph into a fence. */
+.help-inline-code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+}
+
+.help-code {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow-x: auto;
+}
+
+.help-code code {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.help-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.help-empty {
+  margin: var(--sp-2) 0;
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- shortcuts -- */
+
+.help-keys-group {
+  margin-bottom: var(--sp-6);
+}
+
+.help-keys-title {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.help-keys-hint {
+  margin: var(--sp-05) 0 var(--sp-2);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* One soft block per group, rows separated by the space inside them. */
+.help-keys {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.help-key-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  padding: var(--sp-15) var(--sp-4);
+  border-bottom: none;
+}
+
+.help-key-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+}
+
+.help-flag {
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.help-key-chords {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: var(--sp-15);
+  /* Same lane as the shortcuts sheet, so the column is scannable. */
+  min-width: 132px;
+  justify-content: flex-end;
+}
+
+.help-key-chords kbd {
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.help-or {
+  margin-right: var(--sp-15);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- about -- */
+
+.help-about-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
+}
+
+.help-about-tagline {
+  margin: var(--sp-1) 0 var(--sp-5);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+.help-about-rows {
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.help-about-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  padding: var(--sp-15) var(--sp-4);
+  border-bottom: none;
+  font-size: var(--t-callout);
+}
+
+.help-about-row dt {
+  color: var(--text-muted);
+}
+
+.help-about-row dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+}
+
+.help-copy {
+  height: var(--control-h);
+  margin-bottom: var(--sp-5);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.help-copy:hover {
+  background: var(--fill-secondary);
+}
+
+/* The rail costs more than it gives once the content column is this narrow. */
+@media (max-width: 620px) {
+  .help-body {
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+
+  .help-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+    gap: var(--sp-1);
+  }
+
+  .help-key-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+  }
+
+  .help-key-chords {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+}

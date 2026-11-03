@@ -1,0 +1,38 @@
+# Build output and dependencies
+node_modules
+out/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+pwa/dist/
+macos/build/
+macos/TerminalDeckNative/.build/
+macos/TerminalDeckNative/.swiftpm/
+macos/TerminalDeckNative/.build-*/
+windows/**/bin/
+windows/**/obj/
+windows/TestResults/
+windows/.vs/
+*.user
+
+# Secrets and signing material — never in this repository
+.env
+.env.*
+.npmrc
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.p8
+*.mobileprovision
+*.certSigningRequest
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+._*
+Thumbs.db

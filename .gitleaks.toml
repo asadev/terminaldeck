@@ -1,0 +1,21 @@
+# gitleaks configuration for this repository (https://github.com/gitleaks/gitleaks).
+# The default rules apply. The paths below hold test fixtures, known-answer vectors and the app's own
+# secret-redaction patterns (the literal "-----BEGIN PRIVATE KEY-----" it searches for); none of them is a
+# live credential. Everything else is scanned normally, and the publish script refuses on any finding.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures, known-answer vectors and redaction patterns"
+paths = [
+  '''.*\.test\.(ts|tsx|mjs)$''',
+  '''src/main/remote/sealed\.electron-probe\.ts$''',
+  '''src/main/redact\.ts$''',
+  '''src/main/servers/keyfiles\.ts$''',
+  '''macos/TerminalDeckNative/Tests/.*''',
+  '''macos/TerminalDeckNative/Sources/TerminalDeckBackend/BackendSharedRedact\.swift$''',
+  '''macos/TerminalDeckNative/Sources/TerminalDeckBackend/BackendGitHubTransport\.swift$''',
+  '''windows/tests/.*''',
+  '''windows/src/TerminalDeck\.App/Assets/terminal/terminal\.js$''',
+  '''windows/src/TerminalDeck\.App/Verification/.*''',
+]

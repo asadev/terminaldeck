@@ -1,0 +1,92 @@
+/*
+   The folded half of a store row, and the one line that stands in for it.
+
+   Here rather than in either department's sheet for the reason `StoreLogo.css`
+   gives about its own rules: both halves of the store draw this, and a rule
+   that lived in `BrowserWorkspace.css` would be styling MCP rows from the
+   browser's stylesheet — which is where a shelf ends up looking like two
+   different shops after somebody edits one of them.
+*/
+
+/* ------------------------------------------------------------- one line -- */
+
+/*
+   What a row says about itself in passing: what an extension reaches, how a
+   server runs and what it wants first.
+
+   A line and not a `dl`. The two-column definition grid is right for the twelve
+   facts behind the disclosure — they are looked up, one at a time, by somebody
+   checking one of them — and wrong for the one fact a person reads while
+   scanning, where the label column pushes the answer to a second tab stop and
+   the answer is three words long.
+*/
+.store-rowline {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+}
+
+/* The part that is the answer, against the part that is only naming it. Both on
+   one line, so the row is one line taller rather than two. */
+.store-rowline > b {
+  color: var(--text-secondary);
+  font-weight: inherit;
+}
+
+/* -------------------------------------------------------- the disclosure -- */
+
+.store-more {
+  margin-top: var(--sp-2);
+}
+
+/*
+   The line somebody presses. Sized and coloured like the facts it stands for
+   rather than like a button: it is a way of reading further, and a row with a
+   second button on it competes with the Install that is the point of the row.
+*/
+.store-more-summary {
+  width: fit-content;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.store-more-summary::marker {
+  color: var(--text-muted);
+}
+
+.store-more-summary:hover,
+.store-more[open] > .store-more-summary {
+  color: var(--text-secondary);
+}
+
+/* Open, the facts sit under the line that named them rather than jumping back
+   out to the row's own left edge — so it reads as what the summary opened and
+   not as more row. */
+.store-more-body {
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border);
+  margin-top: var(--sp-1);
+  margin-left: var(--sp-1);
+}
+
+/* On a page there is no fold, so there is nothing to indent from: the facts are
+   the page. See `StoreRowMore.tsx` for why this is not simply `details[open]`. */
+.store-more-open-page {
+  margin-top: var(--sp-2);
+}
+
+/*
+   The first `dl` inside either of these already carries its own top margin —
+   `.bw-store-facts` and `.mcp-store-facts` both set one, because on the shelf
+   they follow the summary paragraph directly. Inside the disclosure the border
+   is what separates them, and the extra gap opened a hole between the line and
+   the facts it opened.
+*/
+.store-more-body > .bw-store-facts:first-child,
+.store-more-body > .mcp-store-facts:first-child {
+  margin-top: 0;
+}

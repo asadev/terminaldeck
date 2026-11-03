@@ -1,0 +1,338 @@
+{
+  "note": "Runtime factory contract facts, read 29 October 2026. Handlers are registered only by complete Core/backend contributions. No page driver is enabled by this snapshot.",
+  "sourceHashes": {
+    "BackendBrowserFactories.swift": "05cde889970c82b7b04f46de3a7e59ce29527d60856a10b663d0d93454a3b747",
+    "BackendBrowserProfilesChannels.swift": "c8d6e7933bbaf81fe635c00fd1c7b1076c14e5c5fd5197699b7292441fc4fa74"
+  },
+  "entries": [
+    {
+      "id": "browser.page",
+      "wire": "browser_page",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "state",
+              "navigate",
+              "back",
+              "forward",
+              "reload",
+              "stop",
+              "zoom",
+              "find",
+              "findstop",
+              "print",
+              "devtools",
+              "useragent",
+              "inspect",
+              "record",
+              "recording",
+              "recordclear",
+              "screenshot",
+              "reveal"
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "factor": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "backwards": {
+            "type": "boolean"
+          },
+          "next": {
+            "type": "boolean"
+          },
+          "keepSelection": {
+            "type": "boolean"
+          },
+          "userAgent": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.windows",
+      "wire": "browser_windows",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "open",
+              "close",
+              "attach",
+              "detach",
+              "reach",
+              "unreach"
+            ]
+          },
+          "window": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "machineName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device",
+              "server"
+            ]
+          },
+          "port": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.open",
+      "wire": "browser_open",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "isolate": {
+            "type": "boolean"
+          },
+          "newWindow": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "url"
+        ]
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.close",
+      "wire": "browser_close",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.read",
+      "wire": "browser_read",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "waitFor": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "textChars": {
+            "type": "integer"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.screenshot",
+      "wire": "browser_screenshot",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.handover",
+      "wire": "browser_handover",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "prompt"
+        ]
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.step",
+      "wire": "browser_step",
+      "tier": "act",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "verb": {
+            "type": "string",
+            "enum": [
+              "click",
+              "type",
+              "select",
+              "check",
+              "press",
+              "submit"
+            ]
+          },
+          "selector": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "Enter",
+              "Tab",
+              "Escape",
+              "Backspace",
+              "Delete",
+              "ArrowDown",
+              "ArrowUp",
+              "ArrowLeft",
+              "ArrowRight"
+            ]
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "verb",
+          "selector"
+        ]
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.profiles",
+      "wire": "browser_profiles",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Default list.",
+            "enum": [
+              "list",
+              "create",
+              "rename",
+              "avatar",
+              "activate",
+              "delete"
+            ]
+          },
+          "profile": {
+            "type": "string",
+            "description": "For rename, avatar, activate and delete: a name or id."
+          },
+          "name": {
+            "type": "string",
+            "description": "For create and rename. Up to 40 characters."
+          },
+          "avatar": {
+            "type": "string",
+            "description": "For avatar: one character, such as an emoji. Empty puts the initial back."
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserProfilesChannels.swift"
+    }
+  ]
+}

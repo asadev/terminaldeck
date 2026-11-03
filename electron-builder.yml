@@ -1,0 +1,378 @@
+appId: dev.terminaldeck.app
+productName: Terminal Deck
+copyright: Copyright © 2026 Asad Iqbal. MIT licensed.
+
+directories:
+  output: release
+  buildResources: build
+
+# The freshly-generated resources — the headless host package (all platforms)
+# and, on Windows, tdconfine.exe — are copied in here rather than by
+# `extraResources`. Both are written seconds before this build runs, and on a
+# Windows runner a file that new is still held by Defender or the indexer: a
+# plain copy throws `EBUSY: resource busy or locked` and fails the whole build,
+# because extraResources copies once with no retry. The hook copies to the same
+# final paths (`resources/headless`, `resources/tdconfine.exe`) with a short
+# retry-with-backoff, so `process.resourcesPath` readers are unchanged and a
+# transient lock is survived rather than fatal. See scripts/after-pack.mjs.
+afterPack: scripts/after-pack.mjs
+
+# Default names carry the product name verbatim — "Terminal Deck-0.1.0-arm64.dmg"
+# — and a space in a release asset becomes %20 in every download URL and every
+# curl command someone pastes. Named from the slug instead.
+#
+# The architecture stays in the name even though only one is built. Left off,
+# electron-builder's default treats x64 as the implicit arch and drops the
+# suffix, so an unsuffixed file would read as the Intel build to anyone who
+# knows that convention. Explicit costs nothing and keeps the door open.
+artifactName: ${name}-${version}-${arch}.${ext}
+
+# Everything the app needs at runtime and nothing else. electron-builder adds
+# production dependencies from package.json automatically; the negations below
+# drop the parts of them that only exist in order to compile the native
+# modules — better-sqlite3/deps alone is the whole SQLite amalgamation, several
+# megabytes of C that a packaged app never reads.
+files:
+  - out/**/*
+  - package.json
+  # The phone client. Built separately by `pwa/`, served by the remote server
+  # off disk — so it must ship, and it must not be inside the asar.
+  - pwa/dist/**/*
+  - '!**/*.map'
+  - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+  - '!**/node_modules/better-sqlite3/{src,deps}/**'
+  - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+  # ALL prebuilds, not just the Windows ones. electron-builder rebuilds
+  # build/Release/pty.node against the target architecture and node-pty loads
+  # that first, so the folder is a fallback that ships every platform at once.
+  # These were one blanket `prebuilds/**` exclusion, which was right for macOS
+  # and quietly wrong for Windows: it also deleted win32-x64, taking with it the
+  # fallback that would have covered an incomplete rebuild — and silently, since
+  # node-pty tries build/Release first and finds it.
+  #
+  # darwin-x64 is excluded everywhere because a nested x86_64 binary is enough
+  # for macOS to flag the whole bundle: "App Update Required — This version of
+  # Terminal Deck will not open in macOS 28", attributed to the parent app. That
+  # is the bug this line exists for; delete or mistype it and it returns.
+  #
+  # The .pdb files are 28.5 MB of the 30 MB Windows slice — debug symbols no
+  # user downstream reads.
+  - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
+  - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+  # The phone apps and the relay, excluded by name even though the allowlist
+  # above never selects them.
+  #
+  # An allowlist decides what ships; it does not stop electron-builder walking
+  # the tree to evaluate it. Those trees are build output — other toolchains'
+  # caches once weighed ~700 MB between them, and
+  # a packaging run once died outright on a 4.2 GB `CompilationCache.noindex`
+  # file that Xcode was writing at that moment:
+  #
+  #   ENOBUFS / size exceeded, at a DerivedData/.../v8.data file
+  #
+  # It left a half-written Electron.app behind in release/, which is a worse
+  # failure than a slow one — a partial bundle looks like a build. Naming these
+  # keeps the walk out of them entirely, so packaging no longer depends on
+  # whether someone happens to be compiling for a phone at the same moment.
+  # The headless host, which the desktop app carries as a *resource* rather than
+  # inside the asar. `out/headless` is the vite build and `out/headless-package`
+  # is the tarball plus installer that `extraResources` copies in below — both
+  # are already selected by `out/**/*`, and both would otherwise be duplicated
+  # into app.asar where nothing can read them: `host.ts` streams the tarball off
+  # disk over SFTP, and a path inside an archive is not a file.
+  - '!out/headless/**'
+  - '!out/headless-package/**'
+  # The npm name-claim placeholder. Published separately, ships nothing.
+  - '!packages/**'
+  # The simulator engine (`@toolingtools/simview`, an optional dependency that
+  # only installs on Apple-silicon Macs). Its own browser preview and agent
+  # skills are not used: this app has its own Simulators page and Annotate.
+  - '!**/node_modules/@toolingtools/simview/{app,skills,assets}/**'
+  # Its command line is a Bun executable that statically links LGPL-2
+  # JavaScriptCore, and redistributing it is a licence decision nobody has made
+  # yet — see THIRD-PARTY-LICENSES.md. Without it React Native apps are read
+  # through the native accessibility tree: labels and test ids, no component
+  # names or source files. `src/main/devices/session.ts` checks for it.
+  - '!**/node_modules/@toolingtools/simview/bin/simview'
+
+# The headless host, beside the asar rather than inside it.
+#
+# Not a packaging preference: `src/main/servers/host.ts` hands the tarball to
+# `putFile`, which streams it off disk over SFTP, and a path inside app.asar is
+# not a file anything can stream. `scripts/build-headless.mjs` writes both files,
+# and `dist:mac`/`dist:win` run it before electron-builder — if it has not run,
+# the `afterPack` hook copies nothing, the app builds, and the server page draws
+# no Install button with a sentence saying this build carries no package. That
+# is the honest failure, but it is a quiet one, so the build step is not
+# optional.
+#
+# This is copied by the `afterPack` hook (see top of file) rather than by
+# `extraResources`, because on Windows the copy of these seconds-old files hits
+# a transient Defender/indexer lock (EBUSY) that only a retry survives. The hook
+# lands it at the same `resources/headless`, so nothing downstream changes.
+
+asar: true
+# electron-builder detects native modules and unpacks them on its own; naming
+# them keeps that from being a silent assumption. node-pty needs more than its
+# .node file — spawn-helper is a separate executable that it forks.
+asarUnpack:
+  # Served over HTTP by the remote server. Reading it out of the asar works for
+  # small files and gets awkward for streamed ones; on disk it is just a folder.
+  - 'pwa/dist/**'
+  - '**/*.node'
+  - '**/node_modules/node-pty/**'
+  - '**/node_modules/better-sqlite3/**'
+  # The simulator engine is programs, not a library: spawn() cannot start an
+  # executable inside an archive, and its xctest-provider is a folder of app
+  # bundles the engine hands to an iOS Simulator by path.
+  - '**/node_modules/@toolingtools/simview/**'
+  # Stays Fixed, run by path as Node by this app's own executable
+  # (`ELECTRON_RUN_AS_NODE=1`, see `src/main/staysfixed/engine.ts`). Node's ES
+  # module loader cannot read a module out of an archive, and Stays Fixed hands
+  # its own files to other programs (`osascript`, a child Node, ssh). Its three
+  # dependencies are unpacked with it because Node resolves them from the
+  # unpacked copy by walking up `app.asar.unpacked/node_modules`, which never
+  # looks inside `app.asar`. WIRING-staysfixed.md has the longer version.
+  - '**/node_modules/staysfixed/**'
+  - '**/node_modules/playwright-core/**'
+  - '**/node_modules/pngjs/**'
+  - '**/node_modules/pixelmatch/**'
+
+mac:
+  # The platform `files` list REPLACES the top-level allowlist rather than adding
+  # to it, and that has quietly been true since this file was written.
+  #
+  # It went unnoticed because the repository had nothing large outside `out/`:
+  # every build shipped the whole tree and nobody looked, because the whole tree
+  # was small. The night large sibling folders appeared, the mac build went from
+  # ~120 MB to **1.0 GB** — an `app.asar` of 790 MB, mostly files that had no
+  # business in the app, plus 3,424 from `node_modules`.
+  #
+  # So the allowlist is restated here in full. It is duplication, and the
+  # alternative is a platform build that silently ignores it.
+  files:
+    - out/**/*
+    - package.json
+    - pwa/dist/**/*
+    - '!**/*.map'
+    - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+    - '!**/node_modules/better-sqlite3/{src,deps}/**'
+    - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+    - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
+    - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+    - '!**/node_modules/node-pty/prebuilds/win32-*/**'
+    # The headless host: carried as a resource, never inside the asar. See the
+    # top-level list for why.
+    - '!out/headless/**'
+    - '!out/headless-package/**'
+    - '!packages/**'
+    # The simulator engine (`@toolingtools/simview`, an optional dependency that
+    # only installs on Apple-silicon Macs). Its own browser preview and agent
+    # skills are not used: this app has its own Simulators page and Annotate.
+    - '!**/node_modules/@toolingtools/simview/{app,skills,assets}/**'
+    # Its command line is a Bun executable that statically links LGPL-2
+    # JavaScriptCore, and redistributing it is a licence decision nobody has made
+    # yet — see THIRD-PARTY-LICENSES.md. Without it React Native apps are read
+    # through the native accessibility tree: labels and test ids, no component
+    # names or source files. `src/main/devices/session.ts` checks for it.
+    - '!**/node_modules/@toolingtools/simview/bin/simview'
+
+  # Apple silicon only. Not universal, and no separate Intel build.
+  #
+  # Rosetta is not the reason, and it is worth being explicit because it is the
+  # thing everyone assumes: Rosetta translates Intel to Apple silicon, never the
+  # reverse, so dropping x64 costs Apple silicon users nothing whatsoever. The
+  # reason is that macOS 27 does not run on any Intel Mac. An x64 slice would
+  # serve only the four Intel models that reach macOS 26 Tahoe — 2019-2020
+  # hardware, last sold June 2023 — and nobody else, ever again.
+  #
+  # It also had a cost. CI runs on arm64, so an x64 slice could only ever be
+  # cross-built, and node-pty and better-sqlite3 both compile from source
+  # against Electron's ABI, which is exactly where cross-arch builds break. It
+  # was never launched on real Intel hardware and could not be. Worse, an Apple
+  # silicon user who picked the x64 disk image got a system notification saying
+  # the app will not open in macOS 28, plus a ~30-second first launch while
+  # Rosetta translated Chromium.
+  #
+  # One architecture also removes the latest-mac.yml hazard: on macOS the update
+  # manifest carries no arch suffix, so two arches built in two invocations
+  # overwrite each other's manifest silently.
+  target:
+    - target: dmg
+      arch: [arm64]
+    # The zip is what electron-updater downloads. A DMG cannot be applied as an
+    # update, so shipping the DMG alone would mean shipping no updates.
+    - target: zip
+      arch: [arm64]
+
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+
+  # Electron 41 itself refuses to launch below this, so claiming anything lower
+  # would turn a clear Finder refusal into a crash on launch.
+  minimumSystemVersion: '12.0'
+  darkModeSupport: true
+
+  # Signing is configured, only the identity is missing. To sign later: supply
+  # CSC_LINK + CSC_KEY_PASSWORD (or CSC_NAME) and delete the `identity: null`
+  # line. Nothing else here has to change.
+  #
+  # identity is null because there is no Developer ID on this machine, and
+  # electron-builder then signs nothing at all — it logs "skipped macOS code
+  # signing". What the binaries carry is the ad-hoc signature Apple's linker put
+  # on Electron itself, which is enough for the app to launch on Apple silicon
+  # but not enough for `codesign --verify` to pass on the bundle, and nowhere
+  # near enough for Gatekeeper. BUILDING.md spells out what that means for
+  # anyone who downloads it.
+  #
+  # Never reach for `codesign --deep` to fix a signing problem: it walks
+  # Electron's nested frameworks in the wrong order and produces a bundle that
+  # will not launch. It has already happened once here.
+  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  # Keep SimView's own signatures on its simulator-side test runner. The engine
+  # checks those files against a manifest of SHA-256 hashes before it starts
+  # them inside a Simulator, so re-signing them would make it fall back to the
+  # plainer accessibility tree for every third-party app. They are iOS
+  # Simulator binaries and never run on the Mac itself. `simview-core` and the
+  # probe are signed as usual (checked: re-signed with the inherit entitlements
+  # and hardened runtime, the engine still starts, captures and screenshots).
+  signIgnore:
+    - '/node_modules/@toolingtools/simview/bin/xctest-provider/'
+
+  extendInfo:
+    NSSupportsAutomaticGraphicsSwitching: true
+    # Projects live in the user's own folders, so macOS will ask for access.
+    # These are the sentences it shows in that prompt.
+    NSDesktopFolderUsageDescription: Terminal Deck opens coding projects stored on your Desktop.
+    NSDocumentsFolderUsageDescription: Terminal Deck opens coding projects stored in your Documents folder.
+    NSDownloadsFolderUsageDescription: Terminal Deck opens coding projects stored in your Downloads folder.
+    NSRemovableVolumesUsageDescription: Terminal Deck opens coding projects stored on external drives.
+    # Without this key macOS *terminates* the process the first time anything
+    # touches the microphone — it does not prompt and it does not fail, it kills
+    # the app. It is declared here rather than at the moment dictation is built
+    # because that failure is silent from inside the renderer, and a crash on
+    # first use is not something to discover from a bug report. The microphone
+    # itself is still gated behind a working transcription key: see
+    # `src/main/voice.ts`.
+    NSMicrophoneUsageDescription: Terminal Deck records your voice only while you hold the microphone button, and sends it to the transcription service whose key you set.
+
+win:
+  # Restated in full for the same reason as `mac:` above: a platform `files`
+  # list REPLACES the top-level allowlist rather than adding to it. This block
+  # used to be the single negation below, which meant the Windows build had no
+  # allowlist at all — electron-builder falls back to "everything except what is
+  # negated", so it shipped the entire repository.
+  #
+  # It has never actually bitten, and only by luck: the Windows installer is
+  # built in CI from a clean checkout, and the large sibling folders were untracked,
+  # so the one tree large enough to notice was never there to be copied. The
+  # 0.1.2 installer is 107 MB because CI could not see the 700 MB it would
+  # otherwise have swallowed. Build Windows locally on a working tree — or
+  # commit the phone apps — and it becomes the same 1.0 GB asar that the macOS
+  # build produced the night the large sibling folders appeared.
+  #
+  # So this is a latent copy of a bug already paid for once on the other
+  # platform, fixed the same way rather than left to be rediscovered.
+  files:
+    - out/**/*
+    - package.json
+    - pwa/dist/**/*
+    - '!**/*.map'
+    - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+    - '!**/node_modules/better-sqlite3/{src,deps}/**'
+    - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+    # Both macOS slices, not just x64 — a Windows installer has no use for
+    # either. The mirror of the `win32-*` exclusion in the `mac:` block.
+    - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
+    - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+    # The headless host: carried as a resource, never inside the asar. See the
+    # top-level list for why.
+    - '!out/headless/**'
+    - '!out/headless-package/**'
+    - '!packages/**'
+    # Mac-only programs; an optional dependency that is never installed on a
+    # Windows runner, excluded by name in case a local build has it.
+    - '!**/node_modules/@toolingtools/simview/**'
+
+  # x64 only, and for the mirror image of the macOS reasoning. There, Rosetta
+  # translates Intel to Apple silicon and never the reverse, so arm64 reaches
+  # everyone. Here the emulation runs the other way — Windows 11 on ARM runs x64
+  # — so one x64 build reaches every Windows machine alive, Snapdragon included.
+  # An arm64 slice would buy those laptops native speed and nothing else, and
+  # there is no ARM Windows machine here to launch the result on.
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+
+  # The confinement launcher and the headless package are copied by the
+  # `afterPack` hook (see top of file), not by `extraResources`.
+  #
+  # `tdconfine.exe` is an executable and `CreateProcess` cannot run a file that
+  # only exists inside an archive; it is what applies the AppContainer to a
+  # session started from a device — see `src/main/confine/appcontainer.ts` — and
+  # `confine/tools.ts` looks for it at `process.resourcesPath`, which is exactly
+  # where the hook still puts it (`resources/tdconfine.exe`). `build.ps1`
+  # compiles it and the release workflow runs that step **before**
+  # electron-builder; if the file is not there the hook copies nothing, the
+  # installer builds anyway, and Windows sessions report themselves unconfined —
+  # the honest, quiet failure, so the CI step is not optional.
+  #
+  # It moved off `extraResources` for the same reason the headless package did:
+  # both are compiled/written seconds before the build, and on a Windows runner
+  # Defender or the indexer still holds the fresh file, so a single-shot copy
+  # throws EBUSY and fails the whole build. The hook retries the copy.
+
+nsis:
+  # Both targets emit .exe, so each needs its own name. The inherited pattern
+  # would name them identically and whichever finished second would overwrite
+  # the first — silently, since both are legitimate outputs of one run.
+  artifactName: ${name}-${version}-${arch}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${name}-${version}-${arch}-portable.${ext}
+
+dmg:
+  title: ${productName} ${version}
+  # Ours, not electron-builder's. There is no way to have no background at all —
+  # `background: null` falls through to a stock image bundled inside the npm
+  # package — so the choice is our artwork or theirs. Regenerate with
+  # `npm run art`; the geometry below is what build/art/dmg-background.mjs
+  # draws against, so the two move together.
+  background: build/background.tiff
+  window:
+    width: 600
+    height: 400
+  iconSize: 110
+  contents:
+    - x: 155
+      y: 180
+      type: file
+    - x: 445
+      y: 180
+      type: link
+      path: /Applications
+  # There is no identity to sign the disk image with either, and attempting it
+  # fails the build on its very last step.
+  sign: false
+
+# Where a release would go. Declaring it is what puts app-update.yml inside the
+# bundle, which is where electron-updater reads the feed from. It does not
+# publish anything by itself: every packaging script in package.json passes
+# `--publish never`, and publishing stays a separate, deliberate act.
+publish:
+  provider: github
+  owner: asadev
+  repo: terminaldeck
+  releaseType: draft

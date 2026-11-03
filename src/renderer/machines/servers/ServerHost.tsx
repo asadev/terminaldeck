@@ -1,0 +1,775 @@
+import { useCallback, useEffect, useState } from 'react'
+import { Button } from '../../settings/controls'
+import { ServerTerminal } from './ServerTerminal'
+import { ServerHostRelayControl } from './ServerHostRelayControl'
+import { ServerConnectGitHub } from './ServerConnectGitHub'
+import { BRAND } from '../../../shared/brand'
+import { hostUpdateAvailable } from '../../../shared/host-version'
+import { useMachines } from '../useMachines'
+import { asHostOffer, asHostState, succeeded } from './types'
+import type { HostOffer, HostRunning, HostState, Server, ServersBridge } from './types'
+
+/**
+ * Running sessions **on** this server, from the page that is already looking at
+ * it.
+ *
+ * ## What he asked for
+ *
+ * > *"for the headless part … instead of going inside a server and doing some
+ * > stuff there … we will directly install through from our application, from
+ * > the main application we can give some steps there for installation, they
+ * > will click on install and it will install … and it should actually be
+ * > installed in the connected server. If we want to uninstall we can
+ * > uninstall."*
+ *
+ * ## Why this is a section here and not a screen of its own
+ *
+ * Because a second screen would be a second list of the same machines. This page
+ * already holds the connection, already has the terminal, and already has the
+ * *other* install panel directly above it — `ServerSetup`, which puts a coding
+ * agent on the same box. Somebody who has just installed Claude Code on a server
+ * and now wants to reach it from their phone is answering one more question
+ * about the machine in front of them, not opening a different feature.
+ *
+ * The two sections deliberately look the same and are deliberately not merged:
+ * an agent is a program a session runs, and this is what runs the session. They
+ * fail independently, they are removed independently, and a server can honestly
+ * have either without the other.
+ *
+ * ## Why the whole thing happens in the terminal
+ *
+ * `host.ts` has the full argument. The short version has one measured fact in
+ * it that is not a matter of taste: **`terminaldeck pair` refuses to finish
+ * without a tty**, by design — it prints the code, says *"Not a terminal, so
+ * nothing can be confirmed here"*, and stops, because *"pretending to wait and
+ * then approving nothing would leave a device paired and permanently locked
+ * out."* So the install and the pairing run in a real terminal, which is also
+ * the honest progress bar for a two-minute install on somebody's server.
+ *
+ * ## Why there is no button here that spends a pairing code
+ *
+ * There was one, and it is the reason this section was rewritten. The install
+ * ended by printing a code, this panel drew it beside **Link it to this
+ * computer**, and by the time anybody had read the panel the code was dead — a
+ * code lives about a minute. Pressing it asked the relay for a machine that had
+ * stopped showing it and answered with a sentence telling him to check digits he
+ * had never typed. A control that looks like it works and does not is the one
+ * thing §4.1 forbids outright, and this was the purest example of it in the app.
+ *
+ * So the code is gone from this screen for the machine this app is running on:
+ * installing links this computer, and `ServerHosts.link` in main does it without
+ * ever putting the code on a state a window can read. What is left here is a
+ * code for a **phone** — minted only by a press that asks for one, drawn only
+ * while the run that minted it is on screen, and never carrying a button,
+ * because the only thing that can spend it is somebody's other device.
+ *
+ * ## Every sentence on screen was written on the other side
+ *
+ * `offer.line`, `offer.reach`, `offer.why`, `offer.consequence`,
+ * `offer.removes` and `state.line` all come from `servers/host.ts`, beside the
+ * code that performs the work — §4.3. This file composes none of them, for the
+ * reason `types.ts` gives: a screen that wrote its own would be describing work
+ * it does not do, and the two would drift.
+ *
+ * ## What is deliberately not drawn
+ *
+ * A **Sign in**-shaped control for the copilot on a server. Not because a server
+ * has no copilot — it has one now: `headless/host.ts` assembles a full copilot
+ * (`startHeadlessCopilot`) and advertises it to the owner's own devices, and
+ * {@link SERVER_COPILOT} says so in this pane's words. It is not drawn *here*
+ * because this is the install pane; a copilot is reached from the copilot's own
+ * surface once the device is paired, not from the panel that put the host on the
+ * box. The guest boundary is stated rather than left to the wire, because on it
+ * *"you were approved as a guest"* and *"this host has no copilot"* arrive as
+ * the same absence.
+ */
+export function ServerHost({
+  server,
+  bridge,
+  connected,
+}: {
+  server: Server
+  bridge: ServersBridge | null
+  /** False while the page is still dialling. Nothing is asked of a server we have not reached. */
+  connected: boolean
+}) {
+  const [offer, setOffer] = useState<HostOffer | null>(null)
+  const [state, setState] = useState<HostState | null>(null)
+  const [running, setRunning] = useState<'install' | 'link' | 'pair' | null>(null)
+  const [asking, setAsking] = useState<'install' | 'remove' | null>(null)
+  const [alsoData, setAlsoData] = useState(false)
+  const [refusal, setRefusal] = useState('')
+
+  /*
+   * The machines this desktop is paired with, read here so a server that is one
+   * of them can be managed **over the relay** — the client half of "the relay is
+   * the network". `useMachines` hands back only the machines whose link is online
+   * (`reachableMachines`), which is exactly the set the relay-control card and the
+   * Connect-GitHub card below may be drawn for: a box that dropped off the relay
+   * cannot be restarted over it, and a card over one would be a control that
+   * reaches nothing. The correlation to a particular machine is by the name the
+   * main process resolved from the host id that server prints — `offer.linkedAs`,
+   * built from `MachinesIpc.linkStanding` — see the render below.
+   */
+  const machines = useMachines()
+
+  const look = useCallback(() => {
+    if (!bridge?.serverHost) return
+    void bridge.serverHost(server.id).then(
+      (raw) => {
+        if (!succeeded(raw)) return
+        const read = asHostOffer((raw as { offer?: unknown }).offer)
+        if (read === null) return
+        setOffer(read)
+        // Seeded from the same answer rather than left empty, so an install
+        // that was already in flight when this page opened shows its line
+        // immediately instead of after the next push.
+        setState(read.state)
+      },
+      () => undefined,
+    )
+  }, [bridge, server.id])
+
+  useEffect(() => {
+    if (connected) look()
+  }, [connected, look])
+
+  /*
+   * The push, not a timer. An install fetches a Node runtime and compiles a
+   * native module, so it ends at a moment this side could never have asked
+   * about — which is the standing rule paid in the one place on this section
+   * where something genuinely changes while nobody presses anything.
+   */
+  useEffect(() => {
+    if (!bridge?.onServerHost) return
+    return bridge.onServerHost((raw) => {
+      const read = asHostState(raw)
+      if (read === null || read.serverId !== server.id) return
+      setState(read)
+      // Finished, one way or the other: what is on that server has changed, so
+      // the lines above are now describing a machine that no longer exists.
+      if (read.step === 'done' || read.step === 'idle' || read.step === 'failed') look()
+    })
+  }, [bridge, server.id, look])
+
+  /** The terminal is open; start whichever of the three presses opened it. */
+  const begin = useCallback(
+    (shellId: string) => {
+      if (!bridge || running === null) return
+      const call =
+        running === 'install'
+          ? bridge.installHostOnServer?.(server.id, shellId)
+          : running === 'link'
+            ? bridge.linkHostToThisComputer?.(server.id, shellId)
+            : bridge.pairHostOnServer?.(server.id, shellId)
+      if (call === undefined) return
+      void call.then((raw) => {
+        if (succeeded(raw)) return
+        setRefusal(readSentence(raw))
+      })
+    },
+    [bridge, server.id, running],
+  )
+
+  const stop = useCallback(() => {
+    setRunning(null)
+    void bridge?.cancelServerHost?.(server.id)
+  }, [bridge, server.id])
+
+  if (bridge === null || bridge.serverHost === undefined) return null
+  if (offer === null) return null
+
+  const controls = hostControls(offer, running !== null)
+  const here = controls.here
+  const step = state?.step ?? 'idle'
+  const working = step !== 'idle' && step !== 'done' && step !== 'failed'
+
+  /*
+   * This server, as one of the online machines this desktop is paired with — or
+   * null. The join is `offer.linkedAs`, the name the main process resolved from
+   * the host id that server prints in its own status (`MachinesIpc.linkStanding`),
+   * matched against the machine list `useMachines` already holds. Null when this
+   * server is not a machine, or is one that is offline over the relay, and then
+   * neither relay card is drawn — the SSH controls above are the whole of it.
+   *
+   * The two cards then self-gate a second time on the *capability* each needs, so
+   * a machine that is a headless server but was paired before it advertised these
+   * verbs shows the SSH page exactly as it was, never a control that reaches
+   * nothing.
+   */
+  const linkedMachine =
+    offer.linkedAs === null
+      ? null
+      : machines.machines.find((row) => row.machine.name === offer.linkedAs) ?? null
+  const linkedCapabilities = linkedMachine?.link?.capabilities ?? []
+  const canRelayControl = linkedMachine !== null && linkedCapabilities.includes('host.control')
+  const canConnectGitHub = linkedMachine !== null && linkedCapabilities.includes('github')
+
+  return (
+    <>
+    <section className="servers-setup servers-host">
+      {/* What it is for, in the words of what a person gets. The product's own
+          name is not the heading, because "install the host" answers a question
+          nobody asked until they know what a host does. */}
+      <h3 className="servers-setup-heading">Sessions on this server</h3>
+
+      <div className="servers-setup-top">
+        <p className="servers-setup-say">{state !== null && working ? state.line : offer.line}</p>
+        <div className="servers-setup-ask">
+          {controls.install && (
+            <Button tone="primary" onClick={() => setAsking('install')}>
+              Set it up
+            </Button>
+          )}
+          {/*
+            * Update, beside Set it up rather than instead of it — the two never
+            * appear together, because one is offered only when there is no host
+            * and the other only when there is one and it is behind.
+            *
+            * It runs the **install** path, which is the point: `installHostOnServer`
+            * stages this build's own release over the connection already open, so
+            * update and install cannot end a server on two different versions.
+            * The version is named on the button, since "Update" with no number is
+            * a control nobody can judge before pressing it.
+            */}
+          {controls.update !== null && (
+            <Button tone="primary" onClick={() => setAsking('install')}>
+              Update it to {controls.update}
+            </Button>
+          )}
+          {controls.link && (
+            <Button
+              tone="primary"
+              onClick={() => {
+                setRefusal('')
+                setRunning('link')
+              }}
+            >
+              Link this computer
+            </Button>
+          )}
+          {controls.pair && (
+            <Button
+              onClick={() => {
+                setRefusal('')
+                setRunning('pair')
+              }}
+            >
+              Show a code for a phone
+            </Button>
+          )}
+          {controls.remove && (
+            /* Named, not "Remove it" — "it" beside a list of a person's own
+               websites reads as delete-the-server. This says what actually goes:
+               our host, off that machine. Word-for-word the phone's own button
+               (`HostProbe.removeLabel` = "Remove {Brand.name} from this
+               server"), through the one place the name lives. */
+            <Button tone="danger" onClick={() => setAsking('remove')}>
+              Remove {BRAND.name} from this server
+            </Button>
+          )}
+          {controls.stop && <Button onClick={stop}>Stop</Button>}
+        </div>
+      </div>
+
+      {/* The reason there is no button, in the server's own terms. Never a
+          greyed control with nothing to say for itself. */}
+      {controls.why !== null && <p className="servers-card-why">{controls.why}</p>}
+      {controls.reach !== null && <p className="servers-card-why">{controls.reach}</p>}
+      {/* Said rather than implied by the missing button. A section that simply
+          stopped offering to link would leave somebody wondering whether it had
+          ever happened; this names the row it is in.
+
+          Two sentences and never both, because they are two different worlds:
+          one machine this app is talking to, and one machine it has a row for
+          and cannot reach. The second used to be drawn as the first. */}
+      {controls.linkedAs !== null && (
+        <p className="servers-card-why">
+          {controls.away ? awayLine(controls.linkedAs) : linkedLine(controls.linkedAs)}
+        </p>
+      )}
+      {/*
+        The address for a phone.
+
+        Drawn rather than hidden behind a press, because unlike the pairing code
+        below it there is nothing to mint: this value came back with the same
+        `servers:host:look` that drew this panel, and a button that reveals data
+        already in hand is ceremony that hides the one thing somebody came here
+        for. His complaint about the shipped build was, exactly, *"i dont see any
+        option there to pair it with server"* — so the answer is not another
+        control to find.
+
+        Above the pairing code and above the terminal, because it is now the
+        ordinary route and the code is the fallback.
+      */}
+      {here && <ServerAddress address={offer.host.address} running={offer.host.running} />}
+
+      {here && <p className="servers-card-why">{SERVER_COPILOT}</p>}
+
+      {/* Every step that has finished, in order, each already a sentence. This
+          is the answer to the complaint the whole feature exists for: a person
+          who looked away comes back to what happened, not to a spinner. */}
+      {state !== null && state.done.length > 0 && (
+        <ol className="servers-host-steps">
+          {state.done.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ol>
+      )}
+
+      {state !== null && state.detail !== '' && <p className="servers-card-why">{state.detail}</p>}
+      {refusal !== '' && <p className="servers-card-why">{refusal}</p>}
+
+      {/*
+        The code for a phone — drawn only while the run that minted it is still
+        on screen.
+
+        That condition is the honest one rather than a tidy one. The code lives
+        inside the `pair` process sitting in the terminal below; closing that
+        terminal ends the process and the code with it, and a code left on the
+        page afterwards would be a number that looks usable and is not. There is
+        no countdown here for the same reason there is no expiry timer: the
+        thing that decides is the process, not a clock this side runs.
+
+        Only the `pair` press can put a code here at all: `ServerHosts.link`
+        never writes one onto its state, so an install and a link draw nothing
+        here even for the second the code exists in main.
+      */}
+      {running === 'pair' && state?.code !== null && state?.code !== undefined && (
+        <PairingCode code={state.code} />
+      )}
+
+      {asking === 'install' && (
+        <div className="servers-setup-ask-first">
+          {/*
+            Written where the work is implemented, and rendered here unchanged —
+            one paragraph per blank line. Splitting is not composing: the words
+            and their order are still `host.ts`'s, and before this the whole
+            thing arrived as a single run-on because HTML folds a newline into a
+            space. A sentence somebody has to read twice to find the point of is
+            a sentence that will not be read.
+          */}
+          {offer.consequence.split('\n\n').map((para) => (
+            <p className="settings-prose" key={para.slice(0, 32)}>
+              {para}
+            </p>
+          ))}
+          <div className="servers-card-actions">
+            <Button
+              tone="primary"
+              onClick={() => {
+                setAsking(null)
+                setRefusal('')
+                setRunning('install')
+              }}
+            >
+              Install
+            </Button>
+            <Button onClick={() => setAsking(null)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {asking === 'remove' && (
+        <div className="servers-setup-ask-first">
+          <p className="settings-prose">
+            {alsoData ? offer.removes.withData : offer.removes.keepData}
+          </p>
+          <label className="servers-host-also">
+            <input
+              type="checkbox"
+              checked={alsoData}
+              onChange={(event) => setAlsoData(event.currentTarget.checked)}
+            />
+            {/* The sentence above changes with this box, so the label can be
+                short: what ticking it does is stated in full, not summarised. */}
+            <span>Remove what it stored on this server as well</span>
+          </label>
+          <div className="servers-card-actions">
+            <Button
+              tone="danger"
+              onClick={() => {
+                setAsking(null)
+                setRefusal('')
+                void bridge.removeHostFromServer?.(server.id, alsoData).then(
+                  (raw) => {
+                    if (!succeeded(raw)) setRefusal(readSentence(raw))
+                    look()
+                  },
+                  () => look(),
+                )
+              }}
+            >
+              Remove it
+            </Button>
+            <Button onClick={() => setAsking(null)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {running !== null && (
+        <div className="servers-setup-terminal">
+          <ServerTerminal serverId={server.id} bridge={bridge} onOpened={begin} onEnded={stop} />
+        </div>
+      )}
+
+      {/* The host's own status, verbatim and behind a door, because it is the
+          most useful thing on this screen for the ten minutes a year somebody
+          needs it and noise for the rest. Nothing here reformats it: it is the
+          same text `terminaldeck status` prints on that machine, so a paste of
+          it into a bug report says exactly what the person saw. */}
+      {here && offer.host.status !== '' && (
+        <details className="servers-host-status">
+          <summary>What it says about itself</summary>
+          <pre>{offer.host.status}</pre>
+        </details>
+      )}
+    </section>
+
+    {/*
+      Manage the host over the relay, and connect its GitHub — both for a server
+      that is a connected machine, both reaching it independently of its SSH
+      address. "The relay is the network": these are exactly the two cards a
+      phone shows on the same page (`HostRelayControlView`, `ConnectGitHubView`),
+      ported here. Each is drawn only when the machine is online and advertised
+      the verb it needs, so an SSH-only server, an older host, or a guest gets the
+      page it always had. Sessions on this server has no relay Restart of its own,
+      so there is never a second one to hide.
+    */}
+    {canRelayControl && linkedMachine !== null && (
+      <ServerHostRelayControl machineId={linkedMachine.machine.id} bridge={machines.bridge} />
+    )}
+    {canConnectGitHub && linkedMachine !== null && (
+      <ServerConnectGitHub machineId={linkedMachine.machine.id} bridge={machines.bridge} />
+    )}
+    </>
+  )
+}
+
+/**
+ * The address of that server, for a device that has never met it.
+ *
+ * ## Why this is the screen that was missing
+ *
+ * The wire for signing in to a server from a phone shipped complete — `enroll`,
+ * the SSH verification, the credential, the roster — and no client had a screen
+ * that could start it, because there was nothing valid to put in the form. A
+ * first connection is a Noise IK handshake and IK needs the machine's X25519
+ * **public key** up front; the two strings a host printed were a host id and a
+ * fingerprint, and both are one-way hashes. This is the value that closes that,
+ * and this panel is where somebody standing in front of a server they just
+ * installed will look for it.
+ *
+ * ## Copyable, and selectable whether or not the copy works
+ *
+ * The value is a hundred and eighty characters, so reading it aloud is not a
+ * route and Copy is the only real affordance. But a Copy button that fails
+ * silently is the dead control §4.1 forbids, and `navigator.clipboard` is a
+ * permission and a `Promise` rather than a certainty — so a refusal says so, and
+ * the text is `user-select: text` underneath, which is the route that cannot
+ * fail.
+ *
+ * ## And it says it is not a secret
+ *
+ * A long random-looking token gets treated as a credential unless it says
+ * otherwise, and somebody who will not paste a thing into a chat with themselves
+ * cannot use this feature. It carries a public key, a public name at a relay,
+ * and the URL of a service this product assumes is hostile; the gate is the SSH
+ * login `enroll` checks against that server's own sshd.
+ */
+export function ServerAddress({ address, running }: { address: string; running: HostRunning }) {
+  const [said, setSaid] = useState<'' | 'copied' | 'refused'>('')
+
+  // Cleared on a timer so the button goes back to offering the thing it does,
+  // and cleared on unmount so a panel that closed mid-copy does not set state on
+  // a component that is gone.
+  useEffect(() => {
+    if (said === '') return
+    const timer = setTimeout(() => setSaid(''), 4000)
+    return () => clearTimeout(timer)
+  }, [said])
+
+  const copy = useCallback(() => {
+    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+    if (!clipboard?.writeText) {
+      setSaid('refused')
+      return
+    }
+    void clipboard.writeText(address).then(
+      () => setSaid('copied'),
+      () => setSaid('refused'),
+    )
+  }, [address])
+
+  if (address === '') return <p className="servers-card-why">{noAddressLine(running)}</p>
+
+  return (
+    <div className="servers-host-address">
+      <div className="servers-host-address-top">
+        <span className="servers-host-address-label">Address for a phone</span>
+        <Button onClick={copy}>{said === 'copied' ? 'Copied' : 'Copy'}</Button>
+      </div>
+      <p className="servers-host-address-value">{address}</p>
+      {said === 'refused' && (
+        <p className="servers-card-why">
+          This window could not reach the clipboard. Select the address above and copy it.
+        </p>
+      )}
+      <p className="servers-card-why">{ADDRESS_HOW}</p>
+      <p className="servers-card-why">{ADDRESS_NOT_A_SECRET}</p>
+    </div>
+  )
+}
+
+/** What to do with it, named as a step in the app rather than as a concept. */
+export const ADDRESS_HOW =
+  'Paste it into the app on your phone or another computer: Add a server, then sign in with a ' +
+  'username and password or key this server already accepts.'
+
+/**
+ * Said here rather than left to be assumed, because the assumption is expensive
+ * in both directions: somebody who thinks this is a credential will not paste it
+ * to themselves, and somebody who later finds one in a chat log should not spend
+ * an afternoon rotating keys over it.
+ */
+export const ADDRESS_NOT_A_SECRET =
+  'This address is not a secret. It holds a public key and this server’s public name at a relay, ' +
+  'and it grants nothing on its own — the login is the gate.'
+
+/**
+ * Why there is no address, in that server's terms.
+ *
+ * Three states and never a blank, because a missing address on a panel that
+ * otherwise looks finished reads as this app failing rather than as that machine
+ * having nothing to say. The remedies differ: start the host, wait for or fix
+ * the relay link, or upgrade a host too old to print one.
+ */
+export function noAddressLine(running: HostRunning): string {
+  if (running === 'no') {
+    return (
+      'There is no address for a phone while the host on this server is not running. Start it, ' +
+      'and this panel will show the address to paste.'
+    )
+  }
+  if (running === 'unknown') {
+    return (
+      'This server did not say whether its host is running, so there is no address to show. ' +
+      'What it says about itself, below, is the whole of what it answered.'
+    )
+  }
+  return (
+    'This server has no address to hand out: its host is running and is not on a relay, so ' +
+    'there is no slot for a phone to find it in. What it says about itself, below, says why — ' +
+    'and a host older than this feature prints no address at all, which upgrading it fixes.'
+  )
+}
+
+/**
+ * A pairing code for another device, and nothing that spends it.
+ *
+ * The code is printed exactly as the host printed it — `cli.ts` states that rule
+ * and the bug that made it one: *"an earlier version regrouped an already-grouped
+ * code into `CSPA--0EC-H`, which nobody can type."*
+ *
+ * There is **no button here**, and that is the fix rather than an omission. The
+ * only thing this app could spend a code on is the computer it is running on,
+ * and that computer is linked by installing — see `ServerHosts.link`. What is
+ * left is a code for a device this app has no channel to, which nothing on this
+ * screen can redeem on that device's behalf; a button here could only ever be
+ * one that looks like it works and does not, which is precisely what shipped and
+ * what he pressed.
+ *
+ * The person still answers the fingerprint question in the terminal below, and
+ * for that path that is right: the device on the far end of this code is one
+ * this app has never met, so the fingerprint is the only part of pairing anybody
+ * can actually check.
+ */
+export function PairingCode({ code }: { code: string }) {
+  return (
+    <div className="servers-host-code">
+      <div className="servers-host-code-top">
+        <span className="servers-host-code-value">{code}</span>
+      </div>
+      <p className="servers-card-why">
+        Type it into the app on your phone, or into Machines on another computer. It is good for
+        about a minute. Then check the fingerprint in the terminal below against the one that device
+        shows, and answer y — that check is the whole point of a fingerprint, so nothing here
+        answers it for you.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * That this computer is already linked to that host, and what it is called here.
+ *
+ * Named rather than described so somebody can find the row: the machine is in
+ * Machines under this name, and everything a machine can do it can do — which is
+ * the whole of *"do the same process like others for rest of the things"*.
+ */
+export function linkedLine(name: string): string {
+  return (
+    `This computer is linked to it, as ${name} in Machines. Sessions, folders and the terminal ` +
+    'work there the way they do for any other machine.'
+  )
+}
+
+/**
+ * The same row, and nothing is reaching it.
+ *
+ * The sentence that had to exist. Measured on his office PC: the host had been
+ * running for two hours, was connected to the relay, had a device of his
+ * approved in its own list — and was counting **zero** open channels. The panel
+ * over it said {@link linkedLine}, word for word, including the part about
+ * sessions and folders working there the way they do anywhere else. Nothing was
+ * working there. A panel that looks finished over a machine nothing is talking
+ * to is worse than one that says it does not know, because it sends somebody
+ * looking for the fault everywhere except where it is.
+ *
+ * Three things in order, and the order is the point: what is true, what the app
+ * has already done about it, and the one press left if that was not enough. The
+ * middle one is not a promise — `servers:host:look` fires the redial before this
+ * is drawn, so by the time these words are on screen the dial is out.
+ */
+export function awayLine(name: string): string {
+  return (
+    `This computer has a row for it — ${name} in Machines — and nothing is reaching it: that host ` +
+    'says nothing is connected to it. This app has just dialled it again. If this sentence is ' +
+    'still here the next time you open this page, Link this computer mints a fresh pairing and ' +
+    'replaces the row.'
+  )
+}
+
+/**
+ * What a device paired to a server now gets from its copilot, said here rather
+ * than discovered on a phone.
+ *
+ * This constant used to say a server never runs a copilot — the sentence
+ * `cli.ts` printed back when a headless host withheld `CAPABILITY.copilot`. It
+ * runs one now: `headless/host.ts` assembles a full copilot
+ * (`startHeadlessCopilot`) and advertises it to the owner's own devices, and
+ * `cli.ts`'s own approval line says the same — *"It gets the copilot too — its
+ * chat, files, routines and settings — driven from the app, because this server
+ * has no screen of its own to run it on."*
+ *
+ * The one thing that has not changed is the guest boundary: a device approved as
+ * a guest is still never offered the copilot. It is said in this pane's own
+ * words because on the wire *"you were approved as a guest"* and *"this host has
+ * no copilot"* still arrive as the same absence, so a person cannot otherwise
+ * tell a guest's withheld copilot from a host that has none.
+ */
+export const SERVER_COPILOT =
+  `A device you sign in as your own gets ${BRAND.assistant} on this server too — its chat, files, ` +
+  'routines and settings — driven from here, because the server has no screen of its own. A ' +
+  'device you add as a guest never gets it.'
+
+/**
+ * Which controls this section draws, as a function of what the server said.
+ *
+ * Pulled out of the component because it is the one part of this screen that is
+ * a *decision* rather than a layout, and because the rule it enforces is the one
+ * that has gone wrong before: **never a control that looks like it works and
+ * does not.** A machine that cannot take a host gets the reason and no button; a
+ * build that carries no package gets the same treatment through the same field,
+ * because `servers:host:look` folds both into `canInstall` and `why`.
+ *
+ * Pure, so it can be exercised in every state — which is the argument
+ * `MachineLinks` already makes about anything a `renderToStaticMarkup` test has
+ * to reach: an effect never runs there, so a component that read its own answer
+ * would be testable in exactly one state, the empty one.
+ */
+export interface HostControls {
+  busy: boolean
+  here: boolean
+  install: boolean
+  /**
+   * Link **this** computer — offered only for a host this computer is not
+   * already linked to.
+   *
+   * An install ends linked, so on the ordinary path this is never drawn at all.
+   * It exists for the two cases an install cannot cover: a host somebody put on
+   * that server another way, and one this app installed before it could link.
+   * Without it the only way to link a running host would be to remove it and
+   * install it again, which is two minutes to undo a bug.
+   */
+  link: boolean
+  /** Show a code for a phone. Always available once there is a host to ask. */
+  pair: boolean
+  remove: boolean
+  stop: boolean
+  /** The reason there is no Install button. Null when there is one, or when busy. */
+  why: string | null
+  /**
+   * The version to update that server to, or null when it is level or ahead.
+   *
+   * Separate from {@link HostControls.install}, which is only ever offered when
+   * there is **no** host — so for one release the only way to get a newer build
+   * onto a server this app had already installed to was a sentence telling
+   * somebody to do it by hand. Asad: *"whenever there is a new update… it should
+   * show the update button also next to where we install."*
+   */
+  update: string | null
+  /** Whether it will still be there tomorrow. Null when there is no host, or when busy. */
+  reach: string | null
+  /** What this computer already calls it. Null when it is not linked, or when busy. */
+  linkedAs: string | null
+  /**
+   * There is a row for it here and nothing is reaching it.
+   *
+   * Changes both halves of what this section says about a link: the sentence
+   * beside {@link HostControls.linkedAs}, and whether **Link this computer** is
+   * offered at all. Never true while {@link HostControls.linkedAs} is null —
+   * there is no such thing as being out of touch with a machine this computer
+   * has never paired with, and the panel already has a sentence for that one.
+   */
+  away: boolean
+}
+
+export function hostControls(offer: HostOffer, busy: boolean): HostControls {
+  const here = offer.host.command !== ''
+  return {
+    busy,
+    here,
+    // Nothing is offered while the terminal is in use: there is one of them, and
+    // a second press would take it from the run that is using it.
+    install: !busy && !here && offer.canInstall,
+    // Offered whenever there is a host and it is behind — running, stopped,
+    // linked or not. It runs the same verb Install does, so a server cannot end
+    // up on a version neither control agrees about.
+    update: busy ? null : hostUpdateAvailable(offer.host, offer.mine),
+    /*
+     * Offered for a host this computer is not linked to — and for one it is
+     * linked to and cannot reach, which is the case this used to hide.
+     *
+     * The old rule was "never both this and the sentence below it", and it was
+     * right about the machine it was written for: a panel must not say "already
+     * linked" and offer to link in the same breath. What it missed is that a row
+     * with nothing behind it is not "already linked". Somebody looking at a host
+     * that has been up for two hours with nothing attached to it needs one
+     * press, and the honest one is this: it mints a fresh code on that server
+     * and replaces the row. So the sentence beside it changes instead — see
+     * {@link awayLine} — and the two are read together rather than exclusively.
+     *
+     * Never at all on a build that would answer the press with a pairing code
+     * instead: a button whose label is a promise the build cannot keep is the
+     * thing this whole section was rewritten to remove.
+     */
+    link: !busy && here && offer.canLink && (offer.linkedAs === null || offer.linkedButNotConnected),
+    pair: !busy && here,
+    remove: !busy && here,
+    stop: busy,
+    why: !busy && !here ? offer.why : null,
+    reach: !busy && here ? offer.reach : null,
+    linkedAs: !busy && here ? offer.linkedAs : null,
+    away: !busy && here && offer.linkedAs !== null && offer.linkedButNotConnected,
+  }
+}
+
+/** The refusal's own sentence, which is the one written where the refusal happened. */
+function readSentence(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) return 'That did not work.'
+  const said = (raw as { sentence?: unknown; message?: unknown }).sentence
+  if (typeof said === 'string' && said !== '') return said
+  const other = (raw as { message?: unknown }).message
+  return typeof other === 'string' && other !== '' ? other : 'That did not work.'
+}

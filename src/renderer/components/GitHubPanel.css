@@ -1,0 +1,1156 @@
+/* ============================================================================
+   GitHub — pull requests and issues for this remote, as a page.
+
+   This used to render in a 300px drawer: a bordered head bar, a bordered tab
+   bar, and rows whose titles clamped to two lines because there was nowhere
+   for them to go. It has the window now, so a row is one line — badge, title,
+   then the facts about it — and nothing is boxed. The only lines left are the
+   ink underline under the selected tab and the ones inside a code sample.
+
+   State colours are aliased from the foundation tokens rather than restated,
+   so a theme swap in tokens.css moves this panel with everything else. The one
+   exception is the label dot, whose colour is GitHub's own per-label hex and
+   arrives at render time as an inline style.
+   ============================================================================ */
+
+.gh-panel {
+  --gh-open: var(--status-completed);
+  --gh-draft: var(--text-muted);
+  /* GitHub paints merged purple; this palette has no purple, and the app's blue
+     means focus. --status-working is the token for "a thing that happened". */
+  --gh-merged: var(--status-working);
+  --gh-closed: var(--color-critical);
+  --gh-approved: var(--status-completed);
+  --gh-changes: var(--color-critical);
+  --gh-pending: var(--status-waiting);
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* The page is the ground. A second fill here drew a grey slab the height of
+     whatever happened to be loaded. */
+  max-width: 82rem;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  user-select: none;
+}
+
+/* ----------------------------------------------------------------- head -- */
+
+/* The repository, said once. The view's own name and blurb are already in the
+   toolbar above it, so this line is identity, not a title bar. */
+.gh-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-5);
+}
+
+.gh-head-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.gh-repo {
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-repo:hover {
+  background: var(--bg-hover);
+}
+
+.gh-head-spacer {
+  flex: 1;
+  min-width: var(--sp-4);
+}
+
+.gh-refresh {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.gh-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.gh-refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.gh-refresh svg {
+  display: block;
+}
+
+/*
+  The glyph turns while the read is in flight.
+
+  Asad on this button: *"If I click on refresh, I don't know if the refresh is
+  working because we don't feel anything getting refreshed."* The only feedback
+  was `:disabled`'s opacity, which on a 13px icon is not feedback. One second per
+  turn is slow enough to read as "working" rather than as decoration, and it is
+  the icon that already means refresh rather than a second spinner beside it.
+
+  Honoured for anybody who has asked the system for less motion — a spinner is
+  exactly the kind of thing that setting is for, and the disabled state still
+  says the button is busy.
+*/
+@keyframes gh-refresh-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.gh-refresh[data-busy] svg {
+  animation: gh-refresh-turn 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gh-refresh[data-busy] svg {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------- copilot -- */
+
+/*
+  One line, four things: a mark, a name, a state, and — only when it is missing
+  — the link that fixes that. It came from a Settings row that also carried the
+  tool's purpose, a caveat, a remedy and the shell probe; see `CopilotRow`.
+*/
+.gh-copilot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+/* The same three tokens `.setup-mark` uses in Settings, so the glyph reads the
+   same after the move as it did before it. Named here rather than borrowed from
+   that stylesheet: the row no longer lives on that pane, and depending on a
+   class defined by a section this page does not render is how a colour goes
+   missing the day somebody splits a bundle. */
+.gh-copilot-mark {
+  flex-shrink: 0;
+  width: var(--sp-4);
+  text-align: center;
+  color: var(--status-idle);
+}
+
+.gh-copilot[data-state='ready'] .gh-copilot-mark {
+  color: var(--status-completed);
+}
+
+.gh-copilot[data-state='installed-not-authed'] .gh-copilot-mark {
+  color: var(--status-waiting);
+}
+
+.gh-copilot[data-state='missing'] .gh-copilot-mark {
+  color: var(--color-critical);
+}
+
+.gh-copilot-name {
+  color: var(--text-primary);
+}
+
+.gh-copilot-state {
+  margin-left: auto;
+}
+
+.gh-copilot-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.gh-copilot-link:hover {
+  text-decoration: underline;
+}
+
+/* ----------------------------------------------------------------- tabs -- */
+
+/* Two words and an ink underline under the selected one. The bordered bar this
+   replaced drew a full-width rule to separate two buttons from a list. */
+.gh-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-4);
+}
+
+.gh-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  padding-bottom: var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.gh-tab:hover {
+  color: var(--text-primary);
+}
+
+.gh-tab[aria-selected='true'] {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* Selection is one of the three jobs the accent is allowed to do. */
+.gh-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--sp-05);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.gh-tab-count {
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.gh-tab:focus-visible,
+.gh-repo:focus-visible,
+.gh-refresh:focus-visible,
+.gh-row:focus-visible,
+.gh-retry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ----------------------------------------------------------------- list -- */
+
+.gh-list-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.gh-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One line, full width, no outline. Rows are told apart by the space between
+   them and by the fill that follows the pointer. */
+.gh-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: var(--sp-3) var(--sp-3);
+  border-radius: var(--radius-md);
+  /* The title is the only thing allowed to give way, so the row clips rather
+     than the page growing a horizontal scrollbar. */
+  overflow: hidden;
+  text-align: left;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-row:hover {
+  background: var(--bg-hover);
+}
+
+.gh-body {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  flex: 1;
+  min-width: 0;
+  /* The facts cluster does not shrink, so past a certain narrowness it has to
+     be clipped by something. Clipped here, it disappears under the row's right
+     edge; unclipped, it printed straight through the diffstat. */
+  overflow: hidden;
+}
+
+/* One line and an ellipsis. Two-line titles were a 300px compromise; at this
+   width they only make one row twice the height of its neighbours. */
+.gh-title {
+  flex: 1 1 var(--sp-16);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+}
+
+/* The facts about the row, in one nowrap cluster at the right. It does not
+   shrink: squeezing it sliced label chips mid-word, and a sliced chip is worse
+   than a shorter title — the title is the one thing here that ellipsizes into
+   something still readable. */
+.gh-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+.gh-number,
+.gh-age {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.gh-author {
+  flex-shrink: 0;
+  max-width: 18ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-author[data-bot='true']::after {
+  content: 'bot';
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+}
+
+.gh-fork,
+.gh-assignees {
+  flex-shrink: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------- badges -- */
+
+/* The state, in the colour it means, in a column of its own so the titles
+   beside it line up. No pill, no outline — four boxed capitals in a column is
+   the loudest thing a quiet list can do. */
+.gh-badge {
+  flex-shrink: 0;
+  width: 5rem;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  text-transform: capitalize;
+  color: var(--text-secondary);
+}
+
+.gh-badge[data-badge='open'] {
+  color: var(--gh-open);
+}
+
+/* A draft is deliberately the quietest of the four — it is not asking for you. */
+.gh-badge[data-badge='draft'] {
+  color: var(--gh-draft);
+}
+
+.gh-badge[data-badge='merged'] {
+  color: var(--gh-merged);
+}
+
+.gh-badge[data-badge='closed'] {
+  color: var(--gh-closed);
+}
+
+/* --------------------------------------------------------------- review -- */
+
+.gh-review {
+  flex-shrink: 0;
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+}
+
+.gh-review[data-review='approved'] {
+  color: var(--gh-approved);
+}
+
+.gh-review[data-review='changes-requested'] {
+  color: var(--gh-changes);
+}
+
+.gh-review[data-review='review-required'] {
+  color: var(--gh-pending);
+}
+
+/* --------------------------------------------------------------- labels -- */
+
+.gh-labels {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  flex-shrink: 0;
+}
+
+/* Inline-block, not inline-flex: `text-overflow` needs the chip to be a block
+   container for its own text. As a flex box the label's text was an anonymous
+   flex item, so a long name was sliced through a letter instead of ellipsized.
+   The chip also never shrinks — the title is the thing that gives way. */
+.gh-label {
+  display: inline-block;
+  flex-shrink: 0;
+  max-width: 14ch;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gh-label-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: var(--sp-1);
+  border-radius: var(--radius-pill);
+  /* Optical nudge off the baseline onto the x-height. */
+  vertical-align: var(--sp-05);
+}
+
+.gh-label-more {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- diffstat -- */
+
+.gh-diffstat {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-2);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.gh-plus {
+  color: var(--status-completed);
+}
+
+.gh-minus {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------- messages -- */
+
+/* `.gh-message` was here. "Reading GitHub…", "GitHub is not available in this
+   build", "No open pull requests" — a page state, a page failure and a section
+   emptiness all in one class, at one size, in one grey. They are `PageNote`
+   and `PageEmpty` now, which is what the rest of the app already used. */
+
+.gh-note {
+  margin: var(--sp-5) 0 0;
+  padding: 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+}
+
+.gh-note code,
+.gh-failure-action code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* -------------------------------------------------------------- failure -- */
+
+.gh-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  max-width: 52ch;
+  padding: var(--sp-4) var(--sp-3);
+}
+
+/* The heading and the dot that holds what used to be two sentences under it —
+   see `FailureBlock`. A row rather than a block so the dot sits on the baseline
+   of the words it belongs to, the way it does in Settings. */
+.gh-failure-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-primary);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+}
+
+/* The page-level case — no remote, not signed in — is a `PageEmpty` now, so
+   this block only ever renders inside a loaded tab and the centring rules that
+   used to re-shape it there are gone with it. */
+
+.gh-failure-detail {
+  width: 100%;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+.gh-failure-detail summary {
+  cursor: pointer;
+}
+
+.gh-failure-detail pre {
+  max-height: 14rem;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  /* Raw tool output is the one thing here worth copying out. */
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.gh-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  margin-top: var(--sp-2);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-retry:hover {
+  background: var(--fill-secondary);
+}
+
+/* Below the width where a title and its facts fit on one line, the facts drop
+   under the title and wrap. Nothing is hidden and nothing is cut — the row is
+   just two lines tall, which is what a narrow window buys you. */
+@media (max-width: 1180px) {
+  .gh-row {
+    align-items: flex-start;
+  }
+
+  .gh-body {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+    overflow: visible;
+  }
+
+  .gh-title {
+    flex: none;
+    max-width: 100%;
+  }
+
+  .gh-meta {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+
+/* ============================================================================
+   The connection — who you are signed in as, and how you got that way.
+
+   Two blocks, and they never appear together: `.gh-conn` is the strip above a
+   working page, `.gh-device` is the whole page while GitHub waits for a code.
+
+   Type follows the house treatment for an option that needs a paragraph: the
+   title in the bright ink, the explanation a step down and a step quieter, and
+   real space between them rather than a tighter line-height. The whole point of
+   this panel is that somebody who has never seen it can read what it is doing,
+   so nothing here is smaller than a footnote and nothing is a bare icon.
+   ============================================================================ */
+
+.gh-conn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  max-width: 60rem;
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  /* The one filled surface on the page. It earns it: this is the block that
+     answers "what is this app doing with my GitHub account", and a strip of
+     unbounded text above the repo name read as a stray paragraph. */
+  background: var(--fill-quaternary);
+}
+
+/* The initial, not the avatar: `img-src 'self' data:` blocks the real one. */
+.gh-avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+}
+
+.gh-conn-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gh-conn-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+}
+
+.gh-conn-login {
+  padding: 0 var(--sp-1);
+  margin: 0 calc(var(--sp-1) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-conn-login:hover {
+  background: var(--bg-hover);
+}
+
+.gh-conn-name {
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  font-weight: var(--w-regular);
+}
+
+/* Dimmer and roomier than the line above it — see the header. */
+.gh-conn-source,
+.gh-conn-note {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-conn-note {
+  flex-shrink: 0;
+  max-width: 16rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.gh-conn-scopes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+}
+
+.gh-conn-scopes-label {
+  margin-right: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  text-transform: uppercase;
+  letter-spacing: var(--t-caption-ls);
+}
+
+/* Every scope GitHub reports on the credential, shown flat.
+
+   There used to be a tinted `[data-asked]` variant marking the ones this app
+   had requested. Nothing is requested now — a GitHub App device request carries
+   no `scope` — so the tint would either mark everything or nothing, and a
+   distinction with no second case is a colour that means nothing. */
+.gh-scope {
+  height: var(--control-h-sm);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  user-select: text;
+}
+
+.gh-scope[data-empty] {
+  font-family: var(--font-ui);
+  font-style: italic;
+}
+
+.gh-conn-source code,
+.gh-conn-note code,
+.gh-device-body code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  user-select: text;
+}
+
+.gh-conn-action,
+.gh-conn-keep,
+.gh-conn-danger,
+.gh-device-cancel {
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.gh-conn-action,
+.gh-conn-keep:hover:not(:disabled),
+.gh-device-cancel:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.gh-conn-action {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.gh-conn-action:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* Signing out can reach the user's terminal, so the second press is the one
+   that is coloured like it means it. */
+.gh-conn-danger {
+  background: var(--color-critical);
+  color: var(--text-onaccent);
+}
+
+.gh-conn-danger:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.gh-conn-confirm {
+  flex-shrink: 0;
+  max-width: 22rem;
+  text-align: right;
+}
+
+.gh-conn-confirm-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-conn-confirm-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.gh-conn-action:disabled,
+.gh-conn-keep:disabled,
+.gh-conn-danger:disabled,
+.gh-device-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ device code -- */
+
+/* Parked at the same height as `.page-blank` in shell.css, because pressing
+   Connect swaps one for the other and the eye should not have to follow it. */
+.gh-device {
+  max-width: 34rem;
+  margin: 11vh auto 0;
+  text-align: center;
+}
+
+.gh-device-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+}
+
+.gh-device-body {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+/* The code is the largest thing in the window on purpose: it is the one piece
+   of this screen the user has to carry to another application by hand. */
+.gh-device-code {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-5) 0 0;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius-lg);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.14em;
+  /* Selectable either way — where there is no clipboard API this is the only
+     way to get the code out, and where there is one it still beats retyping. */
+  user-select: text;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+button.gh-device-code:hover {
+  background: var(--fill-secondary);
+}
+
+.gh-device-copy {
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  letter-spacing: normal;
+}
+
+.gh-device-expiry {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+}
+
+.gh-device-asks {
+  margin: var(--sp-4) auto 0;
+  max-width: 44ch;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-device-row {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+}
+
+.gh-device-open {
+  padding: 0 var(--sp-4);
+}
+
+/* Both buttons on this row are the tall size. Left at the default the Cancel
+   beside the primary sat four pixels short of it, which reads as a rendering
+   fault rather than a hierarchy. */
+.gh-device-open,
+.gh-device-cancel {
+  height: var(--control-h-lg);
+}
+
+/* Under about 700px the strip's right-hand column has nowhere to sit beside a
+   paragraph, so it drops under it rather than squeezing the text to a ribbon. */
+@media (max-width: 700px) {
+  .gh-conn {
+    flex-wrap: wrap;
+  }
+
+  .gh-conn-body {
+    flex-basis: 100%;
+  }
+
+  .gh-conn-note,
+  .gh-conn-confirm {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .gh-conn-confirm-row {
+    justify-content: flex-start;
+  }
+}
+
+/* The two lines under the connect block. `PageNote` inherits alignment from its
+   container, so this is the container that makes them agree with the block they
+   sit under rather than with the page's left edge. */
+.gh-connect-notes {
+  max-width: 30rem;
+  margin: var(--sp-5) auto 0;
+  text-align: center;
+}
+
+.gh-connect-notes .page-blank-line + .page-blank-line {
+  padding-top: var(--sp-1);
+}
+
+/* A command inside the connect page's hint must not break across a line: `gh
+   auth login` rendered as `gh auth` / `login` in two boxes, which reads as two
+   different commands. Scoped to this panel rather than pushed into the shared
+   blank, where a long path in some other page's hint may need to wrap. */
+.gh-panel .page-blank-hint code {
+  white-space: nowrap;
+}
+
+/* ============================================================== what it asks
+
+   The block that exists because of a screenshot.
+
+   GitHub's authorisation page said "Full control of private repositories" with
+   no repository picker on it, and the app had given no warning it was about to
+   ask for that. This says the same thing first, in GitHub's own words, so that
+   nobody arrives at that page surprised. It sits under the Connect button on
+   the empty page, so it is centred with everything else there and constrained
+   to the same measure — a full-width list of scopes under a centred block reads
+   as belonging to some other screen.
+   ============================================================================ */
+
+.gh-asks {
+  max-width: 30rem;
+  margin: var(--sp-5) auto 0;
+  padding: var(--sp-4);
+  border-radius: var(--radius-md);
+  /* A fill with a radius, not an outline: the panel has one ink line in it and
+     it is under the selected tab. */
+  background: var(--fill-quaternary);
+  text-align: left;
+}
+
+.gh-asks-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+}
+
+.gh-asks-body {
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.gh-asks-body {
+  margin: var(--sp-3) 0 0;
+  line-height: var(--lh-body);
+}
+
+.gh-asks-body code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  user-select: text;
+}
+
+.gh-asks-link {
+  height: var(--control-h-sm);
+  margin-top: var(--sp-3);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-asks-link:hover {
+  background: var(--bg-hover);
+}
+
+/* ============================================================== repositories
+
+   The third tab. It reads the credential rather than the folder, so it is the
+   only thing on this page with something to show when the open folder is not a
+   GitHub repository — which is the state that made a successful sign-in look
+   like a failed one.
+   ============================================================================ */
+
+.gh-repos {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gh-repos-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--control-h);
+  margin-bottom: var(--sp-2);
+  padding: 0 var(--sp-3);
+}
+
+/* "500+ repositories · showing the 100 most recently pushed". Quiet, because
+   it is a caveat on the list rather than a heading over it. */
+.gh-repos-count {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* 11rem is the width `.debug-filter` settled on for the same job — long enough
+   for a repository name, short enough to leave the count beside it. There is no
+   spacing token past 64px, and inventing one for a single control would put a
+   value in the design system that nothing else uses. */
+.gh-repos-filter {
+  width: 11rem;
+  max-width: 40%;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+}
+
+.gh-repos-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.gh-repos-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/*
+  A repository row runs name-first, facts-after — the opposite way round to a
+  pull-request row, and it has to be said explicitly.
+
+  `.gh-title` grows by default because a pull-request title is the long thing
+  on the row and everything else is a short cluster pinned right. A repository
+  name is the *short* thing, so the same rule pushed the description and the
+  language over to the far edge with a hand's width of nothing between them and
+  the name. Here the name hugs its text and the fact cluster takes the slack.
+*/
+.gh-row[data-kind='repo'] .gh-title {
+  flex: 0 1 auto;
+}
+
+.gh-row[data-kind='repo'] .gh-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+  Visibility is not a status, so it does not get a status colour.
+
+  These two used to borrow `data-badge="open"` and `="draft"`, which painted
+  every public repository in the green that means "this pull request is waiting
+  on you" — the one colour rule this panel has is that a meaningful colour
+  means something specific, and "public" is not it. Private is the slightly
+  louder of the two because it is the one worth noticing in a screen-share.
+*/
+.gh-badge[data-badge='private'] {
+  color: var(--text-secondary);
+}
+
+.gh-badge[data-badge='public'] {
+  color: var(--text-muted);
+}
+
+/* The folder you are standing in, marked in the list. A tint rather than a
+   rule, and no second colour: it is "you are here", not a status. */
+.gh-row[data-current] {
+  background: var(--fill-quaternary);
+}
+
+.gh-here {
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+}
+
+/* The description shares the row's fact cluster with the language and the age,
+   so it is the one that gives way. */
+.gh-repo-desc {
+  flex: 1 1 var(--sp-16);
+  /* Same basis as `.gh-title`, so a row with a long description and a row
+     without one put the age in the same column. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.gh-repo-lang {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* The folder line in the head, when there is no repository to link to. Same
+   size and position as `.gh-repo` so the head does not jump as the answer
+   arrives, but not a button, because there is nowhere for it to go. */
+.gh-repo-none {
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

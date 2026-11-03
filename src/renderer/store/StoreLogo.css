@@ -1,0 +1,111 @@
+/* ============================================================================
+   The mark on a store row, and the column it sits in.
+
+   One stylesheet, imported by `StoreLogo.tsx`, for the reason `storefront.css`
+   gives about itself: the two stores are drawn on two surfaces whose
+   stylesheets never both load, so anything shared has to bring its own. The
+   `.bw-store-row-logo` / `.mcp-store-row-logo` rules below are here rather than
+   in `BrowserWorkspace.css` and `McpInspector.css` for a second reason as well
+   — several people are working in those two files at once, and a lane that adds
+   a column should not be reaching into everybody else's stylesheet to do it.
+
+   Every colour, radius and step is a token, so the tile takes whichever surface
+   it is sitting on with it.
+   ============================================================================ */
+
+/* The tile. Fixed, square, and the same on both stores: a shelf whose pictures
+   are different sizes reads as a broken layout however good the pictures are. */
+.storelogo {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  overflow: hidden;
+}
+
+/* `contain`, never `cover`: a wordmark is wider than it is tall — SQLite's and
+   Puppeteer's both are — and `cover` would crop the ends off somebody's
+   trademark, which is exactly the thing this app promised not to do to them. */
+.storelogo img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+/* A mark its vendor drew in one dark ink, on nothing, for a light page. Without
+   this it is a dark shape on a dark surface — a row that looks like it has a
+   logo and has not. The background changes; the mark is untouched. Near-white
+   rather than pure white so it is a tile in both themes and not a hole in the
+   light one. */
+.storelogo-plate {
+  background: #f4f4f5;
+}
+
+/* The row with no mark at all: this app's own drawing, and it reads as one.
+   `--bind-*` because those four are the only fills in the sheet guaranteed to
+   clear 4.5:1 with `--bind-fg` ink on every surface of both themes — see the
+   long note beside them in `tokens.css`. */
+.storelogo-monogram {
+  color: var(--bind-fg);
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+  line-height: 1;
+  user-select: none;
+}
+
+.storelogo-monogram[data-fill='1'] {
+  background: var(--bind-1);
+}
+
+.storelogo-monogram[data-fill='2'] {
+  background: var(--bind-2);
+}
+
+.storelogo-monogram[data-fill='3'] {
+  background: var(--bind-3);
+}
+
+.storelogo-monogram[data-fill='4'] {
+  background: var(--bind-4);
+}
+
+/* ------------------------------------------------------------ the column -- */
+
+/* A row that carries a mark becomes two columns, and the mark spans all of it.
+
+   Beside the name rather than left of the row was the other option and it is
+   worse at the one job the picture has: at the top-left of the block the eye
+   finds it without reading, which is what turns a list into a shelf. Spanning
+   `1 / -1` rather than sitting in the first line so a tall row does not leave
+   the mark orphaned against a paragraph of text.
+
+   Auto-placement would drop every other child into column one, so they are all
+   named into column two. `:not(.storelogo)` rather than a class on each, since
+   the children are somebody else's markup and this lane does not own them. */
+.bw-store-row-logo,
+.mcp-store-row-logo {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-3);
+  align-items: start;
+}
+
+.bw-store-row-logo > .storelogo,
+.mcp-store-row-logo > .storelogo {
+  grid-row: 1 / -1;
+  grid-column: 1;
+  /* Optically level with the name beside it rather than with the box: the head
+     line is taller than its text, so a tile aligned to the top of the row sits
+     a hair high. */
+  margin-top: 1px;
+}
+
+.bw-store-row-logo > *:not(.storelogo),
+.mcp-store-row-logo > *:not(.storelogo) {
+  grid-column: 2;
+  min-width: 0;
+}

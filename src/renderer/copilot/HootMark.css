@@ -1,0 +1,62 @@
+/* Hoot's blink — the only thing about the owl that moves.
+
+   The lids are `<g class="hoot-lid">` groups (an orange disc plus a closed-eye
+   line) folded to nothing from their top edge, and the keyframes unfold them
+   for an instant: a quick blink near the end of each cycle, and a softer second
+   one straight after it now and then. The cycle length and its start come from
+   `--blink` and `--blink-at`, which `HootMark.tsx` sets per instance so no two
+   owls on screen blink together. The right eye follows the left by 30 ms.
+
+   No colours here: the owl's palette is fixed brand art, named once in
+   `HootMark.tsx` (see its header for why it is not drawn from tokens). */
+
+.hoot-mark {
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.hoot-lid {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  transform: scaleY(0);
+}
+
+.hoot-mark[data-animated='true'] .hoot-lid {
+  animation: hoot-blink var(--blink, 7s) infinite cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: var(--blink-at, 0s);
+}
+
+.hoot-mark[data-animated='true'] .hoot-lid-r {
+  animation-delay: calc(var(--blink-at, 0s) + 0.03s);
+}
+
+@keyframes hoot-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(0);
+  }
+  93% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0);
+  }
+  96.5% {
+    transform: scaleY(0);
+  }
+  97.5% {
+    transform: scaleY(1);
+  }
+  99% {
+    transform: scaleY(0);
+  }
+}
+
+/* Reduced motion: no blink at all, eyes open. */
+@media (prefers-reduced-motion: reduce) {
+  .hoot-mark[data-animated='true'] .hoot-lid {
+    animation: none;
+  }
+}

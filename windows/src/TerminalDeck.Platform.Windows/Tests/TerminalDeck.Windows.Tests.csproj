@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
+  <ItemGroup><Compile Remove="Core/**/*.cs" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <ProjectReference Include="../TerminalDeck.Platform.Windows.csproj" />
+    <Using Include="Xunit" />
+    <Compile Include="../../TerminalDeck.Keeper/WindowsKeeperRuntime.cs" Link="WindowsKeeperRuntime.cs" />
+    <Compile Include="../../TerminalDeck.Keeper/KeeperHootHandoff.cs" Link="KeeperHootHandoff.cs" />
+    <Compile Include="../../TerminalDeck.App/Services/PhoneRecoveryHost.cs" Link="PhoneRecoveryHost.cs" />
+    <Compile Include="../../TerminalDeck.App/ViewModels/ShellViewModel.cs" Link="ShellViewModel.cs" />
+    <Compile Include="../../../tests/TerminalDeck.Core.Tests/Remote/LinkHarness.cs" Link="Link/LinkHarness.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TdLinkNative)' != ''">
+    <None Include="$(TdLinkNative)/tdlink.dll;$(TdLinkNative)/libwebrtc.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+</Project>

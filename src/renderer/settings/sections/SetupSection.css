@@ -1,0 +1,196 @@
+/* ============================================================================
+   Setup — the tool list, the probe lines and the hook blocks.
+
+   Only what this section adds: the rows, paths, notices and buttons are the
+   shared classes in SettingsWindow.css, so they follow that file when it
+   changes. Every value here is a token; nothing is boxed that a fill and a
+   corner can hold on its own.
+
+   Kept in its own file rather than appended to SettingsWindow.css so that a
+   section can be added without touching a file other sections are being edited
+   in — the same rule the main process follows with registerXIpc.
+   ============================================================================ */
+
+/* A tick or a cross. Colour repeats the state the word on the right already
+   gives, so nothing here is the only carrier of meaning. */
+.setup-mark {
+  flex-shrink: 0;
+  width: var(--sp-4);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  text-align: center;
+  color: var(--status-idle);
+}
+
+.setup-mark[data-state='ready'],
+.setup-mark[data-state='installed'] {
+  color: var(--status-completed);
+}
+
+.setup-mark[data-state='installed-not-authed'],
+.setup-mark[data-state='stale'] {
+  color: var(--status-waiting);
+}
+
+.setup-mark[data-state='missing'] {
+  color: var(--color-critical);
+}
+
+/* What the shell actually said. Mono because it is a command's output, not
+   prose, and selectable because the next thing a person does is paste it.
+
+   A translucent fill rather than a surface colour, and that is the whole of
+   what changed here. It used to be `--bg-primary`, lifting off the tinted list
+   row it sat in; the rows lost their tint when the sheet was flattened, so the
+   lift was being measured against a surface that is no longer under it. In
+   light that left the one pure-white rectangle on a grey sheet — louder than a
+   line of shell output has any business being — and it needed a dark-theme
+   override to invert the same trick. `--fill-tertiary` composes with whatever
+   is behind it instead of naming it, so one declaration is right on both
+   themes and stays right the next time the ground moves. */
+.setup-probe {
+  display: block;
+  margin-top: var(--sp-1);
+  padding: var(--sp-15) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ hooks -- */
+
+.setup-endpoint {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.setup-endpoint::before {
+  content: '';
+  display: inline-block;
+  width: var(--settings-dot, 7px);
+  height: var(--settings-dot, 7px);
+  margin-right: var(--sp-2);
+  border-radius: var(--radius-pill);
+  vertical-align: 1px;
+  background: var(--status-idle);
+}
+
+.setup-endpoint[data-running]::before {
+  background: var(--status-completed);
+}
+
+/* One soft block per CLI. No border: the fill and the corner already say where
+   it starts and stops.
+
+   The fill has to be a fill. This was `--bg-secondary` back when the settings
+   sheet was `--bg-primary`, and when the sheet was flattened onto
+   `--bg-secondary` the block became exactly the colour of the page it sits on:
+   three provider blocks, each with a heading, a path, ten event chips and three
+   buttons, and nothing at all saying where one ended and the next began. A
+   thing that has *appeared* must not be page-coloured. `--fill-tertiary` is
+   what the flattening pass gave every other appearing surface — the notices,
+   the confirmations — and being translucent it cannot repeat this failure: it
+   is defined as a lift off whatever is behind it rather than as a colour that
+   happens to differ from it today. */
+.setup-hooks {
+  margin-top: var(--sp-3);
+  padding: var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--fill-tertiary);
+}
+
+.setup-hooks-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.setup-hooks-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.setup-hooks .settings-path {
+  display: block;
+  margin-top: var(--sp-05);
+}
+
+.setup-hooks .settings-tool-note {
+  display: block;
+  margin: var(--sp-2) 0 0;
+}
+
+/* A notice inside a hook block needs no override any more, and the absence is
+   worth a sentence because it looks like something is missing.
+
+   There were two rules here, one per theme, pushing a nested notice up to the
+   page colour so that a tint inside a tint did not vanish. Both were lifting
+   off a block that had itself become the page colour, so they were lifting off
+   nothing — and the light one painted a white card inside a grey sheet. Now
+   that the block is `--fill-tertiary` the arithmetic does itself: the notice
+   keeps the same fill from `SettingsWindow.css`, and two translucent layers
+   over one ground land a step apart, in both themes, with no rule naming
+   either colour. Codex's `codex_hooks = true` requirement is the notice this
+   was verified against. */
+
+/* The events, in the order the CLI fires them. Wrapping rather than scrolling:
+   Claude has ten and all ten matter equally. */
+.setup-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+}
+
+.setup-event {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.setup-event-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+.setup-event[data-state='installed'] .setup-event-name {
+  color: var(--text-primary);
+}
+
+.setup-event[data-state='missing'] .setup-event-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+
+/* Read out, never shown: the tick and the cross are decoration, and this is the
+   text that carries their meaning to a screen reader. */
+.setup-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+[data-density='compact'] .setup-hooks {
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
+}

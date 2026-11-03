@@ -1,0 +1,58 @@
+/* ============================================================================
+   The dot field — the non-focused part of the window while a scan is running.
+
+   Asad: "some dots around it or kind of things happening… we can see like a
+   machine is working, a proper feel of high-speed intelligence." And the rule
+   that decides where it goes: the non-focused areas carry the dots; the focus
+   stays clear. The hole is cut inside the canvas, not here — see `ScanField.tsx`.
+   ============================================================================ */
+
+.scan-field {
+  position: fixed;
+  inset: 0;
+  /*
+    Nothing on this layer is ever a target. The scan is a highlight, not a
+    modal: every control in the app stays live while it plays, and a click
+    anywhere is both "take over" and "stop". A field that swallowed clicks would
+    make the one gesture that has to work the one gesture that does not.
+  */
+  pointer-events: none;
+
+  /*
+    Above the scrim (40), below dialogs and the command palette (100).
+
+    Above the scrim rather than below it, and that is the one ordering decision
+    in this file. Underneath, the 26% black would be painted over the dots and
+    the field would read as murk rather than as a mesh — the dulling is meant to
+    happen to the *app*, and the dots are the thing doing the dulling's talking.
+    Above it, the field sits on the dulled window at full strength and the one
+    part with neither over it is the focus rectangle, which is the whole point.
+
+    The ring is drawn at the hole's edge and the canvas is cleared for ten
+    pixels around it, so nothing here can land on the accent border.
+  */
+  z-index: 41;
+
+  /*
+    A fade, so a scan starting does not slap a mesh onto the window in one
+    frame, and a scan ending takes it off the way it arrived. `--dur-slow` and
+    not `--dur`: this covers the whole window, and a large surface changing fast
+    reads as a flash however short it is.
+
+    Under `prefers-reduced-motion` the durations in `tokens.css` are already
+    zeroed, which makes this a swap — and the field's own motion stops too, in
+    the component, so what remains is a static mesh over the dulled area. That
+    is the correct reading of the preference: somebody who asked for less motion
+    has not asked to lose the distinction between focused and not.
+  */
+  animation: scan-field-in var(--dur-slow) var(--ease) both;
+}
+
+@keyframes scan-field-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

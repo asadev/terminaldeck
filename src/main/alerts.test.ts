@@ -1,0 +1,919 @@
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import {
+  CONTEXT_CRITICAL_PERCENT,
+  CONTEXT_WARNING_PERCENT,
+  contextUsage,
+  PRE_CONTEXT_BLOAT_PERCENT,
+} from './cost'
+import { encodeProjectPath } from './transcript'
+import { assessProgress, REPEAT_CRITICAL, REPEAT_WARNING } from './deck-control/progress'
+import type { ToolTrail } from './deck-control/surface'
+import {
+  BLOCKED_CRITICAL_MS,
+  BLOCKED_WARNING_MS,
+  blockedAlerts,
+  collectAlertInput,
+  contextAlerts,
+  deriveAlerts,
+  DIRTY_TREE_SESSION_STREAK,
+  dirtyTreeAlerts,
+  formatDuration,
+  HEAVY_MIN_SAMPLE,
+  HEAVY_MIN_TOKENS,
+  HEAVY_MULTIPLE,
+  heavySessionAlerts,
+  groupBySeverity,
+  LOOP_ACTIVE_WITHIN_MS,
+  loopAlerts,
+  median,
+  providerAlerts,
+  type AlertInput,
+  type AlertSession,
+} from './alerts'
+
+const NOW = Date.parse('2026-08-12T12:00:00.000Z')
+const MINUTE = 60_000
+const WINDOW = 200_000
+
+/** An input with nothing in it — the state a folder added a second ago is in. */
+function emptyInput(overrides: Partial<AlertInput> = {}): AlertInput {
+  return {
+    projectPath: '/Users/apple/Projects/terminaldeck',
+    now: NOW,
+    sessions: [],
+    providersInUse: [],
+    providersInstalled: { claude: true, codex: false, gemini: false, shell: true },
+    git: null,
+    ...overrides,
+  }
+}
+
+function session(overrides: Partial<AlertSession> & { sessionId: string }): AlertSession {
+  return {
+    transcriptPath: `/tmp/${overrides.sessionId}.jsonl`,
+    context: null,
+    preContextTokens: 0,
+    requests: 10,
+    tokens: 0,
+    startedAt: NOW - 60 * MINUTE,
+    lastActivityAt: NOW - 5 * MINUTE,
+    status: null,
+    ...overrides,
+  }
+}
+
+/** A session sitting at `percent` of its window, built through cost.ts's own maths. */
+function atContext(sessionId: string, percent: number, overrides: Partial<AlertSession> = {}): AlertSession {
+  const tokens = Math.round((percent / 100) * WINDOW)
+  return session({
+    sessionId,
+    context: contextUsage(tokens, 'claude-opus-5', WINDOW),
+    ...overrides,
+  })
+}
+
+/* ------------------------------------------------------- the quiet invariant -- */
+
+describe('a brand-new project', () => {
+  it('produces no alerts at all', () => {
+    const report = deriveAlerts(emptyInput())
+    expect(report.alerts).toEqual([])
+    expect(report.worst).toBeNull()
+    expect(report.counts).toEqual({ critical: 0, warning: 0, info: 0 })
+  })
+
+  it('stays quiet with a clean repo and no sessions', () => {
+    const report = deriveAlerts(
+      emptyInput({ git: { repo: true, dirty: false, changedFiles: 0, lastChangeAt: null } }),
+    )
+    expect(report.alerts).toEqual([])
+  })
+
+  it('stays quiet when a transcript exists but nothing ever ran in it', () => {
+    // Claude Code opens a file the moment a session starts; zero requests means
+    // the session was closed without asking anything.
+    const report = deriveAlerts(
+      emptyInput({
+        sessions: [session({ sessionId: 'empty', requests: 0, tokens: 0, preContextTokens: 90_000 })],
+      }),
+    )
+    expect(report.alerts).toEqual([])
+  })
+
+  it('does not complain about uninstalled CLIs the project never asked for', () => {
+    // codex and gemini are both missing here, and that is nobody's problem.
+    const report = deriveAlerts(emptyInput({ providersInUse: [] }))
+    expect(report.alerts).toEqual([])
+  })
+
+  it('does not flag a dirty tree on its own', () => {
+    // A folder cloned five minutes ago is dirty and has run nothing. Alerting
+    // on that trains the user to ignore the panel on day one.
+    const report = deriveAlerts(
+      emptyInput({
+        git: { repo: true, dirty: true, changedFiles: 12, lastChangeAt: NOW - MINUTE },
+      }),
+    )
+    expect(report.alerts).toEqual([])
+  })
+})
+
+/* ------------------------------------------------------------------ helpers -- */
+
+describe('median', () => {
+  it('averages the middle pair on an even sample', () => {
+    expect(median([1, 2, 3, 4])).toBe(2.5)
+  })
+
+  it('takes the middle of an odd sample regardless of input order', () => {
+    expect(median([9, 1, 5])).toBe(5)
+  })
+
+  it('is zero for no sample', () => {
+    expect(median([])).toBe(0)
+  })
+})
+
+describe('formatDuration', () => {
+  it('never says "0 minutes"', () => {
+    expect(formatDuration(20_000)).toBe('1 minute')
+  })
+
+  it('steps up to hours and days', () => {
+    expect(formatDuration(90 * MINUTE)).toBe('2 hours')
+    expect(formatDuration(50 * 60 * MINUTE)).toBe('2 days')
+  })
+})
+
+/* ------------------------------------------------------------ context bloat -- */
+
+describe('contextAlerts', () => {
+  it('is silent below cost.ts\'s warning threshold', () => {
+    const alerts = contextAlerts(
+      emptyInput({ sessions: [atContext('s1', CONTEXT_WARNING_PERCENT - 1)] }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('warns at the threshold and escalates at the critical one', () => {
+    const warn = contextAlerts(emptyInput({ sessions: [atContext('s1', CONTEXT_WARNING_PERCENT)] }))
+    expect(warn.map((alert) => alert.severity)).toEqual(['warning'])
+
+    const critical = contextAlerts(
+      emptyInput({ sessions: [atContext('s1', CONTEXT_CRITICAL_PERCENT)] }),
+    )
+    expect(critical.map((alert) => alert.severity)).toEqual(['critical'])
+    expect(critical[0].action?.kind).toBe('compact-session')
+  })
+
+  it('reports only the most recent session, not every session in history', () => {
+    const alerts = contextAlerts(
+      emptyInput({
+        sessions: [
+          atContext('old', 95, { lastActivityAt: NOW - 10 * 24 * 60 * MINUTE }),
+          atContext('new', 95, { lastActivityAt: NOW - MINUTE }),
+        ],
+      }),
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].sessionId).toBe('new')
+  })
+
+  it('flags an oversized fixed prefix separately from the live window', () => {
+    const preTokens = Math.round(((PRE_CONTEXT_BLOAT_PERCENT + 1) / 100) * WINDOW)
+    const alerts = contextAlerts(
+      emptyInput({ sessions: [atContext('s1', 20, { preContextTokens: preTokens })] }),
+    )
+    expect(alerts.map((alert) => alert.kind)).toEqual(['pre-context-bloat'])
+  })
+
+  it('does not flag a prefix that is a normal share of the window', () => {
+    const preTokens = Math.round(((PRE_CONTEXT_BLOAT_PERCENT - 5) / 100) * WINDOW)
+    const alerts = contextAlerts(
+      emptyInput({ sessions: [atContext('s1', 20, { preContextTokens: preTokens })] }),
+    )
+    expect(alerts).toEqual([])
+  })
+})
+
+/* --------------------------------------------------------------- blocked -- */
+
+describe('blockedAlerts', () => {
+  it('ignores a session that only just asked', () => {
+    const alerts = blockedAlerts(
+      emptyInput({
+        sessions: [session({ sessionId: 's1', status: 'input', statusSince: NOW - MINUTE })],
+      }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('warns once the wait passes the threshold, and escalates later', () => {
+    const warn = blockedAlerts(
+      emptyInput({
+        sessions: [session({ sessionId: 's1', status: 'input', statusSince: NOW - BLOCKED_WARNING_MS })],
+      }),
+    )
+    expect(warn[0].severity).toBe('warning')
+
+    const critical = blockedAlerts(
+      emptyInput({
+        sessions: [session({ sessionId: 's1', status: 'input', statusSince: NOW - BLOCKED_CRITICAL_MS })],
+      }),
+    )
+    expect(critical[0].severity).toBe('critical')
+    expect(critical[0].action?.target).toBe('s1')
+  })
+
+  it('does not treat a ready prompt as blocked', () => {
+    // session-activity.ts calls an empty prompt `waiting` and an unanswered
+    // question `input`. Only the second is stuck; the first is every idle tab.
+    for (const status of ['waiting', 'idle', 'working', 'completed', 'exited'] as const) {
+      const alerts = blockedAlerts(
+        emptyInput({
+          sessions: [session({ sessionId: 's1', status, statusSince: NOW - 5 * BLOCKED_CRITICAL_MS })],
+        }),
+      )
+      expect(alerts, status).toEqual([])
+    }
+  })
+
+  it('never fires for history, which has no live status', () => {
+    const alerts = blockedAlerts(
+      emptyInput({
+        sessions: [session({ sessionId: 's1', status: null, lastActivityAt: NOW - 200 * MINUTE })],
+      }),
+    )
+    expect(alerts).toEqual([])
+  })
+})
+
+/* ------------------------------------------------------------- providers -- */
+
+describe('providerAlerts', () => {
+  it('fires only for a provider this project actually uses', () => {
+    const alerts = providerAlerts(emptyInput({ providersInUse: ['codex'] }))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].severity).toBe('critical')
+    expect(alerts[0].action?.target).toBe('codex')
+  })
+
+  it('says nothing about a provider in use that is installed', () => {
+    expect(providerAlerts(emptyInput({ providersInUse: ['claude'] }))).toEqual([])
+  })
+
+  it('never fires for the shell, which is always present', () => {
+    expect(providerAlerts(emptyInput({ providersInUse: ['shell'] }))).toEqual([])
+  })
+
+  it('stays quiet when detection itself failed rather than claiming everything is missing', () => {
+    // `detectProviders` returning {} means "we could not look", not "nothing is
+    // installed" — an empty map must not produce an alert per provider.
+    const alerts = providerAlerts(
+      emptyInput({ providersInUse: ['claude', 'codex'], providersInstalled: {} }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('reports each missing provider once even when several sessions use it', () => {
+    const alerts = providerAlerts(emptyInput({ providersInUse: ['codex', 'codex', 'gemini'] }))
+    expect(alerts.map((alert) => alert.id)).toEqual(['provider-missing:codex', 'provider-missing:gemini'])
+  })
+
+  /**
+   * The detail lost its opening clause in the copy pass — the title already
+   * says the tool is not installed — but kept the two things that make this
+   * critical rather than informational: the binary somebody can go and check
+   * for, and the fact that sessions do not degrade, they fail outright.
+   */
+  it('names the binary and the consequence, and repeats neither the title nor itself', () => {
+    const [alert] = providerAlerts(emptyInput({ providersInUse: ['codex'] }))
+    expect(alert.detail).toContain('PATH')
+    expect(alert.detail).toContain('fail immediately')
+    expect(alert.detail).not.toContain('This project is set up to run')
+  })
+
+  it('ignores a provider id that is not in the table instead of throwing', () => {
+    // Hardening rather than a reported crash: today `providersInstalled` is
+    // only ever built by `detectProviders()`, whose keys all come from
+    // `PROVIDERS`, so an unrecognised id is filtered out one line earlier by
+    // the `!== false` check. The moment anything else fills that map — a
+    // cached copy on disk, a provider dropped from the table between releases —
+    // the blind `PROVIDERS[provider]` lookup throws
+    // `Cannot read properties of undefined (reading 'label')` out of a pure
+    // function, through `deriveAlerts`, and takes the whole report with it.
+    // This input is exactly that shape.
+    const input = emptyInput({
+      providersInUse: ['ollama' as never, 'codex'],
+      providersInstalled: { ollama: false, codex: false } as AlertInput['providersInstalled'],
+    })
+    expect(() => providerAlerts(input)).not.toThrow()
+    expect(providerAlerts(input).map((alert) => alert.id)).toEqual(['provider-missing:codex'])
+    // And the whole report still comes back rather than rejecting.
+    expect(() => deriveAlerts(input)).not.toThrow()
+  })
+})
+
+/* ----------------------------------------------------------- heavy runs -- */
+
+/*
+ * This suite used to be `expensiveSessionAlerts` and its fixtures were dollar
+ * amounts. The rule is the same rule — one session far past the project median
+ * — measured in the unit the transcript actually recorded. See the constants in
+ * `alerts.ts`, and the bottom of `cost.ts` for why the money went.
+ */
+describe('heavySessionAlerts', () => {
+  const M = 1_000_000
+
+  function sessionsOfTokens(counts: number[]): AlertSession[] {
+    return counts.map((tokens, index) =>
+      session({ sessionId: `s${index}`, tokens, lastActivityAt: NOW - index * MINUTE }),
+    )
+  }
+
+  it('needs a real sample before a median means anything', () => {
+    const counts = Array.from({ length: HEAVY_MIN_SAMPLE - 1 }, () => M)
+    counts[0] = 100 * M
+    expect(heavySessionAlerts(emptyInput({ sessions: sessionsOfTokens(counts) }))).toEqual([])
+  })
+
+  it('fires when one session is well past the project median', () => {
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, 1.2 * M, 0.9 * M, 1.1 * M, 12 * M]) }),
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].kind).toBe('heavy-session')
+    expect(alerts[0].sessionId).toBe('s5')
+  })
+
+  it('does not fire on a ratio alone when the counts are trivial', () => {
+    // Median 4k tokens, worst 50k — twelve times the median, and a single long
+    // answer. Below the floor there is nothing here worth a word.
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([4_000, 4_000, 5_000, 3_000, 4_000, 50_000]) }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('does not fire just under the multiple', () => {
+    const justUnder = HEAVY_MIN_TOKENS * (HEAVY_MULTIPLE - 0.5)
+    const alerts = heavySessionAlerts(
+      emptyInput({
+        sessions: sessionsOfTokens([
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          justUnder,
+        ]),
+      }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('reports only the worst offender rather than one alert per session', () => {
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 8 * M, 20 * M, 15 * M]) }),
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].detail).toContain('20M')
+  })
+
+  it('never rises to critical — tokens already spent are not an emergency', () => {
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 500 * M]) }),
+    )
+    expect(alerts[0].severity).not.toBe('critical')
+  })
+
+  it('ignores sessions that recorded no tokens rather than counting them as zero', () => {
+    const sessions = [
+      ...sessionsOfTokens([2 * M, 2 * M, 2 * M, 2 * M, 2 * M, 9 * M]),
+      session({ sessionId: 'silent', tokens: 0 }),
+    ]
+    const alerts = heavySessionAlerts(emptyInput({ sessions }))
+    // A zero-token session folded into the sample would drag the median down
+    // and inflate the ratio, so its absence from the count is the assertion.
+    expect(alerts[0].detail).toContain('6 sessions')
+  })
+
+  it('carries no dollar figure into the alert it raises', () => {
+    // The whole point of the rename. This alert used to print two prices.
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 40 * M]) }),
+    )
+    expect(alerts[0].title).not.toMatch(/[$]/)
+    expect(alerts[0].detail).not.toMatch(/[$]/)
+  })
+})
+
+/* ------------------------------------------------------------ dirty tree -- */
+
+/* -------------------------------------------------------------------- loops -- */
+
+describe('loopAlerts', () => {
+  /**
+   * A trail built the way a stuck session actually produces one.
+   *
+   * Deliberately fed through the real `assessProgress` rather than hand-writing
+   * a `ProgressReport`: the thing under test is whether a *genuine* verdict
+   * reaches the panel, and a fabricated verdict would pass even if the two
+   * modules had drifted apart on what `looping` means — which is the exact
+   * failure importing `progress.ts` from here was meant to make impossible.
+   */
+  function trailOf(calls: Array<{ name: string; failed: boolean }>): ToolTrail {
+    return {
+      events: calls.map((call, index) => ({
+        at: NOW - (calls.length - index) * 20_000,
+        name: call.name,
+        failed: call.failed,
+      })),
+      compactions: [],
+      fileBytes: 4096,
+      fromByte: 0,
+      partial: false,
+    }
+  }
+
+  function looping(count: number, name = 'Bash'): AlertSession {
+    return session({
+      sessionId: 'looper',
+      progress: assessProgress(trailOf(Array.from({ length: count }, () => ({ name, failed: true })))),
+    })
+  }
+
+  it('fires on a genuine looping verdict, with the counts in the sentence', () => {
+    const alerts = loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].kind).toBe('loop')
+    expect(alerts[0].title).toContain('Bash')
+    // The evidence, not the adjective: a person should be able to act without
+    // opening anything.
+    expect(alerts[0].detail).toContain(`${REPEAT_WARNING}`)
+    expect(alerts[0].detail).toContain('Nothing has been written')
+    /*
+     * Sentences, not a run-on. Every finding's detail already ends in a full
+     * stop, and the duration used to be appended as a clause — the real alert
+     * on this machine read "…in the last 26 tool calls. over the last 6
+     * minutes." before anybody looked at one.
+     */
+    expect(alerts[0].detail).toContain('It has been doing that for')
+    expect(alerts[0].detail).not.toMatch(/\.\s+[a-z]/)
+  })
+
+  it('is critical only once repetition passes progress.ts own critical threshold', () => {
+    expect(loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))[0].severity).toBe('warning')
+    expect(loopAlerts(emptyInput({ sessions: [looping(REPEAT_CRITICAL)] }))[0].severity).toBe('critical')
+  })
+
+  it('stays silent for a session that is repeating but still writing files', () => {
+    /*
+     * `suspect`, not `looping`. This is what a refactor looks like from the
+     * outside — the same edit tool over and over, files landing every time —
+     * and an alert on it would put a warning on ordinary work, which is the
+     * failure this module's header calls the one it lives or dies by.
+     */
+    const calls = Array.from({ length: REPEAT_WARNING }, () => ({ name: 'Edit', failed: false }))
+    const progress = assessProgress(trailOf(calls))
+    expect(progress.verdict).toBe('suspect')
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'refactor', progress })] }))).toEqual([])
+  })
+
+  it('stays silent when nothing looked, and when looking found nothing to read', () => {
+    // Not looked at: `collectAlertInput` reads a trail for at most a handful of
+    // transcripts, so most entries carry no verdict at all.
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'unread' })] }))).toEqual([])
+    // Looked, and there was nothing there — a shell keeps no transcript. This
+    // must never read as health, and it must never read as a loop either.
+    const nothing = assessProgress(null)
+    expect(nothing.verdict).toBe('unknown')
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'shell', progress: nothing })] }))).toEqual([])
+  })
+
+  it('reports one session rather than every looping session at once', () => {
+    const alerts = loopAlerts(
+      emptyInput({
+        sessions: [
+          { ...looping(REPEAT_WARNING), sessionId: 'mild' },
+          { ...looping(REPEAT_CRITICAL), sessionId: 'severe' },
+        ],
+      }),
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].id).toBe('loop:severe')
+  })
+
+  it('points at the transcript, and links a session only when one can be named', () => {
+    const unlinked = loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))[0]
+    expect(unlinked.action).toEqual({
+      kind: 'open-inspector',
+      label: 'See what it is doing',
+      target: '/tmp/looper.jsonl',
+    })
+    /*
+     * No `sessionId` unless `collectAlertInput` could say which live session the
+     * transcript belongs to. A transcript's own id is the CLI's, in a different
+     * namespace from the app's — an alert carrying it would offer a link to a
+     * tab that does not exist, and the routine engine would key its loop guard
+     * on a session it cannot find.
+     */
+    expect(unlinked.sessionId).toBeUndefined()
+
+    const linked = loopAlerts(
+      emptyInput({ sessions: [{ ...looping(REPEAT_WARNING), appSessionId: 'pty-1' }] }),
+    )[0]
+    expect(linked.sessionId).toBe('pty-1')
+  })
+
+  it('is in the rule set, so a looping session reaches the panel and the routine', () => {
+    const report = deriveAlerts(emptyInput({ sessions: [looping(REPEAT_CRITICAL)] }))
+    expect(report.alerts.map((alert) => alert.kind)).toContain('loop')
+    expect(report.worst).toBe('critical')
+  })
+})
+
+describe('collectAlertInput and the loop trail', () => {
+  const temps: string[] = []
+
+  afterAll(async () => {
+    await Promise.all(temps.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined)))
+  })
+
+  /**
+   * A transcript of one session hammering one failing tool.
+   *
+   * Written in the real JSONL shape rather than a fixture object, because the
+   * whole point of the gathering half is that it parses what the CLI actually
+   * writes — `parseInsightLine` carries three documented surprises about this
+   * format and a hand-made shortcut would test none of them.
+   */
+  async function transcriptWith(project: string, calls: number, at: string): Promise<string> {
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-loop-'))
+    temps.push(config)
+    const dir = join(config, 'projects', encodeProjectPath(project))
+    await mkdir(dir, { recursive: true })
+    const lines: string[] = []
+    for (let index = 0; index < calls; index += 1) {
+      lines.push(
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'stuck',
+          cwd: project,
+          requestId: `req-${index}`,
+          timestamp: at,
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-5',
+            usage: { input_tokens: 100, output_tokens: 50 },
+            content: [{ type: 'tool_use', id: `tu-${index}`, name: 'Bash', input: {} }],
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'stuck',
+          cwd: project,
+          timestamp: at,
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: `tu-${index}`, is_error: true, content: 'boom' }],
+          },
+        }),
+      )
+    }
+    await writeFile(join(dir, 'stuck.jsonl'), lines.join('\n') + '\n', 'utf8')
+    return config
+  }
+
+  it('reads the trail and raises the alert for a folder with a live session', async () => {
+    const project = '/Users/apple/Projects/loop-fixture'
+    const config = await transcriptWith(project, REPEAT_CRITICAL, new Date(NOW - MINUTE).toISOString())
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      now: () => NOW,
+      liveSessions: () => [{ sessionId: 'pty-1', cwd: project, status: 'working', statusSince: NOW - MINUTE }],
+    })
+
+    const stuck = input.sessions.find((session) => session.sessionId === 'stuck')
+    expect(stuck?.progress?.verdict).toBe('looping')
+    // One live session in the folder, so the transcript can honestly be given a
+    // tab to point at.
+    expect(stuck?.appSessionId).toBe('pty-1')
+    expect(deriveAlerts(input).alerts.map((alert) => alert.kind)).toContain('loop')
+  }, 30_000)
+
+  it('reads no trail at all when nothing is running in the folder', async () => {
+    /*
+     * The cost gate that makes this affordable on a timer. A loop alert is about
+     * money being spent *now*; a folder with no live session has none, so the
+     * scan does not open a single transcript tail for it.
+     */
+    const project = '/Users/apple/Projects/loop-fixture-dead'
+    const config = await transcriptWith(project, REPEAT_CRITICAL, new Date(NOW - MINUTE).toISOString())
+
+    const input = await collectAlertInput(project, { configDir: config, now: () => NOW })
+    expect(input.sessions.every((session) => session.progress === undefined)).toBe(true)
+    expect(deriveAlerts(input).alerts.map((alert) => alert.kind)).not.toContain('loop')
+  }, 30_000)
+
+  it('ignores a transcript that stopped moving before the activity window', async () => {
+    const project = '/Users/apple/Projects/loop-fixture-stale'
+    const stale = new Date(NOW - LOOP_ACTIVE_WITHIN_MS - 5 * MINUTE).toISOString()
+    const config = await transcriptWith(project, REPEAT_CRITICAL, stale)
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      now: () => NOW,
+      liveSessions: () => [{ sessionId: 'pty-1', cwd: project, status: 'working', statusSince: NOW }],
+    })
+    expect(input.sessions.find((session) => session.sessionId === 'stuck')?.progress).toBeUndefined()
+  }, 30_000)
+})
+
+describe('dirtyTreeAlerts', () => {
+  const CHANGED_AT = NOW - 5 * 24 * 60 * MINUTE
+
+  function sessionsStartedAfter(count: number): AlertSession[] {
+    return Array.from({ length: count }, (_, index) =>
+      session({ sessionId: `s${index}`, startedAt: CHANGED_AT + (index + 1) * 60 * MINUTE }),
+    )
+  }
+
+  const dirty = { repo: true, dirty: true, changedFiles: 4, lastChangeAt: CHANGED_AT }
+
+  it('says nothing about a folder that is not a repository', () => {
+    const alerts = dirtyTreeAlerts(
+      emptyInput({
+        git: { repo: false, dirty: false, changedFiles: 0, lastChangeAt: null },
+        sessions: sessionsStartedAfter(10),
+      }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('says nothing about a clean tree', () => {
+    const alerts = dirtyTreeAlerts(
+      emptyInput({
+        git: { repo: true, dirty: false, changedFiles: 0, lastChangeAt: CHANGED_AT },
+        sessions: sessionsStartedAfter(10),
+      }),
+    )
+    expect(alerts).toEqual([])
+  })
+
+  it('needs several sessions to have run on top of the changes', () => {
+    const quiet = dirtyTreeAlerts(
+      emptyInput({ git: dirty, sessions: sessionsStartedAfter(DIRTY_TREE_SESSION_STREAK - 1) }),
+    )
+    expect(quiet).toEqual([])
+
+    const loud = dirtyTreeAlerts(
+      emptyInput({ git: dirty, sessions: sessionsStartedAfter(DIRTY_TREE_SESSION_STREAK) }),
+    )
+    expect(loud).toHaveLength(1)
+    expect(loud[0].action?.kind).toBe('open-git')
+  })
+
+  it('only counts sessions that started after the tree was last touched', () => {
+    // Ten sessions, all of them older than the change: the work is new, not stale.
+    const older = Array.from({ length: 10 }, (_, index) =>
+      session({ sessionId: `old${index}`, startedAt: CHANGED_AT - (index + 1) * 60 * MINUTE }),
+    )
+    expect(dirtyTreeAlerts(emptyInput({ git: dirty, sessions: older }))).toEqual([])
+  })
+
+  it('escalates once the pile has been sitting there far longer', () => {
+    const alerts = dirtyTreeAlerts(emptyInput({ git: dirty, sessions: sessionsStartedAfter(9) }))
+    expect(alerts[0].severity).toBe('warning')
+  })
+
+  /**
+   * Shortened in the app-wide copy pass, and the risk had to come through it
+   * intact. "Commit or stash" on its own is advice with no reason behind it;
+   * the reason is that several sessions have now rewritten on top of a state
+   * nothing can return to. Both halves are asserted so neither can be trimmed
+   * away as the redundant one.
+   */
+  it('keeps both halves of the dirty-tree warning — the risk and the action', () => {
+    const alerts = dirtyTreeAlerts(
+      emptyInput({ git: dirty, sessions: sessionsStartedAfter(DIRTY_TREE_SESSION_STREAK) }),
+    )
+    expect(alerts[0].detail).toContain('no clean state to roll back to')
+    expect(alerts[0].detail).toContain('Commit or stash')
+  })
+})
+
+/* ------------------------------------------------------------ the report -- */
+
+describe('deriveAlerts', () => {
+  const input = emptyInput({
+    providersInUse: ['codex'],
+    sessions: [
+      atContext('hot', 95, { lastActivityAt: NOW - MINUTE, tokens: 2_000_000 }),
+      session({ sessionId: 'stuck', status: 'input', statusSince: NOW - BLOCKED_WARNING_MS - MINUTE }),
+    ],
+  })
+
+  it('orders by severity, then by how recent the evidence is', () => {
+    const report = deriveAlerts(input)
+    const severities = report.alerts.map((alert) => alert.severity)
+    expect(severities).toEqual([...severities].sort((a, b) => (a === b ? 0 : a === 'critical' ? -1 : 1)))
+    expect(report.worst).toBe('critical')
+  })
+
+  it('counts every severity', () => {
+    const report = deriveAlerts(input)
+    const total = report.counts.critical + report.counts.warning + report.counts.info
+    expect(total).toBe(report.alerts.length)
+  })
+
+  it('gives every alert a stable id across identical scans', () => {
+    const first = deriveAlerts(input).alerts.map((alert) => alert.id)
+    const second = deriveAlerts({ ...input, now: input.now + 1000 }).alerts.map((alert) => alert.id)
+    expect(second).toEqual(first)
+  })
+
+  it('is pure — the same input twice gives the same report', () => {
+    expect(deriveAlerts(input)).toEqual(deriveAlerts(input))
+  })
+})
+
+/* --------------------------------------------------------------- gathering -- */
+
+describe('collectAlertInput', () => {
+  const temps: string[] = []
+
+  afterAll(async () => {
+    await Promise.all(
+      temps.map(async (dir) => {
+        // Chmod back first: a 000 file inside cannot be removed otherwise.
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+      }),
+    )
+  })
+
+  async function configWith(
+    project: string,
+    files: Array<{ name: string; body: string; mode?: number }>,
+  ): Promise<string> {
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-'))
+    temps.push(config)
+    const dir = join(config, 'projects', encodeProjectPath(project))
+    await mkdir(dir, { recursive: true })
+    for (const file of files) {
+      const path = join(dir, file.name)
+      await writeFile(path, file.body, 'utf8')
+      if (file.mode !== undefined) await chmod(path, file.mode)
+    }
+    return config
+  }
+
+  /** One request's worth of a real transcript line. */
+  function usageLine(sessionId: string, cwd: string): string {
+    return JSON.stringify({
+      type: 'assistant',
+      sessionId,
+      cwd,
+      requestId: `req-${sessionId}`,
+      timestamp: '2026-08-10T09:00:00.000Z',
+      message: {
+        role: 'assistant',
+        model: 'claude-opus-5',
+        usage: { input_tokens: 100, output_tokens: 50 },
+        content: [{ type: 'text', text: 'hello' }],
+      },
+    })
+  }
+
+  it('reads a project through the config dir it is given', async () => {
+    const project = '/Users/apple/Projects/alerts-fixture'
+    const config = await configWith(project, [
+      { name: 'good.jsonl', body: usageLine('good', project) + '\n' },
+    ])
+
+    const input = await collectAlertInput(project, { configDir: config, now: () => NOW })
+    expect(input.now).toBe(NOW)
+    expect(input.sessions.map((session) => session.sessionId)).toContain('good')
+  }, 30_000)
+
+  it('sees a confined session, whose transcript is in its own store', async () => {
+    /*
+     * A session started from a paired device runs with a `HOME` of its own — it
+     * cannot read the account's — so the agent writes its transcript under that
+     * home rather than under `~/.claude`. Alerts read transcripts, so a session
+     * from a phone produced no alerts at all: not "nothing is wrong", but
+     * "nothing was read". A blocked session nobody can see is precisely what
+     * this module exists to prevent.
+     */
+    const project = '/Users/apple/Projects/alerts-confined'
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-cfg-'))
+    const homes = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-homes-'))
+    temps.push(config, homes)
+    // The owner's store exists and holds nothing for this project — the shape
+    // that used to read as "this project has never been worked on".
+    await mkdir(join(config, 'projects', encodeProjectPath(project)), { recursive: true })
+    const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(project))
+    await mkdir(store, { recursive: true })
+    await writeFile(join(store, 'phone.jsonl'), usageLine('phone', project) + '\n', 'utf8')
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      deviceHomes: homes,
+      now: () => NOW,
+    })
+    expect(input.sessions.map((session) => session.sessionId)).toContain('phone')
+  }, 30_000)
+
+  it('asks only the profile store when told there are no device homes', async () => {
+    // `null` is how a caller says "the owner's own sessions, and nothing else",
+    // and it is what every test that does not care gets by default. It must not
+    // quietly fall back to whatever the app installed at boot.
+    const project = '/Users/apple/Projects/alerts-profile-only'
+    const config = await configWith(project, [
+      { name: 'own.jsonl', body: usageLine('own', project) + '\n' },
+    ])
+    const homes = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-homes-'))
+    temps.push(homes)
+    const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(project))
+    await mkdir(store, { recursive: true })
+    await writeFile(join(store, 'phone.jsonl'), usageLine('phone', project) + '\n', 'utf8')
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      deviceHomes: null,
+      now: () => NOW,
+    })
+    const ids = input.sessions.map((session) => session.sessionId)
+    expect(ids).toContain('own')
+    expect(ids).not.toContain('phone')
+  }, 30_000)
+
+  it('skips a transcript it cannot read rather than losing the whole report', async () => {
+    // Regression: a single EACCES under `~/.claude/projects` rejected the scan
+    // outright, so one unreadable file meant the panel showed a raw errno in
+    // place of every alert it had already gathered the inputs for.
+    const project = '/Users/apple/Projects/alerts-unreadable'
+    const config = await configWith(project, [
+      { name: 'good.jsonl', body: usageLine('good', project) + '\n' },
+      { name: 'locked.jsonl', body: usageLine('locked', project) + '\n', mode: 0o000 },
+    ])
+
+    const input = await collectAlertInput(project, { configDir: config, now: () => NOW })
+    expect(input.sessions.map((session) => session.sessionId)).toContain('good')
+    // The report still derives, which is the thing the user sees.
+    expect(() => deriveAlerts(input)).not.toThrow()
+
+    await chmod(join(config, 'projects', encodeProjectPath(project), 'locked.jsonl'), 0o644)
+  }, 30_000)
+
+  it('stays quiet for a project with no transcripts at all', async () => {
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-'))
+    temps.push(config)
+    await mkdir(join(config, 'projects'), { recursive: true })
+
+    const input = await collectAlertInput('/Users/apple/Projects/never-opened', {
+      configDir: config,
+      now: () => NOW,
+    })
+    expect(input.sessions).toEqual([])
+    expect(deriveAlerts(input).alerts).toEqual([])
+  }, 30_000)
+
+  it('keeps a live session it cannot join to any transcript', async () => {
+    const project = '/Users/apple/Projects/alerts-live'
+    const config = await configWith(project, [])
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      now: () => NOW,
+      liveSessions: () => [
+        {
+          sessionId: 'pty-uuid',
+          cwd: project,
+          status: 'input',
+          statusSince: NOW - BLOCKED_CRITICAL_MS,
+        },
+      ],
+    })
+    // Live ids and transcript ids are different namespaces — see the comment in
+    // `collectAlertInput`. The blocked rule is the one that wants these.
+    expect(deriveAlerts(input).alerts.map((entry) => entry.kind)).toContain('session-blocked')
+  }, 30_000)
+})
+
+describe('groupBySeverity', () => {
+  it('drops empty groups and keeps critical first', () => {
+    const groups = groupBySeverity(deriveAlerts(
+      emptyInput({ providersInUse: ['codex'] }),
+    ).alerts)
+    expect(groups.map((group) => group.severity)).toEqual(['critical'])
+  })
+
+  it('returns nothing for a quiet project', () => {
+    expect(groupBySeverity([])).toEqual([])
+  })
+})

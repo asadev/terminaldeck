@@ -1,0 +1,311 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { existsSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { IpcMain } from 'electron'
+import { agentBinaries, loginPath, PROVIDERS } from './providers'
+import { binaryEvidence, binaryNote, binaryProblem, type AgentBinary } from './agent-binaries'
+import { LOOKUP_AGENTS } from '../shared/agent-catalog'
+import { currentPlatform, withPath, type Platform } from './platform/host'
+import { firstLookupPath, lookupSpec } from './platform/lookup'
+import { launchSpec } from './tool-probe'
+import type { ProviderId } from '../shared/types'
+
+const run = promisify(execFile)
+
+export type ToolState = 'ready' | 'installed-not-authed' | 'missing' | 'unknown'
+
+export interface ToolStatus {
+  id: string
+  label: string
+  state: ToolState
+  /** Version string when we could read one. */
+  version?: string
+  /** What this unlocks, in the user's terms. */
+  purpose: string
+  /** What to do about it, when something is wrong. */
+  remedy?: string
+  /** Where to get it. */
+  url?: string
+  /**
+   * Something true even when nothing is wrong.
+   *
+   * Today it says one thing: that an agent is running from somewhere other than
+   * the copy on your PATH. Silence there would be simpler and would also be what
+   * makes a person distrust the app later, when `codex` fails in their own
+   * terminal and works here.
+   */
+  note?: string
+  /**
+   * What the machine literally said, when it said something worth quoting.
+   *
+   * Only ever set for a tool that is present and will not start — the case where
+   * the verdict alone ("Not found"? but it *is* there) is unbelievable without
+   * the evidence. `tool-probe.ts` makes the same argument for a tool that is
+   * genuinely absent.
+   */
+  evidence?: string
+  /** A missing required tool blocks the app; optional ones only disable a panel. */
+  required: boolean
+}
+
+export interface Prerequisites {
+  tools: ToolStatus[]
+  /** True when at least one agent CLI is installed AND authenticated. */
+  canRunSessions: boolean
+  /** True when a CLI exists but none are logged in — a very different message. */
+  needsLogin: boolean
+}
+
+const AGENT_PURPOSE: Record<string, string> = {
+  claude: 'Run Claude Code sessions',
+  codex: 'Run OpenAI Codex sessions',
+  gemini: 'Run Gemini CLI sessions',
+}
+
+const AGENT_URL: Record<string, string> = {
+  claude: 'https://docs.anthropic.com/en/docs/claude-code',
+  codex: 'https://github.com/openai/codex',
+  gemini: 'https://github.com/google-gemini/gemini-cli',
+}
+
+/**
+ * Where a binary is, or null.
+ *
+ * This used to spawn the literal `which` with `{ ...process.env, PATH }`, which
+ * is wrong twice over on Windows and was the reason the first launch there
+ * reported every tool — Git included, with Git plainly installed — as missing:
+ *
+ *  - `which` is not a Windows command. The spawn fails with ENOENT, the catch
+ *    swallows it, and every tool comes back `null`. `platform/lookup.ts` has
+ *    carried the `where.exe` spelling for this the whole time; this function
+ *    simply never used it.
+ *  - `{ ...process.env, PATH }` leaves Windows holding both `Path` (inherited)
+ *    and `PATH` (ours), and which one the child reads is undefined. `withPath`
+ *    exists precisely to collapse that, and `platform/host.ts` documents why.
+ */
+async function which(
+  bin: string,
+  PATH: string,
+  platform: Platform = currentPlatform(),
+): Promise<string | null> {
+  const spec = lookupSpec(platform, bin)
+  try {
+    const { stdout } = await run(spec.command, spec.args, {
+      env: withPath(process.env, PATH, platform),
+      timeout: 4000,
+      // `where.exe` is a console program. Without this, checking five tools on
+      // launch flashes five console windows over the desktop.
+      windowsHide: true,
+    })
+    // `where.exe` prints one CRLF-terminated line per match; `which` prints one.
+    return firstLookupPath(stdout)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read a version without ever hanging.
+ *
+ * Several agent CLIs open an interactive session when run with no arguments,
+ * and some block on stdin even for `--help`. Everything here therefore runs
+ * with a hard timeout and a closed stdin, and a timeout is reported as
+ * "installed, version unknown" rather than as a failure.
+ */
+async function version(
+  bin: string,
+  PATH: string,
+  resolved: string | null = null,
+  platform: Platform = currentPlatform(),
+): Promise<string | undefined> {
+  // On Windows what satisfies the lookup for an npm-installed agent CLI is a
+  // `.cmd` shim, and `CreateProcess` will not run a batch file — Node refuses
+  // it outright without `shell: true`. `providers.ts` carries the same
+  // distinction for the PTY path.
+  //
+  // This used to build that decision inline, and got the quoting wrong: with
+  // `shell: true` Node does not quote the file it puts inside
+  // `cmd /d /s /c "…"`, so `C:\Program Files\nodejs\claude.cmd` — the ordinary
+  // install location, not a corner case — split at the space and cmd ran
+  // `C:\Program`. `launchSpec` is the one place that decision and its quoting
+  // now live, shared with `tool-probe.ts` so the two cannot drift apart again.
+  // `resolved` is an absolute path that `where.exe` printed, never anything the
+  // user typed.
+  const launch = launchSpec(bin, resolved, platform)
+  try {
+    const { stdout } = await run(launch.command, ['--version'], {
+      env: withPath(process.env, PATH, platform),
+      timeout: 4000,
+      encoding: 'utf8',
+      shell: launch.shell,
+      // Every tool in the Setup panel gets a version read on open. Without this
+      // that is one console window flashed per tool, over whatever the user is
+      // doing at the time.
+      windowsHide: true,
+    })
+    return stdout.trim().split('\n')[0]?.slice(0, 60) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether an agent CLI is authenticated.
+ *
+ * There is no portable "am I logged in" command, and probing by starting a
+ * session would cost the user money. So this is deliberately conservative:
+ * we report 'installed-not-authed' ONLY where a cheap, side-effect-free check
+ * exists, and otherwise report 'ready' and let the CLI show its own login
+ * prompt inside the terminal — which is the real flow anyway.
+ */
+async function agentAuth(
+  id: ProviderId,
+  _PATH: string,
+  platform: Platform = currentPlatform(),
+): Promise<ToolState> {
+  if (id === 'claude') {
+    // `claude auth status`-style probes differ across versions; the credential
+    // file is the stable signal and reading it costs nothing.
+    //
+    // This was `/bin/sh -c 'test -s …'`, which is a shell spawn to ask a
+    // question the filesystem answers directly — and a shell that does not
+    // exist on Windows, so every Windows user with Claude Code installed was
+    // told they were signed out. `statSync` is the same test (`-s` is "exists
+    // and non-empty") on every platform, with nothing to spawn.
+    try {
+      const credentials = join(homedir(), '.claude', '.credentials.json')
+      if (existsSync(credentials) && statSync(credentials).size > 0) return 'ready'
+    } catch {
+      return 'unknown'
+    }
+    // Claude can also authenticate via the login keychain — which is a macOS
+    // concept. `security` is not on Windows or Linux, and running it there only
+    // produced an ENOENT that the catch turned into 'unknown'.
+    if (platform === 'darwin') {
+      try {
+        await run('security', ['find-generic-password', '-s', 'Claude Code-credentials'], {
+          // Unreachable on Windows — the branch above is macOS-only — but the
+          // rule is mechanical and has no exceptions, because guards move and
+          // the next reader should not have to work out whether this one still
+          // holds. `tool-probe.test.ts` enforces it by scanning this file.
+          timeout: 3000,
+          windowsHide: true,
+        })
+        return 'ready'
+      } catch {
+        return 'installed-not-authed'
+      }
+    }
+    return 'installed-not-authed'
+  }
+  // For the rest, presence is all we can honestly claim.
+  return 'ready'
+}
+
+export async function checkPrerequisites(): Promise<Prerequisites> {
+  const PATH = await loginPath()
+  const tools: ToolStatus[] = []
+
+  /*
+   * Every agent in the catalogue, not three names written here.
+   *
+   * The list used to be a literal `['claude', 'codex', 'gemini']` in this
+   * function *and* in `AGENT_IDS` in the renderer *and* in `SETUP_TOOL_IDS`, and
+   * a fourth agent would have had to be remembered in all three. It is now the
+   * catalogue's, which is also the list the New-session picker draws from — so a
+   * Setup panel that disagrees with the picker about which agents exist is no
+   * longer a thing that can happen.
+   */
+  const binaries = await agentBinaries()
+
+  for (const entry of LOOKUP_AGENTS) {
+    const id = entry.id
+    const spec = PROVIDERS[id]
+    const binary: AgentBinary | undefined = binaries[id]
+
+    /*
+     * Runnable, not merely present.
+     *
+     * `which codex` succeeds on this machine and `codex --version` exits 1 with
+     * a spawn error, and while this row asked only the first question it said
+     * "Ready" beside an agent that could not open a session. The report was the
+     * other half of the same complaint: *"Codex CLI is not installed actually…
+     * And it's not telling me it is installed also. If it is installed it should
+     * tell that."* Both halves are answered here — a working copy found anywhere
+     * declared reads as installed, with its real version; a copy that cannot
+     * start reads as not usable, with the reinstall command and the literal
+     * error underneath.
+     */
+    if (!binary || binary.runnable === null) {
+      const remedy =
+        binaryProblem(binary ?? { id, bin: entry.bin, onPath: null, runnable: null, version: null, broken: false, said: null, usedAlternate: false, checkedAt: Date.now() }) ??
+        `Install ${spec.label}, then reopen this window.`
+      tools.push({
+        id,
+        label: spec.label,
+        state: 'missing',
+        purpose: AGENT_PURPOSE[id] ?? spec.label,
+        remedy,
+        ...(binary && binaryEvidence(binary) ? { evidence: binaryEvidence(binary) as string } : {}),
+        url: AGENT_URL[id],
+        required: false,
+      })
+      continue
+    }
+
+    const state = await agentAuth(id, PATH)
+    const note = binaryNote(binary)
+    tools.push({
+      id,
+      label: spec.label,
+      state,
+      // The version the runnable copy printed, which is the copy that will
+      // actually start a session. Reading it again through the name on PATH is
+      // what produced "version not reported" beside a working install.
+      ...(binary.version ? { version: binary.version } : {}),
+      purpose: AGENT_PURPOSE[id] ?? spec.label,
+      ...(note ? { note } : {}),
+      remedy:
+        state === 'installed-not-authed'
+          ? `Installed but not signed in. Start a session and run \`${spec.bin}\` — it will walk you through signing in.`
+          : undefined,
+      url: AGENT_URL[id],
+      required: false,
+    })
+  }
+
+  for (const [bin, label, purpose] of [
+    ['git', 'Git', 'Branch and change tracking'],
+    ['gh', 'GitHub CLI', 'Pull requests and issues'],
+  ] as const) {
+    const found = await which(bin, PATH)
+    tools.push({
+      id: bin,
+      label,
+      state: found ? 'ready' : 'missing',
+      version: found ? await version(bin, PATH, found) : undefined,
+      purpose,
+      remedy: found ? undefined : `Optional. Without it, the ${label} panel stays empty.`,
+      url: bin === 'gh' ? 'https://cli.github.com' : 'https://git-scm.com',
+      required: false,
+    })
+  }
+
+  const agentIds = LOOKUP_AGENTS.map((entry) => entry.id as string)
+  const agents = tools.filter((t) => agentIds.includes(t.id))
+  return {
+    tools,
+    canRunSessions: agents.some((t) => t.state === 'ready'),
+    // Distinguish "you have nothing" from "you have it, just sign in" — those
+    // need completely different instructions.
+    needsLogin:
+      !agents.some((t) => t.state === 'ready') &&
+      agents.some((t) => t.state === 'installed-not-authed'),
+  }
+}
+
+export function registerPrerequisitesIpc(ipcMain: IpcMain): void {
+  ipcMain.handle('prereq:check', () => checkPrerequisites())
+}

@@ -1,0 +1,24 @@
+schema=1
+os=Debian GNU/Linux 12 (bookworm)
+kernel=Linux 6.8.0-137-generic
+arch=x86_64
+host=dfc05c952f20
+user=root
+root=yes
+init=container-none
+containers=none
+packages=apt-get
+web=
+cpus=2
+disk_used_kb=6206132
+disk_total_kb=39020108
+memory_total_kb=3911564
+memory_free_kb=3295404
+load1=0.38
+uptime_s=234785
+#services cannot this is running inside a container, which has nothing of its own that keeps programs running
+#containers none
+#listeners cannot this server has no tool installed for listing what is listening
+#sites none
+#adminunits cannot we can only tell which programs were added by hand on a server that keeps them this way
+#end ok

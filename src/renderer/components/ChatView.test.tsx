@@ -1,0 +1,536 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import {
+  ChatBubble,
+  ChatColumn,
+  ChatEmpty,
+  ChatView,
+  EchoBubble,
+  ECHO_SLACK_MS,
+  dayBreak,
+  forgetDrawn,
+  formatTime,
+  isoAt,
+  markdown,
+  mergeMessages,
+  recallDrawn,
+  rememberDrawn,
+  renderMarkdown,
+  settleEchoes,
+  type ChatMessage,
+  type PendingEcho,
+} from './ChatView'
+import { runningProvider } from '../shell/agent-presence'
+import { CHAT_SESSION_ATTR } from '../driving/where'
+
+/**
+ * No DOM environment in this project's test setup, so these render to static
+ * markup — which is also the environment that makes the security invariant
+ * testable: with no `window`, DOMPurify cannot initialise, and the component
+ * must fall back to escaped text rather than emitting HTML it never cleaned.
+ */
+
+const NOW = Date.parse('2026-08-12T09:00:00.000Z')
+
+function message(overrides: Partial<ChatMessage> & { id: string }): ChatMessage {
+  return { role: 'agent', text: 'Hello.', at: NOW, ...overrides }
+}
+
+describe('sanitising model output', () => {
+  it('refuses to produce HTML when it cannot be sanitised', () => {
+    // `dompurify`'s default export outside a browser is an uninitialised factory
+    // with no `sanitize`. Reading that as "nothing to clean" would ship raw
+    // model output into `dangerouslySetInnerHTML`.
+    expect(renderMarkdown('**hi**')).toBeNull()
+  })
+
+  it('escapes markup in a reply rather than rendering it', () => {
+    const html = renderToStaticMarkup(
+      <ChatBubble
+        message={message({ id: 'a', text: '<img src=x onerror="alert(1)"> and <script>alert(2)</script>' })}
+        heading={null}
+      />,
+    )
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<script')
+    expect(html).toContain('&lt;img')
+  })
+
+  it('shows a typed prompt verbatim, never as markup', () => {
+    // A person typing `# 1` means "number one", not a heading.
+    const html = renderToStaticMarkup(
+      <ChatBubble message={message({ id: 'p', role: 'you', text: '# 1 — fix *this*' })} heading={null} />,
+    )
+    expect(html).toContain('cv-plain')
+    expect(html).toContain('# 1 — fix *this*')
+    expect(html).not.toContain('<h1')
+    expect(html).not.toContain('<em>')
+  })
+})
+
+describe('what markdown is allowed to become', () => {
+  const html = (source: string): string => {
+    const out = markdown.parse(source, { async: false })
+    return typeof out === 'string' ? out : ''
+  }
+
+  it('renders a link label as markup, not as its own source', () => {
+    // Caught in the browser harness: the label arrives as a raw token, so
+    // `[**mayCarryChat**](url)` put the asterisks on screen. Models write half
+    // their links this way.
+    const out = html('see [**mayCarryChat**](https://x.example/a) and [`the gate`](https://x.example/b)')
+    expect(out).toContain('<strong>mayCarryChat</strong>')
+    expect(out).toContain('<code>the gate</code>')
+    expect(out).not.toContain('**')
+    expect(out).not.toContain('`the gate`')
+  })
+
+  it('emits no href, no src and no image, whatever the model wrote', () => {
+    const out = html('[go](https://evil.example) ![shot](https://evil.example/x.png) <https://auto.example>')
+    expect(out).not.toContain('href')
+    expect(out).not.toContain('src')
+    expect(out).not.toContain('<img')
+    // The destination survives as a tooltip, which is inert.
+    expect(out).toContain('title="https://evil.example"')
+  })
+
+  it('folds a fenced block into a closed details with its content escaped', () => {
+    const out = html('```ts\nconst x = "</code></pre><img src=x onerror=alert(1)>"\n```')
+    expect(out).toContain('<details class="cv-code"><summary>ts · 1 line</summary>')
+    expect(out).not.toContain('<img')
+    expect(out).toContain('&lt;img')
+    expect(out).not.toContain('<details open')
+  })
+})
+
+describe('merging a tail', () => {
+  const first = message({ id: 'you:1', role: 'you', text: 'go' })
+  const second = message({ id: 'agent:1', text: 'Working.' })
+
+  it('appends messages it has not seen', () => {
+    expect(mergeMessages([first], [second]).map((m) => m.id)).toEqual(['you:1', 'agent:1'])
+  })
+
+  it('replaces a message that grew, in place', () => {
+    // The live turn arrives a block at a time under one id; appending would show
+    // the same reply twice, each a prefix of the next.
+    const grown = { ...second, text: 'Working.\n\nDone.' }
+    const merged = mergeMessages([first, second], [grown])
+    expect(merged).toHaveLength(2)
+    expect(merged[1].text).toBe('Working.\n\nDone.')
+  })
+
+  it('leaves the conversation alone when nothing changed', () => {
+    const current = [first, second]
+    expect(mergeMessages(current, [])).toBe(current)
+  })
+})
+
+describe('timestamps', () => {
+  it('shows nothing for an undated message rather than 1970', () => {
+    expect(formatTime(0)).toBe('')
+  })
+
+  it('breaks the day only when the day changes', () => {
+    const later = NOW + 60_000
+    const tomorrow = NOW + 26 * 60 * 60 * 1000
+    expect(dayBreak(NOW, 0)).not.toBeNull()
+    expect(dayBreak(later, NOW)).toBeNull()
+    expect(dayBreak(tomorrow, NOW)).not.toBeNull()
+  })
+})
+
+/* ------------------------------------------------- who said it, and where -- */
+
+/**
+ * *"my message should start from the right, should be on the other side, like
+ * this one, just like Claude. See, mine is right side. … The left side will be
+ * the agent … So no need to give a name actually on both sides. Not even you,
+ * for me also not you. Just start it from the right side, give the time and all
+ * that."* — 2026-08-20.
+ *
+ * The two halves are one decision and have to be tested as one: the labels are
+ * safe to delete **because** the alignment says who is talking. Half of it —
+ * names removed, both turns still left-aligned — is a conversation in which
+ * nothing at all says who said what, which is worse than what was there before.
+ */
+describe('a turn is placed rather than labelled', () => {
+  const you = renderToStaticMarkup(
+    <ChatBubble message={message({ id: 'p', role: 'you', text: 'fix the parser' })} heading={null} />,
+  )
+  const agent = renderToStaticMarkup(
+    <ChatBubble message={message({ id: 'a', role: 'agent', text: 'Done.' })} heading={null} />,
+  )
+
+  it('names neither speaker, on either side', () => {
+    // Both spellings, because the markup used to print one of each and a
+    // half-removal is the likely regression.
+    expect(you).not.toContain('cv-who')
+    expect(agent).not.toContain('cv-who')
+    expect(you).not.toMatch(/>You</)
+    expect(agent).not.toMatch(/>Agent</)
+  })
+
+  it('marks the side, which is what replaced the names', () => {
+    // The class is what `ChatView.css` hangs `align-items: flex-end` and the
+    // tint off. Without it the markup is two identical blocks and the removal
+    // above has taken away the only thing distinguishing them.
+    expect(you).toContain('cv-message cv-you')
+    expect(agent).toContain('cv-message cv-agent')
+  })
+
+  it('puts the time at the end of the turn, not over it', () => {
+    // *"give the copy button wherever it's possible at the end of maybe
+    // messages"* — the metadata moved with it, from a header above the words to
+    // a footer below them.
+    expect(you).toContain('cv-foot')
+    expect(you.indexOf('cv-body')).toBeLessThan(you.indexOf('cv-foot'))
+    expect(you).toContain(formatTime(NOW))
+  })
+
+  it('gives the time a machine-readable date, since the printed one has none', () => {
+    // `14:32` on its own is ambiguous to everything that is not a person
+    // reading the column under a day heading.
+    expect(isoAt(NOW)).toBe(new Date(NOW).toISOString())
+    expect(isoAt(0)).toBeUndefined()
+    expect(you).toContain(`dateTime="${new Date(NOW).toISOString()}"`)
+  })
+})
+
+/* -------------------------------------------------------- the copy control -- */
+
+describe('copying a message', () => {
+  it('draws one control per turn when the host can reach a clipboard', () => {
+    const html = renderToStaticMarkup(
+      <ChatColumn
+        messages={[
+          message({ id: 'a', role: 'you', text: 'fix the parser' }),
+          message({ id: 'b', role: 'agent', text: 'Done.' }),
+        ]}
+        onCopy={() => {}}
+      />,
+    )
+    expect(html.match(/class="cv-copy"/g)).toHaveLength(2)
+    expect(html).toContain('aria-label="Copy this message"')
+  })
+
+  it('draws none at all where there is no clipboard to reach', () => {
+    /*
+     * Absent, not inert — the rule `GitHubPanel` follows for its device code.
+     * A copy button that silently does nothing looks like the clipboard failing
+     * rather than like the app never having had one, so the person retries.
+     */
+    const html = renderToStaticMarkup(
+      <ChatColumn messages={[message({ id: 'a', role: 'you', text: 'hi' })]} />,
+    )
+    expect(html).not.toContain('cv-copy')
+    // And the footer is still there with the time on it, so "no clipboard"
+    // costs the copy control and nothing else.
+    expect(html).toContain('cv-foot')
+  })
+
+  it('hands over the transcript text, not the rendering', () => {
+    /*
+     * The agent's half is rendered markdown with fenced code folded into a
+     * closed `<details>`. Copying what is on screen would hand back a reply
+     * with the diff missing, which is the one thing somebody copying an agent's
+     * answer is most likely to be after.
+     *
+     * Read as source rather than pressed, because there is no DOM in this suite
+     * and no press to make: `renderToStaticMarkup` drops handlers, and calling
+     * the component as a function trips its hooks. The distinction being
+     * guarded is one identifier wide — `message.text` against the rendered
+     * `html` — so the source is where it is visible either way.
+     */
+    const source = readFileSync(join(__dirname, 'ChatView.tsx'), 'utf8')
+    expect(source).toContain('onCopy(message.text)')
+    expect(source).not.toMatch(/onCopy\((html|renderMarkdown)/)
+  })
+
+  it('is on screen without a pointer on it', () => {
+    /*
+     * *"And give the copy button wherever it's possible at the end of maybe
+     * messages. See, it gives everywhere. So give copy button."*
+     *
+     * This shipped at `opacity: 0` until the turn was hovered, which satisfies
+     * every assertion above — the button is in the markup, it is 20px wide, it
+     * copies the right text — and fails the sentence, because on the screen as
+     * it sits there was no copy button anywhere.
+     *
+     * Read out of the stylesheet because that is where the failure lived; there
+     * is no layout engine in this suite, so the resting opacity is only
+     * checkable as text. The number itself is taste and may move; zero is not
+     * taste, it is the control being absent.
+     */
+    const css = readFileSync(join(__dirname, 'ChatView.css'), 'utf8')
+    const rest = /\.cv-copy \{[\s\S]*?\n\}/.exec(css)?.[0] ?? ''
+    expect(rest, '.cv-copy has changed shape').not.toBe('')
+    const opacity = Number(/opacity:\s*([\d.]+);/.exec(rest)?.[1])
+    expect(opacity).toBeGreaterThan(0.3)
+    // And hovering the turn still takes it to full, so the affordance reads.
+    expect(css).toMatch(/\.cv-message:hover \.cv-copy,\n\.cv-copy:focus-visible \{\n {2}opacity: 1;/)
+  })
+})
+
+describe('empty states', () => {
+  it('tells a missing transcript apart from a silent session', () => {
+    const missing = renderToStaticMarkup(<ChatEmpty state="no-transcript" />)
+    const silent = renderToStaticMarkup(<ChatEmpty state="silent" />)
+    expect(missing).toContain('No transcript for this project yet')
+    expect(silent).toContain('Nothing said yet')
+    expect(missing).not.toEqual(silent)
+  })
+
+  it('says so when the preload has no chat methods, instead of looking empty', () => {
+    // Three shipped bugs came from a component silently rendering nothing when
+    // the bridge was missing. `window` does not exist here, so this is that path.
+    expect(renderToStaticMarkup(<ChatView cwd="/tmp/x" />)).toContain('not wired into this build')
+  })
+
+  it('admits it cannot tell rather than saying the session has been quiet', () => {
+    // Two sessions in one folder is not "nothing from this session yet" — that
+    // sentence tells somebody staring at a busy terminal that it has said
+    // nothing, which is how the wrong conversation got shown in the first place.
+    const unsure = renderToStaticMarkup(<ChatEmpty state="ambiguous" />)
+    const quiet = renderToStaticMarkup(<ChatEmpty state="no-session-transcript" />)
+    expect(unsure).toContain('Cannot tell which conversation')
+    expect(unsure).not.toEqual(quiet)
+    // And it must point at the view that *is* exact.
+    expect(unsure).toContain('terminal')
+  })
+})
+
+describe('the end of the conversation', () => {
+  /**
+   * Item 4 of NEXT-UPDATE.md, in his words:
+   *
+   *   > "there should be only last message whoever has said, no great line
+   *   > under there"
+   *
+   * A sentence explaining the pane used to be rendered after the final bubble,
+   * so it followed the newest reply down the screen and was the last thing read
+   * every time the agent finished talking.
+   */
+  it('ends with the last message and nothing else', () => {
+    const html = renderToStaticMarkup(
+      <ChatColumn
+        messages={[
+          message({ id: 'a', role: 'you', text: 'Ship it.' }),
+          message({ id: 'b', text: 'Shipped.' }),
+        ]}
+      />,
+    )
+    expect(html).toContain('Shipped.')
+    // Whatever the markup, the column closes immediately after the last bubble.
+    expect(html.endsWith('</article></div>')).toBe(true)
+  })
+
+  it('says nothing about where the conversation was read from', () => {
+    const html = renderToStaticMarkup(<ChatColumn messages={[message({ id: 'a' })]} />)
+    expect(html).not.toContain('transcript')
+    expect(html).not.toContain('cv-source')
+  })
+})
+
+describe('what is running in the session, not what was launched into it', () => {
+  /**
+   * The knock-on from item 1. Run Claude starts an agent inside a session this
+   * app spawned as `$SHELL -l`, and `SessionMeta.provider` goes on saying
+   * `shell` for the rest of that session's life — correctly, it is a record of
+   * the spawn. Everything written *from* it would then be wrong: the pane would
+   * tell somebody with a live conversation on screen that a shell has nothing
+   * to read, and the control row would withdraw every picker.
+   */
+  it('stops calling a shell a shell once an agent is running in it', () => {
+    expect(runningProvider('shell', true)).toBeUndefined()
+  })
+
+  it('says shell again the moment the agent is gone', () => {
+    expect(runningProvider('shell', false)).toBe('shell')
+    // And while nothing is known — the honest reading of a session nobody has
+    // managed to look at yet is the one thing that is on record about it.
+    expect(runningProvider('shell', null)).toBe('shell')
+  })
+
+  it('does not claim to know which agent somebody typed', () => {
+    // `undefined` is "not known", which is true; `'claude'` would be a guess
+    // that reads as a fact, and `codex` is one keystroke away.
+    expect(runningProvider('shell', true)).not.toBe('claude')
+  })
+
+  it('leaves an agent session exactly as it found it', () => {
+    expect(runningProvider('claude', true)).toBe('claude')
+    expect(runningProvider('claude', false)).toBe('claude')
+    expect(runningProvider(undefined, null)).toBeUndefined()
+  })
+})
+
+describe('the pane says which session it is a view of', () => {
+  /**
+   * `app.where` answers "what am I looking at" by measuring the DOM — see
+   * `driving/where.ts` for why that is the right source rather than a shortcut —
+   * and a conversation was the one thing it could see and not name, because this
+   * pane's root carried no id. So the tool reported that this app could not say
+   * which session was in front of its own window.
+   *
+   * Asad asked for the capability in one sentence: *"if I ask it where I am right
+   * now, it should be able to answer."*
+   *
+   * These render with no `window`, so the pane falls straight through to its
+   * "not wired into this build" state — which is the point: the attribute is on
+   * the **root**, so it is there whatever the conversation underneath turns out
+   * to be, including before a transcript has been found.
+   */
+  it('carries the session id when it knows which pty it acts on', () => {
+    const html = renderToStaticMarkup(<ChatView cwd="/tmp/x" sessionId="sess-7" />)
+    expect(html).toContain(`${CHAT_SESSION_ATTR}="sess-7"`)
+  })
+
+  it('leaves the attribute off entirely when it does not', () => {
+    /*
+     * An absent attribute reads as "not known"; a guessed one reads as a fact.
+     * With no id passed in and no live session list to narrow to one, the pane
+     * genuinely does not know — and its own composer refuses to attach a file for
+     * exactly the same reason.
+     */
+    const html = renderToStaticMarkup(<ChatView cwd="/tmp/x" />)
+    expect(html).not.toContain(CHAT_SESSION_ATTR)
+  })
+})
+
+/* ------------------------------------------------------------------ echo -- */
+
+describe('a message you send is on screen before the transcript has it', () => {
+  /**
+   * The measurement this exists for, taken in the packed app on 2026-08-22:
+   * pressing Return in chat mode and then watching the pane, the first message
+   * of a session took **3.78 seconds** to appear and every one after it took
+   * about a second and a half. For the whole of that window the pane looked
+   * exactly as it looks when nothing was sent — which is the report:
+   * *"when we send our message mostly it is page still stays blank."*
+   */
+  const sent = (text: string, at: number): PendingEcho => ({ id: `e:${at}`, text, at })
+
+  it('keeps waiting while nothing in the transcript matches', () => {
+    const pending = [sent('fix the header', 1000)]
+    expect(settleEchoes(pending, [])).toHaveLength(1)
+    expect(
+      settleEchoes(pending, [message({ id: 'a', role: 'agent', text: 'fix the header', at: 2000 })]),
+    ).toHaveLength(1)
+  })
+
+  it('retires it the moment its own line is recorded', () => {
+    const pending = [sent('fix the header', 1000)]
+    const recorded = [message({ id: 'u1', role: 'you', text: 'fix the header', at: 1400 })]
+    expect(settleEchoes(pending, recorded)).toEqual([])
+  })
+
+  it('matches through the whitespace the CLI trims and the mention it adds', () => {
+    const pending = [sent('  look at this  ', 1000)]
+    const recorded = [
+      message({ id: 'u1', role: 'you', text: '@"/p/a.ts" look at this', at: 1100 }),
+    ]
+    expect(settleEchoes(pending, recorded)).toEqual([])
+  })
+
+  it('will not let one recorded line clear two identical sends', () => {
+    // Sending the same sentence twice is a real thing to do, and taking the
+    // second bubble off the screen before its own line arrives would be the
+    // blank this whole change is about, in miniature.
+    const pending = [sent('again', 1000), sent('again', 1200)]
+    const recorded = [message({ id: 'u1', role: 'you', text: 'again', at: 1300 })]
+    expect(settleEchoes(pending, recorded)).toHaveLength(1)
+    expect(settleEchoes(pending, recorded)[0].at).toBe(1200)
+  })
+
+  it('does not let an older identical line settle a new send', () => {
+    // The same words said ten minutes ago are not evidence that the message
+    // just typed has been recorded.
+    const pending = [sent('again', 100_000)]
+    const stale = [message({ id: 'u1', role: 'you', text: 'again', at: 100_000 - ECHO_SLACK_MS - 1 })]
+    expect(settleEchoes(pending, stale)).toHaveLength(1)
+  })
+
+  it('returns the same array when nothing settled, so the pane does not re-render', () => {
+    const pending = [sent('x', 1000)]
+    expect(settleEchoes(pending, [])).toBe(pending)
+  })
+
+  it('says it is sending, and never shows a time it does not have', () => {
+    const html = renderToStaticMarkup(<EchoBubble echo={sent('hello', 1000)} now={1200} />)
+    expect(html).toContain('Sending…')
+    expect(html).toContain('hello')
+    expect(html).not.toContain('<time')
+    // No copy button: there is nothing in a file to copy yet.
+    expect(html).not.toContain('cv-copy')
+  })
+
+  it('changes the label rather than the message when the wait goes on', () => {
+    const slow = renderToStaticMarkup(<EchoBubble echo={sent('hello', 1000)} now={1000 + 60_000} />)
+    // The words stay — they really were written into the session, and the
+    // terminal one click away is showing them.
+    expect(slow).toContain('hello')
+    expect(slow).not.toContain('Sending…')
+    expect(slow).toContain('has not written it down yet')
+  })
+})
+
+/* ------------------------------------------------- coming back to a tab -- */
+
+describe('leaving a chat tab and coming back', () => {
+  /**
+   * `App.tsx` mounts this pane only while its session is in front, so every
+   * switch away unmounts it and every switch back re-reads the transcript from
+   * byte zero. Measured on 2026-08-22 the pane drew "Reading the transcript…"
+   * in between; on a large transcript that is seconds of blank over a
+   * conversation somebody was reading a moment earlier.
+   */
+  it('remembers what a pane was showing, keyed by its conversation', () => {
+    forgetDrawn()
+    const drawn = [message({ id: 'a', text: 'one' })]
+    rememberDrawn('/p/a.jsonl', drawn)
+    expect(recallDrawn('/p/a.jsonl')).toEqual(drawn)
+    expect(recallDrawn('/p/b.jsonl')).toEqual([])
+  })
+
+  it('hands back a copy, so the caller cannot mutate the cache', () => {
+    forgetDrawn()
+    rememberDrawn('/p/a.jsonl', [message({ id: 'a', text: 'one' })])
+    const first = recallDrawn('/p/a.jsonl')
+    first.push(message({ id: 'b', text: 'two' }))
+    expect(recallDrawn('/p/a.jsonl')).toHaveLength(1)
+  })
+
+  it('keeps a bounded number of panes rather than the whole folder', () => {
+    forgetDrawn()
+    for (let i = 0; i < 12; i += 1) rememberDrawn(`/p/${i}.jsonl`, [message({ id: `m${i}` })])
+    // The oldest are dropped; the newest are all still there.
+    expect(recallDrawn('/p/0.jsonl')).toEqual([])
+    expect(recallDrawn('/p/11.jsonl')).toHaveLength(1)
+  })
+
+  it('ignores a pane with no conversation to key on', () => {
+    forgetDrawn()
+    rememberDrawn('', [message({ id: 'a' })])
+    expect(recallDrawn('')).toEqual([])
+  })
+})
+
+/* --------------------------------------------------- where to type, said -- */
+
+describe('the empty state points at the box that is on screen', () => {
+  it('points at the composer when this pane has one', () => {
+    const html = renderToStaticMarkup(<ChatEmpty state="no-session-transcript" canType />)
+    expect(html).toContain('Type below')
+    expect(html).not.toContain('in the terminal')
+  })
+
+  it('still points at the terminal for a pane that is read-only', () => {
+    // Two callers render this for a transcript rather than for a session, and
+    // for them the old sentence is simply true.
+    const html = renderToStaticMarkup(<ChatEmpty state="no-session-transcript" />)
+    expect(html).toContain('in the terminal')
+  })
+})

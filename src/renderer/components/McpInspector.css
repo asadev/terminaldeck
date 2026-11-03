@@ -1,0 +1,1394 @@
+/* ============================================================================
+   MCP inspector — configured servers, what each one offers, and a form built
+   from a tool's own schema.
+
+   This is the densest surface in the app, and it used to be the narrowest: a
+   single scrolling column of disclosure rows, because a detail pane in a 300px
+   drawer shows one tool name and no schema. With the window it gets columns —
+   tools lay out two or three abreast, and a schema form puts its scalar fields
+   side by side — and it loses the nesting. A server was a card, holding a tool
+   that was a card, holding a `pre` that was a card. Now a server is a row, an
+   open server is a tint, and the only outlines left are on the inputs, which
+   are the one thing that has to look like something you can type into.
+   ============================================================================ */
+
+.mcp {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: 96rem;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.mcp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  flex-shrink: 0;
+  min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-5);
+}
+
+.mcp-heading {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+/* The ⓘ dot that replaced the paragraph. It is a dot on a line of its own, so
+   it only has to sit where the paragraph's first line sat. */
+.mcp-subheading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--sp-5);
+}
+
+/*
+  The folder this page is reading, in one word.
+
+  Drawn as a fact rather than a control: it is the same shape as the `user` /
+  `project` scope tags on the rows below, because it answers the same kind of
+  question — *which* one of these am I looking at. The full path is in its
+  `title`; see `folderName` for why the path is not on the page.
+*/
+.mcp-folder {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 28ch;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+  The buttons hug the right, which they did not.
+  
+  `.mcp-head > div` above matches the actions as well as the text beside them,
+  so the header split itself in half and put "Add server" and "Reload" in the
+  middle of the window with 460px of nothing after them. It went unnoticed while
+  a paragraph filled the left half; with that paragraph now behind a ⓘ dot the
+  two buttons were floating in the centre of an empty bar.
+*/
+.mcp-head-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.mcp-refresh,
+.mcp-add-open,
+.mcp-server-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.mcp-refresh,
+.mcp-add-open {
+  font-size: var(--t-body);
+}
+
+.mcp-refresh:hover:not(:disabled),
+.mcp-add-open:hover:not(:disabled),
+.mcp-server-action:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+/* The way to the store, which used to be the second half of a two-segment
+   switch on this page.
+
+   It is a link and not a button-shaped thing, because it *leaves*: the store is
+   a page of its own now, holding this catalogue beside the browser's
+   extensions. A filled control here would read as "do something to what you are
+   looking at", and the chevron plus the accent colour is the app's own way of
+   saying "somewhere else". Left-aligned above the page's own content, where the
+   switch sat, so nobody who knew where the store was has to go looking. */
+.mcp-to-store {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  align-self: flex-start;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-to-store:hover {
+  background: var(--fill-tertiary);
+}
+
+/* The second press of Remove, in the colour of what it does.
+
+   The same two states `CloseSessionConfirm.css` gives Delete, and for the same
+   reason — Asad specified them twice and both times the same way: *"when I hover
+   on the delete, it will have the white text and red color instead of this blue.
+   And when it's not hover, it will have red text only."* A red block at rest
+   would be the loudest thing on a list whose safe answer is the button beside
+   it. */
+.mcp-server-action[data-danger] {
+  background: transparent;
+  color: var(--color-critical);
+}
+
+.mcp-server-action[data-danger]:hover:not(:disabled),
+/* Keyboard included, or the one control here that destroys something is the one
+   control that says nothing to somebody not using a mouse. */
+.mcp-server-action[data-danger]:focus-visible:not(:disabled) {
+  background: var(--critical-fill);
+  color: var(--critical-fill-ink);
+}
+
+/* The one thing this panel is for, once there is a list to add to. It was a
+   grey chip identical to Reload sitting beside it, so the screen's primary
+   action and its "read it again" action were drawn as the same control — and
+   the accent, which exists to say "this is the action", was spent on nothing at
+   all here. */
+.mcp-add-open {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.mcp-add-open:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.mcp-refresh:disabled,
+.mcp-add-open:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* This panel is almost entirely buttons and disclosure rows; one rule keeps
+   every one of them reachable by keyboard. */
+.mcp-refresh:focus-visible,
+.mcp-add-open:focus-visible,
+.mcp-server-action:focus-visible,
+.mcp-server-toggle:focus-visible,
+.mcp-tab:focus-visible,
+.mcp-item-head:focus-visible,
+.mcp-array-add:focus-visible,
+.mcp-array-remove:focus-visible,
+.mcp-run:focus-visible,
+.mcp-input:focus-visible,
+.mcp-checkbox:focus-visible,
+.mcp-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+/* --------------------------------------------------------------- messages -- */
+
+.mcp-note {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-secondary);
+}
+
+/* `.mcp-empty` was here. Nothing configured is a page state, not a footnote,
+   and it is a `PageEmpty` now — the same block, with the same glyph and the
+   same title voice, as every other page in the app with nothing on it. */
+
+.mcp-error {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+  color: var(--color-critical);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------- servers -- */
+
+.mcp-servers,
+.mcp-items,
+.mcp-args {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-servers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+}
+
+/* A row, not a card. The one that is open takes a tint so you can see which
+   half of the page belongs to it. */
+.mcp-server {
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-server[data-open='false']:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-server[data-open='true'] {
+  background: var(--bg-secondary);
+  padding-bottom: var(--sp-5);
+}
+
+.mcp-server-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mcp-server-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* An HTTP or SSE server has nothing to open — see the note in `McpInspector`
+   where the row is drawn. No pointer, no hover, full contrast: this is not a
+   control somebody is being denied, it is a row that was never one. */
+.mcp-server-toggle:disabled {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+/* The machine switch, above everything this page draws.
+
+   `.settings-scope` in `SettingsWindow.css` is the control itself — the same one
+   the Coding AI pane's scope switch is, per `components/SegmentedSwitch.tsx`. It
+   was `.page-pills` until 2026-08-22; the two are now split by the question they
+   answer, and this page asks *which machine*.
+
+   Only the gap under it is this page's business. `.settings-scope`'s own bottom
+   margin is sized for the top of a settings pane, and what sits under this one
+   is the scope caption — a `--sp-4` line, at the same `--sp-4` remove the rest
+   of this column keeps. */
+.mcp > .settings-scope {
+  margin-bottom: var(--sp-4);
+}
+
+/*
+  The same row, for a server on another machine — a `<span>`, because there is
+  nothing to press.
+
+  It is not the disabled button above: that one is a control this app has and
+  cannot use on one transport. This is a row that was never a control, because
+  opening a server over there would spawn a process on that computer and no
+  frame on this wire carries the request. Same geometry, so the two lists read
+  as one page.
+*/
+.mcp-server-static {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+}
+
+.mcp-server-name {
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.mcp-server-state {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding-left: var(--sp-4);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+/* Status dot. Colours alias the session tokens so a connected MCP server and a
+   working session read the same way across the app. */
+.mcp-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--status-idle);
+}
+
+.mcp-dot[data-state='connecting'] {
+  background: var(--status-waiting);
+}
+.mcp-dot[data-state='ready'] {
+  background: var(--status-completed);
+}
+.mcp-dot[data-state='failed'] {
+  background: var(--color-critical);
+}
+.mcp-dot[data-state='closed'] {
+  background: var(--status-input);
+}
+
+.mcp-tag {
+  flex-shrink: 0;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-secondary);
+}
+
+/* Where a server is configured is a fact about it, not a warning and not a
+   selection — so it is stated in a firmer fill, not in colour. */
+.mcp-tag[data-scope='project'],
+.mcp-tag[data-scope='local'] {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+/* Which machine a server lives on. Quieter than the scope beside it: it is the
+   answer to "whose is this", which only matters at all once there is more than
+   one machine on the page. */
+.mcp-tag[data-machine='true'] {
+  background: none;
+  padding-inline: 0;
+  color: var(--text-muted);
+}
+
+/*
+   Price. Free is stated in the same neutral fill as everything else beside it:
+   the chip earns its place by being on every row, and colouring the ordinary
+   case would make *Free* look like an award.
+
+   The two that cost money are warmer, and only those two. `metered` and `paid`
+   are the rows where somebody is about to type a key into a field and find out
+   later that using it is billed — which is the whole reason the field exists.
+   They are warning-coloured rather than critical: nothing is broken, and a store
+   that shouted at a paid tool would be editorialising about price. */
+.mcp-tag[data-cost='metered'],
+.mcp-tag[data-cost='paid'] {
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--color-warning);
+}
+
+.mcp-tag[data-warn='true'] {
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+  color: var(--color-warning);
+}
+
+/* The command is the one thing that identifies a server; it has to be read. It
+   sits under the name, indented to it. */
+.mcp-server-command {
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.mcp-server > .mcp-note,
+.mcp-server > .mcp-error {
+  margin-left: var(--sp-4);
+  max-width: 78ch;
+}
+
+/* Space, not a rule: the tint behind an open server already says where its
+   detail begins. */
+.mcp-server-body {
+  margin-top: var(--sp-5);
+  padding-left: var(--sp-4);
+}
+
+.mcp-meta {
+  margin: 0;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+.mcp-meta-dim {
+  color: var(--text-muted);
+}
+
+.mcp-instructions {
+  max-width: 84ch;
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------------ tabs -- */
+
+/* Three words and a refresh. The bordered strip this replaced drew a rule
+   across the window to separate a three-way switch from what it switches. */
+.mcp-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-5);
+}
+
+.mcp-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  font-family: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  text-transform: capitalize;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.mcp-tab:hover {
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+.mcp-tab[aria-selected='true'] {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+.mcp-count {
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.mcp-tabs .mcp-server-action {
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------------------- items -- */
+
+/* Tools two or three abreast — a single column of one-line rows was a drawer's
+   answer to a drawer's width. An open tool takes the whole row back, because
+   its form and its result need it. */
+.mcp-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+  gap: var(--sp-05) var(--sp-6);
+  margin-top: var(--sp-3);
+}
+
+.mcp-item {
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
+.mcp-items > .mcp-note,
+.mcp-item[data-open='true'] {
+  grid-column: 1 / -1;
+}
+
+/* An open tool is marked by the surface it stands on. Everything inside it
+   works in tints of the ink, so nothing needs an edge of its own. */
+.mcp-item[data-open='true'] {
+  margin: var(--sp-2) 0;
+  padding-bottom: var(--sp-2);
+  background: var(--bg-primary);
+}
+
+.mcp-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-15) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  font-family: inherit;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+button.mcp-item-head:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-item-name {
+  flex-shrink: 0;
+  max-width: 26ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.mcp-item-title {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.mcp-item-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.mcp-item-body {
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+}
+
+.mcp-item-description {
+  max-width: 84ch;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-args {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 var(--sp-2) var(--sp-4);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+.mcp-args code {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------- details -- */
+
+.mcp-details {
+  margin-top: var(--sp-3);
+  font-size: var(--t-callout);
+}
+
+.mcp-details > summary {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+.mcp-details > summary:hover {
+  color: var(--text-primary);
+}
+
+/* A tint of the ink rather than a panel: this sits inside an open tool, which
+   already sits inside an open server, and a third edge is one too many. */
+.mcp-pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  max-height: 22rem;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ form -- */
+
+/* Scalar fields side by side; anything with a body of its own — an object, an
+   array, a JSON box — takes the full width. */
+.mcp-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: var(--sp-4) var(--sp-6);
+  /* Bottom-aligned, so the inputs across a row sit on one line whether or not
+     the field above them declared a description. */
+  align-items: end;
+  margin-bottom: var(--sp-4);
+}
+
+.mcp-form-note,
+.mcp-form > .mcp-field[data-kind='object'],
+.mcp-form > .mcp-field[data-kind='array'],
+.mcp-form > .mcp-field[data-kind='json'] {
+  grid-column: 1 / -1;
+}
+
+.mcp-form-note {
+  margin: 0;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* A checkbox beside its label reads better than one stacked under it. */
+.mcp-field[data-kind='boolean'] {
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.mcp-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+}
+
+.mcp-field-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+}
+
+.mcp-field-required {
+  color: var(--color-critical);
+}
+
+.mcp-field-type {
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+}
+
+.mcp-field-description {
+  max-width: 68ch;
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-field-error {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--color-critical);
+}
+
+/* The one place an outline is still the right answer: a field has to look like
+   something you can type into. */
+.mcp-input {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-family: inherit;
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.mcp-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.mcp-input:disabled {
+  opacity: 0.5;
+}
+
+.mcp-input[aria-invalid='true'] {
+  border-color: var(--color-critical);
+}
+
+.mcp-input-json {
+  height: auto;
+  min-height: 5rem;
+  padding: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+
+.mcp-checkbox {
+  width: var(--sp-4);
+  height: var(--sp-4);
+  accent-color: var(--accent);
+}
+
+/* One hairline for one job: it says how deep in the schema you are, which no
+   amount of space says on its own. */
+.mcp-nested {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.mcp-array {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.mcp-array-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+}
+
+.mcp-array-remove {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  font-family: inherit;
+  font-size: var(--t-title3);
+  line-height: 1;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.mcp-array-remove:hover:not(:disabled),
+.mcp-array-add:hover:not(:disabled) {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+}
+
+.mcp-array-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* ------------------------------------------------------------------- run -- */
+
+.mcp-run-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+/* The one filled button on the page. */
+.mcp-run {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  font-family: inherit;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-run:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.mcp-run:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+.mcp-run-hint {
+  font-size: var(--t-callout);
+  color: var(--text-muted);
+}
+
+/* The one line left in this file that is not around an input: it is the result
+   saying whether the call worked, which is the whole point of pressing Run. */
+.mcp-result {
+  margin-top: var(--sp-4);
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--status-completed);
+}
+
+.mcp-result[data-ok='false'] {
+  border-left-color: var(--color-critical);
+}
+
+.mcp-result-error {
+  margin: 0;
+  color: var(--color-critical);
+  font-size: var(--t-callout);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------- the add form -- */
+
+/* Two neutral buttons side by side. The filled accent one lives inside the
+   form, not up here: the header offers to *open* the form, and painting that
+   the same colour as the button that actually writes the config would put two
+   competing primaries on one screen. */
+.mcp-head-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Layered, not outlined — the form is a surface sitting on the page rather
+   than a rectangle drawn around some fields.
+
+   The width cap is not decoration. `.mcp` is 96rem wide, and a form that
+   inherits all of it puts a 700px box around a word like "filesystem" and
+   drags the label miles from the field it names. Text inputs are capped by
+   what is comfortable to read back, not by the room available. */
+.mcp-add {
+  flex-shrink: 0;
+  max-width: 52rem;
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* Exactly two columns, not `auto-fit`. Auto-fit sized the tracks off the
+   container and produced three or four of them, so the two short fields sat in
+   the first two and the rest of the row was empty air while every other field
+   spanned the lot — a ragged right edge that reads as a bug even when nobody
+   can name it. Two fixed tracks keep the top row full and everything aligned
+   to the same grid. */
+.mcp-add-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+/* One column once two would be narrower than a readable field. */
+@media (max-width: 620px) {
+  .mcp-add-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mcp-field-wide {
+  grid-column: 1 / -1;
+}
+
+/* `.mcp-input` fixes a control height, which is right for one line and wrong
+   for a box meant to hold several. */
+/* `.mcp-input` fixes a control height, which is right for one line and wrong
+   for a box meant to hold several.
+
+   `resize` is off because the platform's own grabber is a raw OS handle — the
+   only one anywhere in a window that draws every other control itself, and it
+   appears in the bottom-right corner of an otherwise custom field. The box
+   grows on its own instead: `field-sizing: content` between the floor and the
+   ceiling below, so pasting six environment variables in makes room for them
+   without anybody dragging a corner. */
+.mcp-textarea {
+  height: auto;
+  min-height: calc(var(--control-h) * 2);
+  max-height: calc(var(--control-h) * 7);
+  field-sizing: content;
+  padding: var(--sp-2);
+  line-height: var(--lh-body);
+  resize: none;
+}
+
+.mcp-add-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* `.mcp-field-help` and `.mcp-added` were here.
+
+   The first was three captions under three fields — *"As you would type it in a
+   terminal"*, *"Optional, one per line"*, *"Available everywhere"* — and the
+   second was a green banner that stayed on the page for the rest of the session
+   after an add, carrying the CLI's two lines concatenated into one. Both are the
+   standing prose he has been deleting all week: *"don't put any single statement
+   in anywhere… We want simplicity. Let the smart people use it."* The one caption
+   worth keeping is behind the dot beside **Save it for**, and the confirmation of
+   an add is the row appearing. */
+
+/* ----------------------------------------------------------------- store -- */
+
+/* The store is the second tab of this page, so it inherits the page's
+   vocabulary rather than bringing its own: the same `.mcp-head` bar, the same
+   `.mcp-tag` chips, the same two-press Remove. What is new below is only what
+   the servers list has no equivalent of — a row that is a product rather than a
+   process, a run of facts under it, and the fields a row needs before it can be
+   installed.
+
+   The class names deliberately rhyme with `browser/BrowserWorkspace.css`'s
+   `.bw-store-*`, because the two stores are meant to read as one product —
+   *"add one like in our MCP store"* — and a reader moving between the two files
+   should find the same nouns. They are not shared: that stylesheet is scoped to
+   the browser window's own chrome and this page's tokens are the settings
+   window's. Two identical-looking rules with different parents is the honest
+   arrangement; one rule reaching across two windows is not. */
+
+.mcp-store {
+  display: flex;
+  flex-direction: column;
+}
+
+/* What was looked for on this machine and what was found — three binaries and
+   the environment probe. A statement, not a warning, so nothing here is
+   coloured until something is actually missing. */
+.mcp-store-runtimes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--t-footnote);
+}
+
+.mcp-store-runtimes > li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  min-width: 0;
+}
+
+.mcp-store-runtimes code {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+/* A runtime that is not here is stated in the warning colour rather than the
+   critical one: a person with no Docker is not doing anything wrong, and half
+   this catalogue does not care. */
+.mcp-store-runtimes > li[data-found='false'] code {
+  color: var(--color-warning);
+}
+
+.mcp-store-section {
+  margin-top: var(--sp-6);
+}
+
+.mcp-store-heading {
+  margin: 0;
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.mcp-store-note {
+  max-width: 78ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The store's first shelf: the door to a server you type yourself, and every
+   one you have typed.
+
+   Given a border rather than left as a plain section, and that is the whole
+   visual argument. Everything else on this screen is somebody else's catalogue;
+   this one shelf is yours, it is a place you act rather than browse, and it sits
+   above nine shelves of rows that all look alike. Without an edge it reads as a
+   paragraph of advice at the top of a list.
+
+   Not a colour, and not a background: `--bg-hover` here would fight every row
+   inside it, which uses that same token on hover. */
+.mcp-store-own {
+  /* `--sp-2` down the sides it used to give `--sp-3`: there is nothing stacked
+     inside it any more, so the padding was holding open a box around one line. */
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+/* The whole card, in one line: the name of the shelf, the dot that still holds
+   the paragraph that used to be printed under it, and the two doors.
+
+   Measured on the shipped page at 1440x900: the card was 208px of chrome above
+   the first row of a store whose first row was already below the fold.
+
+   Wraps, because at a half-width column the heading and the two buttons do not
+   share a line — and when it wraps the buttons go under the name rather than off
+   the edge, which is the one arrangement that stays readable. */
+.mcp-store-own-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+/* The heading sits on that line now, so it carries no margin of its own. */
+.mcp-store-own-bar > .mcp-store-heading {
+  margin: 0;
+}
+
+.mcp-store-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The same row geometry as `.mcp-server` next door, so the two tabs do not read
+   as two applications. */
+.mcp-store-row {
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-store-row:hover {
+  background: var(--bg-hover);
+}
+
+/* A row with nothing to press is quieter, and quieter is the whole message: it
+   is not broken, it is not for this machine. */
+.mcp-store-row[data-state='unavailable'],
+.mcp-store-row[data-state='taken'] {
+  opacity: 0.75;
+}
+
+.mcp-store-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mcp-store-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/*
+   Every chip on the head, as one thing the head can give way on.
+
+   The head has to be able to wrap — `store/store-page.css` argues that, and a
+   half-width column proves it — but with the chips as flat children of the head
+   the item that dropped to the second line was whichever one did not fit, and
+   at 575px on `supabase` that was **Install**: alone, at the left, under the
+   name, reading as a button belonging to nothing.
+
+   `flex: 1 1 0` is what fixes that, and the `0` is the whole of it. A wrapping
+   flex container breaks its lines on each item's *hypothetical* main size and
+   only shrinks what is left on a line afterwards — so `flex-basis: auto` would
+   still have measured this cluster at its full content width, decided Install
+   did not fit beside it, and wrapped the button anyway. At a basis of zero the
+   cluster asks for nothing, the head never has a reason to break, and the
+   cluster then grows into whatever is left and wraps *inside itself*. Name and
+   action keep the first line at every width this page can produce.
+*/
+.mcp-store-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.mcp-store-version {
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Installed is said on the row, not implied by which button is drawn. */
+.mcp-store-state {
+  flex-shrink: 0;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--accent);
+}
+
+.mcp-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The one accent on a row: the thing you came here to press. Same metrics as
+   `.mcp-add-open`, which is this page's other primary. */
+.mcp-store-install {
+  flex-shrink: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-footnote);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.mcp-store-install:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.mcp-store-install:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mcp-store-install:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mcp-store-summary {
+  max-width: 78ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* Source, package, how it runs, what it needs, and the exact command. Two
+   columns of label-and-value, because these are read by scanning down the
+   labels rather than across the sentence. */
+.mcp-store-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+  gap: var(--sp-1) var(--sp-6);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+}
+
+.mcp-store-facts > div {
+  display: flex;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mcp-store-facts dt {
+  flex: 0 0 6.5rem;
+  color: var(--text-muted);
+}
+
+.mcp-store-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.mcp-store-facts code {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.mcp-store-facts a {
+  color: var(--text-secondary);
+  text-decoration-color: var(--border-strong);
+}
+
+.mcp-store-facts a:hover {
+  color: var(--accent);
+}
+
+/*
+   What Install asked for.
+
+   Set apart from the row rather than continuous with it, because the row is
+   something being read and this is something being answered: the rule down the
+   left is the same device `store/StoreRowMore.css` uses for the facts a
+   disclosure opened, so the two "this appeared because you pressed something"
+   states on a store row look like one idea.
+
+   The fields inside it are unchanged — same grid, same widths. What changed is
+   when they exist; `components/McpStoreRow.tsx` carries that argument and the
+   measurement behind it.
+*/
+.mcp-store-ask {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--accent);
+}
+
+.mcp-store-ask-head {
+  max-width: 78ch;
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-store-ask-head > b {
+  font-family: var(--font-mono);
+  font-weight: inherit;
+  color: var(--text-primary);
+}
+
+.mcp-store-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* The fields themselves. */
+.mcp-store-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: var(--sp-3) var(--sp-6);
+  margin: var(--sp-3) 0 0;
+}
+
+.mcp-field-hint {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/*
+   The ⓘ that used to draw on a line of its own.
+
+   `.mcp-field` is a flex column, so every child of it is a flex item on a line
+   of its own — and the *"where this is kept"* dot was a sibling of the hint.
+   The result was a lone ⓘ under the hint with nothing beside it, on every
+   secret-taking row in the store, which reads as a control somebody forgot to
+   label.
+
+   No rule in this file could pull the sibling back up: a flex item is
+   blockified whatever `display` it asks for. Putting it *inside* the hint was
+   tried and was not enough either — these hints fill their line, so the dot
+   wrapped alone anyway, and `&nbsp;` did not hold it back in Chromium. It lives
+   on `.mcp-field-label` now, which is already a baseline-aligned flex row with
+   the required asterisk and the `secret` chip on it, so there is always
+   something beside it at every width. `McpStoreRow.tsx` carries that argument.
+
+   What is left here is the line box: `--t-footnote` type with an `inline-flex`
+   child 1.15em tall, whose default `vertical-align: middle` would lift it off
+   the label's baseline.
+*/
+.mcp-field-label > .hovernote-dot {
+  vertical-align: baseline;
+}
+
+/* Something true about a row that Install does not fix — archived, metered,
+   writes to your repository. Warning-coloured because it is a thing to weigh,
+   not a failure. */
+.mcp-store-caveat {
+  max-width: 78ch;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--color-warning);
+}
+
+/* What the last press on this row said. It stays until the next press, and it
+   is the only place a success is ever printed — the row redrawing as installed
+   is the other half of the confirmation. */
+.mcp-store-said {
+  max-width: 78ch;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.mcp-store-row > .mcp-note,
+.mcp-store-row > .mcp-run-hint {
+  max-width: 78ch;
+}
+
+/* The one-word version of why a row has no Install, in the row's head.
+
+   The store browses by shelf now — Databases, Driving a browser — so a row with
+   no button sits inside a heading about what it does rather than under one about
+   why it cannot be had. The chip carries that fact where the section heading
+   used to; the sentence under the row still carries the reason. Shaped after
+   `.bw-store-chip` in `browser/BrowserWorkspace.css`, because the two stores are
+   one product and a person should not have to learn two vocabularies of chip. */
+.mcp-store-chip {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+}
+
+/* The runtime was looked for on this machine and was not found. Warmer than the
+   neutral chip beside it because it is a different sentence, and quieter than an
+   error, because nothing is wrong: the store is telling the truth. */
+.mcp-store-chip-no {
+  background: color-mix(in srgb, var(--color-critical) 14%, transparent);
+  color: var(--color-critical);
+}

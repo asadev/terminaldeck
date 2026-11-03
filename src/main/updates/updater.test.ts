@@ -1,0 +1,1291 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AppUpdater } from 'electron-updater'
+import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
+import {
+  LAUNCH_DELAY_MS,
+  MAX_NOTES_LENGTH,
+  MIN_AUTOMATIC_INTERVAL_MS,
+  PORTABLE_REASON,
+  UPDATE_STATE_CHANNEL,
+  codeSignaturePath,
+  createUpdateController,
+  installNowArgs,
+  macBundleRoot,
+  readNotes,
+  readSizeBytes,
+  registerUpdateIpc,
+  updateSupport,
+  type UpdateEnvironment,
+  type UpdateState,
+  type UpdaterLike,
+} from './updater'
+import type { FocusSource } from './window-focus'
+
+/**
+ * These tests are about the promises the panel makes on this module's behalf.
+ *
+ * Three of them are worth stating, because each is a way this feature could
+ * quietly become a lie:
+ *
+ *  - **Nothing installs itself.** The fake counts every `quitAndInstall`, and
+ *    the count is asserted to be zero on each path that could plausibly reach
+ *    it by accident — registering the IPC, finding an update, downloading one,
+ *    a failed download, and six hours of timers — and to be exactly one only
+ *    where a user explicitly asked. A default flipped in a future
+ *    electron-updater, or an `autoDownload` left at its default `true`, shows
+ *    up here.
+ *  - **A failed check is a sentence, not a throw.** Checks run from a timer with
+ *    nobody awaiting them, so a rejection would be an unhandled one.
+ *  - **Unsigned is `unsupported`, not `error`.** The two look similar in a panel
+ *    and mean opposite things: one says try again later, the other says this
+ *    will never work, go and download it. Reporting the first for the second is
+ *    what "silently failing forever" looks like.
+ *
+ * Nothing here touches the network or the disk. The updater is a fake that
+ * records calls and lets a test fire the emitter events by hand, and
+ * `fileExists` is a set of paths.
+ */
+
+/* ------------------------------------------------------------- the fake -- */
+
+type Listeners = {
+  'checking-for-update': Array<() => void>
+  'update-available': Array<(info: UpdateInfo) => void>
+  'update-not-available': Array<(info: UpdateInfo) => void>
+  'download-progress': Array<(progress: ProgressInfo) => void>
+  'update-downloaded': Array<(event: UpdateDownloadedEvent) => void>
+  error: Array<(error: Error) => void>
+}
+
+class FakeUpdater implements UpdaterLike {
+  autoDownload = true
+  autoInstallOnAppQuit = false
+
+  readonly calls = { check: 0, download: 0, quitAndInstall: 0 }
+
+  /** Set to make the matching call reject before it emits anything. */
+  checkRejectsWith: Error | null = null
+  downloadRejectsWith: Error | null = null
+
+  /**
+   * Set to reject *after* the emitter has already run.
+   *
+   * This is the real macOS order, not a contrived one. `MacUpdater` calls
+   * `dispatchUpdateDownloaded(event)` — which is what `update-downloaded`
+   * comes from — and only then waits, resolving when Squirrel has pulled the
+   * file through its local proxy and rejecting on a `nativeUpdater` error.
+   * So a rejection genuinely can land on a state that already says `ready`.
+   */
+  downloadRejectsAfterEmittingWith: Error | null = null
+
+  /**
+   * When set, `downloadUpdate` waits on it after emitting, so a test can look
+   * at the state while the download is genuinely still in flight. Without it
+   * `await download()` always ends in `ready`, because a resolved
+   * `downloadUpdate()` means the bytes are on disk.
+   */
+  downloadGate: Promise<void> | null = null
+
+  /** Fired by `checkForUpdates`, so a check behaves like the real emitter. */
+  onCheck: (() => void) | null = null
+  /** Fired by `downloadUpdate`. */
+  onDownload: (() => void) | null = null
+
+  private readonly listeners: Listeners = {
+    'checking-for-update': [],
+    'update-available': [],
+    'update-not-available': [],
+    'download-progress': [],
+    'update-downloaded': [],
+    error: [],
+  }
+
+  on(event: 'checking-for-update', listener: () => void): unknown
+  on(event: 'update-available', listener: (info: UpdateInfo) => void): unknown
+  on(event: 'update-not-available', listener: (info: UpdateInfo) => void): unknown
+  on(event: 'download-progress', listener: (progress: ProgressInfo) => void): unknown
+  on(event: 'update-downloaded', listener: (event: UpdateDownloadedEvent) => void): unknown
+  on(event: 'error', listener: (error: Error) => void): unknown
+  on(event: keyof Listeners, listener: never): unknown {
+    this.listeners[event].push(listener)
+    return this
+  }
+
+  async checkForUpdates(): Promise<unknown> {
+    this.calls.check += 1
+    if (this.checkRejectsWith) throw this.checkRejectsWith
+    this.onCheck?.()
+    return null
+  }
+
+  async downloadUpdate(): Promise<unknown> {
+    this.calls.download += 1
+    if (this.downloadRejectsWith) throw this.downloadRejectsWith
+    this.onDownload?.()
+    if (this.downloadGate) await this.downloadGate
+    if (this.downloadRejectsAfterEmittingWith) throw this.downloadRejectsAfterEmittingWith
+    return []
+  }
+
+  /** Every argument list `quitAndInstall` was called with, in order. */
+  readonly quitAndInstallArgs: Array<{ isSilent: boolean | undefined; isForceRunAfter: boolean | undefined }> = []
+
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void {
+    this.calls.quitAndInstall += 1
+    this.quitAndInstallArgs.push({ isSilent, isForceRunAfter })
+  }
+
+  /* The emitter half, driven by the tests. */
+  emitChecking(): void {
+    for (const listener of this.listeners['checking-for-update']) listener()
+  }
+  emitAvailable(info: UpdateInfo): void {
+    for (const listener of this.listeners['update-available']) listener(info)
+  }
+  emitNotAvailable(info: UpdateInfo): void {
+    for (const listener of this.listeners['update-not-available']) listener(info)
+  }
+  emitProgress(progress: ProgressInfo): void {
+    for (const listener of this.listeners['download-progress']) listener(progress)
+  }
+  emitDownloaded(event: UpdateDownloadedEvent): void {
+    for (const listener of this.listeners['update-downloaded']) listener(event)
+  }
+  emitError(error: Error): void {
+    for (const listener of this.listeners.error) listener(error)
+  }
+}
+
+/* --------------------------------------------------------------- fixtures -- */
+
+const SIGNED_BUNDLE = '/Applications/Terminal Deck.app'
+const EXEC_PATH = `${SIGNED_BUNDLE}/Contents/MacOS/Terminal Deck`
+const FEED = '/Applications/Terminal Deck.app/Contents/Resources/app-update.yml'
+
+/** A packaged, signed macOS build — the only shape that supports updating. */
+function supportedEnvironment(): UpdateEnvironment {
+  return { platform: 'darwin', isPackaged: true, execPath: EXEC_PATH, feedConfigPath: FEED }
+}
+
+/** The paths a properly signed, properly packaged build would have. */
+const SUPPORTED_FILES = new Set([codeSignaturePath(SIGNED_BUNDLE), FEED])
+
+const WIN_EXEC = 'C:\\Users\\Kiwi\\AppData\\Local\\Programs\\Terminal Deck\\Terminal Deck.exe'
+const WIN_FEED = 'C:\\Users\\Kiwi\\AppData\\Local\\Programs\\Terminal Deck\\resources\\app-update.yml'
+
+/**
+ * The installed Windows build, as it is on `desktop-ddgmncv`.
+ *
+ * The real paths from the real machine, because the point of these cases is the
+ * difference between the installed artifact and the portable one, and a made-up
+ * path could not show it.
+ */
+function windowsEnvironment(): UpdateEnvironment {
+  return { platform: 'win32', isPackaged: true, execPath: WIN_EXEC, feedConfigPath: WIN_FEED }
+}
+
+function info(version: string, extra: Partial<UpdateInfo> = {}): UpdateInfo {
+  return {
+    version,
+    files: [{ url: `terminaldeck-${version}-arm64.zip`, sha512: 'x', size: 119_559_307 }],
+    path: `terminaldeck-${version}-arm64.zip`,
+    sha512: 'x',
+    releaseDate: '2026-08-13T00:00:00.000Z',
+    ...extra,
+  }
+}
+
+function downloaded(version: string): UpdateDownloadedEvent {
+  return { ...info(version), downloadedFile: `/tmp/terminaldeck-${version}-arm64.zip` }
+}
+
+function progress(percent: number, bytesPerSecond = 1_000_000): ProgressInfo {
+  return { total: 100, delta: 1, transferred: percent, percent, bytesPerSecond }
+}
+
+/**
+ * A rate that moves, which is the only kind the real emitter produces.
+ *
+ * `bytesPerSecond` is `transferred / elapsed` recomputed on every tick by
+ * `builder-util-runtime`'s `ProgressCallbackTransform`, so it is a different
+ * integer nearly every time. A throttle test that holds it constant is testing
+ * a stream that does not exist.
+ */
+const MEASURED_RATES = [1_000_000, 1_010_400, 1_003_991, 1_009_112]
+
+/**
+ * A window coming to the front, under the test's control.
+ *
+ * This is what replaced the recurring timer, so it is what the scheduling tests
+ * drive. `subscribed` is asserted as well as `fire`, because "stop() drops the
+ * subscription" is the half of the contract a leak hides in: a controller that
+ * kept listening after `before-quit` would go on checking for a window that is
+ * on its way out.
+ */
+interface FakeFocus {
+  fire(): void
+  readonly subscribed: number
+}
+
+function fakeFocus(): { focus: FakeFocus; source: FocusSource } {
+  const listeners = new Set<() => void>()
+  return {
+    focus: {
+      fire: () => {
+        for (const listener of [...listeners]) listener()
+      },
+      get subscribed(): number {
+        return listeners.size
+      },
+    },
+    source: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
+
+interface Harness {
+  updater: FakeUpdater
+  pushed: UpdateState[]
+  controller: ReturnType<typeof createUpdateController>
+  clock: { value: number }
+  focus: FakeFocus
+  /** Every backoff the retry ladder asked for, in order. Never actually slept. */
+  waits: number[]
+}
+
+function harness(options: { environment?: UpdateEnvironment; files?: Set<string> } = {}): Harness {
+  const updater = new FakeUpdater()
+  const pushed: UpdateState[] = []
+  const clock = { value: 1_000_000 }
+  const files = options.files ?? SUPPORTED_FILES
+  const { focus, source } = fakeFocus()
+  const waits: number[] = []
+  const controller = createUpdateController({
+    updater,
+    environment: options.environment ?? supportedEnvironment(),
+    broadcast: (channel, state) => {
+      expect(channel).toBe(UPDATE_STATE_CHANNEL)
+      pushed.push(state)
+    },
+    fileExists: (path) => files.has(path),
+    now: () => clock.value,
+    onFocus: source,
+    // Recorded rather than slept: the ladder is ten seconds of real time and
+    // the thing under test is the shape of the ladder, not its duration.
+    wait: async (ms) => {
+      waits.push(ms)
+    },
+  })
+  return { updater, pushed, controller, clock, focus, waits }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+/* ------------------------------------------------------------------ seam -- */
+
+describe('the injected seam', () => {
+  it('still fits the real electron-updater autoUpdater', () => {
+    // A compile-time proof. `AppUpdater` is a type-only import, so nothing is
+    // loaded at runtime — reading the real `autoUpdater` would construct a
+    // MacUpdater, which requires `electron`. If the class this module drives
+    // ever changes shape, `npm run typecheck` fails here rather than the app
+    // failing at 3am on someone's update.
+    const fits: (updater: AppUpdater) => UpdaterLike = (updater) => updater
+    expect(typeof fits).toBe('function')
+  })
+})
+
+/* --------------------------------------------------------------- support -- */
+
+describe('whether this build can update itself', () => {
+  it('finds the bundle an executable runs from', () => {
+    expect(macBundleRoot(EXEC_PATH)).toBe(SIGNED_BUNDLE)
+    expect(macBundleRoot('/usr/local/bin/node')).toBeNull()
+  })
+
+  it('takes the innermost bundle when one is nested in another', () => {
+    expect(macBundleRoot('/Applications/Outer.app/Contents/Helpers/Inner.app/Contents/MacOS/Inner')).toBe(
+      '/Applications/Outer.app/Contents/Helpers/Inner.app',
+    )
+  })
+
+  it('reports a development build as unsupported, not broken', () => {
+    const verdict = updateSupport({ ...supportedEnvironment(), isPackaged: false }, () => true)
+    expect(verdict.supported).toBe(false)
+    if (verdict.supported) throw new Error('unreachable')
+    expect(verdict.reason).toMatch(/development build/i)
+  })
+
+  it('reports an unsigned macOS build as unsupported and says why', () => {
+    // This is the real shape of every build shipped so far: `codesign -dv`
+    // against /Applications/Terminal Deck.app reports Signature=adhoc,
+    // TeamIdentifier=not set, Sealed Resources=none — and correspondingly there
+    // is no Contents/_CodeSignature/CodeResources on disk.
+    const verdict = updateSupport(supportedEnvironment(), (path) => path === FEED)
+    expect(verdict.supported).toBe(false)
+    if (verdict.supported) throw new Error('unreachable')
+    expect(verdict.reason).toMatch(/not code-signed/i)
+    expect(verdict.reason).toMatch(/Squirrel\.Mac/)
+    // The sentence has to tell the user what to do instead.
+    expect(verdict.reason).toMatch(/Releases/)
+  })
+
+  it('accepts a signed, packaged build with a feed', () => {
+    expect(updateSupport(supportedEnvironment(), (path) => SUPPORTED_FILES.has(path))).toEqual({
+      supported: true,
+    })
+  })
+
+  it('reports a missing feed separately from a missing signature', () => {
+    const verdict = updateSupport(supportedEnvironment(), (path) => path === codeSignaturePath(SIGNED_BUNDLE))
+    expect(verdict.supported).toBe(false)
+    if (verdict.supported) throw new Error('unreachable')
+    expect(verdict.reason).toMatch(/without a release feed/i)
+  })
+
+  it('does not apply the macOS signature rule to other platforms', () => {
+    // Not a gap and not a guess: `NsisUpdater.verifySignature` skips the check
+    // outright when `app-update.yml` carries no `publisherName`, which an
+    // unsigned build does not. Confirmed end to end on a real Windows machine —
+    // 0.1.5 found, downloaded and installed 0.1.6 through this very controller.
+    expect(updateSupport(windowsEnvironment(), (path) => path === WIN_FEED)).toEqual({ supported: true })
+  })
+
+  it('refuses the portable Windows build, which has nowhere to install to', () => {
+    // The portable exe is the same build with the same app-update.yml, so
+    // everything above says "yes" for it. Left alone it would download 102 MB
+    // and then quietly install a *second* copy of the app into
+    // %LOCALAPPDATA%\\Programs while the exe the user is running stays old.
+    const portable = {
+      ...windowsEnvironment(),
+      portableExecutable: 'D:\\portable\\terminaldeck-0.1.6-x64-portable.exe',
+    }
+    const verdict = updateSupport(portable, (path) => path === WIN_FEED)
+    if (verdict.supported) throw new Error('the portable build must not be offered an update')
+    expect(verdict.reason).toBe(PORTABLE_REASON)
+    expect(verdict.reason).toMatch(/portable/i)
+  })
+
+  it('does not read the portable marker on macOS, where it cannot be set', () => {
+    // Belt and braces on a value that comes out of the environment: only the
+    // Windows portable launcher writes it, so only Windows may act on it.
+    const mac = { ...supportedEnvironment(), portableExecutable: '/nonsense' }
+    expect(updateSupport(mac, (path) => SUPPORTED_FILES.has(path))).toEqual({ supported: true })
+  })
+
+  it('treats an empty portable marker as not portable', () => {
+    // An environment variable that exists but is empty is the shape a shell
+    // leaves behind, and it says nothing.
+    const blank = { ...windowsEnvironment(), portableExecutable: '' }
+    expect(updateSupport(blank, (path) => path === WIN_FEED)).toEqual({ supported: true })
+  })
+})
+
+/* ------------------------------------------------------- unsupported build -- */
+
+describe('an unsupported build', () => {
+  const unsignedFiles = new Set([FEED])
+
+  it('starts in unsupported with the reason as its message', () => {
+    const { controller } = harness({ files: unsignedFiles })
+    const state = controller.state()
+    expect(state.phase).toBe('unsupported')
+    if (state.phase !== 'unsupported') throw new Error('unreachable')
+    expect(state.reason).toMatch(/not code-signed/i)
+  })
+
+  it('is reported as unsupported rather than as an error', () => {
+    const { controller } = harness({ files: unsignedFiles })
+    // The distinction the panel renders: an error invites a retry, unsupported
+    // tells the truth that retrying will never help.
+    expect(controller.state().phase).not.toBe('error')
+  })
+
+  it('never checks, downloads, installs, arms a timer or subscribes', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, focus } = harness({ files: unsignedFiles })
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 3)
+    // Not even a listener: nothing here can be woken by a window.
+    expect(focus.subscribed).toBe(0)
+    focus.fire()
+
+    expect(await controller.check()).toEqual(controller.state())
+    expect(await controller.download()).toEqual(controller.state())
+    expect(await controller.installNow()).toEqual(controller.state())
+
+    expect(updater.calls).toEqual({ check: 0, download: 0, quitAndInstall: 0 })
+    controller.stop()
+  })
+
+  it('subscribes to nothing, so a stray event cannot move it off unsupported', () => {
+    const { controller, updater } = harness({ files: unsignedFiles })
+    // An unsupported build does not half-wire itself. Nothing is listening, so
+    // even an emitter that fires cannot replace the sentence the panel shows.
+    updater.emitAvailable(info('9.9.9'))
+    updater.emitDownloaded(downloaded('9.9.9'))
+    updater.emitError(new Error('should not be heard'))
+    expect(controller.state().phase).toBe('unsupported')
+  })
+})
+
+/* ------------------------------------------------------------ transitions -- */
+
+describe('state transitions', () => {
+  it('sets the two flags that make up the no-surprises contract', () => {
+    const { updater } = harness()
+    expect(updater.autoDownload).toBe(false)
+    expect(updater.autoInstallOnAppQuit).toBe(true)
+  })
+
+  it('starts idle with nothing checked yet', () => {
+    const { controller } = harness()
+    expect(controller.state()).toEqual({ phase: 'idle', checkedAt: null })
+  })
+
+  it('idle → checking → idle when there is no update', async () => {
+    const { controller, updater, pushed, clock } = harness()
+    updater.onCheck = () => {
+      updater.emitChecking()
+      updater.emitNotAvailable(info('0.1.0'))
+    }
+
+    const state = await controller.check()
+
+    expect(state).toEqual({ phase: 'idle', checkedAt: clock.value })
+    expect(pushed.map((s) => s.phase)).toEqual(['checking', 'idle'])
+  })
+
+  it('idle → checking → available carries version, notes and size', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => {
+      updater.emitChecking()
+      updater.emitAvailable(info('0.2.0', { releaseNotes: '  Faster startup.  ' }))
+    }
+
+    const state = await controller.check()
+
+    expect(state).toEqual({
+      phase: 'available',
+      version: '0.2.0',
+      notes: 'Faster startup.',
+      sizeBytes: 119_559_307,
+    })
+  })
+
+  it('available → downloading → ready', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    pushed.length = 0
+
+    updater.onDownload = () => {
+      updater.emitProgress(progress(42, 2_500_000))
+      updater.emitDownloaded(downloaded('0.2.0'))
+    }
+    const state = await controller.download()
+
+    expect(state).toEqual({ phase: 'ready', version: '0.2.0' })
+    expect(pushed).toEqual([
+      { phase: 'downloading', version: '0.2.0', percent: 0, bytesPerSecond: 0 },
+      { phase: 'downloading', version: '0.2.0', percent: 42, bytesPerSecond: 2_500_000 },
+      { phase: 'ready', version: '0.2.0' },
+    ])
+  })
+
+  it('rounds progress and pushes at most one message per whole percent', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    pushed.length = 0
+
+    updater.onDownload = () => {
+      // On a slow connection the percent sits still while the rate keeps
+      // moving, and a panel does not need four messages to draw "7%". The
+      // rates below are the shape the real transform produces — see
+      // MEASURED_RATES. With a constant rate this test passes whether or not
+      // anything is being throttled, which is why it does not use one.
+      updater.emitProgress(progress(7.1, MEASURED_RATES[0]))
+      updater.emitProgress(progress(7.2, MEASURED_RATES[1]))
+      updater.emitProgress(progress(7.4, MEASURED_RATES[2]))
+      updater.emitProgress(progress(8.0, MEASURED_RATES[3]))
+    }
+    await controller.download()
+
+    const percents = pushed
+      .filter((state) => state.phase === 'downloading')
+      .map((state) => (state.phase === 'downloading' ? state.percent : -1))
+    expect(percents).toEqual([0, 7, 8])
+  })
+
+  it('carries the rate measured when a percent was first reached', async () => {
+    // Dropping `bytesPerSecond` from the throttle identity has a consequence
+    // worth stating: the rate shown is the one from the tick that changed the
+    // percent, not the newest one. That is the trade the throttle makes.
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    pushed.length = 0
+
+    updater.onDownload = () => {
+      updater.emitProgress(progress(7.1, MEASURED_RATES[0]))
+      updater.emitProgress(progress(7.4, MEASURED_RATES[1]))
+    }
+    await controller.download()
+
+    expect(pushed.filter((state) => state.phase === 'downloading')).toEqual([
+      { phase: 'downloading', version: '0.2.0', percent: 0, bytesPerSecond: 0 },
+      { phase: 'downloading', version: '0.2.0', percent: 7, bytesPerSecond: MEASURED_RATES[0] },
+    ])
+  })
+
+  it('never pushes NaN for a feed that sent no content length', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    pushed.length = 0
+
+    // `percent` is transferred/total, and a server that sent no Content-Length
+    // makes that NaN. Math.round(NaN) is NaN and so is every clamp around it.
+    updater.onDownload = () => updater.emitProgress(progress(Number.NaN, Number.NaN))
+    await controller.download()
+
+    for (const state of pushed) {
+      if (state.phase !== 'downloading') continue
+      expect(Number.isFinite(state.percent)).toBe(true)
+      expect(Number.isFinite(state.bytesPerSecond)).toBe(true)
+    }
+  })
+
+  it('clamps a nonsensical percent from the feed rather than showing it', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    pushed.length = 0
+
+    // A progress bar is a promise about a number; 140% would break it.
+    updater.onDownload = () => updater.emitProgress(progress(140))
+    await controller.download()
+
+    const percents = pushed
+      .filter((state) => state.phase === 'downloading')
+      .map((state) => (state.phase === 'downloading' ? state.percent : -1))
+    expect(percents).toEqual([0, 100])
+  })
+
+  it('ready → install only when asked', () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    updater.emitDownloaded(downloaded('0.2.0'))
+
+    expect(updater.calls.quitAndInstall).toBe(0)
+    controller.installNow()
+    expect(updater.calls.quitAndInstall).toBe(1)
+  })
+
+  it('installs silently and comes back, because the button said Restart', () => {
+    // Watched failing on desktop-ddgmncv with the library's defaults: the app
+    // quit, the NSIS setup sat on a page nobody could click for fifty seconds,
+    // `Terminal Deck.exe` was still 0.1.5.0 and no app was running. With `/S`
+    // and `--force-run` the same staged installer put 0.1.6.0 in place and the
+    // app was back. So these two arguments are the difference between "Restart
+    // to finish" working and leaving the user with no app at all.
+    const { controller, updater } = harness()
+    updater.emitDownloaded(downloaded('0.2.0'))
+
+    controller.installNow()
+
+    expect(updater.quitAndInstallArgs).toEqual([{ isSilent: true, isForceRunAfter: true }])
+    expect(installNowArgs).toEqual({ isSilent: true, isForceRunAfter: true })
+  })
+
+  it('does not let a late error event undo a staged update', () => {
+    const { controller, updater } = harness()
+    updater.emitDownloaded(downloaded('0.2.0'))
+    // An error *event* with no download promise in flight — a nativeUpdater
+    // failure raised later. The bytes are staged and stay staged.
+    updater.emitError(new Error('connection reset'))
+    expect(controller.state()).toEqual({ phase: 'ready', version: '0.2.0' })
+  })
+
+  it('does let a rejected download undo a staged update, and says why', async () => {
+    // The other half of the rule above, and the half that is easy to get
+    // backwards. `MacUpdater` emits `update-downloaded` before its promise
+    // settles, so a rejection lands on a state that already says `ready`.
+    // It has to win: the promise rejects when Squirrel refused the staged
+    // bytes, and `quitAndInstall()` on a refused update attaches a listener
+    // and returns without quitting — a Restart button that does nothing.
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+
+    updater.onDownload = () => updater.emitDownloaded(downloaded('0.2.0'))
+    updater.downloadRejectsAfterEmittingWith = new Error('Squirrel: could not get code signature')
+
+    const state = await controller.download()
+
+    expect(state).toEqual({
+      phase: 'error',
+      message: 'Squirrel: could not get code signature',
+    })
+    expect(controller.state()).toEqual(state)
+    expect(updater.calls.quitAndInstall).toBe(0)
+  })
+})
+
+/* ----------------------------------------------------------------- errors -- */
+
+describe('a failed check', () => {
+  it('reports a message and does not throw', async () => {
+    const { controller, updater } = harness()
+    updater.checkRejectsWith = new Error('net::ERR_INTERNET_DISCONNECTED')
+
+    const state = await controller.check()
+
+    // The Chromium code is the diagnostic, not the message. A user pressed for
+    // this one, so it is reported — as a sentence.
+    expect(state).toEqual({ phase: 'error', message: 'No connection to the update server.' })
+  })
+
+  it('does not reject even when run from a timer with nobody awaiting it', async () => {
+    vi.useFakeTimers()
+    const { controller, updater } = harness()
+    updater.checkRejectsWith = new Error('403 rate limited')
+
+    controller.start()
+    // An unhandled rejection here would take the main process down in
+    // production; this is the assertion that it cannot happen.
+    await expect(vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS + 1)).resolves.toBeDefined()
+    // Rate limiting is transient, and an automatic check swallows those — the
+    // state it lands on is `idle`. What is being proven here is that nothing
+    // rejected, which an unhandled rejection would have turned into a crash.
+    expect(controller.state()).toEqual({ phase: 'idle', checkedAt: 1_000_000 })
+    controller.stop()
+  })
+
+  it('reports an error raised through the event rather than the promise', async () => {
+    const { controller, updater } = harness()
+    // A background check's promise is not awaited by the panel, so the emitter
+    // is the only route this failure has.
+    updater.onCheck = () => {
+      updater.emitChecking()
+      updater.emitError(new Error('ENOTFOUND github.com'))
+    }
+
+    const state = await controller.check()
+
+    expect(state).toEqual({ phase: 'error', message: 'No connection to the update server.' })
+  })
+
+  it('never leaves the panel stuck on checking', async () => {
+    const { controller, updater, clock } = harness()
+    // An updater that resolves without emitting anything at all.
+    updater.onCheck = null
+
+    const state = await controller.check()
+
+    expect(state).toEqual({ phase: 'idle', checkedAt: clock.value })
+  })
+
+  it('recovers: a check after an error goes back to checking', async () => {
+    const { controller, updater } = harness()
+    updater.checkRejectsWith = new Error('offline')
+    await controller.check()
+
+    updater.checkRejectsWith = null
+    updater.onCheck = () => updater.emitAvailable(info('0.3.0'))
+    const state = await controller.check()
+
+    expect(state.phase).toBe('available')
+  })
+
+  it('turns a failed download into a message, not a rejection', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+
+    updater.downloadRejectsWith = new Error('sha512 mismatch')
+    const state = await controller.download()
+
+    expect(state).toEqual({ phase: 'error', message: 'sha512 mismatch' })
+    expect(updater.calls.quitAndInstall).toBe(0)
+  })
+
+  it('says something useful when the failure is not an Error', async () => {
+    const { controller, updater } = harness()
+    updater.checkRejectsWith = new Error('')
+
+    const state = await controller.check()
+
+    expect(state.phase).toBe('error')
+    expect(state.phase === 'error' ? state.message : '').not.toBe('')
+  })
+})
+
+/* ------------------------------------------------- nothing behind your back -- */
+
+describe('nothing happens without an explicit call', () => {
+  it('finding an update downloads nothing', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+
+    await controller.check()
+
+    expect(controller.state().phase).toBe('available')
+    expect(updater.calls.download).toBe(0)
+    expect(updater.calls.quitAndInstall).toBe(0)
+  })
+
+  it('a staged update installs only on the explicit call', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, focus } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    updater.onDownload = () => updater.emitDownloaded(downloaded('0.2.0'))
+    await controller.download()
+
+    controller.start()
+    // Neither time passing nor coming back to the window is consent.
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 5)
+    focus.fire()
+    focus.fire()
+    expect(updater.calls.quitAndInstall).toBe(0)
+
+    controller.installNow()
+    expect(updater.calls.quitAndInstall).toBe(1)
+    controller.stop()
+  })
+
+  it('install does nothing when nothing is staged', async () => {
+    const { controller, updater } = harness()
+    expect((await controller.installNow()).phase).toBe('idle')
+
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    expect((await controller.installNow()).phase).toBe('available')
+
+    expect(updater.calls.quitAndInstall).toBe(0)
+  })
+
+  it('download does nothing unless an update was offered', async () => {
+    const { controller, updater } = harness()
+    expect((await controller.download()).phase).toBe('idle')
+    expect(updater.calls.download).toBe(0)
+  })
+
+  it('a second download call does not restart a running one', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+    updater.onDownload = () => updater.emitProgress(progress(10))
+
+    await controller.download()
+    await controller.download()
+
+    expect(updater.calls.download).toBe(1)
+  })
+
+  it('a check does not interrupt a download in progress', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+
+    // Hold the download open so the check below lands mid-flight, which is the
+    // only moment this can go wrong: replacing a progress bar someone is
+    // watching with the word "checking".
+    let release = (): void => undefined
+    updater.downloadGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    updater.onDownload = () => updater.emitProgress(progress(50))
+
+    const running = controller.download()
+    await Promise.resolve()
+
+    const checksBefore = updater.calls.check
+    const state = await controller.check()
+
+    expect(updater.calls.check).toBe(checksBefore)
+    expect(state.phase).toBe('downloading')
+
+    release()
+    await running
+  })
+})
+
+/* -------------------------------------------------------------- scheduling -- */
+
+describe('scheduling', () => {
+  it('does not check during startup', async () => {
+    vi.useFakeTimers()
+    const { controller, updater } = harness()
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS - 1)
+    expect(updater.calls.check).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(updater.calls.check).toBe(1)
+    controller.stop()
+  })
+
+  it('checks again when the user comes back to the window', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+
+    // The clock has to move past the rate limit; the point of the test is that
+    // nothing but the event is needed after that.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updater.calls.check).toBe(2)
+    controller.stop()
+  })
+
+  it('arms no recurring timer at all — time alone never checks again', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+
+    // A week of an app nobody touched. The old interval would have made
+    // twenty-eight requests across this; an app in the background makes none.
+    clock.value += 7 * 24 * 60 * 60 * 1000
+    await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1000)
+    expect(updater.calls.check).toBe(1)
+    controller.stop()
+  })
+
+  it('rate limits a window that is focused over and over', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+
+    // Alt-tabbing between two windows is not a reason to hammer someone
+    // else's API. This is the whole safety net under an event this cheap:
+    // twenty returns across twenty minutes buy exactly nothing.
+    for (let press = 0; press < 20; press++) {
+      clock.value += 60_000
+      focus.fire()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(updater.calls.check).toBe(1)
+
+    // And the first one past the floor does check, so the limit is a limit and
+    // not an off switch.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updater.calls.check).toBe(2)
+    controller.stop()
+  })
+
+  it('refuses an automatic check inside the minimum interval', async () => {
+    const { controller, updater, clock } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    await controller.check({ automatic: true })
+    expect(updater.calls.check).toBe(1)
+
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS - 1
+    await controller.check({ automatic: true })
+    expect(updater.calls.check).toBe(1)
+
+    clock.value += 1
+    await controller.check({ automatic: true })
+    expect(updater.calls.check).toBe(2)
+  })
+
+  it('never rate limits a check the user asked for', async () => {
+    const { controller, updater } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    await controller.check({ automatic: true })
+    // A button that declines to do its job is a dead click.
+    await controller.check()
+    await controller.check()
+
+    expect(updater.calls.check).toBe(3)
+  })
+
+  it('stop() disarms the launch check and drops the subscription', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+
+    controller.start()
+    expect(focus.subscribed).toBe(1)
+    controller.stop()
+    expect(focus.subscribed).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 2)
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(updater.calls.check).toBe(0)
+  })
+
+  it('start() twice does not arm two timers or subscribe twice', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+
+    controller.start()
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+
+    expect(updater.calls.check).toBe(1)
+    expect(focus.subscribed).toBe(1)
+
+    // One listener means one check, not two — a double subscription would be
+    // invisible except through the rate limit, which would hide it entirely.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updater.calls.check).toBe(2)
+    controller.stop()
+  })
+
+  it('a focus during a download does not interrupt it', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+
+    let release = (): void => undefined
+    updater.downloadGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    updater.onDownload = () => updater.emitProgress(progress(50))
+
+    controller.start()
+    const running = controller.download()
+    await Promise.resolve()
+
+    const before = updater.calls.check
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Replacing a progress bar someone is watching with "checking" is the one
+    // thing the window coming forward must never do.
+    expect(updater.calls.check).toBe(before)
+    expect(controller.state().phase).toBe('downloading')
+
+    release()
+    await running
+    controller.stop()
+  })
+})
+
+/* ------------------------------------------------------------- broadcasts -- */
+
+describe('the push channel', () => {
+  it('pushes every change and repeats nothing', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => {
+      updater.emitChecking()
+      updater.emitAvailable(info('0.2.0'))
+    }
+
+    await controller.check()
+    // `set({ phase: 'checking' })` runs before `checkForUpdates`, and the
+    // emitter fires the same state again from inside it. The panel should see
+    // one message, not two.
+    expect(pushed.map((state) => state.phase)).toEqual(['checking', 'available'])
+  })
+
+  it('never pushes the same state twice in a row', async () => {
+    const { controller, updater, pushed } = harness()
+    updater.onCheck = () => {
+      // The real emitter announces the state this module has already set, and
+      // a second identical check produces a second identical idle result.
+      updater.emitChecking()
+      updater.emitChecking()
+      updater.emitNotAvailable(info('0.1.0'))
+      updater.emitNotAvailable(info('0.1.0'))
+    }
+
+    await controller.check()
+    await controller.check()
+
+    const phases = pushed.map((state) => state.phase)
+    expect(phases).toEqual(['checking', 'idle', 'checking', 'idle'])
+    for (let i = 1; i < pushed.length; i++) {
+      expect(pushed[i]).not.toEqual(pushed[i - 1])
+    }
+  })
+})
+
+/* -------------------------------------------------------- reading the feed -- */
+
+describe('reading the feed', () => {
+  it('takes notes from a string or an array, and null from nothing', () => {
+    expect(readNotes(info('1.0.0', { releaseNotes: 'Fixed the thing.' }))).toBe('Fixed the thing.')
+    expect(
+      readNotes(
+        info('1.0.0', {
+          releaseNotes: [
+            { version: '1.0.0', note: 'Second.' },
+            { version: '0.9.0', note: 'First.' },
+          ],
+        }),
+      ),
+    ).toBe('Second.\n\nFirst.')
+    expect(readNotes(info('1.0.0'))).toBeNull()
+    expect(readNotes(info('1.0.0', { releaseNotes: '   ' }))).toBeNull()
+    expect(readNotes(info('1.0.0', { releaseNotes: null }))).toBeNull()
+  })
+
+  it('caps notes so a whole changelog cannot arrive as a notification', () => {
+    const notes = readNotes(info('1.0.0', { releaseNotes: 'x'.repeat(MAX_NOTES_LENGTH * 2) }))
+    expect(notes).toHaveLength(MAX_NOTES_LENGTH)
+  })
+
+  it('sizes the zip, because the zip is what gets downloaded on macOS', () => {
+    const withDmg = info('1.0.0', {
+      files: [
+        { url: 'terminaldeck-1.0.0-arm64.dmg', sha512: 'a', size: 119_533_030 },
+        { url: 'terminaldeck-1.0.0-arm64.zip', sha512: 'b', size: 119_559_307 },
+      ],
+    })
+    expect(readSizeBytes(withDmg)).toBe(119_559_307)
+  })
+
+  it('reports no size rather than inventing one', () => {
+    expect(readSizeBytes(info('1.0.0', { files: [] }))).toBeNull()
+    expect(
+      readSizeBytes(info('1.0.0', { files: [{ url: 'terminaldeck.zip', sha512: 'a' }] })),
+    ).toBeNull()
+  })
+})
+
+/* -------------------------------------------------------------------- ipc -- */
+
+describe('registerUpdateIpc', () => {
+  interface Registered {
+    handlers: Map<string, () => unknown>
+  }
+
+  function fakeIpcMain(): { ipcMain: Parameters<typeof registerUpdateIpc>[0]; registered: Registered } {
+    const handlers = new Map<string, () => unknown>()
+    // Only `handle` is exercised; the module registers nothing with `on`, which
+    // is what `src/preload/contract.test.ts` checks from the other side.
+    const ipcMain = {
+      handle: (channel: string, listener: () => unknown) => {
+        handlers.set(channel, listener)
+      },
+    }
+    const asIpcMain: unknown = ipcMain
+    // Narrowed by the guard below rather than asserted: a cast here would be
+    // the exact thing this project banned.
+    if (!isIpcMainLike(asIpcMain)) throw new Error('unreachable')
+    return { ipcMain: asIpcMain, registered: { handlers } }
+  }
+
+  function isIpcMainLike(value: unknown): value is Parameters<typeof registerUpdateIpc>[0] {
+    return typeof value === 'object' && value !== null && 'handle' in value
+  }
+
+  let controller: ReturnType<typeof registerUpdateIpc> | null = null
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    controller?.stop()
+    controller = null
+  })
+
+  it('registers exactly the four request channels', () => {
+    const { ipcMain, registered } = fakeIpcMain()
+    const updater = new FakeUpdater()
+    controller = registerUpdateIpc(ipcMain, {
+      updater,
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+
+    expect([...registered.handlers.keys()].sort()).toEqual([
+      'update:check',
+      'update:download',
+      'update:get',
+      'update:install',
+    ])
+  })
+
+  it('does not use the push channel name for a request channel', () => {
+    const { ipcMain, registered } = fakeIpcMain()
+    controller = registerUpdateIpc(ipcMain, {
+      updater: new FakeUpdater(),
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+    // `update:state` is main → renderer only. A handler on the same name is how
+    // an invoke/send mix-up gets written next.
+    expect(registered.handlers.has(UPDATE_STATE_CHANNEL)).toBe(false)
+  })
+
+  it('answers update:get with the current state', async () => {
+    const { ipcMain, registered } = fakeIpcMain()
+    controller = registerUpdateIpc(ipcMain, {
+      updater: new FakeUpdater(),
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+
+    const get = registered.handlers.get('update:get')
+    expect(get?.()).toEqual({ phase: 'idle', checkedAt: null })
+  })
+
+  it('registering does not install anything', async () => {
+    const { ipcMain } = fakeIpcMain()
+    const updater = new FakeUpdater()
+    controller = registerUpdateIpc(ipcMain, {
+      updater,
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 4)
+    expect(updater.calls.quitAndInstall).toBe(0)
+    expect(updater.calls.download).toBe(0)
+  })
+
+  it('falls back to the Electron focus event without being handed one', async () => {
+    // No `onFocus` in the deps, which is how `src/main/index.ts` calls it. The
+    // default reaches for `electron`, and here there is no Electron to reach —
+    // so the promise inside `appWindowFocus` has to resolve to a subscription
+    // to nothing rather than throw, and `stop()` has to be safe to call
+    // against it. Both are silent failures if they break.
+    const { ipcMain } = fakeIpcMain()
+    const updater = new FakeUpdater()
+    controller = registerUpdateIpc(ipcMain, {
+      updater,
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+
+    // Let the dynamic import settle before the launch check runs on top of it.
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+    expect(() => controller?.stop()).not.toThrow()
+  })
+})
+
+/* ------------------------------------------- a network that moved under us -- */
+
+/**
+ * The failure a real user's Windows install showed on 2026-08-20: a check that
+ * hit `ERR_NETWORK_CHANGED` and put the whole Atom feed on screen.
+ */
+const MOVING_NETWORK = new Error(
+  'Cannot parse releases feed: Error: Unable to find latest version on GitHub ' +
+    '(https://github.com/asadev/terminaldeck/releases/latest), please ensure a production ' +
+    'release exists: Error: net::ERR_NETWORK_CHANGED at SimpleURLLoaderWrapper.<anonymous> ' +
+    '(node:electron/js2c/browser_init:2:135010) XML: <?xml version="1.0"?><feed><entry>' +
+    '<content type="html">&lt;h3&gt;Install&lt;/h3&gt;</content></entry></feed>',
+)
+
+describe('a check that failed because the network moved', () => {
+  it('retries before it reports anything', async () => {
+    const { updater, controller, waits } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    const state = await controller.check()
+
+    expect(updater.calls.check).toBe(3)
+    expect(waits).toEqual([2_000, 8_000])
+    expect(state).toMatchObject({ phase: 'error', message: 'No connection to the update server.' })
+  })
+
+  it('says nothing at all when nobody pressed for it', async () => {
+    const { updater, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    const state = await controller.check({ automatic: true })
+
+    // A timer's check that fails on a blip is not news. The panel stays shut.
+    expect(state.phase).toBe('idle')
+    expect(updater.calls.check).toBe(3)
+  })
+
+  it('stops at the first attempt when the cause will not fix itself', async () => {
+    const { updater, controller, waits } = harness()
+    updater.checkRejectsWith = new Error('The release has no macOS asset.')
+
+    const state = await controller.check()
+
+    expect(updater.calls.check).toBe(1)
+    expect(waits).toEqual([])
+    expect(state).toMatchObject({ phase: 'error', message: 'The release has no macOS asset.' })
+  })
+
+  it('takes the answer when a retry succeeds', async () => {
+    const { updater, controller } = harness()
+    let attempts = 0
+    updater.checkForUpdates = async () => {
+      attempts += 1
+      updater.calls.check = attempts
+      if (attempts < 3) throw MOVING_NETWORK
+      updater.emitNotAvailable({ version: '0.8.0' } as UpdateInfo)
+      return null
+    }
+
+    const state = await controller.check()
+
+    expect(attempts).toBe(3)
+    expect(state.phase).toBe('idle')
+  })
+
+  it('never hands the panel a feed, a stack frame or a file path', async () => {
+    const { updater, pushed, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    await controller.check()
+
+    for (const state of pushed) {
+      const message = 'message' in state ? String(state.message ?? '') : ''
+      expect(message).not.toContain('<')
+      expect(message).not.toContain('node_modules')
+      expect(message).not.toContain('XML')
+      expect(message.length).toBeLessThanOrEqual(120)
+    }
+  })
+
+  it('does not let the error event write what the retry loop is suppressing', async () => {
+    const { updater, controller } = harness()
+    updater.checkRejectsWith = MOVING_NETWORK
+
+    // The real emitter reports the same failure twice — through the promise and
+    // through the event. Without the same rule on both, the event wins the race
+    // and the panel opens anyway.
+    const running = controller.check({ automatic: true })
+    updater.emitError(MOVING_NETWORK)
+    const state = await running
+
+    expect(state.phase).toBe('idle')
+  })
+})

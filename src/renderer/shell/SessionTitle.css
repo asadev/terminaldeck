@@ -1,0 +1,98 @@
+/*
+  The session's name over its terminal, while it is a thing you can rename.
+
+  `shell.css` owns `.toolbar-title` — the type, the colour, the ellipsis. What
+  is here is only what the rename gesture needed, and it lives beside the
+  component for the same reason `AccountChip.css` does: it is this component's
+  and nothing else's.
+
+  Every value is a token. `tokens.css` is the system; a raw pixel or hex here
+  would be a second opinion about the same thing.
+*/
+
+/*
+  The heading has to stop being part of the window's drag handle.
+
+  `.toolbar-lead` is deliberately draggable — the heading is the part of a title
+  bar everybody grabs to move a window, and on Windows there is no OS strip
+  above it to grab instead. But a double-click on a draggable region is claimed
+  by the OS before any handler sees it: macOS reads it as the title-bar
+  double-click action, which under the default System Settings *zooms the
+  window*. So on the one heading that answers a double-click itself, the drag is
+  given up for that rectangle only. Headings with no session behind them — a
+  sidebar view, the launch screen — keep it, because they have no gesture to
+  protect and the window still needs somewhere to be grabbed.
+
+  Attribute selector, so this is 0,2,0 and beats `.toolbar-title` whichever
+  order the two stylesheets are bundled in. Order across two files is a
+  bundler's decision, not a design one.
+*/
+.toolbar-title[data-renameable] {
+  -webkit-app-region: no-drag;
+  /* A gesture leaves nothing on screen to say it exists. The tooltip is the
+     advertisement; this is the acknowledgement — the pointer stays an arrow,
+     because a text cursor over a heading that is not yet a field would be
+     promising the wrong thing. */
+  padding: 0 var(--sp-1);
+  margin-left: calc(var(--sp-1) * -1);
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.toolbar-title[data-renameable]:hover {
+  background: var(--bg-hover);
+}
+
+/* Focusable, because F2 is the only way in from a keyboard and an element
+   nothing can focus is an element F2 can never reach. */
+.toolbar-title[data-renameable]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+/*
+  The heading while it is a field.
+
+  Sized off the heading's own type rather than the body face, so the text does
+  not change size at the moment the field opens — the name would appear to jump,
+  which reads as the heading having been replaced rather than opened. Same shape
+  as `.sb-rename-input` in the rail otherwise: it is the same field, on the same
+  name, in the other place it is written.
+*/
+.toolbar-title-form {
+  display: flex;
+  min-width: 0;
+}
+
+.toolbar-title-input {
+  min-width: 0;
+  width: 100%;
+  max-width: 32ch;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  /* The bar is a fixed height and the heading sits on a baseline with the chips
+     under it; a field that grew the row would move both every time one opened. */
+  -webkit-app-region: no-drag;
+}
+
+/* And at the pane's scale, so opening the field inside a split does not make
+   the name jump to window-title size for as long as it is being typed — the
+   same reason the field matches the heading in the window's bar. `shell.css`
+   carries the heading's half of this pair. */
+.toolbar-title-input[data-scale='pane'] {
+  font-size: var(--t-body);
+  letter-spacing: normal;
+  max-width: 22ch;
+}
+
+.toolbar-title-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}

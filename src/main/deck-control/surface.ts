@@ -1,0 +1,795 @@
+/**
+ * `deck-control` — the contract between the copilot's tools and this app.
+ *
+ * The copilot is a Claude CLI session with an MCP server attached. That server
+ * is the app's own IPC surface, seen from outside the window: it is how the
+ * copilot answers "how is that other session doing" and acts on "start a
+ * session in this project".
+ *
+ * ## Why there is an interface here at all
+ *
+ * Because the alternative is a second backend, and this feature must not have
+ * one. Every tool below resolves to a function the app already calls from an
+ * `ipcMain.handle` — `store().getProjects()`, `readGitStatus()`,
+ * `patchStoredSettings()`, `PtyManager.list()`. Re-implementing any of them so
+ * the copilot could reach it would be two answers to the same question, and the
+ * two would drift within a release.
+ *
+ * What the interface buys is that the tool layer has no idea Electron exists.
+ * `live-surface.ts` is the only file that imports the app's own modules, so the
+ * permission tiers, the confirmation gate and the action log are testable as
+ * plain functions with no window, no app object and no spawned process. It is
+ * the same seam `platform/paths.ts` argues for at length, for the same reason:
+ * the piece that must be exercisable is the piece that decides whether a
+ * dangerous call happens.
+ *
+ * ## The tiers, and why the middle one exists
+ *
+ * | Tier    | Examples                              | Behaviour                     |
+ * |---------|---------------------------------------|-------------------------------|
+ * | `read`  | list sessions, read a transcript      | always allowed                |
+ * | `act`   | start a session, send to its own      | allowed, logged               |
+ * | `alter` | write settings, stop somebody's work  | confirmed by a human, logged  |
+ *
+ * `act` is not "safe". Starting a session spends money and spawns a process
+ * with the user's credentials. It is separated from `alter` because it is
+ * *visible and undoable* — a new session appears in the sidebar and can be
+ * killed — whereas an `alter` call changes state that nothing on screen would
+ * announce. A gate that fires on everything is a gate nobody reads, and
+ * confirmation fatigue is the failure mode that turns a permission prompt into
+ * a rubber stamp.
+ *
+ * Every call at every tier is written to the action log. That is not a tier
+ * behaviour, it is unconditional; see `action-log.ts`.
+ */
+
+import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../../shared/types'
+import type { ContextUsage, TokenUsage } from '../cost'
+import type { AttentionView } from './attention'
+import type { TranscriptChoice } from './transcript-match'
+
+/* ------------------------------------------------------------------ tiers -- */
+
+export type Tier = 'read' | 'act' | 'alter'
+
+export const TIERS: readonly Tier[] = ['read', 'act', 'alter']
+
+/**
+ * Ranking, so a tier can be compared rather than switched on.
+ *
+ * Used by the escalation rule on `sessions.send` and `sessions.stop`, which
+ * raise a call from `act` to `alter` when the target is not the copilot's own
+ * session. Comparing by rank means an escalation can only ever move *up*: a
+ * spec that tried to escalate downwards would be refused by `control.ts` rather
+ * than quietly weakening its own gate.
+ */
+export const TIER_RANK: Readonly<Record<Tier, number>> = { read: 0, act: 1, alter: 2 }
+
+/* ------------------------------------------------------------ who is asking -- */
+
+/**
+ * Which tiers a caller is allowed to reach at all.
+ *
+ * Three booleans rather than one "may use the copilot", and the difference is
+ * the whole of `COPILOT-CAPABILITIES.md` item 5. A single boolean makes "my
+ * phone can ask the copilot how the build is going" and "my phone can rewrite my
+ * settings and kill my sessions" the same decision, because the tool names are
+ * the same on both surfaces — deliberately, so there is one model to understand
+ * — and a grant that names the surface rather than the power hands over all of
+ * it.
+ *
+ * That is not a hypothetical. OpenClaw shipped it: advisory
+ * GHSA-943q-mwmv-hhvh (OC-02), where the HTTP gateway did not deny
+ * session-orchestration tools by default, so anybody holding gateway auth could
+ * call `sessions_spawn` and `sessions_send`. Same tool names, same shape of
+ * surface, and the fix there was per-tool denial after the fact.
+ *
+ * Independent booleans, not a ladder, even though `act` without `read` is a
+ * strange thing to grant. A ladder (`maxTier`) would mean the *order* of the
+ * tiers is a security property, and the day somebody inserts a tier between two
+ * others every existing grant silently widens. Three answers to three questions
+ * cannot do that.
+ */
+export type TierGrant = Readonly<Record<Tier, boolean>>
+
+/** Nothing. What every device has until a person says otherwise. */
+export const NO_TIERS: TierGrant = Object.freeze({ read: false, act: false, alter: false })
+
+/** Everything. The person at this keyboard, on this machine. */
+export const ALL_TIERS: TierGrant = Object.freeze({ read: true, act: true, alter: true })
+
+/**
+ * Where a tool call came from.
+ *
+ * Carried through {@link DeckControl.call} rather than checked at the transport,
+ * for the reason the dispatcher's own header gives: a rule enforced in one
+ * transport is a rule the *next* transport does not have. The local copilot
+ * passes nothing and gets {@link LOCAL_CALLER}; a relayed call must construct
+ * one, and constructing one means answering the tier question.
+ */
+export interface Caller {
+  /**
+   * `local` is the copilot session on this machine. `remote` came over the
+   * relay. `session` is an ordinary session in this app — one of the rows in
+   * the sidebar — calling about **its own** browser windows.
+   *
+   * ## Why a third kind rather than a flag on `local`
+   *
+   * Because every gate in this codebase is written `caller.kind !== 'local'`,
+   * and a third kind is refused by all of them without a line being changed.
+   * That is the direction the default has to fall: an ordinary session must not
+   * inherit the copilot's reach over the app — Asad on the same page of the same
+   * review, about driving *sessions*:
+   *
+   *   > *"Driving tool is only for commanders, and it should not be with for the
+   *   > other sessions, and they should not be able to find it also."*
+   *
+   * What a session does get is the browser half, and it gets it by being named
+   * on an allow-list carried by its own token (`callers.ts`) — a positive list
+   * of tool ids, not an exemption from a check. So the two halves of what he
+   * asked for on that page cannot loosen each other: opening browser driving to
+   * every session (T29) adds ids to one list, and session-driving (T28) is not
+   * on it and is not listable.
+   */
+  kind: 'local' | 'remote' | 'session' | 'key'
+  /** The paired device, when the call came from one. Recorded in the action log. */
+  deviceId?: string
+  /**
+   * The access key, for `kind: 'key'` — an AI app outside this one that the
+   * owner made a key for. See `access-keys.ts`.
+   *
+   * ## Why a fourth kind rather than `local`
+   *
+   * The same reason `session` is a third: every gate written
+   * `caller.kind !== 'local'` refuses it without a line changing, and that is
+   * the direction a new caller's default has to fall. A key is the owner's own
+   * — he made it for himself — but it arrives from an app this one cannot see
+   * into, possibly from the far side of the internet, and the handful of tools
+   * that are only for the person at this keyboard (granting a server, playing a
+   * tour on a screen) should go on saying so until somebody decides otherwise
+   * for each of them, on purpose.
+   *
+   * The name travels with the id so the action log and the confirmation
+   * dialog can say *which* app asked without a second lookup on the call path.
+   */
+  keyId?: string
+  keyName?: string
+  /**
+   * Put alter-tier calls to the owner first. Read only for `kind: 'key'`, and
+   * absent means yes — the narrow reading. See `AccessKeyView.askFirst`.
+   */
+  askFirst?: boolean
+  /**
+   * Folders a session may be started in, for a key limited to some. Absent
+   * means every folder the app has open, exactly as for the owner at the desk.
+   */
+  folders?: readonly string[]
+  /**
+   * May this key use the task tools (`local-task-tools.ts`)? Read only for
+   * `kind: 'key'`; absent means no. The owner turns it on per key in Settings.
+   */
+  tasks?: boolean
+  /**
+   * Which session is calling, for `kind: 'session'`, and the machine it runs on
+   * — `''` for this computer, a machine id for a paired device, a server id for
+   * a shell on a server. The same pair `browser-binding.ts` keys its map with.
+   *
+   * It is the *whole* of what such a caller may act on. A session names a window
+   * by its slot (`B1`), the slot is resolved inside that session's own binding,
+   * and a window belonging to the session next door is not found — which is the
+   * argument `windowNamed` already makes for the copilot, applied to a caller
+   * that cannot even name another session.
+   *
+   * Absent means there is no session behind this token yet: a token is
+   * registered a moment before the pty is created, so that a CLI which calls a
+   * tool in its first breath is refused rather than attributed to nothing.
+   */
+  sessionId?: string
+  machineId?: string
+  /** Which tiers this caller may reach. */
+  tiers: TierGrant
+}
+
+/**
+ * The default, and the only caller that exists today.
+ *
+ * The local copilot is not exempt from anything — every tier check, budget,
+ * confirmation and log entry applies to it exactly as before. It simply has all
+ * three tiers available to *ask for*, which is what the local permission model
+ * has always assumed and what `alter` needing a human confirmation is for.
+ */
+export const LOCAL_CALLER: Caller = Object.freeze({ kind: 'local', tiers: ALL_TIERS })
+
+/**
+ * Does this caller act as the owner of this computer?
+ *
+ * True for the person at this keyboard (and the copilot they are talking to),
+ * and for an AI app holding an **access key** the owner made for it. False for a
+ * paired device, an ordinary session, and any kind added later.
+ *
+ * ## Why a key acts as the owner
+ *
+ * Because he made it for himself, to do from another app what he does here:
+ *
+ *   > *"Everything that I can do manually should be able to do through the
+ *   > MCP… any other AI from any other application from internet through the
+ *   > MCP can connect to it."*
+ *
+ * The gates that ask this question — `hereOnly` for the whole machines area,
+ * `mayDrive` for the browser, worker profiles, the ask for logins,
+ * `servers.control` — were all written `kind !== 'local'` so that a caller kind
+ * nobody had thought of would be refused by default. A key is not that kind any
+ * more; it has been thought about, here, and this is the one function that says
+ * so. What still bounds it is everything that bounds the owner's own copilot,
+ * plus its level: the tier check reads `tiersFor(level)` per call, so a Look only
+ * key reaches only `read` tools whatever this answers, and an alter call still
+ * asks unless he turned asking off for that key.
+ *
+ * ## What this does not open
+ *
+ * A paired device (`remote`) and an ordinary session (`session`) answer false
+ * exactly as before — a device's protocol has no frame for these and a
+ * session's allow-list does not name them. Some things stay the person's even
+ * for a key: a tour (somebody has to be watching the screen it moves), and the
+ * calls a tool marks {@link ToolSpec.ownerMustAnswer}, which are put to him even
+ * when the key's own setting would skip the question.
+ */
+export function actsAsOwner(caller: Caller): boolean {
+  return caller.kind === 'local' || caller.kind === 'key'
+}
+
+/**
+ * What a session this caller starts should say about who started it.
+ *
+ * The copilot's sessions say `copilot`, and an AI app's say `app` with the name
+ * the owner gave its key — so the sidebar can put "ChatGPT" on a session
+ * ChatGPT started instead of filing it under the copilot, which did not. A
+ * label and never a permission: the session runs exactly as one the copilot or
+ * the person started would.
+ */
+export function sessionOriginFor(caller: Caller): { origin: 'copilot' } | { origin: 'app'; originApp: string } {
+  if (caller.kind === 'key') return { origin: 'app', originApp: caller.keyName ?? 'An AI app' }
+  return { origin: 'copilot' }
+}
+
+/**
+ * Whose "started this session" a caller's calls count against.
+ *
+ * Sessions a caller started itself are an ordinary `act` to type into or stop;
+ * anybody else's are `alter`. The copilot at the desk, a phone's copilot run and
+ * an ordinary session share one bucket, as they always did. Each access key has
+ * its own, so ChatGPT cannot type unasked into a session Cursor started, and the
+ * copilot cannot into one ChatGPT started.
+ */
+export function starterOf(caller: Caller): string {
+  return caller.kind === 'key' && caller.keyId !== undefined ? `key:${caller.keyId}` : 'copilot'
+}
+
+/* -------------------------------------------------------------- refusals -- */
+
+/**
+ * Why a call did not happen, when the reason is a rule rather than a fault.
+ *
+ * Kept as a closed set because these strings land in the action log and in the
+ * Activity pane, and "the copilot was refused" is a different row from "the
+ * copilot tried something that broke". A free-text message would collapse the
+ * two the first time somebody phrased an error as a refusal.
+ */
+export type RefusalReason =
+  /** No window was registered to answer, so nobody could be asked. */
+  | 'no-approver'
+  /** The person was asked and said no. */
+  | 'declined'
+  /** The person was asked and did not answer in time. */
+  | 'timeout'
+  /** The window that was asked went away before it answered. */
+  | 'approver-gone'
+  /** The app is shutting down; every outstanding question is dropped unanswered. */
+  | 'shutting-down'
+  /**
+   * The copilot hung up while the question was still on screen.
+   *
+   * This one exists to close a specific and nasty hole. An alter call blocks on
+   * a human, and the client on the other end has a timeout of its own. If that
+   * timeout fires first the client stops listening — and if the person then
+   * clicked Allow, the change would land while the model had already been told
+   * the call failed. So a dropped connection cancels the question instead. The
+   * answer a person gives after the caller has gone changes nothing.
+   */
+  | 'caller-gone'
+  /** Too many questions are already outstanding. See `consent.ts`. */
+  | 'too-many-pending'
+  /**
+   * An alter-tier call from a run that nobody is watching.
+   *
+   * A routine firing at 03:00 runs through the copilot with no human anywhere
+   * near it, and the alter tier is defined as *a real question put to a real
+   * person*. Without this reason the call goes to `ConsentBroker` and waits: two
+   * minutes if a window happens to be open and the person is asleep, then
+   * `timeout` — a whole agent turn spent, one of the three pending slots held,
+   * and a model told its call failed for a reason it cannot fix, which is an
+   * invitation to try again.
+   *
+   * This is not a hypothesis. It is OpenClaw's recorded failure on this machine:
+   * a heartbeat session tried to run a script, exec needed approval, a heartbeat
+   * cannot get interactive approval, and the run died with `approval-timeout`,
+   * then again, then `user-denied` — each failure spending a turn generating an
+   * apology. The fix there was to delete the command.
+   *
+   * So an unattended run is refused at the boundary, immediately, with a
+   * sentence that tells the model to *report what it would have done* rather
+   * than retry. It is deliberately distinct from `no-approver`: that one means
+   * "there is no window", which is a state that fixes itself when somebody opens
+   * the app. This one means "this caller can never be approved", which does not.
+   */
+  | 'not-permitted-unattended'
+  /** The copilot is calling faster than the budget allows. */
+  | 'rate-limited'
+  /**
+   * A tool that changes something, asked for while the copilot is driving the
+   * screen.
+   *
+   * The only refusal here that means *later* rather than *no*, and the only one
+   * whose reason is about the person rather than about permission. While a tour
+   * plays, the screen is moving on its own: sessions come to the front, boxes
+   * appear, everything else dims. **In that window the user's model of cause and
+   * effect is suspended.** A session that goes quiet mid-tour is one they cannot
+   * attribute — was that the tour, the copilot, or the session finishing? — and
+   * the answer arriving in an action log afterwards is not the same as knowing
+   * at the time.
+   *
+   * So `sessions.send`, `sessions.start`, `sessions.stop`, `settings.write` and
+   * the routine tools are refused for the length of a tour, and the gate lifts
+   * the frame it stops. `control.ts` holds the list and the sentence, which
+   * tells the model to wait rather than to retry — an agent that reads a refusal
+   * as transient will spend the whole tour looping, and arrive at the end with
+   * its change budget gone.
+   */
+  | 'not-permitted-while-driving'
+  /** The tool exists but this argument is out of bounds for it. */
+  | 'not-permitted'
+  /**
+   * The caller was never granted this tier.
+   *
+   * Distinct from `declined`, and the distinction is the point: `declined` is a
+   * person saying no to this call, and this is a person having never said yes to
+   * this *class* of call. Retrying is pointless, no dialog was drawn and none
+   * will be — a grant is changed on the desktop, in Settings, by hand.
+   */
+  | 'not-granted'
+
+export class Refused extends Error {
+  constructor(
+    readonly reason: RefusalReason,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'Refused'
+  }
+}
+
+/* -------------------------------------------------------- what tools see -- */
+
+/**
+ * A live session, as the copilot is allowed to see it.
+ *
+ * It carries both the raw {@link SessionStatus} and the derived
+ * {@link AttentionView}, and it carries both on purpose. The derived fields are
+ * the answer to the question the copilot is actually asked — *which of these
+ * needs me* — and the raw status is what anything precise needs: `alerts.ts`
+ * keys its blocked rule on `input` exactly, the renderer colours a dot from it,
+ * and a tool result that had thrown it away would be forcing every later reader
+ * to re-derive something this app already knew. See `attention.ts` for why the
+ * two are not the same field under two names.
+ */
+export interface SessionView extends AttentionView {
+  id: string
+  cwd: string
+  title: string
+  provider: ProviderId
+  status: SessionStatus
+  /** When the session last entered `status`, or when it was created. */
+  statusSince: number
+  createdAt: number
+  exitCode: number | null
+  resumed: boolean
+  /** The account it runs as, when one applies. Never a credential — a name. */
+  profileName: string | null
+  /**
+   * True when the copilot started this session itself.
+   *
+   * The whole `sessions.send` / `sessions.stop` tier split hangs off this
+   * field. It is tracked by `control.ts` from the ids `sessions.start`
+   * returned, in memory, for this run only — not read off `SessionMeta`, which
+   * has no such field yet. See `COPILOT-DESIGN.md`, phase 3.
+   */
+  startedByCopilot: boolean
+  /**
+   * The AI app outside this one that started it, by its access key's name, or
+   * null. Read off the session (`SessionMeta.originApp`), so it survives a
+   * restart and a renamed or revoked key. An app's own sessions are the ones it
+   * may type into or stop without asking.
+   */
+  startedByApp: string | null
+  /**
+   * The browser windows attached to this session, by the names on screen:
+   * `['B1', 'B2']`.
+   *
+   * Q1, for the caller that is not the session itself. A session's own agent is
+   * told this at the top of every turn — `hookContext` in `browser-binding.ts`
+   * composes it — but the copilot is told nothing, so an agent that can now
+   * *drive* `B2` had no way to discover that `B2` exists. Announcing a
+   * capability the caller cannot find is the same dead end from the other side.
+   *
+   * Names, never ids: `browser:<epoch>:<seq>` on a screen was a defect fixed
+   * this afternoon and it does not come back through a tool result. What each
+   * window is *showing* is in `sessions.get`, where a line per window is
+   * affordable; a fleet listing gets the names alone.
+   */
+  windows: string[]
+}
+
+/** Where the last-good copy of the settings was written, and when. */
+export interface SettingsSnapshot {
+  /** Absolute path of the file. Reported to the copilot so it can name it. */
+  path: string
+  /** Epoch ms. */
+  at: number
+}
+
+/** One message of a conversation, trimmed for a tool result. */
+export interface TranscriptMessage {
+  /**
+   * `ChatMessage.id` — the reader's own, unchanged.
+   *
+   * This field was missing, and its absence had a cost worth recording because
+   * it is invisible from inside this file. `ChatView` draws every bubble with
+   * `data-drive-anchor="message:<id>"`, and driving mode points at a bubble by
+   * that id — so the copilot could *read* a message through `sessions.transcript`
+   * and had no way to **cite** it. Every `message` stop in a tour would have been
+   * a guess at a string it had never been shown.
+   *
+   * It is the reader's id rather than one minted here, and that is the whole
+   * point: `chat-transcript.ts` builds it as `` `${role}:${groupKey}` `` and its
+   * comment says it is "stable across reads, so an appended-to message replaces
+   * rather than duplicates". A second identifier invented at this boundary would
+   * be stable across nothing, and would name a message the window has never
+   * heard of.
+   */
+  id: string
+  role: 'you' | 'agent'
+  at: number
+  text: string
+  /** True when `text` was cut to the per-message cap. */
+  truncated: boolean
+}
+
+/* ------------------------------------------------- what a session has done -- */
+
+/**
+ * One tool call in a session's transcript, paired with its result.
+ *
+ * Name and outcome and nothing else, and that is the whole of what
+ * `progress.ts` is allowed to see. The arguments are deliberately absent: one
+ * `Write` call carries a megabyte of file content, and a shape that admitted
+ * them would put an unbounded allocation on a read path the copilot calls
+ * across the whole fleet. See that module's header for what is given up.
+ */
+export interface ToolEvent {
+  /** Epoch ms of the call, or 0 when the line carried no usable timestamp. */
+  at: number
+  name: string
+  /**
+   * Did it fail? **Null means the result was not seen**, which is a third
+   * answer and not a quiet "no": a call still running, and a call whose result
+   * fell outside the window that was read, both land here. Collapsing null into
+   * false would make a session that is failing everything look healthy for
+   * exactly as long as the window was too short.
+   */
+  failed: boolean | null
+}
+
+/**
+ * The tail of what a session has been doing, bounded and honest about it.
+ *
+ * Bounded the same way `sessions.transcript` is, and for the same measured
+ * reason — a transcript on this machine reaches 154 MB — with the same rule
+ * that the bound is *reported* rather than hidden. A caller that summarises a
+ * window as if it were the session will describe behaviour that never happened.
+ */
+export interface ToolTrail {
+  /** Chronological. At most what fitted in the window. */
+  events: ToolEvent[]
+  /** Compactions inside the window, oldest first. */
+  compactions: Array<{ at: number; preTokens: number; postTokens: number; trigger: string }>
+  fileBytes: number
+  fromByte: number
+  /** True when the window started after byte zero, so this is a tail. */
+  partial: boolean
+}
+
+/**
+ * What a whole session cost, read from its transcript.
+ *
+ * Deliberately not a price. This repository deleted its rate card — see
+ * `transcript.ts`'s `rateKey` — so there is no honest way to say "$6.40", and a
+ * number invented here would be a number Asad plans against. Tokens and context
+ * occupancy are facts the file carries; dollars are not.
+ */
+export interface TranscriptTotals {
+  requests: number
+  usage: TokenUsage
+  /** Real models seen, heaviest first. */
+  models: string[]
+  compactions: number
+  /** Occupancy of the context window right now, or null before the first request. */
+  context: ContextUsage | null
+  startedAt: number
+  lastActivityAt: number
+}
+
+/* ------------------------------------------------------------- git changes -- */
+
+/** One file git reports as changed, flattened for a tool result. */
+export interface ChangedFile {
+  path: string
+  group: 'staged' | 'unstaged' | 'untracked' | 'conflicted'
+  /** `modified`, `added`, `deleted`, `renamed`, … as git classified it. */
+  kind: string
+  insertions: number | null
+  deletions: number | null
+  binary: boolean
+}
+
+/**
+ * A folder's uncommitted state, as the copilot is allowed to see it.
+ *
+ * Flattened out of `GitStatusResult` rather than passed through, because that
+ * type crosses the bridge as `unknown` — the app's own choice, so the two sides
+ * cannot drift — and a tool that has to re-narrow an `unknown` before it can
+ * count files is a tool doing the surface's job.
+ */
+export interface RepoChanges {
+  repo: boolean
+  root: string | null
+  branch: string | null
+  ahead: number
+  behind: number
+  files: ChangedFile[]
+  /** Why there is nothing to report, when `repo` is false. Null otherwise. */
+  reason: string | null
+}
+
+/**
+ * The app operations the tools need, and deliberately no more.
+ *
+ * Every method here has exactly one implementation in `live-surface.ts`, and
+ * every one of those is a call into a module that already existed. Adding a
+ * method is therefore a claim that the app can already do the thing — house
+ * rule three, "a tool that cannot do the thing must not exist", enforced at the
+ * type level rather than by good intentions.
+ */
+export interface DeckSurface {
+  /* --- sessions ---------------------------------------------------------- */
+  listSessions(): SessionMeta[]
+  /** Live status, or null when nothing has classified this session yet. */
+  sessionStatus(id: string): { status: SessionStatus; at: number } | null
+  /**
+   * Start a session.
+   *
+   * `forDevice` is the one argument on this interface that is about *who asked*
+   * rather than about what to start, and it exists because a tool's **effect**
+   * can be wider for a remote caller than the frames that caller already has.
+   *
+   * The shape of that bug, stated plainly so nobody removes this argument as
+   * redundant: a phone's own `create` frame is narrow by construction —
+   * `session-create.ts` checks the folder against that device's grants,
+   * `prepareGuestGit` strips this machine's git identity, and on macOS the
+   * session is held inside the folder it was given. `sessions.start` did none of
+   * that, correctly, because its caller had always been the person at the
+   * keyboard. Grant a phone `act` with that unchanged and you have handed it a
+   * strictly *larger* power than the New Session button it already has: any
+   * folder the desktop happens to have open, with the owner's git credentials,
+   * unconfined. That is the OC-02 shape (GHSA-943q-mwmv-hhvh) arriving through
+   * the back door — the tool name was gated, the effect was not.
+   *
+   * So when it is set, the session is started down the *same* path that device's
+   * own `create` frame takes: its folder grants, its guest git identity, its
+   * confinement. The general rule, worth writing into any tool added later: **a
+   * tool's effect for a remote caller may never exceed what that device's own
+   * protocol frames already permit.**
+   *
+   * Optional on the implementation, not on the interface. A host with no remote
+   * layer cannot honour it, and {@link DeckSurface.deviceFolders} being absent is
+   * how the tool learns that and refuses — rather than answering optimistically,
+   * which is the failure this argument exists to prevent.
+   */
+  startSession(input: CreateSessionInput, forDevice?: string): Promise<SessionMeta>
+  /** Raw bytes into a session's pty. `control.ts` decides what may be written. */
+  writeToSession(id: string, data: string): void
+  killSession(id: string): void
+  /** The settled screen of a session, for a provider that writes no transcript. */
+  sessionScreen(id: string): Promise<string | null>
+  /**
+   * Everything this app still holds of what a session's process has printed.
+   *
+   * Raw pty bytes, escape sequences and all, capped at `SCROLLBACK_LIMIT` (4 000
+   * chunks) in `pty-manager.ts`. Not for showing anybody — {@link sessionScreen}
+   * is the settled, readable form and is what a tool result carries.
+   *
+   * This exists for exactly one job: verifying that a tour stop's `quote` was
+   * genuinely on that terminal. {@link sessionScreen} cannot answer it, because
+   * it is the *current viewport* — about fifty lines — and almost everything
+   * worth stopping on has scrolled past by the time somebody asks what happened
+   * overnight. Checking against the viewport alone would drop nearly every
+   * honest stop, which is a verification rule that fails in the direction of
+   * "the tour is empty" rather than "the tour is checked".
+   *
+   * The window is the same one the renderer searches. `terminal-region.ts` caps
+   * its own backwards scan at 4 000 lines and says why in those words: *"beyond
+   * the main process's retention there is nothing the copilot could have read in
+   * order to quote it, so searching further can only find a coincidence."* So
+   * this is not a wider door than the copilot already has; it is the same door,
+   * asked a yes/no question.
+   */
+  sessionScrollback(id: string): string
+
+  /**
+   * The accounts a session may be started as — ids and names, never a credential.
+   *
+   * `profiles.ts`'s `listProfiles()`, narrowed to the three fields a choice is
+   * made by. Here because `sessions.start` takes an `account` and has to check
+   * it: `resolveProfileId` quietly falls back to the default for an id it does
+   * not know, so an unchecked typo would start a session as the *wrong* login
+   * and report success — the silent downgrade this app has removed everywhere
+   * else.
+   *
+   * Optional, and absent means "this host cannot choose an account", which the
+   * tool says rather than ignoring the argument.
+   */
+  accounts?(): Array<{ id: string; name: string; provider: ProviderId }>
+
+  /* --- projects ---------------------------------------------------------- */
+  listProjects(): Array<{ path: string; provider?: ProviderId; lastOpenedAt: number }>
+  /**
+   * The folders one paired device may start a session in.
+   *
+   * The *same* call `create` is checked against and the same array that device
+   * was sent in its `welcome` — `remoteSessionStart` hands both out of one
+   * starter, deliberately, because a picker built from a second source is a
+   * picker that eventually offers a folder the rule refuses.
+   *
+   * **Absent is a switch, and its absence must be read as a refusal rather than
+   * as permission.** A host with no remote layer cannot answer "may this device
+   * use this folder", and the correct behaviour for a host that cannot answer is
+   * to refuse the call — not to fall back to {@link listProjects}, which is the
+   * desktop's own list and is precisely the wider power a remote caller must not
+   * gain. The `devserver` capability makes the same call for the same reason.
+   */
+  deviceFolders?(deviceId: string): string[]
+
+  /* --- this app's own storage -------------------------------------------- */
+  /**
+   * `<userData>` — where this app keeps its settings, its state and every
+   * session's transcript.
+   *
+   * Here for one job: refusing to start a session inside it.
+   * `COPILOT-CAPABILITIES.md` §3.2 rule 2 makes that a rule rather than a
+   * preference, and it is the general form of a recorded failure — an agent
+   * pointed at another program's live state directory wrote into it, bypassed
+   * that program's validation, corrupted it, and cost a whole recovery session.
+   * The check has to happen where the session is started, so the fact has to be
+   * reachable from there.
+   */
+  appStateRoot(): string
+  /**
+   * The task workspaces that exist (`workspaces/task-workspaces.ts`): checkouts
+   * of open projects, kept under `<userData>/workspaces/`. A session may start
+   * in one, though it is under {@link appStateRoot}. Optional: a surface with no
+   * workspaces behind it has none.
+   */
+  taskWorkspaceFolders?(): string[]
+  /** `<copilot>` — the copilot's own folder, where briefs are written. */
+  copilotRoot(): string
+
+  /* --- git --------------------------------------------------------------- */
+  gitStatus(cwd: string): Promise<unknown>
+
+  /* --- alerts ------------------------------------------------------------ */
+  alerts(projectPath: string): Promise<unknown>
+
+  /* --- settings ---------------------------------------------------------- */
+  readSettings(): { settings: Record<string, string | number | boolean>; preferences: Record<string, unknown> }
+  writeSettings(patch: Record<string, unknown>): Record<string, string | number | boolean>
+  writePreferences(patch: Record<string, unknown>): Record<string, unknown>
+  /**
+   * Write the last-good copy of both settings stores, and say where it went.
+   *
+   * Called before a copilot-originated write reaches the confirmation dialog,
+   * never after. See `settings.write`'s precheck in `catalogue.ts` for the whole
+   * argument; the short form is that the copilot changing settings is precisely
+   * the case where a person needs a way back, and the way back has to exist
+   * before the change does.
+   *
+   * Throws if the snapshot cannot be written. A caller must treat that as a
+   * reason not to proceed rather than as a warning to log — a write with no
+   * snapshot behind it is the state this exists to prevent.
+   */
+  snapshotSettings(): SettingsSnapshot
+  /**
+   * Push what was just written into the window that is already open, and say
+   * whether one heard.
+   *
+   * This is the difference between a setting being *saved* and a setting being
+   * *applied*, and until 2026-08-18 this app only ever did the first. The
+   * renderer learns a preference from the return value of its own `prefs:set`
+   * invoke, so a write that arrives from anywhere else — the copilot, a paired
+   * phone — reached the disk and never reached React. Watched live: the copilot
+   * was asked for a light theme, `state.json` said `"light"`, the window stayed
+   * dark, and it reported *"Done — theme is now light."* True of the file, false
+   * of the screen, and the person's reasonable conclusion is that the tool does
+   * not work.
+   *
+   * The **answer matters as much as the push**, because it is what
+   * `settings.write` puts in `appliedToWindow`. `true` means a live renderer was
+   * handed the new values; `false` means there was nothing open to hand them to,
+   * and the honest sentence is then "it is saved and the next launch reads it"
+   * rather than a claim about a screen.
+   *
+   * Optional, and its absence is a true "there is no window here" rather than a
+   * gap to be filled in later: the headless host has no renderer at all, and the
+   * fake surfaces in `control.test.ts` are not pretending to have one. A caller
+   * treats a missing method exactly as it treats `false`.
+   */
+  applyToWindow?(scope: 'settings' | 'preferences', values: Record<string, unknown>): boolean
+
+  /* --- transcripts ------------------------------------------------------- */
+  /**
+   * Every conversation in a folder, with when each began.
+   *
+   * Not "the newest one", which is what this used to be and what
+   * `transcript-match.ts` exists to correct: several sessions share a folder,
+   * and handing them all the same file made three of them report a fourth
+   * session's work as their own. The choice is made per session, from this
+   * list, by a function that says how it chose.
+   */
+  transcriptsIn(cwd: string): Promise<TranscriptChoice[]>
+  /** Size in bytes, so a reader can start near the end instead of at zero. */
+  transcriptBytes(path: string): Promise<number>
+  /** Parse from a byte offset to the end. Never called with offset zero on a big file. */
+  readTranscriptFrom(path: string, from: number): Promise<TranscriptMessage[]>
+  /**
+   * The tail of a session's tool use, for {@link ToolTrail}.
+   *
+   * Separate from {@link readTranscriptFrom} even though both read the same
+   * file, because they keep opposite halves of it: that one keeps the prose and
+   * throws the tool calls away, this one does the reverse. One reader returning
+   * both would be a reader whose payload is the whole transcript.
+   */
+  readToolTrail(path: string, windowBytes: number): Promise<ToolTrail>
+  /**
+   * What the whole session cost, in tokens.
+   *
+   * A full-file read rather than a window, and that asymmetry is deliberate:
+   * "how is it behaving" is a question about the last few minutes, and "what
+   * has it spent" is a question about all of it. A windowed total would
+   * under-report, silently, in the direction that makes an expensive session
+   * look cheap.
+   */
+  transcriptTotals(path: string): Promise<TranscriptTotals | null>
+
+  /* --- git --------------------------------------------------------------- */
+  /** Uncommitted state of a folder, flattened. See {@link RepoChanges}. */
+  gitChanges(cwd: string): Promise<RepoChanges>
+  /** Unified diff for one file. '' when there is none or the path is refused. */
+  fileDiff(cwd: string, path: string, options: { staged?: boolean; untracked?: boolean }): Promise<string>
+  /**
+   * When a file was last written, epoch ms, or null when it cannot be told.
+   *
+   * The whole of the attribution in `fleet-diff.ts` rests on this one number.
+   * Null is a real answer and not an error: a deleted file has no mtime, and a
+   * change that cannot be dated is reported as unattributed rather than
+   * guessed at.
+   */
+  fileModifiedAt(path: string): Promise<number | null>
+}

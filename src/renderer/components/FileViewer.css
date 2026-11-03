@@ -1,0 +1,182 @@
+/* ============================================================================
+   File viewer — read-only source with a line-number gutter.
+
+   A reading surface, so it is set like one: the filename floats over the page
+   with space around it rather than sitting in a bar, the gutter is quiet ink
+   on the page's own paper with no rule beside it, and the code has the line
+   height of something meant to be read rather than counted.
+
+   Colours from tokens.css only.
+   ============================================================================ */
+
+.file-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* No fill and no rule under it: the space between the name and the first line
+   of code is what separates them. */
+.file-viewer-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex: none;
+  padding: var(--sp-5) var(--sp-6) var(--sp-3);
+}
+
+/* min-width:0 lets the name shrink; without it the automatic minimum size of a
+   flex item keeps the header at full width, so the ellipsis never fires and a
+   long filename shoves the line count off the end of the bar. */
+.file-viewer-name {
+  min-width: 0;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-badge {
+  flex: none;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: 16px;
+}
+
+.file-viewer-meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Long lines scroll here, inside the viewer, and nowhere else. */
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.file-viewer-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* min-width keeps the row as wide as the widest code line, so the sticky
+   gutter still covers the full height while scrolling sideways. */
+.file-viewer-doc {
+  display: flex;
+  align-items: flex-start;
+  min-width: min-content;
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
+  tab-size: 2;
+}
+
+.file-viewer-gutter,
+.file-viewer-code {
+  margin: 0;
+  padding: 0 0 var(--sp-10);
+  font: inherit;
+  white-space: pre;
+}
+
+/* Opaque, because it is sticky and the code scrolls under it — but painted in
+   the page's own colour, so it reads as a margin rather than a column. */
+.file-viewer-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  padding-right: var(--sp-5);
+  padding-left: var(--sp-6);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.file-viewer-code {
+  flex: none;
+  padding-right: var(--sp-8);
+  color: var(--text-primary);
+}
+
+.file-viewer-code code {
+  font: inherit;
+}
+
+/* ============================================================================
+   Syntax colour.
+
+   Four hues and one weight, all of them tokens the palette already proves are
+   readable on every surface of both themes (`tokens.test.ts` measures each of
+   these against the full set of backgrounds). No new colours are invented for
+   code: a reading pane that needed its own palette would be the one surface in
+   the app whose contrast nobody was checking.
+
+   Nothing here is bold or italic except a heading. Italic comments at 13px on
+   a hinted monospace face are measurably harder to read, and a file where four
+   things shout is a file where nothing does.
+   ============================================================================ */
+
+.tok-comment {
+  color: var(--text-muted);
+}
+
+.tok-string {
+  color: var(--color-positive);
+}
+
+.tok-number {
+  color: var(--color-warning);
+}
+
+.tok-keyword {
+  color: var(--color-info);
+}
+
+/* A Markdown heading, a YAML key, a CSS at-rule: the line's own structure
+   rather than a value inside it. */
+.tok-meta {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* Two jobs, one class. Above a truncated file it is a note over the code, so
+   it stays a left-aligned line at the top of the pane. */
+.file-viewer-notice {
+  max-width: 52ch;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-6) var(--sp-4);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+/* On its own it is the whole pane — "Select a file to view it here", and the
+   three refusals — so it is placed the way the shell places its own empty
+   states rather than left hanging in the top corner of a blank pane. */
+.file-viewer-notice:only-child {
+  margin: 12vh auto 0;
+  padding: 0 var(--sp-6);
+  font-size: var(--t-body);
+  text-align: center;
+}
+
+.file-viewer-notice.error {
+  color: var(--color-critical);
+}

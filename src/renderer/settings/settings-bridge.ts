@@ -1,0 +1,787 @@
+/**
+ * The slice of the preload bridge the settings window uses, and the narrowing
+ * that turns its `unknown` answers into something a control can render.
+ *
+ * Two constraints shape this file.
+ *
+ * Everything crosses the bridge as `unknown` — the main-process modules own
+ * their types and duplicating them in `shared/types.ts` lets the two drift — so
+ * each shape is mirrored here and parsed on arrival, the way `BrowserTab.tsx`
+ * mirrors the browser types.
+ *
+ * And every method is optional. The preload is wired by the orchestrator after
+ * these files land, and several sections depend on channels that may not exist
+ * yet in a given build. A section that finds its method missing says so in one
+ * sentence; the alternative is a dialog that throws on open.
+ */
+
+import type { ProviderId } from '@shared/types'
+import { isProviderId } from '../preferences'
+import type { SettingValues } from './settings-schema'
+
+/* -------------------------------------------------------------- sections -- */
+
+/** What every section is handed. Uniform so the shell can render them in a map. */
+export interface SectionProps {
+  values: SettingValues
+  /** Optimistic — the shell applies the patch locally, then persists it. */
+  save(patch: Record<string, unknown>): void
+  bridge: SettingsBridge
+  /** True until the stored values have arrived; controls stay disabled. */
+  loading: boolean
+  /** Jump to another section — for the places where one setting lives in two. */
+  goTo(section: string): void
+  /** Re-read both stores from disk. For anything that writes behind `save`. */
+  reload(): void
+  /**
+   * Start a session from inside settings, and close the window on the way.
+   *
+   * Exactly one section needs it and the reason is not decoration: signing an
+   * account in happens inside the agent's own terminal, so "Sign in" can only
+   * mean "open a session under this account". A settings pane cannot do that on
+   * its own — the window owns the session store, and a session created behind
+   * its back would be a running pty with no tab.
+   *
+   * Optional, like every other capability here: a panel rendered without it
+   * draws no Sign in button rather than a button that does nothing.
+   *
+   * `provider` is which agent to start, and it is not optional decoration: an
+   * account is a login of one specific CLI, so a session started on a different
+   * one shows the wrong login screen and the account is dropped on the way past.
+   * Omitted still means "whatever the default coding tool is", which is what
+   * every caller meant while Claude was the only agent that could hold one.
+   */
+  startSession?(request: { profileId: string; provider?: ProviderId }): void
+  /**
+   * Ask the copilot's setup questions again, and close this window on the way.
+   *
+   * The second capability that has to come from the app rather than from a pane,
+   * and for a version of the same reason {@link SectionProps.startSession}
+   * gives: the flow is a dialog, this window is a dialog, and a dialog opened
+   * over another leaves two Escape handlers on one key — pressing it inside the
+   * questions would take the settings sheet with it. The pane knows when to ask;
+   * only the window that owns both can put them in the right order.
+   *
+   * Optional like the rest: a panel rendered without it draws no button rather
+   * than one that does nothing.
+   */
+  setUpCopilot?(): void
+}
+
+/* ------------------------------------------------------------ mirrored -- */
+
+export interface StoredSettingsPayload {
+  version: number
+  values: Record<string, unknown>
+}
+
+/** Mirrors `ConfigPath` in `src/main/settings-extra.ts`. */
+export interface ConfigPath {
+  key: string
+  label: string
+  purpose: string
+  path: string
+  kind: 'file' | 'folder'
+  exists: boolean
+}
+
+export interface OpenPathResult {
+  opened: boolean
+  path: string | null
+  message: string
+}
+
+export interface UpdateChannel {
+  packaged: boolean
+  feedPresent: boolean
+  checkable: boolean
+  detail: string
+}
+
+/** Mirrors `AboutInfo` in `src/main/settings-extra.ts`. */
+export interface AboutInfo {
+  name: string
+  tagline: string
+  version: string
+  electron: string
+  chromium: string
+  node: string
+  platform: string
+  arch: string
+  license: string | null
+  repository: string | null
+  homepage: string | null
+  updates: UpdateChannel | null
+}
+
+/** Mirrors `ToolStatus` in `src/main/prerequisites.ts`. */
+export interface ToolStatus {
+  id: string
+  label: string
+  state: 'ready' | 'installed-not-authed' | 'missing' | 'unknown'
+  version?: string
+  purpose: string
+  remedy?: string
+  /**
+   * True even when nothing is wrong — a caveat, not a fix.
+   *
+   * Carried because of one case that is otherwise invisible: an agent that runs
+   * from somewhere other than the copy on your PATH. Saying nothing would be
+   * simpler and would also be what makes a person distrust the app later, when
+   * `codex` fails in their own terminal and works here.
+   */
+  note?: string
+  url?: string
+  required: boolean
+}
+
+export interface Prerequisites {
+  tools: ToolStatus[]
+  canRunSessions: boolean
+  needsLogin: boolean
+}
+
+/** Mirrors `Profile` in `src/main/profiles.ts`. */
+export interface ProfileSummary {
+  id: string
+  name: string
+  /**
+   * Which agent this is a login of, or null when the payload did not say.
+   *
+   * Carried because the label a list prints for the machine's own install names
+   * the agent — "Your own Codex CLI install" — and without this every system row
+   * in the "Run them as" picker would read "Your own install", which is three
+   * identical options for three different installs. Null rather than a guess:
+   * a snapshot from a build that predates accounts having providers genuinely
+   * does not know, and naming Claude there would put the wrong agent on a row.
+   */
+  provider: ProviderId | null
+  configDir: string
+  system: boolean
+  /** A custom property name from tokens.css — the UI wraps it in `var()`. */
+  color: string
+  createdAt: number
+  lastUsedAt: number | null
+}
+
+export interface ProfilesSnapshot {
+  profiles: ProfileSummary[]
+  defaultProfileId: string | null
+}
+
+/** Mirrors `DetectedBrowser` in `src/main/chrome-import.ts`. */
+export interface BrowserProfileSummary {
+  id: string
+  name: string
+  access: 'ok' | 'blocked' | 'missing'
+}
+
+export interface DetectedBrowser {
+  id: string
+  name: string
+  userDataDir: string
+  access: 'ok' | 'blocked' | 'missing'
+  note?: string
+  profiles: BrowserProfileSummary[]
+}
+
+export interface DevUrl {
+  url: string
+  host: string
+  title: string | null
+  source: 'bookmark' | 'history' | 'session'
+  detail: string | null
+  approximate?: boolean
+}
+
+export interface ScanResult {
+  urls: DevUrl[]
+  problems: Array<{ message: string }>
+}
+
+export interface ClearResult {
+  cleared: boolean
+  message: string
+}
+
+/** Mirrors `CookieSource` in `src/main/cookie-import.ts`. */
+export interface CookieSource {
+  browserId: string
+  browserName: string
+  profileId: string
+  profileName: string
+  /** False when nothing on this machine holds that browser's encryption key. */
+  keychainItem: boolean
+}
+
+/**
+ * Mirrors the part of `BrowserSessionInfo` (`src/main/browser-session.ts`) that
+ * a settings pane has any business showing.
+ *
+ * Four of its seven fields are left on the floor deliberately. `partition` and
+ * `storagePath` are the two the browser's own dialog prints as `<code>` — they
+ * are a partition name and a path, which is precisely what this window is being
+ * cleared of, and neither answers a question anybody asks in Settings.
+ * `persistent` is Electron's own answer about the partition rather than the
+ * user's choice, and the row above the summary ("Keep cookies and logins between
+ * runs") is the one they actually control; printing both invites the reader to
+ * work out which of two "does this survive a restart" answers wins.
+ *
+ * What is left is the three numbers that make the red button below honest.
+ */
+export interface BrowserStored {
+  cookieCount: number
+  domainCount: number
+  cacheBytes: number
+}
+
+/** Mirrors `CookieImportStatus` in `src/main/cookie-import.ts`. */
+export interface CookieImportStatus {
+  present: number
+  recorded: number
+  importedAt: number | null
+  source: string
+  supported: boolean
+}
+
+/**
+ * Mirrors `CookieImportReport` in `src/main/cookie-import.ts`.
+ *
+ * `keychain` is the field that separates "nothing to import" from "you said no
+ * to the keychain", which are the same number of cookies and completely
+ * different situations.
+ */
+export interface CookieImportReport {
+  ok: boolean
+  browserName: string
+  imported: number
+  skipped: number
+  failed: number
+  domains: number
+  keychain: string | null
+  message: string
+}
+
+/* -------------------------------------------------------------- bridge -- */
+
+export interface SettingsBridgeMethods {
+  getPreferences(): Promise<unknown>
+  setPreferences(patch: Record<string, unknown>): Promise<unknown>
+  /**
+   * A stored value changed, and this window is not what changed it.
+   *
+   * The copilot writes settings and preferences, with a confirmation, and a
+   * paired device can behind it. Without these the app repaints while this
+   * dialog goes on showing the values it read when it opened — somebody watching
+   * their app turn light with the Appearance picker still on Dark would
+   * reasonably conclude the picker is broken. Both hand back an unsubscribe
+   * function, like every other `on*` on the bridge. See `main/live-push.ts`.
+   */
+  onPreferencesChanged(cb: (preferences: unknown) => void): () => void
+  onSettingsChanged(cb: (settings: unknown) => void): () => void
+
+  getSettings(): Promise<unknown>
+  setSettings(patch: Record<string, unknown>): Promise<unknown>
+  resetSettings(): Promise<unknown>
+  settingsPaths(): Promise<unknown>
+  openSettingsPath(key: string): Promise<unknown>
+  appAbout(): Promise<unknown>
+  clearBrowserData(): Promise<unknown>
+
+  /**
+   * The three notification questions the renderer cannot answer itself.
+   *
+   * `Notification.permission` is always `granted` in an Electron renderer —
+   * Chromium answers from its own model and never asks the OS — so every one
+   * of these has to be asked of the main process or not asked at all.
+   */
+  notificationSupport(): Promise<unknown>
+  openNotificationSettings(): Promise<unknown>
+  notificationDelivery(sinceMs: number): Promise<unknown>
+
+  getBrand(): Promise<unknown>
+  checkPrerequisites(): Promise<unknown>
+  detectProviders(): Promise<unknown>
+
+  listProfiles(): Promise<unknown>
+  createProfile(name: string): Promise<unknown>
+  renameProfile(id: string, name: string): Promise<unknown>
+  deleteProfile(id: string): Promise<unknown>
+  setDefaultProfile(id: string): Promise<unknown>
+
+  listBrowsers(): Promise<unknown>
+  scanBrowserTabs(request?: unknown): Promise<unknown>
+
+  /**
+   * Cookie import. `importBrowserCookies` is the one call in this bridge that
+   * can put a system dialog on screen — macOS asks before handing over the
+   * keychain key — so nothing calls it except a button the user pressed.
+   */
+  browserCookieSources(): Promise<unknown>
+  browserCookieImportStatus(): Promise<unknown>
+  importBrowserCookies(request?: unknown): Promise<unknown>
+  clearImportedCookies(): Promise<unknown>
+
+  /**
+   * What the browser tab is currently holding: how many cookies, from how many
+   * sites, and how much cache.
+   *
+   * A read, and the reason it was added to this bridge is the button underneath
+   * it. "Clear stored browsing data" is red, cannot be undone, and said nothing
+   * whatsoever about what it was going to remove — so a person was being asked
+   * to accept an irreversible action against an unknown quantity. The channel
+   * has existed on the preload since the browser's own dialog was built; the
+   * settings pane simply never asked.
+   */
+  browserSessionInfo(): Promise<unknown>
+
+  /**
+   * Setup: one read of what is installed and what our hooks look like, and the
+   * two writes that change the second half of that. The names are the preload's
+   * — `installHooks`, not `hooksInstall` — because the contract test matches
+   * these strings against it and a near-miss renders a panel that looks
+   * unimplemented rather than one that fails.
+   */
+  setupStatus(): Promise<unknown>
+  installHooks(providerId: string): Promise<unknown>
+  removeHooks(providerId: string): Promise<unknown>
+}
+
+export type SettingsBridge = Partial<SettingsBridgeMethods>
+
+const BRIDGE_METHODS: ReadonlyArray<keyof SettingsBridgeMethods> = [
+  'getPreferences',
+  'setPreferences',
+  'onPreferencesChanged',
+  'onSettingsChanged',
+  'getSettings',
+  'setSettings',
+  'resetSettings',
+  'settingsPaths',
+  'openSettingsPath',
+  'appAbout',
+  'clearBrowserData',
+  'notificationSupport',
+  'openNotificationSettings',
+  'notificationDelivery',
+  'getBrand',
+  'checkPrerequisites',
+  'detectProviders',
+  'listProfiles',
+  'createProfile',
+  'renameProfile',
+  'deleteProfile',
+  'setDefaultProfile',
+  'listBrowsers',
+  'scanBrowserTabs',
+  'browserCookieSources',
+  'browserCookieImportStatus',
+  'importBrowserCookies',
+  'clearImportedCookies',
+  'browserSessionInfo',
+  'setupStatus',
+  'installHooks',
+  'removeHooks',
+]
+
+/**
+ * Pick the methods that actually exist on the bridge, each one called through
+ * the host object rather than detached.
+ *
+ * Detaching matters: a preload that exposes plain functions survives being
+ * torn off its object, one with methods on a prototype throws on `this` the
+ * first time a button is pressed. Cheap to avoid, impossible to debug later.
+ */
+export function resolveSettingsBridge(host?: unknown): SettingsBridge {
+  const source =
+    host ??
+    (typeof window === 'undefined'
+      ? undefined
+      : (window as unknown as { deck?: unknown }).deck)
+
+  if (typeof source !== 'object' || source === null) return {}
+  const record = source as Record<string, unknown>
+  const bridge: Record<string, unknown> = {}
+
+  for (const name of BRIDGE_METHODS) {
+    if (typeof record[name] !== 'function') continue
+    bridge[name] = (...args: unknown[]): unknown =>
+      (record[name] as (...a: unknown[]) => unknown).apply(record, args)
+  }
+
+  return bridge as SettingsBridge
+}
+
+/* ------------------------------------------------------------ narrowing -- */
+
+export function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+export function toStoredSettings(raw: unknown): Record<string, unknown> {
+  const record = asRecord(raw)
+  if (!record) return {}
+  const values = asRecord(record.values)
+  // Both shapes: the envelope, and a bare map from a build that predates it.
+  return values ?? record
+}
+
+export function toConfigPaths(raw: unknown): ConfigPath[] {
+  return asArray(raw).flatMap((entry) => {
+    const record = asRecord(entry)
+    if (!record || typeof record.key !== 'string' || typeof record.path !== 'string') return []
+    return [
+      {
+        key: record.key,
+        label: asString(record.label, record.key),
+        purpose: asString(record.purpose),
+        path: record.path,
+        kind: record.kind === 'folder' ? 'folder' : 'file',
+        exists: asBoolean(record.exists),
+      },
+    ]
+  })
+}
+
+/* ------------------------------------------------------- notifications -- */
+
+/** Mirrors `NotificationSupport` in `src/main/os-notifications.ts`. */
+export interface NotificationSupport {
+  settingsPane: boolean
+  deliveryReadable: boolean
+}
+
+/**
+ * Narrowed pessimistically on purpose.
+ *
+ * A build whose preload predates these channels answers `undefined`, and the
+ * right reading of that is "no settings page to offer, nothing verifiable" —
+ * which draws no button and claims nothing, rather than a button that goes
+ * nowhere and a sentence that is not true.
+ */
+export function toNotificationSupport(raw: unknown): NotificationSupport {
+  const record = asRecord(raw)
+  return {
+    settingsPane: asBoolean(record?.settingsPane),
+    deliveryReadable: asBoolean(record?.deliveryReadable),
+  }
+}
+
+/** Mirrors `DeliveryReport` in `src/main/os-notifications.ts`. */
+export interface DeliveryReport {
+  verdict: 'delivered' | 'absent' | 'unknown'
+  at: string | null
+}
+
+export function toDeliveryReport(raw: unknown): DeliveryReport {
+  const record = asRecord(raw)
+  const verdict = record?.verdict
+  return {
+    // Anything unrecognised is `unknown`, never `delivered`. The whole module
+    // exists because a success reported by something that did not check is
+    // worse than no answer at all.
+    verdict: verdict === 'delivered' || verdict === 'absent' ? verdict : 'unknown',
+    at: typeof record?.at === 'string' && record.at !== '' ? record.at : null,
+  }
+}
+
+export function toOpenPathResult(raw: unknown): OpenPathResult {
+  const record = asRecord(raw)
+  return {
+    opened: asBoolean(record?.opened),
+    path: typeof record?.path === 'string' ? record.path : null,
+    message: asString(record?.message, 'Nothing happened.'),
+  }
+}
+
+export function toAbout(raw: unknown): AboutInfo | null {
+  const record = asRecord(raw)
+  if (!record || typeof record.name !== 'string') return null
+  const updates = asRecord(record.updates)
+  return {
+    name: record.name,
+    tagline: asString(record.tagline),
+    version: asString(record.version),
+    electron: asString(record.electron),
+    chromium: asString(record.chromium),
+    node: asString(record.node),
+    platform: asString(record.platform),
+    arch: asString(record.arch),
+    license: typeof record.license === 'string' ? record.license : null,
+    repository: typeof record.repository === 'string' ? record.repository : null,
+    homepage: typeof record.homepage === 'string' ? record.homepage : null,
+    updates: updates
+      ? {
+          packaged: asBoolean(updates.packaged),
+          feedPresent: asBoolean(updates.feedPresent),
+          checkable: asBoolean(updates.checkable),
+          detail: asString(updates.detail),
+        }
+      : null,
+  }
+}
+
+const TOOL_STATES = new Set(['ready', 'installed-not-authed', 'missing', 'unknown'])
+
+export function toPrerequisites(raw: unknown): Prerequisites | null {
+  const record = asRecord(raw)
+  if (!record || !Array.isArray(record.tools)) return null
+  const tools = record.tools.flatMap((entry): ToolStatus[] => {
+    const tool = asRecord(entry)
+    if (!tool || typeof tool.id !== 'string') return []
+    return [
+      {
+        id: tool.id,
+        label: asString(tool.label, tool.id),
+        state: TOOL_STATES.has(asString(tool.state))
+          ? (tool.state as ToolStatus['state'])
+          : 'unknown',
+        version: asOptionalString(tool.version),
+        purpose: asString(tool.purpose),
+        remedy: asOptionalString(tool.remedy),
+        note: asOptionalString(tool.note),
+        url: asOptionalString(tool.url),
+        required: asBoolean(tool.required),
+      },
+    ]
+  })
+  return {
+    tools,
+    canRunSessions: asBoolean(record.canRunSessions),
+    needsLogin: asBoolean(record.needsLogin),
+  }
+}
+
+/**
+ * A profile's colour is a custom property *name*, which the list wraps in
+ * `var()` and hands to an inline style. Anything that is not one is replaced
+ * rather than passed through: `profiles.json` is a file a person can edit, and
+ * `var(whatever they typed)` is at best a dot that does not appear.
+ */
+const CUSTOM_PROPERTY = /^--[A-Za-z0-9-]{1,64}$/
+
+export function toProfiles(raw: unknown): ProfilesSnapshot | null {
+  const record = asRecord(raw)
+  if (!record || !Array.isArray(record.profiles)) return null
+  const profiles = record.profiles.flatMap((entry): ProfileSummary[] => {
+    const profile = asRecord(entry)
+    if (!profile || typeof profile.id !== 'string') return []
+    return [
+      {
+        id: profile.id,
+        name: asString(profile.name, profile.id),
+        // Narrowed rather than cast: `profiles.json` is a file a person can
+        // edit, and an unrecognised string would reach the label as an agent
+        // this build has no name for. Null draws the generic sentence, which
+        // is the honest answer for both cases.
+        provider: isProviderId(profile.provider) ? profile.provider : null,
+        configDir: asString(profile.configDir),
+        system: asBoolean(profile.system),
+        color: CUSTOM_PROPERTY.test(asString(profile.color)) ? (profile.color as string) : '--accent',
+        createdAt: asNumber(profile.createdAt),
+        lastUsedAt: typeof profile.lastUsedAt === 'number' ? profile.lastUsedAt : null,
+      },
+    ]
+  })
+  return {
+    profiles,
+    defaultProfileId:
+      typeof record.defaultProfileId === 'string' ? record.defaultProfileId : null,
+  }
+}
+
+const ACCESS_STATES = new Set(['ok', 'blocked', 'missing'])
+
+function toAccess(value: unknown): DetectedBrowser['access'] {
+  return ACCESS_STATES.has(asString(value)) ? (value as DetectedBrowser['access']) : 'missing'
+}
+
+export function toBrowsers(raw: unknown): DetectedBrowser[] {
+  return asArray(raw).flatMap((entry): DetectedBrowser[] => {
+    const browser = asRecord(entry)
+    if (!browser || typeof browser.id !== 'string') return []
+    return [
+      {
+        id: browser.id,
+        name: asString(browser.name, browser.id),
+        userDataDir: asString(browser.userDataDir),
+        access: toAccess(browser.access),
+        note: asOptionalString(browser.note),
+        profiles: asArray(browser.profiles).flatMap((raw2): BrowserProfileSummary[] => {
+          const profile = asRecord(raw2)
+          if (!profile || typeof profile.id !== 'string') return []
+          return [
+            {
+              id: profile.id,
+              name: asString(profile.name, profile.id),
+              access: toAccess(profile.access),
+            },
+          ]
+        }),
+      },
+    ]
+  })
+}
+
+const URL_SOURCES = new Set(['bookmark', 'history', 'session'])
+
+/**
+ * Both lists are deduplicated here rather than trusted.
+ *
+ * `chrome-import` folds repeated addresses together, but it reports one problem
+ * per browser *profile*, so a machine with three Chrome profiles behind Full
+ * Disk Access sends the same sentence three times — rendered as three identical
+ * warnings under three identical React keys. Deduplicating on arrival fixes the
+ * duplicate keys and the duplicate warnings in one place, and makes the panel
+ * safe against a scan that ever stops folding its URLs.
+ */
+export function toScanResult(raw: unknown): ScanResult {
+  const record = asRecord(raw)
+  const seenUrls = new Set<string>()
+  const urls = asArray(record?.urls).flatMap((entry): DevUrl[] => {
+    const hit = asRecord(entry)
+    if (!hit || typeof hit.url !== 'string') return []
+    if (seenUrls.has(hit.url)) return []
+    seenUrls.add(hit.url)
+    return [
+      {
+        url: hit.url,
+        host: asString(hit.host),
+        title: typeof hit.title === 'string' ? hit.title : null,
+        source: URL_SOURCES.has(asString(hit.source)) ? (hit.source as DevUrl['source']) : 'history',
+        detail: typeof hit.detail === 'string' ? hit.detail : null,
+        approximate: hit.approximate === true,
+      },
+    ]
+  })
+  const seenProblems = new Set<string>()
+  const problems = asArray(record?.problems).flatMap((entry) => {
+    const problem = asRecord(entry)
+    const message = asString(problem?.message)
+    if (message === '' || seenProblems.has(message)) return []
+    seenProblems.add(message)
+    return [{ message }]
+  })
+  return { urls, problems }
+}
+
+export function toCookieSources(raw: unknown): CookieSource[] {
+  return asArray(raw).flatMap((entry): CookieSource[] => {
+    const source = asRecord(entry)
+    if (!source || typeof source.browserId !== 'string' || typeof source.profileId !== 'string') {
+      return []
+    }
+    return [
+      {
+        browserId: source.browserId,
+        browserName: asString(source.browserName, source.browserId),
+        profileId: source.profileId,
+        profileName: asString(source.profileName, source.profileId),
+        keychainItem: asBoolean(source.keychainItem),
+      },
+    ]
+  })
+}
+
+export function toCookieImportStatus(raw: unknown): CookieImportStatus {
+  const record = asRecord(raw)
+  return {
+    present: asNumber(record?.present),
+    recorded: asNumber(record?.recorded),
+    importedAt: typeof record?.importedAt === 'number' ? record.importedAt : null,
+    source: asString(record?.source),
+    // Defaults to false: claiming an import will work and then failing at the
+    // keychain is worse than saying up front that it will not.
+    supported: asBoolean(record?.supported),
+  }
+}
+
+export function toCookieImportReport(raw: unknown): CookieImportReport {
+  const record = asRecord(raw)
+  return {
+    ok: asBoolean(record?.ok),
+    browserName: asString(record?.browserName),
+    imported: asNumber(record?.imported),
+    skipped: asNumber(record?.skipped),
+    failed: asNumber(record?.failed),
+    domains: asNumber(record?.domains),
+    keychain: typeof record?.keychain === 'string' ? record.keychain : null,
+    message: asString(record?.message, 'The import finished without saying what happened.'),
+  }
+}
+
+/**
+ * Narrowed to zeroes rather than to null.
+ *
+ * A build whose preload predates the channel, or a read that fails, answers
+ * "nothing" — and nothing is also what a fresh install genuinely holds, so the
+ * two are indistinguishable *and it does not matter*: both mean the Clear button
+ * has nothing to promise. The caller decides whether it asked at all.
+ */
+export function toBrowserStored(raw: unknown): BrowserStored {
+  const record = asRecord(raw)
+  return {
+    cookieCount: asNumber(record?.cookieCount),
+    domainCount: asNumber(record?.domainCount),
+    cacheBytes: asNumber(record?.cacheBytes),
+  }
+}
+
+export function toClearResult(raw: unknown): ClearResult {
+  const record = asRecord(raw)
+  return {
+    cleared: asBoolean(record?.cleared),
+    message: asString(record?.message, 'Nothing to report.'),
+  }
+}
+
+/** The message to show when a channel the preload has not wired yet is called. */
+export function missingChannelNote(what: string): string {
+  return `${what} is not available in this build yet.`
+}
+
+/**
+ * An error from an IPC rejection, reduced to one line a person can read.
+ *
+ * Never the empty string. Every caller renders this conditionally, so returning
+ * '' would show no message at all — and the two ways that happened were both
+ * real: an Error whose message is exactly `Error:` (the frame with nothing
+ * after it), and a rejection that is not an Error at all.
+ */
+export function errorText(error: unknown, fallback: string): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+  if (message.trim() === '') return fallback
+
+  // Electron prefixes a rejected invoke with the channel and handler frame; the
+  // sentence the main process actually wrote is after the last one.
+  const parts = message.split(/Error:\s*/)
+  const tail = (parts[parts.length - 1] ?? '').trim()
+  return tail !== '' ? tail : message.trim()
+}

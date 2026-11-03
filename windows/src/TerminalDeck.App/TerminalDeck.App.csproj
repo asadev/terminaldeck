@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <ApplicationIcon>Assets/icons/app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The retained W2 alternate host uses the .NET projection. The integrated
+         WinUI host lives in BrowserPane and must be the only compiled binding. -->
+    <Compile Remove="Browser/WebView2SurfaceFactory.cs" />
+    <Compile Remove="Views/Windows/Tests/**/*.cs" />
+    <Content Include="Verification/w7-fake-claude.cjs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets/**/*" CopyToOutputDirectory="PreserveNewest" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <ProjectReference Include="../TerminalDeck.Keeper/TerminalDeck.Keeper.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <ProjectReference Include="../TerminalDeck.Platform.Windows/TerminalDeck.Platform.Windows.csproj" />
+  </ItemGroup>
+  <!-- stream step 2: the direct link's engine, built by src/TerminalDeck.Link.Native/build.ps1 -Out <folder>;
+       pass -p:TdLinkNative=<folder>. Without it the app runs, but phones cannot connect (direct only: no relay fallback). -->
+  <ItemGroup Condition="'$(TdLinkNative)' != ''">
+    <None Include="$(TdLinkNative)/tdlink.dll;$(TdLinkNative)/libwebrtc.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+    <None Include="$(TdLinkNative)/licenses/webrtc/*" Link="licenses/webrtc/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+  <Target Name="CopyKeeper" AfterTargets="Build">
+    <PropertyGroup><KeeperBundleId>$([System.DateTime]::UtcNow.ToString(yyyyMMddHHmmssfff))</KeeperBundleId></PropertyGroup>
+    <ItemGroup><KeeperFiles Include="../TerminalDeck.Keeper/bin/$(Platform)/$(Configuration)/net10.0-windows10.0.19041.0/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(KeeperFiles)" DestinationFolder="$(OutDir)keeper/$(KeeperBundleId)/%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <WriteLinesToFile File="$(OutDir)keeper-location.txt" Lines="$(KeeperBundleId)" Overwrite="true" />
+  </Target>
+</Project>

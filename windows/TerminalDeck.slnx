@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
+    <Project Path="src/TerminalDeck.Platform.Windows/TerminalDeck.Platform.Windows.csproj" />
+    <Project Path="src/TerminalDeck.App/TerminalDeck.App.csproj" />
+    <Project Path="src/TerminalDeck.Keeper/TerminalDeck.Keeper.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj" />
+  </Folder>
+</Solution>

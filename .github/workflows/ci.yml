@@ -1,0 +1,44 @@
+name: CI
+
+# Every push to main is the source of a release. The publisher reads this run's result for the exact
+# commit before the GitHub release (and the in-app update the Mac and Windows apps offer) goes out.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    name: Mac app compiles
+    # The source needs Xcode 27 (Swift 6.4); the macos-26 image tops out at Swift 6.3 (0.21.0 CI, 4 Nov). GitHub's
+    # Xcode 27 image (preview label xcode-27) until a macos-27 image ships.
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - name: Newest Xcode on the runner
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          swift --version
+      # Xcode 26+ ships the Metal compiler as a separate component; SwiftTerm's shaders need it (0.21.0 CI, 4 Nov).
+      - name: Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Build the Swift package
+        run: swift build --package-path macos/TerminalDeckNative
+
+  windows-core:
+    name: Windows core builds; update channel and update rules tested
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: windows/global.json
+      - name: Build the core
+        run: dotnet build windows/TerminalDeck.Core.slnf -c Release
+      - name: Update channel tests
+        run: dotnet test windows/tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~GitHubReleaseChannel|FullyQualifiedName~UpdateReadiness"

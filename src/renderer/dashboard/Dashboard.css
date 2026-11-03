@@ -1,0 +1,786 @@
+/* ============================================================================
+   Project dashboard — gridstack shell plus the widget chrome.
+
+   This is a page now, not a 300px drawer, so the tiles are read at arm's
+   length: a calm `--bg-secondary` fill with a large radius, no outline, a
+   quiet title and one big number. The only lines left in this file are the
+   drag placeholder's dashed edge and the resize grip, and both of them only
+   exist while something is being moved.
+
+   Colour comes only from tokens.css; the locals below are geometry, so a
+   density change is one edit rather than thirty.
+
+   gridstack ships its own stylesheet for positioning (imported by
+   Dashboard.tsx). Everything here is either app skin on top of it, or the few
+   overrides needed to make its placeholder and resize handles look like the
+   rest of Terminal Deck instead of the library default.
+   ============================================================================ */
+
+.dashboard {
+  /* gridstack's own item margin is 8px, so the tiles already sit --sp-2 in
+     from the page padding; the bar matches that inset rather than the page's. */
+  --widget-gutter: var(--sp-2);
+  --widget-pad: var(--sp-5);
+  --widget-row: 26px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------- bar -- */
+
+/*
+  The widget section's own heading row.
+
+  It used to float above the whole page, which read as chrome for the Overview
+  rather than as the head of one section of it — and with the session board
+  above it now, chrome for the board is exactly what it would have been
+  mistaken for. `--sp-8` of air above it is the only thing separating the two
+  halves of this page: no rule, no card, no tinted band.
+*/
+.dashboard-bar {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: var(--sp-8) var(--widget-gutter) var(--sp-4);
+}
+
+/* `margin-inline-end: auto` so the buttons stay on the right when the hint
+   beside it is withdrawn — an empty grid hides the hint, and without this the
+   Add widget button slides across and sits against the heading. It costs
+   nothing when the hint is there: `flex: 1` on the hint leaves no free space
+   for an auto margin to take. */
+.dashboard-heading {
+  margin: 0 auto 0 0;
+  flex-shrink: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+}
+
+/*
+  A hint that would rather disappear than be half a hint.
+
+  It ellipsised, and the half it kept was the half that says nothing: at 900px
+  wide "Drag a widget by its header · Alt+arrows to move" became "Drag a widget
+  by i…", which is an instruction with the instruction cut off. There is nothing
+  to truncate *to* here — both halves are the content — so below the width where
+  it fits, it leaves rather than lingering as a stub. The keyboard route it
+  names is also in the shortcuts sheet, so nothing is lost with it.
+*/
+.dashboard-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+@media (max-width: 1100px) {
+  .dashboard-hint {
+    display: none;
+  }
+}
+
+/* A quiet fill rather than an outline — the same shape the toolbar's buttons
+   have, at the larger of the two macOS control heights. */
+.dashboard-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-15);
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.dashboard-btn:hover {
+  background: var(--fill-secondary);
+}
+
+.dashboard-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ grid -- */
+
+.dashboard-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* No `min-height` any more, and its absence is load-bearing: the grid used to
+   claim the full height of the scroller because it was the only thing in it,
+   and with the session board above it that claim pushes a viewport of empty
+   paper under two widgets. gridstack sizes this box from its own rows. */
+.dashboard-grid {
+  min-height: 0;
+}
+
+/* The board's empty state, which is now the empty state of the *page* — the
+   grid below it is a second section rather than the only content, so this sits
+   where a reader's eye lands rather than in the exact middle of the window.
+
+   `auto` on the sides, not `0`: `.page-blank` is a 30rem column centred by its
+   own `margin: 0 auto`, and a shorthand here that sets the sides to zero
+   silently un-centres every empty state on this page. */
+.board > .page-blank {
+  margin: 6vh auto var(--sp-4);
+}
+
+/* The widget section's "nothing here yet" line, indented to where the first
+   tile's own text starts. Only the inline padding — the block padding is what
+   holds it off the bar above. */
+.dashboard-scroll > .page-blank-line {
+  padding-inline: var(--widget-gutter);
+}
+
+/* --------------------------------------------------------------- widgets -- */
+
+/* A fill and a corner. No border: on a page this wide a rule around every
+   tile is four extra lines per row of the grid, and the fill already says
+   where the tile ends. */
+.widget {
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  /* Own stacking context, so a widget's own scrollbar and sticky header never
+     paint over a neighbour mid-drag. */
+  isolation: isolate;
+  overflow: hidden;
+}
+
+/* Lifted rather than outlined while it moves. */
+.grid-stack-item.ui-draggable-dragging .widget {
+  box-shadow: var(--shadow-md);
+}
+
+/* Part of the card, not a bar across the top of it: no fill of its own and no
+   rule under it, so the title and its number read as one block. */
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--widget-pad) var(--sp-2) var(--sp-3) var(--widget-pad);
+  cursor: grab;
+  user-select: none;
+}
+
+.widget-head:active {
+  cursor: grabbing;
+}
+
+.widget-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-lg);
+}
+
+/* Sentence case at footnote weight. The tracked-out capitals this replaced
+   were louder than the number underneath them. */
+.widget-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.widget-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  /* Hidden until the widget is hovered or something inside it has focus, so
+     the header stays quiet, but never hidden from keyboards. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.widget:hover .widget-remove,
+.widget-remove:focus-visible {
+  opacity: 1;
+}
+
+.widget-remove:hover {
+  background: var(--bg-hover);
+  color: var(--color-critical);
+}
+
+.widget-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.widget-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* The rows inside are inset by their own padding, so the body's side padding
+     is one step smaller than the head's and the two still line up. */
+  padding: 0 var(--sp-3) var(--widget-pad);
+}
+
+/* -------------------------------------------------------- widget content -- */
+
+.widget-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-15);
+  padding: 0 var(--sp-2);
+}
+
+.widget-message-title {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+}
+
+.widget-message.muted .widget-message-title {
+  color: var(--text-secondary);
+}
+
+.widget-message.error .widget-message-title {
+  color: var(--color-critical);
+}
+
+.widget-message-detail {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  /* Channel names and git errors are long and unbreakable. */
+  overflow-wrap: anywhere;
+}
+
+.widget-message-action {
+  margin-top: var(--sp-1);
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.widget-message-action:hover {
+  background: var(--fill-secondary);
+}
+
+.widget-message-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The headline row of a tile: one or four big numbers, wrapping as the tile
+   narrows rather than shrinking. */
+.widget-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-8);
+  margin-bottom: var(--sp-4);
+  padding: 0 var(--sp-2);
+}
+
+.widget-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* A count with somewhere to go. The affordance is deliberately quiet — a tint
+   behind it on hover and the label lifting out of muted — because the tile is
+   read as a row of numbers first and a row of controls second. */
+button.widget-stat {
+  margin: calc(var(--sp-1) * -1) calc(var(--sp-2) * -1);
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+button.widget-stat:hover {
+  background: var(--bg-hover);
+}
+
+button.widget-stat:hover .widget-stat-label {
+  color: var(--text-secondary);
+}
+
+button.widget-stat:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Text that is a control: the branch name, the meter's caption, "see them all".
+   No underline at rest — an underline in a tile of quiet type reads as an
+   error — and no colour change either; the hover is the whole signal.
+
+   No `font: inherit` here, and its absence is load-bearing. All three are
+   `<button>`, and `app.css` already says `button { font: inherit }` — so this
+   copy added nothing to two of them and quietly broke the third. `font` is a
+   shorthand, this selector is (0,2,0) and `.widget-branch-name` is (0,1,0), so
+   the reset out-specified the branch name's own `font-family: var(--font-mono)`
+   and the git branch rendered in the UI face. Visible without a debugger: the
+   same tile draws the branch as a `<span>` when there is nowhere to navigate to,
+   and the span was monospace while the button beside it was not. Dropping the
+   line lets the element rule through and leaves the other two exactly as they
+   were, because the base `button` rule is still doing the same job for them. */
+.widget-branch-name.is-link,
+.widget-meter-link,
+.widget-inline-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.widget-branch-name.is-link:hover,
+.widget-meter-link:hover,
+.widget-inline-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.widget-branch-name.is-link:focus-visible,
+.widget-meter-link:focus-visible,
+.widget-inline-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.widget-inline-link {
+  color: var(--text-primary);
+}
+
+.widget-stat-value {
+  font-size: var(--t-title1);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title1-ls);
+  /* Money and token counts line up column-wise as they tick. */
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+}
+
+.widget-stat-value.warn {
+  color: var(--color-warning);
+}
+
+.widget-stat-value.crit {
+  color: var(--color-critical);
+}
+
+/* Labels arrive lowercase from the widget registry. `::first-letter` lifts
+   them into sentence case without a `text-transform: uppercase` that would
+   turn a caption into a tracked-out rule. */
+.widget-stat-label {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.widget-stat-label::first-letter {
+  text-transform: uppercase;
+}
+
+.widget-note {
+  margin: var(--sp-3) 0 0;
+  padding: 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+/* Provenance under a figure — where the rate came from, when it was checked.
+   A step quieter than the note above it because it answers a question the
+   reader has not asked yet, and it must not compete with the sentence that
+   says what the number is. Separated with space, not a rule. */
+.widget-note.quiet {
+  margin-top: var(--sp-15);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* The heading over one run of breakdown rows. There are two runs inside the
+   usage drill-in — the itemised total and the per-session list — and without a
+   word between them they read as one list that changes shape halfway down. */
+.widget-breakdown-label {
+  margin: var(--sp-4) 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.widget-note.mono,
+.widget-row-main.mono,
+.widget-row-side.mono {
+  font-family: var(--font-mono);
+}
+
+/* A mono path at the body size out-weighs the sans rows beside it; one step
+   down puts the two back on the same footing. */
+.widget-row-main.mono {
+  font-size: var(--t-callout);
+}
+
+/* A run of rows with nothing between them but the row height. */
+.widget-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.widget-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--widget-row);
+  padding: var(--sp-05) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--t-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.widget-row.static,
+.widget-row:disabled {
+  cursor: default;
+}
+
+.widget-row:not(.static):not(:disabled):hover {
+  background: var(--bg-hover);
+}
+
+.widget-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A drill-in sits between the totals it explains and whatever follows, so it
+   needs air on both sides rather than butting into the meter below it. */
+.widget-list-breakdown {
+  margin-bottom: var(--sp-4);
+}
+
+/* Figures in a column line up. Tabular figures are the whole rule now: this
+   used to also pin one precision for money, and there is no money left in the
+   app to pin. */
+.widget-row-side.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-row-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-row-side {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.widget-branch {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: 0 var(--sp-2);
+}
+
+.widget-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+}
+
+.widget-branch-sync {
+  display: flex;
+  gap: var(--sp-15);
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The change, in a word rather than in git's letter. It was 16px wide and
+   monospaced, which is the size and the face a single character wants; a word
+   needs a column it can sit in and the app's own type, so the paths beside it
+   still line up. */
+.widget-code {
+  flex-shrink: 0;
+  width: 66px;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-code.staged {
+  color: var(--status-completed);
+}
+
+.widget-code.unstaged {
+  color: var(--color-warning);
+}
+
+.widget-code.conflicted {
+  color: var(--color-critical);
+}
+
+/* Readiness check state. Filled = met, hollow = outstanding — shape carries the
+   meaning as well as colour, and the status word is spelled out beside it. */
+.widget-check {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: var(--radius-pill);
+}
+
+.widget-check.pass {
+  border-color: var(--status-completed);
+  background: var(--status-completed);
+}
+
+.widget-check.warn {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+}
+
+.widget-check.fail {
+  border-color: var(--color-critical);
+}
+
+.widget-check.skip {
+  opacity: 0.4;
+}
+
+/* Space above, because a meter that butts straight into the sentence over it
+   reads as that sentence's third line. Separate with space, then a tint, then
+   a line — and this needs only the first. */
+.widget-meter {
+  margin-top: var(--sp-4);
+  padding: 0 var(--sp-2);
+}
+
+.widget-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-15);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+/* The percentage beside the bar is a reading, not the tile's headline number,
+   so it keeps the stat's tone and tabular figures at the label's size. */
+.widget-meter-head .widget-stat-value {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  letter-spacing: normal;
+}
+
+/* Which session the reading belongs to, under the label rather than beside it.
+   The label line already carries a name and a percentage; a third clause on the
+   same row is where a caption stops being read. */
+.widget-meter-note {
+  margin: 0 0 var(--sp-15);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.widget-meter-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  overflow: hidden;
+}
+
+/* --status-working, not --accent: a meter is data, and it has warn/crit
+   variants below, so its resting colour belongs to the status palette rather
+   than to the blue that means focus. */
+.widget-meter-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--status-working);
+  transition: width var(--dur) var(--ease-emphasis);
+}
+
+.widget-meter-fill.warn {
+  background: var(--color-warning);
+}
+
+.widget-meter-fill.crit {
+  background: var(--color-critical);
+}
+
+/* ---------------------------------------------------------------- picker -- */
+
+.widget-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.widget-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  width: 100%;
+  /* Indented by a hair, not a whole step: the row's text should sit close to
+     the sheet's own title rather than starting a second margin inside it. */
+  padding: var(--sp-3) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.widget-picker-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.widget-picker-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.widget-picker-item:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.widget-picker-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+}
+
+.widget-picker-detail {
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.widget-picker-tag {
+  margin-top: var(--sp-05);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.widget-picker-tag::first-letter {
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------- gridstack re-skinning -- */
+
+/* The drop target shown under a dragged widget. gridstack's default is a flat
+   black wash, which is invisible on a dark theme. A dashed outline says
+   "nothing here yet" without adding a colour the rest of the grid does not use. */
+.dashboard-grid > .grid-stack-placeholder > .placeholder-content {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-active);
+}
+
+/* Its resize grips are 1px glyphs by default. Give the south-east one a real
+   target and draw it as a corner rather than a character. */
+.dashboard-grid > .grid-stack-item > .ui-resizable-se {
+  right: var(--sp-15);
+  bottom: var(--sp-15);
+  width: 14px;
+  height: 14px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  border-bottom-right-radius: var(--radius-sm);
+  opacity: 0;
+  transform: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.dashboard-grid > .grid-stack-item:hover > .ui-resizable-se {
+  opacity: 0.8;
+}
+
+/* ------------------------------------------------------------- density -- */
+
+[data-density='compact'] .dashboard {
+  --widget-pad: var(--sp-3);
+  --widget-row: 24px;
+}

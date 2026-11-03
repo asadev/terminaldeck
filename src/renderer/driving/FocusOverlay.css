@@ -1,0 +1,134 @@
+/* ============================================================================
+   The focus overlay — one hole, one ring, everything else dulled.
+
+   Asad: "it will make a box around the important thing and other things become
+   dull — decrease the visibility of them and keep the inside-the-box things
+   bright, giving a focus."
+
+   Two elements and one rectangle. The rectangle comes from `focus-target.ts`
+   and is written to both elements as inline geometry, because it changes at
+   frame rate while a terminal streams and a stylesheet cannot hold a moving
+   number.
+   ============================================================================ */
+
+/*
+  The layer itself paints nothing and receives nothing.
+
+  `position: fixed` on the root and on both children, so the overlay is in
+  window coordinates — the same units `getBoundingClientRect()` reports and the
+  same ones every adapter in `focus-target.ts` ends at. There is no conversion
+  anywhere in this feature, which is why there is no place for one to be wrong.
+
+  It must be mounted INSIDE the app root and never portalled into `<body>`.
+  That is not a style preference: `overlay-watch.ts` treats every body child
+  with a box as a floating surface and parks any browser page underneath it, so
+  a portalled scrim would blank every web page in the app for as long as a
+  highlight was up — and, worse, would do it *because* the highlight was over
+  the page, which is the one moment the page has to stay visible.
+  `focus-overlay.test.tsx` pins this.
+*/
+.fo {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  /*
+    Above the peeked rail (20) and the toolbar's stacking context (15), below
+    modals and the command palette (100). A permission prompt or a confirmation
+    dialog outranks a highlight: one is a decision the user is being asked to
+    make, the other is a pointer at something. Drawing a dialog behind a scrim
+    is how a prompt gets answered without being read.
+  */
+  z-index: 40;
+}
+
+/*
+  The scrim, drawn as a shadow cast *outward* from the hole.
+
+  One element and one solid quad. The alternatives were measured against this:
+
+  - `filter: brightness()` on the rest of the app re-rasterises everything
+    inside it, and the terminal is a subtree that repaints on every frame of
+    output. Its cost scales with how busy the fleet is, which is exactly
+    backwards for a feature whose reason to exist is a busy fleet.
+  - a full-window `mask` with a hole costs a mask texture the size of the
+    window, re-uploaded whenever the hole moves — and the hole moves every
+    frame while a session streams.
+  - four rectangles around the box is the same paint cost with four times the
+    arithmetic and a seam at each corner.
+
+  `box-shadow` also happens to be the trick already proven in this codebase:
+  `browser-preload.ts` uses an outward shadow for its captured ring precisely
+  because it "paints beyond the box, so the element gains a halo and loses none
+  of its own contrast".
+*/
+.fo-scrim {
+  position: fixed;
+  box-shadow: 0 0 0 9999px var(--drive-dim);
+  /* Never a background. The one lesson `browser-preload.ts` records in full:
+     a wash over the thing you are pointing at means "you cannot see what you
+     are pointing at, which is the one thing an element picker exists for." */
+  background: transparent;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+
+/*
+  The ring.
+
+  A `border` on a box grown by exactly the border weight, rather than an
+  `outline`. Both paint outside the content, and the border wins on one point
+  that matters: it can be switched off per side. A terminal region scrolled
+  halfway off the top of its pane must not be drawn with a line across its top,
+  because that line is the top of the viewport and not the top of the passage —
+  it would tell the reader the highlighted output begins where it does not.
+  `clipRect` in `geometry.ts` decides which sides survived; this renders it.
+
+  One pixel, never two. The browser inspector in this app shipped a 2px border
+  over a 16% fill and was rewritten on camera on 2026-08-16 because the element
+  read as "being *replaced* by a pale blue rectangle". A single pixel is enough
+  to say "here" and cheap enough to say it over text.
+*/
+.fo-ring {
+  position: fixed;
+  box-sizing: border-box;
+  border: 1px solid var(--accent);
+  /* Outside the ring, so the glow never lands on the content. */
+  box-shadow: 0 0 0 3px var(--drive-ring-glow);
+  background: transparent;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+
+/* A cut edge, not an edge. Transparent rather than absent so the box keeps its
+   size and the content inside it does not shift by a pixel when a region
+   scrolls into full view. */
+.fo-ring[data-cut-top] {
+  border-top-color: transparent;
+}
+.fo-ring[data-cut-right] {
+  border-right-color: transparent;
+}
+.fo-ring[data-cut-bottom] {
+  border-bottom-color: transparent;
+}
+.fo-ring[data-cut-left] {
+  border-left-color: transparent;
+}
+
+/*
+  Travel.
+
+  `DRIVING-MODE.md` §3: the dim is off while the screen is moving and on once it
+  settles. Two motions competing is worse than one, and the reader wants to see
+  where they are being taken. The owner sets `lit`; this is the whole of it.
+
+  Under `prefers-reduced-motion` the durations in `tokens.css` are already
+  zeroed to 0.01ms, so this becomes a swap rather than a fade with no rule of
+  its own. Nothing else about the overlay changes: the dimming is content, not
+  decoration, and a reader who has asked for less motion has not asked to lose
+  the focus.
+*/
+.fo:not([data-lit]) .fo-scrim,
+.fo:not([data-lit]) .fo-ring {
+  opacity: 0;
+}

@@ -1,0 +1,650 @@
+/* ============================================================================
+   Artifacts — the things an agent made, shown as themselves.
+
+   Two panes: a column of artifacts on the left, the selected one **rendered**
+   on the right. The rendered document is the interface here; the diff, which
+   used to be the only thing this pane ever showed, is behind a History switch.
+   That inversion is the fix — see the header comment in ArtifactsPanel.tsx for
+   why the page was reported twice as "showing files instead of artifacts", and
+   why a pane of monospace source under a monospace path heading was most of the
+   reason.
+
+   Everything around the two panes is kept quiet: chips with no borders, a list
+   with no rules between rows, and no card around the list, because the space
+   between the two panes is the separation.
+
+   Colours from tokens.css only. The diff is the one place a meaningful colour
+   is spent: added and removed are data, and neutralising them would leave two
+   identical grey blocks in the one place on the page where the difference is
+   the whole point.
+   ============================================================================ */
+
+.artifacts {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.artifacts-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding-bottom: var(--sp-2);
+}
+
+.artifacts-filter {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--t-body);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.artifacts-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.artifacts-filter:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* Safari draws its own clear button; it collides with the border radius. */
+.artifacts-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.artifacts-scope,
+/*
+  One rule, not two.
+
+  There were two `.artifacts-sessions` blocks here, one under the other, the
+  second adding `flex-wrap` to the first — the kind of split that survives
+  because both halves are correct and neither is findable from the other.
+
+  `max-height` is what makes showing *every* session safe: the row wraps, and
+  past about three lines of chips it scrolls instead of pushing the artifact
+  list off the bottom of the window. Before this the row was capped at five
+  chips in the component, which kept the layout tidy by hiding sessions.
+*/
+.artifacts-sessions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  max-height: 6.5rem;
+  overflow-y: auto;
+  padding-bottom: var(--sp-1);
+}
+
+/* Space, not a rule, between the two questions this row answers: which
+   sessions to read, and which one of them to look at. */
+.artifacts-chip-gap {
+  width: var(--sp-4);
+}
+
+/*
+  The chips themselves are `.page-pill` now, in `shell.css`.
+
+  These rules — the fill, the pressed state, the focus ring — were the pattern
+  Asad pointed at when he asked for pills on the readiness page: *"maybe here we
+  also need pills."* Giving him the same ones meant making them the same ones,
+  so the block moved and this page renders `components/Pill.tsx` like the other
+  two. What is left here is the *row*, which is this page's own: a wrapping,
+  scrolling strip that can hold one chip per session.
+*/
+
+.artifacts-status {
+  flex-shrink: 0;
+  margin: 0;
+  padding: var(--sp-2) 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  /* Reserves the line so the panes do not jump when the count changes. */
+  min-height: 22px;
+}
+
+/* ------------------------------------------------------------------ body -- */
+
+.artifacts-body {
+  display: flex;
+  gap: var(--sp-5);
+  flex: 1;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+.artifacts-list {
+  flex: none;
+  width: 300px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 var(--sp-1) var(--sp-8) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.artifact-row + .artifact-row {
+  /* Space between rows, never a rule. */
+  margin-top: 1px;
+}
+
+.artifact-row-button {
+  display: block;
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.artifact-row-button:hover {
+  background: var(--bg-hover);
+}
+
+.artifact-row[data-selected='true'] .artifact-row-button {
+  background: var(--bg-active);
+}
+
+.artifact-row-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.artifact-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.artifact-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.artifact-row-when {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+/* A long path loses its head, not its tail: `…/renderer/components` is what
+   tells two files of the same name apart, so the ellipsis belongs at the
+   front, and `direction: rtl` is what moves it there. */
+.artifact-row-dir {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Exactly one element, forced back to left-to-right. A bare text node is no
+   good: rtl reorders its trailing slash, and the palette learned the same
+   lesson the same way — see `.palette-dir-text`. */
+.artifact-row-dir-text {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+.artifact-row-counts {
+  flex: none;
+}
+
+/* What kind of thing this is, in a word — the first thing after the name, and
+   the thing that stops a row reading as a path. Slightly brighter than the rest
+   of the meta line because it is the row's second piece of information rather
+   than its footnote. */
+.artifact-row-kind {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.artifact-row-size {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-tag {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.artifacts-none {
+  list-style: none;
+}
+
+/* A read that failed: the reason, and the way to ask again, on one centre
+   line. Separated by space rather than boxed — a failure is a state of this
+   pane, not a card inside it. */
+.artifacts-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-top: var(--sp-6);
+}
+
+/* ---------------------------------------------------------------- detail -- */
+
+.artifacts-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding-bottom: var(--sp-8);
+  overflow-y: auto;
+}
+
+.artifacts-detail-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+}
+
+/* The artifact's name, in the app's own type at heading weight.
+
+   It was `.artifacts-detail-path`: the whole project-relative path, in
+   monospace. A heading in a code face saying `credentials/apple-appstore.md`
+   announces "you are looking at a file at a path" before the pane has shown
+   anything, which is half of why this page read as Files. The path is still
+   here — one line down, in the meta, and in the heading's `title`. */
+.artifacts-detail-name {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+}
+
+.artifacts-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-basis: 100%;
+  padding-top: var(--sp-1);
+}
+
+/* ------------------------------------------------------------- preview -- */
+
+/*
+   A document, rendered.
+
+   Prose measure rather than the full pane width: a markdown note run edge to
+   edge across a 1200px pane is a wall, and this is the one surface on the page
+   somebody is meant to actually *read*.
+*/
+.artifact-doc {
+  max-width: 68ch;
+  padding-bottom: var(--sp-8);
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  user-select: text;
+}
+
+.artifact-doc h1,
+.artifact-doc h2,
+.artifact-doc h3,
+.artifact-doc h4,
+.artifact-doc h5,
+.artifact-doc h6 {
+  margin: var(--sp-5) 0 var(--sp-2);
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+}
+
+.artifact-doc h1 { font-size: var(--t-title3); }
+.artifact-doc h2 { font-size: var(--t-headline); }
+.artifact-doc h3,
+.artifact-doc h4,
+.artifact-doc h5,
+.artifact-doc h6 { font-size: var(--t-subhead); }
+
+/* The first heading sits at the top of the pane; the margin above it would be
+   the only thing in the gap. */
+.artifact-doc > :first-child {
+  margin-top: 0;
+}
+
+.artifact-doc p,
+.artifact-doc ul,
+.artifact-doc ol,
+.artifact-doc blockquote,
+.artifact-doc table {
+  margin: 0 0 var(--sp-3);
+}
+
+.artifact-doc ul,
+.artifact-doc ol {
+  padding-left: var(--sp-5);
+}
+
+.artifact-doc li {
+  margin-bottom: var(--sp-1);
+}
+
+.artifact-doc strong {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* A tint and a radius, not a border — the card rule, applied to a quotation. */
+.artifact-doc blockquote {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-muted);
+}
+
+.artifact-doc code {
+  padding: 0 var(--sp-05);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+}
+
+/* `renderMarkdown` folds every fenced block into a `<details>` with a summary
+   naming the language and the line count — so a note full of code opens as
+   prose and the code is one click away rather than eight screens of it. */
+.artifact-doc details {
+  margin: 0 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.artifact-doc summary {
+  padding: var(--sp-15) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifact-doc details pre {
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-2);
+  overflow-x: auto;
+}
+
+.artifact-doc details code {
+  padding: 0;
+  background: none;
+}
+
+.artifact-doc hr {
+  height: 1px;
+  margin: var(--sp-5) 0;
+  border: none;
+  background: var(--border);
+}
+
+.artifact-doc table {
+  border-collapse: collapse;
+  font-size: var(--t-callout);
+}
+
+.artifact-doc th,
+.artifact-doc td {
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.artifact-doc th {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* Anything that is text but not prose — a stylesheet, a config, a CSV. Shown as
+   itself, which for these *is* the artifact. */
+.artifact-plain {
+  margin: 0;
+  padding-bottom: var(--sp-8);
+  overflow-x: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+  white-space: pre;
+  user-select: text;
+}
+
+.artifacts-detail-meta {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.artifacts-open {
+  flex: none;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.artifacts-open:hover {
+  background: var(--fill-tertiary);
+}
+
+.artifacts-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/*
+   The one that opens the artifact on the machine.
+
+   Filled where `Open in Files` is a neutral fill, and that is the whole of the
+   difference: this pane has two buttons now and only one of them is what
+   somebody came here to do — *"they can be reviewed and they can be used"*. One
+   accent, on one primary button, is the rule the shell keeps everywhere else.
+
+   No `data-kind` styling. The attribute is there for a test to read and for
+   anybody inspecting the pane to see which word the button chose; giving each
+   kind its own colour would be four accents on a page that is allowed one.
+*/
+.artifacts-run {
+  background: var(--accent);
+  color: var(--text-onaccent);
+}
+
+.artifacts-run:hover {
+  background: var(--accent-dim);
+}
+
+.artifacts-run:active {
+  background: var(--accent-press);
+}
+
+/* --------------------------------------------------------------- changes -- */
+
+.artifacts-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* A card is a fill with a radius, not an outline. */
+.artifact-change {
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.artifact-change-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.artifact-change-action {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+.artifact-change-tool {
+  font-family: var(--font-mono);
+}
+
+.artifact-change-when {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ diff -- */
+
+.artifact-diff {
+  padding-bottom: var(--sp-2);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+}
+
+/* `width: max-content` with `min-width: 100%` is what keeps a short removed
+   line tinted all the way across a hunk that scrolls sideways. Without it the
+   fill stops where that line's own text stops, and a diff scrolled right shows
+   ragged stripes of colour instead of rows. */
+.artifact-diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: max-content;
+  min-width: 100%;
+  padding: 0 var(--sp-3);
+  white-space: pre;
+}
+
+/* The tints are low because a hunk is mostly context: strong enough to sort
+   the three kinds of line apart at a glance, weak enough that a fifty-line
+   diff is not two solid slabs of colour. The ink carries the meaning. */
+.artifact-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--color-positive) 12%, transparent);
+}
+
+.artifact-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--color-critical) 12%, transparent);
+}
+
+.artifact-diff-mark {
+  flex: none;
+  width: 1ch;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.artifact-diff-line[data-kind='add'] .artifact-diff-mark {
+  color: var(--color-positive);
+}
+
+.artifact-diff-line[data-kind='del'] .artifact-diff-mark {
+  color: var(--color-critical);
+}
+
+.artifact-diff-text {
+  color: var(--text-primary);
+}
+
+.artifact-diff-line[data-kind='same'] .artifact-diff-text {
+  color: var(--text-secondary);
+}
+
+/* A write has no "before" to line up against, so it is shown as the file's
+   own text rather than as three hundred added lines. */
+.artifact-diff-body {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  color: var(--text-primary);
+  font: inherit;
+  white-space: pre;
+}
+
+.artifact-diff-more {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) 0;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+}
+
+/* ---------------------------------------------------------------- narrow -- */
+
+/* Under this the two panes are each too narrow to be worth having, so the
+   list becomes a short strip above the diff rather than a column beside it. */
+@media (max-width: 760px) {
+  .artifacts-body {
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+
+  .artifacts-list {
+    width: auto;
+    max-height: 34%;
+    padding-bottom: 0;
+  }
+}

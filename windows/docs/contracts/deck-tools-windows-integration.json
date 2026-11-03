@@ -1,0 +1,693 @@
+{
+  "note": "Windows integration additions. These extend the retained source contracts without changing the captured source facts.",
+  "entries": [
+    {
+      "id": "browser.page",
+      "wire": "browser_page",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "state",
+              "navigate",
+              "back",
+              "forward",
+              "reload",
+              "stop",
+              "zoom",
+              "find",
+              "findstop",
+              "print",
+              "devtools",
+              "useragent",
+              "inspect",
+              "record",
+              "recording",
+              "recordclear",
+              "screenshot",
+              "size",
+              "send"
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "factor": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "backwards": {
+            "type": "boolean"
+          },
+          "next": {
+            "type": "boolean"
+          },
+          "keepSelection": {
+            "type": "boolean"
+          },
+          "userAgent": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 240,
+            "maximum": 3840
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 240,
+            "maximum": 3840
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "browser.windows",
+      "wire": "browser_windows",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "open",
+              "close",
+              "attach",
+              "detach",
+              "reach",
+              "unreach",
+              "select",
+              "move"
+            ]
+          },
+          "window": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "machineName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device",
+              "server"
+            ]
+          },
+          "port": {
+            "type": "integer"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "additionalProperties": false
+      },
+      "source": "BackendBrowserFactories.swift"
+    },
+    {
+      "id": "ui.workspace",
+      "wire": "ui_workspace",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "enum": [
+              "sessions",
+              "browser",
+              "projects",
+              "agents",
+              "tasks",
+              "artifacts",
+              "servers",
+              "receiver",
+              "hoot",
+              "settings",
+              "devices",
+              "mcp"
+            ]
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "split": {
+            "type": "string",
+            "enum": [
+              "none",
+              "sessions",
+              "browser"
+            ]
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "browserStartUrl": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "settingsSection": {
+            "type": "string",
+            "enum": [
+              "general",
+              "notifications",
+              "agent-defaults",
+              "browser",
+              "tasks",
+              "coding-ais",
+              "accounts",
+              "devices",
+              "mcp",
+              "appearance",
+              "outside-ai-apps",
+              "advanced",
+              "about"
+            ]
+          },
+          "settingsPresentation": {
+            "description": "Settings always opens in one owned native window. The legacy panel value focuses that same window.",
+            "type": "string",
+            "enum": [
+              "panel",
+              "window",
+              "closed",
+              "shortcuts"
+            ]
+          },
+          "settingsSearch": {
+            "type": "string"
+          },
+          "windowAction": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "select",
+                  "rename",
+                  "move",
+                  "split",
+                  "one",
+                  "close-pane",
+                  "resize",
+                  "close",
+                  "pop-out",
+                  "dock",
+                  "pop-session",
+                  "new-browser",
+                  "attach-session",
+                  "sidebar",
+                  "swap",
+                  "restore-split",
+                  "empty-split",
+                  "fill-empty",
+                  "window-bounds",
+                  "focus-empty",
+                  "move-pane",
+                  "mark-read"
+                ]
+              },
+              "windowId": {
+                "type": "string"
+              },
+              "otherWindowId": {
+                "type": "string"
+              },
+              "ownerSessionId": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "ratio": {
+                "type": "number",
+                "minimum": 0.15,
+                "maximum": 0.85
+              },
+              "vertical": {
+                "type": "boolean"
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "emptyPaneId": {
+                "type": "string"
+              },
+              "x": {
+                "type": "integer"
+              },
+              "y": {
+                "type": "integer"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32768
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32768
+              },
+              "edge": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "above",
+                  "below",
+                  "swap"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "settingsBounds": {
+            "type": "object",
+            "description": "Open, move or resize the native Settings window in desktop logical coordinates at the window current DPI (negative monitor origins allowed). Clamped to the nearest monitor work area and remembered.",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "additionalProperties": false
+          },
+          "sidebarAction": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "page-tab",
+                  "page-window",
+                  "pin-page",
+                  "order-pages",
+                  "pin-session",
+                  "move-session",
+                  "geometry",
+                  "confirm-delete",
+                  "delete-session",
+                  "archive-chat"
+                ]
+              },
+              "pageId": {
+                "type": "string",
+                "enum": [
+                  "Agents",
+                  "Tasks",
+                  "Artifacts",
+                  "Projects",
+                  "Servers",
+                  "Devices",
+                  "Receiver",
+                  "Mcp"
+                ]
+              },
+              "pinned": {
+                "type": "boolean"
+              },
+              "order": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "targetSessionId": {
+                "type": "string"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 240,
+                "maximum": 340
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "archived": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "shellCommand": {
+            "type": "string",
+            "enum": [
+              "new-session",
+              "new-chat",
+              "split",
+              "one-pane",
+              "swarm",
+              "palette",
+              "quick-open",
+              "search-sessions",
+              "inspector",
+              "actual-size",
+              "zoom-in",
+              "zoom-out",
+              "settings",
+              "shortcuts",
+              "help",
+              "diagnostics",
+              "report",
+              "about",
+              "resume",
+              "open-project",
+              "project-overview",
+              "artifacts",
+              "sidebar",
+              "return-windows",
+              "exit",
+              "stop-exit",
+              "retry-connection",
+              "show-log",
+              "rename-session",
+              "session-delete-confirmation"
+            ]
+          },
+          "generalSettings": {
+            "type": "object",
+            "properties": {
+              "autoNameSessions": {
+                "type": "boolean"
+              },
+              "copyOnSelect": {
+                "type": "boolean"
+              },
+              "keepAwake": {
+                "type": "boolean"
+              },
+              "confirmCloseWorking": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "checkForUpdates": {
+            "type": "boolean"
+          },
+          "taskPopup": {
+            "type": "object",
+            "properties": {
+              "taskId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expanded": {
+                "type": "boolean"
+              },
+              "threadOpen": {
+                "type": "boolean"
+              },
+              "threadPane": {
+                "type": "string",
+                "enum": [
+                  "Comments",
+                  "Activity"
+                ]
+              },
+              "hideEmptyFields": {
+                "type": "boolean"
+              },
+              "search": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "activityCategory": {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "comments",
+                  "status",
+                  "assignees",
+                  "dates",
+                  "priority",
+                  "subtasks",
+                  "checklists",
+                  "attachments",
+                  "relationships",
+                  "time",
+                  "details"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "mcp.remote",
+      "wire": "mcp_remote",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "mcp.callers",
+      "wire": "mcp_callers",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "revoke",
+              "rename",
+              "create"
+            ]
+          },
+          "callerId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "remote.workspace",
+      "wire": "remote_workspace",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100
+          },
+          "hoot": {
+            "type": "boolean"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "look",
+              "work",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "deviceId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "shell.read",
+      "wire": "shell_read",
+      "tier": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "commands",
+              "sidebar",
+              "quick-files",
+              "session-search",
+              "inspector"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "folder": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "accounts.install",
+      "wire": "accounts_install",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "gemini"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "install",
+              "state",
+              "cancel"
+            ]
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "accounts.sign_in_flow",
+      "wire": "accounts_sign_in_flow",
+      "tier": "alter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "state",
+              "cancel"
+            ]
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Resume the p-shell Windows proof
+
+Source remains on lane/win-v3b. No merge/install is part of this lane.
+
+1. Check whether the earlier queued `/tmp/p-shell-build.ps1` process survived the SSH failure. Check `C:\TD\locks\build\owner.txt` and the owned checkout before starting another build. Never remove another lane's lock.
+2. Run `tools/win/sync.sh lane/win-v3b` from the local worktree. The dedicated PC checkout is `C:\TD\work\92c47c15948720acca8af53dbc2478442139e2b50b1d50d2fa72b6790e5d66cd`.
+3. Run `Proof/build.ps1` on the PC. It takes the shared build lock, builds with two workers below normal priority and runs the workspace tests with outputs outside the WinUI source tree.
+4. Run `Proof/render.ps1` in an interactive scheduled task, using the existing `tools/win` interactive-task pattern. Use a new `p-shell-...` run name. Its explicit scratch root is outside `C:\TD`, preventing the preview's share-target pointer from changing. The fixture keeps its windows behind the review app and closes its app windows afterwards. It starts no provider or session process.
+5. The fixture writes `result.json` and native-control PNGs under that run's `proof/` folder. RenderTargetBitmap excludes WebView2 pixels and Windows' system caption controls. Inspect both whole frames and crops; capture WebView2 previews separately before claiming browser appearance, and check caption/Snap behavior in the native window. The fixture tests native double-click maximize, tab placement, three-pane rendering, focus, separate Settings, MCP list/pop-out/dock, return and selection. These are planned checks until result.json exists.
+6. Copy logs/results/PNGs to `~/Deck Dev/notes/windows/parity/p-shell-proof/`. Create `shell-light.png` and `shell-dark.png` side-by-sides when the matching Mac fixture exists. The user-supplied Mac screenshot is a reference, not a replacement for a successful Windows capture.
+7. Cleanup: use `owned-app.json`, the scratch root's keeper identity, executable path and start time to identify only this run's app/keeper/toolbridge. Stop only verified owned processes. Delete only the namespace's `keeper/auth-v2`, `remote-host` and `remote-identity` Credential Manager entries; use the existing `tools/win/w9-cleanup.ps1` namespace-hash and credential-readback procedure, adapted to this exact outside-C:\TD root. Read back 0 owned processes/tasks/credentials. No proof has been launched yet, so none currently needs cleanup.
+
+Before final integration, also resolve the four cross-lane notes in docs/WIN-PARITY-REQUESTS.md. The ui.workspace schema extension is required for full agent reachability. Do not claim all shell capabilities have callable MCP tools until it is merged and checked.

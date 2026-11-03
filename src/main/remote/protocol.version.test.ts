@@ -1,0 +1,337 @@
+/**
+ * Version awareness on the `welcome` — the two optional fields a host now sends
+ * about itself, `appVersion` and `hostKind`, and the one rule they exist to
+ * serve: a client can say which build the machine at the other end is running,
+ * and — only when its own build is genuinely ahead — the single sentence *update
+ * this server from a desktop*.
+ *
+ * Two halves, both here:
+ *
+ *  1. **The wire.** A `welcome` with the fields parses and a `welcome` without
+ *     them parses just as well, because a host from before the fields is a host
+ *     a current client still has to talk to. The version is display text that
+ *     lands beside terminal output, so it is stripped and bounded exactly as
+ *     `hostName` is; `hostKind` is admitted only as one of its two literals and
+ *     dropped otherwise, never guessed. And there is deliberately no update verb
+ *     anywhere on the protocol to pair the sentence with — replacing a host
+ *     stays on the SSH and desktop plane — which is asserted by refusing the
+ *     verbs that would be one.
+ *
+ *  2. **The assembly.** The server carries the real numbers its shell handed it
+ *     onto the `welcome`, and a shell that handed it none sends no such key —
+ *     the same absence an older host is correct about. Driven over a real socket
+ *     for the reason `server.test.ts` gives at length: the assembly runs inside
+ *     the message loop and a test that called a function would prove nothing
+ *     about the frame a phone receives.
+ */
+
+import { randomBytes } from 'node:crypto'
+import { createServer, request, type Server } from 'node:http'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { AddressInfo, Socket } from 'node:net'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  MAX_APP_VERSION_LENGTH,
+  PROTOCOL_VERSION,
+  parseClientMessage,
+  parseServerFrame,
+  parseServerMessage,
+  serialize,
+  type ServerMessage,
+} from './protocol'
+import {
+  WS_PATH,
+  createRemoteEndpoint,
+  type RemoteAuthenticator,
+  type SessionAccess,
+  type SessionHandle,
+} from './server'
+
+/* -------------------------------------------------------------- the wire -- */
+
+/** A minimal, valid `welcome` object to vary one field of at a time. */
+function baseWelcome(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    t: 'welcome',
+    protocol: PROTOCOL_VERSION,
+    deviceId: 'dev-1',
+    deviceName: 'iPhone',
+    token: null,
+    sessions: [],
+    capabilities: [],
+    ...extra,
+  }
+}
+
+function welcomeOf(parse: ReturnType<typeof parseServerFrame>): Extract<ServerMessage, { t: 'welcome' }> {
+  if (!parse.ok) throw new Error(`welcome refused: ${parse.reason}`)
+  if (parse.message.t !== 'welcome') throw new Error(`parsed as ${parse.message.t}`)
+  return parse.message
+}
+
+describe('the version fields on a welcome', () => {
+  it('carries appVersion and hostKind when a host sends them', () => {
+    const message = welcomeOf(parseServerFrame(baseWelcome({ appVersion: '0.10.0', hostKind: 'headless' })))
+    expect(message.appVersion).toBe('0.10.0')
+    expect(message.hostKind).toBe('headless')
+  })
+
+  it('parses a welcome from a host that predates both fields', () => {
+    // An older host sends neither key. It must not be a parse failure — that
+    // host is one a current client still has to talk to — and neither field is
+    // invented in its place.
+    const message = welcomeOf(parseServerFrame(baseWelcome()))
+    expect('appVersion' in message).toBe(false)
+    expect('hostKind' in message).toBe(false)
+    expect(message.appVersion).toBeUndefined()
+    expect(message.hostKind).toBeUndefined()
+  })
+
+  it('survives serialize → parse unchanged with the fields set', () => {
+    const parsed = parseServerMessage(serialize(baseWelcome({ appVersion: '1.2.3', hostKind: 'desktop' }) as ServerMessage))
+    const message = welcomeOf(parsed)
+    expect(message.appVersion).toBe('1.2.3')
+    expect(message.hostKind).toBe('desktop')
+  })
+
+  it('strips control characters from appVersion', () => {
+    // Display text beside terminal output: the same treatment `hostName` gets,
+    // for the same reason. An escape sequence in it would repaint the screen
+    // around itself.
+    const message = welcomeOf(parseServerFrame(baseWelcome({ appVersion: '0.10\u001b[2J.0\u0007' })))
+    expect(message.appVersion).toBe('0.10[2J.0')
+    expect(message.appVersion).not.toMatch(/[\u0000-\u001f\u007f]/)
+  })
+
+  it('bounds appVersion to the wire cap', () => {
+    const long = '9'.repeat(MAX_APP_VERSION_LENGTH + 40)
+    const message = welcomeOf(parseServerFrame(baseWelcome({ appVersion: long })))
+    expect(message.appVersion).toBeDefined()
+    expect(message.appVersion!.length).toBe(MAX_APP_VERSION_LENGTH)
+  })
+
+  it('drops an appVersion that cleans away to nothing rather than storing empty', () => {
+    // A version made only of control characters said nothing; storing '' would
+    // overwrite a good number a client already held with a blank.
+    const message = welcomeOf(parseServerFrame(baseWelcome({ appVersion: '\u0000\u0007  ' })))
+    expect('appVersion' in message).toBe(false)
+  })
+
+  it('drops a hostKind that is neither literal rather than guessing one', () => {
+    for (const bad of ['server', 'DESKTOP', 'phone', '', 42, null, true, {}]) {
+      const message = welcomeOf(parseServerFrame(baseWelcome({ hostKind: bad })))
+      expect('hostKind' in message).toBe(false)
+    }
+    // The two that are admitted, for contrast.
+    expect(welcomeOf(parseServerFrame(baseWelcome({ hostKind: 'desktop' }))).hostKind).toBe('desktop')
+    expect(welcomeOf(parseServerFrame(baseWelcome({ hostKind: 'headless' }))).hostKind).toBe('headless')
+  })
+
+  it('reads appVersion and hostKind independently', () => {
+    // One present, the other absent, both ways round — nothing infers one from
+    // the other.
+    const onlyVersion = welcomeOf(parseServerFrame(baseWelcome({ appVersion: '0.9.1' })))
+    expect(onlyVersion.appVersion).toBe('0.9.1')
+    expect('hostKind' in onlyVersion).toBe(false)
+
+    const onlyKind = welcomeOf(parseServerFrame(baseWelcome({ hostKind: 'desktop' })))
+    expect('appVersion' in onlyKind).toBe(false)
+    expect(onlyKind.hostKind).toBe('desktop')
+  })
+})
+
+describe('there is no update verb on this wire, in either direction', () => {
+  // The sentence a client renders when it is ahead is display text with nothing
+  // to press, because host replacement stays on the SSH and desktop plane. If
+  // any of these were a real frame the exhaustive parser would accept it; that
+  // it refuses every one is the structural proof that none exists.
+  it('refuses server frames that would be an update/upgrade/install verb', () => {
+    for (const t of ['update', 'upgrade', 'install', 'host.update', 'host.upgrade', 'server.update']) {
+      expect(parseServerFrame({ t }).ok).toBe(false)
+    }
+  })
+
+  it('refuses client frames that would ask a host to replace itself', () => {
+    for (const t of ['update', 'upgrade', 'install', 'host.update', 'server.upgrade', 'self.update']) {
+      const parsed = parseClientMessage({ t, protocol: PROTOCOL_VERSION })
+      expect(parsed.ok).toBe(false)
+    }
+  })
+})
+
+/* --------------------------------------------------------- the assembly -- */
+
+function maskedText(payload: Buffer): Buffer {
+  const mask = randomBytes(4)
+  const masked = Buffer.from(payload)
+  for (let i = 0; i < masked.length; i += 1) masked[i] ^= mask[i & 3]
+  let header: Buffer
+  if (masked.length < 126) {
+    header = Buffer.alloc(2)
+    header[1] = 0x80 | masked.length
+  } else {
+    header = Buffer.alloc(4)
+    header[1] = 0x80 | 126
+    header.writeUInt16BE(masked.length, 2)
+  }
+  header[0] = 0x81
+  return Buffer.concat([header, mask, masked])
+}
+
+interface Client {
+  send(message: unknown): void
+  until(predicate: (message: ServerMessage) => boolean, label: string): Promise<ServerMessage>
+}
+
+function connect(port: number): Promise<Client> {
+  return new Promise((settle, fail) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path: WS_PATH,
+      headers: {
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-key': randomBytes(16).toString('base64'),
+        'sec-websocket-version': '13',
+      },
+    })
+    req.on('error', fail)
+    req.on('upgrade', (_res, socket: Socket, head: Buffer) => {
+      const received: ServerMessage[] = []
+      const waiters: { predicate: (m: ServerMessage) => boolean; settle: (m: ServerMessage) => void }[] = []
+      let buffer = head
+      const drain = (): void => {
+        let at = 0
+        for (;;) {
+          if (buffer.length - at < 2) break
+          let length = buffer[at + 1] & 0x7f
+          let offset = at + 2
+          if (length === 126) {
+            if (buffer.length < offset + 2) break
+            length = buffer.readUInt16BE(offset)
+            offset += 2
+          } else if (length === 127) {
+            if (buffer.length < offset + 8) break
+            length = Number(buffer.readBigUInt64BE(offset))
+            offset += 8
+          }
+          if (buffer.length < offset + length) break
+          const opcode = buffer[at] & 0x0f
+          const payload = buffer.subarray(offset, offset + length)
+          at = offset + length
+          if (opcode !== 0x1) continue
+          const message = JSON.parse(payload.toString('utf8')) as ServerMessage
+          received.push(message)
+          for (const waiter of [...waiters]) {
+            if (!waiter.predicate(message)) continue
+            waiters.splice(waiters.indexOf(waiter), 1)
+            waiter.settle(message)
+          }
+        }
+        buffer = buffer.subarray(at)
+      }
+      drain()
+      socket.on('data', (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk])
+        drain()
+      })
+      settle({
+        send: (message) => socket.write(maskedText(Buffer.from(JSON.stringify(message), 'utf8'))),
+        until: (predicate, label) =>
+          new Promise((done, reject) => {
+            const already = received.find(predicate)
+            if (already) return done(already)
+            const timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2000)
+            waiters.push({
+              predicate,
+              settle: (message) => {
+                clearTimeout(timer)
+                done(message)
+              },
+            })
+          }),
+      })
+    })
+    req.end()
+  })
+}
+
+const authenticator: RemoteAuthenticator = {
+  async authenticate(token) {
+    return token === 'dev-1.c2VjcmV0'
+      ? { ok: true, deviceId: 'dev-1', deviceName: 'iPhone', credential: null }
+      : { ok: false, message: 'This device is not allowed in.' }
+  },
+}
+
+const sessions: SessionAccess = {
+  list: () => [],
+  attach: (): SessionHandle | null => null,
+  write: () => {},
+  resize: () => {},
+  detach: () => {},
+}
+
+let servers: Server[] = []
+let roots: string[] = []
+
+afterEach(() => {
+  for (const server of servers) server.close()
+  servers = []
+  for (const root of roots) rmSync(root, { recursive: true, force: true })
+  roots = []
+})
+
+async function serve(version: { appVersion?: string; hostKind?: 'desktop' | 'headless' }): Promise<number> {
+  const root = mkdtempSync(join(tmpdir(), 'deck-version-wire-'))
+  roots.push(root)
+  writeFileSync(join(root, 'index.html'), '<!doctype html><title>deck</title>')
+
+  const endpoint = createRemoteEndpoint({
+    sessions,
+    auth: authenticator,
+    webRoot: root,
+    pingIntervalMs: 0,
+    ...(version.appVersion ? { appVersion: version.appVersion } : {}),
+    ...(version.hostKind ? { hostKind: version.hostKind } : {}),
+  })
+  const server = createServer(endpoint.handleRequest)
+  server.on('upgrade', endpoint.handleUpgrade)
+  servers.push(server)
+  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', settle))
+  return (server.address() as AddressInfo).port
+}
+
+async function welcomeFrom(port: number): Promise<Extract<ServerMessage, { t: 'welcome' }>> {
+  const client = await connect(port)
+  client.send({ t: 'hello', protocol: PROTOCOL_VERSION, token: 'dev-1.c2VjcmV0', device: { name: 'iPhone', platform: 'iOS' } })
+  const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+  if (welcome.t !== 'welcome') throw new Error(`parsed as ${welcome.t}`)
+  return welcome
+}
+
+describe('the server puts its own build on the welcome', () => {
+  it('carries the real appVersion and hostKind its shell handed it', async () => {
+    const port = await serve({ appVersion: '0.10.0', hostKind: 'headless' })
+    const welcome = await welcomeFrom(port)
+    expect(welcome.appVersion).toBe('0.10.0')
+    expect(welcome.hostKind).toBe('headless')
+  })
+
+  it('is a desktop when the desktop shell serves it', async () => {
+    const port = await serve({ appVersion: '9.9.9', hostKind: 'desktop' })
+    const welcome = await welcomeFrom(port)
+    expect(welcome.appVersion).toBe('9.9.9')
+    expect(welcome.hostKind).toBe('desktop')
+  })
+
+  it('sends no key at all when the shell handed it none — the shape an older host sends', async () => {
+    const port = await serve({})
+    const welcome = await welcomeFrom(port)
+    expect('appVersion' in welcome).toBe(false)
+    expect('hostKind' in welcome).toBe(false)
+  })
+})

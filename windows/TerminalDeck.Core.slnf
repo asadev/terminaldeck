@@ -1,0 +1,6 @@
+{
+  "solution": {
+    "path": "TerminalDeck.slnx",
+    "projects": ["src/TerminalDeck.Core/TerminalDeck.Core.csproj", "tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj"]
+  }
+}

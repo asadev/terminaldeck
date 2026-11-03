@@ -1,0 +1,205 @@
+/* ============================================================================
+   Shortcuts sheet
+
+   A reading surface, not a table. It is read by scanning down the key column
+   rather than across each row, so the keys are right-aligned in a fixed lane
+   and every label starts at the same x — and that alignment is the whole
+   structure. There is no line between rows and none under a group heading:
+   two aligned columns with air around them are already a table.
+
+   Colour is carried entirely by foundation tokens, and the base `kbd` rule in
+   app.css supplies the chip — only its size is adjusted here, because in this
+   panel the keys are the content.
+   ============================================================================ */
+
+:root {
+  /* The lane the keys are right-aligned in, so every row's chord ends on the
+     same edge. Wide enough for the longest spelled-out chord in this keymap
+     (Ctrl+Shift+Tab). */
+  --sheet-keys-lane: 132px;
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+/* ---------------------------------------------------------------- search -- */
+
+/* The strip *is* the field, exactly as the command palette's is: a glyph, a
+   borderless input and the count, with nothing drawn around them. It is
+   full-bleed and sticky so rows scroll under it rather than past it, which is
+   the one thing here that has to be opaque: the sheet's own glass is 86%
+   opaque, and at 86% the rows read straight through the field they are
+   supposed to be sliding behind. A tint is the separation, rather than the
+   rule this strip used to carry. */
+.sheet-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  position: sticky;
+  /* The modal body has no top padding, so 0 is flush with the header. */
+  top: 0;
+  z-index: 1;
+  margin: 0 calc(-1 * var(--sp-5));
+  padding: var(--sp-2) var(--sp-5) var(--sp-3);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+
+.sheet-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+}
+
+/* The field takes focus the moment the sheet opens and keeps it, so the ring
+   Modal draws around anything focusable would be permanent decoration rather
+   than an answer to "where am I?". The caret is the answer here. */
+.sheet .sheet-input:focus-visible {
+  outline: none;
+}
+
+.sheet-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* The native clear affordance sits on a themed surface it was not designed
+   for, and duplicates Escape. */
+.sheet-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.sheet-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- groups -- */
+
+.sheet-group-head {
+  margin-bottom: var(--sp-2);
+}
+
+/* Sentence case, small and quiet — the tracked-out uppercase this used to be
+   is a Notion idiom, and it shouted louder than the rows it introduced. */
+.sheet-group-title {
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
+.sheet-group-hint {
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.sheet-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sheet-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  padding: var(--sp-15) 0;
+}
+
+/* Nothing is wired to this command yet. Dimmed rather than hidden: a gap in
+   the app is worth seeing, and hiding it is how the sheet starts lying. */
+.sheet-row[data-unassigned] .sheet-label,
+.sheet-row[data-unassigned] .sheet-keys {
+  opacity: 0.5;
+}
+
+.sheet-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-15);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+}
+
+.sheet-flag {
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.sheet-flag.warn {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+/* ------------------------------------------------------------------ keys -- */
+
+.sheet-keys {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: var(--sp-15);
+  min-width: var(--sheet-keys-lane);
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.sheet-chord {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+}
+
+.sheet-chord kbd {
+  padding: var(--sp-05) var(--sp-15);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.sheet-or {
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+.sheet-empty {
+  margin: var(--sp-2) 0;
+  font-size: var(--t-body);
+  color: var(--text-secondary);
+}
+
+/* The panel is fixed-width, so on a short window the two columns collide
+   before the viewport does. Stack them rather than letting labels truncate. */
+@media (max-width: 520px) {
+  .sheet-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+  }
+
+  .sheet-keys {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+}

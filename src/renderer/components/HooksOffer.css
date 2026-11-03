@@ -1,0 +1,112 @@
+/* ============================================================================
+   The first-run offer strip.
+
+   Lives in the sidebar's announcement slot beside the update strip, and wears
+   the same inset-card clothes for the same reason: the app talking about
+   itself floats over its own chrome, inset from the window, separated by its
+   corners rather than by rules. See UpdateBanner.css for the argument.
+
+   Column, not row: the slot is sidebar-width, and the one sentence this strip
+   is entitled to does not fit beside two buttons there.
+   ============================================================================ */
+
+.hoffer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-3) var(--sp-4) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg);
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      color-mix(in srgb, var(--accent) 12%, transparent)
+    ),
+    var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-sm), inset 0 0 0 0.5px var(--material-hairline);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+}
+
+.hoffer-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.hoffer-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.hoffer-detail {
+  color: var(--text-secondary);
+}
+
+/* The main process's sentence about a press that did not land, verbatim. */
+.hoffer-failure {
+  color: var(--color-critical);
+}
+
+.hoffer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.hoffer-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.hoffer-btn:hover {
+  background: var(--fill-secondary);
+}
+
+.hoffer-btn[data-tone='primary'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.hoffer-btn[data-tone='primary']:hover {
+  background: var(--accent-dim);
+}
+
+.hoffer-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hoffer-quiet {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.hoffer-quiet:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.hoffer-quiet[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
