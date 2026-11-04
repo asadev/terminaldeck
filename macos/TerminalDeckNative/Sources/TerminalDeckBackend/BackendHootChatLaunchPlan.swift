@@ -115,12 +115,16 @@ public struct BackendHootChatLaunchPlan: Sendable {
         if provider == .codex {
             // An empty thread override would erase the worker's CLI lease and account restrictions.
             if !sessionTools || !codexServers.isEmpty { config = config.setting("mcp_servers", .object(codexServers)) }
-            session = session.setting("config", config)
+            // Ask is an explicit app choice, not an invitation to inherit a user's `never` default.
+            if !session.has("approvalPolicy") { session = session.setting("approvalPolicy", .string("on-request")) }
+            session = BackendCodexApprovalPolicy.session(session.setting("config", config))
             let composed = [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n")
             if !composed.isEmpty { session = session.setting("developerInstructions", .string(composed)) }
         } else {
             session = session.setting("mcpServers", .array(geminiServers))
         }
+        // Last override wins over profile extras; this invocation must never wait on an update menu.
+        if provider == .codex { cli += BackendAgentStartup.codexArguments }
         arguments = cli
         setup = .init(cwd: cwd, session: session, expectedTools: required,
             instructions: provider == .gemini ? [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n") : "")

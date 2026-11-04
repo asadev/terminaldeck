@@ -106,13 +106,17 @@ public struct CodingAISignIn: Equatable, Sendable {
     public var plan: String?
     public var detail: String
     public var command: String
+    /// 4 Nov (Asad: "it's not even telling which Gmail account is used"): for a login that is signed out, the
+    /// address the AI itself still remembers from its last sign-in. Never a claim that it can run.
+    public var remembered: String?
 
-    public init(state: State, account: String? = nil, plan: String? = nil, detail: String = "", command: String = "") {
+    public init(state: State, account: String? = nil, plan: String? = nil, detail: String = "", command: String = "", remembered: String? = nil) {
         self.state = state
         self.account = account
         self.plan = plan
         self.detail = detail
         self.command = command
+        self.remembered = remembered
     }
 
     /// What a row shows while its answer is still being read.
@@ -211,7 +215,8 @@ public enum CodingAIAccountsParse {
             account: value["account"].text,
             plan: value["plan"].text,
             detail: value["detail"].text ?? "This account’s sign-in state could not be read.",
-            command: value["command"].string ?? "")
+            command: value["command"].string ?? "",
+            remembered: value["remembered"].text)
     }
 
     /// `parseAccountHistory`: nil for anything that is not an answer.
@@ -290,10 +295,26 @@ public enum CodingAIAccountLabels {
     }
 
     /// What an account row in Settings is headed with.
+    /// 4 Nov (Asad: "an account which has nothing … no name of the account"): this Mac's own login with nobody
+    /// signed in says what it is, in words, instead of "Your own … install".
     public static func rowLabel(_ account: CodingAIAccount, _ signIn: CodingAISignIn?) -> String {
         if let named = namedLogin(account, signIn) { return named }
         if signIn?.state == .signedIn { return unnamedLogin }
+        if isGenerated(account), !account.isAPIKey { return ownLoginLabel(account.provider) }
         return profileLoginLabel(account, signIn)
+    }
+
+    /// The name of an AI's own login on this Mac (the one its Terminal uses), when nobody is signed in to it.
+    public static func ownLoginLabel(_ provider: String?) -> String {
+        guard let agent = provider.flatMap({ CodingAICatalog.agent($0)?.label }) else { return "This Mac’s own login" }
+        return "This Mac’s own \(agent) login"
+    }
+
+    /// "Last signed in here as …": only for a login that is signed out now, from what the AI itself remembers.
+    public static func lastLoginLine(_ signIn: CodingAISignIn?) -> String? {
+        guard let signIn, signIn.state == .signedOut,
+              let address = CodingAILogins.normalizedEmail(signIn.remembered ?? signIn.account) else { return nil }
+        return "Last signed in here as \(address)"
     }
 
     /// The one line under a name: can this account start a session.
@@ -612,6 +633,10 @@ public enum CodingAILogins {
         account.id == defaultId || (defaultId == nil && account.id == "system")
     }
 
+    /// Claude Code and Codex sign in through the app itself (the browser opens, no terminal and no chat).
+    /// Gemini has no sign-in command, so it signs in inside a session. The one rule for every Sign in button.
+    public static func appSignsIn(_ provider: String?) -> Bool { ["claude", "codex"].contains(provider ?? "claude") }
+
     /// What Sign in asks the main window to start: this account, on its own agent.
     public static func signInRequest(_ account: CodingAIAccount) -> (profileId: String, provider: String?) {
         (account.id, account.provider)
@@ -633,6 +658,10 @@ public struct CodingAIAccountRowModel: Equatable, Sendable {
     public var note: String
     public var sessions: String?
     public var duplicate: String?
+    /// "Last signed in here as …" for a signed-out login, when the AI remembers who it was.
+    public var lastLogin: String?
+    /// The plan-usage line belongs to a login that can run: a signed-out one would show an old reading.
+    public var showsUsage: Bool
     public var problem: CodingAIAgentProblem?
     public var signOutNote: String?
     public var offersSignIn: Bool
@@ -682,10 +711,13 @@ public struct CodingAIAccountRowModel: Equatable, Sendable {
             note: CodingAIAccountText.accountNote(account, history: rowHistory, inherited: snapshot.inherited),
             sessions: CodingAIAccountText.sessionsLine(sessionTitles),
             duplicate: duplicate,
+            lastLogin: CodingAIAccountLabels.lastLoginLine(state),
+            showsUsage: state?.state != .signedOut,
             problem: CodingAIProviders.agentProblem(providerRows, provider),
             signOutNote: (signedIn && provider != nil && !hasSignOut) ? CodingAICatalog.signOutNote(provider ?? "") : nil,
-            offersSignIn: canStartSessions && state != nil && state?.state != .signedIn && state?.state != .unsupported
-                && CodingAIProviders.agentCanStart(providerRows, provider),
+            // 4 Nov: Claude Code and Codex sign in through the app, so their Sign in needs no session window.
+            offersSignIn: (canStartSessions || CodingAILogins.appSignsIn(provider)) && state != nil && state?.state != .signedIn
+                && state?.state != .unsupported && CodingAIProviders.agentCanStart(providerRows, provider),
             offersSignOut: canSignOut && signedIn && provider != nil && hasSignOut,
             offersUseByDefault: !isDefault && moreLogins,
             offersRenameRemove: !account.system,

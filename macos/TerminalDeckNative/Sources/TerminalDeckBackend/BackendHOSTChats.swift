@@ -125,11 +125,16 @@ public actor BackendHOSTChats {
             reply = .object([.init("sessions", try NativeRPCValue.parseJSON(JSONEncoder().encode(manager.list().filter { $0.chat == true }))),
                 .init("jobs", try NativeRPCValue.parseJSON(JSONEncoder().encode(await chats.conversations())))])
         case "chats.read": reply = try await chats.read(id, cursor: args["cursor"].number.map(Int.init), limit: Int(args["limit"].number ?? 500), seen: args["seen"].number.map(Int.init), conversation: args["conversation"].string)
+        case "chats.resume-input": reply = try NativeRPCValue.parseJSON(JSONEncoder().encode(await chats.jobResumeInput(id)))
+        case "chats.resume-continue": reply = try await chats.continueResumedJob(id)
         case "chats.provider": reply = try await chats.providerFeature(id, operation: args["operation"].requireString("operation", nonempty: true), arguments: args["arguments"].isNullish ? .object([]) : args["arguments"])
         case "chats.terminal":
             let approval = args["appApproval"].isNullish ? nil : try BackendChatOwnedTerminals.AppApproval(trustedWire: args["appApproval"])
             reply = try await chats.ownedTerminalFeature(id, operation: args["operation"].requireString("operation", nonempty: true),
                 arguments: args["arguments"].isNullish ? .object([]) : args["arguments"], approval: approval)
+        case "chats.seed-fork":
+            let worktree = args["worktree"].isNullish ? nil : try JSONDecoder().decode(BackendChatForkWorktree.self, from: args["worktree"].encodedJSON())
+            try await chats.seedFork(id, from: args["parent"].requireString("parent", nonempty: true), through: Int(args["sequence"].number ?? 0), worktree: worktree); reply = .bool(true)
         case "chats.rewind": reply = try await chats.rewind(id, sequence: Int(args["sequence"].number ?? 0))
         case "chats.undo-rewind": reply = try await chats.rewind(id, sequence: nil)
         case "chats.handoff": reply = try await chats.handoffPrompt(id, sequence: Int(args["sequence"].number ?? 0))

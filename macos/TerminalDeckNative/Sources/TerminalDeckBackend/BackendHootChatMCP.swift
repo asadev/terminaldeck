@@ -7,7 +7,7 @@ public enum BackendHootChatMCP {
     public static func definitions(runtime: BackendCopilotSessionRuntime, access: BackendDeckToolsAppAccess,
                                    visible: @escaping @Sendable (BackendMCPCallContext) async throws -> Void) throws -> [BackendDeckToolsDefinition] {
         let descriptions: [(String, String, String, BackendMCPTier, String)] = [
-            ("hoot.chat.read", "hoot_chat_read", "Read Hoot's structured conversation with a bounded cursor and the person's saved seen-marker. Pass seenSequence and conversationId to advance it.", .read,
+            ("hoot.chat.read", "hoot_chat_read", "Read Hoot's structured conversation with a bounded cursor. The newest content is followed automatically in open chat views; seenSequence remains an ignored compatibility field.", .read,
              #"{"type":"object","properties":{"cursor":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500},"seenSequence":{"type":"integer","minimum":0},"conversationId":{"type":"string"}},"additionalProperties":false}"#),
             ("hoot.chat.ask", "hoot_chat_ask", "Send a message to Hoot through its assistant chat.", .alter,
              #"{"type":"object","properties":{"clientMessageId":{"type":"string","minLength":1},"sentAt":{"type":["string","number"]},"clientSequence":{"type":["string","number"]},"message":{"type":"string","maxLength":262144},"attachments":{"type":"array","maxItems":4,"items":{"type":"object"}}},"required":["message"],"additionalProperties":false}"#),

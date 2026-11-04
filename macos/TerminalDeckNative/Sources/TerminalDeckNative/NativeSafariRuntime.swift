@@ -16,7 +16,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     private let browserData: @MainActor (String, [String: Any]) async throws -> Any
     private let authorizePopup: @MainActor (String, URL?, Bool) throws -> Void
     var ownTabID: String?
-    private var eventNumber = 0
+    var eventNumber = 0
     private var installed: [String: ObjectIdentifier] = [:]
     private var controllers: [ObjectIdentifier: NativeSafariWeakController] = [:]
     private struct Frame { let info: WKFrameInfo; let webView: ObjectIdentifier; let document: String; let url: String }
@@ -64,6 +64,10 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         controller.addUserScript(WKUserScript(source: Self.frameRegistration, injectionTime: .atDocumentStart,
                                              forMainFrameOnly: false, in: .defaultClient))
         guest.install(into: configuration)
+        // Console messages and page errors from this machine's and the local network's pages
+        // (a developer's own app); other sites only when an agent asks (browser_page console).
+        controller.addUserScript(WKUserScript(source: BrowserPageHooks.console(auto: true), injectionTime: .atDocumentStart,
+                                             forMainFrameOnly: true, in: .page))
     }
     /// Call from WKUIDelegate using its real supplied configuration and action.
     /// Returning the actual child WKWebView retains window.opener/postMessage;
@@ -88,6 +92,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     func detachedPage(_ id: String) {
         for child in popupOpeners.filter({ $0.value == id }).map(\.key) { closeTab(child) }
         popupOpeners[id] = nil; transientPopups.remove(id); inspectingTabs.remove(id)
+        unpark(id)
         installed[id] = nil; frames[id] = nil; map.closed(id)
     }
     func shutdown() {
@@ -147,6 +152,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     }
     func settle(_ id: String, timeoutMs: Int) async -> Bool {
         guard let tab = tabs.tab(id) else { return false }; tab.ensurePage()
+        parkIfHidden(id)
         let ready = await tab.settle(timeout: .milliseconds(max(0, timeoutMs)))
         return ready && tabs.tab(id) === tab
     }
@@ -157,11 +163,14 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         try Task.checkCancellation()
         guard BrowserDriverScripts.name(of: script) != nil else { throw refusal("The browser driver only runs its own bounded scripts.") }
         let view = try requireView(id)
-        let value = try await view.evaluateJavaScript(script, in: nil, contentWorld: .defaultClient)
+        // Browser 27: a page replaced mid-call (or stuck behind a dialog) never holds the tool forever.
+        let value = try await NativeBrowserRace.within(30_000) {
+            NativeBrowserUnchecked(try await view.evaluateJavaScript(script, in: nil, contentWorld: .defaultClient))
+        }.value
         try Task.checkCancellation(); return value
     }
     func reveal(_ id: String) async -> Bool { await tabs.reveal(id) }
-    private func screen(_ id: String) -> (WKWebView, NSWindow)? {
+    func screen(_ id: String) -> (WKWebView, NSWindow)? {
         guard !Task.isCancelled, let view = tabs.tab(id)?.webView, let window = view.window,
               tabs.tab(id)?.handoverPrompt == nil else { return nil }
         return (view, window)
@@ -289,10 +298,6 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
             }
             let file = try savePNG(raw, folder: userScreenshotDirectory, prefix: "marked")
             return .object([.init("path", .string(file.path)), .init("width", .number(Double(width))), .init("height", .number(Double(height))), .init("url", .string(pageURL(id)))])
-        case "evaluate":
-            let script = try arguments["script"].requireString("script", nonempty: true)
-            guard script.utf8.count <= 65_536 else { throw refusal("The app tool's script exceeds 64 KiB.") }
-            return try NativeRPCValue.fromFoundation(await view.evaluateJavaScript(script, in: nil, contentWorld: .defaultClient))
         case "screenshot", "snapshot":
             let shot = try await screenshot(id)
             return .object([.init("path", .string(shot.path)), .init("width", .number(Double(shot.width))), .init("height", .number(Double(shot.height))), .init("masked", .number(Double(shot.masked)))])
@@ -308,7 +313,9 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
             let shot = try await privacySnapshotPNG(id), small = try resizedPNG(shot.bytes, maximumWidth: 2_000)
             return .object([.init("image", .string("data:image/png;base64," + small.bytes.base64EncodedString())),
                 .init("width", .number(Double(small.width))), .init("height", .number(Double(small.height))), .init("url", .string(pageURL(id)))])
-        default: throw refusal("Safari does not implement page action '\(operation)'.")
+        default:
+            if let answer = try await automationCommand(id, tab: tab, view: view, operation: operation, arguments: arguments) { return answer }
+            throw refusal("Safari does not implement page action '\(operation)'.")
         }
         note(tab); return try pageState(id)
     }
@@ -408,7 +415,8 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         var captureHost: NativeBrowserCaptureWindow?
         if view.window == nil {
             // Give a background page drawable geometry without selecting a tab or ordering a window.
-            let host = NativeBrowserCaptureWindow(contentRect: NSRect(x: -30_000, y: -30_000, width: 1280, height: 800),
+            let size = parkingSize(id)
+            let host = NativeBrowserCaptureWindow(contentRect: NSRect(x: -30_000, y: -30_000, width: size.width, height: size.height),
                                 styleMask: [.borderless], backing: .buffered, defer: false)
             host.isReleasedWhenClosed = false
             host.contentView = view
@@ -440,7 +448,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         let png = try NativeBrowserShotMask.maskedPNG(cg, rects: rects, scale: scale)
         return (png, cg.width, cg.height, rects.count)
     }
-    private func resizedPNG(_ png: Data, maximumWidth: Int) throws -> (bytes: Data, width: Int, height: Int) {
+    func resizedPNG(_ png: Data, maximumWidth: Int) throws -> (bytes: Data, width: Int, height: Int) {
         guard let source = CGImageSourceCreateWithData(png as CFData, nil), let original = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw refusal("The captured image could not be decoded.") }
         let width = min(maximumWidth, original.width), height = max(1, Int(Double(original.height) * Double(width) / Double(original.width)))
         if width == original.width { return (png, width, height) }
@@ -457,14 +465,14 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
-    private func savePNG(_ png: Data, folder: URL, prefix: String) throws -> URL {
+    func savePNG(_ png: Data, folder: URL, prefix: String, ext: String = "png") throws -> URL {
         var ancestor = folder
         while ancestor.path != "/" {
             guard (try? FileManager.default.destinationOfSymbolicLink(atPath: ancestor.path)) == nil else { throw refusal("The screenshot destination contains a symbolic link.") }
             ancestor.deleteLastPathComponent()
         }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let file = folder.appendingPathComponent("\(prefix)-\(UUID().uuidString).png")
+        let file = folder.appendingPathComponent("\(prefix)-\(UUID().uuidString).\(ext)")
         try png.write(to: file, options: .withoutOverwriting)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         savedScreenshots.insert(file.path); return file
@@ -503,9 +511,9 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     func unbind(_ id: String) { map.detach(id) }
     func now() -> Double { ProcessInfo.processInfo.systemUptime * 1000 }
     func pause(ms: Int) async { try? await Task.sleep(for: .milliseconds(ms)) }
-    private func requireTab(_ id: String) throws -> NativeBrowserTab { guard let tab = tabs.tab(id) else { throw refusal("That page is no longer open.") }; return tab }
-    fileprivate func requireView(_ id: String) throws -> WKWebView { let tab = try requireTab(id); tab.ensurePage(); guard let view = tab.webView else { throw refusal("That page has no live WebKit view.") }; return view }
-    private func refusal(_ message: String) -> NativeRPCError { .init(code: "browser-refused", message: message) }
+    func requireTab(_ id: String) throws -> NativeBrowserTab { guard let tab = tabs.tab(id) else { throw refusal("That page is no longer open.") }; return tab }
+    func requireView(_ id: String) throws -> WKWebView { let tab = try requireTab(id); tab.ensurePage(); guard let view = tab.webView else { throw refusal("That page has no live WebKit view.") }; return view }
+    func refusal(_ message: String) -> NativeRPCError { .init(code: "browser-refused", message: message) }
     // MARK: S4 guest picker
 
     private func makeGuest() -> BackendS4BrowserGuestBridge {
@@ -569,7 +577,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     (function(){const rects=[]; function cut(r,c){const x=Math.max(r.x,c?c.x:r.x),y=Math.max(r.y,c?c.y:r.y);
     const w=Math.min(r.x+r.width,c?c.x+c.width:Infinity)-x,h=Math.min(r.y+r.height,c?c.y+c.height:Infinity)-y; return w>0&&h>0?{x,y,width:w,height:h}:null;}
     function secret(e){const t=(e.getAttribute('type')||'').toLowerCase(); return e.matches('input,textarea')&&(t==='password'||
-    /(password|one-time-code|cc-number|cc-csc|cc-exp)/i.test(e.getAttribute('autocomplete')||'')||/(card.?num|cc.?num|cvc|cvv|csc)/i.test((e.getAttribute('name')||'')+' '+e.id));}
+    /(password|one-time-code|cc-[a-z-]+)/i.test(e.getAttribute('autocomplete')||'')||/(card.?num|credit.?card|cc.?num|cvc|cvv|csc|one.?time.?code|password|passwd)/i.test((e.getAttribute('name')||'')+' '+e.id));}
     function walk(root,dx,dy,clip){for(const e of root.querySelectorAll('*')){
     if(e.shadowRoot)walk(e.shadowRoot,dx,dy,clip); const frame=e.matches('iframe,frame'); if(!frame&&!secret(e))continue;
     const b=e.getBoundingClientRect(), r=cut({x:b.x+dx,y:b.y+dy,width:b.width,height:b.height},clip); if(!r)continue;

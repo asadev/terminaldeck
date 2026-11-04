@@ -40,7 +40,8 @@ public sealed class LinkGuest : IDisposable
   private readonly List<byte[]> held = [];
   private ILinkAnswerConnection? link;
   private int remoteCandidates;
-  private bool hostOnly, hostMoved;
+  private bool hostOnly, hostMoved, serverHost;
+  private string UnreachableReason => serverHost ? "Can't reach your server — this network blocks the direct connection." : Unreachable;
   private volatile bool moved, relayGone;
   private int ended;
   private long pingAt;
@@ -68,9 +69,24 @@ public sealed class LinkGuest : IDisposable
   {
     var caps = welcome.TryGetProperty("capabilities", out var c) && c.ValueKind == JsonValueKind.Array
       ? c.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToHashSet() : [];
-    lock (gate) { Offered = caps.Contains(LinkBinding.Capability); hostOnly = caps.Contains(LinkBinding.OnlyCapability); }
-    if (Offered) _ = DeadlineAsync();
+    ValidateServerWelcome(welcome, canMakeLink: true);
+    serverHost = IsServer(welcome);
+    lock (gate) { hostOnly = caps.Contains(LinkBinding.OnlyCapability); Offered = caps.Contains(LinkBinding.Capability) || (serverHost && hostOnly); }
+    if (caps.Contains(LinkBinding.Capability)) _ = DeadlineAsync();
   }
+
+  /// A server has no legacy relay data path. Pairing receipts are admission only.
+  public static void ValidateServerWelcome(JsonElement welcome, bool canMakeLink)
+  {
+    if (!IsServer(welcome) || (welcome.TryGetProperty("token", out var token) && token.ValueKind == JsonValueKind.String)) return;
+    var capabilities = welcome.TryGetProperty("capabilities", out var values) && values.ValueKind == JsonValueKind.Array
+      ? values.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToHashSet() : [];
+    if (!capabilities.Contains(LinkBinding.Capability) && !capabilities.Contains(LinkBinding.OnlyCapability))
+      throw new ProtocolException("Update the host on your server to connect directly.");
+    if (!canMakeLink) throw new ProtocolException("Can't reach your server — this network blocks the direct connection.");
+  }
+
+  private static bool IsServer(JsonElement welcome) => welcome.TryGetProperty("hostKind", out var kind) && kind.ValueKind == JsonValueKind.String && kind.GetString() == "headless";
 
   /// A relay message after the welcome. True = taken here (signalling, or dropped because it belongs on the link).
   public bool FromRelay(JsonElement message)
@@ -90,7 +106,7 @@ public sealed class LinkGuest : IDisposable
   {
     relayGone = true;
     if (moved) Trace.WriteLine(Stamp() + " link: relay closed; the direct link stays");
-    else Fail(Unreachable);
+    else Fail(UnreachableReason);
   }
 
   /// One message to the host on td.ctl, waiting (in order) until this side has moved onto the link.
@@ -103,7 +119,7 @@ public sealed class LinkGuest : IDisposable
       catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
       ct.ThrowIfCancellationRequested();
     }
-    if (!moved || Volatile.Read(ref ended) != 0) throw new IOException(moved ? Ended : Unreachable);
+    if (!moved || Volatile.Read(ref ended) != 0) throw new IOException(moved ? Ended : UnreachableReason);
     await sendGate.WaitAsync(ct).ConfigureAwait(false);
     try
     {
@@ -135,7 +151,7 @@ public sealed class LinkGuest : IDisposable
         return;
       }
       case "end":
-        Fail(moved ? Ended : Unreachable);
+        Fail(moved ? Ended : UnreachableReason);
         return;
     }
   }
@@ -168,7 +184,7 @@ public sealed class LinkGuest : IDisposable
     var events = new LinkEvents(
       (candidate, mid, index) => _ = LocalCandidateAsync(candidate, mid, index),
       route => _ = OpenedAsync(route),
-      why => { Trace.WriteLine(Stamp() + " link: ended " + why); Fail(moved ? Ended : Unreachable); },
+      why => { Trace.WriteLine(Stamp() + " link: ended " + why); Fail(moved ? Ended : UnreachableReason); },
       Arrived);
     ILinkAnswerConnection made;
     try { made = engine.ConnectAnswerer(new LinkServers(servers, policy), events); }
@@ -205,7 +221,7 @@ public sealed class LinkGuest : IDisposable
     {
       Trace.WriteLine(Stamp() + " link: the answer failed (" + ex.GetType().Name + ")");
       _ = RelayQuietlyAsync(EndText);
-      Fail(Unreachable);
+      Fail(UnreachableReason);
     }
   }
 
@@ -237,7 +253,7 @@ public sealed class LinkGuest : IDisposable
       if (!relayGone)
       {
         try { await relay(RelayMarker, stop.Token).ConfigureAwait(false); }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { if (!hostOnly) { Fail(Unreachable); return; } }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { if (!hostOnly) { Fail(UnreachableReason); return; } }
       }
       Route = route; moved = true; movedSignal.TrySetResult();
     }
@@ -306,7 +322,7 @@ public sealed class LinkGuest : IDisposable
     catch (OperationCanceledException) { return; }
     if (moved || Volatile.Read(ref ended) != 0) return;
     if (!relayGone) await RelayQuietlyAsync(EndText).ConfigureAwait(false);
-    Fail(Unreachable);
+    Fail(UnreachableReason);
   }
 
   private async Task HeartbeatAsync()

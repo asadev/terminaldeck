@@ -13,6 +13,8 @@ struct NativeCodingAISettings: View {
     var body: some View {
         // Read here so the page follows it: a sign-in that could not start (no sheet is up for it).
         let signInProblem = NativeAccountSignInModel.shared.active == nil ? NativeAccountSignInModel.shared.problem : nil
+        let ownLogin = NativeAccountSignInModel.shared.confirmingOwnLogin
+        let ownAI = CodingAICatalog.label(ownLogin?.provider ?? "claude")
         Group {
             if app.engineIsUp {
                 NativeSettingsPage(sectionId: "agents") {
@@ -52,6 +54,16 @@ struct NativeCodingAISettings: View {
         // The progress of a sign-in started here (Add account, Sign in, Sign in again).
         .sheet(item: Bindable(NativeAccountSignInModel.shared).active) { _ in
             NativeAccountSignInSheet(model: NativeAccountSignInModel.shared, accounts: store.snapshot.accounts)
+        }
+        // 4 Nov: Sign in on this Mac's own login opens the AI's own sign-in in the browser (never a new chat), after
+        // saying plainly that it is the Mac's login, which the Terminal uses too.
+        .confirmationDialog("Sign in to \(ownAI) on this Mac?",
+                            isPresented: Binding(get: { ownLogin != nil }, set: { if !$0 { NativeAccountSignInModel.shared.confirmingOwnLogin = nil } }),
+                            titleVisibility: .visible) {
+            Button("Sign In on This Mac") { NativeAccountSignInModel.shared.confirmOwnLogin() }
+            Button("Cancel", role: .cancel) { NativeAccountSignInModel.shared.confirmingOwnLogin = nil }
+        } message: {
+            Text("This is \(ownAI)’s own login on this Mac, not one Terminal Deck keeps. Your browser opens \(ownAI)’s sign-in page. The account you approve there is used by your Terminal and every app that uses \(ownAI) on this Mac, and by the sessions here that use this login.")
         }
         // A sign-in that could not start says why and what to do (11 Oct, item 25: it said nothing).
         .alert("The sign-in was not started",
@@ -173,7 +185,7 @@ struct NativeCodingAIThisMachine: View {
                     if provider?.canSignIn == true {
                         Button("Sign in") { store.signInInstall(tool.id) }
                             .buttonStyle(.bordered)
-                            .disabled(store.busy || !store.canStartSessions)
+                            .disabled(store.busy || (!store.canStartSessions && !CodingAILogins.appSignsIn(tool.id)))
                     }
                 }
             } else {

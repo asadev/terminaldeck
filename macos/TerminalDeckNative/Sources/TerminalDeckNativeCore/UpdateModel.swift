@@ -225,7 +225,7 @@ public struct UpdateCard: Equatable, Sendable {
     /// error; an error after the card's own Download or Restart does). `inAppSessions`: sessions that run inside
     /// the app rather than with the session keeper, which a restart closes.
     public static func make(_ state: UpdateState, waitingFor: String?, restarting: Bool, dismissedVersion: String?,
-                            offered: String?, hiddenError: String?, notesURL: URL?, inAppSessions: Int) -> UpdateCard? {
+                            offered: String?, hiddenError: String?, notesURL: URL?, inAppSessions: Int, checkingUpdate: Bool = false) -> UpdateCard? {
         switch state {
         case .available(let version?, _, let size):
             guard version != dismissedVersion else { return nil }
@@ -238,6 +238,10 @@ public struct UpdateCard: Equatable, Sendable {
             return .init(title: "Downloading \(version)", detail: parts.isEmpty ? nil : parts.joined(separator: " · "),
                          progress: progress, busy: progress == nil, primary: nil, notesURL: notesURL, dismissKey: nil)
         case .ready(let version?):
+            if checkingUpdate {
+                return .init(title: "Checking the update…", detail: "The app restarts once all checks pass.",
+                             progress: nil, busy: true, primary: nil, notesURL: nil, dismissKey: nil)
+            }
             if restarting {
                 return .init(title: "Restarting to \(version)…", detail: "It opens again by itself in a few seconds.",
                              progress: nil, busy: true, primary: nil, notesURL: nil, dismissKey: nil)

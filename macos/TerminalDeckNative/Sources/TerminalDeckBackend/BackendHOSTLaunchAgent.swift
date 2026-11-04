@@ -73,6 +73,12 @@ public struct BackendHOSTLaunchAgent: Sendable {
             "ThrottleInterval": 10,
             "Umask": 0o077,
         ]
+        // launchd starts the keeper outside the GUI process tree. Without this association,
+        // privacy decisions belong to its versioned executable path, rather than to the app.
+        // Never lend the installed app's grants to a scratch host.
+        if !label.contains(".scratch-") {
+            value["AssociatedBundleIdentifiers"] = ["dev.terminaldeck.app"]
+        }
         if label.contains(".scratch-") {
             // launchd does not inherit the dev app's isolation switches. The
             // helper's hook owner must refuse the same global-config writes.

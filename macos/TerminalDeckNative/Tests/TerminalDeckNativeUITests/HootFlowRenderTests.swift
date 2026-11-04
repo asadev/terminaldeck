@@ -116,7 +116,7 @@ import TerminalDeckBackend
         guard items.count == 2, case .reply(let key, let answer, let steps, let open) = items[1] else { return XCTFail("one reply for the job") }
         XCTAssertEqual(key, rows[0].id); XCTAssertEqual(steps.count, 7); XCTAssertTrue(open)
         XCTAssertEqual(answer?.value["text"].string, "On it: I'll check the tasks first.\n\n" + Self.finalAnswer)
-        XCTAssertEqual(items[1].unreadMessageIDs.count, 2)
+        XCTAssertEqual(answer?.value["combinedMessageIDs"].elements?.count, 2)
         // A new message starts a new job: the first job's reply is no longer the open one.
         let more = Self.events(finished: true) + [Self.event(18, turn: "t2", .text(.user, id: "u2", "Thanks"))]
         let next = HootChatItem.items(HootChatProjection.rows(more))

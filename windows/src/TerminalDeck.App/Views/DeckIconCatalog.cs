@@ -14,7 +14,7 @@ internal static class DeckIconCatalog
     new("window", "macwindow", "\uE71B", "M3,2.5 H13 Q14.5,2.5 14.5,4 V12 Q14.5,13.5 13,13.5 H3 Q1.5,13.5 1.5,12 V4 Q1.5,2.5 3,2.5 Z M1.5,5.5 H14.5 M4,4 H4.05 M6,4 H6.05"),
     new("new-window", "arrow.up.forward.square", "\uE8A7", "M8,2.5 H4 Q2,2.5 2,4.5 V12 Q2,14 4,14 H11.5 Q13.5,14 13.5,12 V8 M8,8 L14,2 M10,2 H14 V6"),
     new("sidebar", "sidebar.left", "\uE8A0", "M3,2.5 H13 Q14.5,2.5 14.5,4 V12 Q14.5,13.5 13,13.5 H3 Q1.5,13.5 1.5,12 V4 Q1.5,2.5 3,2.5 Z M5.5,2.5 V13.5 M3.5,5 H3.55 M3.5,7 H3.55"),
-    new("more", "ellipsis", "\uE712", "M3,8 H3.1 M8,8 H8.1 M13,8 H13.1"),
+    new("more", "ellipsis", "\uE712", "M4.25,8 A1.25,1.25 0 1 1 1.75,8 A1.25,1.25 0 1 1 4.25,8 Z M9.25,8 A1.25,1.25 0 1 1 6.75,8 A1.25,1.25 0 1 1 9.25,8 Z M14.25,8 A1.25,1.25 0 1 1 11.75,8 A1.25,1.25 0 1 1 14.25,8 Z"),
     new("close", "xmark", "\uE711", "M4,4 L12,12 M12,4 L4,12"),
     new("plus", "plus", "\uE710", "M8,3 V13 M3,8 H13"),
     new("minus", "minus", "\uE738", "M3,8 H13"),
@@ -94,7 +94,7 @@ internal static class DeckIconCatalog
     new("rich-document", "doc.richtext", "", "M4,1.5 H12 Q13,1.5 13,2.5 V13.5 Q13,14.5 12,14.5 H4 Q3,14.5 3,13.5 V2.5 Q3,1.5 4,1.5 Z M5,4 H11 V7 H5 Z M5,10 H11 M5,12 H9"),
   ];
   internal static DeckIconDefinition? Find(string? value) => All.FirstOrDefault(icon => icon.Name == value || icon.MacSymbol == value || (value?.Length == 1 && icon.Glyphs.Contains(value, StringComparison.Ordinal)));
-  internal static bool Solid(string name) => name is "stop" or "usage";
+  internal static bool Solid(string name) => name is "stop" or "usage" or "more";
   internal static string? FilledPart(string name) => name switch
   {
     "appearance" => "M8,1.5 A6.5,6.5 0 0 0 8,14.5 Z",

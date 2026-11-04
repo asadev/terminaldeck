@@ -30,6 +30,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { ServerDirectGuest } from '../server-direct-guest'
 import { connect as netConnect } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { connect as tlsConnect } from 'node:tls'
@@ -149,6 +150,7 @@ export function dialMachine(request: DialRequest): Promise<GuestChannel> {
 
     const reader = new FrameReader(MAX_PAYLOAD_BYTES, 'client')
     let transport: SealedTransport | null = null
+    let direct: ServerDirectGuest | null = null
     let settled = false
     let closed = false
     let head: string | null = null
@@ -188,7 +190,8 @@ export function dialMachine(request: DialRequest): Promise<GuestChannel> {
         reject(new Error(why))
         return
       }
-      request.handlers.closed(why)
+      if (direct) direct.relayClosed(why)
+      else request.handlers.closed(why)
     }
 
     const write = (opcode: number, payload: Buffer): void => {
@@ -231,8 +234,9 @@ export function dialMachine(request: DialRequest): Promise<GuestChannel> {
           return
         }
         clearTimeout(timer)
+        direct = new ServerDirectGuest({ relay: channel, handlers: request.handlers, binding: transport.channelBinding })
         settled = true
-        resolve(channel)
+        resolve(direct)
         return
       }
 
@@ -247,7 +251,7 @@ export function dialMachine(request: DialRequest): Promise<GuestChannel> {
         return
       }
       try {
-        request.handlers.message(text)
+        direct?.receiveRelay(text)
       } catch (error) {
         // The caller's own bookkeeping threw. It must not take the app down, and
         // it must not leave a channel nobody is reading.

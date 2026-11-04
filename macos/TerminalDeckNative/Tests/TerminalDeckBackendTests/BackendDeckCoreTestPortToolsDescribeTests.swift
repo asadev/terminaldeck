@@ -34,7 +34,7 @@ final class BackendDeckCoreTestPortToolsDescribeTests: XCTestCase {
     // TSCASE describe-tool.test.ts:131
     func testDescribeL131() throws { XCTAssertEqual(try answer(F.json(#"{"tools":"b.second"}"#),catalogue:simple())["tools"].elements?.first?["name"],.string("b_second")) }
     // TSCASE describe-tool.test.ts:135
-    func testDescribeL135() throws { XCTAssertThrowsError(try names([])) { XCTAssertTrue($0 is BackendDeckCoreSecurityRefusal) }; XCTAssertThrowsError(try names(Array(repeating:"a.first",count:D.maxNames+1))) { XCTAssertTrue($0.localizedDescription.contains("at most")) } }
+    func testDescribeL135() throws { XCTAssertNotNil(try names([])["areas"].elements); XCTAssertThrowsError(try names(Array(repeating:"a.first",count:D.maxNames+1))) { XCTAssertTrue($0.localizedDescription.contains("at most")) } }
     // TSCASE describe-tool.test.ts:143
     func testDescribeL143() throws { XCTAssertEqual(try meta().advertisedValue["annotations"]["readOnlyHint"],.bool(true)) }
     // TSCASE describe-tool.test.ts:148
@@ -64,7 +64,7 @@ final class BackendDeckCoreTestPortToolsDescribeTests: XCTestCase {
     // TSCASE describe-tool.test.ts:316
     func testDescribeL316() throws { let text = try XCTUnwrap(D.advertised([spec("sessions.list"),spec("sessions.wait",index:"block until the turn ends"),meta()]).first { $0.tool.id == D.id }?.tool.description); XCTAssertTrue(text.contains("sessions_wait — block until the turn ends")); XCTAssertFalse(text.contains("sessions — ")) }
     // TSCASE describe-tool.test.ts:323
-    func testDescribeL323() throws { XCTAssertThrowsError(try answer(.object([]),catalogue:many())) { XCTAssertTrue($0.localizedDescription.contains("name an area")) } }
+    func testDescribeL323() throws { XCTAssertEqual(try answer(.object([]),catalogue:many())["areas"].elements?.count,D.areas.count) }
     // TSCASE describe-tool.test.ts:328
     func testDescribeL328() throws { XCTAssertEqual(D.areaOf("sessions.wait"),"sessions"); XCTAssertEqual(D.areaOf("chats.read"),"sessions"); XCTAssertEqual(D.areaOf("teleport.go"),"teleport") }
 }

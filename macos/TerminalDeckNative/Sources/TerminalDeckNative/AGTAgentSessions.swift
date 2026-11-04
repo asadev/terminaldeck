@@ -156,6 +156,7 @@ struct AGTTeamChatHistoryCard: View {
     private var storeAgent: AGTAgent? { AGTAgentsStore.shared.agent(agentID) }
     @State private var deleting: NativeRPCValue?
     @State private var stoppingJob: String?
+    @State private var resumingJob: String?
     private var opened: NativeRPCValue? {
         get { history.openedByAgent[agentID] }
         nonmutating set { history.openedByAgent[agentID] = newValue }
@@ -173,15 +174,25 @@ struct AGTTeamChatHistoryCard: View {
                             Text(row["session"]["title"].string ?? "Conversation").font(.callout)
                             if let subtitle = identity.subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
                             HStack(spacing: 6) {
-                                Text(row["finishedAt"].isNullish ? "Open" : row["failed"].bool == true ? "Finished · Failed" : "Finished")
+                                Text(!row["resume"].isNullish ? "Ended by restart" : row["finishedAt"].isNullish ? "Open" : row["failed"].bool == true ? "Finished · Failed" : "Finished")
                                 if let at = row["session"]["createdAt"].number { Text(Date(timeIntervalSince1970: at / 1000), style: .date) }
                             }.font(.caption).foregroundStyle(.secondary)
                             if let result = row["result"].string { Text(result).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                         }
                         Spacer(minLength: 8)
-                        let unread = NativeChatUnreadCounts.shared.counts[row["session"]["id"].string ?? ""] ?? Int(row["unread"]["count"].number ?? 0)
-                        if unread > 0 { Text("\(unread) new").font(.caption).foregroundStyle(Color.accentColor) }
                         Button("Open") { opened = row }.controlSize(.small)
+                        if !row["resume"].isNullish, let id = row["session"]["id"].string {
+                            AGTTeamChatRecoveryControl(pending: resumingJob == id) {
+                                resumingJob = id
+                                Task {
+                                    defer { resumingJob = nil }
+                                    do {
+                                        _ = try await EngineBridge.shared.invoke("session:team:resume", [id])
+                                        await history.refresh()
+                                    } catch { history.problem = error.localizedDescription }
+                                }
+                            }.disabled(resumingJob != nil)
+                        }
                         if row["finishedAt"].isNullish, let id = row["session"]["id"].string {
                             Button {
                                 stoppingJob = id

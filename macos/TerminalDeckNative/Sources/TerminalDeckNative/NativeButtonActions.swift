@@ -491,6 +491,7 @@ final class NativeButtonActions {
     }
     func created(_ row: [String: Any]) {
         guard let id = row["id"] as? String, UUID(uuidString: id) != nil, !closed.contains(id) else { return }
+        SIDEBARPins.shared.observe(row)
         if Self.hasFinished(row) { finished.insert(id) } else { finished.remove(id) }
         if let profile = row["agentProfileID"] as? String, !profile.isEmpty {
             AGTTeamChatHistory.shared.explicitOwners[id] = profile

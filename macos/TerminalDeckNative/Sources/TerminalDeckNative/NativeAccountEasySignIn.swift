@@ -28,28 +28,48 @@ final class NativeAccountSignInModel {
     var active: Active?
     var code = ""
     var problem: String?
+    /// This Mac's own login, waiting for the person to confirm its sign-in (it is the Terminal's login too).
+    var confirmingOwnLogin: CodingAIAccount?
     /// The last sign-in, to start again once a missing AI is installed (CONNECT-SKILLS).
     @ObservationIgnored var retry: (@MainActor () -> Void)?
     @ObservationIgnored private var watching: Task<Void, Never>?
 
     /// Claude and Codex have a sign-in command the app can run; Gemini signs in inside a session.
-    static func canDrive(_ provider: String?) -> Bool { ["claude", "codex"].contains(provider ?? "claude") }
+    static func canDrive(_ provider: String?) -> Bool { CodingAILogins.appSignsIn(provider) }
+
+    /// 4 Nov (Asad: Sign in on this Mac's own login "opens a new chat session instead of taking me somewhere where
+    /// I can sign in"): the ONE thing every Sign in button does. Claude Code and Codex: the app's own sign-in (the
+    /// browser opens; this Mac's own login asks first, because the Terminal uses it too). Gemini has no sign-in
+    /// command, so it alone still signs in inside a session.
+    func open(_ account: CodingAIAccount, store: NativeCodingAIStore? = nil) {
+        guard !account.isAPIKey else { return }
+        guard Self.canDrive(account.provider) else { (store ?? .shared).signIn(account); return }
+        if account.system { problem = nil; confirmingOwnLogin = account } else { start(account: account) }
+    }
+    /// The person confirmed: sign this Mac's own login in.
+    func confirmOwnLogin() {
+        guard let account = confirmingOwnLogin else { return }
+        confirmingOwnLogin = nil
+        start(account: account, ownLogin: true)
+    }
 
     /// Sign in (or sign in again) to an account that exists.
-    func start(account: CodingAIAccount, email: String? = nil, namesItself: Bool = false, createdHere: Bool = false) {
+    func start(account: CodingAIAccount, email: String? = nil, namesItself: Bool = false, createdHere: Bool = false, ownLogin: Bool = false) {
         problem = nil; code = ""
         let provider = account.provider ?? "claude"
         // An account this sign-in made is removed again on failure: its retry is the whole Add (set there).
-        if !createdHere { retry = { [weak self] in self?.start(account: account, email: email, namesItself: namesItself) } }
+        if !createdHere { retry = { [weak self] in self?.start(account: account, email: email, namesItself: namesItself, ownLogin: ownLogin) } }
         Task {
             do {
                 var options: [String: Any] = [:]
                 if let email, !email.isEmpty { options["email"] = email }
+                if ownLogin { options["ownLogin"] = true }
                 let raw = try await EngineBridge.shared.invoke("profiles:signin-start", [account.id, options] as [Any]) as? [String: Any] ?? [:]
                 guard let flow = raw["flow"] as? String else { throw NativeRPCError(code: "signin", message: "The sign-in could not be started.") }
-                active = Active(id: flow, accountID: account.id, accountName: account.name, provider: provider,
+                active = Active(id: flow, accountID: account.id,
+                                accountName: account.system ? CodingAIAccountLabels.ownLoginLabel(provider) : account.name, provider: provider,
                                 state: raw["state"] as? String ?? "waiting", message: raw["message"] as? String ?? "",
-                                namesItself: namesItself, createdHere: createdHere, loginStore: raw["loginStore"] as? String ?? "app")
+                                namesItself: namesItself, createdHere: createdHere, loginStore: ownLogin ? "mac" : raw["loginStore"] as? String ?? "app")
                 watch(flow)
             } catch {
                 let text = CodingAIErrorText.from(error, fallback: "The sign-in could not be started.")
@@ -137,6 +157,8 @@ final class NativeAccountSignInModel {
             // Nothing was signed in: do not leave an empty account behind.
             _ = try? await EngineBridge.shared.invoke("profiles:signin-discard", [flow.accountID])
         }
+        // The row reads its sign-in again at once (the answer it had is the one from before this sign-in).
+        if flow.state == "done" { NativeCodingAIStore.shared.reloadAccounts(forcing: [flow.accountID]) }
         NativeCodingAIPages.announceAccountsChanged()
         await NativeAccountLevelsModel.shared.reload()
         await NativeAccountLevelsModel.shared.reloadUsage()
@@ -189,7 +211,8 @@ struct NativeAccountSignInSheet: View {
                 }
                 switch flow.state {
                 case "done":
-                    Label("\(flow.accountName) is signed in. " + (flow.loginStore == "agent" ? "This login is in the AI’s own store for this account." : "Terminal Deck keeps this login."), systemImage: "checkmark.circle.fill")
+                    Label("\(flow.accountName) is signed in. " + (flow.loginStore == "mac" ? "Your Terminal uses this login too."
+                        : flow.loginStore == "agent" ? "This login is in the AI’s own store for this account." : "Terminal Deck keeps this login."), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 case "failed", "cancelled":
                     Label(flow.message.isEmpty ? "The sign-in did not finish." : flow.message, systemImage: "exclamationmark.triangle")

@@ -5,6 +5,9 @@ namespace TerminalDeck.App.Shell;
 
 internal sealed partial class WorkspaceSurface
 {
+  internal FrameworkElement? UmerPaneForProof(string id) => paneFrames.GetValueOrDefault(id);
+  internal Button UmerTabForProof(string id) => tabButtons[id];
+  internal void UmerSlideForProof(string id, double offset) { Slide(id, offset); EndSlide(id, true); }
   internal object TabProofSnapshot(FrameworkElement root)
   {
     double Left(FrameworkElement element) => element.TransformToVisual(root).TransformPoint(new(0, 0)).X;

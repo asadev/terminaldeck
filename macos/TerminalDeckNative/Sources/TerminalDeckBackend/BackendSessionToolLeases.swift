@@ -9,6 +9,9 @@ import TerminalDeckNativeCore
 public enum BackendOrdinarySessionToolGrant {
     public static let names: Set<String> = Set([
         "browser.open", "browser.read", "browser.step", "browser.screenshot", "browser.handover", "browser.close",
+        // Browser 27: waits, scripts, dialogs, console, network, emulation, storage and collect on the session's own
+        // windows (BackendBrowserService.sessionPageOperations); the rest of browser_page stays the person's.
+        "browser.page",
         "browser.workers", "browser.worker", "browser.lift_request", "browser.network", "browser.extract",
         "assets.rendition", "assets.ledger", "assets.fetch", "assets.coverage", "assets.blocks",
         "devices.list", "devices.open", "devices.screenshot", "devices.tree", "devices.find", "devices.tap",

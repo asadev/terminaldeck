@@ -17,6 +17,9 @@ extension NativeCompositionProduction {
         }
         let authority = try wired(self.authority, "authority"), registry = root.registry
         var definitions: [BackendDeckToolsDefinition] = []
+        definitions += try BackendPrivacyMCP.definitions(access: access, openSettings: { url in
+            await MainActor.run { NSWorkspace.shared.open(url) }
+        })
         let updates = BackendCompositionDeckToolsAppUpdates(
             state: { try await Self.updater("update:get") }, check: { _ in try await Self.updater("update:check") },
             download: { try await Self.updater("update:download") }, installNow: { try await Self.updater("update:install") })

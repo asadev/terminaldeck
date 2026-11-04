@@ -96,7 +96,7 @@ final class NativeAIToolInstallModel {
                 if !store.accountsLoading {
                     found = store.snapshot.accounts.first(where: { ($0.provider ?? "claude") == tool && $0.system })
                     if let account = found, let answer = store.signIn[account.id], answer != .checking {
-                        if answer.state != .signedIn { store.signIn(account) }
+                        if answer.state != .signedIn { NativeAccountSignInModel.shared.open(account, store: store) }
                         return
                     }
                 }
@@ -104,7 +104,7 @@ final class NativeAIToolInstallModel {
                                          upTo: deadline - ContinuousClock.now)
             }
             // No answer about its login yet: open the sign-in anyway (it says so itself if already signed in).
-            if let found { store.signIn(found) }
+            if let found { NativeAccountSignInModel.shared.open(found, store: store) }
         }
     }
 }

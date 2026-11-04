@@ -657,7 +657,7 @@ final class AppModel {
     var visibleSidebar: SidebarState? {
         guard failure == nil, let sidebar else { return nil }
         let hidden = AGTAgentsStore.shared.ownedSessionIDs
-        var result = canRun ? NativeChatUnreadCounts.shared.decorate(sidebar) : sidebar
+        var result = sidebar
         // No in-app notifications (Asad, 30 Oct): the retired Alerts row never shows.
         result.groups = result.groups.map { .init(id: $0.id, title: $0.title, items: $0.items.filter { !hidden.contains($0.id) && $0.id != "alerts" }) }
         result.projects = result.projects.map { .init(id: $0.id, title: $0.title, expanded: $0.expanded, sessions: $0.sessions.filter { !hidden.contains($0.id) }) }

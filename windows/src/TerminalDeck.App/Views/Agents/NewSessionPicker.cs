@@ -21,7 +21,7 @@ public static class NewSessionPicker
   internal static ContentDialog? ActiveDialogForProof { get; private set; }
   // App-wide inputs the many callers do not carry: recently used folders, the
   // app-wide model/effort (Settings → Coding AIs) and the permission default.
-  internal sealed record PickerServices(Func<IEnumerable<string>> RecentFolders, Func<string, (string Model, string? Effort)> Launch, Func<string, AiPermissionMode> Permission);
+  internal sealed record PickerServices(Func<IEnumerable<string>> RecentFolders, Func<string, (string Model, string? Effort)> Launch, Func<string, AiPermissionMode> Permission, Func<string>? ShellLabel = null);
   internal static PickerServices? Services { get; set; }
   public static async Task ShowAsync(XamlRoot root, IAgents agents, IProjects projects, AccountService? accounts,
     IProjectsAgentsNavigation navigation, string? projectId = null, string? agentId = null, string mode = "chat", CancellationToken cancellationToken = default, Func<string, string, Task>? terminalStart = null, bool requireJob = false, Func<FrameworkElement, Task>? renderForProof = null)
@@ -33,7 +33,7 @@ public static class NewSessionPicker
     var initialProject = NewSessionProjects.Selection(initialProjects, projectId ?? (agentId is null ? null : agents.Get(agentId).ProjectId) ?? projects.ActiveProjectId);
     var project = Choice("Project · optional", initialProjects.Select(p => (p.Id, p.Name + (p.HomeFolder is { } home ? " · " + home : ""))).Append((NewSessionProjects.CreateId, "New project…")), initialProject);
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(project, "session.project");
-    IEnumerable<(string Id, string Name)> ProviderChoices() => (terminalStart is null ? Providers : Providers.Append(("shell", "PowerShell"))).Concat(CustomTerminalStart is null ? [] : TerminalProviders?.List().Where(p => p.Enabled).Select(p => (p.Id, p.Name + " · Terminal")) ?? []);
+    IEnumerable<(string Id, string Name)> ProviderChoices() => (terminalStart is null ? Providers : Providers.Append(("shell", Services?.ShellLabel?.Invoke() ?? "PowerShell"))).Concat(CustomTerminalStart is null ? [] : TerminalProviders?.List().Where(p => p.Enabled).Select(p => (p.Id, p.Name + " · Terminal")) ?? []);
     var agent = Choice("Agent", [], ""); var provider = Choice("AI", ProviderChoices());
     var account = Choice("Account", [], ""); var folder = Field("Working folder", NewSessionProjects.Folder(projects.Get(Picked(project)), homeFolder));
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(folder, "session.folder");
@@ -155,8 +155,8 @@ public static class NewSessionPicker
       var shell = (Picked(provider) == "shell" || CustomTerminalProviders.IsKey(Picked(provider))) && Picked(agent).Length == 0;
       var missing = !Directory.Exists(folder.Text) ? "Choose an existing working folder with Choose folder…. A project is optional." :
         requireJob && string.IsNullOrWhiteSpace(job.Text) ? "Add the job for this hand before starting." :
-        !shell && account.Items.Count == 0 ? "Add an account in Settings → Coding AIs, or choose PowerShell to open a terminal now." :
-        !shell && !agents.CanStart(Picked(presentation)) ? "The session service is unavailable. Choose PowerShell for a terminal, or retry the connection." : "";
+        !shell && account.Items.Count == 0 ? "Add an account in Settings → Coding AIs, or choose a shell to open a terminal now." :
+        !shell && !agents.CanStart(Picked(presentation)) ? "The session service is unavailable. Choose a shell for a terminal, or retry the connection." : "";
       folderStatus.Text = missing; folderStatus.Visibility = missing.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
       // Signed-out accounts start their sign-in flow; a model catalogue is not
       // available until then and must never deadlock a clean first launch.

@@ -33,6 +33,14 @@ SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
 # behaviour (Liquid Glass toolbar etc.) for the SDK it was actually built with.
 echo "==> swift build -c release (macOS $MIN_OS+, SDK $SDK_VERSION)"
 SCRATCH="${TD_SCRATCH:-$PKG/.build}"   # lanes building at once: give each its own
+# Isolated copies keep the existing TD_BUNDLE_ID interface. Metadata must be selected
+# before linking, not patched into a signed or running helper afterwards.
+if [ "${TD_NATIVE_STANDALONE:-0}" = 1 ] && [ "${TD_BUNDLE_ID:-dev.terminaldeck.app}" != dev.terminaldeck.app ] && [ -z "${TD_SESSION_HOST_INFO_PLIST:-}" ]; then
+  PRIVACY_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/td-privacy-metadata.XXXXXX")"
+  trap 'rm -rf "$PRIVACY_SCRATCH"' EXIT
+  export TD_SESSION_HOST_INFO_PLIST="$PRIVACY_SCRATCH/SessionHost-Info.plist"
+  python3 "$HERE/../scripts/mac-privacy-metadata.py" --prepare "$PKG/Support/SessionHost-Info.plist" "$TD_SESSION_HOST_INFO_PLIST" "$TD_BUNDLE_ID" "${TD_BUNDLE_NAME:-Terminal Deck}"
+fi
 # Swift Build named outright: it is the default only from Swift 6.4 (Xcode 27). Swift
 # 6.3 (Xcode 26, the release machine's) defaults to the old native system, which writes
 # no .swiftconstvalues and no Intermediates.noindex — so intents-metadata.sh has nothing to read.
@@ -240,6 +248,30 @@ if [ "${TD_WITH_WIDGETS:-1}" = "1" ]; then
   "$HERE/Widgets/build-extension.sh" "$APP"
 fi
 
+# Warm SwiftPM products name their shared PackageFrameworks folder even for helpers
+# that link no package framework. Normalize every copied executable before signing:
+# the keeper's new stable requirement must be sealed around its final portable bytes.
+/usr/bin/python3 - "$APP" <<'TD_PORTABLE_LOAD_PATHS'
+from pathlib import Path
+import re, subprocess, sys
+app = Path(sys.argv[1]).resolve()
+for executable in (app / 'Contents/MacOS').iterdir():
+    if not executable.is_file() or executable.is_symlink():
+        continue
+    relative = str(executable.relative_to(app))
+    loads = subprocess.check_output(['otool', '-l', relative], cwd=app, text=True)
+    for rpath in re.findall(r'cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset', loads):
+        if rpath.startswith('/'):
+            subprocess.run(['install_name_tool', '-delete_rpath', rpath, str(executable)], check=True)
+    loads = subprocess.check_output(['otool', '-l', relative], cwd=app, text=True)
+    linked = subprocess.check_output(['otool', '-L', relative], cwd=app, text=True)
+    if '/Users/' in loads + linked:
+        raise SystemExit(f'error: copied executable retains a build-machine load path: {relative}')
+    names = re.findall(r'\n\s*(?:name|path) (.*?) \(offset', loads)
+    if any(name.startswith('/') and not name.startswith(('/System/', '/usr/lib/')) for name in names):
+        raise SystemExit(f'error: copied executable retains a non-system absolute load path: {relative}')
+TD_PORTABLE_LOAD_PATHS
+
 # Every file owner-writable before signing. Copies from SwiftPM checkouts (SwiftTerm's
 # LICENSE) arrive read-only (0444); a read-only file in the bundle makes Squirrel's
 # ShipIt fail the in-place update ("Couldn't remove quarantine attribute", 0.19.0).
@@ -256,6 +288,7 @@ elif [ "$IDENTITY" != "-" ]; then
     exit 1
   fi
 fi
+source "$HERE/../scripts/mac-privacy-signing.sh"
 SIGN=(codesign --force --options runtime --sign "$IDENTITY")
 if [ "$IDENTITY" = "-" ]; then
   echo "==> signing ad-hoc (no Developer ID), hardened runtime"
@@ -272,7 +305,11 @@ if [ "${TD_NATIVE_STANDALONE:-0}" = "1" ]; then
   # bundle is ours and signed here with the hardened runtime.
   "${SIGN[@]}" --entitlements "$HERE/JSCoreHelper.entitlements" "$APP/Contents/MacOS/TerminalDeckJSCorePluginHelper"
   "${SIGN[@]}" --entitlements "$ENTITLEMENTS" "$APP/Contents/MacOS/TerminalDeckNativeHelper"
-  "${SIGN[@]}" --entitlements "$ENTITLEMENTS" "$APP/Contents/MacOS/$SESSION_HOST_EXE"
+  # Pin the keeper to the containing app's identity namespace, never its filename or version.
+  PRIVACY_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+  # A scratch bundle must compile with TD_SESSION_HOST_INFO_PLIST naming its own identity.
+  python3 "$HERE/../scripts/mac-privacy-metadata.py" "$APP/Contents/MacOS/$SESSION_HOST_EXE" "$PRIVACY_APP_ID.session-host"
+  td_sign_privacy_helper "$APP/Contents/MacOS/$SESSION_HOST_EXE" "$PRIVACY_APP_ID.session-host" "$ENTITLEMENTS"
   if [ "${TD_APPLY_COMPILE_ONLY:-0}" != "1" ]; then codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/$SESSION_HOST_EXE"; fi
 fi
 for bundle in "$APP/Contents/Resources"/*.bundle; do

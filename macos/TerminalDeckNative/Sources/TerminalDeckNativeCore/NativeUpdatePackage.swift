@@ -138,7 +138,7 @@ public enum NativeUpdatePackage {
     }
 
     /// Start a detached helper while this app is alive; the helper acknowledges
-    /// its checks, then waits for normal termination before copying or moving.
+    /// startup, finishes its checks, then waits for normal termination before copying or moving.
     public static func armInstall(_ staged: NativeStagedUpdate, currentBundle: URL, executableName: String,
                                   helper: URL, relaunch: Bool) throws {
         let fm = FileManager.default
@@ -163,9 +163,9 @@ public enum NativeUpdatePackage {
         try fm.copyItem(at: helper, to: script)
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
         let marker = staged.directory.appendingPathComponent("helper-ready")
-        let cancelled = staged.directory.appendingPathComponent("helper-cancelled")
-        try? fm.removeItem(at: marker)
-        try? fm.removeItem(at: cancelled)
+        for name in ["helper-ready", "helper-cancelled", "helper-started", "helper-status", "helper-error"] {
+            try? fm.removeItem(at: staged.directory.appendingPathComponent(name))
+        }
         let log = staged.directory.appendingPathComponent("install.log")
         if !fm.fileExists(atPath: log.path) { fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let output = try FileHandle(forWritingTo: log)
@@ -183,17 +183,8 @@ public enum NativeUpdatePackage {
              "--ready", marker.path, "--relaunch", relaunch ? "1" : "0"],
             environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LC_ALL": "C"],
             input: .none, output: .descriptor(output.fileDescriptor), errors: .descriptor(output.fileDescriptor)))
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
-            if fm.fileExists(atPath: marker.path) { return }
-            if !child.isRunning { break }
-            usleep(25_000)
-        }
-        // Closing a failed acknowledgement leaves the app running. The helper
-        // has a finite wait and never kills the parent, even on this path.
-        try? Data().write(to: cancelled, options: .atomic)
-        child.terminate()
-        throw NativeUpdateFeed.Failure("The native update helper did not become ready. The app is still running; see \(log.path).")
+        try NativeUpdateHelperHandshake.wait(for: child, directory: staged.directory,
+                                             timeout: NativeUpdateHelperHandshake.checkLimit(archiveBytes: staged.release.size))
     }
 
     /// ditto, codesign and unzip through the standard runner, errors merged into the output. Ten minutes

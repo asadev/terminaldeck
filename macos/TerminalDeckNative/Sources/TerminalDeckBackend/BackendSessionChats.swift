@@ -22,6 +22,9 @@ public actor BackendSessionChats {
         let remote = BackendHOSTChatClient(client: client)
         hosted = remote
         try await remote.attach { [weak self] id, snapshot in await self?.hostChanged(id, snapshot) }
+        for job in remote.conversations() where job.interruptedAt != nil {
+            await publish(job.session.id, .object([.init("job", job.wire), .init("restartEvent", job.restartEvent)]))
+        }
     }
     public func adoptHostedSession(_ meta: BackendSessionMeta) async throws {
         guard meta.chat == true, let hosted else { throw BackendHOSTFailure.unavailable }
@@ -93,6 +96,8 @@ public actor BackendSessionChats {
         var draftRevision = 0
         /// A model or effort pick waits for the next message: the AI starts again with it, in the same conversation.
         var ready = false
+        /// A checked Resume reconnects first. Its caller then explicitly continues the cut-off turn.
+        var resumeWaiting = false
         var relaunch = false
         /// A 1M pick under the box ("opus[1m]") waits for its first answer: whether this account has the 1M window
         /// cannot be read beforehand, so a failed first answer puts the chat back on the same model without it.
@@ -124,10 +129,6 @@ public actor BackendSessionChats {
     private let manager: BackendPTYManager
     private let directory: URL
     private let publishOut: @Sendable (String, NativeRPCValue) async -> Void
-    /// 28 Oct (CPU, Asad: every terminal slow): what each chat last said about its unread messages, so the team-chat
-    /// list does not read every chat again (through the session helper, which loads a finished chat's whole history
-    /// from disk) each time it is drawn (`BackendChatUnreadCache`).
-    private var unread = BackendChatUnreadCache()
     private let noteConversation: @Sendable (String, String) async -> Void
     private var live: [String: Live] = [:]
     private var diaryCursors: [String: Int] = [:]
@@ -140,6 +141,16 @@ public actor BackendSessionChats {
     private var jobClosed: (@Sendable (String) async -> Void)?
     private var activeTaskJobs: Set<String> = []
     private var notifiedJobs: Set<String> = []
+    private var resumingJobs: Set<String> = []
+    private struct StarterWatch {
+        let fromID: String
+        let sessionID: String?
+        let continuation: AsyncStream<Void>.Continuation
+    }
+    private var starterWatches: [UUID: StarterWatch] = [:]
+    private var starterSequence = 0
+    private var starterSeatSequences: [String: Int] = [:]
+    private var starterSessionSequences: [String: Int] = [:]
     private var jobTurn: (@Sendable (String, Turn) async -> Void)?
     /// 22 Oct (Asad, "remove this 128 limit"): a finished team job leaves the session list once (the app closes it
     /// unless it is on screen); its record and history stay and `openJobHistory` brings it back on demand.
@@ -174,6 +185,15 @@ public actor BackendSessionChats {
             throw BackendSessionFailure.unsupported("Only Claude Code, Codex and Gemini can run as a chat.")
         }
         let id = hostLaunch?.id ?? UUID().uuidString.lowercased(), cwd = spawn.hostCwd ?? input.cwd, key = input.teamJob == nil ? (spawn.tabKey ?? id) : id
+        let resumeSource = input.teamJob?.resumedFromSessionID
+        let expectedConversation: String?
+        if let source = resumeSource {
+            guard !resumingJobs.contains(source) else { throw NativeRPCError(code: "busy", message: "This chat is already being resumed. Read its conversation entry for the new session.") }
+            resumingJobs.insert(source)
+            do { expectedConversation = try prepareResumeHistory(source, input: input, spawn: spawn, destinationKey: key) }
+            catch { resumingJobs.remove(source); throw error }
+        } else { expectedConversation = nil }
+        defer { if let resumeSource { resumingJobs.remove(resumeSource) } }
         let prepared = try manager.chatLaunch(id: id, spawn: spawn, cwd: cwd)
         // A phone's chat runs inside its device's folder boundary: `sandbox-exec -p <profile> <cli> <args…>`. The chat
         // mode's flags belong to the CLI (27 Oct, live: they went before `-p`, so sandbox-exec printed its usage and
@@ -193,6 +213,7 @@ public actor BackendSessionChats {
                             environment: prepared.environment, cwd: cwd, conversation: spawn.agentSessionId, sessionTools: input.teamJob != nil)
         recipe.preparedChat = hostLaunch?.preparedChat == true; recipe.setup = hostLaunch?.chatSetup; recipe.wrapper = cli.wrapper
         let item = Live(store: store, recipe: recipe, mirror: Mirror(), key: key, id: id)
+        item.resumeWaiting = resumeSource != nil
         // An explicit New chat mode must override inherited launch flags in both
         // the actual CLI arguments and the composer's reported choice.
         if let permission = chosenPermission { item.choices["permission"] = permission }
@@ -200,7 +221,13 @@ public actor BackendSessionChats {
         meta.chat = true
         if let job = input.teamJob {
             meta.title = job.sessionTitle
-            jobs[id] = BackendTeamChatRecord(session: meta, job: job, key: key)
+            var record = BackendTeamChatRecord(session: meta, job: job, key: key)
+            var savedInput = input
+            savedInput.teamJob?.resumedFromSessionID = nil
+            savedInput.agentSettings?.environment = [:]
+            savedInput.agentSettings?.hooks = []
+            record.resumeInput = savedInput
+            jobs[id] = record
             do { try saveJob(id) } catch { jobs[id] = nil; await store.stop(); throw error }
         }
         let mirror = item.mirror
@@ -216,7 +243,17 @@ public actor BackendSessionChats {
         } catch { await store.stop(); throw error }
         live[id] = item
         watch(id, item)
-        do { try await start(item, again: false); item.ready = true }
+        do {
+            try await start(item, again: resumeSource != nil)
+            if let expectedConversation, await store.cliSessionID != expectedConversation {
+                throw NativeRPCError(code: "resume-unavailable", message: "The AI could not reopen this saved conversation. Nothing was sent. Open its history, then start a new job with the saved brief.")
+            }
+            item.ready = true
+            if let source = resumeSource, var previous = jobs[source] {
+                previous.resumedBySessionID = id; jobs[source] = previous; try saveJob(source)
+                await publish(source, try await read(source, cursor: nil, limit: 1))
+            }
+        }
         catch {
             if input.teamJob != nil { try? await finishJob(id, result: error.localizedDescription, failed: true) }
             else { await close(id) }
@@ -232,6 +269,10 @@ public actor BackendSessionChats {
 
     private func start(_ item: Live, again: Bool) async throws {
         let cli = await item.store.cliSessionID, carrying = await item.store.handoverPending
+        if item.recipe.provider == .claude, let cli, await item.store.needsClaudeMessageIDs,
+           let ids = try? await BackendChatProviderCatalogue.claudeMessageIDs(environment: item.recipe.environment, cwd: item.recipe.cwd, conversation: cli) {
+            try await item.store.adoptClaudeMessageIDs(ids)
+        }
         var arguments = Self.withChoices(item.recipe.arguments, provider: item.recipe.provider, choices: item.choices)
         if let fast = item.choices["fastMode"].map({ $0 == "true" }) {
             arguments = try BackendSessionChatComposer.applyingFastMode(arguments, on: fast,
@@ -428,6 +469,11 @@ public actor BackendSessionChats {
             return try await BackendChatBackground.invoke(operation: operation, args: arguments, provider: item.recipe.provider, ownedTasks: owned, request: request)
         }
         if operation == "fork/create" || operation == "location/read" {
+            // Reject an unseedable exact boundary before the provider creates a new conversation.
+            if operation == "fork/create", let sequence = arguments["throughSequence"].number {
+                let prefix = try await item.store.forkPrefix(through: Int(sequence))
+                guard prefix.count <= 100_000 else { throw NativeRPCError.invalidArguments("This fork's visible history is too large to copy.") }
+            }
             let turns = await item.store.forkTurnIDs(), quiet = await item.store.isQuietForFeatures
             var isolatedFork: (@Sendable (NativeRPCValue) async throws -> NativeRPCValue)?
             if let launch = await item.store.providerLaunch {
@@ -436,7 +482,7 @@ public actor BackendSessionChats {
                 }
             }
             return try await BackendChatFork.invoke(operation: operation, args: arguments, provider: item.recipe.provider, conversation: conversation,
-                cwd: item.recipe.cwd, knownTurns: turns, quiet: quiet, request: request, isolatedFork: isolatedFork)
+                cwd: item.recipe.cwd, knownTurns: turns, quiet: quiet, request: request, isolatedFork: isolatedFork, knownMessages: await item.store.messageActionRows)
         }
         if operation.hasPrefix("catalogue/") || operation.hasPrefix("skills/") || operation.hasPrefix("instructions/") {
             let applied = await item.store.providerInstructionReceipt
@@ -510,22 +556,20 @@ public actor BackendSessionChats {
         return result
     }
 
-    /// Every change of a chat goes out here; the unread the list shows follows it (`BackendChatUnreadCache`).
     private func publish(_ id: String, _ snapshot: NativeRPCValue) async {
-        unread.noteChange(id, snapshot)
+        starterSequence += 1
+        if let job = conversation(id) {
+            starterSeatSequences[job.job.fromID] = starterSequence
+            if let sessionID = job.job.starterSessionID { starterSessionSequences[sessionID] = starterSequence }
+            for watch in starterWatches.values where Self.isStarter(job, fromID: watch.fromID, sessionID: watch.sessionID) {
+                watch.continuation.yield(())
+            }
+        }
         await publishOut(id, snapshot)
-    }
-    /// What the team-chat list shows for one chat's unread messages: remembered from its last read or change, read
-    /// (once) only when nothing is known since it last changed.
-    public func unreadEntry(_ id: String) async throws -> BackendChatUnreadCache.Entry {
-        if let known = unread.entry(id) { return known }
-        let snapshot = try await read(id, cursor: nil, limit: 1)
-        return .init(unread: snapshot["unread"], conversationID: snapshot["conversationId"])
     }
     public func read(_ id: String, cursor: Int?, limit: Int, seen: Int? = nil, conversation: String? = nil) async throws -> NativeRPCValue {
         if hosted?.owns(id) == true {
             let value = try await hosted!.call("read", id: id, fields: [.init("cursor", cursor.map { .number(Double($0)) } ?? .null), .init("limit", .number(Double(limit))), .init("seen", seen.map { .number(Double($0)) } ?? .null), .init("conversation", conversation.map(NativeRPCValue.string) ?? .null)])
-            unread.noteRead(id, value)
             return value
         }
         // 18 Oct (#424): a finished job's history is parsed once and kept in the small cache below.
@@ -533,7 +577,6 @@ public actor BackendSessionChats {
         if let seen { try await store.setSeenSequence(seen, conversation: conversation ?? store.conversationID) }
         let adopted = jobs[id]?.historyPath != nil
         var snapshot = Self.visibleJobSnapshot(await store.snapshot(after: cursor, limit: limit), adopted: adopted)
-        if adopted { snapshot = snapshot.setting("unread", await store.unreadSummary(showBackground: true)) }
         if let job = jobs[id] {
             snapshot = snapshot.setting("job", job.wire).setting("readOnly", .bool(job.isFinished))
             if job.isFinished { snapshot = snapshot.setting("alive", .bool(false)).setting("busy", .bool(false)).setting("pending", .array([])) }
@@ -543,8 +586,6 @@ public actor BackendSessionChats {
             if let chosen = item.choices["model"], !["default", "auto", ""].contains(chosen.lowercased().replacingOccurrences(of: "[1m]", with: "")) { snapshot = snapshot.setting("model", .string(chosen)) }
         }
         snapshot = BackendChatMedia.slim(snapshot)
-        if seen != nil { await publish(id, snapshot) }
-        unread.noteRead(id, snapshot)
         return snapshot
     }
     private func actionStore(_ id: String) throws -> BackendHootChatStore {
@@ -558,19 +599,42 @@ public actor BackendSessionChats {
         while historyOrder.count > Self.historyCacheLimit { historyActions[historyOrder.removeFirst()] = nil }
         historyActions[id] = store; return store
     }
-    private func forgetHistory(_ id: String) { historyActions[id] = nil; historyOrder.removeAll { $0 == id }; unread.forget(id) }
+    private func forgetHistory(_ id: String) { historyActions[id] = nil; historyOrder.removeAll { $0 == id } }
     public func rewind(_ id: String, sequence: Int?) async throws -> NativeRPCValue {
-        if hosted?.owns(id) == true { return try await hosted!.call(sequence == nil ? "undo-rewind" : "rewind", id: id, fields: [.init("sequence", sequence.map { .number(Double($0)) } ?? .null)]) }
+        if let hosted, hosted.owns(id) {
+            if let sequence {
+                let snapshot = try await hosted.call("read", id: id, fields: [.init("limit", .number(1))])
+                try BackendChatMessageActions.requireNativeRewind(snapshot, sequence: sequence)
+            }
+            return try await hosted.call(sequence == nil ? "undo-rewind" : "rewind", id: id, fields: [.init("sequence", sequence.map { .number(Double($0)) } ?? .null)])
+        }
         let store = try actionStore(id)
-        changingHistory.insert(id); live[id]?.ready = false
+        changingHistory.insert(id)
+        if sequence == nil || live[id]?.recipe.provider != .codex { live[id]?.ready = false }
         defer { changingHistory.remove(id) }
         let text: String
-        if let sequence { text = try await store.rewind(to: sequence).text }
+        if let sequence { text = try await store.rewindProvider(to: sequence).text }
         else { try await store.undoRewind(); text = "" }
         if jobs[id]?.isFinished != true, live[id] != nil { try await ensure(id) }
+        if sequence != nil { try await setDraft(id, text: text) }
         let snapshot = try await read(id, cursor: nil, limit: 500)
         await publish(id, snapshot)
         return .object([.init("text", .string(text)), .init("snapshot", snapshot)])
+    }
+    /// Only the trusted app/keeper link can copy a journal into a just-created fork.
+    public func seedFork(_ id: String, from parentID: String, through sequence: Int, worktree: BackendChatForkWorktree? = nil) async throws {
+        if hosted?.owns(id) == true {
+            let record = try worktree.map { try NativeRPCValue.parseJSON(JSONEncoder().encode($0)) } ?? .null
+            _ = try await hosted!.call("seed-fork", id: id, fields: [.init("parent", .string(parentID)), .init("sequence", .number(Double(sequence))), .init("worktree", record)])
+            return
+        }
+        let sessions = manager.list()
+        guard let parent = live[parentID], let target = live[id], parent.recipe.provider == target.recipe.provider,
+              let sourceMeta = sessions.first(where: { $0.id == parentID }), let targetMeta = sessions.first(where: { $0.id == id }) else {
+            throw NativeRPCError(code: "not-granted", message: "The source and destination Chats must still belong to this session owner.")
+        }
+        try await BackendChatForkHistory.seed(parent: sourceMeta, target: targetMeta, worktree: worktree,
+            through: sequence, source: parent.store, destination: target.store)
     }
     public func handoffPrompt(_ id: String, sequence: Int) async throws -> NativeRPCValue {
         if hosted?.owns(id) == true { return try await hosted!.call("handoff", id: id, fields: [.init("sequence", .number(Double(sequence)))]) }
@@ -909,21 +973,21 @@ public actor BackendSessionChats {
     }
     private func changed(_ id: String, _ item: Live, _ raw: NativeRPCValue) async {
         var snapshot = Self.visibleJobSnapshot(raw, adopted: item.externalRuntime != nil)
-        if item.externalRuntime != nil { snapshot = snapshot.setting("unread", await item.store.unreadSummary(showBackground: true)) }
         guard live[id] === item, !changingHistory.contains(id), !item.steering else { return }
-        let status: BackendSessionStatus = !(snapshot["pending"].elements ?? []).isEmpty ? .input : snapshot["busy"].bool == true ? .working : .idle
+        let status: BackendSessionStatus = !(snapshot["pending"].elements ?? []).isEmpty ? .input : ChatWorkingState.isActive(snapshot) ? .working : .idle
         if status != item.status { item.status = status; manager.chatStatus(id, status: status) }
         // The CLI's own conversation id (Codex and Gemini tell it once started; a carried conversation gets a new one).
         if let cli = await item.store.cliSessionID, cli != item.conversation {
             item.conversation = cli
             manager.setAgentSessionId(id, conversationId: cli)
             await noteConversation(id, cli)
+            if jobs[id] != nil { jobs[id]?.session.agentSessionId = cli; try? saveJob(id) }
         }
         item.mirror.set(text: Self.plainText(snapshot))
         item.mirror.set(pid: await item.store.processPID)
         if item.millionTrialTurn != nil { await checkMillionTrial(id, item, snapshot: snapshot) }
         await publish(id, draftSnapshot(snapshot, item).setting("readOnly", .bool(jobs[id]?.isFinished == true)))
-        if let job = jobs[id], !job.isFinished, finishing[id] == nil, !item.steering, !item.personStopped, item.queuedCount == 0 {
+        if let job = jobs[id], !job.isFinished, finishing[id] == nil, !item.steering, !item.personStopped, !item.resumeWaiting, item.queuedCount == 0 {
             do { try await captureDiary(id) }
             catch { await publish(id, snapshot.setting("problem", .string("Could not save this chat to the diary: " + error.localizedDescription))) }
             let turn = await turnOfStore(item, snapshot: snapshot)
@@ -1034,6 +1098,50 @@ public actor BackendSessionChats {
             (state == nil || (row.isFinished ? "finished" : "open") == state)
         }.sorted { $0.session.createdAt > $1.session.createdAt }
     }
+    private static func isStarter(_ record: BackendTeamChatRecord, fromID: String, sessionID: String?) -> Bool {
+        // A profile can start again under a new process after a reboot. Its persisted seat identity
+        // still owns its jobs; a session identity also works when the profile changed presentation.
+        record.job.fromID == fromID || (sessionID != nil && record.job.starterSessionID == sessionID)
+    }
+    private func sequenceForStarter(fromID: String, sessionID: String?) -> Int {
+        max(starterSeatSequences[fromID] ?? 0, sessionID.flatMap { starterSessionSequences[$0] } ?? 0)
+    }
+    /// Durable restart notices plus the current questions, for the seat that started these jobs.
+    /// The caller still filters every event through its project grants before returning it through MCP.
+    /// Waiting uses the existing chat change stream, never a timer that rereads all histories.
+    public func starterEvents(fromID: String, starterSessionID: String? = nil, after: Int? = nil,
+                              timeout: Duration = .zero) async throws -> NativeRPCValue {
+        if after == sequenceForStarter(fromID: fromID, sessionID: starterSessionID), timeout > .zero {
+            let token = UUID(), pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            starterWatches[token] = .init(fromID: fromID, sessionID: starterSessionID, continuation: pair.continuation)
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { for await _ in pair.stream { return } }
+                group.addTask { try? await Task.sleep(for: min(timeout, .seconds(60))) }
+                _ = await group.next(); group.cancelAll()
+            }
+            starterWatches.removeValue(forKey: token)?.continuation.finish()
+        }
+        var events: [NativeRPCValue] = []
+        for job in conversations() where Self.isStarter(job, fromID: fromID, sessionID: starterSessionID) {
+            let meta = try NativeRPCValue.parseJSON(JSONEncoder().encode(job.session))
+            if job.interruptedAt != nil {
+                events.append(job.restartEvent.setting("eventId", .string("restart:" + job.session.id)).setting("session", meta))
+            }
+            guard !job.isFinished else { continue }
+            let snapshot = try await read(job.session.id, cursor: nil, limit: 1)
+            for request in snapshot["pending"].elements ?? [] {
+                guard let requestID = request["requestId"].string else { continue }
+                let answer = NativeRPCValue.object([.init("tool", .string("sessions_conversations")), .init("do", .string("answer")),
+                    .init("sessionId", .string(job.session.id)), .init("request", .string(requestID))])
+                events.append(.object([.init("eventId", .string("question:" + job.session.id + ":" + requestID)),
+                    .init("kind", .string("needs-permission")), .init("sessionId", .string(job.session.id)), .init("session", meta),
+                    .init("starterSessionId", job.job.starterSessionID.map(NativeRPCValue.string) ?? .null),
+                    .init("starter", .string(job.job.fromID)), .init("request", request), .init("answer", answer)]))
+            }
+        }
+        return .object([.init("events", .array(events)),
+            .init("sequence", .number(Double(sequenceForStarter(fromID: fromID, sessionID: starterSessionID))))])
+    }
     private func captureDiary(_ id: String) async throws {
         guard let job = jobs[id], let item = live[id] else { return }
         var cursor = diaryCursors[id] ?? 0
@@ -1059,8 +1167,80 @@ public actor BackendSessionChats {
         try JSONEncoder().encode(job).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
+    /// Read by the checked Resume action only; the ordinary launcher rechecks the saved agent, account,
+    /// folders and current tool grants. No old executable, environment or lease is replayed.
+    public func jobResumeInput(_ id: String) async throws -> BackendCreateSessionInput {
+        if let hosted, hosted.owns(id) {
+            return try JSONDecoder().decode(BackendCreateSessionInput.self, from: await hosted.call("resume-input", id: id).encodedJSON())
+        }
+        guard let job = jobs[id] else { throw BackendSessionFailure.missingSession }
+        guard job.canResume else {
+            if let resumed = job.resumedBySessionID { throw NativeRPCError.invalidArguments("This chat was already resumed. Use session " + resumed + ".") }
+            throw NativeRPCError.invalidArguments("Only a chat ended by a restart can Resume. Start a new conversation for new work.")
+        }
+        let conversation = try resumeConversation(job)
+        var input = job.resumeInput ?? BackendCreateSessionInput(cwd: job.session.cwd, provider: job.session.provider)
+        // Older records kept metadata and history but not launch input. The saved agent is resolved afresh
+        // by the normal launcher; an unavailable profile is a refusal, never an unrestricted substitute.
+        if job.resumeInput == nil, !BackendCreateSessionInput.chatProviders.contains(job.job.agentID) {
+            input.agentProfileID = job.job.agentID
+        }
+        input.cwd = job.session.cwd; input.projectId = job.session.projectId; input.provider = job.session.provider
+        input.profileId = job.session.profileId; input.homeProfileId = job.session.homeProfileId
+        input.resume = true; input.resumeConversationId = conversation; input.forkSession = nil
+        input.chat = true; input.replaces = nil; input.tabKey = nil
+        input.permissionMode = BackendTAGLaunchArguments.newSessionPermission(provider: job.session.provider)
+        input.agentSettings?.permissionMode = input.permissionMode
+        input.teamJob = job.job; input.teamJob?.resumedFromSessionID = id
+        return input
+    }
+    /// The explicit Resume action has already passed the starter's act gate and reopened the provider thread.
+    /// Continue only the saved unfinished turn; an idle kept-open chat simply becomes ready for a follow-up.
+    public func continueResumedJob(_ id: String) async throws -> NativeRPCValue {
+        if let hosted, hosted.owns(id) { return try await hosted.call("resume-continue", id: id) }
+        guard let item = live[id], item.resumeWaiting, jobs[id]?.job.resumedFromSessionID != nil else {
+            throw NativeRPCError.invalidArguments("This chat has no pending restart continuation.")
+        }
+        if let cut = await item.store.takeContinuation() {
+            try await item.store.continueCutOff(turn: cut.turn, text: cut.text)
+        }
+        item.resumeWaiting = false
+        return try await read(id, cursor: nil, limit: 500)
+    }
+    private func resumeConversation(_ job: BackendTeamChatRecord) throws -> String {
+        guard let provider = HootChatProvider(rawValue: job.session.provider) else { throw BackendSessionFailure.missingSession }
+        let file = Self.historyFile(Self.tabFolder(directory, key: job.key), provider: provider)
+        let history = try BackendHootChatStore.readHistory(file: file, provider: provider, retainAllHistory: true)
+        guard let conversation = history.sessionID, !conversation.isEmpty else {
+            throw NativeRPCError(code: "resume-unavailable", message: "This chat did not save an AI conversation to resume. Open its history and start the saved agent again with the last brief.")
+        }
+        return conversation
+    }
+    private func prepareResumeHistory(_ id: String, input: BackendCreateSessionInput, spawn: BackendSpawnSpec, destinationKey: String) throws -> String {
+        guard let job = jobs[id], job.canResume,
+              input.cwd == job.session.cwd, spawn.provider == job.session.provider,
+              spawn.profile?.id == job.session.profileId, spawn.homeProfileId == job.session.homeProfileId else {
+            throw NativeRPCError.invalidArguments("Resume must use the saved chat's AI, account and project folder. Start a new conversation to change them.")
+        }
+        let conversation = try resumeConversation(job)
+        guard input.resume == true, input.resumeConversationId == conversation else {
+            throw NativeRPCError.invalidArguments("Resume must reopen the saved AI conversation.")
+        }
+        let provider = HootChatProvider(rawValue: job.session.provider)!
+        let source = Self.tabFolder(directory, key: job.key), destination = Self.tabFolder(directory, key: destinationKey)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw NativeRPCError.invalidArguments("The resumed chat's history folder already exists. No session was started.")
+        }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        do {
+            try FileManager.default.copyItem(at: Self.historyFile(source, provider: provider), to: Self.historyFile(destination, provider: provider))
+            let media = source.appendingPathComponent("media", isDirectory: true)
+            if FileManager.default.fileExists(atPath: media.path) { try FileManager.default.copyItem(at: media, to: destination.appendingPathComponent("media", isDirectory: true)) }
+        } catch { try? FileManager.default.removeItem(at: destination); throw error }
+        return conversation
+    }
     /// Called at startup. Only the small job records are loaded; conversations are read when opened.
-    /// An app exit closes unfinished jobs too. Nothing starts a CLI during history restoration.
+    /// A machine restart ends processes, but keeps unfinished conversations resumable. No CLI starts here.
     /// 21 Oct (Asad): a finished job is NOT put on the bar at startup; it stays in the Agents page's chat list
     /// and is registered as a chat only when the person opens it (`openJobHistory`). Registering all of them
     /// (114 that morning) opened a tab per finished task and froze the app at launch.
@@ -1076,13 +1256,17 @@ public actor BackendSessionChats {
                 NSLog("[chats] a saved chat record could not be read and was skipped: %@", folder.lastPathComponent); continue
             }
             if job.historyPath != nil { continue }
-            if !job.isFinished {
-                job.finishedAt = Date(); job.failed = true; job.result = "The app closed before this job finished"
+            if !job.isFinished || job.result == "The app closed before this job finished" {
+                job.interruptedAt = job.interruptedAt ?? job.finishedAt ?? Date()
+                job.finishedAt = job.finishedAt ?? job.interruptedAt; job.failed = true; job.result = "Ended by restart — Resume"
                 job.session.exitCode = 1
             }
             jobs[job.session.id] = job
             do { try saveJob(job.session.id) }
             catch { NSLog("[chats] a saved chat record could not be restored: %@", error.localizedDescription) }
+            if job.interruptedAt != nil {
+                await publish(job.session.id, .object([.init("job", job.wire), .init("restartEvent", job.restartEvent)]))
+            }
         }
     }
     @discardableResult
@@ -1380,7 +1564,8 @@ public actor BackendSessionChats {
                 if permission != "default" { args += ["--permission-mode", permission] }
             case .codex:
                 drop(["--sandbox", "-s", "--ask-for-approval", "-a"])
-                if permission != "default" { args += ["--sandbox", permission, "--ask-for-approval", "on-request"] }
+                if permission == "default" { args += ["--ask-for-approval", "on-request"] }
+                else { args += ["--sandbox", permission, "--ask-for-approval", permission == "danger-full-access" ? "never" : "on-request"] }
             case .gemini:
                 drop(["--yolo", "-y"], pair: false); drop(["--approval-mode"])
                 if permission == "yolo" { args += ["--yolo"] } else if permission != "default" { args += ["--approval-mode", permission] }
@@ -1637,7 +1822,8 @@ public actor BackendSessionChats {
         var result: [String] = [], index = 0
         while index < arguments.count {
             let flag = arguments[index]
-            if ["--session-id", "--resume", "-r"].contains(flag) { index += 2; continue }
+            if flag.hasPrefix("--resume-session-at=") { index += 1; continue }
+            if ["--session-id", "--resume", "-r", "--resume-session-at"].contains(flag) { index += 2; continue }
             if ["--continue", "-c", "--fork-session"].contains(flag) { index += 1; continue }
             result.append(flag); index += 1
         }

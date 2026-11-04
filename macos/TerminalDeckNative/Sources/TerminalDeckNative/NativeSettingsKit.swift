@@ -58,6 +58,7 @@ enum NativeSettingsNavigation {
         .init(id: "tasks", title: "Tasks", symbol: "checklist", tint: .orange, group: 2, description: "Connected task systems."),
         .init(id: "features", title: "Voice", symbol: "mic", tint: .pink, group: 2, description: "Turn your voice into text."),
         .init(id: "plugins", title: "Plugins", symbol: "puzzlepiece.extension", tint: .purple, group: 2, description: "Tools you add yourself."),
+        .init(id: "privacy", title: "Privacy", symbol: "hand.raised", tint: .blue, group: 3, description: "Mac permissions and old helper entries."),
         .init(id: "advanced", title: "Advanced", symbol: "bolt", tint: .gray, group: 3, description: "Help with problems and starting over."),
         .init(id: "help", title: "About", symbol: "info.circle", tint: .gray, group: 3, description: "Version, links and help topics."),
     ]

@@ -79,7 +79,7 @@ public enum BackendDeckCoreBrowserMetadata {
     "id": "browser.page",
     "wire": "browser_page",
     "title": "A browser window’s toolbar",
-    "index": "One window’s toolbar: navigate, back, reload, zoom, find, print, user agent, recorder, screenshot."
+    "index": "One window’s page: back, reload, waits (network idle, URL, element, download), run a script, page dialogs, console, request log and HAR, block/mock/offline, emulation, storage, collect across pages; toolbar zoom, find, print, user agent, recorder."
   },
   {
     "module": "browser-network-tool",

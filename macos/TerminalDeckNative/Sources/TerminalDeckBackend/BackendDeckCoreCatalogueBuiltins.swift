@@ -77,7 +77,7 @@ public enum BackendDeckCoreCatalogueBuiltins {
         guard known.contains(path) else { throw BackendDeckCoreSecurityRefusal(.notPermitted, "\(path) is not a folder this app has open. Use projects.list to see the folders you can ask about.") }
         return path
     }
-    static func requireExistingFolder(_ path: String) throws {
+    public static func requireExistingFolder(_ path: String) throws {
         var directory: ObjCBool = false
         guard !path.contains("\0"), FileManager.default.fileExists(atPath: path, isDirectory: &directory) else {
             throw NativeRPCError.invalidArguments("that folder doesn't exist: \(path)")
@@ -119,17 +119,24 @@ public enum BackendDeckCoreCatalogueBuiltins {
         if (cwd == root || cwd.hasPrefix(prefix)) && !surface.taskWorkspaceFolders().contains(cwd) {
             throw BackendDeckCoreSecurityRefusal(.notPermitted, "\(cwd) is inside this app's own storage (\(root)). A session started there would be editing the app's state from underneath it. Start it in one of the project folders instead.")
         }
-        let sessions = surface.listSessions()
-        if let clash = sessions.first(where: { $0["cwd"].string == cwd && $0["exitCode"] == .null && context.startedByCopilot($0["id"].string ?? "") }) {
-            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have a session running in \(cwd) (\(clash["id"].string ?? "")). This guard prevents two of your agents editing the same working folder. projectId independent changes where the session is listed; it does not give it a separate folder. Use the existing session, wait for it to finish, or start the other job in a separate git worktree added through projects_add. Stop the existing session only if you mean to end its work.")
-        }
-        let live = sessions.filter { $0["exitCode"] == .null && context.startedByCopilot($0["id"].string ?? "") }
-        guard live.count < maxCopilotSessions else {
-            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have \(live.count) sessions running, which is the limit. Past about five, the work comes back faster than anybody can review it. Wait for one to finish, or stop one.")
-        }
+        try requireStartRoom(cwd: cwd, sessions: surface.listSessions(), startedByCaller: context.startedByCopilot)
         _ = try checkBrief(args)
         if surface.hasAsyncAccountChoices { _ = try Rules.optionalString(args, "account") }
         else { _ = try chooseAccount(surface: surface, arguments: args) }
+    }
+    /// All AI start tools keep the same overlapping-work and live-session limits.
+    public static func requireStartRoom(cwd: String, sessions: [NativeRPCValue], startedByCaller: (String) -> Bool) throws {
+        if let clash = sessions.first(where: { row in
+            guard let folder = row["cwd"].string else { return false }
+            return BackendAgentProjectAccess.within(cwd, folder) && BackendAgentProjectAccess.within(folder, cwd)
+                && row["exitCode"] == .null && startedByCaller(row["id"].string ?? "")
+        }) {
+            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have a session running in \(cwd) (\(clash["id"].string ?? "")). This guard prevents two of your agents editing the same working folder. projectId independent changes where the session is listed; it does not give it a separate folder. Use the existing session, wait for it to finish, or start the other job in a separate git worktree added through projects_add. Stop the existing session only if you mean to end its work.")
+        }
+        let live = sessions.filter { $0["exitCode"] == .null && startedByCaller($0["id"].string ?? "") }
+        guard live.count < maxCopilotSessions else {
+            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have \(live.count) sessions running, which is the limit. Past about five, the work comes back faster than anybody can review it. Wait for one to finish, or stop one.")
+        }
     }
     public static func checkBrief(_ args: NativeRPCValue) throws -> String? {
         guard let brief = try Rules.optionalString(args, "brief") else { return nil }

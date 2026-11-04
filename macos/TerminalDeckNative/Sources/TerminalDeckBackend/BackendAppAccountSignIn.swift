@@ -15,10 +15,13 @@ public struct BackendAppAccountSignInReport: Sendable, Equatable {
     public let detail: String
     public let command: String
     public let checkedAt: Double
+    /// 4 Nov: a signed-out login's last address, as the AI itself still remembers it ("Last signed in here as …").
+    public var remembered: String? = nil
     public var wireValue: NativeRPCValue {
-        .object([.init("profileId", .string(profileId)), .init("provider", .string(provider)), .init("state", .string(state)),
+        let value = NativeRPCValue.object([.init("profileId", .string(profileId)), .init("provider", .string(provider)), .init("state", .string(state)),
             .init("account", account.map(NativeRPCValue.string) ?? .null), .init("plan", plan.map(NativeRPCValue.string) ?? .null),
             .init("detail", .string(detail)), .init("command", .string(command)), .init("checkedAt", .number(checkedAt))])
+        return remembered.map { value.setting("remembered", .string($0)) } ?? value
     }
 }
 public struct BackendAppAccountGeminiSignIn: Sendable, Equatable {
@@ -263,7 +266,10 @@ public actor BackendAppAccountSignInService {
             }
             let env = try await probeEnvironment(profile, provider: provider, path: path)
             let probe = await executor.run(runnable, arguments: args, environment: env, cwd: configuration.homeDirectory.path, timeoutMilliseconds: 10_000, maximumBytes: 256 * 1024)
-            let result = BackendAppAccountSignInParsing.report(profileID: profile.id, provider: provider, command: command, probe: probe, now: clock.now().timeIntervalSince1970 * 1000)
+            var result = BackendAppAccountSignInParsing.report(profileID: profile.id, provider: provider, command: command, probe: probe, now: clock.now().timeIntervalSince1970 * 1000)
+            if result.state == "signed-out", provider == "claude" {
+                result.remembered = BackendAccountTidy.rememberedEmail(readJSON(BackendAccountTidy.claudeStateFile(configDir: env["CLAUDE_CONFIG_DIR"], home: configuration.homeDirectory)))
+            }
             cache[key] = result; return result
         } catch { return unknown(profile, provider: provider, detail: error.localizedDescription) }
     }
@@ -315,28 +321,36 @@ public actor BackendAppAccountSignInService {
             try authorize(context)
             guard !id.isEmpty, let profile = try await dependencies.find(id) else { throw BackendAppSessionError("There is no such account on this computer any more.") }
             let provider = profile.provider
+            let options = args.count > 1 ? args[1] : .null
             // 11 Oct (Asad's Mac: Claude Code back on its first-run screen, its login changed): the app
-            // runs an AI's sign-in ONLY for an account that lives in a folder the app itself made.
-            // Never for this Mac's own login, and never for an account pointed at a folder he already
-            // had (~/.claude included): there the command would act on the Mac's own install.
-            guard !profile.system, await dependencies.managed(profile) else {
+            // runs an AI's sign-in ONLY for an account that lives in a folder the app itself made, and
+            // never on its own for this Mac's own login or a folder he already had (~/.claude included).
+            // 4 Nov (Asad: Sign in on this Mac's own login "opens a new chat session instead of taking me
+            // somewhere where I can sign in"): this Mac's own login is signed in here only when the person
+            // pressed its Sign in and confirmed that it is the Mac's own login (`ownLogin`), and only in
+            // the AI's own folder for it (BackendAccountOwnLogin.pinned).
+            let ownLogin = profile.system && options["ownLogin"].bool == true
+            let appFolder = profile.system ? false : await dependencies.managed(profile)
+            guard ownLogin || appFolder else {
                 let label = BackendAccountProfile.providerLabel(provider)
                 throw BackendAppSessionError(profile.system
-                    ? "This is this Mac’s own \(label) login. Terminal Deck never signs it in for you: sign in inside \(label) itself."
+                    ? "This is this Mac’s own \(label) login. Press Sign in on its row in Settings › Coding AIs to sign it in."
                     : "This account uses a folder of your own, so Terminal Deck does not sign it in for you: sign in inside \(label) itself.")
             }
             guard var arguments = BackendAccountStrategies.strategy(provider)?.signInArgs else {
                 throw BackendAppSessionError(BackendAccountProfile.providerLabel(provider) + " signs in inside a session. Use Sign in on its row.")
             }
-            let options = args.count > 1 ? args[1] : .null
             if provider == "claude", let email = BackendAppAccountSignInParsing.text(options["email"]), email.utf8.count <= 254,
                email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil { arguments += ["--email", email] }
             let path = try await dependencies.loginPath(), binary = await dependencies.binary(provider, path: path, refresh: true)
             guard let runnable = binary.runnable else { throw BackendAppSessionError(Self.binaryProblem(binary)) }
-            let env = try await probeEnvironment(profile, provider: provider, path: path)
+            var env = try await probeEnvironment(profile, provider: provider, path: path)
+            // This Mac's own login signs in as itself: no token or API key from the app's surroundings rides along.
+            if ownLogin { for name in BackendAccountOwnLogin.overrides { env[name] = nil } }
             // Started only when the command is pinned to this account's own folder.
-            guard let key = BackendAccountStrategies.strategy(provider)?.configEnv, let folder = env[key], !profile.configDir.isEmpty,
-                  URL(fileURLWithPath: folder).standardizedFileURL.path == URL(fileURLWithPath: profile.configDir).standardizedFileURL.path else {
+            guard let key = BackendAccountStrategies.strategy(provider)?.configEnv, !profile.configDir.isEmpty,
+                  ownLogin ? BackendAccountOwnLogin.pinned(profile, environment: env, key: key, home: configuration.homeDirectory)
+                           : env[key].map({ URL(fileURLWithPath: $0).standardizedFileURL.path == URL(fileURLWithPath: profile.configDir).standardizedFileURL.path }) == true else {
                 throw BackendAppSessionError("The sign-in was not started: this account’s own folder could not be set for it.")
             }
             return try await flows.begin(profile: profile, provider: provider, runnable: runnable, arguments: arguments,

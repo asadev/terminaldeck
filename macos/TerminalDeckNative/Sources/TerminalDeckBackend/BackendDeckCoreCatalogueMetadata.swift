@@ -112,9 +112,9 @@ public enum BackendDeckCoreCatalogueDescribe {
         .init(id: "knowledge", covers: "what is known about a project and how sure: verified results, claims, decisions, constraints, architecture, what is stale or in conflict — and recording or replacing it", prefixes: ["knowledge"]),
         .init(id: "devices", covers: "iOS Simulators, Android emulators and USB Android phones on this Mac: list, start, shut down, restart, rename, erase or delete, see, tap, swipe, type, buttons, the elements on screen, and what a person marked with Annotate", prefixes: ["devices", "simulators"]),
         .init(id: "memory", covers: "your own memory notes — the ones your agent keeps and reads at the start — searched and read, with their links", prefixes: ["memory"]),
-        .init(id: "app", covers: "this app itself: version, logs, diagnostics, updates, settings, notifications, Hoot, clicks in its window, sessions in windows of their own and the monitors, opening links, access requests, and what this tool server covers", prefixes: ["app", "settings", "updates", "notifications", "hoot", "ui", "windows", "links", "tools", "access"])
+        .init(id: "app", covers: "this app itself: version, logs, diagnostics, updates, settings, notifications, Hoot, clicks in its window, sessions in windows of their own and the monitors, opening links, access requests, and what this tool server covers", prefixes: ["app", "settings", "updates", "notifications", "hoot", "ui", "windows", "links", "tools", "access", "privacy"])
     ]
-    public static let description = "Get the full schema for one of the tools listed below. They are real tools you can call; their arguments are fetched here rather than sent on every turn. Ask for the ones you need, then call them."
+    public static let description = "Call with no arguments to list tool areas, with an area to list its available tools, or with tool names to get their full arguments. Get the full schema for one of the tools listed below. They are real tools you can call; their arguments are fetched here rather than sent on every turn. Ask for the ones you need, then call them."
     public static let areaDescription = "Most of this server’s tools are held back to keep this list short, grouped into the areas below. Call this with an area to list what it has, then with the tool names you want to get their arguments, then call them."
     public static func areaOf(_ id: String) -> String {
         let prefix = id.split(separator: ".", maxSplits: 1).first.map(String.init) ?? id
@@ -179,7 +179,18 @@ public enum BackendDeckCoreCatalogueDescribe {
     }
     public static func answer(_ args: NativeRPCValue, catalogue: [BackendDeckCoreCatalogueMetadata], granted: Set<String>?, caller: BackendDeckCoreSecurityCaller) throws -> BackendDeckCoreSecurityToolOutput {
         let names = names(args), area = requestedArea(args)
-        guard !names.isEmpty || area != nil else { throw BackendDeckCoreSecurityRefusal(.notPermitted, "name an area to see what it has, or tools to get their arguments") }
+        if names.isEmpty, area == nil {
+            let available = catalogue.compactMap { $0.asListed(keyCaller: caller.kind == .key) }
+                .filter { $0.tool.id != id && $0.visible(to: granted, caller: caller) }
+            let overview = areas.map { area in
+                BackendDeckCoreCatalogueRules.object([
+                    ("area", .string(area.id)), ("covers", .string(area.covers)),
+                    ("tools", .number(Double(available.filter { areaOf($0.tool.id) == area.id }.count)))
+                ])
+            }
+            return .init(value: .object([.init("areas", .array(overview))]),
+                         summary: .object([.init("areas", .number(Double(overview.count)))]))
+        }
         guard names.count <= maxNames else { throw BackendDeckCoreSecurityRefusal(.notPermitted, "describe at most \(maxNames) tools in one call") }
         var answer = NativeRPCValue.object([]), unknown: [String] = [], described: [NativeRPCValue] = [], heldCount = 0
         if let area {
@@ -187,7 +198,13 @@ public enum BackendDeckCoreCatalogueDescribe {
                 $0.tool.id != id && areaOf($0.tool.id) == area && $0.visible(to: granted, caller: caller)
             }
             if inside.isEmpty {
-                if area == "agents", caller.kind == .key, !caller.tasks,
+                if area == "sessions", caller.kind == .session {
+                    answer = BackendDeckCoreCatalogueRules.object([
+                        ("area", .string(area)), ("covers", .string(covers(area))),
+                        ("held", .array([])), ("alreadyListed", .array([])),
+                        ("note", .string("This session has no granted session tools. Ask the owner to open this saved agent’s settings → Tools, check ‘Allow only these tools’ / ‘Allowed tools’ and ‘Tools it must not use’, and allow the needed deck-control tools (mcp__deck-control__sessions_conversations, mcp__deck-control__sessions_start_agent or mcp__deck-control__sessions_chat). Then start a new session so it receives the updated grant. These settings cannot grant tools beyond the seat’s access."))
+                    ])
+                } else if area == "agents", caller.kind == .key, !caller.tasks,
                    catalogue.contains(where: { $0.keyGrant == "tasks" && areaOf($0.tool.id) == "agents" && $0.asListed(keyCaller: true) != nil }) {
                     answer = BackendDeckCoreCatalogueRules.object([("area", .string(area)), ("covers", .string(covers(area))), ("held", .array([])), ("alreadyListed", .array([]))])
                 } else { unknown.append("no area called \(area)") }

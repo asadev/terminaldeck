@@ -239,6 +239,13 @@ final class NativeCompositionINT2HOSTManaged {
         controls = try await BackendHOSTProfileScope.withContext(context) {
             try await BackendHOSTFrontendResources.makeControls(client: active, app: app, manager: manager)
         }
+        // 4 Nov: the launch tidy of account names, through this session host's own list and rename (an older host
+        // knows both), so an account that only carried another login's name stops hiding from the list.
+        Task.detached(priority: .utility) {
+            _ = await BackendHOSTProfileScope.withContext(context) {
+                await appSignIn.tidy(context: context) { line in Task { @MainActor in AppModel.shared.engine.log.note(line) } }
+            }
+        }
         let parts = try await BackendHOSTAccountSessionParts(managedClient: active, configuration: owner.configuration,
             app: app, externalPID: { manager.pidOf($0) }, profileContext: { try BackendHOSTProfileScope.requireCurrent() })
         let ordinary = try await BackendHOSTToolLeaseProxy(client: active)

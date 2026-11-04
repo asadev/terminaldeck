@@ -7,7 +7,7 @@ import TerminalDeckBackend
 
 /// Hoot's chat (the page and the island share NativeHootChat) opens at the latest message,
 /// stays pinned while replies arrive, and leaves a person who scrolled up where they are,
-/// with a "New messages" button. Hosted in a real but never-shown window (not ordered on
+/// without a separate new-message mode. Hosted in a real but never-shown window (not ordered on
 /// screen, no activation); no app, engine or AI.
 @MainActor final class L6HootScrollTests: XCTestCase {
     private static let conversation = "L6-scroll"

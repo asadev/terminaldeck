@@ -62,7 +62,9 @@ PY
     -Xfrontend -const-gather-protocols-file -Xfrontend "$OBJ/protocols.json" \
     "${SOURCES[@]}" > "$OBJ/extract.log" 2>&1 || { tail -20 "$OBJ/extract.log" >&2; exit 1; }
 else
-  LIST="$(find "$SCRATCH/out/Intermediates.noindex" -path "*/Release/*" -name "$MODULE.SwiftFileList" -print 2>/dev/null | head -1)"
+  CONFIGURATION="${TD_BUILD_CONFIGURATION:-Release}"
+  case "$CONFIGURATION" in Release|Debug) ;; *) echo 'error: unsupported App Intents build configuration' >&2; exit 1 ;; esac
+  LIST="$(find "$SCRATCH/out/Intermediates.noindex" -path "*/$CONFIGURATION/*" -name "$MODULE.SwiftFileList" -print 2>/dev/null | head -1)"
 fi
 [ -n "$LIST" ] || { echo "error: no $MODULE.SwiftFileList under $SCRATCH/out (release build missing?)" >&2; exit 1; }
 OBJ="$(dirname "$LIST")"

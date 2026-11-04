@@ -103,6 +103,7 @@ public struct BackendCreateSessionInput: Codable, Equatable, Sendable {
     /// F38: resume the named conversation as a FORK (Claude `--fork-session`): a new conversation with its own ID that
     /// starts as a copy. Only meaningful with `resume` and `resumeConversationId`.
     public var forkSession: Bool?
+    public var resumeSessionAt: String?
     public var pickConversation: Bool?
     public var model: String?
     /// The thinking level for this session (the CLI's own word). Set by the playbook when Hoot starts a session.

@@ -160,16 +160,27 @@ public actor BackendRemoteGuest {
             capabilities = Set(value["capabilities"].elements?.compactMap(\.string) ?? [])
             copilot = value["hoot"] == .missing ? .null : value["hoot"]
             platform = value["hostPlatform"].string ?? ""; version = value["appVersion"].string ?? ""; hostKind = value["hostKind"].string
-            hostName = value["hostName"].string.flatMap { $0.isEmpty ? nil : $0 } ?? "that computer"
+            hostName = value["hostName"].string.flatMap { $0.isEmpty ? nil : $0 } ?? (hostKind == "headless" ? "your server" : "that computer")
+            if hostKind == "headless", !capabilities.contains(BackendRemoteHost.linkCapability), !capabilities.contains(BackendRemoteHost.linkOnlyCapability) {
+                await drop("Update the host on your server to connect directly.", reconnect: false)
+                return
+            }
+            let binding = await channel?.binding
+            if hostKind == "headless", Self.answerer == nil || binding == nil {
+                await drop(Self.unreachable(hostName), reconnect: false)
+                return
+            }
             // A host that offers the link (§1): everything from here on waits for it; one that does not (older than
-            // 0.20.3) keeps today's relay connection (§11.5).
-            if stage == .none, capabilities.contains(BackendRemoteHost.linkCapability), Self.answerer != nil, await channel?.binding != nil {
+            // 0.20.3) keeps today's relay connection (§11.5). Servers always require the link.
+            if stage == .none, capabilities.contains(BackendRemoteHost.linkCapability) || capabilities.contains(BackendRemoteHost.linkOnlyCapability), Self.answerer != nil, binding != nil {
                 stage = .awaiting
                 hostOnly = capabilities.contains(BackendRemoteHost.linkOnlyCapability)
                 linkTimer?.cancel()
-                linkTimer = Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(Self.offerWaitMs))
-                    await self?.linkDeadline(epoch, stage: .awaiting)
+                if capabilities.contains(BackendRemoteHost.linkCapability) {
+                    linkTimer = Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(Self.offerWaitMs))
+                        await self?.linkDeadline(epoch, stage: .awaiting)
+                    }
                 }
             }
             await onWelcome(platform)

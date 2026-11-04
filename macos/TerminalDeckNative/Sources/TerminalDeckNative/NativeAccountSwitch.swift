@@ -160,15 +160,24 @@ final class NativeAccountSwitcher {
             if let provider, !provider.isEmpty { input["provider"] = provider }
             do {
                 let raw = try await EngineBridge.shared.invoke("session:create", [input], timeout: 10)
-                guard let id = (raw as? [String: Any])?["id"] as? String, !id.isEmpty else {
+                guard Self.openCreatedSession(raw, created: AppModel.shared.buttonActions.created,
+                                             select: AppModel.shared.selectTab) else {
                     problem = Problem(owner: owner, text: "The new session did not start. Check the sessions list before trying again.")
                     return
                 }
-                AppModel.shared.selectTab(id)
             } catch {
                 problem = Problem(owner: owner, text: "The new session did not start: " + Self.plain(error))
             }
         }
+    }
+
+    /// The reply can beat session:created. Register its row before asking the window to select it.
+    @discardableResult
+    static func openCreatedSession(_ raw: Any, created: ([String: Any]) -> Void, select: (String) -> Void) -> Bool {
+        guard let row = raw as? [String: Any], let id = row["id"] as? String, UUID(uuidString: id) != nil else { return false }
+        created(row)
+        select(id)
+        return true
     }
 
     /// Add account: Settings › Coding AI with its Add account sheet open.

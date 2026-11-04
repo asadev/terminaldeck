@@ -174,7 +174,7 @@ const marks = {
   'ublock-origin': { url: 'https://raw.githubusercontent.com/gorhill/uBlock/fe277a4ea6d18a0a62757826bb665a92c04a0745/src/img/ublock.svg' },
   'ublock-origin-lite': { url: 'https://raw.githubusercontent.com/uBlockOrigin/uBOL-home/c4c5127c0b69c1576b0f8a923c0f3dacaa0997d4/chromium/img/icon_128.png' },
   'sponsorblock': { url: 'https://raw.githubusercontent.com/ajayyy/SponsorBlock/6a306a09622170d0f7f733faa3172a58346650bd/public/icons/IconSponsorBlocker128px.png' },
-  'return-youtube-dislike': { url: 'https://raw.githubusercontent.com/Anarthe phone app's icon128.png' },
+  'return-youtube-dislike': { url: 'https://raw.githubusercontent.com/Anarios/return-youtube-dislike/4e6dfd1977fcf2d160142bf5c2e303d5cda2c685/Extensions/combined/icons/icon128.png' },
   'isdcac': { url: 'https://raw.githubusercontent.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/d4728187136f973c9fd59266b7f629a8228ea144/src/icons/128.png' },
   'adguard': { url: 'https://raw.githubusercontent.com/AdguardTeam/AdguardBrowserExtension/496161c602ee787d23ee87f6ad3e681f8a0a7a4b/Extension/assets/images/logo-shield.svg' },
   'consent-o-matic': { url: 'https://raw.githubusercontent.com/cavi-au/Consent-O-Matic/8ca8500d26434c586039e126ad091e1bfccd205d/Extension/logo.svg' },

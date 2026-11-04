@@ -161,6 +161,7 @@ struct HootComposerDraft: Equatable, Sendable, Codable {
 /// composer height +24; the host supplies data/actions and owns sending errors.
 struct HootComposer: View {
     @Binding var draft: HootComposerDraft
+    var ownerID: String? = nil
     var catalogue = HootComposerCatalogue()
     var showMeta = true
     /// Which part to draw. A chat can float `.box` over its scroll area (so messages slide
@@ -194,6 +195,7 @@ struct HootComposer: View {
     var onRecall: ((Bool) -> Bool)? = nil
     var attachmentLimits: ChatAttachmentLimits? = nil
     var canStop = true
+    var stopping = false
     /// The owner's own + panel (a task's comment box: what to add to the comment, the comment's options,
     /// the task's actions). The + opens it in a popover in place of the menu; nil keeps the menu (Hoot).
     var addPanel: ((HootComposerAddPanel) -> AnyView)? = nil
@@ -202,6 +204,8 @@ struct HootComposer: View {
     var dictationOwner: HootComposerVoice? = nil
     var onDictationStart: (() -> Void)? = nil
     var onExpandLongPrompt: (() -> Void)? = nil
+    /// Fixed activity belongs to the same message surface, so it adds no gap above the box.
+    var status: AnyView? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.agkitOffscreenSolid) private var offscreenSolid
     @State private var localVoice = HootComposerVoice()
@@ -231,6 +235,7 @@ struct HootComposer: View {
             if part != .meta {
             Group {
                 VStack(alignment: .leading, spacing: 8) {
+                    if let status { status }
                     if let shown = slashShown { slashMenu(shown) }
                     if !draft.attachments.isEmpty {
                         attachments
@@ -244,7 +249,7 @@ struct HootComposer: View {
                                 Button("Edit full prompt", action: onExpandLongPrompt)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                        HootComposerEditor(draft: $draft, handle: editor, onReturn: returnPressed,
+                        HootComposerEditor(draft: $draft, ownerID: ownerID, handle: editor, onReturn: returnPressed,
                                            onFiles: addFiles, onMentionQuery: { mentionQuery = $0 },
                                            mentionNames: { DeckMentionRows.names(for: catalogue.mentions) }, onRecall: onRecall)
                             .frame(height: editor.height)
@@ -264,7 +269,7 @@ struct HootComposer: View {
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                         Button { toggleVoice() } label: {
-                            Image(systemName: voice.recording ? "stop.fill" : "mic")
+                            Image(systemName: voice.recording ? "waveform" : "mic")
                                 .foregroundStyle(voice.recording ? Color.red : Color.secondary)
                                 .frame(width: 32, height: 32)
                                 .background(AGKITStyle.selection, in: .circle)
@@ -272,16 +277,7 @@ struct HootComposer: View {
                             .opacity(!hasMicrophone && !voice.recording ? 0.4 : 1)
                             .help(hasMicrophone ? (voice.recording ? "Stop dictation" : "Dictate a message") : "No microphone connected")
                             .accessibilityLabel(hasMicrophone ? (voice.recording ? "Stop dictation" : "Dictate a message") : "No microphone connected")
-                        if busy {
-                            Button(action: onStop) { Image(systemName: "stop.fill").font(.system(size: 14, weight: .semibold)).frame(width: 32, height: 32) }
-                                .buttonStyle(.plain).help("Stop the current answer").accessibilityLabel("Stop \(agentName)").disabled(!enabled || !canStop)
-                        }
-                        Button(action: submit) {
-                            Image(systemName: "arrow.up").font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white).frame(width: 32, height: 32)
-                                .background(Color.accentColor.opacity(busy || draft.canSend ? 1 : 0.4), in: .circle)
-                        }.buttonStyle(.plain).disabled(!enabled || (busy && !allowsSteering) || voice.starting || voice.finishing || (!draft.canSend && !voice.recording))
-                            .help(busy ? "Queue message" : "Send message").accessibilityLabel(busy ? "Queue message" : "Send message")
+                        primaryControl
                     }
                 }
                 .padding(16)
@@ -606,6 +602,32 @@ struct HootComposer: View {
         if voice.recording { Task { await finishVoice() }; return }
         sendDraft()
     }
+    private var primaryAction: ChatComposerControl {
+        .action(turnRunning: busy, hasDraft: draft.canSend || voice.recording, allowsQueue: allowsSteering, stopping: stopping, canStop: canStop)
+    }
+    private var primaryDisabled: Bool {
+        if !enabled || stopping { return true }
+        if primaryAction == .stop { return !canStop }
+        return (busy && !allowsSteering) || voice.starting || voice.finishing || (!draft.canSend && !voice.recording)
+    }
+    private var primaryControl: some View {
+        Button { if primaryAction == .stop { onStop() } else { submit() } } label: {
+            Group {
+                if stopping { ProgressView().controlSize(.small).tint(.white) }
+                else { Image(systemName: primaryAction == .stop ? "stop.fill" : "arrow.up").font(.system(size: 14, weight: .semibold)) }
+            }
+            .foregroundStyle(.white).frame(width: 32, height: 32)
+            .background(Color.accentColor.opacity(primaryDisabled ? 0.4 : 1), in: .circle)
+        }
+        .buttonStyle(.plain).disabled(primaryDisabled)
+        .help(primaryAction == .queue && canStop ? "Queue for after this answer. Right-click to stop the current answer." : primaryAction.label)
+        .accessibilityLabel(primaryAction.label).accessibilityIdentifier("composer.primary")
+        .contextMenu {
+            if primaryAction == .queue && canStop {
+                Button("Stop current answer", systemImage: "stop.fill", action: onStop).disabled(!enabled || !canStop)
+            }
+        }
+    }
     private func sendDraft() {
         guard enabled, draft.canSend, (!busy || allowsSteering), !voice.starting, !voice.finishing else { return }
         do { try attachmentLimits?.validateFiles(draft.attachments.map(\.url)); onSend(draft) }
@@ -713,6 +735,7 @@ private struct HootComposerEditor: NSViewRepresentable {
     /// typing and Paste land in a box nobody can see.
     @Environment(\.nativeScreenActive) private var onShow
     @Binding var draft: HootComposerDraft
+    let ownerID: String?
     let handle: HootComposerEditorHandle
     let onReturn: () -> Void
     let onFiles: ([URL]) -> Void
@@ -746,9 +769,17 @@ private struct HootComposerEditor: NSViewRepresentable {
         return scroll
     }
     func updateNSView(_ view: NSScrollView, context: Context) {
-        context.coordinator.parent = self
+        let ownerChanged = context.coordinator.parent.ownerID != ownerID
         guard let text = view.documentView as? HootComposerTextView else { return }
-        text.isEditable = isEnabled
+        context.coordinator.updating = true
+        defer { context.coordinator.updating = false }
+        if ownerChanged {
+            // AppKit undo and marked text belong to the old owner too.
+            text.undoManager?.removeAllActions()
+            text.unmarkText()
+        }
+        context.coordinator.parent = self
+        text.isEditable = isEnabled && onShow
         text.onFiles = isEnabled ? onFiles : nil
         text.onShow = onShow
         if !onShow, let window = text.window, window.firstResponder === text { window.makeFirstResponder(nil) }
@@ -771,10 +802,11 @@ private struct HootComposerEditor: NSViewRepresentable {
     }
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HootComposerEditor
+        var updating = false
         init(_ parent: HootComposerEditor) { self.parent = parent }
         func raw(_ text: NSTextView) -> String { HootComposerEditor.raw(text) }
         func textDidChange(_ notification: Notification) {
-            guard let text = notification.object as? NSTextView else { return }
+            guard !updating, parent.onShow, let text = notification.object as? NSTextView, text === parent.handle.textView else { return }
             parent.draft.text = raw(text); parent.draft.mentions = parent.draft.activeMentions
             let prefix = (text.string as NSString).substring(to: min(text.selectedRange().location, (text.string as NSString).length))
             // FORK-L1: the picker says what still counts as asking for the @ list (a name can have spaces).

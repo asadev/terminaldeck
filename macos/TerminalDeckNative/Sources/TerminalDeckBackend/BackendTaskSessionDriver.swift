@@ -200,6 +200,9 @@ public enum BackendTaskBriefDelivery {
     public static func setupScreen(_ screen: String) -> String? {
         let text = normalizedRows(screen).joined(separator: " ").lowercased().replacingOccurrences(of: "’", with: "'")
         func shows(_ words: String...) -> Bool { words.contains { text.contains($0) } }
+        if shows("update available") && shows("codex", "skip until next version", "@openai/codex") {
+            return "Codex is showing an update choice. Open this session and skip or finish the update, then send the brief again. Nothing was typed into that choice."
+        }
         if shows("choose the text style that looks best with your terminal", "to change this later, run /theme") {
             return "Claude Code is showing its first-run setup in this session. Open the session and finish it once."
         }

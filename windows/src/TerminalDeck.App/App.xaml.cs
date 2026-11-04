@@ -69,6 +69,23 @@ public partial class App : Application
             UiRecovery.Log("FirstChance", error.Exception);
         };
       }
+      // Explicit component proof branches before accounts, keeper, hooks and shared activation pointers.
+      if (DevelopmentRun && Environment.GetEnvironmentVariable("TD_UMER_PRS_PROOF") is { } proof &&
+          Path.GetFullPath(proof).StartsWith(root.DirectoryPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+      {
+        try
+        {
+          window = new Views.UmerPortsProofWindow(root, proof);
+          window.AppWindow.Show(false);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+          Directory.CreateDirectory(proof);
+          await File.WriteAllTextAsync(Path.Combine(proof, "ui-result.json"), System.Text.Json.JsonSerializer.Serialize(new { passed = Array.Empty<string>(), failed = new[] { error.ToString() } }));
+          Exit();
+        }
+        return;
+      }
       var instance = Microsoft.Windows.AppLifecycle.AppInstance.FindOrRegisterForKey("terminaldeck-preview-" + root.NamespaceId);
       if (!instance.IsCurrent) { await instance.RedirectActivationToAsync(activation); Exit(); return; }
       TerminalDeck.Platform.Windows.Integration.PreviewShareRoot.Remember(root);

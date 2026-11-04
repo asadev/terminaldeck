@@ -6,6 +6,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5"><PrivateAssets>all</PrivateAssets></PackageReference>
     <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
     <Using Include="Xunit" />
+    <!-- Exercise the actual shared user-created launch method without starting the app or keeper. -->
+    <Compile Include="../../src/TerminalDeck.App/Integration/LocalSessionStarts.cs" Link="Integration/LocalSessionStarts.cs" />
     <!-- Pure navigation/geometry contracts run on Mac without compiling the WinUI app. -->
     <Compile Include="../../src/TerminalDeck.App/Views/Settings/SettingsNavigation.cs" Link="Settings/SettingsNavigation.cs" />
     <Compile Include="../../src/TerminalDeck.App/Views/Settings/SettingsPanelBounds.cs" Link="Settings/SettingsPanelBounds.cs" />

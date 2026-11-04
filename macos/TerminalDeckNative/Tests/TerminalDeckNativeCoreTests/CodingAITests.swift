@@ -110,7 +110,32 @@ struct CodingAIAccountModelTests {
         #expect(CodingAIAccountLabels.stateLine(signedIn("a@b", plan: "max")) == "Signed in")
         #expect(CodingAIAccountLabels.stateLine(nil) == "Checking with the agent…")
         #expect(CodingAIAccountLabels.stateLine(signedOut) == "Not signed in")
-        #expect(CodingAIAccountLabels.rowLabel(codex, signedOut) == "Your own Codex CLI install")
+        #expect(CodingAIAccountLabels.rowLabel(codex, signedOut) == "This Mac’s own Codex CLI login")
+    }
+
+    /// 4 Nov (Asad's recording): the Mac's own Claude Code login, signed out, was a row with "nothing" on it and
+    /// its Sign in opened a new chat. It now says what it is and who was last signed in, and signs in by itself.
+    @Test func thisMacsOwnLoginSaysWhatItIsWhenNobodyIsSignedIn() {
+        let snapshot = CodingAIAccountsParse.snapshot(snapshotFixture)
+        let system = snapshot.accounts[0]
+        let out = CodingAISignIn(state: .signedOut, detail: "", remembered: " Asad@Example.com ")
+        #expect(CodingAIAccountLabels.rowLabel(system, out) == "This Mac’s own Claude Code login")
+        #expect(CodingAIAccountLabels.rowLabel(system, nil) == "This Mac’s own Claude Code login")
+        #expect(CodingAIAccountLabels.rowLabel(system, signedIn("me@x.com")) == "me@x.com")
+        #expect(CodingAIAccountLabels.lastLoginLine(out) == "Last signed in here as asad@example.com")
+        #expect(CodingAIAccountLabels.lastLoginLine(signedIn("me@x.com")) == nil)       // only for a login that is out
+        #expect(CodingAIAccountLabels.lastLoginLine(CodingAISignIn(state: .signedOut, detail: "")) == nil)
+        #expect(CodingAIAccountLabels.lastLoginLine(CodingAISignIn(state: .signedOut, account: "old@x.com")) == "Last signed in here as old@x.com")
+        #expect(CodingAIAccountsParse.signIn(json(#"{"state":"signed-out","remembered":"a@b.com"}"#)).remembered == "a@b.com")
+        let rows = CodingAIProviders.rows(detected: json(#"{"claude": true, "codex": true, "gemini": true}"#), fromMain: [])
+        let model = CodingAIAccountRowModel.make(account: system, snapshot: snapshot, signIn: ["system": out], history: [:],
+                                                 providerRows: rows, sessionTitles: nil, canStartSessions: false, canSignOut: true)
+        #expect(model.label == "This Mac’s own Claude Code login")
+        #expect(model.lastLogin == "Last signed in here as asad@example.com")
+        #expect(!model.showsUsage)                          // an old plan reading never sits on a signed-out login
+        #expect(model.offersSignIn)                         // Claude Code signs in through the app: no session window needed
+        #expect(CodingAILogins.appSignsIn("claude") && CodingAILogins.appSignsIn("codex") && CodingAILogins.appSignsIn(nil))
+        #expect(!CodingAILogins.appSignsIn("gemini"))
     }
 
     @Test func runsPutTheUnansweredFirstAndGroupInCatalogueOrder() {
@@ -222,7 +247,7 @@ struct CodingAIAccountModelTests {
         let codex = row(1)
         #expect(codex.offersSignIn && !codex.offersSignOut)
         #expect(codex.offersUseByDefault && codex.hasMenu)
-        #expect(!row(1, sessions: false).offersSignIn)       // nothing can open a session
+        #expect(row(1, sessions: false).offersSignIn)        // Codex signs in through the app, no session needed (4 Nov)
         let gemini = row(2)
         #expect(!gemini.offersSignOut)                       // no logout command: the reason instead
         #expect(gemini.signOutNote?.hasPrefix("Gemini CLI has no logout command") == true)

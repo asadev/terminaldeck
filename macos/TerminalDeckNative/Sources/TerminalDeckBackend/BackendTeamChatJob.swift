@@ -9,6 +9,10 @@ public struct BackendTeamChatJob: Codable, Equatable, Sendable {
     public var agentName: String
     public var title: String
     public var taskID: String?
+    /// The actual starter session, rather than the seat's reusable profile ID.
+    public var starterSessionID: String? = nil
+    /// Set only by the checked Resume action. The launcher grants a fresh tool lease.
+    public var resumedFromSessionID: String? = nil
     /// 30 Oct (Decker): the job stays open when a turn ends (a seat with background work still running); the starter
     /// ends it with finish or stop. nil: the delivered answer closes the job, as before.
     public var keepOpen: Bool? = nil
@@ -30,11 +34,32 @@ public struct BackendTeamChatRecord: Codable, Equatable, Sendable {
     public var historyPath: String? = nil
     public var turnID: String? = nil
     public var cursor: Int? = nil
+    public var interruptedAt: Date? = nil
+    public var resumedBySessionID: String? = nil
+    /// Original launch rules, without executable arguments, environment or credentials.
+    /// Never included in the public job summary: an agent's private instructions stay private.
+    public var resumeInput: BackendCreateSessionInput? = nil
     public var isFinished: Bool { finishedAt != nil }
+    public var canResume: Bool { interruptedAt != nil && resumedBySessionID == nil && historyPath == nil }
+    public var resumeHandle: NativeRPCValue {
+        guard canResume else { return .null }
+        return .object([.init("tool", .string("sessions_conversations")), .init("do", .string("resume")),
+            .init("sessionId", .string(session.id))])
+    }
+    public var restartEvent: NativeRPCValue {
+        guard let interruptedAt else { return .null }
+        return .object([.init("kind", .string("ended-by-restart")), .init("sessionId", .string(session.id)),
+            .init("starterSessionId", job.starterSessionID.map(NativeRPCValue.string) ?? .null),
+            .init("starter", .string(job.fromID)), .init("at", .number(interruptedAt.timeIntervalSince1970 * 1000)),
+            .init("message", .string("Ended by restart — Resume")), .init("resume", resumeHandle),
+            .init("resumedBySessionId", resumedBySessionID.map(NativeRPCValue.string) ?? .null)])
+    }
     public var wire: NativeRPCValue {
         var summary = self
         summary.result = result.map { String($0.prefix(1000)) }
-        return (try? NativeRPCValue.parseJSON(JSONEncoder().encode(summary))) ?? .null
+        summary.resumeInput = nil
+        return ((try? NativeRPCValue.parseJSON(JSONEncoder().encode(summary))) ?? .null)
+            .setting("resume", resumeHandle).setting("restartEvent", restartEvent)
     }
 }
 

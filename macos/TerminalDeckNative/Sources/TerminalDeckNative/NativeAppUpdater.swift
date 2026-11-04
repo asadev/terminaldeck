@@ -24,6 +24,7 @@ final class NativeAppUpdater {
     private(set) var state: UpdateState = .none
     var onState: (([String: Any]) -> Void)?
     private(set) var relaunchOnQuit = false
+    private(set) var checkingUpdate = false
     /// Why the restart is waiting right now (nil: not waiting). Set by a "Restart to update" press while busy.
     private(set) var waitingFor: String?
     /// What would be cut by a restart right now (nil: nothing). Production: Hoot mid-answer.
@@ -61,7 +62,7 @@ final class NativeAppUpdater {
             guard let self else { throw NativeRPCError(code: "closed", message: "The update controller has stopped.") }
             // The strategy already obtained the real helper acknowledgement.
             self.helperArmed = true
-            DispatchQueue.main.async {
+            Self.scheduleQuit {
                 // One quit through the app's own path: sheets and dialogs close first, a quit AppKit refuses is
                 // finished directly, kept sessions stay with the session keeper (NativeSVQuitRule .detach), and the
                 // helper (already waiting) swaps and reopens the app from a clean environment. Never a kill.
@@ -133,7 +134,7 @@ final class NativeAppUpdater {
         case .checking: return ["phase": "checking"]
         case .available(let version, let text, let size): return ["phase": "available", "version": value(version), "notes": value(text), "sizeBytes": value(size), "notesUrl": notes]
         case .downloading(let version, let percent, let rate): return ["phase": "downloading", "version": value(version), "percent": value(percent), "bytesPerSecond": value(rate), "notesUrl": notes]
-        case .ready(let version): return ["phase": "ready", "version": value(version), "notesUrl": notes, "waitingFor": value(waitingFor)]
+        case .ready(let version): return ["phase": "ready", "version": value(version), "notesUrl": notes, "waitingFor": value(waitingFor), "checkingUpdate": checkingUpdate]
         case .error(let message): return ["phase": "error", "message": message]
         case .unsupported(let reason): return ["phase": "unsupported", "reason": reason]
         }
@@ -153,7 +154,7 @@ final class NativeAppUpdater {
     /// "Restart to update" (the side panel, Settings, updates.install). Never cuts an answer: while something
     /// that lives inside the app is answering, the restart waits and then goes by itself; cancelRestart stops that.
     func requestRestart() async {
-        guard case .ready(let version?) = state, strategy != nil, waitTask == nil else { return }
+        guard case .ready(let version?) = state, strategy != nil, waitTask == nil, !relaunchOnQuit else { return }
         if let reason = busyReason() {
             waitingFor = reason; publish()
             NativeCompositionRoot.note("update: restart to \(version) waits — \(reason)")
@@ -184,12 +185,20 @@ final class NativeAppUpdater {
     private func installNow(_ version: String) async {
         guard case .ready(let current?) = state, current == version, let strategy else { return }
         relaunchOnQuit = true
+        checkingUpdate = true
         publish()
         let result = await strategy.install(version: version)
+        checkingUpdate = false
         if result["ok"].bool != true {
             relaunchOnQuit = false
             set(.error(message: BackendAppUpdateError.describe(result["message"]).text))
-        }
+        } else { publish() }
+    }
+
+    /// AppKit's terminate call runs a nested event loop. Starting it inside a main-queue job
+    /// holds that queue and prevents the main-actor shutdown tasks from ever answering AppKit.
+    static func scheduleQuit(_ quit: @escaping @MainActor @Sendable () -> Void) {
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { quit() } }
     }
 
     func start() {

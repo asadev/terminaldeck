@@ -76,45 +76,20 @@ import TerminalDeckNativeCore
     }
 
     func testSendingAndStreamingFollowTheNewestUnlessThePersonScrolledUp() {
-        let view = NativeChatUnreadViewport()
-        let messages = [ChatUnreadMessage(id: "m1", sequence: 1)]
-        view.appear(); view.active = true
-        view.receive(conversation: "c", seen: 1, messages: messages)
-        view.geometry(.init(x: 0, y: 700, width: 600, height: 300), bottom: true, contentHeight: 1000)
+        let view = NativeChatFollowViewport()
+        XCTAssertTrue(view.measure(offset: 700, viewport: 300, content: 1000))
+        XCTAssertTrue(view.measure(offset: 700, viewport: 300, content: 1300))
+        _ = view.measure(offset: 1000, viewport: 300, content: 1300)
         XCTAssertTrue(view.following)
-
-        // Content grows below (the sent message, then streamed words): the chat follows it.
-        view.position.scrollTo(id: "elsewhere")
-        view.geometry(.init(x: 0, y: 700, width: 600, height: 300), bottom: false, contentHeight: 1300)
-        XCTAssertEqual(view.position.edge, .bottom, "New content keeps the newest in view")
-        XCTAssertFalse(view.showsJumpToLatest)
-
-        // He scrolls up to read: the chat stays where he is and offers the way back.
-        view.geometry(.init(x: 0, y: 200, width: 600, height: 300), bottom: false, contentHeight: 1300)
+        XCTAssertFalse(view.measure(offset: 200, viewport: 300, content: 1300))
         XCTAssertFalse(view.following)
-        XCTAssertTrue(view.showsJumpToLatest)
-        view.position.scrollTo(id: "reading")
-        view.geometry(.init(x: 0, y: 200, width: 600, height: 300), bottom: false, contentHeight: 1700)
-        XCTAssertEqual(view.position.viewID(type: String.self), "reading", "Streaming never yanks a reader down")
-        view.receive(conversation: "c", seen: 1, messages: messages)
-        XCTAssertEqual(view.position.viewID(type: String.self), "reading")
-
-        // Jump to latest (or sending) brings the newest back and follows again.
-        view.jumpToLatest()
+        XCTAssertFalse(view.measure(offset: 200, viewport: 300, content: 1700))
+        view.latest()
         XCTAssertTrue(view.following)
         XCTAssertEqual(view.position.edge, .bottom)
-        XCTAssertFalse(view.showsJumpToLatest)
-
-        // Scrolling back down to the bottom by hand also turns following back on.
-        view.geometry(.init(x: 0, y: 200, width: 600, height: 300), bottom: false, contentHeight: 1700)
-        view.geometry(.init(x: 0, y: 1400, width: 600, height: 300), bottom: true, contentHeight: 1700)
+        _ = view.measure(offset: 1400, viewport: 300, content: 1700)
+        _ = view.measure(offset: 200, viewport: 300, content: 1700)
+        _ = view.measure(offset: 1400, viewport: 300, content: 1700)
         XCTAssertTrue(view.following)
-
-        // Coming back to a chat with nothing unread opens it at the newest message.
-        view.geometry(.init(x: 0, y: 200, width: 600, height: 300), bottom: false, contentHeight: 1700)
-        view.position.scrollTo(id: "reading")
-        view.returned()
-        XCTAssertEqual(view.position.edge, .bottom)
-        view.disappear()
     }
 }

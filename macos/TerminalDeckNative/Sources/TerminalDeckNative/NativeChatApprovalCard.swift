@@ -16,7 +16,7 @@ struct NativeChatApprovalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Approval needed").font(.headline)
+            Text("Permission").font(.headline)
             Text(request["name"].string ?? "Tool operation").fontWeight(.medium).lineLimit(2)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {

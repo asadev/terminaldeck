@@ -31,7 +31,7 @@ private struct AccountChipLabel<Content: View>: View {
 }
 
 /// One row of an account menu: the tick, the account's colour, its agent and its login.
-private struct AccountRowLine: View {
+struct AccountRowLine: View {
     let current: Bool
     let color: String?
     let provider: String?
@@ -75,6 +75,11 @@ private struct MenuHead: View {
 /// A shell with no agent in it gets "Run …".
 struct NativeLocalAccountChip: View {
     let session: NativeTerminalSession
+    static let shellAccountHelp = "Claude or another AI started in this shell keeps its own login. To sign in to Claude here, type /login. Choosing an account below opens a new session; this shell stays open."
+    static var shellAccountInstructions: some View {
+        Text(shellAccountHelp).font(.caption).foregroundStyle(.secondary).padding(8)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 
     @State private var snapshot = CodingAIAccountsSnapshot.empty
     @State private var signIn: [String: CodingAISignIn] = [:]
@@ -222,6 +227,9 @@ struct NativeLocalAccountChip: View {
             let groups = order.map { ai in (ai, ready.filter { ($0.provider ?? "claude") == ai }) }.filter { !$0.1.isEmpty }
             let checking = loading || AccountChipRules.stillChecking(rows, signIn: signIn, sessionAgent: nil)
             VStack(alignment: .leading, spacing: 2) {
+                if info?.provider == "shell" {
+                    Self.shellAccountInstructions
+                }
                 ForEach(groups, id: \.0) { group in
                     if groups.count > 1 { MenuHead(text: AccountSwitchWords.aiName(group.0)) }
                     ForEach(group.1) { account in
@@ -272,12 +280,13 @@ struct NativeLocalAccountChip: View {
                 NativeAccountSwitcher.shared.newSession(from: session.sessionId, in: info?.cwd, accountId: account.id, provider: account.provider)
             }
         } label: {
-            AccountRowLine(current: isCurrent, color: account.color, provider: account.provider, login: login,
+            AccountRowLine(current: isCurrent, color: account.color, provider: account.provider,
+                           login: switching ? login : "New session · \(login)",
                            state: AccountChipRules.stateSummary(state).label)
         }
         .buttonStyle(.plain)
         .disabled(inert)
-        .help(!switching && blocked != nil ? AccountChipRules.blockedFoot : isCurrent ? "This session runs as \(login)." : "Use \(login) for this session.")
+        .help(!switching && blocked != nil ? AccountChipRules.blockedFoot : !switching ? "Open a new session as \(login). This shell stays open." : isCurrent ? "This session runs as \(login)." : "Use \(login) for this session.")
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 

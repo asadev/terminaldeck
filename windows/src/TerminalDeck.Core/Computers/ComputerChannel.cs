@@ -19,6 +19,7 @@ public sealed class ComputerChannel : IAsyncDisposable
   private NoiseTransport? transport;
   private LinkGuest? guest;
   private volatile bool welcomed;
+  private volatile bool serverWelcomeSeen;
   private int disposed;
 
   /// Set before OpenAsync to ask for the direct link (§11); null keeps the relay connection (the pairing lookups).
@@ -49,6 +50,8 @@ public sealed class ComputerChannel : IAsyncDisposable
   public async Task SendAsync(object message, CancellationToken ct)
   {
     var clear = JsonSerializer.SerializeToUtf8Bytes(message);
+    if (serverWelcomeSeen && guest is not { Offered: true })
+      throw new ProtocolException("The direct link to your server is not connected.");
     // §11.1: after a welcome that offered the link, nothing app-level goes on the relay.
     if (welcomed && guest is { Offered: true } link) { await link.SendAsync(clear, ct); return; }
     if (clear.Length > 93528) throw new ProtocolException("The computer message is too large.");
@@ -95,7 +98,12 @@ public sealed class ComputerChannel : IAsyncDisposable
         }
         catch (JsonException) { throw new ProtocolException("That computer sent an invalid message."); }
         if (welcomed && guest is not null && guest.FromRelay(message)) continue;
-        if (!welcomed && message.GetProperty("t").GetString() == "welcome") { guest?.Welcomed(message); welcomed = true; }
+        if (!welcomed && message.GetProperty("t").GetString() == "welcome")
+        {
+          serverWelcomeSeen = message.TryGetProperty("hostKind", out var kind) && kind.ValueKind == JsonValueKind.String && kind.GetString() == "headless";
+          LinkGuest.ValidateServerWelcome(message, guest is not null);
+          guest?.Welcomed(message); welcomed = true;
+        }
         inbox.Writer.TryWrite(message);
       }
     }

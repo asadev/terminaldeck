@@ -27,7 +27,7 @@ struct NativeChatMarkdown: View {
             out[range].underlineStyle = Text.LineStyle(pattern: .dot, color: .secondary)
         }
         for range in codes {
-            out[range].font = .system(size: NSFont.systemFontSize * 0.86, design: .monospaced)
+            out[range].font = .system(size: bodyFont.pointSize * 0.86, design: .monospaced)
             out[range].backgroundColor = Color.secondary.opacity(0.14)
         }
         return out
@@ -37,13 +37,14 @@ struct NativeChatMarkdown: View {
 // MARK: - A line with links in it: their addresses as tooltips
 
 extension NativeChatMarkdown {
-    static var bodyFont: NSFont { NSFont.preferredFont(forTextStyle: .body) }
-    static var headlineFont: NSFont { NSFont.preferredFont(forTextStyle: .headline) }
+    static var bodyFont: NSFont { .systemFont(ofSize: 14) }
+    static var bodyType: Font { .system(size: bodyFont.pointSize) }
+    static var headlineFont: NSFont { NSFont.systemFont(ofSize: 15, weight: .semibold) }
     static var subheadlineFont: NSFont {
-        NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .subheadline), toHaveTrait: .boldFontMask)
+        NSFontManager.shared.convert(NSFont.systemFont(ofSize: 14), toHaveTrait: .boldFontMask)
     }
     static func calloutFont(bold: Bool) -> NSFont {
-        let font = NSFont.preferredFont(forTextStyle: .callout)
+        let font = bodyFont
         return bold ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
     }
 
@@ -142,7 +143,7 @@ private struct NativeChatBlocks: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 NativeChatBlockView(block: block)
             }
-        }
+        }.font(NativeChatMarkdown.bodyType)
     }
 }
 
@@ -152,11 +153,11 @@ private struct NativeChatBlockView: View {
     var body: some View {
         switch block {
         case .paragraph(let text):
-            NativeChatInline(source: text, font: .body, nsFont: NativeChatMarkdown.bodyFont)
+            NativeChatInline(source: text, font: NativeChatMarkdown.bodyType, nsFont: NativeChatMarkdown.bodyFont)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let text):
-            NativeChatInline(source: text, font: level <= 2 ? .headline : .subheadline.weight(.semibold),
+            NativeChatInline(source: text, font: .system(size: level <= 2 ? 15 : 14, weight: .semibold),
                              nsFont: level <= 2 ? NativeChatMarkdown.headlineFont : NativeChatMarkdown.subheadlineFont)
                 .padding(.top, 4)
         case .code(let language, let text):
@@ -183,31 +184,12 @@ private struct NativeChatBlockView: View {
         case .rule:
             Divider().padding(.vertical, 4)
         case .table(let header, let rows):
-            ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-                    GridRow {
-                        ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
-                            NativeChatInline(source: cell, font: .callout.weight(.semibold), nsFont: NativeChatMarkdown.calloutFont(bold: true))
-                        }
-                    }
-                    Divider().gridCellUnsizedAxes(.horizontal)
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        GridRow {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                                NativeChatInline(source: cell, font: .callout, nsFont: NativeChatMarkdown.calloutFont(bold: false))
-                            }
-                        }
-                        if index < rows.count - 1 { Divider().gridCellUnsizedAxes(.horizontal) }
-                    }
-                }
-                .font(.callout)
-            }
-            .scrollIndicators(.automatic)
+            NativeChatTable(header: header, rows: rows)
         }
     }
 }
 
-/// `<details class="cv-code">`: shut until opened, at most 320 points tall, wrapped.
+/// Code keeps its original lines and scrolls inside its own surface.
 private struct NativeChatCode: View {
     @Environment(\.nativeChatFindQuery) private var findQuery
     let label: String
@@ -234,18 +216,67 @@ private struct NativeChatCode: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(open ? "Expanded" : "Collapsed")
             if open || !NativeChatFindText.ranges(text, query: findQuery).isEmpty {
-                ScrollView(.vertical) {
+                ScrollView([.horizontal, .vertical]) {
                     Text(NativeChatFindText.highlight(AttributedString(text), query: findQuery))
-                        .font(.system(size: NSFont.systemFontSize * 0.92, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: NativeChatMarkdown.bodyFont.pointSize * 0.92, design: .monospaced))
+                        .fixedSize(horizontal: true, vertical: true)
                         .padding(.horizontal, 12)
-                        .padding(.bottom, 12)
+                        .padding(.bottom, DeckTokens.Spacing.s12)
                 }
-                .frame(maxHeight: 320)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: min(320, CGFloat(text.components(separatedBy: "\n").count) * NSLayoutManager().defaultLineHeight(for: NSFont.monospacedSystemFont(ofSize: NativeChatMarkdown.bodyFont.pointSize * 0.92, weight: .regular)) + DeckTokens.Spacing.s12))
             }
         }
         .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 10))
+    }
+}
+
+/// Measurement follows the chat column, never the table's intrinsic text width.
+struct NativeChatTable: View {
+    let header: [String]
+    let rows: [[String]]
+    @State private var available: CGFloat = 0
+    private var count: Int { max(header.count, rows.map(\.count).max() ?? 0) }
+    private func cell(_ row: [String], _ index: Int) -> String { index < row.count ? row[index] : "" }
+    var body: some View {
+        Group {
+            if let widths = ChatTableLayout.widths(header: header, rows: rows, available: available) {
+                VStack(alignment: .leading, spacing: DeckTokens.Spacing.s8) {
+                    tableRow(header, widths: widths, bold: true)
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        tableRow(row, widths: widths, bold: false)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: DeckTokens.Spacing.s12) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        VStack(alignment: .leading, spacing: DeckTokens.Spacing.s8) {
+                            ForEach(0..<count, id: \.self) { index in
+                                let label = cell(header, index).isEmpty ? "Column \(index + 1)" : cell(header, index)
+                                inline("**" + label + "**: " + cell(row, index), bold: false)
+                            }
+                        }
+                        .padding(DeckTokens.Spacing.s12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DeckTokens.taskCard, in: .rect(cornerRadius: DeckTokens.Metrics.cardRadius))
+                    }
+                    if rows.isEmpty { ForEach(header.indices, id: \.self) { inline(header[$0], bold: true) } }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
+    }
+    private func inline(_ text: String, bold: Bool) -> some View {
+        NativeChatInline(source: text, font: bold ? NativeChatMarkdown.bodyType.weight(.semibold) : NativeChatMarkdown.bodyType,
+                         nsFont: NativeChatMarkdown.calloutFont(bold: bold))
+            .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func tableRow(_ cells: [String], widths: [Double], bold: Bool) -> some View {
+        HStack(alignment: .top, spacing: ChatTableLayout.gap) {
+            ForEach(0..<count, id: \.self) { index in
+                inline(cell(cells, index), bold: bold).frame(width: widths[index], alignment: .leading)
+            }
+        }
     }
 }

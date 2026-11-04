@@ -191,6 +191,7 @@ public final class BackendBrowserService {
         if verb != .handover, let tabID, runtime.handoverPrompt(tabID) != nil {
             throw NativeRPCError(code: "not-permitted", message: "The person has this page right now. Wait for Done or Stop.")
         }
+        let uploadDocument = tabID.flatMap { runtime.uploadDocument($0) }
         let origin = tabID.flatMap { BackendBrowserOrigin.exact(runtime.pageURL($0)) }
         let tier: BackendMCPTier = verb == .read || verb == .screenshot ? .read
             : verb == .step && origin.map({ !BackendBrowserOrigin.isPrivate($0) }) == true ? .alter : .act
@@ -209,7 +210,7 @@ public final class BackendBrowserService {
         guard !closed, epoch == ownerEpochs[who.ownerID, default: 0] else { throw NativeRPCError(code: "not-permitted", message: "This browser call's grant was revoked.") }
         if let tabID { currentTabs[Self.slot(who)] = tabID; touchedAt[tabID] = Date().timeIntervalSince1970 * 1000 }
         scheduleUpdates()
-        let host = BackendBrowserCallHost(runtime: runtime, bindings: bindings, principal: who, origin: origin, authority: { [weak self] in
+        let host = BackendBrowserCallHost(runtime: runtime, bindings: bindings, principal: who, origin: origin, uploadDocument: uploadDocument, authority: { [weak self] in
             guard let self else { return false }; return !self.closed && self.ownerEpochs[who.ownerID, default: 0] == epoch
         }) { [weak self] id in
             self?.currentTabs[Self.slot(who)] = id; self?.touchedAt[id] = Date().timeIntervalSince1970 * 1000; self?.scheduleUpdates()
@@ -253,8 +254,9 @@ public final class BackendBrowserService {
     public func page(_ context: NativeRPCContext, operation: String, arguments: NativeRPCValue, frame: Bool = false, sessionReader: Bool = false) async throws -> NativeRPCValue {
         let who = try await principal(context)
         guard context.caller != .pairedDevice else { throw NativeRPCError(code: "not-permitted", message: "A paired device may not drive this Mac's browser.") }
-        guard who.managesWindows || sessionReader && operation == "extract" || frame && context.capabilities.contains("browser.frames") else {
-            throw NativeRPCError(code: "not-permitted", message: "An ordinary session uses the six browser tools or an installed page reader. Browser toolbar management requires the person's grant.")
+        guard who.managesWindows || sessionReader && operation == "extract" || frame && context.capabilities.contains("browser.frames")
+              || !frame && who.session != nil && Self.sessionPageOperations.contains(operation) else {
+            throw NativeRPCError(code: "not-permitted", message: "A session's browser_page does: \(Self.sessionPageOperations.sorted().joined(separator: ", ")), on its own windows. The rest of the toolbar is the person's.")
         }
         if operation == "reveal", !frame { return try await revealScreenshot(context, path: arguments["path"].requireString("path", nonempty: true)) }
         if who.routesToOriginatingDevice {
@@ -284,17 +286,23 @@ public final class BackendBrowserService {
             try await authorize(.init(tool: frame ? "browser.frames" : "browser.page", principal: who, tabID: id, tier: .act))
             return try await forward(who, frame ? "browser.frames" : "browser.page", arguments.setting("action", .string(operation)))
         }
-        guard operation != "evaluate" || who.evaluatesScripts else { throw NativeRPCError(code: "not-permitted", message: "Arbitrary page evaluation is reserved for an explicitly granted app tool; it is not an agent browser tool.") }
         guard !active.contains(id) else { throw NativeRPCError(code: "busy", message: "Another operation is using this page.") }
         active.insert(id); defer { active.remove(id) }
         let origin = BackendBrowserOrigin.exact(runtime.pageURL(id))
-        let readOnly = ["state", "frames", "read", "wait", "snapshot", "screenshot", "recording", "extract"].contains(operation)
-        let effectiveTier: BackendMCPTier = readOnly ? .read :
-            ["recordclear", "evaluate"].contains(operation) ? .alter :
-            frame && operation == "step" && origin.map({ !BackendBrowserOrigin.isPrivate($0) }) == true ? .alter : .act
+        let effectiveTier = Self.pageTier(operation, arguments: arguments, origin: origin, frame: frame)
+        if let why = BrowserAutomationPolicy.refusal(operation: operation, arguments: arguments, isolated: runtime.isIsolated(id)) {
+            throw NativeRPCError(code: "not-permitted", message: why)
+        }
+        let readOnly = effectiveTier == .read
         try await authorize(.init(tool: frame ? "browser.frames" : "browser.page", principal: who, tabID: id,
             profileID: try runtime.pageState(id)["profileId"].string, origin: origin,
             tier: effectiveTier, arguments: arguments))
+        guard (who.session == nil || bindings.owner(of: id) == who.session), runtime.handoverPrompt(id) == nil else {
+            throw NativeRPCError(code: "not-permitted", message: "This page's grant changed while approval was pending.")
+        }
+        if let why = BrowserAutomationPolicy.refusal(operation: operation, arguments: arguments, isolated: runtime.isIsolated(id)) {
+            throw NativeRPCError(code: "not-permitted", message: why)
+        }
         if frame, operation != "frames" {
             let state = try await runtime.frameCommand(id, operation: "state", arguments: arguments)
             guard let frameOrigin = state["url"].string.flatMap(BackendBrowserOrigin.exact) else { throw NativeRPCError(code: "not-permitted", message: "This frame has no allowed web origin.") }
@@ -429,6 +437,30 @@ public final class BackendBrowserService {
             origin: requestURL.flatMap(BackendBrowserOrigin.exact), tier: .alter, arguments: arguments))
         return try await runtime.dataCommand(operation, arguments: arguments)
     }
+    /// Browser 27: what a session may do with browser_page on its own windows —
+    /// navigation, waits, scripts, dialogs, console, network, emulation, storage
+    /// and multi-page collection. Printing, the recorder, Annotate and the
+    /// person's screenshot folder stay the person's (and Hoot's).
+    public nonisolated static let sessionPageOperations: Set<String> = ["state", "navigate", "back", "forward", "reload", "stop", "zoom", "find", "findstop",
+        "useragent", "wait", "evaluate", "dialogs", "console", "requests", "route", "emulate", "permissions", "storage", "collect"]
+
+    /// Reads are free; anything that changes the page asks as the caller's permission
+    /// mode says; a script, a storage change or a script-wait on a public website is
+    /// a change on that site (like browser_step there).
+    public nonisolated static func pageTier(_ operation: String, arguments: NativeRPCValue, origin: String?, frame: Bool) -> BackendMCPTier {
+        let publicSite = origin.map { !BackendBrowserOrigin.isPrivate($0) } ?? true
+        switch operation {
+        case "state", "frames", "read", "snapshot", "screenshot", "recording", "extract", "console", "requests": return .read
+        case "wait": return frame ? .read : arguments["for"].string == "function" ? (publicSite ? .alter : .act) : .read
+        case "dialogs": return arguments["policy"].isNullish ? .read : publicSite ? .alter : .act
+        case "permissions": return arguments["camera"].isNullish && arguments["microphone"].isNullish ? .read : .act
+        case "evaluate", "storage", "route", "emulate", "collect": return publicSite ? .alter : .act
+        case "recordclear": return .alter
+        case "step": return frame && publicSite ? .alter : .act
+        default: return .act
+        }
+    }
+
     /// browser-tools.ts noSuchWindow (L229-234): a bad target is a
     /// not-permitted refusal in the targeting rule's own words. The raw
     /// BrowserDriverRefusal is not a LocalizedError, so letting it escape would
@@ -551,11 +583,13 @@ private final class BackendBrowserCallHost: BrowserDriverHost {
     let map: BackendBrowserBindings
     let who: BackendBrowserPrincipal
     let grantedOrigin: String?
+    let grantedUploadDocument: String?
     let created: @MainActor (String) -> Void
     let authority: @MainActor () -> Bool
-    init(runtime: any BackendBrowserRuntime, bindings: BackendBrowserBindings, principal: BackendBrowserPrincipal, origin: String?,
+    init(runtime: any BackendBrowserRuntime, bindings: BackendBrowserBindings, principal: BackendBrowserPrincipal, origin: String?, uploadDocument: String?,
          authority: @escaping @MainActor () -> Bool, created: @escaping @MainActor (String) -> Void) {
         self.runtime = runtime; map = bindings; who = principal; grantedOrigin = origin
+        grantedUploadDocument = uploadDocument
         self.created = created
         self.authority = authority
     }
@@ -585,7 +619,7 @@ private final class BackendBrowserCallHost: BrowserDriverHost {
         try Task.checkCancellation()
         guard permittedTab(id) else { throw NativeRPCError(code: "not-permitted", message: "This window is no longer attached to this caller.") }
         guard runtime.handoverPrompt(id) == nil else { throw NativeRPCError(code: "not-permitted", message: "The person has this page.") }
-        if ["select", "focusAndSelect", "scriptedInput"].contains(BrowserDriverScripts.name(of: script) ?? ""), !mayInput(id) {
+        if ["select", "focusAndSelect", "scriptedInput", "domAction", "files"].contains(BrowserDriverScripts.name(of: script) ?? ""), !mayInput(id) {
             throw NativeRPCError(code: "origin-changed", message: "The site changed. The previous permission no longer applies.")
         }
         let value = try await runtime.evaluate(id, script)
@@ -597,6 +631,26 @@ private final class BackendBrowserCallHost: BrowserDriverHost {
     func focusForTyping(_ id: String) -> Bool { mayInput(id) && runtime.focusForTyping(id) }
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool { mayInput(id) && runtime.type(id, plan: plan) }
     func press(_ id: String, key: BrowserKeySpec) -> Bool { mayInput(id) && runtime.press(id, key: key) }
+    func click(_ id: String, cssRect: CGRect, modifiers: BrowserClickModifiers) -> Bool { mayInput(id) && runtime.click(id, cssRect: cssRect, modifiers: modifiers) }
+    func doubleClick(_ id: String, cssRect: CGRect) -> Bool { mayInput(id) && runtime.doubleClick(id, cssRect: cssRect) }
+    func hover(_ id: String, cssRect: CGRect) -> Bool { mayInput(id) && runtime.hover(id, cssRect: cssRect) }
+    func press(_ id: String, chord: BrowserKeyChord) -> Bool { mayInput(id) && runtime.press(id, chord: chord) }
+    func upload(_ id: String, selector: String, files: [String], probe: [String: Any]) async throws -> [String: Any] {
+        guard mayInput(id) else { throw NativeRPCError(code: "origin-changed", message: "The site changed. The previous permission no longer applies.") }
+        let allowed: @MainActor () -> Bool = { [self] in
+            mayInput(id) && grantedUploadDocument != nil && runtime.uploadDocument(id) == grantedUploadDocument
+        }
+        guard allowed() else { throw NativeRPCError(code: "origin-changed", message: "The upload document changed. Ask again on the current page.") }
+        let answer = try await runtime.upload(id, selector: selector, files: files, probe: probe, authority: allowed)
+        guard allowed() else { throw NativeRPCError(code: "not-permitted", message: "This page's grant changed during the upload.") }
+        return answer
+    }
+    func screenshot(_ id: String, options: BrowserScreenshotOptions) async throws -> (path: String, width: Int, height: Int, masked: Int) {
+        try Task.checkCancellation(); guard permittedTab(id) else { throw NativeRPCError(code: "not-permitted", message: "This window's grant was revoked.") }
+        let shot = try await runtime.screenshot(id, options: options)
+        guard permittedTab(id), runtime.handoverPrompt(id) == nil else { throw NativeRPCError(code: "not-permitted", message: "This page's grant changed during capture.") }
+        return shot
+    }
     func screenshot(_ id: String) async throws -> (path: String, width: Int, height: Int, masked: Int) {
         try Task.checkCancellation(); guard permittedTab(id) else { throw NativeRPCError(code: "not-permitted", message: "This window's grant was revoked.") }
         let shot = try await runtime.screenshot(id)

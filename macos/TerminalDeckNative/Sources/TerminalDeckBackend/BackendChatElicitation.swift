@@ -1,10 +1,26 @@
 import Foundation
 import TerminalDeckNativeCore
 
-/// MCP requests are conversation input, never tool permissions or automatic grants.
+/// Codex transports MCP permissions and genuine server questions through the same request method.
 public enum BackendChatElicitation {
     public static func isRequest(_ request: NativeRPCValue) -> Bool {
         ["mcpServer/elicitation/request", "elicitation"].contains(request["subtype"].string ?? "")
+    }
+    public static func isToolApproval(_ request: NativeRPCValue) -> Bool {
+        isRequest(request) && request["subtype"].string == "mcpServer/elicitation/request" &&
+            request["input"]["_meta"]["codex_approval_kind"].string == "mcp_tool_call" &&
+            request["input"]["mode"].string == "form"
+    }
+    public static func requestKind(_ request: NativeRPCValue) -> String {
+        if isToolApproval(request) { return "mcp-tool-approval" }
+        if isRequest(request) { return "elicitation" }
+        if BackendChatQuestions.isQuestion(request) { return "requestUserInput" }
+        return "permission"
+    }
+    public static func title(_ request: NativeRPCValue) -> String {
+        if isToolApproval(request) { return "Permission" }
+        if let server = request["input"]["serverName"].string { return "Question from " + server }
+        return "Question"
     }
     public static func authURL(_ request: NativeRPCValue) -> URL? {
         guard isRequest(request), request["input"]["mode"].string == "url",
@@ -30,16 +46,36 @@ public enum BackendChatElicitation {
         }
     }
     public static func fields(_ request: NativeRPCValue) -> [Field] {
+        if BackendChatQuestions.isQuestion(request) {
+            return BackendChatQuestions.questions(request).map { question in
+                let choices = NativeRPCValue.array(question.options.map { .string($0.label) })
+                var schema = NativeRPCValue.object([
+                    .init("title", .string(question.title)), .init("description", .string(question.text)),
+                    .init("type", .string(question.multiple ? "array" : "string")),
+                    .init("allowCustom", .bool(true)), .init("secret", .bool(question.secret)),
+                    .init("enumDescriptions", .array(question.options.map { .string($0.detail) }))
+                ])
+                schema = question.multiple ? schema.setting("items", .object([.init("enum", choices)])) : schema.setting("enum", choices)
+                return Field(id: question.id, schema: schema, required: true)
+            }
+        }
         let schema = request["input"]["requestedSchema"]
         let required = Set(schema["required"].elements?.compactMap(\.string) ?? [])
         return (schema["properties"].fields ?? []).map { Field(id: $0.key, schema: $0.value, required: required.contains($0.key)) }
     }
     public static func usesFields(_ request: NativeRPCValue) -> Bool {
+        if BackendChatQuestions.isQuestion(request) { return !fields(request).isEmpty }
         let schema = request["input"]["requestedSchema"]
         return schema["type"].string == "object" && !fields(request).isEmpty && fields(request).allSatisfy {
             ["string", "number", "integer", "boolean"].contains($0.schema["type"].string ?? "") ||
                 ($0.schema["type"].string == "array" && !$0.choices.isEmpty && $0.choices.allSatisfy { $0.string != nil })
         }
+    }
+    public static func isEmptyForm(_ request: NativeRPCValue) -> Bool {
+        let schema = request["input"]["requestedSchema"]
+        return isRequest(request) && schema["type"].string == "object" &&
+            (schema["properties"].isNullish || schema["properties"].fields?.isEmpty == true) &&
+            (schema["required"].elements ?? []).isEmpty
     }
     public static func defaults(_ request: NativeRPCValue) -> NativeRPCValue {
         .object(fields(request).compactMap { field in
@@ -47,6 +83,14 @@ public enum BackendChatElicitation {
         })
     }
     public static func answers(_ request: NativeRPCValue, text: [String: String], selected: NativeRPCValue) throws -> NativeRPCValue {
+        if BackendChatQuestions.isQuestion(request) {
+            let values = Dictionary(uniqueKeysWithValues: BackendChatQuestions.questions(request).map { question in
+                let custom = (text[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let picks = selected[question.id].elements?.compactMap(\.string) ?? selected[question.id].string.map { [$0] } ?? []
+                return (question.id, custom.isEmpty ? picks : question.multiple ? picks + [custom] : [custom])
+            })
+            return BackendChatQuestions.answers(request, values: values)
+        }
         var result = NativeRPCValue.object([])
         for field in fields(request) {
             if let raw = text[field.id], !raw.isEmpty || (field.required && field.schema["type"].string == "string") {

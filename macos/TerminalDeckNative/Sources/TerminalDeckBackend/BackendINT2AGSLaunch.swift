@@ -39,9 +39,22 @@ public struct BackendINT2AGSLaunch: Sendable {
                 task = task?.setting("model", .null).setting("effort", .null)
             }
         }
+        let resuming = input.teamJob?.resumedFromSessionID != nil
+        let fallbackProvider = await defaultProvider()
         var settings = try await BackendAGSSettingsResolution.resolve(input: input, store: store, configuration: configuration,
-            defaultProvider: await defaultProvider(), taskProfile: profileID, requested: input.agentSettings, playbook: playbook,
+            defaultProvider: fallbackProvider, taskProfile: profileID, requested: resuming ? nil : input.agentSettings, playbook: playbook,
             sessionProviderChoice: sessionProviderChoice)
+        if resuming, let saved = input.agentSettings {
+            let current: AGSAgentSettings
+            if let settings { current = settings }
+            else if let profileID, let raw = try await configuration.agent(profileID) {
+                current = try BackendAGSProfileProjection.settings(raw, defaultProvider: fallbackProvider)
+            } else {
+                current = .init(provider: input.provider ?? fallbackProvider, model: input.model, effort: input.effort,
+                    permissionMode: input.permissionMode, allowedTools: input.allowedTools, deniedTools: input.deniedTools ?? [])
+            }
+            settings = try Self.resuming(saved, within: current)
+        }
         if let task, let current = settings { settings = try BackendAGOPTEfficiencyPolicy.taskChoices(current, task: task) }
         // A permission picked in the owner's New session dialog also wins over private profile defaults.
         if context.fromWindow, let permission = input.permissionMode, var current = settings {
@@ -58,6 +71,40 @@ public struct BackendINT2AGSLaunch: Sendable {
         var resolved = input; resolved.agentSettings = settings
         if resolved.cwd.isEmpty, let folder = settings?.workingFolder { resolved.cwd = folder }
         return resolved
+    }
+    /// Restart journals retain restrictions, never an executable hook or environment. The current profile
+    /// supplies those private values; the old restrictions can only make its grants smaller.
+    static func resuming(_ saved: AGSAgentSettings, within current: AGSAgentSettings) throws -> AGSAgentSettings {
+        guard saved.provider == current.provider else {
+            throw NativeRPCError.invalidArguments("The saved chat's AI no longer matches its agent. Choose that AI in the agent's settings before resuming.")
+        }
+        var narrowed = current
+        if let allowed = saved.allowedTools {
+            narrowed.allowedTools = current.allowedTools.map { BackendTAGToolPolicy.intersection($0, allowed) } ?? allowed
+        }
+        narrowed.deniedTools = Array(Set(current.deniedTools + saved.deniedTools)).sorted()
+        for (server, enabled) in saved.mcpServers where !enabled { narrowed.mcpServers[server] = false }
+        var controls = current.efficiency ?? .init()
+        if saved.efficiency?.addonsOff == true { controls.addonsOff = true }
+        if saved.efficiency?.completion == "stop" { controls.completion = "stop" }
+        if saved.efficiency?.reuseContext == false { controls.reuseContext = false }
+        if saved.efficiency?.serializeHeavyJobs == true { controls.serializeHeavyJobs = true }
+        if saved.efficiency?.onExhaustion == "pause" { controls.onExhaustion = "pause" }
+        func budget<T: Comparable & AdditiveArithmetic>(_ a: T?, _ b: T?) -> T? {
+            guard let b, b > .zero else { return a }
+            guard let a, a > .zero else { return b }
+            return min(a, b)
+        }
+        controls.agentTokenBudget = budget(controls.agentTokenBudget, saved.efficiency?.agentTokenBudget)
+        controls.taskTokenBudget = budget(controls.taskTokenBudget, saved.efficiency?.taskTokenBudget)
+        controls.monthlyBudgetUSD = budget(controls.monthlyBudgetUSD, saved.efficiency?.monthlyBudgetUSD)
+        if let warning = saved.efficiency?.warningPercent { controls.warningPercent = min(controls.warningPercent ?? 80, warning) }
+        if current.efficiency != nil || saved.efficiency != nil { narrowed.efficiency = controls }
+        if let allowed = narrowed.allowedTools {
+            narrowed.allowedTools = allowed.filter { tool in !narrowed.deniedTools.contains { BackendTAGToolPolicy.covers($0, tool: tool) } }
+        }
+        try BackendAGSPolicy.requireNarrowing(narrowed, owner: current)
+        return narrowed
     }
     private func unavailable(_ context: BackendLaunchContext) -> NativeRPCError {
         .init(code: "unavailable", message: context.deviceBoundary != nil

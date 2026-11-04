@@ -130,7 +130,7 @@ struct SessionChatsRulesTests {
         #expect(claude == ["--model", "sonnet", "--effort", "max", "--permission-mode", "acceptEdits"])
         let codex = BackendSessionChats.withChoices(["-m", "gpt-5", "-c", "model_reasoning_effort=\"low\"", "--sandbox", "read-only", "--ask-for-approval", "on-request"],
                                                     provider: .codex, choices: ["effort": "high", "permission": "danger-full-access"])
-        #expect(codex == ["-m", "gpt-5", "-c", "model_reasoning_effort=\"high\"", "--sandbox", "danger-full-access", "--ask-for-approval", "on-request"])
+        #expect(codex == ["-m", "gpt-5", "-c", "model_reasoning_effort=\"high\"", "--sandbox", "danger-full-access", "--ask-for-approval", "never"])
         #expect(BackendSessionChats.effort(provider: .codex, arguments: codex) == "high")
         #expect(BackendSessionChats.withChoices(["--yolo"], provider: .gemini, choices: ["permission": "default"]).isEmpty)
     }

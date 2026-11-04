@@ -64,6 +64,7 @@ final class SIDEBARProjectStore {
             } catch { if mine == generation { self.error = "Couldn’t read project colours." } }
             if let raw = try? await EngineBridge.shared.invoke("session:list", []), let rows = raw as? [[String: Any]] {
                 guard mine == generation else { return }
+                for row in rows { SIDEBARPins.shared.observe(row) }
                 liveIDs = Set(rows.filter { $0["exitCode"] is NSNull || $0["exitCode"] == nil }.compactMap { $0["id"] as? String })
                 started = Dictionary(rows.compactMap { row -> (String, Double)? in
                     guard let id = row["id"] as? String else { return nil }

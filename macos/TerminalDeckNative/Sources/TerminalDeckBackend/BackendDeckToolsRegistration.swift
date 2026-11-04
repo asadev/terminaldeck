@@ -49,7 +49,7 @@ public enum BackendDeckToolsRegistration {
         let simulatorIDs = Set(BackendFIXESSimulatorMCP.ids)
         let simulatorTools: Set<String> = supplied.isDisjoint(with: simulatorIDs) ? [] : simulatorIDs
         let chatIDs: Set<String> = ["sessions.chat", "sessions.start_agent"]
-        let libraryTools = supplied.intersection(["sessions.chat_library", "sessions.chat_feature", "sessions.chat_organize", "sessions.chat_provider", "sessions.chat_diffs", "sessions.chat_children", "sessions.chat_terminal", "sessions.chat_fork"])
+        let libraryTools = supplied.intersection(["sessions.chat_library", "sessions.chat_feature", "sessions.chat_organize", "sessions.chat_provider", "sessions.chat_diffs", "sessions.chat_children", "sessions.chat_terminal", "sessions.chat_fork", "sessions.chat_rewind"])
         let devicePanelTools = supplied.intersection(["sessions.device_panels"])
         guard libraryTools.isEmpty || chatIDs.isSubset(of: supplied) else {
             throw NativeRPCError.invalidArguments("Native Chat extensions require the shared Chat tools.")
@@ -60,7 +60,10 @@ public enum BackendDeckToolsRegistration {
         let sidebarTools: Set<String> = supplied.isDisjoint(with: sidebarIDs) ? [] : sidebarIDs
         let queueTools: Set<String> = supplied.contains("chats.queue") ? ["chats.queue"] : []
         let captureTools = supplied.intersection(["browser.feedback", "windows.check"])
-        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs).union(attachTools).union(recordTools).union(simulatorTools).union(chatTools).union(libraryTools).union(devicePanelTools).union(sidebarTools).union(queueTools).union(captureTools)
+        // Privacy is an optional, complete family for the native Mac settings page.
+        let privacyIDs = BackendPrivacyMCP.toolIDs
+        let privacyTools: Set<String> = supplied.isDisjoint(with: privacyIDs) ? [] : privacyIDs
+        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs).union(attachTools).union(recordTools).union(simulatorTools).union(chatTools).union(libraryTools).union(devicePanelTools).union(sidebarTools).union(queueTools).union(captureTools).union(privacyTools)
         guard supplied == expected, definitions.count == expected.count else {
             let missing = expected.subtracting(supplied).sorted().joined(separator: ", ")
             let extra = supplied.subtracting(expected).sorted().joined(separator: ", ")

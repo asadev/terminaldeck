@@ -298,7 +298,10 @@ public struct HootChatDecoder: Sendable {
                     records.append(.init(.toolCall, id: toolID, value: .object([.init("name", block["name"]), .init("input", block["input"])])))
                 }
             }
-            if !text.isEmpty { records.insert(.text(row["is_api_error_message"].bool == true ? .error : .message, id: id, text), at: 0) }
+            if !text.isEmpty {
+                let record = HootChatRecord.text(row["is_api_error_message"].bool == true ? .error : .message, id: id, text)
+                records.insert(.init(record.kind, id: record.messageID, value: record.value.setting("providerMessageId", row["parent_tool_use_id"].isNullish ? row["uuid"] : .null)), at: 0)
+            }
             // Deck Memory: how much is in view after this step. Sub-agents have their own desks.
             let usage = message["usage"]
             if row["parent_tool_use_id"].isNullish, usage.fields != nil {

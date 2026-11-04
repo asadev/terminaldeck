@@ -74,7 +74,10 @@ struct NativeCodingAIAccountRow: View {
             .font(.callout)
             if account.isAPIKey {
                 Text("Usage and reported cost appear in each chat. Subscription windows are separate.").font(.caption).foregroundStyle(.secondary)
-            } else { NativeAccountUsageLine(accountID: account.id) }
+            } else if model.showsUsage { NativeAccountUsageLine(accountID: account.id) }
+            if let last = model.lastLogin {
+                Text(last).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
             if let sessions = model.sessions {
                 Text(sessions)
                     .font(.caption)
@@ -107,9 +110,7 @@ struct NativeCodingAIAccountRow: View {
                     if problem.install != nil {
                         let provider = account.provider ?? "claude"
                         NativeAIToolInstallButton(tool: provider) {
-                            if account.isAPIKey { store.refreshAll() }
-                            else if NativeAccountSignInModel.canDrive(provider), !account.system { NativeAccountSignInModel.shared.start(account: account) }
-                            else { store.signIn(account) }
+                            if account.isAPIKey { store.refreshAll() } else { NativeAccountSignInModel.shared.open(account, store: store) }
                         }
                     }
                 }
@@ -134,8 +135,7 @@ struct NativeCodingAIAccountRow: View {
                 // Claude and Codex: the app runs the sign-in and the browser opens (no terminal).
                 // The same button is "Sign in again" for an account that was signed out or expired.
                 Button(account.lastUsedAt == nil ? "Sign in" : "Sign in again") {
-                    if NativeAccountSignInModel.canDrive(account.provider), !account.system { NativeAccountSignInModel.shared.start(account: account) }
-                    else { store.signIn(account) }
+                    NativeAccountSignInModel.shared.open(account, store: store)
                 }
                     .disabled(store.busy)
             }

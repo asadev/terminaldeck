@@ -71,7 +71,11 @@ export const DEFAULT_RELAY_URL = 'wss://relay.terminaldeck.dev'
  * payload. The phone side is unwrapped — a phone has one channel and does not
  * need to be told its own name.
  */
-export const ENVELOPE = { open: 0x01, data: 0x02, close: 0x03 } as const
+export const ENVELOPE = { open: 0x01, data: 0x02, close: 0x03, signal: 0x04 } as const
+
+/** A server host explicitly refuses the old relay data lane. Guests keep their raw carrier. */
+export const SERVER_DIRECT_HEADER = 'x-deck-host-mode'
+export const SERVER_DIRECT_MODE = 'server-direct-v1'
 
 export const CHANNEL_BYTES = 16
 export const ENVELOPE_HEADER = 1 + CHANNEL_BYTES
@@ -104,7 +108,7 @@ export interface Envelope {
 export function decodeEnvelope(frame: Buffer): Envelope | null {
   if (frame.length < ENVELOPE_HEADER) return null
   const type = frame[0]
-  if (type !== ENVELOPE.open && type !== ENVELOPE.data && type !== ENVELOPE.close) return null
+  if (type !== ENVELOPE.open && type !== ENVELOPE.data && type !== ENVELOPE.close && type !== ENVELOPE.signal) return null
   return {
     type,
     channel: Buffer.from(frame.subarray(1, ENVELOPE_HEADER)),

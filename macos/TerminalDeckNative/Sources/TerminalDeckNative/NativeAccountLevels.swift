@@ -432,7 +432,7 @@ struct NativeAccountLevelsSection: View {
         return original.id
     }
     private var names: [String: String] {
-        Dictionary(accounts.map { ($0.id, $0.system ? $0.name + " (this Mac’s own login)" : $0.name) }, uniquingKeysWith: { first, _ in first })
+        Dictionary(accounts.map { ($0.id, $0.system ? CodingAIAccountLabels.ownLoginLabel($0.provider) : $0.name) }, uniquingKeysWith: { first, _ in first })
     }
 
     var body: some View {
@@ -485,8 +485,8 @@ struct NativeAccountLevelsSection: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if signedOut.contains(effective.id), let account = accounts.first(where: { $0.id == effective.id }) {
                     // Signing in again keeps everything assigned to this account as it is.
-                    Button("\(account.name) is signed out. Sign in again") {
-                        if NativeAccountSignInModel.canDrive(account.provider), !account.system { NativeAccountSignInModel.shared.start(account: account) }
+                    Button("\(account.system ? CodingAIAccountLabels.ownLoginLabel(account.provider) : account.name) is signed out. Sign in again") {
+                        NativeAccountSignInModel.shared.open(account)
                     }
                     .buttonStyle(.link).font(.caption)
                 }

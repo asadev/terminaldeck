@@ -154,8 +154,9 @@ public actor BackendNativeProviders: BackendProviderLaunchResolver {
                 ? "\(requested) is installed but its launcher will not run. Repair that CLI or choose another agent."
                 : "\(requested) could not be found on the login shell's PATH. Install it or choose another agent.")
         }
-        return BackendProviderSpec(id: requested, command: command, args: [],
-            resumeArgs: requested == "claude" ? ["--continue"] : requested == "codex" ? ["resume", "--last"] : [])
+        let arguments = requested == "codex" ? BackendAgentStartup.codexArguments : []
+        return BackendProviderSpec(id: requested, command: command, args: arguments,
+            resumeArgs: requested == "claude" ? ["--continue"] : requested == "codex" ? arguments + ["resume", "--last"] : [])
     }
 
     public func resolveBinary(_ id: String, path: String, refresh: Bool = false) async -> Binary {

@@ -13,7 +13,7 @@ struct TeamChats20ToolLeaseTests {
         let recipe = BackendSessionChats.Recipe(provider: .codex, executable: "/fake/codex", arguments: flags,
             environment: [:], cwd: "/scratch/job", conversation: nil, sessionTools: true)
         let plan = try BackendSessionChats.plan(recipe, cliSession: nil, again: false)
-        #expect(plan.arguments == ["app-server", "--stdio"] + Array(flags.dropLast(2)))
+        #expect(plan.arguments == ["app-server", "--stdio"] + Array(flags.dropLast(2)) + ["-c", "check_for_update_on_startup=false"])
         #expect(plan.setup?.session["model"].string == "test-model")
         #expect(plan.setup?.session["config"]["mcp_servers"].isNullish == true)
         // A restart keeps the same lease. No account file or token is read by this check.

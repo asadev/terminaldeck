@@ -345,7 +345,7 @@ enum EngineBridgeUsedChannels {
         ("session:chat:terminal", "NativeChatOwnedTerminals.swift"),
         ("session:create", "IntentsActions.swift, NativeAccountSwitch.swift, NativeChatLibrary.swift, NativeChatProviderFeatures.swift, NativeSFXScreen.swift"),
         ("session:kill", "NativeCodingAIStore.swift, SidebarView.swift"),
-        ("session:list", "IntentsEntities.swift, NativeAccountLevels.swift, NativeArtifactsSource.swift, NativeBrowserBRBinding.swift, NativeBrowserPanels.swift, NativeCapturedFeedback.swift, NativeChatLibrary.swift, NativeChatProviderFeatures.swift, NativeChatSources.swift, NativeChatUnreadCounts.swift, NativeCodingAIStore.swift, NativeCompositionPhoneDevices.swift, NativeDebugPanel.swift, NativeDriveHost.swift, NativeFIXESDeviceContextMenu.swift, NativeHootChat.swift, NativeHootScreen.swift, NativeSimulatorModel.swift, NativeTerminalSession.swift, SIDEBARProjectStore.swift"),
+        ("session:list", "IntentsEntities.swift, NativeAccountLevels.swift, NativeArtifactsSource.swift, NativeBrowserBRBinding.swift, NativeBrowserPanels.swift, NativeCapturedFeedback.swift, NativeChatLibrary.swift, NativeChatProviderFeatures.swift, NativeChatSources.swift, NativeCodingAIStore.swift, NativeCompositionPhoneDevices.swift, NativeDebugPanel.swift, NativeDriveHost.swift, NativeFIXESDeviceContextMenu.swift, NativeHootChat.swift, NativeHootScreen.swift, NativeSimulatorModel.swift, NativeTerminalSession.swift, SIDEBARProjectStore.swift"),
         ("session:owner", "NativeTerminalSession.swift"),
         ("session:scrollback", "NativePermissionDesk.swift, NativeTerminalSession.swift"),
         ("session:switch-account", "NativeAccountLevels.swift, NativeAccountSwitch.swift"),

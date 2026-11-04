@@ -120,6 +120,11 @@ extension NativeCompositionProduction {
                     return try await BackendAGTDirectoryService(config: tasks.config, authority: taskAuthority, live: live)
                         .invoke("agents.profile", arguments: .object([.init("id", .string(id))]), caller: caller)
                 }
+                if let authority = await MainActor.run(body: { self?.authority }),
+                   try await authority.resolve(caller).caller.kind == .session {
+                    guard let row = try await tasks.config.agent(id) else { throw NativeRPCError.invalidArguments("Choose a saved agent from agents_directory.") }
+                    return BackendAgentStartSelection.publicProfile(row)
+                }
                 guard let profile = await MainActor.run(body: { self?.agentSettings?.profileService }) else {
                     throw NativeRPCError(code: "unavailable", message: "The agent profile reader is not ready.")
                 }

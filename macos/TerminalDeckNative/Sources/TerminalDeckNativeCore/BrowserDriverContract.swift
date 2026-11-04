@@ -45,10 +45,13 @@ public struct BrowserDriverSession: Equatable, Sendable {
 }
 
 /// A refusal, said in one plain sentence — what the agent reads.
-public struct BrowserDriverRefusal: Error, Equatable, Sendable, CustomStringConvertible {
+public struct BrowserDriverRefusal: Error, Equatable, Sendable, CustomStringConvertible, LocalizedError {
     public let message: String
     public init(_ message: String) { self.message = message }
     public var description: String { message }
+    /// Browser 27: a refusal that reaches a caller outside the engine (browser_page)
+    /// still reads as its own sentence, not Foundation's "operation couldn't be completed".
+    public var errorDescription: String? { message }
 }
 
 /// One command from the engine.
@@ -241,8 +244,14 @@ public enum BrowserDriverTargeting {
 
 /// The engine's limits and verbs for `browser_step` (`browser-driver.ts`).
 public enum BrowserStepRules {
-    public static let verbs = ["click", "type", "select", "check", "press", "submit"]
-    public static let maxSelectorChars = 400
+    public static let verbs = ["click", "type", "select", "check", "press", "submit",
+                               // Browser 27: the rest of Playwright's element actions.
+                               "dblclick", "rightclick", "hover", "focus", "clear", "uncheck", "scroll", "drag", "upload"]
+    /// Verbs that may act on the page (or the focused element) with no selector.
+    public static let selectorOptional: Set<String> = ["press", "scroll"]
+    /// Read modes beyond the outline and one element's text.
+    public static let readModes = ["outline", "text", "accessibility", "links", "tables", "html", "matches", "extract", "frames"]
+    public static let maxSelectorChars = 1_000
     public static let maxTypeChars = 2_000
     /// Up to this many characters are typed key by key; longer text is inserted at once.
     public static let perKeyLimit = 200
@@ -400,5 +409,52 @@ public enum BrowserHandover {
         .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespaces)
         return flat.count > maxPromptChars ? String(flat.prefix(maxPromptChars)) + "\u{2026}" : flat
+    }
+}
+
+/// What `browser_screenshot` should capture: the visible page (the default), the
+/// whole page top to bottom, one element, or the whole page as a PDF.
+public struct BrowserScreenshotOptions: Equatable, Sendable {
+    public var fullPage = false
+    public var selector: String?
+    public var pdf = false
+    public init(fullPage: Bool = false, selector: String? = nil, pdf: Bool = false) {
+        self.fullPage = fullPage; self.selector = selector; self.pdf = pdf
+    }
+    public var isPlain: Bool { !fullPage && selector == nil && !pdf }
+
+    public static func read(_ command: BrowserDriverCommand) throws(BrowserDriverRefusal) -> BrowserScreenshotOptions {
+        let format = (try command.optionalString("format"))?.lowercased() ?? "png"
+        guard format == "png" || format == "pdf" else { throw BrowserDriverRefusal("format is png or pdf") }
+        let selector = try command.optionalString("selector").map { BrowserElementRef.selector(for: $0) }
+        if format == "pdf" && selector != nil { throw BrowserDriverRefusal("a PDF is the whole page; leave out selector") }
+        if command.flag("fullPage") && selector != nil { throw BrowserDriverRefusal("name selector or fullPage, not both") }
+        return BrowserScreenshotOptions(fullPage: command.flag("fullPage"), selector: selector, pdf: format == "pdf")
+    }
+}
+
+/// The modifier keys held during a click (`modifiers: ["Shift", "Meta"]`).
+public struct BrowserClickModifiers: Equatable, Sendable {
+    public var shift = false, control = false, alt = false, meta = false
+    public init(shift: Bool = false, control: Bool = false, alt: Bool = false, meta: Bool = false) {
+        self.shift = shift; self.control = control; self.alt = alt; self.meta = meta
+    }
+    public var isEmpty: Bool { !(shift || control || alt || meta) }
+    public var flags: [String: Bool] { ["shift": shift, "control": control, "alt": alt, "meta": meta] }
+
+    public static func read(_ raw: Any?) throws(BrowserDriverRefusal) -> BrowserClickModifiers {
+        guard let raw, !(raw is NSNull) else { return BrowserClickModifiers() }
+        guard let list = raw as? [Any] else { throw BrowserDriverRefusal("modifiers is a list, like [\"Shift\"]") }
+        var out = BrowserClickModifiers()
+        for item in list {
+            switch (item as? String)?.lowercased() ?? "" {
+            case "shift": out.shift = true
+            case "control", "ctrl": out.control = true
+            case "alt", "option": out.alt = true
+            case "meta", "command", "cmd": out.meta = true
+            default: throw BrowserDriverRefusal("\(item) is not a modifier. Use Shift, Control, Alt or Meta.")
+            }
+        }
+        return out
     }
 }

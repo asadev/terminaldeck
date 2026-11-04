@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Shapes;
 using TerminalDeck.App.Shell;
 using TerminalDeck.Core.Usage;
@@ -23,7 +24,9 @@ public sealed class UsageMeter : StackPanel
   private readonly Button stripButton = new(), ringButton = new();
   private readonly Grid strip = new() { Width = 12, Height = 12, VerticalAlignment = VerticalAlignment.Center };
   private readonly Border stripFill = new() { CornerRadius = new(2.5), HorizontalAlignment = HorizontalAlignment.Left };
-  private readonly Grid ring = new() { Width = 12, Height = 12 };
+  private const double RingSize = 14, RingLine = 2;
+  private Storyboard? pulse;
+  private readonly Grid ring = new() { Width = RingSize, Height = RingSize };
   private readonly StackPanel contextCard = new() { Spacing = 5, Width = 276 }, planCard = new() { Spacing = 8, Width = 276 };
   private readonly Flyout contextFlyout = new(), planFlyout = new();
   private readonly DispatcherQueueTimer tick;
@@ -45,7 +48,7 @@ public sealed class UsageMeter : StackPanel
     var track = new Border { CornerRadius = new(2.5) }; track.SetResourceReference(Border.BackgroundProperty, "DeckDividerBrush");
     strip.Children.Add(track); strip.Children.Add(stripFill);
     Plain(stripButton, strip); stripButton.Visibility = Visibility.Collapsed;
-    var capsule = new Border { CornerRadius = new(9), Padding = new(6, 3, 6, 3), Child = ring };
+    var capsule = new Border { CornerRadius = new((RingSize + 6) / 2), Padding = new(6, 3, 6, 3), Child = ring };
     capsule.SetResourceReference(Border.BackgroundProperty, "DeckHoverBrush");
     Plain(ringButton, capsule);
     Children.Add(stripButton); Children.Add(ringButton);
@@ -88,7 +91,7 @@ public sealed class UsageMeter : StackPanel
       watch ??= usage.Watch(sessionId); usage.Changed += OnChanged;
       tick.Start(); Reload();
     };
-    Unloaded += (_, _) => { usage.Changed -= OnChanged; watch?.Dispose(); watch = null; tick.Stop(); cap?.Cancel(); };
+    Unloaded += (_, _) => { usage.Changed -= OnChanged; watch?.Dispose(); watch = null; tick.Stop(); cap?.Cancel(); Pulse(false); };
     Render();
   }
 
@@ -217,7 +220,7 @@ public sealed class UsageMeter : StackPanel
     AutomationProperties.SetName(stripButton, summary); ToolTipService.SetToolTip(stripButton, null);
 
     DrawRing(worst?.Percent, worst?.Level ?? UsageLevel.Ok);
-    ring.Opacity = checking ? 0.55 : 1;
+    Pulse(checking);
     AutomationProperties.SetName(ringButton, "Plan limits: " + title);
 
     // Context card.
@@ -252,17 +255,30 @@ public sealed class UsageMeter : StackPanel
   private void DrawRing(double? percent, UsageLevel level)
   {
     ring.Children.Clear();
-    var track = new Ellipse { Width = 12, Height = 12, StrokeThickness = 2, Opacity = 0.3 };
+    var track = new Ellipse { Width = RingSize, Height = RingSize, StrokeThickness = RingLine, Opacity = 0.3 };
     track.SetResourceReference(Shape.StrokeProperty, "DeckSecondaryInkBrush"); ring.Children.Add(track);
     var filled = Math.Clamp((percent ?? 0) / 100, 0, 1);
     if (filled <= 0) return;
-    if (filled >= 0.999) { ring.Children.Add(new Ellipse { Width = 12, Height = 12, StrokeThickness = 2, Stroke = PlanBrush(level) }); return; }
-    // An arc from twelve o'clock, clockwise, radius 5 inside the 12 px box.
-    var angle = filled * 2 * Math.PI; var end = new Windows.Foundation.Point(6 + 5 * Math.Sin(angle), 6 - 5 * Math.Cos(angle));
-    var figure = new PathFigure { StartPoint = new(6, 1), IsClosed = false };
-    figure.Segments.Add(new ArcSegment { Point = end, Size = new(5, 5), SweepDirection = SweepDirection.Clockwise, IsLargeArc = filled > 0.5 });
+    if (filled >= 0.999) { ring.Children.Add(new Ellipse { Width = RingSize, Height = RingSize, StrokeThickness = RingLine, Stroke = PlanBrush(level) }); return; }
+    // Both strokes share a centre line, including the rounded arc caps.
+    const double centre = RingSize / 2, radius = (RingSize - RingLine) / 2;
+    var angle = filled * 2 * Math.PI; var end = new Windows.Foundation.Point(centre + radius * Math.Sin(angle), centre - radius * Math.Cos(angle));
+    var figure = new PathFigure { StartPoint = new(centre, centre - radius), IsClosed = false };
+    figure.Segments.Add(new ArcSegment { Point = end, Size = new(radius, radius), SweepDirection = SweepDirection.Clockwise, IsLargeArc = filled > 0.5 });
     var geometry = new PathGeometry(); geometry.Figures.Add(figure);
-    ring.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Stroke = PlanBrush(level), StrokeThickness = 2, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+    ring.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Stroke = PlanBrush(level), StrokeThickness = RingLine, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
+  }
+
+  private void Pulse(bool checkingNow)
+  {
+    if (!checkingNow || !IsLoaded || !new Windows.UI.ViewManagement.UISettings().AnimationsEnabled)
+    {
+      pulse?.Stop(); pulse = null; ring.Opacity = checkingNow ? 0.55 : 1; return;
+    }
+    if (pulse is not null) return;
+    var fade = new DoubleAnimation { From = 1, To = 0.55, Duration = TimeSpan.FromSeconds(0.8), AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+    Storyboard.SetTarget(fade, ring); Storyboard.SetTargetProperty(fade, nameof(Opacity));
+    pulse = new(); pulse.Children.Add(fade); pulse.Begin();
   }
 
   /// "Context window" with the figure, the used/free bar and rows, and the facts.

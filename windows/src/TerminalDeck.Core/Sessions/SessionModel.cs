@@ -4,12 +4,13 @@ namespace TerminalDeck.Core.Sessions;
 
 public enum SessionState { Starting, Running, Held, Exited }
 public sealed record SessionDefinition(string Id, string Provider, string Cwd, string Title, string? AccountId = null,
-  string? AccountHome = null, string? ConversationId = null, string? DeviceId = null, string? Purpose = null, string? InitialPrompt = null, string? Model = null, string? Effort = null, string? Permission = null, string? ServerId = null)
+  string? AccountHome = null, string? ConversationId = null, string? DeviceId = null, string? Purpose = null, string? InitialPrompt = null, string? Model = null, string? Effort = null, string? Permission = null, string? ServerId = null, string? Shell = null)
 {
   public TerminalDeck.Core.Servers.ServerCodingTask? ServerCodingTask { get; init; }
   public string? ServerStartIn { get; init; }
   public void Validate()
   {
+    if (Shell is not null && (Provider != "shell" || ServerId is not null || !TerminalShells.IsKnown(Shell))) throw new ArgumentException("Choose a supported shell for a local terminal.");
     if (ServerStartIn is not null) { if (ServerId is null) throw new ArgumentException("A remote folder needs a saved SSH server."); TerminalDeck.Core.Servers.ServerValidation.Path(ServerStartIn); }
     if (ServerCodingTask is not null) { if (ServerId is null) throw new ArgumentException("Coding AI setup needs a saved SSH server."); ServerCodingTask.Validate(); }
     if (ServerId is not null && (Provider != "shell" || !Guid.TryParseExact(ServerId, "N", out _)) || !Guid.TryParse(Id, out _) || (Provider is not ("claude" or "codex" or "gemini" or "shell") && !CustomTerminalProviders.IsKey(Provider)) ||

@@ -6,7 +6,7 @@ using TerminalDeck.Core.Storage;
 namespace TerminalDeck.Core.Settings;
 
 public sealed record GeneralPreferences(bool AutoNameSessions = true, bool CopyOnSelect = false, bool KeepAwake = false, AiPermissionMode? DefaultPermission = null,
-  LaunchModelChoice[]? LaunchModels = null, string DefaultProvider = "claude", bool RestoreSessions = true, bool DebugSettings = false);
+  LaunchModelChoice[]? LaunchModels = null, string DefaultProvider = "claude", bool RestoreSessions = true, bool DebugSettings = false, string? TerminalShell = null);
 // The app-wide model and effort every new session starts with (Settings → Coding AIs).
 public sealed record LaunchModelChoice(string Provider, string Model, string? Effort);
 
@@ -14,13 +14,22 @@ public sealed class GeneralSettings(IStateStore<GeneralPreferences> store)
 {
   public GeneralPreferences Read() => store.Load() ?? new();
   public event Action? Changed;
-  public void Save(GeneralPreferences value) { store.Save(value); Changed?.Invoke(); }
+  public void Save(GeneralPreferences value)
+  {
+    if (!Sessions.TerminalShells.IsKnown(value.TerminalShell)) throw new ArgumentException("Choose a supported terminal shell.");
+    store.Save(value); Changed?.Invoke();
+  }
   public GeneralPreferences Patch(JsonElement patch)
   {
     if (patch.ValueKind != JsonValueKind.Object) throw new ArgumentException("Choose named General settings.");
     var next = Read();
     foreach (var field in patch.EnumerateObject())
     {
+      if (field.Name == "terminalShell")
+      {
+        if (field.Value.ValueKind != JsonValueKind.String || !Sessions.TerminalShells.IsKnown(field.Value.GetString())) throw new ArgumentException("Choose a supported terminal shell.");
+        next = next with { TerminalShell = field.Value.GetString() }; continue;
+      }
       if (field.Name == "defaultProvider")
       {
         if (field.Value.ValueKind != JsonValueKind.String || field.Value.GetString() is not ("claude" or "codex" or "gemini" or "shell")) throw new ArgumentException("Choose an offered default coding AI.");

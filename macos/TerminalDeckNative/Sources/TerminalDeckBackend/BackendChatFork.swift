@@ -5,7 +5,7 @@ import TerminalDeckNativeCore
 /// identity, and the app opens that in a separate Chat. It is not a rewind, and not a handoff summary.
 ///   Codex   -> `thread/fork` creates the new thread now; the app then opens it through the normal resume.
 ///   Claude  -> the CLI only forks at launch (`--resume <id> --fork-session`), so this reports the launch
-///              the app must perform and never pretends a fork already exists.
+///              the app must perform, with --resume-session-at for a recorded message boundary. It reports pending until the first input saves the new ID.
 /// A turn the app shows is chosen by the app's own turn ID; `knownTurns` maps it to the provider's turn ID ("" when none is recorded).
 /// `location/read` answers where a Chat really runs, so no Chat claims a remote or cloud location it does not have.
 public enum BackendChatFork {
@@ -17,11 +17,11 @@ public enum BackendChatFork {
 
     public static func invoke(operation: String, args: NativeRPCValue, provider: HootChatProvider, conversation: String?, cwd: String,
                               knownTurns: [String: String], quiet: Bool, request: Request,
-                              isolatedFork: (@Sendable (NativeRPCValue) async throws -> NativeRPCValue)? = nil) async throws -> NativeRPCValue {
+                              isolatedFork: (@Sendable (NativeRPCValue) async throws -> NativeRPCValue)? = nil, knownMessages: [NativeRPCValue] = []) async throws -> NativeRPCValue {
         guard operations.contains(operation), args.fields != nil, try args.encodedJSON().count <= 2_048 else {
             throw NativeRPCError.invalidArguments("Choose a supported fork or location action with bounded arguments.")
         }
-        guard Set(args.fields?.map(\.key) ?? []).isSubset(of: operation == "fork/create" ? ["throughTurn"] : []) else {
+        guard Set(args.fields?.map(\.key) ?? []).isSubset(of: operation == "fork/create" ? ["throughTurn", "throughSequence"] : []) else {
             throw NativeRPCError.invalidArguments("Only throughTurn can be chosen. The folder, account and provider settings come from this Chat.")
         }
         if operation == "location/read" { return location(provider: provider, conversation: conversation, cwd: cwd) }
@@ -29,7 +29,13 @@ public enum BackendChatFork {
             throw NativeRPCError(code: "unavailable", message: "The AI has no confirmed conversation to fork yet. Send a message first.")
         }
         guard quiet else { throw NativeRPCError(code: "busy", message: "Wait for the AI to finish its answer before forking this conversation.") }
-        let through = args["throughTurn"].string
+        let sequence = args["throughSequence"].number
+        let message = knownMessages.first { $0["sequence"].number == sequence && sequence != nil }
+        if sequence != nil, message?["fork"].bool != true {
+            throw NativeRPCError(code: "unavailable", message: "The AI cannot fork at that exact message. Nothing was forked.")
+        }
+        guard sequence == nil || args["throughTurn"].isNullish else { throw NativeRPCError.invalidArguments("Choose a message or a turn, not both.") }
+        let through = message?["turnId"].string ?? args["throughTurn"].string
         if let through {
             guard !through.isEmpty, through.utf8.count <= 512, knownTurns[through] != nil else {
                 throw NativeRPCError(code: "access-denied", message: "That turn does not belong to this conversation.")
@@ -65,11 +71,11 @@ public enum BackendChatFork {
                 ("executionLocation", .string("this-mac")),
                 ("next", .string("Open the new conversation in its own Chat; this Chat keeps its own conversation unchanged."))])
         case .claude:
-            guard through == nil else {
-                throw NativeRPCError(code: "unavailable", message: "Claude Code forks the whole conversation at its latest point. Forking from an earlier message is not offered for Claude.")
+            guard through == nil || message?["providerMessageId"].string != nil else {
+                throw NativeRPCError(code: "unavailable", message: "Choose a recorded message sequence for Claude. A turn ID alone does not identify a precise Claude message.")
             }
             return object([("provider", .string("claude")), ("mode", .string("launch-fork")), ("conversationId", .string(conversation)),
-                ("parentConversationId", .string(conversation)), ("throughTurn", .null), ("cwd", .string(cwd)), ("requiresForkLaunch", .bool(true)),
+                ("parentConversationId", .string(conversation)), ("resumeSessionAt", message?["providerMessageId"] ?? .null), ("throughTurn", .null), ("cwd", .string(cwd)), ("requiresForkLaunch", .bool(true)),
                 ("executionLocation", .string("this-mac")),
                 ("next", .string("Claude forks while launching: start a new Chat that resumes this conversation as a fork. The fork gets its own conversation ID once it starts."))])
         case .gemini:

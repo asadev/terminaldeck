@@ -17,19 +17,19 @@ import TerminalDeckNativeCore
         var draft: HootComposerDraft?
         var tabKey: String?
     }
+    static var defaults: UserDefaults = .standard
     private static let prefix = "native.chat.outbox."
     private static let index = prefix + "sessions"
-    static var sessions: [String] { UserDefaults.standard.stringArray(forKey: index) ?? [] }
+    static var sessions: [String] { defaults.stringArray(forKey: index) ?? [] }
     static func load(_ id: String) -> Saved? {
-        guard let data = UserDefaults.standard.data(forKey: prefix + id) else { return nil }
+        guard let data = defaults.data(forKey: prefix + id) else { return nil }
         return try? JSONDecoder().decode(Saved.self, from: data)
     }
     static func remove(_ id: String) {
-        UserDefaults.standard.removeObject(forKey: prefix + id)
-        UserDefaults.standard.set(sessions.filter { $0 != id }, forKey: index)
+        defaults.removeObject(forKey: prefix + id)
+        defaults.set(sessions.filter { $0 != id }, forKey: index)
     }
     static func save(_ id: String, name: String, entries: [Entry], draft: HootComposerDraft? = nil, tabKey: String? = nil) throws {
-        let defaults = UserDefaults.standard
         // The saved entry is read only for what the caller left out: decoding it on every save was part of each
         // key press's cost (#174).
         let keptDraft = draft ?? load(id)?.draft

@@ -23,8 +23,6 @@ struct Routines21Report: Identifiable {
 @MainActor @Observable final class Routines21ReportsModel {
     let routineID: String
     var entries: [Routines21Report] = []
-    var seenSequence = 0
-    var unreadCount = 0
     var draft = ""
     var loading = true
     var sending = false
@@ -61,7 +59,7 @@ struct Routines21Report: Identifiable {
             do {
                 let raw = try await call("routines:reports-chat", [routineID])
                 guard mine == generation else { return }
-                acceptUnread(raw)
+                acceptReports(raw)
                 loading = false; problem = nil
             } catch {
                 guard mine == generation else { return }
@@ -87,7 +85,7 @@ struct Routines21ReportsView: View {
     let agentID: String
     var live = true
     @State private var model: Routines21ReportsModel
-    @State private var unreadViewport = NativeChatUnreadViewport()
+    @State private var followViewport = NativeChatFollowViewport()
     init(name: String, agentID: String, model: Routines21ReportsModel, live: Bool = true) {
         self.name = name; self.agentID = agentID; self.live = live; _model = State(initialValue: model)
     }
@@ -96,17 +94,11 @@ struct Routines21ReportsView: View {
             HStack(spacing: 7) {
                 Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary)
                 Text("Reports").font(.callout.weight(.semibold))
-                if model.unreadCount > 0 { Text("\(model.unreadCount) new").font(.caption).foregroundStyle(Color.accentColor) }
                 Spacer()
                 Text("Each question starts a fresh job").font(.caption).foregroundStyle(.secondary)
             }
-            NativeRoutineUnreadScroll(entries: model.entries, viewport: unreadViewport, loading: model.loading) { entry in bubble(entry) }
+            NativeRoutineFollowScroll(entries: model.entries, viewport: followViewport, loading: model.loading) { entry in bubble(entry) }
                 .overlay { if model.loading { skeleton } }
-            if unreadViewport.pillCount > 0 {
-                Button { unreadViewport.revealFirst() } label: { Text("\(unreadViewport.pillCount) new messages ↓").font(.caption.weight(.medium)) }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.small)
-            }
-            if let problem = unreadViewport.problem { Text(problem).font(.caption).foregroundStyle(ROUTINESKit.bad) }
             if let id = model.reportID {
                 HStack { Text("Asking about a report").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Clear") { model.reportID = nil } }
                     .accessibilityValue(id)
@@ -125,19 +117,9 @@ struct Routines21ReportsView: View {
             }.padding(10).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
         }.padding(.horizontal, 14).padding(.bottom, 14)
         .task { if live { model.start() } }
-        .onAppear {
-            unreadViewport.save = { sequence, conversation in try await model.saveSeen(sequence, conversation: conversation) }
-            unreadViewport.appear(); syncUnread()
-        }
-        .onChange(of: model.unreadMessages) { _, _ in syncUnread() }
-        .onChange(of: model.seenSequence) { _, _ in syncUnread() }
-        .onChange(of: model.loading) { _, loading in if !loading { syncUnread() } }
-        .onDisappear { unreadViewport.disappear(); if live { model.stop() } }
-        .background(NativeChatUnreadWindow { unreadViewport.active = $0 })
-    }
-    private func syncUnread() {
-        guard !model.loading else { return }
-        unreadViewport.receive(conversation: "routine:" + model.routineID, seen: model.seenSequence, messages: model.unreadMessages)
+        .onAppear { NativeRoutineChatFollow.attach(followViewport, routine: model.routineID) }
+        .onChange(of: model.sending) { _, sending in if sending { followViewport.latest() } }
+        .onDisappear { NativeRoutineChatFollow.detach(followViewport, routine: model.routineID); if live { model.stop() } }
     }
     private var skeleton: some View {
         VStack(alignment: .leading, spacing: 10) {

@@ -470,10 +470,10 @@ final class NativeCodingAIStore {
         return true
     }
 
-    /// The install login of one agent — what the menu's Sign in opens a session on.
+    /// The install login of one agent: the same Sign in as its row (NativeAccountSignInModel.open).
     func signInInstall(_ provider: String) {
         guard let account = snapshot.accounts.first(where: { $0.provider == provider && $0.system }) else { return }
-        signIn(account)
+        NativeAccountSignInModel.shared.open(account, store: self)
     }
 
     func signOut(_ account: CodingAIAccount) {

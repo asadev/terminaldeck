@@ -96,6 +96,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     Runtime.ResetWindowPreferenceOwner = () => { SaveSettingsTheme(ElementTheme.Default); sidebar.AskBeforeDelete(true); };
     Runtime.ResetBrowserPreferenceOwner = ct => browser.ResetBrowserPreferencesAsync(ct);
     WindowMaterials.Attach(this, Root, TitleBarRow);
+    FocusInputOnActivation(this, Root, "main");
     RoundedContentClip.Attach(ContentCard, topLeftOnly: true);
     Projects = new(new(Runtime.Projects, Runtime.Agents, Runtime.ProjectSessions, Runtime.Accounts), this);
     Agents = new(new(Runtime.Agents, Runtime.Projects, Runtime.Accounts), this);

@@ -4,6 +4,11 @@
 // Terminal Deck's React screens in a WKWebView, served by Terminal Deck's own
 // Electron main process running windowless underneath as the "engine".
 import PackageDescription
+import Foundation
+
+// Isolated packaging can supply matching scratch metadata; production always uses the checked-in plist.
+let hostInfoPlist = ProcessInfo.processInfo.environment["TD_SESSION_HOST_INFO_PLIST"]
+    ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Support/SessionHost-Info.plist").path
 
 // The bundled host and app must agree on the real production seams in release.
 // The ShippedHost trait turns the same seams on in debug, so `swift test --traits ShippedHost`
@@ -57,7 +62,8 @@ let package = Package(
             name: "TerminalDeckSessionHostHelper",
             dependencies: ["TerminalDeckNativeCore", "TerminalDeckBackend"],
             swiftSettings: hostReleaseSettings,
-            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Security"), .linkedFramework("IOKit"), .linkedFramework("SystemConfiguration")]
+            linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Security"), .linkedFramework("IOKit"), .linkedFramework("SystemConfiguration"),
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", hostInfoPlist])]
         ),
         // stream-anywhere: the screen's direct connection (WebRTC data channels). Linked into the app only; the helpers
         // and the session host never link WebRTC. Swift 5 mode: the library's Objective-C types carry no Sendable notes.

@@ -41,6 +41,6 @@ extension NativeCompositionProduction {
                 if change { await gate.noteResult(caller, .object([.init("sessionId", .string(id)), .init("operation", .string(operation))])) }
                 return .value(result)
             }
-        }] + (try chatDiffToolDefinitions(gate: gate)) + (try chatChildToolDefinitions(gate: gate)) + (try chatOwnedTerminalToolDefinitions(gate: gate)) + (try chatForkToolDefinitions(gate: gate))
+        }] + (try chatDiffToolDefinitions(gate: gate)) + (try chatChildToolDefinitions(gate: gate)) + (try chatOwnedTerminalToolDefinitions(gate: gate)) + (try chatForkToolDefinitions(gate: gate)) + (try chatRewindToolDefinitions(gate: gate))
     }
 }

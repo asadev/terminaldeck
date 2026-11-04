@@ -211,9 +211,14 @@ console.log(`  dependencies: ${needed.join(', ') || 'none'}`)
 function readme() {
   return `# ${root.productName} — headless host
 
-The desktop app minus the window. It runs as a background process, joins the
-relay, serves sessions, and is driven from a phone or from ${root.productName}
-on another machine.
+The desktop app minus the window. It runs as a background process and is driven
+from a phone or from ${root.productName} on another machine. The relay is only
+the meeting point for pairing and connection setup. Sessions, files, browser
+views and every other application message use WebRTC directly, or Cloudflare
+TURN (including TCP/TLS). A blocked link never falls back to relayed data.
+
+The WebRTC stack is Werift, written in TypeScript. It needs no native compiler
+or browser on Linux x64 or arm64. The existing terminal dependencies are unchanged.
 
 It is the answer for a Linux server and for WSL, and it is not a reduced
 product: sessions in granted folders, the localhost tunnel, clipboard, file

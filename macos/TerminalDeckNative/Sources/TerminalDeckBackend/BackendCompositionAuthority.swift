@@ -47,6 +47,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
         let native: BackendMCPCallContext
         let context: NativeRPCContext
         var effects: Set<BackendMCPTier> = []
+        var derived = false
     }
     private var tickets: [UUID: Ticket] = [:]
     private var statusReceipts: [String: (status: String, at: Double)] = [:]
@@ -99,7 +100,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
         let core = try await resolve(native)
         let (rpc, fresh) = lock.withLock { () -> (NativeRPCContext, Bool) in
             tickets = tickets.filter { !$0.value.native.cancellation.isCancelled }
-            if let existing = tickets.values.first(where: { $0.native.cancellation === native.cancellation }) { return (existing.context, false) }
+            if let existing = tickets.values.first(where: { !$0.derived && $0.native.cancellation === native.cancellation }) { return (existing.context, false) }
             var capabilities: Set<String> = []
             if core.caller.tiers.contains(.read) { capabilities.formUnion(["files.read", "git.read", "projects.read", "dev.read", "apps.read", "docker.read"]) }
             if core.caller.tiers.contains(.act) || core.caller.tiers.contains(.alter) { capabilities.formUnion(["files.write", "git.write", "projects.write", "dev.start", "apps.write", "docker.write"]) }
@@ -112,6 +113,27 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
         // quit. Registered outside the lock: an already ended call answers at once.
         if fresh { let id = rpc.requestID; _ = native.cancellation.observe { [weak self] in self?.dropTicket(id) } }
         return rpc
+    }
+    /// A nested RPC needs a fresh in-flight ID and the same accepted call proof. It cannot mint a grant,
+    /// outlive its parent, or replace the canonical context returned by rpc(_:).
+    public func childContext(_ context: NativeRPCContext) throws -> NativeRPCContext {
+        if context.caller == .nativeApp {
+            try requireLocalUI(context)
+            return .init(caller: context.caller, ownerID: context.ownerID, origin: context.origin, capabilities: context.capabilities)
+        }
+        let proof = try ticket(context)
+        let next = NativeRPCContext(caller: proof.context.caller, ownerID: proof.context.ownerID,
+            origin: proof.context.origin, capabilities: proof.context.capabilities)
+        try lock.withLock {
+            guard open, let current = tickets[context.requestID], current.native.cancellation === proof.native.cancellation,
+                  !proof.native.cancellation.isCancelled else { throw unavailable("a live parent call for this nested request") }
+            var child = Ticket(native: current.native, context: next)
+            child.effects = current.effects; child.derived = true
+            tickets[next.requestID] = child
+        }
+        let id = next.requestID
+        _ = proof.native.cancellation.observe { [weak self] in self?.dropTicket(id) }
+        return next
     }
     private func dropTicket(_ id: UUID) { lock.withLock { _ = tickets.removeValue(forKey: id) } }
     private func ticket(_ context: NativeRPCContext) throws -> Ticket {
@@ -213,9 +235,12 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
             ownedWorkspace = BackendTAGTaskProjectScope.isOwnedWorkspace(folder, caller: core.caller, cwd: session.cwd)
         } else { ownedWorkspace = false }
         guard BackendTAGProjectGrant.permits(folder, caller: core.caller,
-            openProjects: state.listProjects().compactMap { $0["path"].string },
+            openProjects: state.listProjects().compactMap { $0["path"].string } + (core.caller.kind == .session ? allowed : []),
             allowedFolders: allowed, ownedWorkspace: ownedWorkspace) else {
-            throw NativeRPCError(code: "access-denied", message: "That project is outside this caller's current project grant")
+            let message = core.caller.kind == .session
+                ? "This seat cannot access that project folder. Opening it with projects_add does not grant access. Ask the owner to add it to this seat's project folders or grant that project, then start it again."
+                : "That project is outside this caller's current project grant. Choose a granted folder or ask the owner to grant access."
+            throw NativeRPCError(code: "access-denied", message: message)
         }
         return folder
     }
@@ -226,7 +251,8 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
         case .key: return core.caller.folders.map { granted in projects.filter { folder in granted.contains { Self.within(folder, $0) } } } ?? projects
         case .session:
             guard let id = core.caller.sessionID, let session = prepared.manager.list().first(where: { $0.id == id && $0.exitCode == nil }) else { throw unavailable("the caller's live session") }
-            return try BackendTAGTaskProjectScope.folders(openProjects: projects, caller: core.caller, cwd: session.cwd)
+            let roots = try BackendAgentProjectAccess.roots(caller: core.caller, cwd: session.cwd)
+            return Array(Set(projects.filter { folder in roots.contains { BackendAgentProjectAccess.within(folder, $0) } } + roots))
         case .remote:
             guard let remote else { throw unavailable("the remote caller's current folder grants") }
             let scope = try await remote.filesystem(core)
@@ -274,7 +300,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
     static func sessionProjectPermits(id: String, cwd: String, caller: BackendDeckCoreSecurityCaller, callerCWD: String?) throws -> Bool {
         if id == caller.sessionID { return true }
         guard let callerCWD else { return false }
-        return try BackendTAGTaskProjectScope.roots(caller: caller, cwd: callerCWD).contains { within(cwd, $0) }
+        return try BackendAgentProjectAccess.roots(caller: caller, cwd: callerCWD).contains { BackendAgentProjectAccess.within(cwd, $0) }
     }
     public func transcriptScope(project: String?, context: NativeRPCContext) async throws -> NativeTranscriptScope {
         let graph = try sessions()

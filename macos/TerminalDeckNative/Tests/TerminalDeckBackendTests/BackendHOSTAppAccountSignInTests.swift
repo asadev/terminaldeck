@@ -183,6 +183,51 @@ final class BackendHOSTAppAccountSignInTests: XCTestCase, @unchecked Sendable {
         await flow.waitForChange(after: Int(before), seconds: 10)   // already changed: answered at once
         XCTAssertLessThan(ContinuousClock.now - waited, .seconds(5))
     }
+    // 4 Nov (Asad's recording): Add account said "already exists" about an account the list did not show.
+    private func savedLogin(_ f: Fixture, id: String, name: String, email: String) async throws {
+        let folder = f.configuration.accountLoginsRoot.appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try NativeRPCValue.object([.init("oauthAccount", .object([.init("emailAddress", .string(email))]))]).encodedJSON().write(to: folder.appendingPathComponent(".claude.json"))
+        await f.owner.put(BackendAccountProfile(id: id, name: name, provider: "claude", configDir: folder.path, system: false, color: "--accent", createdAt: 0))
+    }
+    func testAddAccountNamesTheAccountThatHasTheNameBeforeTheBrowserOpens() async throws {
+        let f = try await fixture()
+        try await savedLogin(f, id: "taken", name: "taken@x.com", email: "taken@x.com")
+        do { _ = try await f.call("profiles:add-signin", [.object([.init("provider", .string("claude")), .init("name", .string("Taken@x.com"))])]); XCTFail("A name in the list is refused.") }
+        catch { XCTAssertTrue(error.localizedDescription.hasPrefix("“taken@x.com” is already one of your Claude Code accounts"), error.localizedDescription) }
+        let creates = await f.owner.creates, renames = await f.owner.renames
+        XCTAssertEqual(creates, 0); XCTAssertEqual(renames, [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: f.configuration.accountLoginsRoot.path), ["taken"])   // no new folder: nothing started
+    }
+    func testAddAccountFreesANameThatAnAccountSignedInAsAnotherLoginCarried() async throws {
+        let f = try await fixture()
+        try await savedLogin(f, id: "app-imatch", name: "app.imatch.ae@gmail.com", email: "app.imatch.ae@gmail.com")
+        try await savedLogin(f, id: "imza", name: "imzapremium@gmail.com", email: "app.imatch.ae@gmail.com")
+        let added = try await f.call("profiles:add-signin", [.object([.init("provider", .string("claude")), .init("name", .string("imzapremium@gmail.com"))])])
+        let renames = await f.owner.renames
+        XCTAssertEqual(renames, ["imzapremium@gmail.com→app.imatch.ae@gmail.com (second copy)"])
+        XCTAssertEqual(added["accountName"].string, "imzapremium@gmail.com")
+        _ = try await f.call("profiles:signin-cancel", [.string(try XCTUnwrap(added["flow"].string))])
+    }
+    // 4 Nov: Sign in on this Mac's own login runs Claude Code's own sign-in (browser), never a new chat, only after
+    // the person confirmed (ownLogin), and in the Mac's own folder: no CLAUDE_CONFIG_DIR is added.
+    func testThisMacsOwnLoginSignsInAfterTheConfirmationInItsOwnFolder() async throws {
+        let seen = FileManager.default.temporaryDirectory.appendingPathComponent("accounts27-env-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: seen) }
+        let f = try await fixture(login: "/usr/bin/env > '\(seen.path)'; printf 'https://claude.ai/oauth/authorize?test=own\\n'; read answer")
+        let started = try await f.call("profiles:signin-start", [.string("system"), .object([.init("ownLogin", .bool(true))])])
+        let flow = try XCTUnwrap(started["flow"].string)
+        XCTAssertEqual(started["loginStore"].string, "mac")
+        var state = started
+        for _ in 0..<100 where state["url"].string == nil { try await Task.sleep(for: .milliseconds(20)); state = try await f.call("profiles:signin-state", [.string(flow)]) }
+        XCTAssertEqual(state["state"].string, "waiting"); XCTAssertNotNil(state["url"].string)
+        let env = try String(contentsOf: seen, encoding: .utf8)
+        XCTAssertFalse(env.contains("CLAUDE_CONFIG_DIR="))
+        XCTAssertTrue(env.contains("HOME=" + f.configuration.homeDirectory.path), "the sign-in saw: " + env.split(separator: "\n").map { String($0.prefix(while: { $0 != "=" })) }.joined(separator: ","))
+        XCTAssertFalse(env.contains("CLAUDE_CODE_OAUTH_TOKEN=") || env.contains("ANTHROPIC_API_KEY="))
+        _ = try await f.call("profiles:signin-cancel", [.string(flow)])
+        let creates = await f.owner.creates; XCTAssertEqual(creates, 0)
+    }
     private func completedCollision(_ f: Fixture, expectedName: String) async throws {
         let added = try await f.call("profiles:add-signin", [.object([.init("provider", .string("claude")), .init("name", .string("New copy"))])])
         let flow = try XCTUnwrap(added["flow"].string), id = try XCTUnwrap(added["profileId"].string)
@@ -204,6 +249,7 @@ actor Accounts18OldOwner: BackendHOSTAppAccountFrontend {
     var creates = 0
     var reports: [String: NativeRPCValue] = [:]
     var reads = 0, refreshedReads = 0
+    var renames: [String] = []
     private var readsRevoked = false
     init(configuration: BackendAccountConfiguration) { self.configuration = configuration }
     func find(_ id: String, context: NativeRPCContext) async throws -> BackendAccountProfile? {
@@ -226,6 +272,10 @@ actor Accounts18OldOwner: BackendHOSTAppAccountFrontend {
             profiles.append(profile); return try NativeRPCValue.parseJSON(JSONEncoder().encode(profile))
         }
         if channel == "profiles:delete" { profiles.removeAll { $0.id == args[0].string }; return .object([.init("removed", .bool(true))]) }
+        if channel == "profiles:rename", let index = profiles.firstIndex(where: { $0.id == args[0].string }) {
+            renames.append("\(profiles[index].name)→\(args[1].string ?? "")"); profiles[index].name = args[1].string ?? ""
+            return try NativeRPCValue.parseJSON(JSONEncoder().encode(profiles[index]))
+        }
         if channel == "profiles:signin" {
             reads += 1; if args.count > 1, args[1]["refresh"].bool == true { refreshedReads += 1 }
             return reports[args[0].string ?? ""] ?? .object([.init("state", .string("unknown"))])

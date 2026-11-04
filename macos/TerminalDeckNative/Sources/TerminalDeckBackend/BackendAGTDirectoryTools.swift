@@ -80,6 +80,7 @@ public struct BackendAGTDirectoryService: Sendable {
                 if id == AGTDirectory.hootID { return try await profileRead(caller, id) }
                 if let profile = try await config.agent(id), let savedID = profile["id"].string {
                     let detail = try await profileRead(caller, savedID)
+                    if detail["coverage"].string == "public-agent-identity" { return detail }
                     let sessions = read.agents.first { $0.profileID == savedID }?.sessionIDs ?? []
                     return detail.setting("sessions", .array(sessions.map(NativeRPCValue.string)))
                 }

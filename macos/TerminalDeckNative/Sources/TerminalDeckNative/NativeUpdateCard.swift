@@ -7,6 +7,7 @@ import TerminalDeckNativeCore
     private(set) var state: UpdateState = .none
     private(set) var waitingFor: String?
     private(set) var restarting = false
+    private(set) var checkingUpdate = false
     private(set) var notesURL: URL?
     private(set) var dismissedVersion: String?
     /// The version the card was offering; an error after it belongs to the card (an automatic check never errors).
@@ -15,6 +16,7 @@ import TerminalDeckNativeCore
     var hiddenError: String?
 
     func update(from updater: NativeAppUpdater) {
+        checkingUpdate = updater.checkingUpdate
         state = updater.state; waitingFor = updater.waitingFor; restarting = updater.relaunchOnQuit
         notesURL = updater.notesURL; dismissedVersion = updater.dismissedVersion
         switch state {
@@ -25,13 +27,14 @@ import TerminalDeckNativeCore
     }
 
     /// Render fixtures only (Release27UpdaterRestartTests): a state the live updater would have published.
-    func show(_ state: UpdateState, waitingFor: String? = nil, restarting: Bool = false, notesURL: URL? = nil) {
+    func show(_ state: UpdateState, waitingFor: String? = nil, restarting: Bool = false, notesURL: URL? = nil, checkingUpdate: Bool = false) {
+        self.checkingUpdate = checkingUpdate
         self.state = state; self.waitingFor = waitingFor; self.restarting = restarting; self.notesURL = notesURL; offered = "0.21.0"
     }
 
     func card(inAppSessions: Int) -> UpdateCard? {
         UpdateCard.make(state, waitingFor: waitingFor, restarting: restarting, dismissedVersion: dismissedVersion,
-                        offered: offered, hiddenError: hiddenError, notesURL: notesURL, inAppSessions: inAppSessions)
+                        offered: offered, hiddenError: hiddenError, notesURL: notesURL, inAppSessions: inAppSessions, checkingUpdate: checkingUpdate)
     }
 }
 

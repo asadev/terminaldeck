@@ -13,32 +13,16 @@ import TerminalDeckNativeCore
             .object([.init("id", .string(id)), .init("kind", .string(kind)), .init("text", .string(text)),
                 .init("status", .string("ok")), .init("at", .number(1_791_878_000_000))])
         }
-        return CodingAIJSON(RoutineChatUnread.snapshot(rows, routineID: "daily", seen: seen).foundation)
+        return CodingAIJSON(RoutineChatSnapshot.snapshot(rows, routineID: "daily").foundation)
     }
-    func testRoutineModelAndViewportUseTheSameMarkerAndTool() async throws {
-        var calls: [String] = []
-        let model = Routines21ReportsModel(routineID: "daily") { channel, args in
-            calls.append(channel)
-            XCTAssertEqual(args[0] as? String, "daily")
-            XCTAssertEqual(args[1] as? Int, 3)
-            return self.snapshot(seen: 3)
-        }
-        model.acceptUnread(snapshot(seen: 1)); model.loading = false
-        XCTAssertEqual(model.unreadCount, 2)
-        XCTAssertEqual(model.unreadMessages.map(\.id), ["old", "first", "second"])
-        let viewport = NativeChatUnreadViewport()
-        viewport.appear(); viewport.receive(conversation: "routine:daily", seen: model.seenSequence, messages: model.unreadMessages)
-        XCTAssertEqual(viewport.dividerID, "first")
-        XCTAssertEqual(viewport.dividerCount, 2)
-        XCTAssertEqual(viewport.position.viewID(type: String.self), "unread:first")
-        try await model.saveSeen(3, conversation: "routine:daily")
-        viewport.receive(conversation: "routine:daily", seen: model.seenSequence, messages: model.unreadMessages)
-        XCTAssertEqual(calls, ["routines:reports-chat"])
-        XCTAssertEqual(model.unreadCount, 1)
-        XCTAssertNil(viewport.dividerID)
-        viewport.disappear()
+    func testReportsIgnoreLegacyUnreadMarkers() {
+        let model = Routines21ReportsModel(routineID: "daily") { _, _ in CodingAIJSON.null }
+        model.acceptReports(snapshot(seen: 1))
+        XCTAssertEqual(model.entries.count, 4)
+        model.acceptReports(snapshot(seen: 4))
+        XCTAssertEqual(model.entries.count, 4)
     }
-    func testRenderRoutineReportDividerLightAndDark() throws {
+    func testRenderRoutineReportFollowLightAndDark() throws {
         guard let output = ProcessInfo.processInfo.environment["UNREAD21_RENDER_OUTPUT"] else { return XCTFail("Set the owned frame directory") }
         let folder = URL(fileURLWithPath: output)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -47,7 +31,7 @@ import TerminalDeckNativeCore
         defer { AGTAgentsStore.shared.fixture = previousAgents }
         for dark in [false, true] {
             let model = Routines21ReportsModel(routineID: "daily") { _, _ in CodingAIJSON.null }
-            model.fixture = true; model.loading = false; model.acceptUnread(snapshot(seen: 1))
+            model.fixture = true; model.loading = false; model.acceptReports(snapshot(seen: 1))
             let size = CGSize(width: 780, height: 480)
             let host = NSHostingView(rootView: VStack(alignment: .leading, spacing: 18) {
                 Text("Daily check").font(.title2.weight(.semibold)).padding(.horizontal, 14)

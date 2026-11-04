@@ -22,7 +22,7 @@ enum HootChatItem: Identifiable {
     /// HOOT-FLOW (Asad, 12 Oct): one job = what Hoot did between one message and the next. All its steps fold into the
     /// reply, which stands where the answer is (the last words after the last step); Hoot's own words in between stay
     /// where they were. `open`: the last job (the one Hoot may still be working on).
-    static func items(_ rows: [HootChatRow]) -> [HootChatItem] {
+    static func items(_ rows: [HootChatRow], firstJobKey: String? = nil) -> [HootChatItem] {
         // A job starts at the person's message or at a background task's line.
         var jobs: [[HootChatRow]] = [], current: [HootChatRow] = []
         for row in rows {
@@ -40,13 +40,24 @@ enum HootChatItem: Identifiable {
                     .setting("combinedMessageIDs", .array(answers.map { .string($0.id) }))
                 answer = combined
             }
-            let reply = HootChatItem.reply(key: job[0].id, answer: answer, steps: steps, open: index == jobs.count - 1)
+            let reply = HootChatItem.reply(key: index == 0 ? (firstJobKey ?? job[0].id) : job[0].id, answer: answer, steps: steps, open: index == jobs.count - 1)
             for (position, row) in job.enumerated() {
                 if position == place { items.append(reply) }
                 else if !isStep(row), !isAnswer(row) { items.append(.row(row)) }
             }
         }
         return items
+    }
+    /// Paging may cut through a long tool run. Keep the original job identity so its fold and
+    /// latest-line measurement survive both streaming and loading an earlier page.
+    static func page(_ rows: [HootChatRow], count: Int) -> [HootChatItem] {
+        let start = max(0, rows.count - max(0, count))
+        guard start < rows.count else { return [] }
+        var firstJobKey: String?
+        for row in rows.prefix(start + 1) {
+            if firstJobKey == nil || row.kind == .user || row.value["background"].fields != nil { firstJobKey = row.id }
+        }
+        return items(Array(rows.suffix(from: start)), firstJobKey: firstJobKey)
     }
     /// The moment a message is sent: Hoot's reply is already there, thinking (Asad, 12 Oct: "very very instant").
     static func thinking(_ items: [HootChatItem], live: Bool) -> [HootChatItem] {
@@ -191,7 +202,12 @@ struct HootStepsView: View {
     var openTask: ((String) -> Void)? = nil
     /// Beside Hoot's avatar (in its reply) the steps need no indent of their own.
     var indent: CGFloat = 38
-    @State private var expanded = false
+    var expansion: Binding<Bool>? = nil
+    @State private var localExpanded = false
+    private var expanded: Bool { expansion?.wrappedValue ?? localExpanded }
+    private func toggleExpansion() {
+        if let expansion { expansion.wrappedValue = !expansion.wrappedValue } else { localExpanded.toggle() }
+    }
     var body: some View {
         let lines = HootFlow.lines(rows, agents: agents, live: live)
         if live { HootFlowLiveList(lines: lines).padding(.leading, indent) } else { summary(lines) }
@@ -200,7 +216,7 @@ struct HootStepsView: View {
         let line = HootStep.summary(rows)
         let extra = HootFlow.counts(lines, agents: agents.count)
         return VStack(alignment: .leading, spacing: 0) {
-            Button { withAnimation(.snappy(duration: 0.18)) { expanded.toggle() } } label: {
+            Button { withAnimation(.snappy(duration: 0.18)) { toggleExpansion() } } label: {
                 HStack(spacing: 6) {
                     Text(line.text + extra).lineLimit(1).truncationMode(.middle)
                     counts(line.plus, line.minus)

@@ -266,7 +266,7 @@ final class BackendHootChatRPCTests: XCTestCase, @unchecked Sendable {
         try Data("Hoot contract".utf8).write(to: instructions)
         let common = ["--mcp-config", mcp.path, "--strict-mcp-config", "--append-system-prompt-file", instructions.path]
         let codex = try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: "saved", extra: ["--model", "chosen", "-c", #"developer_instructions="Profile identity""#] + common, expectedTools: ["read"])
-        XCTAssertEqual(codex.arguments, ["app-server", "--stdio"])
+        XCTAssertEqual(codex.arguments, ["app-server", "--stdio", "-c", "check_for_update_on_startup=false"])
         XCTAssertEqual(codex.setup?.session["model"].string, "chosen")
         XCTAssertEqual(codex.setup?.session["developerInstructions"].string, "Profile identity\n\nHoot contract")
         XCTAssertEqual(codex.setup?.session["config"]["mcp_servers"]["deck-control"]["required"].bool, true)

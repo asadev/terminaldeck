@@ -33,7 +33,12 @@ function setTheme(mode, surface = {}) {
   document.documentElement.style.setProperty('--terminal-background', theme.background)
 }
 function send(message) { window.chrome?.webview?.postMessage(message) }
-const term = new Terminal({ fontFamily, fontWeight, fontWeightBold, fontSize: 13, scrollback: 10000, allowProposedApi: true })
+// allowTransparency gives the WebGL glyph atlas an alpha channel. On an opaque
+// atlas Chromium draws ClearType (sub-pixel) text, which shows colour fringes
+// and hard hinted edges next to the grayscale-smoothed WinUI text around it;
+// with alpha it draws grayscale antialiasing like the rest of the app and the
+// Mac. The page background is the same colour, so nothing else changes.
+const term = new Terminal({ fontFamily, fontWeight, fontWeightBold, fontSize: 13, scrollback: 10000, allowProposedApi: true, allowTransparency: true })
 const fit = new FitAddon()
 const search = new SearchAddon()
 term.loadAddon(fit)

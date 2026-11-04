@@ -94,15 +94,32 @@ public struct BackendPhoneFiles: Sendable {
     }
 
     /// One row: its name and full path, folder or file, whether this account can open it, and a file's size and time.
+    /// A named pipe, a socket or a device says which in `special` ("pipe", "socket", "device") and has no size or time,
+    /// so the phone draws it as "Not a file" without asking (Decker, 4 Nov). A link is judged by what it points to.
     private static func row(in here: String, _ name: String, directory: Bool) -> NativeRPCValue {
         let full = (here as NSString).appendingPathComponent(name)
         var fields: [NativeRPCValue.Field] = [.init("name", .string(name)), .init("path", .string(full)),
             .init("directory", .bool(directory)), .init("readable", .bool(FileManager.default.isReadableFile(atPath: full)))]
+        var info = stat()
+        if !directory, stat(full, &info) == 0, let kind = special(info.st_mode) {
+            fields.append(.init("special", .string(kind)))
+            return .object(fields)
+        }
         if !directory, let meta = try? FileManager.default.attributesOfItem(atPath: full) {
             if let size = meta[.size] as? NSNumber { fields.append(.init("size", .number(size.doubleValue))) }
             if let at = meta[.modificationDate] as? Date { fields.append(.init("at", .number((at.timeIntervalSince1970 * 1000).rounded()))) }
         }
         return .object(fields)
+    }
+
+    /// What a file that is not a plain file is, in the word the phones know; nil for a plain file (or a folder).
+    static func special(_ mode: mode_t) -> String? {
+        switch mode & S_IFMT {
+        case S_IFIFO: return "pipe"
+        case S_IFSOCK: return "socket"
+        case S_IFCHR, S_IFBLK: return "device"
+        default: return nil
+        }
     }
 
     /// One window of a file from `at`. Binary is decided from the bytes (a NUL in what was read), never from a name;

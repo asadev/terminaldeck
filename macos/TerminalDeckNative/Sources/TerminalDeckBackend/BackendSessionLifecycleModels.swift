@@ -43,6 +43,9 @@ public struct BackendSessionSaved: Equatable, Sendable {
         input.taskProject = raw["taskProject"].string
         input.agentDefinitionsFile = raw["agentDefinitionsFile"].string
         input.chat = raw["chat"].bool == true ? true : nil
+        if raw["forkSession"].bool == true, raw["forkParentConversationId"].string == self.conversationID {
+            input.forkSession = true; input.resumeSessionAt = raw["resumeSessionAt"].string
+        }
         return input
     }
     public static func from(_ input: BackendCreateSessionInput) -> NativeRPCValue {
@@ -58,6 +61,10 @@ public struct BackendSessionSaved: Equatable, Sendable {
         if input.noSkills == true { value = value.setting("noSkills", .bool(true)) }
         if let allowed = input.allowedTools { value = value.setting("allowedTools", .array(allowed.map(NativeRPCValue.string))) }
         if input.chat == true { value = value.setting("chat", .bool(true)) }
+        if input.forkSession == true {
+            value = value.setting("forkSession", .bool(true)).setting("forkParentConversationId", input.resumeConversationId.map(NativeRPCValue.string) ?? .null)
+            if let at = input.resumeSessionAt { value = value.setting("resumeSessionAt", .string(at)) }
+        }
         return value
     }
 }

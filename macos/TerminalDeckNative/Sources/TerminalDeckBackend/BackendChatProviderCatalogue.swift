@@ -186,7 +186,7 @@ public enum BackendChatProviderCatalogue {
                 throw NativeRPCError(code: "transcript-identity", message: "The transcript changed its conversation or project identity during preview.")
             }
             let messages = chunk.messages.map { message in
-                object([("id", .string(message.groupKey)), ("role", .string(message.role == .you ? "user" : "assistant")), ("text", .string(message.text))])
+                object([("id", .string(message.groupKey)), ("providerMessageId", message.providerMessageID.map(NativeRPCValue.string) ?? .null), ("role", .string(message.role == .you ? "user" : "assistant")), ("text", .string(message.text))])
             }
             return page(.claude, cwd: cwd, items: messages,
                 next: chunk.complete ? .null : .string(String(chunk.cursor)), source: "account-scoped-transcript")
@@ -209,6 +209,28 @@ public enum BackendChatProviderCatalogue {
                 ("preview", .string(preview)), ("updatedAt", .number(file.modifiedAt)), ("canResume", .bool(true))]))
         }
         return page(.claude, cwd: cwd, items: rows, next: offset < files.count ? .string(String(offset)) : .null, source: "account-scoped-transcript")
+    }
+
+    /// Recover exact checkpoint IDs for journals written before the stream decoder kept them. The ordinary
+    /// account/project transcript reader supplies the same no-follow and identity checks as Past chats.
+    static func claudeMessageIDs(environment: [String: String], cwd: String, conversation: String) async throws -> [String: String] {
+        let scope = try claudeScope(environment: environment, cwd: cwd)
+        let directories = try NativeTranscriptPaths.projectDirectories(cwd, scope: scope)
+        for directory in directories {
+            guard let file = try NativeTranscriptPaths.transcript(named: conversation, in: directory, scope: scope) else { continue }
+            var args = object([("conversationId", .string(conversation)), ("path", .string(file.path))])
+            var result: [String: String] = [:]
+            for _ in 0..<32 {
+                let page = try await claude(operation: "catalogue/read", arguments: args, cwd: cwd, scope: scope)
+                for row in page["items"].elements ?? [] {
+                    if let id = row["id"].string, let uuid = row["providerMessageId"].string, UUID(uuidString: uuid) != nil { result[id] = uuid }
+                }
+                guard let cursor = page["nextCursor"].string else { return result }
+                args = args.setting("cursor", .string(cursor))
+            }
+            return result
+        }
+        return [:]
     }
 
     private struct ClaudeChunk {

@@ -4,7 +4,13 @@ namespace TerminalDeck.Core.Storage;
 public static class StableChannel
 {
   public const string Marker = "terminaldeck-stable-channel";
-  public static bool IsStable(string directory) => File.Exists(Path.Combine(directory, Marker));
+  private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> identities = new(StringComparer.OrdinalIgnoreCase);
+  // Windows can retire the old package's marker while its keeper still owns
+  // terminals. Install identity belongs to the running process: losing that
+  // file must not turn its next existing-login launch into a test-copy refusal.
+  // Remember a missing marker too, so a test copy cannot gain access later.
+  public static bool IsStable(string directory) => identities.GetOrAdd(Path.GetFullPath(directory),
+    path => File.Exists(Path.Combine(path, Marker)));
   public static AppDataRoot Root(string userProfile) => AppDataRoot.Explicit(Path.Combine(userProfile, "AppData", "Local", "TerminalDeckStable"));
   public static AppDataRoot Resolve(string? explicitPath, string userProfile)
   {

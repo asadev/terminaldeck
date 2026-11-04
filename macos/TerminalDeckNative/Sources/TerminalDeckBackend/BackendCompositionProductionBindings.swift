@@ -147,6 +147,7 @@ public final class BackendCompositionProductionBindings: BackendDeckCoreEventsMC
     /// files.upload's content replaced by its size, app-tools' own redaction list).
     public static func redacted(_ id: String, _ args: NativeRPCValue) -> NativeRPCValue {
         if id.hasPrefix("assets.") { return BackendDeckToolsAssets.redact(args) }
+        if id == "browser.page" { return BackendBrowserFactories.loggedPageArguments(args) }
         if id == "devices.type" || id == "servers.manage" { return BackendDeckToolsMachinesFactory.loggedArguments(toolID: id, arguments: args) }
         if id == "files.upload", let content = args["contentBase64"].string {
             return args.setting("contentBase64", .string("[\(content.count) base64 characters]"))

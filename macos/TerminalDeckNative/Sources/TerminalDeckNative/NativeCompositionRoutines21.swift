@@ -52,7 +52,9 @@ extension NativeCompositionProduction {
         let scope = BackendCompositionDeckToolsScope(gate: try joins.deckToolsGate(), deviceFolders: nil,
             workspaces: try wired(files, "files").workspaces, browserSlots: { _, _ in [] })
         let access = BackendCompositionDeckToolsAccess.appAccess(scope: scope)
-        let definitions = try BackendRoutines21MCP.definitions(api: api, access: access)
+        let definitions = try BackendRoutines21MCP.definitions(api: api, access: access, chatView: { id, action in
+            try await MainActor.run { try NativeRoutineChatFollow.tool(id, action) }
+        })
         let area = try BackendDeckToolsSupport.area(id: "routine-reports", definitions: definitions)
         let bundle = try BackendDeckCoreAreaIntegration.bundle(area: area, metadata: definitions.map(\.catalogueMetadata),
             policies: definitions.map { joins.nativePolicy($0) })

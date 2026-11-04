@@ -57,6 +57,8 @@ public actor BackendHOSTAppAccountSignIn {
     private var flowAccounts: [String: String] = [:]
     private var pendingDrafts: [String: BackendAccountProfile] = [:]
     private var settled = Set<String>()
+    /// Sign-ins of this Mac's own login: never a new account, so never refused as "the same account as" another.
+    private var ownFlows = Set<String>()
     private var closing = false
     private var activeStarts = 0
     public init(configuration: BackendAccountConfiguration, frontend: any BackendHOSTAppAccountFrontend, providers: BackendNativeProviders,
@@ -122,7 +124,10 @@ public actor BackendHOSTAppAccountSignIn {
             return .object([.init("removed", .bool(true))])
         case "profiles:signin-start":
             guard let id = args.first?.string, let profile = try await frontend.find(id, context: context) else { return nil }
-            guard BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration), !profile.promised else {
+            // 4 Nov: this Mac's own login, after the person confirmed its Sign in, signs in here in the app (an older
+            // session host refuses it), in the AI's own folder for it.
+            let ownLogin = profile.system && args.count > 1 && args[1]["ownLogin"].bool == true
+            guard ownLogin || (BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration) && !profile.promised) else {
                 if olderHost { throw BackendAccountFailure("Click Add account in Settings › Coding AIs to sign in to another login. This saved copy needs Allow login store on its account row before it can be used.") }
                 return nil
             }
@@ -131,8 +136,8 @@ public actor BackendHOSTAppAccountSignIn {
                 _ = try await service.invoke("profiles:signin-cancel", args: [.string(flow)], context: context)
                 throw BackendAccountFailure("The sign-in was cancelled because the app is closing.")
             }
-            if let flow = answer["flow"].string { localFlows.insert(flow); shutdownFlows.insert(flow); flowAccounts[flow] = id }
-            return answer.setting("loginStore", .string("agent"))
+            if let flow = answer["flow"].string { localFlows.insert(flow); shutdownFlows.insert(flow); flowAccounts[flow] = id; if ownLogin { ownFlows.insert(flow) } }
+            return answer.setting("loginStore", .string(ownLogin ? "mac" : "agent"))
         case "profiles:signin-state", "profiles:signin-code", "profiles:signin-cancel":
             guard let flow = args.first?.string, localFlows.contains(flow) else { return nil }
             if !(await service.hasFlow(flow)) {
@@ -149,7 +154,7 @@ public actor BackendHOSTAppAccountSignIn {
                 // Drain it before taking away the folder it was writing into.
                 _ = try await service.invoke("profiles:signin-cancel", args: [.string(flow)], context: context)
                 try await discard(id, context: context)
-            } else if answer["state"].string == "done", !settled.contains(flow), let id = flowAccounts[flow] {
+            } else if answer["state"].string == "done", !settled.contains(flow), !ownFlows.contains(flow), let id = flowAccounts[flow] {
                 settled.insert(flow)
                 if let same = try await collision(id, context: context) {
                     if created[id] != nil { try await discard(id, context: context) }
@@ -189,6 +194,13 @@ public actor BackendHOSTAppAccountSignIn {
         }
     }
     private func pendingFlows() -> [String] { Array(shutdownFlows).sorted() }
+    /// The launch tidy (BackendAccountTidy) through the session host's own list and rename, so it works with an
+    /// older host too. The caller supplies the profile scope.
+    public func tidy(context: NativeRPCContext, note: @escaping @Sendable (String) -> Void = { _ in }) async -> [BackendAccountTidy.Rename] {
+        let frontend = frontend
+        return await BackendAccountTidy.run(configuration: configuration, list: { try await frontend.list(provider: nil, context: context) },
+            rename: { id, next in _ = try await frontend.invoke("profiles:rename", args: [.string(id), .string(next)], context: context) }, note: note)
+    }
     func pendingShutdownCount() -> Int { shutdownFlows.count }
     private func add(_ args: [NativeRPCValue], context: NativeRPCContext) async throws -> NativeRPCValue {
         let options = args.first ?? .null, provider = options["provider"].string ?? "claude"
@@ -204,6 +216,12 @@ public actor BackendHOSTAppAccountSignIn {
             while existing.contains(where: { $0.name.lowercased() == name.lowercased() }) { name = label + " \(suffix)"; suffix += 1 }
         }
         name = try BackendAccountProfileStore.normalizedName(name)
+        // 4 Nov: a name already in the list is said BEFORE the browser opens, naming the account that has it; an
+        // account that only carried the name while signed in as another login gives it up (renamed to its login).
+        let frontend = frontend
+        try await BackendAccountTidy.freeName(name, provider: provider, among: existing, configuration: configuration) { id, next in
+            _ = try await frontend.invoke("profiles:rename", args: [.string(id), .string(next)], context: context)
+        }
         let nonce = UUID().uuidString.lowercased(), directory = BackendAccountSignInStorage.root(configuration).appendingPathComponent(nonce)
         let draft = BackendAccountProfile(id: "pending-" + nonce, name: name, provider: provider, configDir: directory.path, system: false,
             color: BackendAccountProfile.colors[0], createdAt: Date().timeIntervalSince1970 * 1000)
@@ -285,7 +303,7 @@ public actor BackendHOSTAppAccountSignIn {
         for flow in localFlows where !shutdownFlows.contains(flow) && pendingDrafts[flow] == nil {
             if let id = flowAccounts[flow], created[id] != nil { continue }
             guard !(await service.hasFlow(flow)) else { continue }
-            localFlows.remove(flow); settled.remove(flow); flowAccounts[flow] = nil
+            localFlows.remove(flow); settled.remove(flow); ownFlows.remove(flow); flowAccounts[flow] = nil
         }
     }
 }

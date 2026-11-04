@@ -48,12 +48,11 @@ extension NativeHootChatModel {
             let task = node.task, id = task["id"].string ?? ""
             var actions: [NativeRPCValue] = []
             if NativeChatAgentTree.source(task, events: transcriptExportEvents) != nil { actions.append(NativeChatPanel.action("Open child source event", "details", id)) }
-            if task["canStop"].bool == true && ChatChildTasks.running(task) { actions.append(NativeChatPanel.action("Stop this child", "stop", id)) }
             let appID = task["appTaskId"].string ?? id, tasks = fixtureMode ? fixtureTasksForChecks : TasksStore.shared.state?.tasks ?? []
             if tasks.contains(where: { $0.id == appID }) { actions.append(NativeChatPanel.action("Open app task and reports", "task", id)) }
             let detail = "\(task["kind"].string ?? "Child") · \(task["status"].string ?? "State unreported")\nID: \(id)\nParent: \(node.parent ?? "Not reported")" + (node.cycle ? "\nReported parent cycle; shown once." : "") + (task["limitation"].string.map { "\n" + $0 } ?? "")
             return NativeChatPanel.row(id, String(repeating: "  ↳", count: node.depth) + (task["title"].string ?? "Child task"), detail, actions)
         }
-        return NativeChatPanel.state("Child agents and tasks", "Hierarchy uses reported parent IDs, shown up to 32 levels. Stop uses the existing child owner. Source events and confirmed app-task reports are available; provider child transcripts and Resume are not exposed by this Chat service.", rows)
+        return NativeChatPanel.state("Child agents and tasks", "Hierarchy uses reported parent IDs, shown up to 32 levels. Individual Stop controls are in Running above the message box. Source events and confirmed app-task reports are available; provider child transcripts and Resume are not exposed by this Chat service.", rows)
     }
 }

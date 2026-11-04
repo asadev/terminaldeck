@@ -102,7 +102,17 @@ extension BackendDeckToolsSessionsArea {
             case "accounts.list":
                 try await authorize(entry, summary: "List the agent accounts", args: args, runtime: runtime, context: context)
                 let agent = try Rules.optStr(args, "agent"), project = try Rules.optStr(args, "projectPath")
-                var value = object([("accounts", try await accounts.list(agent: agent, context: context)), ("agents", try await accounts.agents(context: context))])
+                var listed = try await accounts.list(agent: agent, context: context)
+                // 4 Nov: the same words as Settings › Coding AIs for this Mac's own login of each AI (its stored name is
+                // only "Default"), so an agent never reports it as an account with no name.
+                if let rows = listed["profiles"].elements {
+                    listed = listed.setting("profiles", .array(rows.map { row in
+                        guard row["system"].bool == true else { return row }
+                        return row.setting("about", .string(CodingAIAccountLabels.ownLoginLabel(row["provider"].string)
+                            + ": the login this AI uses on this Mac outside Terminal Deck too. accounts.status says whether anyone is signed in to it, and as whom."))
+                    }))
+                }
+                var value = object([("accounts", listed), ("agents", try await accounts.agents(context: context))])
                 if let project {
                     let checked = try await knownFolder(project, runtime: runtime, context: context)
                     value = value.setting("newSessionHere", try await accounts.resolve(projectPath: checked, provider: agent, context: context))

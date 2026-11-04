@@ -64,6 +64,9 @@ final class NativeBrowserTab: Identifiable {
     private(set) var handoverPrompt: String?
     /// The agent's waiting call, answered with the handover's outcome.
     @ObservationIgnored var handoverWaiter: ((String) -> Void)?
+    /// Browser 27: dialog answers, waiting uploads, camera/microphone answers,
+    /// network routes, console and emulation for this tab (never saved).
+    @ObservationIgnored var automation = NativeBrowserAutomation()
 
     /// Annotate or Draw: the page frozen as a picture, marked over the top.
     enum Markup: Equatable {
@@ -154,7 +157,15 @@ final class NativeBrowserTab: Identifiable {
         view.navigationDelegate = delegate
         view.uiDelegate = delegate
         self.delegate = delegate
-        view.windowChanged = { [weak self] visible in self?.pageInWindow = visible }
+        view.windowChanged = { [weak self, weak view] visible in
+            guard let self else { return }
+            self.pageInWindow = visible
+            // The person's browser took the page back from its off-screen parking window.
+            if visible, let parking = self.automation.parkingWindow, view?.window !== parking {
+                self.automation.parkingWindow = nil
+                parking.close()
+            }
+        }
         webView = view
         observe(view)
         owner.browserComposition?.attached(self)
@@ -179,6 +190,11 @@ final class NativeBrowserTab: Identifiable {
         webView = nil
         pageInWindow = false
         delegate = nil
+        automation.parkingWindow?.close()
+        automation.parkingWindow = nil
+        automation.disarmUpload()
+        // A new website store must not inherit script routes, headers or standing dialog answers.
+        automation = NativeBrowserAutomation()
     }
 
     func load(_ target: URL) {
@@ -190,8 +206,15 @@ final class NativeBrowserTab: Identifiable {
         if let webView { loadView(webView, target: target) }
     }
 
+    /// The request for a navigation this tab starts, with any headers an agent set (browser_page route).
+    func request(for target: URL) -> URLRequest {
+        var request = URLRequest(url: target)
+        for (name, value) in automation.extraHeaders { request.setValue(value, forHTTPHeaderField: name) }
+        return request
+    }
+
     private func loadView(_ view: WKWebView, target: URL) {
-        guard let composition = owner?.browserComposition else { view.load(URLRequest(url: target)); return }
+        guard let composition = owner?.browserComposition else { view.load(request(for: target)); return }
         ownedLoad?.cancel(); ownedLoadEpoch = UUID()
         let epoch = ownedLoadEpoch
         isLoading = true; awaitingWebKitLoad = true
@@ -202,7 +225,7 @@ final class NativeBrowserTab: Identifiable {
                 try await composition.prepareNavigation(self, url: target)
                 try Task.checkCancellation()
                 guard self.ownedLoadEpoch == epoch, self.webView === view else { return }
-                view.load(URLRequest(url: target))
+                view.load(self.request(for: target))
             } catch {
                 guard self.ownedLoadEpoch == epoch else { return }
                 self.awaitingWebKitLoad = false; self.isLoading = false
@@ -426,6 +449,7 @@ final class NativeBrowserTab: Identifiable {
     // MARK: Handover (an agent gives the page to the person)
 
     func beginHandover(_ prompt: String) {
+        automation.disarmUpload()
         handoverPrompt = prompt
     }
 
@@ -772,6 +796,7 @@ final class NativeBrowserTab: Identifiable {
     }
 
     func navigationStarted() {
+        automation.disarmUpload()
         clearSavedLoginOffers()
         owner?.browserComposition?.navigationStarted(self)
         failure = nil
@@ -920,7 +945,8 @@ final class NativeBrowserTab: Identifiable {
     // MARK: Asking the person (page dialogs)
 
     func presentAlert(_ alert: NSAlert) async -> NSApplication.ModalResponse {
-        if let window = webView?.window {
+        // A page parked off screen for an agent (or being photographed) has a window nobody sees.
+        if let window = webView?.window, !(window is NativeBrowserCaptureWindow) {
             return await alert.beginSheetModal(for: window)
         }
         // A page with no window on screen asks nobody: an app-modal alert took the front and
@@ -1051,6 +1077,9 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
+        // A navigation requested by an upload handler must revoke its armed files
+        // before waiting for profile preparation or a new document to commit.
+        tab?.automation.disarmUpload()
         if navigationAction.shouldPerformDownload { return (.download, preferences) }
         guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else {
             return (.cancel, preferences)
@@ -1148,24 +1177,53 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     }
 
     // MARK: Page dialogs
+    //
+    // The person answers on the tab, unless an agent set an answer for this tab
+    // (browser_page dialogs). Every dialog is written down for the agent to read.
+
+    /// In a window the person can see (not a capture or off-screen parking window).
+    static func onScreen(_ webView: WKWebView) -> Bool {
+        guard let window = webView.window else { return false }
+        return !(window is NativeBrowserCaptureWindow)
+    }
+
+    private func record(_ kind: String, _ message: String, frame: WKFrameInfo, answer: String, by: String) {
+        tab?.automation.note(.init(kind: kind, message: String(message.prefix(500)), site: frame.securityOrigin.host,
+                                   answer: answer, by: by, at: Date()))
+    }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async {
+        if tab?.automation.autoAnswer() != nil { record("alert", message, frame: frame, answer: "ok", by: "agent"); return }
         let alert = Self.alert(message, frame: frame)
         alert.addButton(withTitle: "OK")
+        let shown = Self.onScreen(webView)
         _ = await tab?.presentAlert(alert)
+        record("alert", message, frame: frame, answer: "ok", by: shown ? "person" : "nobody (the page was not on screen)")
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        if let policy = tab?.automation.autoAnswer() {
+            record("confirm", message, frame: frame, answer: policy == .accept ? "ok" : "cancel", by: "agent")
+            return policy == .accept
+        }
         let alert = Self.alert(message, frame: frame)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
-        return await tab?.presentAlert(alert) == .alertFirstButtonReturn
+        let shown = Self.onScreen(webView)
+        let ok = await tab?.presentAlert(alert) == .alertFirstButtonReturn
+        record("confirm", message, frame: frame, answer: ok ? "ok" : "cancel", by: shown ? "person" : "nobody (the page was not on screen)")
+        return ok
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
+        if let policy = tab?.automation.autoAnswer() {
+            let text = policy == .accept ? (tab?.automation.promptText ?? defaultText ?? "") : nil
+            record("prompt", prompt, frame: frame, answer: text.map { "ok (\($0.count) characters)" } ?? "cancel", by: "agent")
+            return text
+        }
         let alert = Self.alert(prompt, frame: frame)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         field.stringValue = defaultText ?? ""
@@ -1173,21 +1231,111 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
-        guard await tab?.presentAlert(alert) == .alertFirstButtonReturn else { return nil }
+        let shown = Self.onScreen(webView)
+        guard await tab?.presentAlert(alert) == .alertFirstButtonReturn else {
+            record("prompt", prompt, frame: frame, answer: "cancel", by: shown ? "person" : "nobody (the page was not on screen)")
+            return nil
+        }
+        record("prompt", prompt, frame: frame, answer: "ok", by: "person")
         return field.stringValue
     }
 
+    // MARK: Files the page asks for
+
+    /// The page's file chooser. Files an agent is uploading go straight in (no
+    /// panel). Otherwise the person picks, from Finder or — "Choose from Photos…"
+    /// — from their Photos library, which needs no Photos permission (PHPicker).
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        if let tab, tab.automation.uploadArmed {
+            let source = frame.securityOrigin
+            let port = source.port == 0 ? "" : ":\(source.port)"
+            let origin = BackendBrowserOrigin.exact("\(source.protocol)://\(source.host)\(port)")
+            return tab.automation.takeUpload(multiple: parameters.allowsMultipleSelection, mainFrame: frame.isMainFrame, origin: origin)
+        }
+        guard Self.onScreen(webView), let window = webView.window else {
+            return nil // no window to put the chooser on (see presentAlert)
+        }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
         panel.canChooseFiles = true
-        if let window = webView.window {
-            let response = await panel.beginSheetModal(for: window)
-            return response == .OK ? panel.urls : nil
+        panel.message = "Choose \(parameters.allowsMultipleSelection ? "files" : "a file") for \(frame.securityOrigin.host.isEmpty ? "this page" : frame.securityOrigin.host)"
+        let photos = NativeBrowserPhotosButton(panel: panel)
+        panel.accessoryView = photos.view
+        panel.isAccessoryViewDisclosed = true
+        let response = await panel.beginSheetModal(for: window)
+        if photos.chosen {
+            return await NativeBrowserPhotoPicker.pick(in: window, multiple: parameters.allowsMultipleSelection)
         }
-        return nil // no window to put the chooser on (see presentAlert)
+        return response == .OK ? panel.urls : nil
+    }
+
+    // MARK: Camera and microphone
+
+    /// Asked on the tab, remembered per site until the tab closes. An agent's answer
+    /// for this tab (browser_page permissions) comes first. A page nobody can see
+    /// (parked off screen for an agent) is answered no: WebKit's own prompt would sit
+    /// on a window nobody sees and the page would wait forever.
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
+        guard let tab else { return .deny }
+        let automation = tab.automation
+        let camera = type == .camera || type == .cameraAndMicrophone
+        let microphone = type == .microphone || type == .cameraAndMicrophone
+        let policies = [camera ? automation.camera : nil, microphone ? automation.microphone : nil].compactMap { $0 }
+        if policies.contains(.deny) { return .deny }
+        if !policies.isEmpty, policies.allSatisfy({ $0 == .allow }) { return .grant }
+        let site = origin.host.isEmpty ? "This page" : origin.host
+        let key = "\(origin.protocol)://\(origin.host):\(origin.port)#\(type.rawValue)"
+        if let answer = automation.personAnswers[key] { return answer ? .grant : .deny }
+        let what = camera && microphone ? "camera and microphone" : camera ? "camera" : "microphone"
+        let alert = NSAlert()
+        alert.messageText = "Allow \(site) to use your \(what)?"
+        alert.informativeText = "Only in this tab, until it closes."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        guard Self.onScreen(webView) else { return .deny }
+        let allowed = await tab.presentAlert(alert) == .alertFirstButtonReturn
+        automation.personAnswers[key] = allowed
+        return allowed ? .grant : .deny
+    }
+
+    // MARK: Sign-in a site asks for (HTTP Basic / Digest)
+
+    /// The person types it on the tab; an agent never does (its pages get a
+    /// handover). Server trust stays WebKit's own; automation never selects a client certificate.
+    func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        let method = challenge.protectionSpace.authenticationMethod
+        if method == NSURLAuthenticationMethodClientCertificate, tab?.isolated == true {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+        if [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodClientCertificate].contains(method),
+           !Self.onScreen(webView) {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+        guard method == NSURLAuthenticationMethodHTTPBasic || method == NSURLAuthenticationMethodHTTPDigest,
+              let tab else { return (.performDefaultHandling, nil) }
+        if challenge.previousFailureCount >= 3 { return (.cancelAuthenticationChallenge, nil) }
+        let space = challenge.protectionSpace
+        let alert = NSAlert()
+        alert.messageText = "\(space.host) wants you to sign in"
+        alert.informativeText = (challenge.previousFailureCount > 0 ? "That did not work. " : "")
+            + (space.realm.map { "It says: \"\($0.prefix(120))\"." } ?? "")
+            + (space.receivesCredentialSecurely ? "" : " This page is not secure: what you type is sent without encryption.")
+        let user = NSTextField(frame: NSRect(x: 0, y: 30, width: 260, height: 24))
+        user.placeholderString = "Name"
+        user.stringValue = challenge.proposedCredential?.user ?? ""
+        let password = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        password.placeholderString = "Password"
+        let stack = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 54))
+        stack.addSubview(user); stack.addSubview(password)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Sign In")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = user.stringValue.isEmpty ? user : password
+        guard await tab.presentAlert(alert) == .alertFirstButtonReturn else { return (.cancelAuthenticationChallenge, nil) }
+        return (.useCredential, URLCredential(user: user.stringValue, password: password.stringValue, persistence: .forSession))
     }
 
     private static func alert(_ message: String, frame: WKFrameInfo) -> NSAlert {

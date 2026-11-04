@@ -67,6 +67,7 @@ public sealed partial class SessionPane
   private async Task PasteDataAsync(DataPackageView data)
   {
     if (disposed || !draft.IsLive) { notice("Open a running terminal before pasting."); return; }
+    if (ended || IsEnded) { ShowEnded(true); return; }
     string text;
     if (data.Contains(StandardDataFormats.StorageItems))
     {

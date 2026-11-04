@@ -45,13 +45,21 @@ struct HootChatSource: Equatable, Sendable {
             context: entry.context.flatMap { try? NativeRPCValue.parseJSON($0) }, held: entry.held || pending || edited,
             problem: pending ? notSentYet("The earlier delivery was not confirmed.") : entry.problem, deliveryPending: pending)
     }
-    private final class QueueOwner {
+    fileprivate final class QueueOwner {
         weak var model: NativeHootChatModel?
         var pending: NativeHootChatModel?
         var searching: NativeHootChatModel?
         init(_ model: NativeHootChatModel) { self.model = model }
     }
-    private static var queueOwners: [String: QueueOwner] = [:]
+    @Observable fileprivate final class QueueRegistry {
+        var owners: [String: QueueOwner] = [:]
+    }
+    private static let queueRegistry = QueueRegistry()
+    // Sidebar rows must also refresh when their model is first attached, not just when an existing model changes.
+    private static var queueOwners: [String: QueueOwner] {
+        get { queueRegistry.owners }
+        set { queueRegistry.owners = newValue }
+    }
     static func queueOwner(_ id: String) -> NativeHootChatModel? { id == "hoot" ? .shared : queueOwners[id]?.model }
     static func forSession(_ id: String, name: String) -> NativeHootChatModel {
         queueOwners[id]?.model ?? NativeHootChatModel(source: .init(sessionID: id, agentName: name))
@@ -120,7 +128,9 @@ struct HootChatSource: Equatable, Sendable {
     var findMatches: [NativeChatFindMatch] = []
     var attachmentCapabilities: NativeRPCValue = .null
     private(set) var childTasks: [NativeRPCValue] = []
+    var runningTasksExpanded = false
     private(set) var answering = false
+    var foregroundAnswerActive: Bool { answering || sending }
     private(set) var stoppingChild: String?
     func stopChild(_ id: String) async throws -> NativeRPCValue {
         guard stoppingChild == nil, childTasks.contains(where: { $0["id"].string == id && ChatChildTasks.running($0) }) else { throw NativeRPCError.invalidArguments("Choose a running task from this chat.") }
@@ -131,10 +141,17 @@ struct HootChatSource: Equatable, Sendable {
     func requestChildStop(_ id: String) {
         Task { do { _ = try await stopChild(id) } catch { problem = error.localizedDescription } }
     }
+    func runningTaskOutput(_ id: String) async throws -> NativeRPCValue {
+        guard runningTasks.contains(where: { $0["id"].string == id }) else {
+            throw NativeRPCError.invalidArguments("Choose a running task from this chat.")
+        }
+        return try NativeRPCValue.fromFoundation(await invokeChat("provider", ["background/output", ["taskId": id]]))
+    }
     func retainAttachmentDraft() { Self.queueOwners[source.sessionID ?? "hoot"]?.pending = self }
     private(set) var pending: [NativeRPCValue] = []
     private(set) var todos: [NativeRPCValue] = []
     private(set) var taskProgress: NativeRPCValue = .null
+    @ObservationIgnored var chatViewports: [UUID: NativeChatFollowViewport] = [:]
     @ObservationIgnored private var progressCursor = -1
     @ObservationIgnored private var progressConversation = ""
     @ObservationIgnored private var progressChildren: [NativeRPCValue] = []
@@ -162,6 +179,7 @@ struct HootChatSource: Equatable, Sendable {
     private(set) var fileDiffs: [BackendChatDiffs.Card] = []
     @ObservationIgnored private var diffInputs: [HootChatRow] = []
     func thought(for rowID: String) -> NativeRPCValue? { thoughts.first { rowID.hasPrefix(($0["turnId"].string ?? "") + ":") } }
+    private(set) var workingState = ChatWorkingState.idle
     private(set) var busy = false
     private(set) var alive = false
     private(set) var readOnly = false
@@ -266,7 +284,14 @@ struct HootChatSource: Equatable, Sendable {
     @ObservationIgnored private var optionsTask: Task<Void, Never>?
     private(set) var changingOptions = false
     private(set) var changingConversation = false
-    private(set) var problem: String?
+    private(set) var problem: String? {
+        didSet {
+            if let problem {
+                let safe = NativeChatDisplayError.text(problem)
+                if safe != problem { self.problem = safe.isEmpty ? nil : safe }
+            }
+        }
+    }
     private(set) var readyToSend: Bool?
     private(set) var catalogue = HootComposerCatalogue()
     @ObservationIgnored private var referenceSearch: Task<Void, Never>?
@@ -311,7 +336,9 @@ struct HootChatSource: Equatable, Sendable {
     @ObservationIgnored private var localDraftEchoes: [String] = []
     /// The person's last message never got a finished answer (a restart cut it off): its turn id.
     private(set) var unfinishedTurn: String?
+    private(set) var forkPrefix = false
     private var retryTurn: String? {
+        guard !forkPrefix else { return nil }
         guard let user = sessionEvents.last(where: { $0.record.kind == .user && !$0.turnID.hasPrefix("bg:") && ($0.record.value["context"]["source"]["kind"].string ?? "").isEmpty }) else { return nil }
         let turn = sessionEvents.filter { $0.turnID == user.turnID }
         return turn.contains { $0.record.kind == .error || $0.record.kind == .interrupted } || !turn.contains { $0.record.kind == .completed } ? user.turnID : nil
@@ -410,11 +437,18 @@ struct HootChatSource: Equatable, Sendable {
     /// A rewind was just made and no message has been sent since: it can still be put back.
     private(set) var canUndoRewind = false
     private(set) var rewindProblem: String?
+    var messageActions: [NativeRPCValue] = []
+    var changingMessageHistory = false
+    var messageActionProblem: String?
+    var messageActionsUnavailable: String?
+    private(set) var providerConversationMissing = false
     /// Back to this message: what came after is set aside, a message of the person's returns to the box.
     func rewind(to row: HootChatRow) {
         guard !fixtureMode || chatInvoke != nil, !busy, row.sequence > 0 else { return }
         rewindProblem = nil
+        changingMessageHistory = true
         Task {
+            defer { changingMessageHistory = false }
             do {
                 let text: String
                 if source.isHoot {
@@ -423,10 +457,14 @@ struct HootChatSource: Equatable, Sendable {
                     let result = try NativeRPCValue.fromFoundation(await invokeChat("rewind", [row.sequence]))
                     text = result["text"].string ?? ""
                 }
-                try await reloadConversation()
-                if !text.isEmpty { composerDraft.text = text }
+                try await finishRewind(text)
             } catch { rewindProblem = error.localizedDescription }
         }
+    }
+    /// The button and the tool replace the visible transcript as well as the AI's history.
+    func finishRewind(_ text: String) async throws {
+        try await reloadConversation()
+        composerDraft.text = text
     }
     func undoRewind() {
         guard !fixtureMode || chatInvoke != nil else { return }
@@ -440,7 +478,7 @@ struct HootChatSource: Equatable, Sendable {
             catch { rewindProblem = error.localizedDescription }
         }
     }
-    var canRewind: Bool { !fixtureMode && !busy && (!source.isHoot || HootChatActions.rewind != nil) }
+    var canRewind: Bool { !fixtureMode && (!source.isHoot || HootChatActions.rewind != nil) }
     /// The app's guard on its own records is not held for this run of Hoot (why, in one sentence). Shown in the header.
     private(set) var guardOff: String?
     var canHandoff: Bool { !fixtureMode && (source.isHoot ? HootChatActions.handoffUpTo != nil : HootChatActions.handoffConversation != nil) }
@@ -495,8 +533,6 @@ struct HootChatSource: Equatable, Sendable {
     @ObservationIgnored private var choicesObserver: UUID?
     @ObservationIgnored private var sequence = -1
     private(set) var conversationID = ""
-    private(set) var unread: NativeRPCValue = .object([])
-    private(set) var unreadMessages: [ChatUnreadMessage] = []
     @ObservationIgnored private var activeTurnID = ""
     @ObservationIgnored private var checkingReadiness = false
     @ObservationIgnored let fixtureMode: Bool
@@ -712,6 +748,7 @@ struct HootChatSource: Equatable, Sendable {
                 queueRemoval = EngineBridge.shared.on("session:removed") { [weak self] values in
                     guard values.first as? String == session, let self else { return }
                     self.readOnly = true
+                    self.workingState = .idle
                     self.outgoingSend?.cancel(); self.steeringTask?.cancel()
                     self.holdQueuedMessages("Session ended. Review before sending in its replacement.")
                     self.persistQueue()
@@ -856,7 +893,9 @@ struct HootChatSource: Equatable, Sendable {
             for event in events where event.record.kind == .session { if let list = event.record.value["receipts"].elements { sent[event.turnID, default: []] += list } }
             receipts = sent
             // The person's last message: did its turn ever finish? (A restart cuts a turn off with no "completed".)
-            unfinishedTurn = Self.unfinishedTurn(events)
+            forkPrefix = value["forkPrefix"].bool == true
+            providerConversationMissing = value.has("providerConversationId") && value["providerConversationId"].string?.isEmpty != false
+            unfinishedTurn = forkPrefix ? nil : Self.unfinishedTurn(events)
             resuming = value["resuming"].bool == true
             var replied: [String: [NativeRPCValue]] = [:]
             for event in events where event.record.kind == .session { if let list = event.record.value["answered"].elements { replied[event.turnID, default: []] += list } }
@@ -874,14 +913,21 @@ struct HootChatSource: Equatable, Sendable {
             if !carriedDisplay { updateTaskProgress(events) }
             let edits = rows.filter(BackendChatDiffs.isEdit)
             if edits != diffInputs { diffInputs = edits; fileDiffs = BackendChatDiffs.cards(edits) }
-            unread = value["unread"]
-            unreadMessages = ChatUnreadMessages.messages(events)
             if !fixtureMode { NativeHOOTSIMFeedback.retainPreviews(conversation: id, rowIDs: Set(rows.filter { $0.kind == .user }.map(\.id))) }
             pending = value["pending"].elements ?? []; busy = value["busy"].bool == true
             answering = value["answering"].bool ?? busy
+            workingState = ChatWorkingState.read(value.setting("readOnly", .bool(readOnly)), events: events)
             // The "/" menu: the commands this AI itself offers.
             if value.has("commands") { chatReportedCommands = value["commands"]; catalogue.commands = HootSlashCommand.offered(value["commands"]) }
             canUndoRewind = value["rewound"].string != nil
+            messageActions = value["messageActions"].elements ?? []
+            if !source.isHoot, rows.contains(where: { $0.kind == .user }) {
+                if !value.has("messageActions") {
+                    messageActionsUnavailable = "This chat is still using the earlier session engine. Rewind and Fork will appear after it is updated."
+                } else if providerConversationMissing {
+                    messageActionsUnavailable = forkPrefix ? "Send this fork's first message to finish saving its conversation." : "The AI has not confirmed this conversation yet."
+                } else { messageActionsUnavailable = nil }
+            } else { messageActionsUnavailable = nil }
             guardOff = value["guardOff"].string
             alive = value["alive"].bool == true
             if !busy, !sending { flushOptions() }
@@ -920,8 +966,9 @@ struct HootChatSource: Equatable, Sendable {
     }
 
     func statusText(_ text: String) -> String {
-        guard !source.isHoot else { return text }
-        var shown = text.replacingOccurrences(of: "Hoot", with: source.agentName)
+        let safe = NativeChatDisplayError.text(text)
+        guard !source.isHoot else { return safe }
+        var shown = safe.replacingOccurrences(of: "Hoot", with: source.agentName)
         if let id = source.sessionID { shown = shown.replacingOccurrences(of: id, with: "this chat") }
         return shown
     }
@@ -942,6 +989,7 @@ struct HootChatSource: Equatable, Sendable {
         }
         do { try attachmentLimits.validateFiles(saved.attachments.map(\.url)) }
         catch { problem = error.localizedDescription; return }
+        for viewport in chatViewports.values { viewport.latest() }
         if busy || sending || changingOptions || !pending.isEmpty || steeringQueuedID != nil {
             queuedMessages.append(.init(draft: saved, context: queuedContext))
             clearDraft(saved)
@@ -1528,7 +1576,7 @@ struct HootChatSource: Equatable, Sendable {
     }
     /// One of the chat's own calls (say, read, stop, answer, ensure) for whoever's conversation this is. For Hoot the
     /// channel and arguments are exactly the ones it always sent.
-    private func invokeChat(_ verb: String, _ arguments: [Any?]) async throws -> Any {
+    func invokeChat(_ verb: String, _ arguments: [Any?]) async throws -> Any {
         if let chatInvoke { return try await chatInvoke(source.channel(verb), source.arguments(arguments)) }
         return try await EngineBridge.shared.invoke(source.channel(verb), source.arguments(arguments))
     }
@@ -1635,17 +1683,15 @@ struct HootChatSource: Equatable, Sendable {
 }
 
 struct NativeHootChat: View {
-    @State var model: NativeHootChatModel = .shared
+    @Bindable var model: NativeHootChatModel = .shared
     var compact = false
     var notices: AnyView? = nil
     static let columnWidth: CGFloat = 760
-    /// The unread target expands the page when it is older than the latest messages.
+    /// Build only the newest page until the person asks for earlier history.
     static let pageSize = 60
     @State private var toolDetail: HootChatRow?
     @State private var shownCount = NativeHootChat.pageSize
-    @State private var unreadViewport = NativeChatUnreadViewport()
-    @State private var composerHeight: CGFloat = 120
-    @State private var statusHeight: CGFloat = 0
+    @State private var followViewport = NativeChatFollowViewport()
     @Environment(\.nativeScreenActive) private var screenActive
     @Environment(\.agkitOffscreenSolid) private var inheritedSolid
     private var side: CGFloat { compact ? 12 : 20 }
@@ -1654,16 +1700,14 @@ struct NativeHootChat: View {
     }
     var body: some View {
         let all = model.displayRows
-        let targetIndex = unreadViewport.dividerID.flatMap { id in all.firstIndex { $0.id == id } }
-        let visibleCount = max(shownCount, targetIndex.map { all.count - $0 } ?? 0)
-        let shown = all.suffix(visibleCount)
+        let shown = all.suffix(shownCount)
         let progressAnchor = model.taskProgress["anchorRowId"].string
         let progressAnchorVisible = shown.contains { $0.id == progressAnchor }
         VStack(spacing: 6) {
             // One icon strip (Session, Command output, Changes, More), the same in every chat (Asad, 20 Oct 2026).
             HStack { Spacer(); NativeChatMenu(model: model) }.frame(height: 26).padding(.horizontal, side + 16).hootColumn(compact)
             if model.findVisible { NativeChatFindBar(model: model) }
-            ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
             ScrollView {
                 // A plain stack: only the latest page of messages is built (see pageSize), so
                 // the bottom is laid out exactly and the chat opens there without a jump.
@@ -1678,69 +1722,57 @@ struct NativeHootChat: View {
                     // HOOT-FLOW: each job is one reply beside Hoot's avatar, there the moment a message is sent
                     // ("Thinking…"). While Hoot works its steps are a live list (tools in plain words, rules with a
                     // green tick, skill steps, agents); after, one folded line whose drop-down is the job as a table.
-                    let live = (model.busy || model.sending) && !model.compacting
-                    let items = HootChatItem.thinking(HootChatItem.items(Array(shown)), live: live)
+                    let live = model.foregroundAnswerActive && !model.compacting
+                    let items = HootChatItem.thinking(HootChatItem.page(all, count: shownCount), live: live)
                     ForEach(items) { item in
-                        let divider = unreadViewport.dividerID.flatMap { id in item.unreadMessageIDs.contains(id) ? id : nil }
-                        if let divider {
-                            NativeChatUnreadDivider(count: unreadViewport.dividerCount)
-                                .id("unread:" + divider).unreadChatFrame("unread:" + divider)
-                                .transition(.opacity)
-                        }
                         Group { switch item {
                         case .row(let row):
                             if row.value["routing"].isNullish { chatRow(row) }
                             else {
-                                HStack(alignment: .top, spacing: 12) {
-                                    avatar(.awake, animated: false)
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(replySenderName).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                                        routingCard(row.value["routing"])
-                                    }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    replyName(.awake, animated: false)
+                                    routingCard(row.value["routing"])
                                 }
                             }
                         case .reply(let key, let answer, let steps, let open):
-                            replyRow(answer, steps: steps, live: live && open, key: key)
+                            replyRow(answer, steps: steps, live: live && open, latest: open, key: key)
                         } }.id(item.id)
                         .background(model.findVisible && model.findMatch?.id == item.id ? Color.yellow.opacity(0.08) : Color.clear)
-                        .background(GeometryReader { proxy in
-                            Color.clear.preference(key: NativeChatUnreadFrames.self,
-                                value: Dictionary(uniqueKeysWithValues: item.unreadMessageIDs.map { ($0, proxy.frame(in: .named("unread21-content"))) }))
-                        })
                         if item.id == progressAnchor, !model.todos.isEmpty {
                             NativeChatTaskCard(todos: model.todos).id("task-progress")
                         }
                     }
                     if !progressAnchorVisible, !model.todos.isEmpty { NativeChatTaskCard(todos: model.todos).id("task-progress") }
-                    // 29 Oct (Asad): what is still running and what waits to be sent are part of the conversation, at
-                    // its end, like the other steps; Stop stays in the box (and on each task).
-                    if model.childTasks.contains(where: { ChatChildTasks.running($0) || $0["status"].string == "stopping" }) {
-                        NativeChatChildRows(model: model, inline: true).id("running-tasks")
-                    }
                     ForEach(model.queuedMessages) { item in
                         NativeQueuedMessageRow(model: model, item: item, bubble: true).id("queued:" + item.id)
                     }
+                    if let unavailable = model.messageActionsUnavailable {
+                        Text(unavailable).font(.callout).foregroundStyle(.secondary)
+                    }
+                    if let problem = model.messageActionProblem {
+                        Label(problem, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    if model.changingMessageHistory { ProgressView("Updating conversation…").controlSize(.small) }
                     if let problem = model.problem {
                         Label(model.statusText(problem), systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     }
-                    Color.clear.frame(height: unreadViewport.dividerID == nil ? 8 : max(8, unreadViewport.visibleRect.height - 80))
+
                 }
                 // The whole chat column, avatars included, sits inside the message box's width,
                 // centred with it, so nothing peeks out at either side of the box.
                 // Same inset left and right, lined up with the text inside the box (16 pt).
                 .scrollTargetLayout()
                 .padding(.horizontal, side + 16).padding(.top, compact ? 6 : 20).hootColumn(compact)
-                .coordinateSpace(name: "unread21-content")
+                .background(NativeChatFollowScroll(viewport: followViewport))
             }
             // Like any chat app: open at the latest message, stay pinned while replies stream
             // in, and leave a person who scrolled up to read where they are.
             .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .scrollPosition($unreadViewport.position)
-            .onScrollGeometryChange(for: ChatUnreadScrollGeometry.self) { geometry in
-                .init(rect: geometry.visibleRect, bottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 60,
-                      contentHeight: geometry.contentSize.height)
-            } action: { _, value in unreadViewport.geometry(value.rect, bottom: value.bottom, contentHeight: value.contentHeight) }
-            .onPreferenceChange(NativeChatUnreadFrames.self) { unreadViewport.layout($0) }
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .scrollPosition($followViewport.position)
+            .onScrollPhaseChange { _, phase in
+                followViewport.interacting = phase == .interacting || phase == .decelerating
+            }
             // No rectangular scroll-edge blur behind the box (Asad: "its not hitting with round shape of text box"); only the box's own rounded glass.
             .scrollEdgeEffectHidden(true, for: .all)
             .scrollEdgeEffectStyle(.soft, for: .top)
@@ -1748,11 +1780,8 @@ struct NativeHootChat: View {
                 LinearGradient(colors: [model.source.isHoot ? DeckTokens.page : DeckTokens.chatPage, (model.source.isHoot ? DeckTokens.page : DeckTokens.chatPage).opacity(0)], startPoint: .top, endPoint: .bottom)
                     .frame(height: 16).allowsHitTesting(false).accessibilityHidden(true)
             }
-            // Only messages are clipped at the box's bottom; the glass, corners and shadow stay above the clip.
-            .contentMargins(.bottom, composerHeight + 8, for: .scrollContent)
-            .clipped()
-            .clipShape(NativeChatMessageClip(bottomHeight: composerHeight, statusHeight: statusHeight))
                 VStack(spacing: 8) {
+                    if (compact && !model.fixtureMode) || model.canUndoRewind || model.rewindProblem != nil || model.compacting || !model.pending.isEmpty {
                     VStack(spacing: 8) {
                     if compact, !model.fixtureMode {
                         // The island has no room for the handoff panel, so its button works like "Give to Hoot" there:
@@ -1782,38 +1811,23 @@ struct NativeHootChat: View {
                             }
                         }.font(.system(size: 11.5)).foregroundStyle(.secondary)
                     }
-                    if let problem = unreadViewport.problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
-                    if unreadViewport.pillCount > 0 {
-                        Button { unreadViewport.revealFirst() } label: {
-                            Text("\(unreadViewport.pillCount) new messages ↓").font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.small)
-                        .accessibilityLabel("Jump to new messages")
-                    } else if unreadViewport.showsJumpToLatest {
-                        // 30 Oct (Asad): scrolled up to read, the chat stays put; this brings the newest back and follows it.
-                        Button { unreadViewport.jumpToLatest() } label: {
-                            Label("Jump to latest", systemImage: "arrow.down").font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
-                        .help("Scroll to the newest message and keep following it")
-                        .accessibilityLabel("Jump to latest")
-                    }
                     if model.compacting { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Compacting…").font(.callout) }.frame(maxWidth: .infinity, alignment: .leading) }
                     ForEach(model.pending, id: \.compact) { request in approvalCard(request) }
                     }
                     .frame(maxWidth: .infinity)
                     .background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 8))
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { statusHeight = $0 }
+                    }
                     if model.readOnly {
                         Label("Finished · Saved history", systemImage: "checkmark.circle").font(.callout).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).background(DeckTokens.card)
-                    } else { composer(.box) }
+                    } else { composer(.box)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { followViewport.composer = $0 }
+                    }
                 }
                 .padding(.horizontal, side).hootColumn(compact)
                 // In the island panel the box is a solid card in the panel's own light or dark
                 // colours (the Reduce Transparency fallback), so nothing shows through it.
                 .environment(\.agkitOffscreenSolid, inheritedSolid)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
                 .zIndex(1)
             }
             if !model.source.isHoot && !model.readOnly {
@@ -1824,30 +1838,21 @@ struct NativeHootChat: View {
         .environment(\.nativeChatFindQuery, model.findVisible ? model.findQuery : "")
         .background(NativeChatFindTarget(model: model))
         .onChange(of: model.findRevision) { _, _ in revealFind() }
-        .onChange(of: model.unreadMessages) { _, _ in syncUnread() }
-        .onChange(of: model.unread) { _, _ in syncUnread() }
-        .onChange(of: model.loading) { _, loading in if !loading { syncUnread() } }
-        .onChange(of: model.conversationID) { _, _ in syncUnread() }
+        .onChange(of: model.loading) { _, loading in if !loading { followViewport.latest() } }
+        .onChange(of: model.conversationID) { _, _ in followViewport.latest() }
         .onChange(of: model.composerDraft.text) { _, _ in model.syncSessionDraftSoon() }
         // Sending always brings the newest into view and follows it (the sent message lands after this, and the
         // follow keeps it and the answer in view as they arrive).
-        .onChange(of: model.sending) { _, sending in if sending { unreadViewport.jumpToLatest() } }
-        .onChange(of: model.requestFocus) { _, _ in unreadViewport.jumpToLatest() }
+        .onChange(of: model.sending) { _, sending in if sending { followViewport.latest() } }
         // A cached chat shown again (a switch back to it) opens at its newest message.
-        .onChange(of: screenActive) { _, shown in if shown { unreadViewport.returned() } }
-        // Every window has its own exposure timer and lands at its first unread message.
+        .onChange(of: screenActive) { _, shown in if shown { followViewport.latest() } }
         .onAppear {
-            unreadViewport.save = { sequence, conversation in try await model.saveSeen(sequence, conversation: conversation) }
-            unreadViewport.appear(); syncUnread()
+            model.chatViewports[followViewport.id] = followViewport
+            followViewport.latest()
         }
-        .onDisappear { unreadViewport.disappear() }
-        .background(NativeChatUnreadWindow { unreadViewport.active = $0 })
+        .onDisappear { model.chatViewports[followViewport.id] = nil }
         .frame(maxWidth: .infinity, maxHeight: .infinity).task { await model.start() }
         .background(model.source.isHoot ? Color.clear : DeckTokens.chatBody)
-    }
-    private func syncUnread() {
-        guard !model.loading else { return }
-        unreadViewport.receive(conversation: model.conversationID, seen: Int(model.unread["seenSequence"].number ?? 0), messages: model.unreadMessages)
     }
     private func revealFind() {
         guard let match = model.findMatch else { return }
@@ -1855,25 +1860,34 @@ struct NativeHootChat: View {
         if let index = all.firstIndex(where: { $0.id == match.firstRow }) { shownCount = max(shownCount, all.count - index) }
         Task { @MainActor in
             await Task.yield()
-            unreadViewport.position.scrollTo(id: match.id, anchor: .center)
+            followViewport.pause()
+            followViewport.position.scrollTo(id: match.id, anchor: .center)
         }
+    }
+    private var composerStatus: AnyView? {
+        guard model.workingState.active || !model.runningTasks.isEmpty else { return nil }
+        return AnyView(VStack(spacing: DeckTokens.Spacing.s4) {
+            NativeChatWorkingLine(state: model.workingState, active: screenActive)
+            NativeChatChildRows(model: model).id("\(model.source.sessionID ?? "hoot"):\(model.conversationID)")
+        })
     }
     private func composer(_ part: HootComposerPart) -> some View {
         // The island uses the very same box as the page: glass, and the permission/model/effort row.
-        HootComposer(draft: $model.composerDraft, catalogue: model.catalogue, showMeta: true, part: part,
+        HootComposer(draft: model.ownedComposerBinding, ownerID: model.source.sessionID ?? "hoot", catalogue: model.catalogue, showMeta: true, part: part,
                      busy: model.busy || model.sending || model.stopping || model.steeringQueuedID != nil, allowsSteering: !model.stopping, enabled: composerEnabled,
                      placeholder: model.source.isHoot ? "Ask Hoot — type @ to mention a session, page, agent or app"
                                                       : "Message \(model.source.agentName) — type / for its commands",
                      agentName: model.source.agentName, plainMeta: !model.source.isHoot,
                      microphoneAvailable: model.fixtureMode ? false : nil,
-                     onSend: { unreadViewport.jumpToLatest(); model.send($0) }, onStop: { model.stop() }, onScreenshot: { model.screenshot() },
+                     onSend: { followViewport.latest(); model.send($0) }, onStop: { model.stop() }, onScreenshot: { model.screenshot() },
                      onManageTools: { if !model.fixtureMode { AppModel.shared.select("mcp") } },
                      onPermissionChange: { model.changePermission($0) }, onModelChange: { model.changeModel($0) },
                      onEffortChange: { model.changeEffort($0) }, onFastModeChange: { model.changeFastMode($0) },
                      onAppCommand: { model.routeSlashCommand($0) },
-                     onReferenceQuery: { model.searchReferences($0) }, onRecall: { model.recallPrompt(previous: $0) }, attachmentLimits: model.attachmentLimits, canStop: model.answering || model.sending,
+                     onReferenceQuery: { model.searchReferences($0) }, onRecall: { model.recallPrompt(previous: $0) }, attachmentLimits: model.attachmentLimits, canStop: model.answering || model.sending, stopping: model.stopping,
                      dictationOwner: model.chatVoice.dictation, onDictationStart: { model.chatVoice.beginDictation() },
-                     onExpandLongPrompt: { _ = try? model.longDraftTool("open", text: nil) })
+                     onExpandLongPrompt: { _ = try? model.longDraftTool("open", text: nil) },
+                     status: part == .meta ? nil : composerStatus)
     }
     /// Who answers: Hoot's owl, or a chat session's own AI.
     private var replyAgent: AGTAgent? {
@@ -1976,7 +1990,9 @@ struct NativeHootChat: View {
                 }.padding(16) }.frame(width: 320, height: 280)
             }
         } else if row.kind == .user {
-            HootMessageFrame(row: row, trailing: true, onRewind: model.canRewind ? { model.rewind(to: row) } : nil,
+            HootMessageFrame(row: row, trailing: true, onRewind: model.messageAction("rewind", row: row) ? { model.rewind(to: row) } : nil,
+                             onFork: model.messageAction("fork", row: row) ? { model.fork(from: row) } : nil,
+                             actionsBusy: model.busy || model.changingMessageHistory,
                              onHandoff: model.canHandoff ? { model.handoff(upTo: row, fromIsland: compact) } : nil) {
             VStack(alignment: .leading, spacing: 10) {
                 let team = AGTTeamChatHistory.shared.rows.first { $0["session"]["id"].string == model.source.sessionID }
@@ -1987,7 +2003,7 @@ struct NativeHootChat: View {
                     }
                 }
                 if row.value["attachmentCount"].number ?? 0 > 0 { attachmentCard(row) }
-                Text(NativeChatFindText.highlight(AttributedString(row.value["text"].string ?? ""), query: model.findVisible ? model.findQuery : "")).font(.system(size: 13.5)).textSelection(.enabled)
+                Text(NativeChatFindText.highlight(AttributedString(row.value["text"].string ?? ""), query: model.findVisible ? model.findQuery : "")).font(NativeChatMarkdown.bodyType).textSelection(.enabled)
             }
                 .padding(14).frame(maxWidth: 520, alignment: .leading)
                 .background(Color.accentColor.opacity(0.12), in: UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18))
@@ -2034,14 +2050,14 @@ struct NativeHootChat: View {
             }
         } else {
             HootMessageFrame(row: row, trailing: false, onRewind: nil,
+                             onFork: model.messageAction("fork", row: row) ? { model.fork(from: row) } : nil,
+                             actionsBusy: model.busy || model.changingMessageHistory,
                              onHandoff: model.canHandoff && [.message, .textDelta].contains(row.kind) ? { model.handoff(upTo: row, fromIsland: compact) } : nil) {
-            HStack(alignment: .top, spacing: 12) {
-                avatar(row.kind == .error ? .stopped : .awake, animated: false)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(replySenderName).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                    replyName(row.kind == .error ? .stopped : .awake, animated: false)
                     if row.kind == .error || row.kind == .interrupted {
                         Text(model.statusText(row.value["text"].string ?? (row.kind == .interrupted ? "Stopped." : "")))
-                            .font(.system(size: 13.5)).lineSpacing(5).textSelection(.enabled)
+                            .font(NativeChatMarkdown.bodyType).lineSpacing(5).textSelection(.enabled)
                     } else {
                         // Hoot writes markdown: the sessions' own renderer (bold, italics, code, lists, tables,
                         // headings, links, code blocks), with its marked parts (Needs you, Done, Waiting on,
@@ -2049,19 +2065,26 @@ struct NativeHootChat: View {
                         HootReplyText(text: row.value["text"].string ?? "", streaming: row.kind == .textDelta,
                                       onReply: model.fixtureMode ? nil : { model.replyByNumber($0) })
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
+            }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
-    /// One job's reply: Hoot's avatar; beside it the steps (live list, or the folded line), then the answer. With no
+    private func toolExpansion(_ key: String) -> Binding<Bool> {
+        Binding(get: { followViewport.expandedCards.contains(key) }, set: { expanded in
+            if expanded { _ = followViewport.expandedCards.insert(key) } else { _ = followViewport.expandedCards.remove(key) }
+        })
+    }
+    private func replyName(_ state: HootAvatar.State, animated: Bool) -> some View {
+        NativeChatSenderLine(name: replySenderName) { avatar(state, animated: animated) }
+    }
+    /// One job's reply: the avatar and name, then steps and the answer on the same left edge. With no
     /// answer yet it says "Thinking…" where the answer will be, so the first words take its place without a jump.
-    @ViewBuilder private func replyRow(_ answer: HootChatRow?, steps: [HootChatRow], live: Bool, key: String) -> some View {
+    @ViewBuilder private func replyRow(_ answer: HootChatRow?, steps: [HootChatRow], live: Bool, latest: Bool, key: String) -> some View {
         let column = VStack(alignment: .leading, spacing: 10) {
-            Text(replySenderName).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            replyName(live ? model.avatarState : .awake, animated: live && !model.fixtureMode)
             if let thought = model.thought(for: key) { NativeChatThoughtRow(thought: thought) }
             if !steps.isEmpty {
-                HootStepsView(rows: steps, live: live, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, indent: 0)
+                HootStepsView(rows: steps, live: live, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, indent: 0, expansion: toolExpansion(key))
             }
             ForEach(model.fileDiffs.filter { card in steps.contains { $0.id == card.rowID } }) { card in
                 NativeChatDiffCard(card: card)
@@ -2069,23 +2092,26 @@ struct NativeHootChat: View {
             if let answer {
                 HootReplyText(text: answer.value["text"].string ?? "", streaming: answer.kind == .textDelta,
                               onReply: model.fixtureMode ? nil : { model.replyByNumber($0) })
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                        let current = model.rows.last(where: { $0.kind == .user })?.id ?? model.rows.first?.id ?? "pending"
+                        if latest, key == current { followViewport.latestLine = frame }
+                    }
             } else if live {
                 HootThinkingLabel(title: model.activityLabel, animated: !model.fixtureMode)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { followViewport.latestLine = $0 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
-        let reply = HStack(alignment: .top, spacing: 12) {
-            avatar(live ? model.avatarState : .awake, animated: live && !model.fixtureMode)
-            column
-        }
+        let reply = column
         if let answer {
             HootMessageFrame(row: answer, trailing: false, onRewind: nil,
+                             onFork: model.messageAction("fork", row: answer) ? { model.fork(from: answer) } : nil,
+                             actionsBusy: model.busy || model.changingMessageHistory,
                              onHandoff: model.canHandoff ? { model.handoff(upTo: answer, fromIsland: compact) } : nil) { reply }
         } else if live {
-            // The same height as a message with its button row, so the answer arrives in place.
-            VStack(alignment: .leading, spacing: 3) { reply; Color.clear.frame(height: 18) }
+            VStack(spacing: 0) { Color.clear.frame(height: 18); reply }
         } else if !steps.isEmpty {
             // Stopped before it answered: only the folded steps.
-            HootStepsView(rows: steps, live: false, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) })
+            HootStepsView(rows: steps, live: false, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, expansion: toolExpansion(key))
         }
     }
     private func attachmentCard(_ row: HootChatRow) -> some View {
@@ -2184,48 +2210,62 @@ enum HootHandoffLine {
     }
 }
 
-/// One message. Asad (12 Oct): under each message only the icons (Copy, Rewind, Handoff), no words; a short tip comes
-/// almost at once on hover; and the time shows only while the pointer is on the message. The row keeps its height, so
-/// nothing moves when it appears.
+/// Reply actions stay above the text so the newest line reaches the composer, including code blocks.
+/// Their height stays fixed while streaming and hovering, so the conversation does not reflow.
 struct HootMessageFrame<Content: View>: View {
     let row: HootChatRow
     let trailing: Bool
     var onRewind: (() -> Void)?
+    var onFork: (() -> Void)? = nil
+    var actionsBusy = false
     var onHandoff: (() -> Void)? = nil
     @ViewBuilder var content: Content
     @State private var hovering = false
     @State private var copied = false
+    @State private var confirmRewind = false
     var body: some View {
-        VStack(alignment: trailing ? .trailing : .leading, spacing: 3) {
+        VStack(alignment: trailing ? .trailing : .leading, spacing: 0) {
+            if !trailing { actions }
             content
-            HStack(spacing: 4) {
-                if hovering || copied {
-                    if row.at > 0 {
-                        Text(HootMessageTime.short(row.at)).foregroundStyle(.tertiary).hootQuickTip(HootMessageTime.exact(row.at)).padding(.trailing, 4)
-                    }
-                    if !trailing, let onHandoff, !copied { HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff) }
-                    HootMessageIcon(symbol: copied ? "checkmark" : "doc.on.doc", tip: copied ? "Copied" : "Copy this message") {
-                        // The message's own text: Hoot's formatting stays plain Markdown, and its boxes become labelled parts.
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(HootCallout.plain(row.value["text"].string ?? ""), forType: .string)
-                        copied = true
-                        Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-                    }
-                    if let onRewind, !copied {
-                        HootMessageIcon(symbol: "arrow.uturn.backward",
-                                        tip: trailing ? "Rewind: go back to this message and put it back in the box" : "Rewind: go back to here",
-                                        action: onRewind)
-                    }
-                    if trailing, let onHandoff, !copied {
-                        HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff)
-                    }
-                }
-            }
-            .font(.system(size: 10.5)).foregroundStyle(.secondary).buttonStyle(.plain)
-            .frame(height: 18).padding(.leading, trailing ? 0 : 38)
+            if trailing { actions }
         }
         .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
         .contentShape(Rectangle()).onHover { hovering = $0 }
+        .alert("Rewind to here?", isPresented: $confirmRewind) {
+            Button("Cancel", role: .cancel) {}
+            Button("Rewind", role: .destructive) { onRewind?() }
+        } message: {
+            Text("Later messages in this chat are removed from the conversation. Your message returns to the box for editing. Files are kept as they are.")
+        }
+    }
+    private var actions: some View {
+        HStack(spacing: 4) {
+            if row.at > 0 && hovering {
+                Text(HootMessageTime.short(row.at)).foregroundStyle(.tertiary).hootQuickTip(HootMessageTime.exact(row.at)).padding(.trailing, 4)
+            }
+            if !trailing, let onHandoff, !copied, hovering { HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff) }
+            if onRewind != nil || onFork != nil || hovering || copied {
+                HootMessageIcon(symbol: copied ? "checkmark" : "doc.on.doc", tip: copied ? "Copied" : "Copy this message") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(HootCallout.plain(row.value["text"].string ?? ""), forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+                }
+            }
+            if let onRewind {
+                HootMessageIcon(symbol: "arrow.uturn.backward",
+                                tip: trailing ? "Rewind: go back to this message and put it back in the box" : "Rewind: go back to here",
+                                action: { confirmRewind = true }).disabled(actionsBusy)
+            }
+            if let onFork {
+                HootMessageIcon(symbol: "arrow.triangle.branch", tip: "Fork from here", action: onFork).disabled(actionsBusy)
+            }
+            if trailing, let onHandoff, !copied, hovering {
+                HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff)
+            }
+        }
+        .font(.system(size: 10.5)).foregroundStyle(.secondary).buttonStyle(.plain)
+        .frame(height: 18).padding(.leading, trailing ? 0 : 38)
     }
 }
 
@@ -2300,7 +2340,7 @@ struct HootThinkingLabel: View {
         TimelineView(.periodic(from: .now, by: 0.45)) { context in
             let dots = animated ? Int(context.date.timeIntervalSinceReferenceDate / 0.45) % 3 + 1 : 3
             Text(title + String(repeating: ".", count: dots) + String(repeating: " ", count: 3 - dots))
-                .font(.system(size: 13.5)).foregroundStyle(.secondary).monospacedDigit()
+                .font(NativeChatMarkdown.bodyType).foregroundStyle(.secondary).monospacedDigit()
         }
         .accessibilityLabel(title)
     }

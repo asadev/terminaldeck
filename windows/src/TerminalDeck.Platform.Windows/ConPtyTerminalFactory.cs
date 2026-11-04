@@ -133,6 +133,7 @@ public sealed class ConPtyProcess : ITerminalProcess
       while (true)
       {
         var buffer = new byte[32768]; var count = output.Read(buffer, 0, buffer.Length); if (count == 0) break;
+        if (ConPtyControlCells.Needed) ConPtyControlCells.Blank(buffer.AsSpan(0, count));
         if (closing.IsCancellationRequested)
         {
           // ClosePseudoConsole emits a final frame. Preserve it when the reader

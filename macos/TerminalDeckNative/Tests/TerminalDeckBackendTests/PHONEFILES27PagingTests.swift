@@ -120,5 +120,14 @@ struct PHONEFILES27PagingTests {
         let link = base.appendingPathComponent("link.txt")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
         #expect(try BackendPhoneFiles.read(link.path, at: 0, max: 64).value["text"] == .string("through a link"))
+        // The list says what the pipe is, so the phone draws "Not a file" without asking; plain files and a link to one
+        // say nothing special and keep their size (Decker, 4 Nov).
+        let rows = try BackendPhoneFiles.list(base.path).value["entries"].elements ?? []
+        let byName = Dictionary(uniqueKeysWithValues: rows.compactMap { row in row["name"].string.map { ($0, row) } })
+        #expect(byName["waiting.fifo"]?["special"] == .string("pipe") && byName["waiting.fifo"]?["size"] == .missing)
+        #expect(byName["real.txt"]?["special"] == .missing && byName["real.txt"]?["size"] == .number(14))
+        #expect(byName["link.txt"]?["special"] == .missing)
+        #expect(BackendPhoneFiles.special(S_IFSOCK) == "socket" && BackendPhoneFiles.special(S_IFCHR) == "device"
+            && BackendPhoneFiles.special(S_IFREG) == nil)
     }
 }

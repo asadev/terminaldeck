@@ -65,6 +65,7 @@ public sealed partial class SessionPane : Grid
     {
       ActualThemeChanged += async (_, _) => await ApplyTerminalThemeAsync();
       terminal = new WebView2 { DefaultBackgroundColor = Microsoft.UI.Colors.Transparent }; BuildTerminalActions(area); area.Children.Add(terminal); InitializeSessionNotices(area);
+      if (session.IsLive) { session.PropertyChanged += DraftStateChanged; ShowEnded(IsEnded); }
       Loaded += async (_, _) =>
       {
         if (initialized || disposed) return;
@@ -101,10 +102,13 @@ public sealed partial class SessionPane : Grid
                 case "ready":
                   PostTerminalTheme();
                   ApplyCopyOnSelect();
+                  // Focused while the page was still loading (a new tab): put the cursor in it now.
+                  if (terminal is { FocusState: not FocusState.Unfocused }) Post(new { type = "focus" });
                   if (runtime is not null && draft.IsLive) _ = FollowAsync();
                   else ready.TrySetResult();
                   break;
                 case "input" when runtime is not null && draft.IsLive:
+                  if (ended || IsEnded) { ShowEnded(true); break; }
                   var text = body.GetProperty("data").GetString()!;
                   if (Encoding.UTF8.GetByteCount(text) <= 65536) await runtime.SendAsync(draft.Id, text);
                   break;
@@ -191,12 +195,12 @@ public sealed partial class SessionPane : Grid
         replayReady = false;
         Post(new { type = "replay", data = attachment.Snapshot.Replay, cols = attachment.Snapshot.Session.ReplaySize?.Columns, rows = attachment.Snapshot.Session.ReplaySize?.Rows });
         ready.TrySetResult();
-        ShowSessionNotice("");
+        ShowSessionNotice(""); ShowEnded(attachment.Snapshot.Session.State == TerminalDeck.Core.Sessions.SessionState.Exited);
         await foreach (var change in attachment.Events(stop.Token))
         {
           if (change.Kind == "data") Post(new { type = "data", data = change.Text });
           if (change.Kind == "reset") { replayReady = false; Post(new { type = "replay", data = change.Text ?? "", cols = change.ReplaySize?.Columns, rows = change.ReplaySize?.Rows }); }
-          if (change.Kind is "exit" or "status") await runtime.RefreshSessionsAsync();
+          if (change.Kind is "exit" or "status" or "reset") await runtime.RefreshSessionsAsync();
         }
       }
       catch (OperationCanceledException) when (stop.IsCancellationRequested) { break; }
@@ -230,6 +234,6 @@ public sealed partial class SessionPane : Grid
     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
     await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyUp\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
   }
-  public void DisposeView() { TerminalAppearanceBridge.Changed -= TerminalAppearanceChanged; if (runtime is not null) runtime.General.Changed -= ApplyCopyOnSelect; disposed = true; stop.Cancel(); terminal?.Close(); }
+  public void DisposeView() { TerminalAppearanceBridge.Changed -= TerminalAppearanceChanged; if (runtime is not null) runtime.General.Changed -= ApplyCopyOnSelect; draft.PropertyChanged -= DraftStateChanged; disposed = true; stop.Cancel(); terminal?.Close(); }
 
 }

@@ -46,12 +46,25 @@ public struct BackendBrowserAccess: Sendable {
 /// second profile jar or launches a browser behind the person's back.
 @MainActor
 public protocol BackendBrowserRuntime: BrowserDriverHost {
+    /// A local document identity, captured before consent and checked again at delivery.
+    func uploadDocument(_ tabID: String) -> String?
+    func upload(_ id: String, selector: String, files: [String], probe: [String: Any],
+                authority: @escaping @MainActor () -> Bool) async throws -> [String: Any]
     func pageState(_ tabID: String) throws -> NativeRPCValue
     func pageCommand(_ tabID: String, operation: String, arguments: NativeRPCValue) async throws -> NativeRPCValue
     func frameCommand(_ tabID: String, operation: String, arguments: NativeRPCValue) async throws -> NativeRPCValue
     func dataCommand(_ operation: String, arguments: NativeRPCValue) async throws -> NativeRPCValue
     func revealScreenshot(_ path: String) throws
     func createProfileTab(url: URL, isolated: Bool, profileID: String) -> String
+}
+
+public extension BackendBrowserRuntime {
+    func uploadDocument(_ tabID: String) -> String? { nil }
+    func upload(_ id: String, selector: String, files: [String], probe: [String: Any],
+                authority: @escaping @MainActor () -> Bool) async throws -> [String: Any] {
+        // A runtime must explicitly implement the delivery-time authority fence.
+        throw BrowserDriverRefusal("This browser cannot bind an upload to its authorized document.")
+    }
 }
 
 public enum BackendBrowserOrigin {

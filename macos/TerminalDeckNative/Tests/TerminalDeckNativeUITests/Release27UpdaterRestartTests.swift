@@ -91,6 +91,44 @@ final class Release27UpdaterRestartTests: XCTestCase {
         XCTAssertEqual(card.card(inAppSessions: 0)?.notesURL?.absoluteString, "https://github.com/asadev/terminaldeck/releases/tag/v999.0.0")
     }
 
+    func testCheckingUpdateIsVisibleThroughTheCardAndToolsAndDuplicateRestartIsIgnored() async throws {
+        let root = try scratch(), staged = receipt(try scratch())
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: staged.directory) }
+        let installs = InstallCount()
+        let updater = NativeAppUpdater(dataRoot: root, operations: .init(feed: { staged.release }, stage: { _, _ in staged }, install: { _ in
+            installs.add()
+            try await Task.sleep(for: .milliseconds(200))
+        }))
+        let card = NativeUpdateCardModel(); updater.card = card
+        _ = await updater.handle("update:check"); _ = await updater.handle("update:download")
+        let restart = Task { await updater.requestRestart() }
+        while !updater.checkingUpdate { await Task.yield() }
+        XCTAssertEqual(updater.rawState["checkingUpdate"] as? Bool, true)
+        XCTAssertEqual(card.card(inAppSessions: 0)?.title, "Checking the update…")
+        XCTAssertTrue(card.card(inAppSessions: 0)?.busy == true)
+        XCTAssertNil(card.card(inAppSessions: 0)?.primary)
+        _ = await updater.handle("update:install")
+        await restart.value
+        XCTAssertEqual(installs.value, 1)
+        XCTAssertFalse(updater.checkingUpdate)
+    }
+
+    func testFailedInstallLeavesTheAppOpenAndShowsTheCheckFailure() async throws {
+        let root = try scratch(), staged = receipt(try scratch())
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: staged.directory) }
+        let updater = NativeAppUpdater(dataRoot: root, operations: .init(feed: { staged.release }, stage: { _, _ in staged }, install: { _ in
+            throw NativeUpdateFeed.Failure("The update could not be installed: archive SHA-256 changed after download. The app is still running.")
+        }))
+        let card = NativeUpdateCardModel(); updater.card = card
+        _ = await updater.handle("update:check"); _ = await updater.handle("update:download")
+        _ = await updater.handle("update:install")
+        XCTAssertEqual(updater.state.phase, "error")
+        XCTAssertFalse(updater.relaunchOnQuit)
+        XCTAssertFalse(updater.checkingUpdate)
+        XCTAssertTrue(card.card(inAppSessions: 0)?.detail?.contains("SHA-256") == true)
+        XCTAssertTrue(updater.prepareForQuit(), "an ordinary quit remains available after the refused update")
+    }
+
     /// The card as the side panel draws it, just above the Settings row, in both appearances: pictures for review
     /// in macos/design-2026-10-10/built.noindex/R27-update-card-*.png.
     func testTheCardRendersEveryStateAboveSettings() throws {
@@ -100,6 +138,7 @@ final class Release27UpdaterRestartTests: XCTestCase {
             ("downloading", .downloading(version: "0.21.0", percent: 42, bytesPerSecond: 3_200_000), nil, false),
             ("ready", .ready(version: "0.21.0"), nil, false),
             ("waiting", .ready(version: "0.21.0"), "Hoot is answering", false),
+            ("checking-update", .ready(version: "0.21.0"), nil, true),
             ("restarting", .ready(version: "0.21.0"), nil, true),
             ("error", .error(message: "The native update failed its SHA-256 check. Nothing was installed."), nil, false),
         ]
@@ -109,7 +148,7 @@ final class Release27UpdaterRestartTests: XCTestCase {
         for dark in [false, true] {
             for (name, state, waiting, restarting) in states {
                 let model = NativeUpdateCardModel()
-                model.show(state, waitingFor: waiting, restarting: restarting, notesURL: notes)
+                model.show(state, waitingFor: waiting, restarting: restarting, notesURL: notes, checkingUpdate: name == "checking-update")
                 XCTAssertNotNil(model.card(inAppSessions: 0), name)
                 let panel = VStack(spacing: 0) {
                     Spacer(minLength: 0)

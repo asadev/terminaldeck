@@ -84,6 +84,24 @@ public sealed class LinkGuestTests
     return (connection, guest, app, relay, running, stop);
   }
 
+  [Theory]
+  [InlineData("[]", true, "Update the host on your server to connect directly.")]
+  [InlineData("[\"link.dc2\",\"link.only\"]", false, "Can't reach your server — this network blocks the direct connection.")]
+  public void AServerCannotKeepLegacyRelayData(string caps, bool canMakeLink, string reason)
+  {
+    using var welcome = JsonDocument.Parse("{\"hostKind\":\"headless\",\"token\":null,\"capabilities\":" + caps + "}");
+    Assert.Equal(reason, Assert.Throws<ProtocolException>(() => LinkGuest.ValidateServerWelcome(welcome.RootElement, canMakeLink)).Message);
+  }
+
+  [Fact]
+  public void AServerWithTheLinkAndAPairingReceiptAreAdmitted()
+  {
+    using var linked = JsonDocument.Parse("""{"hostKind":"headless","token":null,"capabilities":["link.dc2","link.only"]}""");
+    LinkGuest.ValidateServerWelcome(linked.RootElement, canMakeLink: true);
+    using var pairing = JsonDocument.Parse("""{"hostKind":"headless","token":"one-use","capabilities":[]}""");
+    LinkGuest.ValidateServerWelcome(pairing.RootElement, canMakeLink: false);
+  }
+
   [Fact]
   public async Task AnotherComputerRunsEntirelyOnTheLinkAndOutlivesTheRelay()
   {

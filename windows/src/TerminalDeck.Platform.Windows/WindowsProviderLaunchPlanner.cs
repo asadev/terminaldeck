@@ -6,6 +6,11 @@ namespace TerminalDeck.Platform.Windows;
 
 public sealed class WindowsProviderLaunchPlanner(AppDataRoot root, string toolsDirectory)
 {
+  public static string? FindPowerShell7(IReadOnlyDictionary<string, string> environment)
+  {
+    var folders = environment.TryGetValue("PATH", out var path) ? path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(Path.IsPathFullyQualified) : [];
+    return folders.Append(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7")).Select(folder => Path.Combine(folder, "pwsh.exe")).FirstOrDefault(File.Exists);
+  }
   public ProcessLaunch Plan(SessionRecord session, bool resume)
   {
     var definition = session.Definition; definition.Validate();
@@ -20,7 +25,16 @@ public sealed class WindowsProviderLaunchPlanner(AppDataRoot root, string toolsD
       return custom with { Environment = customEnvironment };
     }
     if (definition.Provider == "shell")
-      return new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoLogo", "-NoProfile"], environment, definition.Cwd);
+    {
+      var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+      var executable = definition.Shell switch
+      {
+        TerminalShells.CommandPrompt => Path.Combine(system, "cmd.exe"),
+        TerminalShells.PowerShell7 => FindPowerShell7(environment) ?? throw new ArgumentException("PowerShell 7 is not installed. Choose another shell in Settings → General."),
+        _ => Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe")
+      };
+      return new(executable, definition.Shell == TerminalShells.CommandPrompt ? [] : ["-NoLogo", "-NoProfile"], environment, definition.Cwd);
+    }
     if (definition.AccountId is null || !Guid.TryParseExact(definition.AccountId, "N", out _))
       throw new ArgumentException("Choose an isolated account before starting this AI.");
     // Core keeps a stable account row while deduplicating a newly signed-in

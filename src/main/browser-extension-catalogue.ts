@@ -389,7 +389,7 @@ export const BROWSER_EXTENSION_CATALOGUE: readonly CatalogueEntry[] = [
       'panel opens whole and its options save.',
     logo: 'return-youtube-dislike',
     source: {
-      url: 'https://github.com/Anarthe phone app's chrome.zip',
+      url: 'https://github.com/Anarios/return-youtube-dislike/releases/download/v4.0.4/chrome.zip',
       bytes: 1_273_186,
       sha256: '4cf9d401c81cf52b813141a973450ca704fba7478d4105e2bf4a39454a9d9117',
     },

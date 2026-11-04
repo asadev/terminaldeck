@@ -17,7 +17,9 @@ extension NativeCompositionProduction {
     func sessionChatToolDefinitions(gate: BackendCompositionDeckToolsGate,
                                     runtime: any BackendDeckToolsSessionsRuntime) throws -> [BackendDeckToolsDefinition] {
         guard let chats = sessionChats, let sessions else { return [] }
-        let lifecycle = sessions.lifecycle, registry = root.registry, state = root.state
+        let lifecycle = sessions.lifecycle, registry = root.registry
+        let storageRoot = root.dataRoot.path
+        let workspaces = files?.workspaces
         let referenceFiles = files?.files
         let fileAuthority = files?.authority
         let hootRuntime = hoot?.runtime
@@ -43,9 +45,10 @@ extension NativeCompositionProduction {
                 ("references", .object([.init("type", .string("array")), .init("items", referenceSchema), .init("maxItems", .number(8))])),
                 ("options", BackendSessionChatOptionsTool.schema)], required: ["sessionId", "do"]), tier: .read)
         let start = try BackendMCPTool(id: "sessions.start_agent", wireName: "sessions_start_agent",
-            description: "Start a session as a saved agent, with its own AI, account, settings and seat. Each AI job is a fresh chat; use sessions_conversations for a named brief. The caller's project access applies; cwd must be an open folder.",
-            inputSchema: schema([("agent", string), ("cwd", string), ("projectId", string),
-                ("mode", string.setting("enum", .array([.string("chat"), .string("terminal")])))], required: ["agent", "cwd"]), tier: .act)
+            description: "Start a session with provider (claude, codex, gemini) or a saved agent (id or name), with its own AI, account, settings and seat. Each AI job is a fresh chat; use sessions_conversations for a named brief. The caller's project access applies. Read permission requests and restart handles with sessions_conversations events; answer requests there.",
+            inputSchema: schema([("agent", string), ("provider", string.setting("enum", .array(["claude", "codex", "gemini"].map(NativeRPCValue.string)))),
+                ("permissionMode", string), ("cwd", string), ("projectId", string),
+                ("mode", string.setting("enum", .array([.string("chat"), .string("terminal")])))], required: ["cwd"]), tier: .act)
         var definitions = [chat, start].map { spec in
             BackendDeckToolsDefinition(spec: spec, title: spec.description) { caller, args in
                 await BackendDeckToolsSupport.reply {
@@ -59,28 +62,26 @@ extension NativeCompositionProduction {
                         }
                         guard args["mode"].string != "terminal" else { throw NativeRPCError.invalidArguments("AI-to-AI jobs run in chat. A person can choose Terminal in New session.") }
                         let cwd = try args["cwd"].requireString("cwd", nonempty: true)
-                        guard try await runtime.knownFolders(caller).contains(cwd) else {
-                            throw NativeRPCError.invalidArguments("Choose an open project folder from projects_list.")
-                        }
+                        _ = try await gate.authority.knownFolder(cwd, native: caller)
+                        try BackendDeckCoreCatalogueBuiltins.requireExistingFolder(cwd)
+                        try BackendAgentStartSelection.requireSafeFolder(cwd, storageRoot: storageRoot, workspaceFolders: await workspaces?.liveFolders() ?? [])
+                        try BackendDeckCoreCatalogueBuiltins.requireStartRoom(cwd: cwd, sessions: await runtime.sessions(caller), startedByCaller: resolved.startedByCopilot)
                         try await gate.authorize(caller, .act, "Start a session as the saved agent", true)
                         // The saved record is read by the same app-only channel used by New session; caller identity
                         // and the folder were checked above before entering that local channel.
                         let saved = try await registry.invoke("tasks:state", context: gate.authority.localContext(), arguments: [])
-                        let agentID = try args["agent"].requireString("agent", nonempty: true)
-                        guard let agent = NativeSavedAgentLookup.find(agentID, in: saved["agents"].elements ?? []), let agentID = agent["id"].string else {
-                            let names = (saved["agents"].elements ?? []).filter { $0["status"].string != "archived" }.compactMap { $0["name"].string }.sorted()
-                            throw NativeRPCError.invalidArguments("Choose a saved agent (by id or name): " + names.joined(separator: ", ") + ".")
-                        }
+                        let choice = try BackendAgentStartSelection(arguments: args, agents: saved["agents"].elements ?? [])
+                        let agent = choice.agent ?? .object([])
                         let sender = await lifecycle.conversationSender(resolved.caller)
                         // #160: filed under the project of the folder it works in, not the agent's home project.
-                        var input = try BackendAgentSessionInput.make(agent: agent, folder: cwd,
-                            projectID: args["projectId"].string ?? PROJProjects.resolve(projectID: nil, folder: cwd), chat: true, specs: specs)
+                        var input = try choice.input(folder: cwd,
+                            projectID: args["projectId"].string ?? PROJProjects.resolve(projectID: nil, folder: cwd), specs: specs)
                         input.origin = .copilot
                         input.teamJob = .init(fromID: sender.id, fromName: sender.name,
-                            agentID: agentID, agentName: agent["name"].string ?? agentID, title: "Conversation")
+                            agentID: choice.id, agentName: choice.name, title: "Conversation")
+                        input.teamJob?.starterSessionID = resolved.caller.sessionID
                         // 30 Oct: the seat's account (or the first signed-in one in the person's order), never a signed-out login.
-                        let preferred = await state.getPreferences()["defaultProvider"].string ?? "claude"
-                        let provider = input.provider ?? preferred
+                        let provider = choice.provider
                         let account = try await NativeTeamJobAccounts(sessions: sessions, context: { try gate.authority.localContext() })
                             .pick(agent: agent, provider: provider, folder: cwd, requested: nil)
                         if let account { input.profileId = account.id }
@@ -90,7 +91,8 @@ extension NativeCompositionProduction {
                         if let id = value["id"].string { resolved.noteStarted(id) }
                         await NativeButtonActions.openQuietly(value)
                         await gate.noteResult(caller, .object([.init("sessionId", value["id"])]))
-                        return .value(value.setting("account", account?.wire ?? .null))
+                        return .value(value.setting("account", account?.wire ?? .null)
+                            .setting("events", .object([.init("tool", .string("sessions_conversations")), .init("do", .string("events"))])))
                     }
                     let operation = try SessionChatToolPolicy.operation(verb)
                     if operation.isPanel {
@@ -198,7 +200,7 @@ extension NativeCompositionProduction {
                         let snapshot = try await chats.read(id, cursor: nil, limit: 500, seen: seen, conversation: args["conversationId"].string)
                         let events = try (snapshot["events"].elements ?? []).map(HootChatEvent.init(wire:))
                         let references = await MainActor.run { NativeHootChatModel.queueOwner(id)?.composerDraft.activeMentions.filter(\.isReference).map(\.wire) ?? [] }
-                        var details = snapshot
+                        var details = snapshot.setting("activity", ChatWorkingState.read(snapshot, events: events).wire())
                         let progress = BackendChatTodos.progress(events, children: details["children"].elements)
                         let complete = snapshot["hasMore"].bool != true && (events.first?.sequence ?? 1) <= 1
                         let steps = complete ? progress.rows : details["todos"].elements ?? progress.rows
@@ -472,7 +474,7 @@ extension NativeCompositionProduction {
             return .object(fields)
         }
         try await registry.register("session:team:list", ownerID: owner, policy: local) { _, args in
-            .array(try await chats.unreadConversations(project: args.first?.string, agent: args.count > 1 ? args[1].string : nil,
+            .array(await chats.conversationCatalogue(project: args.first?.string, agent: args.count > 1 ? args[1].string : nil,
                 state: args.count > 2 ? args[2].string : nil))
         }
         try await registry.register("session:team:open", ownerID: owner, policy: local) { _, args in
@@ -482,6 +484,15 @@ extension NativeCompositionProduction {
                 if let row = value.foundation as? [String: Any] { AppModel.shared.buttonActions.openedHistory(row) }
             }
             try await registry.publish("session:created", arguments: [value], ownerID: BackendCompositionRoot.appOwnerID)
+            return value
+        }
+        try await registry.register("session:team:resume", ownerID: owner, policy: local) { _, args in
+            let id = try SessionChatArguments.id(args)
+            let input = try await chats.jobResumeInput(id)
+            let meta = try await sessions.lifecycle.create(input, context: .init(rememberTab: false, fromWindow: true), holdOnFailure: false)
+            _ = try await chats.continueResumedJob(meta.id)
+            let value = try NativeRPCValue.parseJSON(JSONEncoder().encode(meta))
+            await NativeButtonActions.openQuietly(value)
             return value
         }
         try await registry.register("session:team:delete", ownerID: owner, policy: local) { _, args in
@@ -521,7 +532,7 @@ extension NativeCompositionProduction {
             return try NativeRPCValue.parseJSON(JSONEncoder().encode(meta)).setting("agentProfileID", .string(agentID))
         }
         try await root.retain(.init(name: "session-chats", domains: ["session-chats"], ownerID: owner,
-            invokes: Set(BackendSessionChats.channels + ["session:start-agent", "session:agent-owners", "session:team:list", "session:team:open", "session:team:delete", "session:team:stop"]), events: [BackendSessionChats.event],
+            invokes: Set(BackendSessionChats.channels + ["session:start-agent", "session:agent-owners", "session:team:list", "session:team:open", "session:team:delete", "session:team:stop", "session:team:resume"]), events: [BackendSessionChats.event],
             stop: { await registry.removeOwner(owner) }))
     }
 }

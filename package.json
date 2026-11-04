@@ -1,6 +1,6 @@
 {
   "name": "terminaldeck",
-  "version": "0.21.1",
+  "version": "0.21.2",
   "description": "Run your coding agents on one deck — Claude Code, Codex CLI and Gemini CLI sessions, an embedded browser, token usage and context in a single window.",
   "main": "./out/main/index.js",
   "author": {
@@ -30,7 +30,13 @@
     "preversion": "npm run typecheck && npm test && node scripts/version.mjs check",
     "version": "node scripts/version.mjs stamp && git add CHANGELOG.md",
     "postversion": "node scripts/version.mjs next",
-    "build:win-confine": "powershell -ExecutionPolicy Bypass -File native/win-confine/build.ps1 -OutDir native/win-confine"
+    "build:win-confine": "powershell -ExecutionPolicy Bypass -File native/win-confine/build.ps1 -OutDir native/win-confine",
+    "test:server-direct": "vitest run src/main/remote/server-direct*.test.ts relay/src/server-direct.test.ts relay/src/rendezvous.test.ts --maxWorkers=1 --no-file-parallelism",
+    "check:server-direct": "tsc --noEmit --skipLibCheck --strict --target ES2022 --module ESNext --moduleResolution bundler --types node src/main/servers/ssh2.d.ts src/main/servers/ssh2-server.d.ts src/main/remote/server-direct.ts src/main/remote/relay-client.ts",
+    "build:server-direct-probe": "vite build --config vite.server-direct-probe.config.ts",
+    "test:server-direct-wire": "vitest run src/main/remote/relay-client.test.ts --maxWorkers=1 -t 'wires server direct mode from sealed hello through the link and survives a relay cut'",
+    "check:server-direct-guest": "tsc --noEmit --skipLibCheck --strict --target ES2022 --module ESNext --moduleResolution bundler --types node src/main/servers/ssh2.d.ts src/main/servers/ssh2-server.d.ts src/main/remote/server-direct-guest.ts src/main/remote/machines/dial.ts",
+    "test:server-direct-guest": "vitest run src/main/remote/server-direct-guest.test.ts --maxWorkers=1 --no-file-parallelism"
   },
   "engines": {
     "node": ">=22"
@@ -60,7 +66,8 @@
     "node-pty": "^1.1.0",
     "picomatch": "^4.0.3",
     "ssh2": "^1.17.0",
-    "staysfixed": "file:vendor/staysfixed-0.15.0-neutral.tgz"
+    "staysfixed": "file:vendor/staysfixed-0.15.0-neutral.tgz",
+    "werift": "0.26.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

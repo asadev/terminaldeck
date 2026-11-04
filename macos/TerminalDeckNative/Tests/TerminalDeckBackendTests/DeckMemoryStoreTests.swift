@@ -493,7 +493,7 @@ final class DeckMemoryStoreTests: XCTestCase {
         let shared = try await store.updateTopic(iosSeat, title: "Release train", body: "Next build Friday.", stamp: nil)
         XCTAssertEqual(first.id, "fix-login-crash"); XCTAssertEqual(second.id, "dark-mode"); XCTAssertEqual(shared.id, "release-train")
         XCTAssertEqual(first.job, "fix-login-crash"); XCTAssertNil(shared.job)
-        XCTAssertTrue(exists(root, "projects/imatch/roles/the phone app's fix-login-crash.md")); XCTAssertTrue(exists(root, "projects/imatch/roles/the phone app's dark-mode.md"))
+        XCTAssertTrue(exists(root, "projects/imatch/roles/ios/topics/fix-login-crash.md")); XCTAssertTrue(exists(root, "projects/imatch/roles/ios/topics/dark-mode.md"))
         let again = try await store.updateTopic(iosSeat, title: "Where we are", body: "Fix written, testing.", stamp: one)
         XCTAssertEqual(again.id, first.id); XCTAssertEqual(again.body, "Fix written, testing.")
         let other = try await store.topic(iosSeat, id: "dark-mode")

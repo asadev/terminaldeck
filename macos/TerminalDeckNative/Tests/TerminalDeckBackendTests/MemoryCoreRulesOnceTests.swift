@@ -71,7 +71,7 @@ final class MemoryCoreRulesOnceTests: XCTestCase {
         XCTAssertEqual(a, ["@file ", "sleep:500", "\r"]); XCTAssertEqual(a, b)
     }
 
-    func testProjectMatchingAndUnreadAdaptersShareCoreRules() {
+    func testProjectMatchingAndReportSequencesShareCoreRules() {
         let projects = [TaskProject(path: "/work/", title: "Work"), TaskProject(path: "/work/nested", title: "Nested")]
         for path in [" /work/ ", "/work/nested/src", "/worker", "/", ""] {
             XCTAssertEqual(BackendTaskProjectScope.clean(path), TaskProjects.clean(path))
@@ -81,9 +81,9 @@ final class MemoryCoreRulesOnceTests: XCTestCase {
         XCTAssertTrue(BackendRemoteServeSessionPolicy.sameFolder("/work/a/../b/", "/work/b"))
         let entries: [NativeRPCValue] = [.object([.init("id", .string("q")), .init("kind", .string("question"))]),
                                          .object([.init("id", .string("r")), .init("kind", .string("report"))])]
-        let wire = RoutineChatUnread.messages(entries)
-        let mapped = RoutineChatUnread.messages(entries, id: { $0["id"].string }, kind: { $0["kind"].string }, sequence: { _ in 0 })
-        XCTAssertEqual(wire, mapped); XCTAssertEqual(wire.map(\.sequence), [2]); XCTAssertEqual(wire.map(\.id), ["r"])
+        let snapshot = RoutineChatSnapshot.snapshot(entries, routineID: "routine")
+        XCTAssertEqual(snapshot["entries"].elements?.map { $0["sequence"].number }, [1, 2])
+        XCTAssertEqual(snapshot["unread"]["count"].number, 0)
     }
 
     func testGroupingPreservesFolderAndRegisteredProjectViews() {

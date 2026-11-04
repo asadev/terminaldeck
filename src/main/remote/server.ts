@@ -8471,7 +8471,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
       // Stopped before the sockets are closed: the relay is an outbound link
       // that reconnects on its own, so a relay left running would dial straight
       // back in and hand out channels against an endpoint that is going away.
-      if (relaying) relay?.stop()
+      if (relaying) await relay?.stop()
       relaying = false
       const closing = servers
       servers = []
@@ -8497,7 +8497,10 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
 
     url: () => current?.url ?? null,
     connections: () => endpoint?.connections() ?? [],
-    dropDevice: (deviceId) => endpoint?.dropDevice(deviceId) ?? 0,
+    dropDevice: (deviceId) => {
+      void relay?.revokeDevice?.(deviceId)
+      return endpoint?.dropDevice(deviceId) ?? 0
+    },
     // Nothing to tell when the server is not up: the device is not connected,
     // and it reads the new list in its `welcome` the next time it is.
     foldersChanged: (deviceId) => endpoint?.foldersChanged(deviceId) ?? 0,
@@ -9086,6 +9089,7 @@ function relayFor(
    */
   enrollServed: boolean,
   onState?: (state: RelayState) => void,
+  serverDirect = false,
 ): RelayLink {
   let link: RelayLink | null = null
   let broken: string | null = null
@@ -9096,6 +9100,7 @@ function relayFor(
         try {
           link = createRelayClient({
             url,
+            serverDirect,
             identity: loadHostIdentity(storageDir),
             // Three ways in, and every one is narrow. A device this Mac already
             // knows, by a key it stored when that device paired — or any device
@@ -9123,6 +9128,7 @@ function relayFor(
       link?.start(attachTransport)
     },
     stop: () => link?.stop(),
+    revokeDevice: async device => { await link?.revokeDevice?.(device) },
     // Harmless before the link exists: a Mac that has never started the relay
     // has nothing to reconnect on waking.
     wake: () => link?.wake(),
@@ -9174,6 +9180,7 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
         desk,
         enroll !== undefined,
         relayStateFanout(deps.onRelayState, () => announceRemoteChange()),
+        deps.hostKind === 'headless',
       )
     : null
   // The settings page that hands AI apps their internet link reads this

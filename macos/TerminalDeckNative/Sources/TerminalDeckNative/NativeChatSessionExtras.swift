@@ -16,8 +16,6 @@ struct NativeChatSessionExtrasView: View {
     @State private var taskOutput = ""
     @State private var outputTask: String?
     @State private var location = NativeRPCValue.null
-    @State private var forkTurn = ""
-    @State private var useWorktree = false
     @State private var title = ""
     @State private var worktree = NativeRPCValue.null
     @State private var busy = false
@@ -58,18 +56,18 @@ struct NativeChatSessionExtrasView: View {
                 Button("Restore", role: .destructive) { load { try await restoreCheckpoint() } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The files listed in the preview go back to how they were before that message. The conversation stays as it is.") }
-            GroupBox("Background tasks") {
+            GroupBox("Background task history") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack { Button("Read tasks") { load { try await readTasks() } }; Button("Move foreground tasks to background") { load { try await taskAction("background/detach", [.init("all", .bool(true))]) } } }
                     if !taskNote.isEmpty { Text(taskNote).font(.caption).foregroundStyle(.secondary) }
-                    ForEach(Array(tasks.enumerated()), id: \.offset) { _, row in
+                    Text("Running tasks and their Stop controls are above the message box.").font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(tasks.filter { $0["running"].bool != true }.enumerated()), id: \.offset) { _, row in
                         HStack(alignment: .top) {
                             VStack(alignment: .leading) {
                                 Text(row["title"].string ?? row["id"].string ?? "Task").lineLimit(2)
                                 Text((row["kind"].string ?? "task") + " · " + (row["status"].string ?? "unknown")).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                             Button("Output") { load { try await readOutput(row["id"].string) } }
-                            if row["running"].bool == true { Button("Stop") { load { try await taskAction("background/stop", [.init("taskId", row["id"])]) } } }
                         }.font(.caption)
                     }
                     if let outputTask, !taskOutput.isEmpty {
@@ -78,15 +76,12 @@ struct NativeChatSessionExtrasView: View {
                     }
                 }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
             }
-            GroupBox("Fork, worktree and location") {
+            GroupBox("Worktree and location") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("A fork is a real copy of this conversation in a new Chat. A worktree is a separate checkout of the project, so two chats never write the same files.")
+                    Text("A worktree is a separate checkout of the project, so chats can work in separate folders.")
                         .font(.caption).foregroundStyle(.secondary)
-                    TextField("Fork through turn ID (optional, Codex only)", text: $forkTurn)
                     TextField("Name for the new work (optional)", text: $title)
-                    Toggle("Put the new Chat in its own worktree", isOn: $useWorktree)
                     HStack {
-                        Button("Fork this conversation") { load { try await fork() } }
                         Button("New Chat in a worktree") { load { try await forkAction("worktree-chat", [.init("title", .string(title))]) } }
                     }
                     HStack {
@@ -141,13 +136,6 @@ struct NativeChatSessionExtrasView: View {
         let value = try await call(operation, fields)
         notice = value["note"].string ?? "Requested."
         try await readTasks()
-    }
-    private func fork() async throws {
-        var fields: [NativeRPCValue.Field] = []
-        if !forkTurn.isEmpty { fields.append(.init("throughTurn", .string(forkTurn))) }
-        if useWorktree { fields.append(.init("worktree", .bool(true))) }
-        if !title.isEmpty { fields.append(.init("title", .string(title))) }
-        _ = try await forkAction("fork", fields)
     }
     @discardableResult
     private func forkAction(_ action: String, _ fields: [NativeRPCValue.Field], open: Bool = true) async throws -> NativeRPCValue {

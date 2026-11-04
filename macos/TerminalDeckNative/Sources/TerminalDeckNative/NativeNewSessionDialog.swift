@@ -407,7 +407,7 @@ final class NativeNewSessionModel {
     @MainActor func signInRefusedAccount() {
         let account = activeProfile
         NativeChatAccount.openSettings(provider: account?.provider ?? chosenProvider ?? "claude")
-        if let account, !account.system, NativeAccountSignInModel.canDrive(account.provider) { NativeAccountSignInModel.shared.start(account: account) }
+        if let account, NativeAccountSignInModel.canDrive(account.provider) { NativeAccountSignInModel.shared.open(account) }
     }
 
     var loginHint: String? {

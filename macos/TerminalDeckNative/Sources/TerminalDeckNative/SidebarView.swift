@@ -463,18 +463,44 @@ enum SymbolName {
 final class SIDEBARPins {
     static let shared = SIDEBARPins()
     static let key = "sidebar.pinnedSessions"
-    private(set) var ids: [String]
+    static let stableKey = "sidebar.pinnedTabs.v2"
+    private var keys: [String]
+    private var sessionKeys: [String: String] = [:]
+    private var currentSessions: [String: String] = [:]
+    var ids: [String] { keys.map { currentSessions[$0] ?? $0 } }
     @ObservationIgnored private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults; ids = defaults.stringArray(forKey: Self.key) ?? [] }
-    func isPinned(_ id: String) -> Bool { ids.contains(id) }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        keys = defaults.stringArray(forKey: Self.stableKey) ?? defaults.stringArray(forKey: Self.key) ?? []
+    }
+    /// tabKey survives a keeper restart. A process id does not. Unknown old pins stay saved without guessing.
+    func observe(_ row: [String: Any]) {
+        guard let id = row["id"] as? String, let key = row["tabKey"] as? String, !key.isEmpty else { return }
+        sessionKeys[id] = key
+        currentSessions[key] = id
+        if keys.contains(id), id != key {
+            keys = unique(keys.map { $0 == id ? key : $0 }); save()
+        }
+    }
+    func isPinned(_ id: String) -> Bool { keys.contains(sessionKeys[id] ?? id) }
     func replaced(_ old: String, with next: String) {
         NativeChatArchives.shared.replaced(old, with: next)
-        guard ids.contains(old) else { return }
-        ids = ids.map { $0 == old ? next : $0 }; defaults.set(ids, forKey: Self.key)
+        let previous = sessionKeys[old] ?? old
+        let key = sessionKeys[next] ?? sessionKeys[old] ?? next
+        sessionKeys[next] = key
+        currentSessions[key] = next
+        guard keys.contains(previous) else { return }
+        keys = unique(keys.map { $0 == previous ? key : $0 }); save()
     }
     func toggle(_ id: String) {
-        if let index = ids.firstIndex(of: id) { ids.remove(at: index) } else { ids.append(id) }
-        defaults.set(ids, forKey: Self.key)
+        let key = sessionKeys[id] ?? id
+        if let index = keys.firstIndex(of: key) { keys.remove(at: index) } else { keys.append(key) }
+        save()
+    }
+    private func save() { defaults.set(keys, forKey: Self.stableKey) }
+    private func unique(_ ids: [String]) -> [String] {
+        var seen: Set<String> = []
+        return ids.filter { seen.insert($0).inserted }
     }
 }
 
@@ -554,7 +580,8 @@ private struct SIDEBARSessionRow<MenuItems: View>: View {
         .overlay(alignment: .trailing) {
             ZStack {
                 // One shared dot: it pulses slowly while the session works (SessionStatusDot).
-                SessionStatusDot(status: session.status, onAccent: onAccent)
+                SessionStatusDot(status: chat && NativeHootChatModel.queueOwner(session.id)?.workingState.active == true
+                    && NativeHootChatModel.queueOwner(session.id)?.pending.isEmpty == true ? "working" : session.status, onAccent: onAccent)
                     .opacity(hovering ? 0 : 1)
                 Menu { menu() } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold))

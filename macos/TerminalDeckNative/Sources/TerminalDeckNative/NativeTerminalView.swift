@@ -234,7 +234,7 @@ struct NativeTerminalHost: NSViewRepresentable {
         DeckTerminalSlot(container: session.container)
     }
 
-    func updateNSView(_ nsView: DeckTerminalSlot, context: Context) {}
+    func updateNSView(_ nsView: DeckTerminalSlot, context: Context) { nsView.show(session.container) }
 
     static func dismantleNSView(_ nsView: DeckTerminalSlot, coordinator: ()) {
         // The terminal lives on with its session (and keeps receiving output), so
@@ -269,6 +269,17 @@ final class DeckTerminalSlot: NSView {
         } else if container.superview === self {
             Self.slots.allObjects.last { $0 !== self && $0.container === container && $0.window != nil }?.take()
         }
+    }
+
+    /// A split pane can be reused for another session without making a new AppKit view.
+    func show(_ next: DeckTerminalContainer) {
+        guard container !== next else { return }
+        if let old = container, old.superview === self {
+            if old.window?.firstResponder === old.terminal { old.window?.makeFirstResponder(nil) }
+            old.removeFromSuperview()
+        }
+        container = next
+        if window != nil { take() }
     }
 
     private func take() {

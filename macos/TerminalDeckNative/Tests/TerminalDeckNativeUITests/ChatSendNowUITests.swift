@@ -3,7 +3,7 @@ import XCTest
 import TerminalDeckNativeCore
 @testable import TerminalDeckNative
 
-/// 29 Oct (Asad): Send now never loses or doubles a message, and what runs or waits sits in the conversation.
+/// Send now never loses or doubles a message. Background controls belong to the Running tray.
 @MainActor final class ChatSendNowUITests: XCTestCase {
     private func snapshot(_ events: [HootChatEvent] = [], busy: Bool = false) -> NativeRPCValue {
         .object([.init("conversationId", .string("c")), .init("sequence", .number(Double(events.last?.sequence ?? 0))),
@@ -199,16 +199,27 @@ import TerminalDeckNativeCore
         }
     }
 
-    /// Guard: the running task and the queued messages are in the message flow, not pinned above the box.
-    func testRunningTasksAndQueuedMessagesAreInTheConversation() throws {
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { root.deleteLastPathComponent() }
-        let view = try String(contentsOf: root.appendingPathComponent("Sources/TerminalDeckNative/NativeHootChat.swift"), encoding: .utf8)
-        XCTAssertTrue(view.contains("NativeChatChildRows(model: model, inline: true)"))
-        XCTAssertTrue(view.contains("NativeQueuedMessageRow(model: model, item: item, bubble: true)"))
-        XCTAssertFalse(view.contains("NativeQueuedMessageRow(model: model, item: item) }"), "no queue card above the box")
-        XCTAssertFalse(view.contains("{ NativeChatChildRows(model: model) }"), "no running-task card above the box")
+    /// Running controls have one owner; queueing keeps the message separate from task state.
+    func testRunningTrayKeepsIndependentTasksAndQueuedDrafts() async throws {
+        let task = NativeRPCValue.object([.init("id", .string("one")), .init("status", .string("running")),
+            .init("canStop", .bool(true)), .init("kind", .string("agent"))])
+        let value = snapshot(busy: true).setting("children", .array([task]))
+        let model = NativeHootChatModel(fixture: value, chatInvoke: { _, _ in value.foundation! }, source: .session("scratch-running-tray", provider: "codex"))
+        model.composerDraft.text = "After this answer"
+        model.send()
+        XCTAssertEqual(model.queuedMessages.last?.draft.text, "After this answer")
+        XCTAssertTrue(model.composerDraft.text.isEmpty)
+        let tray = try await model.featureTool("running", action: "open", args: .object([]))
+        XCTAssertEqual(tray["count"].number, 1)
+        XCTAssertEqual(tray["items"].elements?.first?["id"].string, "one")
+        XCTAssertTrue(tray["expanded"].bool == true)
+        let details = try await model.agentTreeTool("read", request: nil)
+        XCTAssertFalse((details["rows"].elements ?? []).flatMap { $0["actions"].elements ?? [] }.contains { $0["do"].string == "stop" })
+        let closed = try await model.featureTool("running", action: "close", args: .object([]))
+        XCTAssertEqual(closed["count"].number, 1, "Closing the tray does not stop a task")
+        XCTAssertEqual(closed["expanded"].bool, false)
     }
+
 }
 
 /// The chat as Asad sees it while a background task runs and a message waits: both in the conversation.

@@ -244,6 +244,7 @@ public enum SettingsSchema {
         .init(id: "tasks", label: "Tasks", blurb: "The agents that take work from your CRM, and the CRMs allowed to send it."),
         .init(id: "plugins", label: "Plugins", blurb: "Programs you add yourself, each allowed only what you choose."),
         .init(id: "power", label: "Power", blurb: "Keep this machine running when you close it."),
+        .init(id: "privacy", label: "Privacy", blurb: "Mac permissions and old helper entries."),
         .init(id: "advanced", label: "Advanced", blurb: "When something is wrong, and starting over."),
         .init(id: "help", label: "Help", blurb: "What this app is, how it works, and what to do when it does not."),
     ]

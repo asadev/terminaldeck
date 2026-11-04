@@ -444,6 +444,7 @@
           "generalSettings": {
             "type": "object",
             "properties": {
+              "terminalShell": { "type": "string", "enum": ["powershell", "pwsh", "cmd"] },
               "autoNameSessions": {
                 "type": "boolean"
               },

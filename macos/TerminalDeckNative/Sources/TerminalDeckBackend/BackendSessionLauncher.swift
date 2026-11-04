@@ -422,7 +422,12 @@ public enum BackendConversationLaunch {
                   parent.range(of: "^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,127}$", options: .regularExpression) != nil else {
                 throw BackendSessionFailure.invalidInput("A fork needs the exact parent conversation. Nothing was started.")
             }
-            return Selection(arguments: provider.args + ["--resume", parent, "--fork-session"], resumed: true, conversationID: nil, declared: false, heldNamed: false)
+            var args = provider.args + ["--resume", parent, "--fork-session"]
+            if let at = input.resumeSessionAt {
+                guard UUID(uuidString: at) != nil else { throw BackendSessionFailure.invalidInput("Choose a recorded Claude message.") }
+                args.append("--resume-session-at=" + at)
+            }
+            return Selection(arguments: args, resumed: true, conversationID: nil, declared: false, heldNamed: false)
         }
         var resumeArguments = provider.resumeArgs
         if picking { resumeArguments = provider.args + ["--resume"] }

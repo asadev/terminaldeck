@@ -46,8 +46,12 @@
 	<string>MIT License</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Terminal Deck connects straight to your paired phones and computers when they are on this network, so your terminal and screen answer faster.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Terminal Deck uses the camera when you ask a session to use it or allow a website on its browser tab.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>A Terminal Deck session controls another app only when you approve that action.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Terminal Deck uses the microphone only when you start voice input, or record a phone screen with "Talk while recording" on.</string>
+	<string>Terminal Deck uses the microphone when you start voice input, record a phone screen with "Talk while recording" on, or allow a website in its browser to use it.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Terminal Deck turns what you say while recording a phone screen into text on this Mac, so your words can be sent with each screen.</string>
 	<key>NSPrincipalClass</key>

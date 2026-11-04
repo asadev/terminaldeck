@@ -357,8 +357,13 @@ public actor BackendAccountProfileStore {
         guard cleaned.utf16.count <= BackendAccountProfile.maximumNameLength else { throw BackendAccountFailure("profile names are limited to \(BackendAccountProfile.maximumNameLength) characters") }
         return cleaned
     }
-    private static func nameClash(_ provider: String, _ name: String) -> BackendAccountFailure {
-        BackendAccountFailure("a \(provider) account called \"\(name)\" already exists")
+    /// 4 Nov (Asad: "it says this account already exists, but if I scroll all the accounts it's not there"): the
+    /// sentence names the AI and where the account is. The launch tidy (BackendAccountTidy) makes every email name
+    /// match its login, so the account named here is one the list shows.
+    private static func nameClash(_ provider: String, _ name: String, adding: Bool = false) -> BackendAccountFailure {
+        let label = BackendAccountProfile.providerLabel(provider)
+        return BackendAccountFailure("A \(label) account called “\(name)” already exists in Settings › Coding AIs. "
+            + (adding ? "Press Sign in again on its row, or choose another name." : "Choose another name."))
     }
     /// `adoptableConfigDir`: absolute, not an agent's own install, not another account's.
     private func adoptable(_ raw: String, provider: String) throws -> String {
@@ -378,7 +383,7 @@ public actor BackendAccountProfileStore {
         try writable()
         let name = try Self.normalizedName(name)
         let nameKey = provider + "\0" + name.lowercased()
-        guard !creatingNames.contains(nameKey), !(try list(provider: provider)).contains(where: { $0.name.lowercased() == name.lowercased() }) else { throw Self.nameClash(provider, name) }
+        guard !creatingNames.contains(nameKey), !(try list(provider: provider)).contains(where: { $0.name.lowercased() == name.lowercased() }) else { throw Self.nameClash(provider, name, adding: true) }
         let id = try BackendAccountProfile.uniqueProfileID(BackendAccountProfile.slugifyProfileID(name), taken: Set(try list().map(\.id)).union(creatingIDs))
         let directory = try configDir.map { try adoptable($0, provider: provider) } ?? configuration.profilesRoot.appendingPathComponent(id).path
         let candidate = BackendAccountProfile(id: id, name: name, provider: provider, configDir: directory, system: false, color: "", createdAt: 0)

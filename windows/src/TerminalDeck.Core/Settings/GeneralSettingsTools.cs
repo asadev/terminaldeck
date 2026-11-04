@@ -24,7 +24,7 @@ public static class GeneralSettingsTools
     var old = previous is null ? JsonSerializer.SerializeToElement(new { }) : await previous(context, JsonSerializer.SerializeToElement(fields), ct);
     var result = old.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
     var current = settings.Read();
-    result["generalSettings"] = JsonSerializer.SerializeToElement(new { restoreSessions = current.RestoreSessions, restoreSessionsSwitchable = true, autoNameSessions = current.AutoNameSessions, copyOnSelect = current.CopyOnSelect, keepAwake = current.KeepAwake, defaultPermission = (current.DefaultPermission ?? TerminalDeck.Core.Chats.ChatPermissionModes.DefaultFor("claude")).ToString(), confirmCloseWorking = readConfirmation(), version = version(), updateStatus });
+    result["generalSettings"] = JsonSerializer.SerializeToElement(new { terminalShell = current.TerminalShell ?? Sessions.TerminalShells.WindowsPowerShell, terminalShells = Sessions.TerminalShells.All, restoreSessions = current.RestoreSessions, restoreSessionsSwitchable = true, autoNameSessions = current.AutoNameSessions, copyOnSelect = current.CopyOnSelect, keepAwake = current.KeepAwake, defaultPermission = (current.DefaultPermission ?? TerminalDeck.Core.Chats.ChatPermissionModes.DefaultFor("claude")).ToString(), confirmCloseWorking = readConfirmation(), version = version(), updateStatus });
     return JsonSerializer.SerializeToElement(result);
   });
 }

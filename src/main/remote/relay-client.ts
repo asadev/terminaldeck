@@ -73,6 +73,8 @@ import {
   MCP_REPLY_LAST,
   RELAY_HOST_PATH,
   RELAY_SECRET_HEADER,
+  SERVER_DIRECT_HEADER,
+  SERVER_DIRECT_MODE,
   decodeEnvelope,
   decodeMcpEnvelope,
   decodeMcpRequest,
@@ -86,6 +88,8 @@ import { FrameReader, OPCODE, acceptKey, encodeMaskedFrame } from '../../shared/
 import type { HostIdentity } from './host-identity'
 import type { RelayMcpAnswer, RelayMcpDoor } from './relay-mcp'
 import type { AttachTransport, RemoteWire, WireHandlers } from './server'
+import { ServerDirectLink } from './server-direct'
+import { ServerDirectTurn } from './server-direct-turn'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -239,7 +243,8 @@ export interface RelayLink {
   /** Begin dialling, and keep dialling. Safe to call twice. */
   start(attach: AttachTransport): void
   /** Stop, drop every channel, and stay stopped. Safe to call twice. */
-  stop(): void
+  stop(): void | Promise<void>
+  revokeDevice?(device: string): Promise<void>
   state(): RelayState
   /**
    * The machine just woke up. Replace the link now rather than waiting.
@@ -264,6 +269,8 @@ export interface RelayLink {
 export interface RelayClientOptions {
   url: string
   identity: HostIdentity
+  /** A Linux server uses this socket only to meet its paired devices. */
+  serverDirect?: boolean
   /**
    * Whether an X25519 key belongs to a device that may open a channel.
    *
@@ -313,6 +320,7 @@ interface Channel {
   transport: SealedTransport | null
   handlers: WireHandlers | null
   closed: boolean
+  direct?: ServerDirectLink
 }
 
 /* ------------------------------------------------------------------- URLs -- */
@@ -397,6 +405,8 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
   let attach: AttachTransport | null = null
   let stopped = true
   let socket: Duplex | null = null
+  const directLinks = new Set<ServerDirectLink>()
+  let turn: ServerDirectTurn | null = null
   let reader = new FrameReader(MAX_PAYLOAD_BYTES + ENVELOPE_HEADER, 'client')
   let dialling = false
   let connectedAt = 0
@@ -432,13 +442,14 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
   }
 
   function state(): RelayState {
+    const attached = new Set([...channels.values()].flatMap(channel => channel.direct ? [channel.direct] : []))
     return {
       url: options.url,
       hostId: identity.hostId,
       publicKey: identity.keys.publicKey.toString('base64url'),
       fingerprint: identity.fingerprint,
       connected: socket !== null,
-      channels: channels.size,
+      channels: channels.size + [...directLinks].filter(link => !attached.has(link)).length,
       reason: socket === null ? reason : null,
       retryAt,
     }
@@ -475,6 +486,10 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     channel.closed = true
     channels.delete(channel.key)
     sendEnvelope(ENVELOPE.close, channel.id, Buffer.alloc(0))
+    if (channel.direct) {
+      channel.direct.relayClosed()
+      return
+    }
     const handlers = channel.handlers
     channel.handlers = null
     if (!handlers) return
@@ -505,13 +520,19 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
           closeChannel(channel, 'the sealed channel is exhausted')
           return
         }
-        sendEnvelope(ENVELOPE.data, channel.id, sealed)
+        sendEnvelope(options.serverDirect ? ENVELOPE.signal : ENVELOPE.data, channel.id, sealed)
       },
       // The close code and reason do not cross a relay: there is no WebSocket
       // close frame to put them in, only an envelope that says "gone". The
       // protocol's own `error` message carries the words, and it is sent before
       // this by every path that refuses a connection.
-      close: () => closeChannel(channel, 'closed by the desktop'),
+      close: () => {
+        if (!options.serverDirect) return closeChannel(channel, 'closed by the desktop')
+        if (channel.closed) return
+        channel.closed = true
+        channels.delete(channel.key)
+        sendEnvelope(ENVELOPE.close, channel.id, Buffer.alloc(0))
+      },
     }
   }
 
@@ -519,7 +540,8 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
   function openChannel(id: Buffer): void {
     const key = id.toString('hex')
     if (channels.has(key)) return
-    if (channels.size >= MAX_CHANNELS) {
+    const attached = new Set([...channels.values()].flatMap(channel => channel.direct ? [channel.direct] : []))
+    if (channels.size + [...directLinks].filter(link => !attached.has(link)).length >= MAX_CHANNELS) {
       sendEnvelope(ENVELOPE.close, id, Buffer.alloc(0))
       return
     }
@@ -600,7 +622,16 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       addressFor(result.devicePublicKey),
       (handlers) => {
         channel.handlers = handlers
-        return wireFor(channel)
+        const relay = wireFor(channel)
+        if (!turn) return relay
+        const deviceTurn = turn
+        const direct = new ServerDirectLink({ relay, handlers, binding: result.transport.channelBinding,
+          servers: device => deviceTurn.servers(device), retain: device => deviceTurn.retain(device),
+          release: device => { void deviceTurn.release(device) },
+          onClosed: () => directLinks.delete(direct) })
+        channel.direct = direct
+        directLinks.add(direct)
+        return direct
       },
       result.devicePublicKey,
     )
@@ -608,14 +639,14 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       closeChannel(channel, 'too many connections')
       return
     }
-    sendEnvelope(ENVELOPE.data, channel.id, withSealedVersion(result.reply))
+    sendEnvelope(options.serverDirect ? ENVELOPE.signal : ENVELOPE.data, channel.id, withSealedVersion(result.reply))
   }
 
   /* -------------------------------------------------------- MCP requests */
 
   /** Tell the relay whether to send AI apps' requests here. Cheap; said often. */
   function sendReach(): void {
-    if (!options.mcp || !socket) return
+    if (options.serverDirect || !options.mcp || !socket) return
     let on = false
     try {
       on = options.mcp.serving()
@@ -717,6 +748,7 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     // channel and must never be mistaken for one.
     const mcpFrame = decodeMcpEnvelope(frame)
     if (mcpFrame) {
+      if (options.serverDirect) return
       onMcpEnvelope(mcpFrame.type, mcpFrame.channel, mcpFrame.payload)
       return
     }
@@ -735,6 +767,11 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
 
     if (envelope.type === ENVELOPE.close) {
       closeChannel(channel, 'the phone disconnected')
+      return
+    }
+    if (options.serverDirect && envelope.type !== ENVELOPE.signal) {
+      channel.direct?.close(1008, 'Data refused on the relay')
+      closeChannel(channel, 'Data refused on the relay')
       return
     }
 
@@ -757,7 +794,8 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     const handlers = channel.handlers
     if (!handlers) return
     try {
-      handlers.message(message)
+      if (channel.direct) channel.direct.receiveRelay(message)
+      else handlers.message(message)
     } catch (error) {
       // This runs on the link's `data` event, inside the main process. An
       // exception here would take the whole app down over one bad message.
@@ -986,6 +1024,7 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
           `Sec-WebSocket-Key: ${key}`,
           'Sec-WebSocket-Version: 13',
           `${RELAY_SECRET_HEADER}: ${identity.hostSecret.toString('base64url')}`,
+          ...(options.serverDirect ? [`${SERVER_DIRECT_HEADER}: ${SERVER_DIRECT_MODE}`] : []),
           '',
           '',
         ].join('\r\n'),
@@ -1109,7 +1148,8 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       attach = next
       if (!stopped) return
       stopped = false
-      if (options.mcp && !unsubscribeMcp) unsubscribeMcp = options.mcp.subscribe(() => sendReach())
+      if (options.serverDirect) turn = new ServerDirectTurn(options.url, identity.hostSecret, () => socket !== null)
+      if (!options.serverDirect && options.mcp && !unsubscribeMcp) unsubscribeMcp = options.mcp.subscribe(() => sendReach())
       attempts = 0
       lastTick = now()
       if (watchdogMs > 0) {
@@ -1130,7 +1170,7 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       wake()
     },
 
-    stop(): void {
+    stop(): void | Promise<void> {
       stopped = true
       attach = null
       unsubscribeMcp?.()
@@ -1143,11 +1183,17 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       // A close frame first, so the relay forgets this host id now rather than
       // when its own heartbeat gives up — otherwise a restart of the app finds
       // its own name still claimed.
-      if (socket) write(OPCODE.close, Buffer.alloc(0))
-      drop('Remote access is switched off.')
-      reason = null
+      const finish = (): void => {
+        for (const direct of [...directLinks]) direct.close(1001, 'Remote access is switched off.')
+        if (socket) write(OPCODE.close, Buffer.alloc(0))
+        drop('Remote access is switched off.')
+        reason = null
+      }
+      if (turn) return turn.stop().finally(finish)
+      finish()
     },
 
+    revokeDevice: async device => { await turn?.release(device, true) },
     state,
   }
 }

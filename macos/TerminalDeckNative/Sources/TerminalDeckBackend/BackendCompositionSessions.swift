@@ -258,6 +258,15 @@ public actor BackendCompositionSessions {
                 deferred: later, store: state, authorizeMutation: dependencies.authorizeMutation)
             let accountRPC = BackendAccountRPC(accounts: accounts, configuration: dependencies.accounts,
                 authorizeMutation: dependencies.authorizeMutation, sessionTitle: { id in manager.list().first { $0.id == id }?.title })
+            // 4 Nov: once at start, where the account list is kept: every email-named account carries the address it
+            // is signed in as (BackendAccountTidy; copies the list first, logs each rename, changes nothing else).
+            let tidyConfiguration = dependencies.accounts
+            Task.detached(priority: .utility) {
+                let store = await accounts.profiles
+                guard store.readiness == .ready else { return }
+                _ = await BackendAccountTidy.run(configuration: tidyConfiguration, list: { try await store.list() },
+                    rename: { id, next in _ = try await store.rename(id: id, name: next) })
+            }
             let hookRPC = BackendSessionHookRPC(installation: hookInstallation, server: hooks)
             let signIn = BackendAppAccountSignInService(accounts: accounts, providers: providers, configuration: dependencies.accounts,
                 executor: dependencies.authCommands, authorizeMetadata: dependencies.authorizeAccountMetadata,

@@ -366,8 +366,11 @@ public struct BackendHootChatRPC: Sendable {
         }
         let name = provider == .gemini ? params["toolCall"]["title"].string : params["command"].string ?? params["reason"].string
         let id = rawID.compact // Distinguishes the numeric 1 from the string "1".
+        let kind = BackendChatElicitation.requestKind(Self.object([("subtype", .string(method)), ("input", params)]))
+        // Request kind only: tool arguments, form answers and authentication links can contain secrets.
+        NSLog("[native chat] provider=%@ request=%@ kind=%@", provider.rawValue, method, kind)
         update.records = [.init(.approval, id: id, value: Self.object([
-            ("requestId", .string(id)), ("rpcId", rawID), ("subtype", .string(method)), ("name", .string(name ?? method)),
+            ("requestId", .string(id)), ("rpcId", rawID), ("subtype", .string(method)), ("requestKind", .string(kind)), ("name", .string(name ?? method)),
             ("input", params), ("toolId", provider == .gemini ? params["toolCall"]["toolCallId"] : params["itemId"])]))]
         return update
     }

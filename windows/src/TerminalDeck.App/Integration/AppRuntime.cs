@@ -46,7 +46,8 @@ public sealed partial class AppRuntime : IAsyncDisposable
     Root = root;
     General = new(new JsonStateStore<TerminalDeck.Core.Settings.GeneralPreferences>(root, "general-settings"));
     TerminalDeck.App.Views.Agents.NewSessionPicker.Services = new(RecentFolders,
-      provider => TerminalDeck.Core.Settings.LaunchDefaults.For(provider, General.Read()), provider => General.NewChatPermission(provider));
+      provider => TerminalDeck.Core.Settings.LaunchDefaults.For(provider, General.Read()), provider => General.NewChatPermission(provider),
+      () => TerminalDeck.Core.Sessions.TerminalShells.Label(General.Read().TerminalShell));
     WindowsPrivateDirectory.Ensure(root.DirectoryPath);
     var keeperBundle = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "keeper-location.txt")).Trim();
     if (keeperBundle.Length != 17 || !keeperBundle.All(char.IsAsciiDigit)) throw new IOException("The keeper bundle is missing.");
@@ -135,27 +136,17 @@ public sealed partial class AppRuntime : IAsyncDisposable
     if (Chats is not null) await Chats.RefreshAsync();
     Agents.ReconcileSessions(ProjectSessions()); TaskSessionsChanged(); Changed?.Invoke();
   }
-  public async Task<SessionRecord> StartAsync(string provider, string folder, string? accountId = null, string? title = null)
-  {
-    if (!Directory.Exists(folder)) throw new ArgumentException("Choose an existing folder.");
-    if (TerminalDeck.Core.Sessions.CustomTerminalProviders.IsKey(provider)) return await StartCustomTerminalAsync(provider, folder, title);
-    AccountProfile? account = null;
-    if (provider != "shell")
-    {
-      account = accountId is null ? Accounts.Preferred(provider, folder) : Accounts.Get(accountId);
-      if (account is null) throw new InvalidOperationException("Sign in to this AI under Coding AIs first.");
-      if (account.Provider != provider) throw new ArgumentException("Choose an account for the selected AI.");
-      account = await Accounts.RequireSignedInAsync(account.Id);
-    }
-    var response = await Keeper.CreateAsync(new(Guid.NewGuid().ToString(), provider, folder, title ?? (provider == "shell" ? "PowerShell" : provider), account?.Id, account?.HomeId));
-    await RefreshSessionsAsync(); return response.Session ?? throw new IOException("The session could not start.");
-  }
   public async Task<SessionRecord> StartShellForProjectAsync(string folder, string projectId)
   {
-    _ = Projects.Get(projectId);
-    var row = await StartAsync("shell", folder);
+    var project = Projects.Get(projectId);
+    // Terminals the user opens use the shell chosen in Settings → General and are
+    // named after their project, or their folder outside one; the tab's icon
+    // shows the shell.
+    var name = project.Id != TerminalDeck.Core.Projects.ProjectIdentity.IndependentId ? project.Name : TerminalFolderName(folder);
+    var row = await StartAsync("shell", folder, title: name.Length > 120 ? name[..120] : name, shell: General.Read().TerminalShell ?? TerminalDeck.Core.Sessions.TerminalShells.WindowsPowerShell);
     Projects.BindSession(row.Definition.Id, projectId); return row;
   }
+  private static string TerminalFolderName(string folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } leaf ? leaf : folder;
   public Func<string, bool, Task>? InstallAiRequested { get; set; }
   public Func<string, string, Task<JsonElement>>? InstallFlowRequested { get; set; }
   public Func<string, string, Task<JsonElement>>? SignInFlowRequested { get; set; }
@@ -301,6 +292,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
       var definition = await SessionLaunch.PrepareAsync(a, account, ct);
       if (definition.Cwd != folder || definition.Provider != provider || account is not null && (definition.AccountId != account.Id || definition.AccountHome != account.HomeId)) throw new McpRefusal("The launch does not match this folder and account.");
       var projectId = Projects.Resolve(a.TryGetProperty("projectId", out var binding) ? binding.GetString() : null, folder); c.Require("projects", projectId);
+      if (provider == "shell" && definition.ServerId is null) definition = definition with { Shell = General.Read().TerminalShell };
       await c.EnsureCurrentAsync(ct);
       if (mode == "chat")
       {

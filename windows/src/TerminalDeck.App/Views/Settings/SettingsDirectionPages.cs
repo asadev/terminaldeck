@@ -49,6 +49,8 @@ public sealed partial class SettingsPane
     if (ReadCloseConfirmation is not null && SaveCloseConfirmation is not null)
       rows.Add(SettingsPanel.SettingRow("Confirm before closing a session", "Asks before a working session is closed. “Don’t ask again” turns this off; turn it back on here.", Toggle(ReadCloseConfirmation(), SaveCloseConfirmation)));
     rows.Add(SettingsPanel.SettingRow("Copy on select", "Selecting text in a session copies it.", Toggle(current.CopyOnSelect, value => runtime.General.Save(runtime.General.Read() with { CopyOnSelect = value }))));
+    rows.Add(SettingsPanel.SettingRow("Terminal shell", "New terminal tabs open this shell. Open tabs keep theirs.",
+      TerminalDeck.App.Views.Settings.TerminalShellChoice.Create(runtime.General, work => DirectionRunAsync(work))));
     {
       // One default for new chats. Each AI offers only the modes it really supports; an unset choice means Bypass (Auto where the AI has it).
       var modes = Enum.GetValues<TerminalDeck.Core.Mcp.AiPermissionMode>().Where(m => new[] { "claude", "codex", "gemini" }.Any(p => TerminalDeck.Core.Chats.ChatPermissionModes.Supported(p).Contains(m))).ToArray();

@@ -47,6 +47,14 @@ public enum ChatChildTasks {
             if tasks[id] == nil { order.append(id) }
             var value = tasks[id] ?? .object([.init("id", .string(id)), .init("turnId", .string(event.turnID)), .init("title", .string(task["kind"].string == "agent" ? "Codex agent" : "Background task")), .init("status", .string("running"))])
             for field in task.fields ?? [] where !field.value.isNullish { value = value.setting(field.key, field.value) }
+            // Use the first recorded start, never the time a view was opened or a progress update arrived.
+            let input = event.record.value["input"]
+            let startReported = event.record.value["taskStarted"].string == id ||
+                event.record.kind == .toolCall && (input["type"].string == "commandExecution" ||
+                    input["type"].string == "subAgentActivity" && input["kind"].string == "started")
+            if value["startedAt"].isNullish, startReported, running(value), event.at.isFinite, event.at > 0 {
+                value = value.setting("startedAt", .number(event.at))
+            }
             if value["kind"].string == "shell", interruptedTurns.contains(event.turnID), running(value) { value = value.setting("status", .string("stopped")) }
             tasks[id] = value
         }

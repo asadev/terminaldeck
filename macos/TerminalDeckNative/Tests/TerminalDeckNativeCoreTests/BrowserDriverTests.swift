@@ -302,15 +302,15 @@ struct BrowserDriverVerbTests {
         #expect(resultError(noPage) == "there is no page being driven; call browser.open first")
         await engine.call("browser_open", ["url": "https://example.com/"])
 
-        #expect(resultError(await engine.call("browser_step", ["verb": "hover", "selector": "#a"]))
-                == "verb must be one of: click, type, select, check, press, submit")
+        #expect(resultError(await engine.call("browser_step", ["verb": "tap", "selector": "#a"]))
+                == "verb must be one of: \(BrowserStepRules.verbs.joined(separator: ", "))")
         #expect(resultError(await engine.call("browser_step", ["verb": "type", "selector": "#a"]))?.hasPrefix("a type step needs `value`") == true)
         #expect(resultError(await engine.call("browser_step", ["verb": "select", "selector": "#a", "value": ""]))
                 == "a select step needs an option to choose; `value` is empty")
-        #expect(resultError(await engine.call("browser_step", ["verb": "press", "selector": "#a", "key": "F5"]))?
-                .hasSuffix("Enter, Tab, Escape, Backspace, Delete, ArrowDown, ArrowUp, ArrowLeft, ArrowRight.") == true)
-        #expect(resultError(await engine.call("browser_step", ["verb": "click", "selector": String(repeating: "a", count: 401)]))
-                == "that selector is longer than 400 characters")
+        #expect(resultError(await engine.call("browser_step", ["verb": "press", "selector": "#a", "key": "Hyper"]))?
+                .contains("Hyper is not a key this can press") == true)
+        #expect(resultError(await engine.call("browser_step", ["verb": "click", "selector": String(repeating: "a", count: 1_001)]))
+                == "that selector is longer than 1000 characters")
 
         engine.host.probeAnswer["type"] = "password"
         engine.host.probeAnswer["editable"] = true
@@ -325,10 +325,10 @@ struct BrowserDriverVerbTests {
 
         engine.host.probeAnswer["hit"] = false
         let covered = await engine.call("browser_step", ["verb": "click", "selector": "#a", "timeoutMs": 500])
-        #expect(resultError(covered) == "waited 500ms and #a is covered by something else on the page. Read the page to see what is actually there.")
+        #expect(resultError(covered) == "waited 500ms and #a is covered by something else on the page. Read the page to see what is actually there, or pass force: true to act on it anyway.")
 
         engine.host.probeAnswer = ["found": false, "count": 0, "invalid": true]
-        #expect(resultError(await engine.call("browser_step", ["verb": "click", "selector": "##"])) == "that is not a valid CSS selector: ##")
+        #expect(resultError(await engine.call("browser_step", ["verb": "click", "selector": "##"])) == "that is not a selector this can read: ##")
     }
 
     @Test func checkClicksOnlyWhenTheStateDiffers() async {

@@ -25,6 +25,8 @@ internal sealed partial class WorkspaceSurface : Grid
   public Action? BeginManualSplit { get; set; }
   public Func<WorkspaceTab, MenuFlyout>? SessionMenu { get; set; }
   public Func<WorkspaceTab, string, Task>? SaveTitle { get; set; }
+  // Runs a tab switch as one change, so the host renders the window once at the end.
+  public Action<Action>? Batch { get; set; }
   private readonly WorkspaceState state;
   private readonly Func<WorkspaceTab, FrameworkElement> view;
   private readonly Action<string, string> focus;
@@ -39,7 +41,7 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly Func<WorkspaceTab, TerminalDeck.App.ViewModels.SessionDraft?> session;
   private readonly Func<WorkspaceTab, FrameworkElement, Task> account;
   private readonly Func<WorkspaceTab, Task> stop;
-  private readonly Dictionary<string, Button> accountButtons = [];
+  private Dictionary<string, Button> accountButtons = [];
   private readonly Action<string> notice;
   private string owner = "";
   private string? headerActive;
@@ -52,10 +54,23 @@ internal sealed partial class WorkspaceSurface : Grid
   private readonly Grid strip = new() { ColumnSpacing = 0, MinWidth = 0 };
   private readonly ScrollViewer stripViewport = new() { HorizontalScrollMode = ScrollMode.Enabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, MinWidth = 0, ZoomMode = ZoomMode.Disabled };
   private readonly Grid body = new();
-  private readonly Dictionary<string, Border> paneFrames = [];
+  private Dictionary<string, Border> paneFrames = [];
+  // Like browser tabs, rendered panes stay in `body` (hidden) while another tab
+  // shows. Switching back only changes visibility, so terminals and pages are
+  // not pulled out of their panes and redrawn on every switch. One set is kept
+  // per owner and set of tabs shown (an owner's single tabs, or a split); it is
+  // rebuilt when that pane tree changes shape or ratio, and all are dropped when
+  // the tabs themselves change (Render, ReleaseViews).
+  private sealed record PaneSet(string Key, FrameworkElement Tree, Dictionary<string, Border> Frames, Dictionary<string, Button> Accounts, List<(ContentControl Holder, string Tab)> Holders);
+  private readonly Dictionary<string, PaneSet> paneSets = [];
+  private List<(ContentControl Holder, string Tab)> holders = [];
+  // Which holder shows each view; a view moves only when another set needs it.
+  private readonly Dictionary<UIElement, ContentControl> viewHolders = [];
   private readonly Dictionary<string, Grid> tabFrames = [];
   private readonly Dictionary<string, Button> tabButtons = [];
   private readonly Dictionary<string, TextBlock> tabTitles = [];
+  // Restyles a tab chip for the current selection without rebuilding it.
+  private readonly Dictionary<string, Action> chipStyles = [];
   public WorkspaceSurface(WorkspaceState state, string host, Func<WorkspaceTab, FrameworkElement> view,
     Action<string, string> focus, Func<string, Task> close, Func<string, Task> rename,
     Action<string> pop, Action<string> dock, Action<string> dockOwner, Func<string, string, Task> create, Func<WorkspaceTab, string> accountLabel, Func<WorkspaceTab, string> folder, Func<WorkspaceTab, TerminalDeck.App.ViewModels.SessionDraft?> session, Func<WorkspaceTab, FrameworkElement, Task> account, Func<WorkspaceTab, Task> stop, Action<string> notice)
@@ -81,6 +96,8 @@ internal sealed partial class WorkspaceSurface : Grid
     stripHost.Children.Add(previousTabs); stripHost.Children.Add(stripViewport); stripHost.Children.Add(nextTabs);
     stripViewport.Content = strip; Header.Children.Add(stripHost);
     Header.SizeChanged += (_, _) => FitTabs();
+    // Retained chips need their selection ink reapplied after inherited theme events settle.
+    Header.ActualThemeChanged += (_, _) => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateFocus);
     stripViewport.ViewChanged += (_, _) => UpdateScrollButtons();
     stripViewport.PointerWheelChanged += (_, args) =>
     {
@@ -124,29 +141,74 @@ internal sealed partial class WorkspaceSurface : Grid
         else Release(child);
       }
     }
-    Release(body); body.Children.Clear();
+    Release(body); body.Children.Clear(); paneSets.Clear(); viewHolders.Clear();
   }
   public void Render(string scope)
   {
-    owner = scope; paneFrames.Clear(); accountButtons.Clear();
+    owner = scope;
     var layout = state.Layout(owner, Host);
     RenderHeader(layout.ActiveEmpty ?? layout.Active);
-    body.Children.Clear();
-    if (layout.Root is { } root) body.Children.Add(RenderNode(root, layout));
-    else
+    RenderPanes(scope);
+  }
+  // Switching tabs changes the selection and often the owner (whose layout the
+  // panes show) but not the tabs, so the host re-renders only the panes and the
+  // existing tab chips are restyled in place.
+  public void RenderPanes(string scope)
+  {
+    owner = scope;
+    var layout = state.Layout(owner, Host);
+    var key = System.Text.Json.JsonSerializer.Serialize(layout.Root);
+    var slot = owner + "|" + string.Join(",", layout.Root?.Tabs ?? []) + "|" + string.Join(",", layout.Root?.EmptyIds ?? []);
+    if (paneSets.TryGetValue(slot, out var cached) && cached.Key != key)
     {
-      var empty = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-      empty.Children.Add(new TextBlock { Text = scope == "swarm" ? "No sessions yet" : "Empty pane", FontSize = 20 });
-      empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
-      var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); body.Children.Add(empty);
+      DropPanes(cached); paneSets.Remove(slot);
     }
+    if (!paneSets.TryGetValue(slot, out var shown))
+    {
+      paneFrames = []; accountButtons = []; holders = [];
+      FrameworkElement tree;
+      if (layout.Root is { } node) tree = RenderNode(node, layout);
+      else
+      {
+        var empty = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        empty.Children.Add(new TextBlock { Text = scope == "swarm" ? "No sessions yet" : "Empty pane", FontSize = 20 });
+        empty.Children.Add(new TextBlock { Text = "Nothing here yet. Choose a session or browser tab, or start a new session.", TextWrapping = TextWrapping.Wrap, MaxWidth = 360, Opacity = 0.65 });
+        var start = new Button { Content = "New session…" }; start.Click += (_, _) => Guard(() => create(state.CreationOwner(owner, Host), "chat")); empty.Children.Add(start); tree = empty;
+      }
+      shown = new(key, tree, paneFrames, accountButtons, holders); paneSets.Add(slot, shown); body.Children.Add(tree);
+    }
+    paneFrames = shown.Frames; accountButtons = shown.Accounts;
+    foreach (var (holder, tab) in shown.Holders) Show(holder, view(state.Get(tab)));
+    foreach (var set in paneSets.Values) set.Tree.Visibility = ReferenceEquals(set, shown) ? Visibility.Visible : Visibility.Collapsed;
+    UpdateFocus();
+  }
+  private void DropPanes(PaneSet set)
+  {
+    foreach (var (holder, _) in set.Holders)
+      if (holder.Content is UIElement content)
+      {
+        holder.Content = null;
+        if (viewHolders.GetValueOrDefault(content) == holder) viewHolders.Remove(content);
+      }
+    body.Children.Remove(set.Tree);
+  }
+  private ContentControl Holder(string tab, UIElement content)
+  {
+    var holder = new ContentControl { Tag = "workspace-view", HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+    Show(holder, content); holders.Add((holder, tab)); return holder;
+  }
+  private void Show(ContentControl holder, UIElement content)
+  {
+    if (ReferenceEquals(holder.Content, content)) return;
+    if (viewHolders.TryGetValue(content, out var previous) && ReferenceEquals(previous.Content, content)) previous.Content = null;
+    holder.Content = content; viewHolders[content] = holder;
   }
   public void RenderHeader(string? active)
   {
     headerActive = active;
     var activeTab = state.Tabs.FirstOrDefault(t => t.Id == active);
     body.SetResourceReference(BackgroundProperty, activeTab is null ? WorkspacePaper.Page : WorkspacePaper.For(activeTab, session(activeTab)));
-    strip.Children.Clear(); strip.ColumnDefinitions.Clear(); tabFrames.Clear(); tabTitles.Clear(); tabButtons.Clear();
+    strip.Children.Clear(); strip.ColumnDefinitions.Clear(); tabFrames.Clear(); tabTitles.Clear(); tabButtons.Clear(); chipStyles.Clear();
     foreach (var tab in state.Tabs.Where(t => t.Host == Host))
     {
       strip.ColumnDefinitions.Add(new() { Width = new(WorkspaceTabSizing.Minimum), MinWidth = WorkspaceTabSizing.Minimum });
@@ -155,17 +217,17 @@ internal sealed partial class WorkspaceSurface : Grid
       chip.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); chip.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
       chip.SetResourceReference(BackgroundProperty, "DeckTransparentBrush");
       // The flared bottom shares the opaque page fill and reaches its top edge.
-      var selected = headerActive == tab.Id;
+      bool Selected() => headerActive == tab.Id;
       var flare = (double)Application.Current.Resources["DeckTabFlare"];
-      var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = selected ? Visibility.Visible : Visibility.Collapsed };
+      var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = Selected() ? Visibility.Visible : Visibility.Collapsed };
       shape.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, WorkspacePaper.For(tab, session(tab)));
       SetColumnSpan(shape, 2); chip.Children.Add(shape);
       void Shape() => shape.Data = WorkspaceTabShape.Outline(chip.ActualWidth, chip.Height, (double)Application.Current.Resources["DeckTabCorner"], flare);
       chip.SizeChanged += (_, _) => Shape();
-      chip.PointerEntered += (_, _) => { if (!selected) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
+      chip.PointerEntered += (_, _) => { if (!Selected()) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
       chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
       var divider = new Border { Width = 1, Height = 14, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
-      divider.Visibility = selected ? Visibility.Collapsed : Visibility.Visible;
+      divider.Visibility = Selected() ? Visibility.Collapsed : Visibility.Visible;
       divider.SetResourceReference(Border.BackgroundProperty, "DeckTabDividerBrush"); SetColumnSpan(divider, 2); chip.Children.Add(divider);
       var label = new Grid { ColumnSpacing = 6, HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 0 };
       if (tab.Subject == "Hoot" && tab.Kind == "page") label.Children.Add(new Image { Width = 14, Height = 14, Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(new Uri("ms-appx:///Assets/icons/hoot.svg")) });
@@ -178,7 +240,7 @@ internal sealed partial class WorkspaceSurface : Grid
       else if (session(tab) is { } row)
       {
         if (ProjectIdentity?.Invoke(tab) is { } project) label.Children.Add(project);
-        label.Children.Add(new TerminalDeck.App.Views.BrandIcon { Kind = row.Provider, Width = 14, Height = 14 });
+        label.Children.Add(new TerminalDeck.App.Views.BrandIcon { Kind = row.Provider, Shell = row.Shell, Width = 14, Height = 14 });
       }
       else label.Children.Add(new TerminalDeck.App.Views.DeckIcon { Glyph = WorkspaceIcons.For(tab.Kind == "page" ? tab.Subject : tab.Kind), FontSize = 13 });
       var title = new TextBlock { Text = tab.Title, FontWeight = active == tab.Id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal, FontSize = 12, LineHeight = 13, LineStackingStrategy = LineStackingStrategy.BlockLineHeight, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center }; label.Children.Add(title); tabTitles[tab.Id] = title;
@@ -199,25 +261,69 @@ internal sealed partial class WorkspaceSurface : Grid
         SetColumn(child, label.ColumnDefinitions.Count);
         label.ColumnDefinitions.Add(new() { Width = ReferenceEquals(child, title) ? new(1, GridUnitType.Star) : GridLength.Auto });
       }
-      var select = new Button { Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 4, 4, 4), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 36 };
+      var select = new Button { ClickMode = ClickMode.Press, Style = (Style)Application.Current.Resources["DeckTabButtonStyle"], Content = label, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new(0), Padding = new(8, 4, 4, 4), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinWidth = 0, MinHeight = 0, Height = 36 };
       TerminalAppearanceBridge.EnsureInkResources();
       void TabInk() => select.Foreground = (Brush)ShellTheme.Resource(select, headerActive == tab.Id ? WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal ? WorkspacePaper.Ink : "DeckInkBrush" : "DeckSecondaryInkBrush");
       TabInk(); select.ActualThemeChanged += (_, _) => TabInk();
       ToolTipService.SetToolTip(select, tab.Title + " · " + tab.Kind + (BrowserIdentity?.Invoke(tab) is { } identity ? "\n" + identity.Address + "\n" + identity.Status : "")); AutomationProperties.SetName(select, TabAccessibility(tab)); tabButtons[tab.Id] = select; AutomationProperties.SetHelpText(select, tab.Kind + " window. Right-click for split, rename and move actions.");
       select.SizeChanged += (_, _) => select.Clip = new RectangleGeometry { Rect = new(0, 0, Math.Max(0, select.ActualWidth), select.ActualHeight) };
-      select.Click += (_, _) => Select(tab.Id);
+      // Selected as the button goes down (above), but the pane takes keyboard focus
+      // only once the button is released or a drag ends: focus leaving the tab
+      // while it is held releases its pointer capture and cancels the drag that
+      // reorders tabs. Keyboard activation (Enter, Space) focuses at once.
+      var focusPending = false;
+      void Settle() { if (!focusPending) return; focusPending = false; FocusPane(tab.Id); }
+      select.Click += (_, _) =>
+      {
+        var held = select.IsPressed || (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.LeftButton) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        focusPending = held; Select(tab.Id, moveFocus: !held);
+      };
+      // Like Chrome, pressing a tab and moving along the strip slides it; the
+      // tabs it passes glide aside and it drops into place on release. Moving
+      // off the strip hands it to a system drag instead (out to its own window,
+      // or into another window's strip).
+      Windows.Foundation.Point? pressedAt = null; var sliding = false;
+      select.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
+      {
+        var point = e.GetCurrentPoint(strip);
+        pressedAt = point.Properties.IsLeftButtonPressed ? point.Position : null; sliding = false;
+      }), true);
+      select.AddHandler(PointerMovedEvent, new PointerEventHandler(async (_, e) =>
+      {
+        if (pressedAt is not { } start || !e.Pointer.IsInContact) return;
+        var point = e.GetCurrentPoint(strip);
+        var dx = point.Position.X - start.X;
+        if (point.Position.Y < -12 || point.Position.Y > strip.ActualHeight + 24)
+        {
+          pressedAt = null; sliding = false; EndSlide(tab.Id, commit: false);
+          try { await select.StartDragAsync(e.GetCurrentPoint(select)); }
+          catch (Exception ex) when (ex is not OutOfMemoryException) { notice("This tab could not be dragged out."); }
+          return;
+        }
+        if (!sliding && Math.Abs(dx) < 4) return;
+        sliding = true; Slide(tab.Id, dx);
+      }), true);
+      select.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) =>
+      {
+        if (sliding) EndSlide(tab.Id, commit: true);
+        pressedAt = null; sliding = false; Settle();
+      }), true);
+      // The button releases its capture before the release reaches the handler
+      // above; only cancel a slide that no release followed.
+      select.PointerCaptureLost += (_, _) => DispatcherQueue.TryEnqueue(() => { if (!sliding) return; sliding = false; pressedAt = null; EndSlide(tab.Id, commit: false); });
+      select.KeyUp += (_, _) => Settle();
       chip.Children.Add(select);
       // Like Chrome: the selected tab always shows its ×, at every width; other tabs
       // show it on hover (or focus). Middle-click closes any tab.
       // Every tab closes, Hoot's too: Hoot stays closed until the person opens it (Asad, 3 Nov).
       var closable = true; var hovering = false; var narrow = false;
       var x = IconButton("Close " + tab.Title, "\uE711", () => Guard(() => close(tab.Id)));
-      if (selected && WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal) x.SetResourceReference(Control.ForegroundProperty, WorkspacePaper.Ink);
-      x.Width = 24; x.MinWidth = 24; x.Height = 24; x.MinHeight = 0; x.Padding = new(4); x.Opacity = selected ? 1 : 0;
+      if (Selected() && WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal) x.SetResourceReference(Control.ForegroundProperty, WorkspacePaper.Ink);
+      x.Width = 24; x.MinWidth = 24; x.Height = 24; x.MinHeight = 0; x.Padding = new(4); x.Opacity = Selected() ? 1 : 0;
       void CloseButton()
       {
-        x.Visibility = closable && (selected || hovering || !narrow) ? Visibility.Visible : Visibility.Collapsed;
-        x.Opacity = selected || hovering ? 1 : 0;
+        x.Visibility = closable && (Selected() || hovering || !narrow) ? Visibility.Visible : Visibility.Collapsed;
+        x.Opacity = Selected() || hovering ? 1 : 0;
       }
       chip.PointerEntered += (_, _) => { hovering = true; CloseButton(); }; chip.PointerExited += (_, _) => { hovering = false; CloseButton(); };
       chip.GotFocus += (_, _) => { hovering = true; CloseButton(); }; chip.LostFocus += (_, _) => { hovering = false; CloseButton(); }; SetColumn(x, 1); chip.Children.Add(x);
@@ -226,7 +332,7 @@ internal sealed partial class WorkspaceSurface : Grid
         if (closable && e.GetCurrentPoint(chip).Properties.IsMiddleButtonPressed) { e.Handled = true; Guard(() => close(tab.Id)); }
       }), true);
       chip.Loaded += (_, _) => { if (headerActive == tab.Id) RevealActiveTab(); };
-      chip.SizeChanged += (_, _) =>
+      void Fit()
       {
         var detail = WorkspaceTabSizing.ForWidth(chip.ActualWidth);
         narrow = !detail.Close; CloseButton();
@@ -235,29 +341,48 @@ internal sealed partial class WorkspaceSurface : Grid
         // Keep one identity at the icon-only floor. Project/account decoration
         // yields first, and every tab stays the same width.
         for (var i = 0; i < icons.Length; i++) icons[i].Visibility = detail.ProjectPicture || i == icons.Length - 1 ? Visibility.Visible : Visibility.Collapsed;
-        if (selected && closable && chip.ActualWidth < WorkspaceTabSizing.Minimum + 24) foreach (var icon in icons) icon.Visibility = Visibility.Collapsed; // too small for icon + ×
+        if (Selected() && closable && chip.ActualWidth < WorkspaceTabSizing.Minimum + 24) foreach (var icon in icons) icon.Visibility = Visibility.Collapsed; // too small for icon + ×
         if (accountBadge is not null) accountBadge.Visibility = chip.ActualWidth >= 176 ? Visibility.Visible : Visibility.Collapsed;
         label.ColumnSpacing = detail.Title ? 6 : 0;
         label.HorizontalAlignment = detail.Title ? HorizontalAlignment.Stretch : HorizontalAlignment.Center;
         title.MaxWidth = double.PositiveInfinity;
+      }
+      chip.SizeChanged += (_, _) => Fit();
+      chipStyles[tab.Id] = () =>
+      {
+        var on = Selected();
+        shape.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        divider.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        if (on) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
+        title.FontWeight = on ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
+        x.Foreground = (Brush)ShellTheme.Resource(x, Selected() && WorkspacePaper.For(tab, session(tab)) == WorkspacePaper.Terminal ? WorkspacePaper.Ink : "DeckInkBrush");
+        TabInk(); CloseButton();
+        if (chip.ActualWidth > 0) Fit();
       };
       var menu = new MenuFlyout();
-      if (tab.Kind != "page") Add(menu, "Rename…", () => Guard(() => rename(tab.Id)));
-      var currentLayout = state.Layout(owner, Host);
-      if (tab.Kind != "page" && currentLayout.ActiveEmpty is null && currentLayout.Active is { } current && state.Tabs.Any(candidate => candidate.Id == current && candidate.Kind != "page") && current != tab.Id && !(currentLayout.Root?.Tabs.Contains(tab.Id) ?? false))
+      // Rebuilt as it opens: the split items depend on the current owner's
+      // layout, which a tab switch changes without rebuilding this chip.
+      void MenuItems()
       {
-        Add(menu, "Open in Split View", () => Split(tab.Id, false));
-        Add(menu, "Open below active pane", () => Split(tab.Id, true));
+        menu.Items.Clear();
+        if (tab.Kind != "page") Add(menu, "Rename…", () => Guard(() => rename(tab.Id)));
+        var currentLayout = state.Layout(owner, Host);
+        if (tab.Kind != "page" && currentLayout.ActiveEmpty is null && currentLayout.Active is { } current && state.Tabs.Any(candidate => candidate.Id == current && candidate.Kind != "page") && current != tab.Id && !(currentLayout.Root?.Tabs.Contains(tab.Id) ?? false))
+        {
+          Add(menu, "Open in Split View", () => Split(tab.Id, false));
+          Add(menu, "Open below active pane", () => Split(tab.Id, true));
+        }
+        Add(menu, "Move left", () => state.Move(tab.Id, Index(tab) - 1));
+        Add(menu, "Move right", () => state.Move(tab.Id, Index(tab) + 1));
+        Add(menu, Host == "main" ? "Open in New Window" : "Move back to main window", () => { if (Host == "main") pop(tab.Id); else dock(tab.Id); });
+        if (closable) Add(menu, "Close Tab", () => Guard(() => close(tab.Id)));
       }
-      Add(menu, "Move left", () => state.Move(tab.Id, Index(tab) - 1));
-      Add(menu, "Move right", () => state.Move(tab.Id, Index(tab) + 1));
-      Add(menu, Host == "main" ? "Open in New Window" : "Move back to main window", () => { if (Host == "main") pop(tab.Id); else dock(tab.Id); });
-      if (closable) Add(menu, "Close Tab", () => Guard(() => close(tab.Id)));
+      MenuItems(); menu.Opening += (_, _) => MenuItems();
       CloseButton();
       select.ContextFlyout = menu;
-      select.CanDrag = true; select.AllowDrop = true;
+      select.AllowDrop = true;
       select.DragStarting += (_, args) => { args.Data.Properties["deck-workspace"] = tab.Id; args.Data.SetText("deck-window:" + tab.Id); args.Data.RequestedOperation = DataPackageOperation.Move; };
-      select.DropCompleted += (_, args) => { if (args.DropResult == DataPackageOperation.None) DragOutside?.Invoke(tab.Id); };
+      select.DropCompleted += (_, args) => { if (args.DropResult == DataPackageOperation.None) DragOutside?.Invoke(tab.Id); Settle(); };
       select.DragOver += (_, args) => { if (args.DataView.Properties.ContainsKey("deck-workspace")) args.AcceptedOperation = DataPackageOperation.Move; };
       select.Drop += async (_, args) =>
       {
@@ -335,7 +460,7 @@ internal sealed partial class WorkspaceSurface : Grid
         var remove = new Button { Content = "Close this pane" }; remove.Click += (_, _) => ClosePaneView(tab.Id); placeholder.Children.Add(remove);
         return placeholder;
       }
-      if (tab.Kind == "page") return new ContentControl { Tag = "workspace-view", Content = view(tab), HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+      if (tab.Kind == "page") return Holder(tab.Id, view(tab));
       var pane = new Grid { RowSpacing = 0 };
       pane.SetResourceReference(BackgroundProperty, WorkspacePaper.For(tab, session(tab)));
       pane.RowDefinitions.Add(new() { Height = GridLength.Auto }); pane.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
@@ -519,15 +644,14 @@ internal sealed partial class WorkspaceSurface : Grid
         terminal.HeaderElement.Visibility = Visibility.Collapsed;
         foreach (var area in terminal.Children.OfType<FrameworkElement>().Where(child => GetRow(child) == 1)) area.Margin = new(0);
       }
-      UIElement hostedContent = content;
+      // Deployment progress stays in each retained pane; only the session view moves between layouts.
       if (deploymentStrip is not null)
       {
-        var withProgress = new Grid { Tag = "deployment-host" };
-        withProgress.RowDefinitions.Add(new() { Height = GridLength.Auto }); withProgress.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-        withProgress.Children.Add(deploymentStrip); SetRow(content, 1); withProgress.Children.Add(content); hostedContent = withProgress;
+        pane.RowDefinitions.Insert(1, new() { Height = GridLength.Auto });
+        SetRow(deploymentStrip, 1); pane.Children.Add(deploymentStrip);
       }
-      var holder = new ContentControl { Tag = "workspace-view", Content = hostedContent, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
-      SetRow(holder, 1); pane.Children.Add(holder);
+      var holder = Holder(id, content);
+      SetRow(holder, deploymentStrip is null ? 1 : 2); pane.Children.Add(holder);
       var frame = new Border { Child = pane, BorderThickness = new(layout.Root?.Tab is null ? 1 : 0), CornerRadius = new(0) };
       frame.SetResourceReference(Border.BorderBrushProperty, layout.ActiveEmpty is null && layout.Active == id ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");
       frame.ActualThemeChanged += (_, _) => frame.BorderBrush = (Brush)ShellTheme.Resource(frame, (state.Layout(owner, Host).ActiveEmpty ?? state.Layout(owner, Host).Active) == id ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");
@@ -587,8 +711,9 @@ internal sealed partial class WorkspaceSurface : Grid
       AutomationProperties.SetName(button, "Account for " + state.Get(id).Title + ": " + label);
     }
     foreach (var (id, frame) in paneFrames) frame.BorderBrush = (Brush)ShellTheme.Resource(frame, active == id ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");
-    foreach (var (id, title) in tabTitles) title.FontWeight = active == id ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
-    foreach (var (id, button) in tabButtons) button.Foreground = (Brush)ShellTheme.Resource(button, active == id ? "DeckInkBrush" : "DeckSecondaryInkBrush");
+    var selectedTab = state.Tabs.FirstOrDefault(tab => tab.Id == active);
+    body.SetResourceReference(BackgroundProperty, selectedTab is null ? WorkspacePaper.Page : WorkspacePaper.For(selectedTab, session(selectedTab)));
+    foreach (var style in chipStyles.Values) style();
     if (changed) RevealActiveTab();
   }
   private string TabAccessibility(WorkspaceTab tab)
@@ -597,17 +722,63 @@ internal sealed partial class WorkspaceSurface : Grid
     if (BrowserIdentity?.Invoke(tab) is { } browser) return tab.Title + ", " + browser.Binding + (browser.Loading ? ", loading" : "") + ", " + browser.Address;
     return tab.Title;
   }
-  private int Index(WorkspaceTab tab) => state.Tabs.Where(t => t.Host == tab.Host).ToList().IndexOf(tab);
-  private void Select(string id)
+  // Strip columns follow this host's tab order, so a column is also the index
+  // WorkspaceState.Move takes.
+  private int slideTo = -1;
+  private void Slide(string id, double dx)
   {
-    if (state.Layout(owner, Host).ActiveEmpty is { } empty && state.Get(id).Kind != "page")
-    { state.FillEmpty(owner, Host, empty, id); focus(owner, id); FocusPane(id); return; }
-    state.Select(id); owner = state.Get(id).Owner; focus(owner, id); FocusPane(id);
+    if (!tabFrames.TryGetValue(id, out var chip)) return;
+    var chips = strip.Children.OfType<Grid>().ToArray();
+    var from = GetColumn(chip); var width = strip.ColumnDefinitions[from].ActualWidth;
+    if (width <= 0) return;
+    var offset = Math.Clamp(dx, -from * width, (chips.Length - 1 - from) * width);
+    var to = Math.Clamp((int)Math.Round(from + offset / width), 0, chips.Length - 1);
+    Canvas.SetZIndex(chip, 1); chip.TranslationTransition = null; chip.Translation = new((float)offset, 0, 0);
+    foreach (var other in chips)
+    {
+      if (ReferenceEquals(other, chip)) continue;
+      var column = GetColumn(other);
+      var shift = from < to && column > from && column <= to ? -width : from > to && column < from && column >= to ? width : 0;
+      other.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+      other.Translation = new((float)shift, 0, 0);
+    }
+    slideTo = to;
+  }
+  private void EndSlide(string id, bool commit)
+  {
+    var to = slideTo; slideTo = -1;
+    if (commit && to >= 0 && tabFrames.TryGetValue(id, out var moved) && GetColumn(moved) != to)
+    {
+      // The move re-renders the strip in its new order.
+      try { state.Move(id, to); return; }
+      catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { notice("This tab could not move."); }
+    }
+    foreach (var chip in strip.Children.OfType<Grid>())
+    {
+      chip.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+      chip.Translation = default; Canvas.SetZIndex(chip, 0);
+    }
+  }
+  private int Index(WorkspaceTab tab) => state.Tabs.Where(t => t.Host == tab.Host).ToList().IndexOf(tab);
+  private void Select(string id, bool moveFocus = true)
+  {
+    // Selecting publishes a layout change and focusing the owner changes the
+    // shell's scope; batched, the window renders once instead of twice.
+    void Switch()
+    {
+      if (state.Layout(owner, Host).ActiveEmpty is { } empty && state.Get(id).Kind != "page") { state.FillEmpty(owner, Host, empty, id); focus(owner, id); return; }
+      state.Select(id); owner = state.Get(id).Owner; focus(owner, id);
+    }
+    if (Batch is { } batch) batch(Switch); else Switch();
+    if (moveFocus) FocusPane(id);
   }
   internal void FocusInput(string id) => FocusPane(id);
   private void FocusPane(string id) => Guard(async () =>
   {
     if (IsModalOpen?.Invoke() == true) return;
+    await PaneLoaded(id);
+    // A newer tab selection can overtake the asynchronous load.
+    if (IsModalOpen?.Invoke() == true || (!paneFrames.ContainsKey(id) && !state.Tabs.Any(tab => tab.Id == id && tab.Host == Host)) || headerActive != id) return;
     if (!paneFrames.TryGetValue(id, out var frame))
     {
       if (state.Get(id).Kind == "page" && FocusManager.FindFirstFocusableElement(view(state.Get(id))) is Control pageInput) pageInput.Focus(FocusState.Programmatic);
@@ -622,6 +793,21 @@ internal sealed partial class WorkspaceSurface : Grid
     else if (content.OfType<TextBox>().FirstOrDefault(input => input.AcceptsReturn && !input.IsReadOnly) is { } composer) composer.Focus(FocusState.Programmatic);
     else if (FocusManager.FindFirstFocusableElement(frame) is Control input) input.Focus(FocusState.Programmatic);
   });
+  // Selecting a tab can rebuild the panes, so the frame found for it may be
+  // brand new: until it is loaded it has no template and no WebView2 in its
+  // tree, and focus would land nowhere. Wait for it (a later rebuild may
+  // replace it again, hence the short loop).
+  private async Task PaneLoaded(string id)
+  {
+    for (var wait = 0; wait < 3 && paneFrames.TryGetValue(id, out var frame) && !frame.IsLoaded; wait++)
+    {
+      var loaded = new TaskCompletionSource();
+      void Done(object sender, RoutedEventArgs e) => loaded.TrySetResult();
+      frame.Loaded += Done;
+      try { await Task.WhenAny(loaded.Task, Task.Delay(1000)); }
+      finally { frame.Loaded -= Done; }
+    }
+  }
   private void ClosePaneView(string id)
   {
     state.ClosePane(owner, Host, id); var layout = state.Layout(owner, Host);
@@ -657,7 +843,11 @@ internal sealed partial class WorkspaceSurface : Grid
   }
   internal static Button IconButton(string name, string glyph, Action action)
   {
-    var button = new Button { Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], Content = new TerminalDeck.App.Views.DeckIcon { Glyph = glyph, FontSize = 14 }, Width = 28, Height = 32, MinHeight = 28, Padding = new(4), BorderThickness = new(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+    var button = new Button { Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], Content = new TerminalDeck.App.Views.DeckIcon { Glyph = glyph, FontSize = 16 }, Width = 28, Height = 32, MinHeight = 28, Padding = new(4), BorderThickness = new(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+    // A templated UserControl icon can retain its old inherited brush when a tab is reused.
+    void UpdateIconInk() { if (button.Content is TerminalDeck.App.Views.DeckIcon icon) icon.Foreground = button.Foreground; }
+    button.RegisterPropertyChangedCallback(Control.ForegroundProperty, (_, _) => UpdateIconInk());
+    button.Loaded += (_, _) => UpdateIconInk();
     AutomationProperties.SetName(button, name); ToolTipService.SetToolTip(button, name); button.Click += (_, _) => action(); return button;
   }
 }

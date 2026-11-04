@@ -11,11 +11,13 @@ public struct BackendDeckCoreSecurityBudgets: Sendable {
     public let changes: BackendDeckCoreSecurityBudget
     public let sessionStarts: BackendDeckCoreSecurityBudget
     public let deviceInput: BackendDeckCoreSecurityBudget
+    public let browserSteps: BackendDeckCoreSecurityBudget
     public init(all: BackendDeckCoreSecurityBudget = .init(limit: 240, windowMilliseconds: 60_000),
                 changes: BackendDeckCoreSecurityBudget = .init(limit: 30, windowMilliseconds: 300_000),
                 sessionStarts: BackendDeckCoreSecurityBudget = .init(limit: 5, windowMilliseconds: 600_000),
-                deviceInput: BackendDeckCoreSecurityBudget = .init(limit: 300, windowMilliseconds: 300_000)) {
-        self.all = all; self.changes = changes; self.sessionStarts = sessionStarts; self.deviceInput = deviceInput
+                deviceInput: BackendDeckCoreSecurityBudget = .init(limit: 300, windowMilliseconds: 300_000),
+                browserSteps: BackendDeckCoreSecurityBudget = .init(limit: 300, windowMilliseconds: 300_000)) {
+        self.all = all; self.changes = changes; self.sessionStarts = sessionStarts; self.deviceInput = deviceInput; self.browserSteps = browserSteps
     }
 }
 public struct BackendDeckCoreSecurityCallResult: Sendable {
@@ -46,12 +48,12 @@ public actor BackendDeckCoreSecurityControl {
         func idle(_ now: Double) -> Bool { hits.allSatisfy { $0 <= now - budget.windowMilliseconds } }
     }
     private struct Windows {
-        var all: Window; var changes: Window; var starts: Window; var devices: Window
+        var all: Window; var changes: Window; var starts: Window; var devices: Window; var browser: Window
         init(_ budgets: BackendDeckCoreSecurityBudgets) {
             all = Window(budget: budgets.all); changes = Window(budget: budgets.changes)
-            starts = Window(budget: budgets.sessionStarts); devices = Window(budget: budgets.deviceInput)
+            starts = Window(budget: budgets.sessionStarts); devices = Window(budget: budgets.deviceInput); browser = Window(budget: budgets.browserSteps)
         }
-        func idle(_ now: Double) -> Bool { all.idle(now) && changes.idle(now) && starts.idle(now) && devices.idle(now) }
+        func idle(_ now: Double) -> Bool { all.idle(now) && changes.idle(now) && starts.idle(now) && devices.idle(now) && browser.idle(now) }
     }
     private let log: BackendDeckCoreSecurityActionLog
     private let consent: BackendDeckCoreSecurityConsentBroker
@@ -259,7 +261,10 @@ public actor BackendDeckCoreSecurityControl {
         catch { return await record(tool: policy.tool.id, tier: tier, baseTier: baseTier, summary: summary, outcome: .error, confirmed: .init(required: tier == .alter), error: error.localizedDescription) }
         if tier == .alter && !options.attended { return await stopped(.unattended, Self.refusalSentence(.unattended, tool: policy.tool.id)) }
         if tier != .read {
-            if policy.spendsDeviceInput {
+            if policy.tool.id == "browser.step" {
+                let taken = window.browser.take(at); storeWindows(window)
+                if !taken { return await stopped(.rateLimited, "too many browser steps in the last five minutes; pause before carrying on") }
+            } else if policy.spendsDeviceInput {
                 let taken = window.devices.take(at); storeWindows(window)
                 if !taken { return await stopped(.rateLimited, "too many taps, swipes and keystrokes on a device in the last few minutes; pause, look at the screen with devices.tree, then carry on") }
             } else {
@@ -267,7 +272,8 @@ public actor BackendDeckCoreSecurityControl {
                 if !taken { return await stopped(.rateLimited, "too many changes in the last few minutes; ask the person to act instead") }
             }
         }
-        if ["sessions.start", "sessions.start_agent"].contains(policy.tool.id) {
+        if ["sessions.start", "sessions.start_agent"].contains(policy.tool.id)
+            || policy.tool.id == "sessions.conversations" && ["start", "resume"].contains(args["do"].string ?? "") {
             let taken: Bool
             if caller.kind == .key { taken = window.starts.take(at); storeWindows(window) } else { taken = sharedStarts.take(at) }
             if !taken { return await stopped(.rateLimited, "too many sessions started recently; each one costs money, so this is capped") } }
@@ -353,15 +359,17 @@ public actor BackendDeckCoreSecurityControl {
               Self.argumentsBound(arguments, to: effect.arguments) || effect.redacted.map({ Self.argumentsBound(arguments, to: $0) }) == true else {
             throw NativeRPCError(code: "access-denied", message: "This effect does not match the deck-control call it claims.")
         }
-        guard !effect.entered else {
-            throw NativeRPCError(code: "access-denied", message: "This deck-control call's effect was already entered; it is entered exactly once.")
-        }
-        effect.entered = true; effects[callID] = effect
         var tier = effect.tier
         if Self.rank(requested) > Self.rank(tier) { tier = requested }
         let mustAnswer = ownerMustAnswer && !BackendTAGProfileConsent.honorsStandingKey(tool: effect.tool.id, arguments: arguments, caller: effect.caller)
             && !Self.hootModeDecides(tool: effect.tool.id, caller: effect.caller)
         if mustAnswer { tier = .alter }
+        // Read paths recheck access around suspended work. Those checks do not
+        // consume the single mutation entry, and each still verifies live rules.
+        guard !effect.entered else {
+            throw NativeRPCError(code: "access-denied", message: "This deck-control call's effect was already entered; it is entered exactly once.")
+        }
+        if tier != .read { effect.entered = true; effects[callID] = effect }
         let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = trimmed.isEmpty ? effect.summary : trimmed
         let caller = effect.caller
@@ -383,10 +391,11 @@ public actor BackendDeckCoreSecurityControl {
             let at = now()
             let windowKey = windowFor(caller, at: at)
             var window = callerWindows[windowKey] ?? Windows(budgets)
-            let taken = effect.spendsDeviceInput ? window.devices.take(at) : window.changes.take(at)
+            let browserStep = effect.tool.id == "browser.step"
+            let taken = browserStep ? window.browser.take(at) : effect.spendsDeviceInput ? window.devices.take(at) : window.changes.take(at)
             callerWindows[windowKey] = window
             if !taken {
-                throw refuse(.rateLimited, effect.spendsDeviceInput
+                throw refuse(.rateLimited, browserStep ? "too many browser steps in the last five minutes; pause before carrying on" : effect.spendsDeviceInput
                     ? "too many taps, swipes and keystrokes on a device in the last few minutes; pause, look at the screen with devices.tree, then carry on"
                     : "too many changes in the last few minutes; ask the person to act instead")
             }
@@ -407,6 +416,9 @@ public actor BackendDeckCoreSecurityControl {
         } catch { throw refuse(.notGranted, "This agent’s current Deck tool rules refuse this effect.") }
         guard !effect.cancellation.isCancelled, !context.cancellation.isCancelled else { throw refuse(.callerGone, "This tool request is no longer current.") }
         guard var current = effects[callID] else { throw BackendSessionFailure.missingCapability("a current deck-control call for this operation") }
+        if tier == .read, current.entered {
+            throw NativeRPCError(code: "access-denied", message: "This deck-control call has already entered a change.")
+        }
         let proof = BackendDeckCoreSecurityEffectProof(id: UUID(), callID: callID, tool: effect.tool.id, tier: tier,
             arguments: arguments, lease: effect.lease)
         current.tier = tier; current.summary = summary; current.confirmation = confirmation; current.proof = proof

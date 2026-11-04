@@ -29,7 +29,28 @@ while [ "$#" -gt 0 ]; do
   shift 2
 done
 
-fail() { echo "native update: $*" >&2; exit 1; }
+status_file= error_file=
+report() {
+  echo "native update: $*"
+  if [ -n "$status_file" ]; then
+    printf '%s\n' "$*" > "$status_file.tmp"
+    /bin/mv -f "$status_file.tmp" "$status_file"
+  fi
+}
+record_failure() {
+  if [ -n "$error_file" ]; then
+    printf '%s\n' "$*" > "$error_file.tmp"
+    /bin/mv -f "$error_file.tmp" "$error_file"
+  fi
+}
+fail() { record_failure "$*"; echo "native update: $*" >&2; exit 1; }
+failed_exit() {
+  result=$?
+  if [ "$result" -ne 0 ] && [ -n "$error_file" ] && [ ! -e "$error_file" ]; then
+    record_failure 'The update checks could not finish. Nothing was installed.'
+  fi
+}
+trap failed_exit EXIT
 case "$current_app" in /*.app) ;; *) fail 'invalid current app path' ;; esac
 case "$staged_app" in /*.app) ;; *) fail 'invalid staged app path' ;; esac
 case "$archive_file" in /*/update.zip) ;; *) fail 'invalid archive path' ;; esac
@@ -49,6 +70,8 @@ case "$current_app" in /Volumes/*|*/AppTranslocation/*) fail 'move the app into 
 stage_dir="$(cd "$(dirname "$archive_file")" && /bin/pwd -P)"
 case "$staged_app" in "$stage_dir"/unpacked/*.app) ;; *) fail 'staged app is outside its private folder' ;; esac
 [ "$ready_file" = "$stage_dir/helper-ready" ] || fail 'invalid acknowledgement path'
+status_file="$stage_dir/helper-status"
+error_file="$stage_dir/helper-error"
 app_parent="$(cd "$(dirname "$current_app")" && /bin/pwd -P)"
 [ -w "$app_parent" ] || fail 'the app folder is not writable'
 [ -d "$current_app/Contents" ] || fail 'current app disappeared'
@@ -86,11 +109,16 @@ verify_app() {
 [ "$(plist "$current_app" CFBundleExecutable)" = "$executable_name" ] || fail 'installed app program differs'
 parent_started="$(/bin/ps -p "$parent_pid" -o lstart=)"
 [ -n "$parent_started" ] || fail 'parent process already exited before acknowledgement'
+# Started is only a receipt: ready is written ONLY after every trust check passes.
+: > "$stage_dir/helper-started"
+report 'Checking the download…'
 verify_archive
+report 'Checking the app signature…'
 verify_app "$staged_app"
+report 'Checking the current app…'
 /usr/bin/codesign --verify --deep --strict "$current_app" || fail 'current app signature is invalid'
 [ ! -e "$stage_dir/helper-cancelled" ] || fail 'helper acknowledgement was cancelled'
-echo "native update: verified $expected_version; waiting for process $parent_pid"
+report "Verified $expected_version; waiting for the app to close."
 : > "$ready_file"
 
 # Five minutes: a quit that waits for the engine to stop must not outlast the helper (it would then close
@@ -107,6 +135,7 @@ done
 
 # The active bundle has gone away. Recheck anything that could have changed
 # while the helper waited, and prepare an adjacent copy on the same filesystem.
+report 'Checking the update again before installing…'
 verify_archive
 verify_app "$staged_app"
 work_dir="$(/usr/bin/mktemp -d "$app_parent/.td-native-update.XXXXXX")"
@@ -117,6 +146,9 @@ backup_app="$work_dir/backup.app"
 drop_staging() { /bin/rm -rf "$stage_dir/unpacked" "$stage_dir/update.zip" 2>/dev/null || true; }
 rollback() {
   status="$?"
+  if [ "$status" -ne 0 ] && [ ! -e "$error_file" ]; then
+    record_failure 'The update could not be installed. The previous app was restored.'
+  fi
   if [ "$status" -ne 0 ] && [ -d "$backup_app" ]; then
     if [ -e "$current_app" ]; then
       /bin/mv "$current_app" "$work_dir/failed.app" || true
@@ -133,6 +165,7 @@ rollback() {
   exit "$status"
 }
 trap rollback EXIT
+report "Installing $expected_version…"
 /usr/bin/ditto "$staged_app" "$incoming_app"
 verify_app "$incoming_app"
 [ ! -L "$current_app" ] && [ -d "$current_app/Contents" ] || fail 'current app changed while waiting'
@@ -162,5 +195,6 @@ if [ -f "$pending_file" ] && [ "$(/usr/bin/plutil -extract release.version raw -
   /bin/rm -f "$pending_file"
 fi
 drop_staging
+report "Installed $expected_version."
 trap - EXIT
 exit 0

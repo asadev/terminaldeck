@@ -12,6 +12,7 @@ public enum NativeChatTranscriptParsing {
         public let dedupeKey: String
         public let sessionID: String?
         public let cwd: String?
+        public var providerMessageID: String? = nil
     }
 
     private static let cliTag = try! NSRegularExpression(pattern:
@@ -74,7 +75,7 @@ public enum NativeChatTranscriptParsing {
             guard !text.isEmpty else { return nil }
             let key = nonempty(message["id"]) ?? uuid ?? ""
             return Line(role: .agent, text: text, at: at, groupKey: key,
-                dedupeKey: "agent\u{0}\(key)\u{0}\(text)", sessionID: sessionID, cwd: cwd)
+                dedupeKey: "agent\u{0}\(key)\u{0}\(text)", sessionID: sessionID, cwd: cwd, providerMessageID: uuid)
         }
         let origin = (raw["origin"] as? [String: Any]).flatMap { nonempty($0["kind"]) }
         if let origin, origin != "human" { return nil }
@@ -91,7 +92,7 @@ public enum NativeChatTranscriptParsing {
         guard !text.isEmpty else { return nil }
         let key = uuid ?? String(format: "%.0f", at)
         return Line(role: .you, text: text, at: at, groupKey: key,
-            dedupeKey: "you\u{0}\(key)", sessionID: sessionID, cwd: cwd)
+            dedupeKey: "you\u{0}\(key)", sessionID: sessionID, cwd: cwd, providerMessageID: uuid)
     }
 }
 

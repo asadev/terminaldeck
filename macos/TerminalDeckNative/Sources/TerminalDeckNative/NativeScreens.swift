@@ -124,6 +124,7 @@ enum NativeScreens {
         case "general": return AnyView(NativeGeneralSettings())
         case "notifications": return AnyView(NativeNotificationsSettings())
         case "appearance": return AnyView(NativeAppearanceSettings())
+        case "privacy": return AnyView(NativePrivacySettings())
         case "advanced": return AnyView(NativeAdvancedSettings())
         case "help": return AnyView(NativeHelpSettings())
         case "plugins": return AnyView(NativePluginsSettings())

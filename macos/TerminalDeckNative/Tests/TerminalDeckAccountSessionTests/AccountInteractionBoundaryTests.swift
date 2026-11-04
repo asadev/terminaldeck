@@ -29,6 +29,19 @@ import TerminalDeckNativeCore
         XCTAssertFalse(NativeAccountSignInModel.canDrive("unknown"))
     }
 
+    /// 4 Nov (Asad's recording): Sign in on this Mac's own login opened a new chat. It now asks first (the Terminal
+    /// uses that login too) and then runs the AI's own sign-in; nothing starts before the person confirms.
+    func testSignInOnThisMacsOwnLoginAsksFirstAndStartsNothingBeforeThat() {
+        let model = NativeAccountSignInModel()
+        let own = CodingAIAccount(id: "system", name: "Default", provider: "claude", configDir: "/Users/me/.claude", system: true)
+        model.open(own)
+        XCTAssertEqual(model.confirmingOwnLogin?.id, "system")
+        XCTAssertNil(model.active); XCTAssertNil(model.problem)
+        model.confirmingOwnLogin = nil                       // Cancel: nothing was started
+        model.open(CodingAIAccount(id: "api-key-0123456789abcdef01234567", name: "Key", provider: "claude", authentication: "api-key"))
+        XCTAssertNil(model.confirmingOwnLogin); XCTAssertNil(model.active)
+    }
+
     func testSwitchErrorsKeepTheActualReason() {
         struct Refused: LocalizedError { var errorDescription: String? { "The selected account is locked." } }
         XCTAssertTrue(NativeAccountSwitcher.plain(Refused()).contains("The selected account is locked."))
