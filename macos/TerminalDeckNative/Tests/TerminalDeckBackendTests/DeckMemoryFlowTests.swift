@@ -635,6 +635,22 @@ final class DeckMemoryFlowTests: XCTestCase, @unchecked Sendable {
         await engine.stop()
     }
 
+    func testCodexChatDropsFlowCarriesChatCompletionToTheStoredBoard() async {
+        let clock = Clock(), store = Store(now: { Date(timeIntervalSince1970: clock.now() / 1000) }), runner = Runner([])
+        await store.set("0", DeckMemoryFlowKeys.tidyOn)
+        let engine = makeEngine(store, clock, runner)
+        await engine.start()
+        engine.post(.sessionSeen(.init(id: "codex-job", title: "Scratch chat", provider: "codex", project: "imatch", chat: true)))
+        engine.post(.sessionStatus(id: "codex-job", status: "input"))
+        engine.post(.sessionExit(id: "codex-job", code: 0))
+        engine.post(.sessionStatus(id: "codex-job", status: "completed"))
+        await engine.settle()
+        let rows = await store.board.filter { $0.id == "session:codex-job" }
+        XCTAssertEqual(rows.last?.doing, "Finished")
+        XCTAssertEqual(rows.last?.waitingForUser, "")
+        await engine.stop()
+    }
+
     func testTheBoardFollowsSessionEventsWithoutAnyAI() async {
         let clock = Clock(), store = Store(now: { Date(timeIntervalSince1970: clock.now() / 1000) }), runner = Runner([])
         await store.set("0", DeckMemoryFlowKeys.tidyOn)

@@ -456,7 +456,8 @@ public final class BackendHOSTClient: @unchecked Sendable {
         // 29 Oct (Asad: Send now failed "POSIX status 60"): Send now stops the answer, waits up to 10 s for the AI to
         // confirm, and may start it again before the message goes in; a send may start the AI. The reply comes when
         // that is done, so it is waited for, never cut off at 10 s while the helper goes on.
-        if request.operation == .resource, ["chats.steer", "chats.say"].contains(request.resourceMethod ?? "") { return 60_000 }
+        // Chat Enter reaches the same send through chats.type, including its interruption wait.
+        if request.operation == .resource, ["chats.steer", "chats.say", "chats.type"].contains(request.resourceMethod ?? "") { return 60_000 }
         if request.operation == .resource, ["chats.interrupt", "chats.stop"].contains(request.resourceMethod ?? "") { return 30_000 }
         return 10_000
     }

@@ -64,7 +64,7 @@ extension NativeCompositionProduction {
 
         let info: @Sendable (BackendSessionMeta) -> DeckMemoryFlowEngine.SessionInfo = { meta in
             .init(id: meta.id, title: meta.title, provider: meta.provider, cwd: meta.cwd, project: meta.resolvedProjectID,
-                  createdAt: meta.createdAt, status: meta.exitCode == nil ? nil : "exited")
+                  createdAt: meta.createdAt, status: meta.exitCode == nil ? nil : "exited", chat: meta.chat == true, exitCode: meta.exitCode)
         }
         var dependencies = DeckMemoryFlowEngine.Dependencies(
             store: { DeckMemoryFlowStoreAdapter(await DeckMemory.ready()) },

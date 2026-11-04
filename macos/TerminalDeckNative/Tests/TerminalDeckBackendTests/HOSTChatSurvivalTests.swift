@@ -113,6 +113,20 @@ struct HOSTChatSurvivalTests {
                 && events.contains { $0["value"]["text"].string == "Scratch job complete" }
         }
     }
+    @Test func codexChatDropsFinishedJobKeepsItsAnswerAndCleanExit() async throws {
+        let f = try await fixture(provider: "codex"), app = try await f.app()
+        defer { Task { await f.cleanup() } }
+        _ = try await app.say(f.session.id, text: "Finish this scratch job")
+        try f.release()
+        try await wait { f.manager.list().first { $0.id == f.session.id }?.exitCode == 0 }
+        let snapshot = try await app.read(f.session.id, cursor: nil, limit: 500)
+        #expect(BackendSessionChats.plainText(snapshot).contains("Scratch job complete"))
+        #expect(try await app.turn(f.session.id).state == .done(answer: "Scratch job complete"))
+        #expect(await app.conversation(f.session.id)?.isFinished == true)
+        #expect(f.manager.chatHostSnapshot(f.session.id)?.status == .completed)
+        #expect(f.manager.pidOf(f.session.id) == nil)
+        await app.endAllForQuit(); await f.cleanup()
+    }
     @Test(arguments: ["claude", "codex", "gemini"])
     func chatAttentionReceivesPermissionOutputAndCompletionWithoutAChatView(provider: String) async throws {
         let f = try await fixture(provider: provider, team: false), pushes = AttentionPushes()

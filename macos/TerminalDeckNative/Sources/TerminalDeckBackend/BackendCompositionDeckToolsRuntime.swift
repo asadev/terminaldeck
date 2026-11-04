@@ -94,7 +94,7 @@ public struct BackendCompositionDeckToolsScope: Sendable {
     /// catalogue.ts viewOf (L757-797) over the authoritative status receipts.
     func view(_ meta: BackendSessionMeta, core: BackendDeckCoreSecurityCallContext) async throws -> NativeRPCValue {
         let live = authority.statusRecord(meta.id)
-        let status = BackendDeckCoreAttention.status(exitCode: meta.exitCode, live: live?["status"].string)
+        let status = BackendDeckCoreAttention.status(exitCode: meta.exitCode, live: live?["status"].string, chat: meta.chat == true)
         let statusSince = live?["at"].number ?? meta.createdAt
         let attentionSince: Double? = meta.exitCode != nil && live == nil ? nil : statusSince
         let windows = try await browserSlots(meta.id, "")
@@ -102,7 +102,7 @@ public struct BackendCompositionDeckToolsScope: Sendable {
             ("provider", .string(meta.provider)), ("status", .string(status)), ("statusSince", .number(statusSince))])
             .merging(BackendDeckCoreAttention.view(status: status, statusSince: attentionSince, exitCode: meta.exitCode, now: core.now()))
             .merging(BackendDeckToolsSupport.object([
-                ("createdAt", .number(meta.createdAt)), ("exitCode", meta.exitCode.map { .number(Double($0)) } ?? .null),
+                ("createdAt", .number(meta.createdAt)), ("chat", .bool(meta.chat == true)), ("exitCode", meta.exitCode.map { .number(Double($0)) } ?? .null),
                 ("resumed", .bool(meta.resumed)), ("profileName", meta.profileName.map(NativeRPCValue.string) ?? .null),
                 // Only the copilot's: an app's session is never reported as the copilot's.
                 ("startedByCopilot", .bool(meta.origin != .app && core.startedByCopilot(meta.id))),

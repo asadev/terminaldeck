@@ -46,7 +46,7 @@ public enum BackendDeckCoreCatalogueBuiltins {
         let id = meta["id"].string ?? ""
         let live = surface.sessionStatus(id)
         let exitCode = meta["exitCode"].number.flatMap { Int(exactly: $0) }
-        let status = BackendDeckCoreAttention.status(exitCode: exitCode, live: live["status"].string)
+        let status = BackendDeckCoreAttention.status(exitCode: exitCode, live: live["status"].string, chat: meta["chat"].bool == true)
         let statusSince = live["at"].number ?? meta["createdAt"].number ?? 0
         let attentionSince = exitCode != nil && live.isNullish ? nil : statusSince
         return Rules.object([
@@ -54,7 +54,7 @@ public enum BackendDeckCoreCatalogueBuiltins {
             ("status", .string(status)), ("statusSince", .number(statusSince))
         ]).merging(BackendDeckCoreAttention.view(status: status, statusSince: attentionSince, exitCode: exitCode, now: context.now()))
             .merging(Rules.object([
-                ("createdAt", meta["createdAt"]), ("exitCode", meta["exitCode"]), ("resumed", .bool(meta["resumed"] == .bool(true))),
+                ("createdAt", meta["createdAt"]), ("chat", meta["chat"]), ("exitCode", meta["exitCode"]), ("resumed", .bool(meta["resumed"] == .bool(true))),
                 ("profileName", meta["profileName"].isNullish ? .null : meta["profileName"]),
                 ("startedByCopilot", .bool(meta["origin"] != .string("app") && context.startedByCopilot(id))),
                 ("startedByApp", meta["origin"] == .string("app") ? (meta["originApp"].isNullish ? .string("An AI app") : meta["originApp"]) : .null),
@@ -121,7 +121,7 @@ public enum BackendDeckCoreCatalogueBuiltins {
         }
         let sessions = surface.listSessions()
         if let clash = sessions.first(where: { $0["cwd"].string == cwd && $0["exitCode"] == .null && context.startedByCopilot($0["id"].string ?? "") }) {
-            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have a session running in \(cwd) (\(clash["id"].string ?? "")). Two agents in one working tree overwrite each other's edits and nothing can tell afterwards which one made which change. Use that session, or stop it first.")
+            throw BackendDeckCoreSecurityRefusal(.notPermitted, "You already have a session running in \(cwd) (\(clash["id"].string ?? "")). This guard prevents two of your agents editing the same working folder. projectId independent changes where the session is listed; it does not give it a separate folder. Use the existing session, wait for it to finish, or start the other job in a separate git worktree added through projects_add. Stop the existing session only if you mean to end its work.")
         }
         let live = sessions.filter { $0["exitCode"] == .null && context.startedByCopilot($0["id"].string ?? "") }
         guard live.count < maxCopilotSessions else {

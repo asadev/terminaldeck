@@ -183,7 +183,7 @@ extension NativeCompositionProduction {
                 guard let device else { return .init(rememberTab: true) }
                 return .init(deviceBoundary: try await joins.deviceBoundary(deviceID: device, folder: cwd), rememberTab: true)
             }, agentRecords: agentRecordLocator(),
-            statusChange: { id, milliseconds in await authority.nextStatusChange(id, milliseconds: milliseconds) })
+            statusChange: { id, milliseconds in await authority.nextStatusChange(id, milliseconds: milliseconds) }, chats: sessionChats)
         #if TD_HOST_ACCOUNT_BRIDGE
         let controlAccess = BackendCompositionDeckToolsAgentControls.Access(
             write: { id, data in _ = try? sessions.manager.write(id, data: data) },

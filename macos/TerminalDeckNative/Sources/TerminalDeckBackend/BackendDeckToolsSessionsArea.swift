@@ -19,6 +19,17 @@ public enum BackendDeckToolsSessionsArea {
         }
         return value
     }
+    static func screenText(_ id: String, chat: NativeRPCValue?, surface: any BackendDeckToolsSessionsSurface,
+                           context: BackendMCPCallContext) async throws -> String? {
+        guard let chat else { return try await surface.screen(sessionID: id, context: context) }
+        var text = BackendSessionChats.plainText(chat)
+        for request in chat["pending"].elements ?? [] {
+            let name = request["name"].string ?? request["subtype"].string ?? "Question or permission"
+            let requestID = request["requestId"].string ?? "unknown"
+            text += "\n\nWaiting for an answer: " + name + " (request " + requestID + "). Read pending below; answer through sessions_chat with do: answer."
+        }
+        return text
+    }
     static func knownFolder(_ path: String, runtime: any BackendDeckToolsSessionsRuntime, context: BackendMCPCallContext) async throws -> String {
         let known = try await runtime.knownFolders(context), local = try await runtime.caller(context).kind == .local
         do { return try BackendDeckCoreCatalogueBuiltins.requireKnownFolder(path, known: Set(known), local: local) }
@@ -68,7 +79,7 @@ public enum BackendDeckToolsSessionsArea {
                     if context.cancellation.isCancelled || Task.isCancelled { throw CancellationError() }
                     let now = clock.now()
                     guard let meta = try await runtime.sessions(context).first(where: { $0["id"].string == id }) else { outcome = "stopped"; break }
-                    if !meta["exitCode"].isNullish { outcome = "exited"; break }
+                    if !meta["exitCode"].isNullish { outcome = meta["chat"].bool == true && meta["exitCode"].number == 0 ? "finished" : "exited"; break }
                     let live = try await surface.status(sessionID: id, context: context)
                     let status = live?["status"].string ?? "idle"
                     if status == "input" { outcome = "blocked"; break }
@@ -93,11 +104,14 @@ public enum BackendDeckToolsSessionsArea {
                     return .init(summary.setting("note", .string(outcomeNote(outcome))), summary: summary)
                 }
                 let answer = try await latestAnswer(meta, runtime: runtime, surface: surface, context: context)
-                let screen = outcome == "blocked" || answer == nil ? try await surface.screen(sessionID: id, context: context) : nil
+                let needsScreen = outcome == "blocked" || answer == nil
+                let chat = needsScreen ? try await surface.chatSnapshot(sessionID: id, context: context) : nil
+                let screen = needsScreen ? (try await screenText(id, chat: chat, surface: surface, context: context)) : nil
                 let capped = Rules.capScreen(screen ?? "")
                 var value = object([("sessionId", .string(id)), ("outcome", .string(outcome)), ("attention", meta["attention"]), ("attentionReason", meta["attentionReason"]),
                     ("status", meta["status"]), ("waitedMs", .number(waited)), ("answer", answer?.setting("afterSend", .bool((answer?["at"].number ?? 0) > after)) ?? .null),
                     ("screen", outcome == "blocked" || answer == nil ? .string(capped.text) : .null), ("note", .string(outcomeNote(outcome)))])
+                if let chat { value = value.setting("pending", chat["pending"]).setting("source", .string("chat")) }
                 if capped.partial { value = value.setting("screenPartial", .bool(true)) }
                 return .init(value, summary: summary.setting("status", meta["status"]))
             case "sessions.keys":
@@ -106,15 +120,26 @@ public enum BackendDeckToolsSessionsArea {
                 try await authorize(entry, tier: own ? .act : .alter, summary: "Press \(keys.map(\.label).joined(separator: ", ")) in session \(sid)", args: args, runtime: runtime, context: context)
                 let held = try await session(Args.str(args, "sessionId"), runtime: runtime, context: context), id = held["id"].string ?? ""
                 if !held["exitCode"].isNullish { throw bad("session \(id) has already exited; there is nothing to press keys in") }
+                // A Chat approval is a structured request, never a terminal prompt answered by y + Enter.
+                if let chat = try await surface.chatSnapshot(sessionID: id, context: context),
+                   chat["pending"].elements?.isEmpty == false, keys.contains(where: { $0.bytes != "\u{3}" && $0.bytes != "\u{1b}" }) {
+                    throw bad("This chat is waiting for a permission or question answer. Read pending with sessions_screen or sessions_chat with do: read, then use sessions_chat with do: answer and its request id. Typing y and Enter would send a new message and interrupt the work. Nothing was typed.")
+                }
                 let sentAt = clock.now()
                 try await BackendDeckToolsSessionsTyping.pressKeys(write: { data in try await surface.write(sessionID: id, data: data, context: context) }, keys: keys, sleep: clock.sleep)
                 return .init(object([("sessionId", .string(id)), ("pressed", .array(keys.map { .string($0.label) })), ("sentAt", .number(sentAt))]), summary: object([("sessionId", .string(id)), ("keys", .array(keys.map { .string($0.name) }))]))
             case "sessions.screen":
                 try await authorize(entry, summary: "Read the screen of session \(sid)", args: args, runtime: runtime, context: context)
                 let held = try await session(Args.str(args, "sessionId"), runtime: runtime, context: context), id = held["id"].string ?? ""
-                let raw = try await surface.screen(sessionID: id, context: context), capped = Rules.capScreen(raw ?? "")
+                let chat = try await surface.chatSnapshot(sessionID: id, context: context)
+                let raw = try await screenText(id, chat: chat, surface: surface, context: context), capped = Rules.capScreen(raw ?? "")
                 var value = object([("sessionId", .string(id)), ("attention", held["attention"]), ("status", held["status"]), ("screen", .string(capped.text)), ("partial", .bool(capped.partial))])
-                if raw == nil { value = value.setting("note", .string("This session’s screen is no longer being read; it has ended.")) }
+                if let chat { value = value.setting("source", .string("chat")).setting("pending", chat["pending"]) }
+                if raw == nil {
+                    value = value.setting("note", .string(held["exitCode"].isNullish
+                        ? "The screen is unavailable. This does not mean the session has ended."
+                        : "This session has ended; its terminal screen is unavailable."))
+                }
                 return .init(value, summary: object([("sessionId", .string(id)), ("chars", .number(Double(capped.text.utf16.count)))]))
             case "sessions.rename":
                 let title = try Rules.title(args)

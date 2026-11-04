@@ -3,8 +3,9 @@ import TerminalDeckNativeCore
 
 public enum BackendDeckCoreAttention {
     public static let order = ["blocked": 0, "done": 1, "quiet": 2, "running": 3]
-    public static func status(exitCode: Int?, live: String?) -> String {
-        exitCode == nil ? (live ?? "idle") : "exited"
+    public static func status(exitCode: Int?, live: String?, chat: Bool = false) -> String {
+        guard let exitCode else { return live ?? "idle" }
+        return chat ? (exitCode == 0 ? "completed" : "failed") : "exited"
     }
     public static func view(status: String, statusSince: Double?, exitCode: Int?, now: Double) -> NativeRPCValue {
         let pair: (String, String)
@@ -12,7 +13,8 @@ public enum BackendDeckCoreAttention {
         case "input": pair = ("blocked", "question-unanswered")
         case "working": pair = ("running", "output-streaming")
         case "waiting": pair = ("quiet", "prompt-ready")
-        case "completed": pair = ("done", "turn-finished")
+        case "completed": pair = ("done", exitCode == 0 ? "job-finished" : "turn-finished")
+        case "failed": pair = ("done", "process-failed")
         case "exited": pair = ("done", exitCode != nil && exitCode != 0 ? "process-failed" : "process-exited")
         default: pair = ("quiet", "no-output")
         }

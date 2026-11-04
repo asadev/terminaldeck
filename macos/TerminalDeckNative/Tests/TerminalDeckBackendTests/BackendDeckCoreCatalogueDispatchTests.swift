@@ -12,6 +12,31 @@ final class BackendDeckCoreCatalogueDispatchTests: XCTestCase {
         return .init(native: native, caller: caller, callID: "row-1", attended: true, granted: nil, sessionLimits: .missing,
             now: { 1_000_000 }, startedByCopilot: { started.contains($0) }, noteStarted: { _ in })
     }
+    func testCodexChatDropsSuccessfulAndFailedJobsKeepTheirOutcome() {
+        let surface = BackendDeckCoreCatalogueDispatchTestSurface()
+        let meta = surface.session(id: "job", cwd: "/work").setting("chat", .bool(true))
+        let done = Builtins.viewOf(surface: surface, context: context(), metadata: meta.setting("exitCode", .number(0)))
+        XCTAssertEqual(done["status"], .string("completed"))
+        XCTAssertEqual(done["attention"], .string("done"))
+        XCTAssertEqual(done["attentionReason"], .string("job-finished"))
+        XCTAssertEqual(done["chat"], .bool(true))
+        let failed = Builtins.viewOf(surface: surface, context: context(), metadata: meta.setting("exitCode", .number(1)))
+        XCTAssertEqual(failed["status"], .string("failed"))
+        XCTAssertEqual(failed["attentionReason"], .string("process-failed"))
+        XCTAssertEqual(BackendDeckCoreAttention.status(exitCode: 0, live: "input"), "exited", "terminal exits keep their existing meaning")
+    }
+    func testCodexChatDropsIndependentDoesNotBypassWorkingFolderGuard() throws {
+        let surface = BackendDeckCoreCatalogueDispatchTestSurface()
+        surface.sessions = [surface.session(id: "mine", cwd: "/work")]
+        let args = Rules.object([("cwd", .string("/work")), ("projectId", .string("independent"))])
+        XCTAssertThrowsError(try Builtins.checkStart(surface: surface, context: context(started: ["mine"]), arguments: args)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("does not give it a separate folder"))
+            XCTAssertTrue(error.localizedDescription.contains("separate git worktree"))
+            XCTAssertTrue(error.localizedDescription.contains("wait for it to finish"))
+        }
+        surface.sessions[0] = surface.sessions[0].setting("exitCode", .number(0))
+        XCTAssertNoThrow(try Builtins.checkStart(surface: surface, context: context(started: ["mine"]), arguments: args))
+    }
     func testMissingDependenciesFailInsteadOfReturningEmptySuccess() async throws {
         let surface = BackendDeckCoreCatalogueDispatchTestSurface()
         do {

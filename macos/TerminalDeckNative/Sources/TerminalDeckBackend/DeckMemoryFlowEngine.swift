@@ -16,9 +16,11 @@ public actor DeckMemoryFlowEngine {
         /// Milliseconds since 1970.
         public var createdAt: Double
         public var status: String?
-        public init(id: String, title: String, provider: String, cwd: String = "", project: String = "", createdAt: Double = 0, status: String? = nil) {
+        public var chat: Bool
+        public var exitCode: Int?
+        public init(id: String, title: String, provider: String, cwd: String = "", project: String = "", createdAt: Double = 0, status: String? = nil, chat: Bool = false, exitCode: Int? = nil) {
             self.id = id; self.title = title; self.provider = provider; self.cwd = cwd; self.project = project
-            self.createdAt = createdAt; self.status = status
+            self.createdAt = createdAt; self.status = status; self.chat = chat; self.exitCode = exitCode
         }
     }
     public struct Dependencies: Sendable {
@@ -331,7 +333,7 @@ public actor DeckMemoryFlowEngine {
         let title = displayTitle(id, stamp: stamp, names: [turn?.title, info?.title, known?.title])
         await learnSeat(stamp.owner)
         if known == nil {
-            await write(board.sessionSeen(.init(id: id, title: title, provider: provider, stamp: stamp, status: info?.status ?? "started")))
+            await write(board.sessionSeen(.init(id: id, title: title, provider: provider, stamp: stamp, status: info?.status ?? "started", exitCode: info?.exitCode, chat: info?.chat ?? false)))
         } else {
             await write(board.sessionStamped(id: id, stamp: stamp))
             await write(board.sessionRenamed(id: id, title: title))

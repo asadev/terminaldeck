@@ -92,6 +92,11 @@ public actor BackendCoordinatedSessionLaunch {
     }
     #endif
     public func create(_ input: BackendCreateSessionInput, context: BackendLaunchContext = BackendLaunchContext()) async throws -> Result {
+        try await BackendAGSLaunchBinding.retryingSelection {
+            try await self.createWithSelection(input, context: context)
+        }
+    }
+    private func createWithSelection(_ input: BackendCreateSessionInput, context: BackendLaunchContext) async throws -> Result {
         #if TD_HOST_ACCOUNT_BRIDGE
         return try await BackendHOSTMixedLeaseRoute.$hosted.withValue((input.chat == true && chatSurvival && context.deviceBoundary == nil && context.appFenceID == nil && !context.isAppComposed) || BackendHOSTMixedLeaseRoute.eligible(input, context)) {
             try await createRouted(input, context: context)

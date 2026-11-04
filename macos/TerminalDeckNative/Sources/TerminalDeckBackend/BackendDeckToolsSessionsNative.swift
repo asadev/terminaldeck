@@ -96,6 +96,7 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
     private let cancelArmed: @Sendable (String, BackendMCPCallContext) async throws -> Bool
     private let launchContext: @Sendable (String?, String, BackendMCPCallContext) async throws -> BackendLaunchContext
     private let agentRecords: BackendDeckCoreAgentRecords.Locate?
+    private let chats: BackendSessionChats?
     private let nextStatus: (@Sendable (String, Int) async -> Bool)?
     public init(lifecycle: BackendSessionLifecycleCoordinator, rpc: BackendSessionLifecycleRPC, profiles: BackendHOSTDeckToolsSessionsNativeProfiles,
                 cost: BackendCostService, search: BackendSessionSearchService, insights: BackendInsightsService,
@@ -108,10 +109,12 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
                 cancelArmed: @escaping @Sendable (String, BackendMCPCallContext) async throws -> Bool,
                 launchContext: @escaping @Sendable (String?, String, BackendMCPCallContext) async throws -> BackendLaunchContext,
                 agentRecords: BackendDeckCoreAgentRecords.Locate? = nil,
-                statusChange: (@Sendable (String, Int) async -> Bool)? = nil) {
+                statusChange: (@Sendable (String, Int) async -> Bool)? = nil,
+                chats: BackendSessionChats? = nil) {
         self.lifecycle = lifecycle; self.rpc = rpc; self.profiles = profiles; self.cost = cost; searchService = search; insightsService = insights
         self.context = context; signal = statusRecord; self.planLimits = planLimits; renamed = announceRenamed; switched = tellSwitched
         view = sessionView; self.cancelArmed = cancelArmed; self.launchContext = launchContext; self.agentRecords = agentRecords
+        self.chats = chats
         nextStatus = statusChange
     }
     public func statusChange(sessionID: String, milliseconds: Int, context: BackendMCPCallContext) async -> Bool {
@@ -122,6 +125,11 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
     }
     public func status(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? { try await signal(sessionID, context) }
     public func screen(sessionID: String, context: BackendMCPCallContext) async throws -> String? { lifecycle.manager.screen(sessionID) }
+    public func chatSnapshot(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? {
+        guard lifecycle.manager.list().contains(where: { $0.id == sessionID && $0.chat == true }) else { return nil }
+        guard let chats else { throw BackendDeckToolsSupport.unavailable("The chat reader") }
+        return try await chats.read(sessionID, cursor: nil, limit: 500)
+    }
     public func write(sessionID: String, data: String, context: BackendMCPCallContext) async throws { try await lifecycle.write(sessionID: sessionID, data: data) }
     public func rename(sessionID: String, title: String, context: BackendMCPCallContext) async throws -> String? {
         guard try await lifecycle.rename(sessionID: sessionID, title: title) else { return nil }

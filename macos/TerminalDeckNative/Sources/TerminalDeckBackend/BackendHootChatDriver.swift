@@ -94,7 +94,11 @@ public actor BackendHootChatDriver: BackendCopilotSessionDriving, BackendHootCha
         #endif
     }
     public func start(_ input: BackendCreateSessionInput, fence: BackendCopilotSessionFence?, extraArguments: [String]) async throws -> BackendSessionMeta {
-        try await scoped { try await self.startUnscoped(input, fence: fence, extraArguments: extraArguments) }
+        try await scoped {
+            try await BackendAGSLaunchBinding.retryingSelection {
+                try await self.startUnscoped(input, fence: fence, extraArguments: extraArguments)
+            }
+        }
     }
     private func startUnscoped(_ input: BackendCreateSessionInput, fence: BackendCopilotSessionFence?, extraArguments: [String]) async throws -> BackendSessionMeta {
         #if TD_HOST_ACCOUNT_BRIDGE

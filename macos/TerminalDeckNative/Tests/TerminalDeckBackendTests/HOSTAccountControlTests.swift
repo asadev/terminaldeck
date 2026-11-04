@@ -102,6 +102,38 @@ final class HOSTAccountControlTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(Set(results).count, 1)
         let profiles = try await fixture.service.accounts.profiles.list(); XCTAssertEqual(profiles.filter { $0.name == "Once only" }.count, 1)
     }
+
+    func testHotfixNewSessionDefaultLoginDiffersAcrossReadAndReservationAfterEachKeeperStart() async throws {
+        for _ in 0..<2 {
+            let fixture = try await fixture()
+            let home = fixture.service.configuration.homeDirectory
+            let bin = home.appendingPathComponent(".local/bin")
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+            let executable = bin.appendingPathComponent("claude")
+            try Data("#!/bin/sh\necho fixture-cli\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            let remembered = Data(#"{"oauthAccount":{"emailAddress":"scratch@example.invalid"}}"#.utf8)
+            try remembered.write(to: home.appendingPathComponent(".claude.json"))
+            let folder = fixture.root.appendingPathComponent("existing-login")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try remembered.write(to: folder.appendingPathComponent(".claude.json"))
+            let profiles = await fixture.service.accounts.profiles
+            let saved = try await profiles.create(name: "Existing scratch login", provider: "claude", configDir: folder.path, vaultManaged: false)
+            fixture.executor.signedOutSystem = true
+            // The facade has its approved read receipt. The final account reservation does not.
+            let prepared = try await invoke(fixture, channel: "host.profiles.resolve", args: [.object([.init("provider", .string("claude"))])])
+            XCTAssertEqual(prepared["id"].string, saved.id)
+            let provider = BackendProviderSpec(id: "claude", command: executable.path, args: [], resumeArgs: [])
+            let input = BackendCreateSessionInput(cwd: folder.path, provider: "claude")
+            let unpinned = try await fixture.service.accounts.resolve(input, provider: provider, loginPath: bin.path, context: .init(isAppComposed: true))
+            XCTAssertEqual(unpinned.profile?.id, "system", "This is the production split that caused the refusal")
+            await fixture.service.accounts.abandon(unpinned)
+            var pinned = input; pinned.profileId = prepared["id"].string
+            let selected = try await fixture.service.accounts.resolve(pinned, provider: provider, loginPath: bin.path, context: .init(isAppComposed: true))
+            XCTAssertEqual(selected.profile?.id, saved.id)
+            await fixture.service.accounts.abandon(selected)
+        }
+    }
     func testWireCallerAndRequestArgumentsCannotReplaceOriginalRetainedContext() async throws {
         let fixture = try await fixture(), original = NativeRPCContext(caller: .page, ownerID: "unregistered-page", capabilities: ["files.write"])
         let request = try fixture.app.begin(channel: "profiles:create", arguments: [.string("Never create")], context: original)
@@ -281,11 +313,19 @@ private final class HOSTAccountRequestBox: @unchecked Sendable {
 }
 private final class HOSTAccountProbeExecutor: BackendAppSessionCommandExecuting, @unchecked Sendable {
     private let lock = NSLock(); private var calls: [(String, [String: String])] = []
+    private var systemIsOut = false
+    var signedOutSystem: Bool {
+        get { lock.withLock { systemIsOut } }
+        set { lock.withLock { systemIsOut = newValue } }
+    }
     var count: Int { lock.withLock { calls.count } }
     var command: String? { lock.withLock { calls.last?.0 } }
     var environment: [String: String]? { lock.withLock { calls.last?.1 } }
     func run(_ command: String, arguments: [String], environment: [String: String], cwd: String, timeoutMilliseconds: Int, maximumBytes: Int) async -> BackendAppSessionCommandResult {
         lock.withLock { calls.append((command, environment)) }
+        if signedOutSystem, environment["CLAUDE_CONFIG_DIR"] == nil {
+            return .init(stdout: "{\"loggedIn\":false}", exitCode: 1)
+        }
         return .init(stdout: "{\"loggedIn\":true,\"email\":\"scratch@example.invalid\"}", exitCode: 0)
     }
     func detach(_ command: String, arguments: [String], environment: [String: String], cwd: String) async throws { throw BackendHOSTFailure.unavailable }

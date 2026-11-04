@@ -65,6 +65,10 @@ public struct BackendAGSLaunchBinding: Sendable {
                 knownServers: measured.serverNames.union(nativeServerNames), overridable: measured.codexConfigured.map { $0.union(nativeServerNames) }, requestedOff: requestedOff)
             var launched = input
             launched.provider = measured.provider.id
+            // Default Claude can resolve to a saved login during the authorized profile read. The
+            // keeper's later reservation has no profile-read receipt, so resolving the default again
+            // can return the system login instead. Carry the measured choice through that boundary.
+            launched.profileId = measured.loginID
             // AGS owns these scalar argv now; legacy instructions must not emit a second copy.
             launched.model = nil; launched.allowedTools = nil
             launched.deniedTools = nil; launched.permissionMode = nil
@@ -94,7 +98,7 @@ public struct BackendAGSLaunchBinding: Sendable {
             // Recheck the original authorized choice. Account-disabled servers are added to
             // prepared.settings during preparation; those restrictions are not a changed user choice.
             try await authorize(originalInput, prepared.requestedSettings)
-            try await facts.recheck(prepared.facts, input: originalInput, context: context)
+            try await facts.recheck(prepared.facts, input: prepared.input, context: context)
             guard let generated = generatedServers.fields, generated.allSatisfy({ BackendAGSSelectedAccountFacts.validName($0.key) && $0.value.fields != nil }) else {
                 throw BackendAGSSelectedAccountFacts.unavailable("The generated native MCP configuration is incomplete.")
             }
@@ -153,10 +157,22 @@ public struct BackendAGSLaunchBinding: Sendable {
         try await prepared.lease.bind(session.id)
     }
     public func abandon(_ prepared: BackendAGSPreparedLaunch) async { await prepared.lease.abandon() }
+    /// A changed selection needs a fresh authorized plan and fresh leases, never a weaker final check.
+    /// Callers unwind their failed transaction before this makes one more attempt.
+    public static func retryingSelection<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        do { return try await operation() }
+        catch is SelectionChanged {
+            try Task.checkCancellation()
+            return try await operation()
+        }
+    }
+    struct SelectionChanged: LocalizedError {
+        var errorDescription: String? { "The selected provider or login changed after agent settings preparation." }
+    }
     /// The launcher calls this after resolving the real account/seat and before spawn.
     public static func requireAccount(_ prepared: BackendAGSPreparedLaunch, actual: BackendAccountLaunch, provider: BackendProviderSpec) throws {
         guard provider.command == prepared.facts.provider.command, provider.id == prepared.facts.provider.id,
-              actual.profile == nil || actual.profile?.id == prepared.facts.loginID else { throw BackendAGSSelectedAccountFacts.unavailable("The selected provider or login changed after agent settings preparation.") }
+              actual.profile == nil || actual.profile?.id == prepared.facts.loginID else { throw SelectionChanged() }
         let key = BackendAccountProfile.configEnvironment(prepared.settings.provider)
         let effective = key.flatMap { actual.environment[$0] ?? prepared.facts.environment[$0] }
         if let effective, URL(fileURLWithPath: effective).standardizedFileURL.path != URL(fileURLWithPath: prepared.facts.account.configDir).standardizedFileURL.path {

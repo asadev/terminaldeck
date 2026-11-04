@@ -36,6 +36,7 @@ public protocol BackendDeckToolsSessionsRuntime: Sendable {
 public protocol BackendDeckToolsSessionsSurface: Sendable {
     func status(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue?
     func screen(sessionID: String, context: BackendMCPCallContext) async throws -> String?
+    func chatSnapshot(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue?
     func write(sessionID: String, data: String, context: BackendMCPCallContext) async throws
     func rename(sessionID: String, title: String, context: BackendMCPCallContext) async throws -> String?
     func held(context: BackendMCPCallContext) async throws -> [NativeRPCValue]
@@ -62,6 +63,7 @@ public protocol BackendDeckToolsSessionsSurface: Sendable {
     func statusChange(sessionID: String, milliseconds: Int, context: BackendMCPCallContext) async -> Bool
 }
 public extension BackendDeckToolsSessionsSurface {
+    func chatSnapshot(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? { nil }
     func agentRecord(session: NativeRPCValue, windowBytes: Int, context: BackendMCPCallContext) async -> BackendDeckCoreAgentRecord? { nil }
     func statusChange(sessionID: String, milliseconds: Int, context: BackendMCPCallContext) async -> Bool { false }
 }

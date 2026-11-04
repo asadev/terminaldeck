@@ -42,6 +42,9 @@ final class BackendDeckToolsSessionsPortClock: @unchecked Sendable {
 /// as the TS tests. It contains no duplicated tool parsing/gating implementation.
 actor BackendDeckToolsSessionsPortRig: BackendDeckToolsSessionsRuntime, BackendDeckToolsSessionsSurface, BackendDeckToolsSessionsLiftRequests {
     typealias V = BackendDeckToolsSessionsPortValues
+    var chatSnapshots: [String: NativeRPCValue] = [:]
+    func setChatSnapshot(_ snapshot: NativeRPCValue, id: String = "s1") { chatSnapshots[id] = snapshot }
+    func chatSnapshot(sessionID: String, context: BackendMCPCallContext) -> NativeRPCValue? { chatSnapshots[sessionID] }
     var rows = [V.row(), V.row("s2", cwd: "/work/web")]
     var own = Set<String>(), gates: [(BackendMCPTier, String, NativeRPCValue)] = [], calls: [(String, NativeRPCValue)] = [], noted: [String] = []
     var callerIdentity = BackendDeckToolsSessionsCaller(kind: .local, callID: "call-1"), allowedFolders: Set<String> = ["/work/api", "/work/web"], grantedDeviceFolders: [String]? = ["/work/web"]

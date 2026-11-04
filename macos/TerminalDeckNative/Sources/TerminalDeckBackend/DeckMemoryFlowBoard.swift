@@ -13,9 +13,10 @@ public struct DeckMemoryFlowBoard: Sendable {
         public var stamp: DeckMemoryStamp
         /// working | input | completed | idle | waiting | exited | started
         public var status: String
+        public var chat: Bool
         public var exitCode: Int?
-        public init(id: String, title: String, provider: String, stamp: DeckMemoryStamp, status: String = "started", exitCode: Int? = nil) {
-            self.id = id; self.title = title; self.provider = provider; self.stamp = stamp; self.status = status; self.exitCode = exitCode
+        public init(id: String, title: String, provider: String, stamp: DeckMemoryStamp, status: String = "started", exitCode: Int? = nil, chat: Bool = false) {
+            self.id = id; self.title = title; self.provider = provider; self.stamp = stamp; self.status = status; self.exitCode = exitCode; self.chat = chat
         }
     }
     public struct Changes: Sendable {
@@ -50,13 +51,15 @@ public struct DeckMemoryFlowBoard: Sendable {
         self.projectName = projectName; self.projectOf = projectOf
     }
 
-    public static func doing(_ status: String, exitCode: Int? = nil) -> String {
+    public static func doing(_ status: String, exitCode: Int? = nil, chat: Bool = false) -> String {
         switch status {
         case "started": return "Started"
         case "working": return "Working"
         case "input": return "Waiting for you"
         case "completed": return "Finished its turn"
-        case "exited": return (exitCode ?? 0) == 0 ? "Stopped" : "Stopped with an error (code \(exitCode ?? 0))"
+        case "exited":
+            if chat, let exitCode { return exitCode == 0 ? "Finished" : "Failed (code \(exitCode))" }
+            return (exitCode ?? 0) == 0 ? "Stopped" : "Stopped with an error (code \(exitCode ?? 0))"
         default: return "Idle"
         }
     }
@@ -73,7 +76,7 @@ public struct DeckMemoryFlowBoard: Sendable {
         return rows(for: next)
     }
     public mutating func sessionStatus(id: String, status: String) -> Changes {
-        guard var session = sessions[id], session.status != status else { return Changes() }
+        guard var session = sessions[id], session.exitCode == nil, session.status != status else { return Changes() }
         let settles = Self.settlingStates.contains(session.status) && Self.settlingStates.contains(status)
         session.status = status
         if status != "exited" { session.exitCode = nil }
@@ -160,7 +163,7 @@ public struct DeckMemoryFlowBoard: Sendable {
         if session.status == "input" { waiting = "Needs your answer in the session (a permission or a question)."; ownWaiting.insert(row) }
         else if ownWaiting.remove(row) != nil { waiting = "" }
         let update = DeckMemoryBoardUpdate(id: DeckMemoryFlowNames.sessionRow(session.id), kind: .session, stamp: session.stamp,
-            title: session.title, doing: Self.doing(session.status, exitCode: session.exitCode), waitingForUser: waiting)
+            title: session.title, doing: Self.doing(session.status, exitCode: session.exitCode, chat: session.chat), waitingForUser: waiting)
         if note(update) { changes.updates.append(update) }
         changes.updates += related(to: session)
         return changes
