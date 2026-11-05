@@ -222,7 +222,18 @@ internal sealed partial class WorkspaceSurface : Grid
       var shape = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab", Margin = new(-flare, 0, -flare, 0), IsHitTestVisible = false, Visibility = Selected() ? Visibility.Visible : Visibility.Collapsed };
       shape.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, WorkspacePaper.For(tab, session(tab)));
       SetColumnSpan(shape, 2); chip.Children.Add(shape);
-      void Shape() => shape.Data = WorkspaceTabShape.Outline(chip.ActualWidth, chip.Height, (double)Application.Current.Resources["DeckTabCorner"], flare);
+      // The fill alone barely differs from the tab strip (terminal paper on the
+      // top bar is #E8E8E8 on #E9E9EE in the light theme), so the selected tab
+      // also gets a rim.
+      var rim = new Microsoft.UI.Xaml.Shapes.Path { Tag = "selected-tab-rim", Margin = shape.Margin, IsHitTestVisible = false, StrokeThickness = 1, Visibility = shape.Visibility };
+      rim.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.StrokeProperty, "DeckTabRimBrush");
+      SetColumnSpan(rim, 2); chip.Children.Add(rim);
+      void Shape()
+      {
+        var corner = (double)Application.Current.Resources["DeckTabCorner"];
+        shape.Data = WorkspaceTabShape.Outline(chip.ActualWidth, chip.Height, corner, flare);
+        rim.Data = WorkspaceTabShape.Edge(chip.ActualWidth, chip.Height, corner, flare);
+      }
       chip.SizeChanged += (_, _) => Shape();
       chip.PointerEntered += (_, _) => { if (!Selected()) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckHoverBrush"); };
       chip.PointerExited += (_, _) => chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
@@ -351,7 +362,7 @@ internal sealed partial class WorkspaceSurface : Grid
       chipStyles[tab.Id] = () =>
       {
         var on = Selected();
-        shape.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        shape.Visibility = rim.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         divider.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
         if (on) chip.Background = (Brush)ShellTheme.Resource(chip, "DeckTransparentBrush");
         title.FontWeight = on ? Microsoft.UI.Text.FontWeights.Medium : Microsoft.UI.Text.FontWeights.Normal;
