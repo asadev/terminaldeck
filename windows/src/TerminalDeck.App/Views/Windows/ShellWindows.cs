@@ -58,7 +58,9 @@ public sealed partial class ShellWindow
     browser.Core.ResolveDriverName = grant => Runtime.Agents.Runs().FirstOrDefault(r => r.SessionId == grant.SessionId)?.AgentName ?? TerminalDeck.Core.Browser.BrowserModel.DriverLabel(grant);
     browser.ShellChanged += () => { SyncWindows(); QueueVisibleBrowserViews(); };
     browser.ShellSelected += RevealBrowserWindow;
-    windowState.Changed += () => { if (!syncingWindows) { RenderWindows(); UpdateSidebarSessions(); } };
+    // The sidebar lists sessions, not which tab is selected: refreshing it can
+    // wait for the frame that shows a change, and several changes share one refresh.
+    windowState.Changed += () => { if (!syncingWindows) { RenderWindows(); UpdateSidebarSessionsSoon(); } };
     _ = new WorkspaceTitleBar(this, Root, TitleBarRow, CaptionSpace);
     AppWindow.Closing += (_, args) =>
     {
@@ -390,14 +392,48 @@ public sealed partial class ShellWindow
     if (tab.Kind == "browser") _ = SelectBrowserForShellAsync(tab.Subject);
     if (tab.Host != "main") return;
     workspaceOwner = owner;
-    if (tab.Kind == "browser" && owner != "browser" && Model.Sessions.FirstOrDefault(s => s.Id == owner) is { } parent) Model.Select(parent);
-    else if (tab.Kind != "browser" && Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject) is { } row)
+    // The panes render from workspaceOwner alone. When the window already shows
+    // sessions (a tab switch), the selection's bookkeeping (the view model's
+    // Selected, which re-syncs windows and the sidebar, read marks, the account
+    // chip, navigation) waits until the frame showing the new tab is drawn.
+    if (Model.Page is ShellPage.Sessions or ShellPage.Browser) AfterNextFrame(Follow); else Follow();
+    void Follow()
     {
-      if (Model.Selected != row || Model.Page != ShellPage.Sessions) Model.Select(row);
+      if (!windowState.Tabs.Any(t => t.Id == id)) return;
+      if (tab.Kind == "browser" && owner != "browser" && Model.Sessions.FirstOrDefault(s => s.Id == owner) is { } parent) Model.Select(parent);
+      else if (tab.Kind != "browser" && Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject) is { } row)
+      {
+        if (Model.Selected != row || Model.Page != ShellPage.Sessions) Model.Select(row);
+      }
+      else if (Model.Page is not (ShellPage.Sessions or ShellPage.Browser)) Model.Page = owner == "browser" ? ShellPage.Browser : ShellPage.Sessions;
+      Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.MarkRead();
+      RefreshAccountChip(); SyncNavigation();
     }
-    else if (Model.Page is not (ShellPage.Sessions or ShellPage.Browser)) Model.Page = owner == "browser" ? ShellPage.Browser : ShellPage.Sessions;
-    Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.MarkRead();
-    RefreshAccountChip(); SyncNavigation();
+  }
+  // Work that only follows what is on screen runs once the next frame has been
+  // drawn: Rendering fires as a frame starts, so the second call comes after the
+  // frame that shows the change. Subscribing also makes sure that frame happens.
+  private readonly List<Action> afterFrame = [];
+  private void AfterNextFrame(Action work)
+  {
+    afterFrame.Add(work);
+    if (afterFrame.Count > 1) return;
+    var frames = 0;
+    void Tick(object? sender, object args)
+    {
+      if (++frames < 2) return;
+      Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= Tick;
+      var pending = afterFrame.ToArray(); afterFrame.Clear();
+      foreach (var item in pending) item();
+    }
+    Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += Tick;
+  }
+  private bool sidebarPending;
+  private void UpdateSidebarSessionsSoon()
+  {
+    if (sidebarPending) return;
+    sidebarPending = true;
+    AfterNextFrame(() => { sidebarPending = false; UpdateSidebarSessions(); });
   }
   private void RevealBrowserWindow(string id)
   {
