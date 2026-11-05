@@ -174,7 +174,7 @@ public sealed partial class ShellWindow
     var record = Runtime.Sessions.FirstOrDefault(s => s.Definition.Id == tab.Subject)?.Definition;
     var provider = record?.Provider ?? Runtime.Chats?.List().FirstOrDefault(c => c.Definition.Id == tab.Subject)?.Definition.Provider;
     if (record?.ServerId is not null) return null;
-    var meters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+    var meters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
     meters.Children.Add(new TerminalDeck.App.Views.Usage.DesktopResourceMeter(Runtime));
     if (TerminalDeck.App.Views.Usage.UsageMeter.Applies(provider, false))
       meters.Children.Add(new TerminalDeck.App.Views.Usage.UsageMeter(Runtime.Usage, tab.Subject, provider!));
