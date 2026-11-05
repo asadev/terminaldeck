@@ -824,7 +824,16 @@ internal sealed partial class WorkspaceSurface : Grid
     var id = ids[(Math.Max(0, Array.IndexOf(ids, active)) + delta + ids.Length) % ids.Length];
     if (panes) { state.Focus(id, owner, Host); focus(owner, id); FocusPane(id); } else Select(id);
   }
-  private async void Guard(Func<Task> work) { try { await work(); } catch (Exception ex) when (ex is not OutOfMemoryException) { notice(ex is ArgumentException or InvalidOperationException ? ex.Message : "The window action could not finish. Try again."); } }
+  // An unexpected failure keeps its details in logs/errors.log; the notice alone gives nothing to go on.
+  private async void Guard(Func<Task> work)
+  {
+    try { await work(); }
+    catch (Exception ex) when (ex is not OutOfMemoryException)
+    {
+      if (ex is not (ArgumentException or InvalidOperationException)) UiRecovery.Log("Window action", ex);
+      notice(ex is ArgumentException or InvalidOperationException ? ex.Message : "The window action could not finish. Try again.");
+    }
+  }
   private void AddShortcut(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
   {
     foreach (var target in new UIElement[] { this, Header })
