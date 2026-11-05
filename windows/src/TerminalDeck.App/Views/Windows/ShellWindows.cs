@@ -313,7 +313,12 @@ public sealed partial class ShellWindow
   {
     if (!Ready.IsCompletedSuccessfully || mainSurface is null || renderingWindows || syncingWindows || renderBatch > 0 || proofChatVisible || closingShell || Model.Page == ShellPage.Settings) return;
     // What the tab chips show, apart from which one is selected.
-    var tabsStructure = JsonSerializer.Serialize(new { page = Model.Page, tabs = windowState.Tabs, identities = Model.Sessions.Select(s => new { s.Id, s.ProjectId, s.PictureUri, colour = Runtime.Projects.List().FirstOrDefault(p => p.Id == s.ProjectId)?.Colour, badge = windowState.Tabs.FirstOrDefault(t => t.Subject == s.Id) is { } tab ? WindowAccountBadge(tab) : null }), browserIdentity = windowState.Tabs.Where(t => t.Kind == "browser").Select(t => browser.ShellIdentity(t.Subject)) });
+    // The sessions and browser pages share one tab strip and one pane surface:
+    // moving between them (a browser window, then a session tab) must not count
+    // as a new strip, or each such click rebuilt every chip, including the one
+    // being pressed, and dropped every retained pane.
+    var page = Model.Page is ShellPage.Sessions or ShellPage.Browser ? "workspace" : Model.Page.ToString();
+    var tabsStructure = JsonSerializer.Serialize(new { page, tabs = windowState.Tabs, identities = Model.Sessions.Select(s => new { s.Id, s.ProjectId, s.PictureUri, colour = Runtime.Projects.List().FirstOrDefault(p => p.Id == s.ProjectId)?.Colour, badge = windowState.Tabs.FirstOrDefault(t => t.Subject == s.Id) is { } tab ? WindowAccountBadge(tab) : null }), browserIdentity = windowState.Tabs.Where(t => t.Kind == "browser").Select(t => browser.ShellIdentity(t.Subject)) });
     var structure = JsonSerializer.Serialize(new { scope = Scope, roots = windowState.Layouts.Select(l => new { l.Owner, l.Host, l.Root }) }) + tabsStructure;
     if (renderedWindowsStructure == structure) { mainSurface.UpdateFocus(); foreach (var child in detached.Values) child.Surface.UpdateFocus(); QueueVisibleBrowserViews(); return; }
     // A tab switch changes the scope or layout but not the tabs: rebuilding every
@@ -392,11 +397,13 @@ public sealed partial class ShellWindow
     if (tab.Kind == "browser") _ = SelectBrowserForShellAsync(tab.Subject);
     if (tab.Host != "main") return;
     workspaceOwner = owner;
-    // The panes render from workspaceOwner alone. When the window already shows
-    // sessions (a tab switch), the selection's bookkeeping (the view model's
-    // Selected, which re-syncs windows and the sidebar, read marks, the account
-    // chip, navigation) waits until the frame showing the new tab is drawn.
-    if (Model.Page is ShellPage.Sessions or ShellPage.Browser) AfterNextFrame(Follow); else Follow();
+    // On the sessions page the panes render from workspaceOwner alone, so the
+    // selection's bookkeeping (the view model's Selected, which re-syncs windows
+    // and the sidebar, read marks, the account chip, navigation) waits until the
+    // frame showing the new tab is drawn. Any other page, the browser page
+    // included, renders from Model.Page, which that bookkeeping moves back to
+    // sessions: deferring it there drew the old page for the click.
+    if (Model.Page == ShellPage.Sessions) AfterNextFrame(Follow); else Follow();
     void Follow()
     {
       if (!windowState.Tabs.Any(t => t.Id == id)) return;
