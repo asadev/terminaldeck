@@ -63,27 +63,37 @@ final class BackendAgentStartupTests: XCTestCase, @unchecked Sendable {
                 while not os.path.exists('ready-gate'): time.sleep(0.01)
                 if provider=='claude':
                     reply={'type':'control_response','response':{'subtype':'success','request_id':row['request_id'],'response':{}}}
+                elif provider=='gemini':
+                    # What the Gemini CLI's ACP mode answers (protocol 1; prompt context and HTTP tools advertised).
+                    reply={'id':row['id'],'result':{'protocolVersion':1,'agentCapabilities':{'loadSession':True,
+                        'promptCapabilities':{'image':True,'embeddedContext':True},'mcpCapabilities':{'http':True}}}}
                 else: reply={'id':row['id'],'result':{}}
                 print(json.dumps(reply),flush=True)
             elif method=='thread/start':
                 print(json.dumps({'id':row['id'],'result':{'thread':{'id':'scratch-thread'}}}),flush=True)
-            elif method=='turn/start' or row.get('type')=='user':
+            elif method=='session/new':
+                print(json.dumps({'id':row['id'],'result':{'sessionId':'scratch-session'}}),flush=True)
+            elif method in ('turn/start','session/prompt') or row.get('type')=='user':
                 open('brief-received','w').close()
         """#
         let store = try BackendHootChatStore(file: root.appendingPathComponent("chat.json"), provider: provider)
         try await store.attach(.init(command: "/usr/bin/python3", arguments: ["-u", "-c", script, provider.rawValue],
             cwd: root.path, environment: ["HOME": root.path], setup: .init(cwd: root.path)))
         let starting = Task { try await store.initialize() }
+        // R14 (6 Nov): the brief sent while the AI is still starting waits for its handshake, the same way for every
+        // AI; it is never written into setup and never refused. Once written, its receipt proves it.
+        var brief: Task<NativeRPCValue, Error>?
         do {
             try await waitForFile(root.appendingPathComponent("initializing"))
-            do {
-                _ = try await store.say("must not be delivered to setup")
-                XCTFail("A brief was sent before the structured handshake completed")
-            } catch let error as NativeRPCError { XCTAssertEqual(error.code, "starting") }
+            brief = Task { try await store.say("the exact startup brief", clientMessageID: "startup-brief") }
+            try await Task.sleep(for: .milliseconds(300))
             XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("brief-received").path))
+            let setup = try String(contentsOf: root.appendingPathComponent("inputs.jsonl"), encoding: .utf8)
+            XCTAssertFalse(setup.contains("the exact startup brief"), "A brief was sent before the structured handshake completed")
             try Data().write(to: root.appendingPathComponent("ready-gate"))
             try await starting.value
-            let receipt = try await store.say("the exact startup brief", clientMessageID: "startup-brief")
+            let receipt = try await XCTUnwrap(brief).value
+            XCTAssertNotEqual(receipt["queued"].bool, true)
             XCTAssertEqual(receipt["startup"]["ready"].bool, true)
             XCTAssertEqual(receipt["delivery"]["state"].string, "written")
             XCTAssertEqual(receipt["delivery"]["evidence"].string, "stdin-write-completed")
@@ -92,8 +102,12 @@ final class BackendAgentStartupTests: XCTestCase, @unchecked Sendable {
             try await waitForFile(root.appendingPathComponent("brief-received"))
             let inputs = try String(contentsOf: root.appendingPathComponent("inputs.jsonl"), encoding: .utf8)
             XCTAssertEqual(inputs.components(separatedBy: "the exact startup brief").count - 1, 1)
-            XCTAssertFalse(inputs.contains("must not be delivered to setup"))
+            // A second message while the brief's turn runs joins the same saved queue for every AI.
+            let second = try await store.say("a second message", clientMessageID: "second-message")
+            XCTAssertEqual(second["queued"].bool, true)
+            XCTAssertFalse(try String(contentsOf: root.appendingPathComponent("inputs.jsonl"), encoding: .utf8).contains("a second message"))
         } catch {
+            brief?.cancel()
             starting.cancel()
             await store.stop()
             throw error
@@ -109,6 +123,10 @@ final class BackendAgentStartupTests: XCTestCase, @unchecked Sendable {
 
     func testClaudeBriefWaitsForStructuredHandshakeAndReturnsWriteEvidence() async throws {
         try await exerciseStructuredReadiness(.claude)
+    }
+
+    func testGeminiBriefWaitsForStructuredSessionAndReturnsWriteEvidence() async throws {
+        try await exerciseStructuredReadiness(.gemini)
     }
 
     private final class SetupSurface: BackendDeckCoreBriefSurface, @unchecked Sendable {

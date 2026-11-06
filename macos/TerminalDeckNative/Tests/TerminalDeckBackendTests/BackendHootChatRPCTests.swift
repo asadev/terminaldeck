@@ -273,7 +273,9 @@ final class BackendHootChatRPCTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(codex.setup?.session["config"]["mcp_servers"]["deck-control"]["http_headers"]["Authorization"].string, "scratch-only")
         let gemini = try BackendHootChatLaunchPlan(provider: .gemini, cwd: root.path, sessionID: nil, extra: ["--approval-mode", "plan", "-c", #"developer_instructions="Gemini profile""#] + common)
         XCTAssertEqual(gemini.arguments, ["--acp", "--approval-mode", "plan"])
-        XCTAssertEqual(gemini.setup?.instructions, "Gemini profile\n\nHoot contract\n\n" + ChatMarkdown.instruction)
+        // 6 Nov: on Gemini the drawing instruction is an optional extra, so a CLI without prompt context still starts.
+        XCTAssertEqual(gemini.setup?.instructions, "Gemini profile\n\nHoot contract")
+        XCTAssertEqual(gemini.setup?.optionalInstructions, ChatMarkdown.instruction)
         XCTAssertEqual(gemini.setup?.session["mcpServers"].elements?.first?["headers"].elements?.first?["value"].string, "scratch-only")
         XCTAssertThrowsError(try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: nil, extra: ["--disallowedTools", "Write"]))
         let claude = try BackendHootChatLaunchPlan(provider: .claude, cwd: root.path, sessionID: nil,
@@ -284,5 +286,37 @@ final class BackendHootChatRPCTests: XCTestCase, @unchecked Sendable {
         } else { XCTFail("The drawing instruction must reach Claude.") }
         XCTAssertTrue(claude.arguments.contains("--append-system-prompt-file"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("config.toml").path))
+    }
+    /// 6 Nov: the rich-chat drawing instruction never stops a Gemini chat from starting. A CLI that advertises prompt
+    /// context gets it beside the profile's and folder's instructions; one that does not starts without it. Those
+    /// required instructions keep their rule: refused rather than silently dropped.
+    func testGeminiDrawingInstructionIsOptionalAndNeverBlocksTheStart() throws {
+        func started(_ setup: BackendHootChatSetup, embedded: Bool) throws -> BackendHootChatRPC {
+            var rpc = BackendHootChatRPC(provider: .gemini, setup: setup)
+            let request = try rpc.begin(id: "hello", resume: nil)
+            let capabilities = embedded ? #"{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"embeddedContext":true}}}"#
+                                        : #"{"protocolVersion":1,"agentCapabilities":{}}"#
+            let next = try XCTUnwrap(rpc.receive(reply(request["id"], json(capabilities))).send.last)
+            XCTAssertTrue(try rpc.receive(reply(next["id"], json(#"{"sessionId":"session"}"#))).ready)
+            return rpc
+        }
+        let drawing = BackendHootChatSetup(cwd: "/scratch", optionalInstructions: "Draw with fenced blocks.")
+        var older = try started(drawing, embedded: false)
+        let plain = try older.user("hello", attachments: [], id: "p1")
+        XCTAssertEqual(plain["params"]["prompt"].elements?.count, 1)
+        XCTAssertFalse(plain.compact.contains("Draw with fenced blocks."))
+        var current = try started(drawing, embedded: true)
+        let rich = try current.user("hello", attachments: [], id: "p2")
+        XCTAssertEqual(rich["params"]["prompt"].elements?.first?["resource"]["text"].string, "Draw with fenced blocks.")
+        var both = try started(.init(cwd: "/scratch", instructions: "Profile rules", optionalInstructions: "Draw with fenced blocks."), embedded: true)
+        let combined = try both.user("hello", attachments: [], id: "p3")
+        XCTAssertEqual(combined["params"]["prompt"].elements?.first?["resource"]["text"].string, "Profile rules\n\nDraw with fenced blocks.")
+        var refused = BackendHootChatRPC(provider: .gemini, setup: .init(cwd: "/scratch", instructions: "Profile rules", optionalInstructions: "Draw"))
+        let hello = try refused.begin(id: "h", resume: nil)
+        XCTAssertThrowsError(try refused.receive(reply(hello["id"], json(#"{"protocolVersion":1,"agentCapabilities":{}}"#))))
+        // The setup crosses to the session host: a setup without the optional key (an older app) still decodes.
+        let encoded = try JSONEncoder().encode(BackendHootChatSetup(cwd: "/scratch", instructions: "x"))
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("optionalInstructions"))
+        XCTAssertEqual(try JSONDecoder().decode(BackendHootChatSetup.self, from: encoded).optionalInstructions, "")
     }
 }

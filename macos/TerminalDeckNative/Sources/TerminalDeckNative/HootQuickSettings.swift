@@ -52,8 +52,8 @@ struct HootAccountMenu: View {
                     ForEach(group.accounts) { account in
                         Button { brain.selectAccount(account.id, provider: group.provider) } label: {
                             if account.id == brain.currentAccountID, group.provider == brain.chosenProvider {
-                                Label(CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(account.id, fallback: account.name), provider: group.provider), systemImage: "checkmark")
-                            } else { Text(CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(account.id, fallback: account.name), provider: group.provider)) }
+                                Label(NativeChatAccountNames.shared.label(account.id, fallback: account.name, provider: group.provider), systemImage: "checkmark")
+                            } else { Text(NativeChatAccountNames.shared.label(account.id, fallback: account.name, provider: group.provider)) }
                             if CodingAILogins.normalizedEmail(account.name) != nil { Text(account.name).font(.caption) }
                         }
                     }
@@ -63,11 +63,11 @@ struct HootAccountMenu: View {
             Divider()
             Button("Add account…", action: addAccount)
         } label: {
-            DeckRowLabel(CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(brain.currentAccountID, fallback: brain.currentAccountName), provider: brain.chosenProvider), image: DeckRowIcon.provider(brain.chosenProvider)).labelStyle(.titleAndIcon)
+            DeckRowLabel(NativeChatAccountNames.shared.label(brain.currentAccountID, fallback: brain.currentAccountName, provider: brain.chosenProvider), image: DeckRowIcon.provider(brain.chosenProvider)).labelStyle(.titleAndIcon)
         }
         .fixedSize()
         .help(brain.currentAccountName)
-        .accessibilityLabel("Hoot's account: " + CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(brain.currentAccountID, fallback: brain.currentAccountName), provider: brain.chosenProvider))
+        .accessibilityLabel("Hoot's account: " + NativeChatAccountNames.shared.label(brain.currentAccountID, fallback: brain.currentAccountName, provider: brain.chosenProvider))
         .task(id: EngineBridge.shared.isReady) { await NativeChatAccountNames.shared.start() }
     }
 }

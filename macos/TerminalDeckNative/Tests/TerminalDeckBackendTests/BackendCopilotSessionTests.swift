@@ -231,7 +231,9 @@ final class BackendCopilotSessionTests: XCTestCase {
     func testExactChannelsAndLegacyHomeScopeSurviveRemovalOfOldJail() async throws {
         let (root, runtime, _, _, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
         // Each Hoot operation has one canonical route, including steering and child-stop.
-        let expected = ["hoot:ensure", "hoot:files", "hoot:read-composed", "hoot:read-contract", "hoot:read-folder-instructions", "hoot:read-instructions", "hoot:reset-instructions", "hoot:signin", "hoot:state", "hoot:stop", "hoot:write-folder-instructions", "hoot:write-instructions", "hoot:chat:read", "hoot:chat:say", "hoot:chat:steer", "hoot:chat:child-stop", "hoot:chat:stop", "hoot:chat:answer", "hoot:chat:options", "hoot:chat:new"]
+        let expected = ["hoot:ensure", "hoot:files", "hoot:read-composed", "hoot:read-contract", "hoot:read-folder-instructions", "hoot:read-instructions", "hoot:reset-instructions", "hoot:signin", "hoot:state", "hoot:stop", "hoot:write-folder-instructions", "hoot:write-instructions", "hoot:chat:read", "hoot:chat:say", "hoot:chat:steer", "hoot:chat:child-stop", "hoot:chat:stop", "hoot:chat:answer", "hoot:chat:options", "hoot:chat:new",
+            // b1a97421 (6 Nov): Hoot's Fork has its own route.
+            "hoot:chat:fork"]
         XCTAssertEqual(BackendCopilotSessionRuntime.channels.sorted(), expected.sorted())
         let scope = BackendCopilotSessionRuntime.homeScope(userData: root.path)
         XCTAssertEqual(scope.home, root.appendingPathComponent("remote/device-home/copilot").path)

@@ -22,7 +22,11 @@ struct BackendCopilotRemoteWiringTests: Sendable {
         #expect(await recorder.all(.copilotChat).isEmpty)
         let named = URL(fileURLWithPath: directory).appendingPathComponent("phone.jsonl")
         try Data("{\"type\":\"assistant\",\"uuid\":\"phone\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"PONG\"}]}}\n".utf8).write(to: named)
-        let frame = await recorder.next(.copilotChat)
+        guard let frame = await recorder.next(.copilotChat, within: .seconds(30)) else {
+            await watcher.stop()
+            Issue.record("No transcript update within 30 s of the named transcript being written")
+            return
+        }
         #expect(frame.value["messages"].elements?.first?["text"].string == "PONG")
         #expect(!frame.value.compact.contains("private desktop conversation"))
         await watcher.stop()

@@ -280,9 +280,30 @@ public enum CodingAIAccountLabels {
         return text.isEmpty ? CodingAICatalog.label(provider ?? "claude") : text
     }
 
+    /// The name an agent's own install has until somebody renames it: "Default", "Default (Codex CLI)",
+    /// "Default (Gemini CLI)" (the catalogue's labels). `BackendAccountProfile.generatedSystemName` is this.
+    public static func generatedName(_ provider: String?) -> String {
+        let provider = provider ?? "claude"
+        return provider == "claude" ? "Default" : "Default (\(CodingAICatalog.label(provider)))"
+    }
+
+    /// A name somebody chose. An install's generated name, an older host's "Default (Codex)", or its own key is not
+    /// one (the phones' `chosenAccountName`, the same rule).
     public static func hasChosenName(_ account: CodingAIAccount) -> Bool {
-        !account.name.isEmpty && (!isGenerated(account) ||
-            !["Default", "Default (Codex)", "Default (Gemini)"].contains(account.name))
+        let name = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return false }
+        guard isGenerated(account) else { return true }
+        let folded = name.lowercased()
+        return !(name == account.id || name == generatedName(account.provider) || folded == "default" || folded.hasPrefix("default ("))
+    }
+
+    /// R9 (6 Nov): what a chat calls a login, as the phones do. The chosen name, else the signed-in address, both
+    /// compact (an address shows only the part before "@"); else which install it is. Never a generated "Default".
+    public static func chatLabel(_ account: CodingAIAccount, _ signIn: CodingAISignIn?) -> String {
+        if hasChosenName(account) { return chatName(account.name, provider: account.provider) }
+        if let address = accountLabel(signIn) { return chatName(address, provider: account.provider) }
+        let label = profileLoginLabel(account, signIn)
+        return label.isEmpty ? chatName("", provider: account.provider) : label
     }
 
     /// `profileLoginLabel`: the address, else a chosen name, else which install.

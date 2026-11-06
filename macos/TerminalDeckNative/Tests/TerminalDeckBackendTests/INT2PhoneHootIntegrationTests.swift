@@ -245,7 +245,14 @@ struct INT2PhoneHootIntegrationTests {
             #expect(await first.wire.rows("hoot.events").count == 1)
             let initial = try #require(await first.wire.rows("hoot.events").last)
             #expect(initial["conversationId"].string == fixture.chat.conversationID)
-            #expect(initial["reset"].bool == true && initial["events"] == .array(fixture.seed))
+            // c5ffca0c (6 Nov): each phone Hoot event carries the store's own row actions (`value.historyActions`);
+            // apart from that it is the saved conversation exactly.
+            let events = initial["events"].elements ?? []
+            #expect(initial["reset"].bool == true && events.count == fixture.seed.count)
+            for (event, seed) in zip(events, fixture.seed) {
+                #expect(event["value"]["historyActions"].fields != nil)
+                #expect(event == seed.setting("value", seed["value"].setting("historyActions", event["value"]["historyActions"])))
+            }
             await fixture.host.closed(first.id)
             let second = try await fixture.connect()
             try await fixture.send(second, "hoot.attach")

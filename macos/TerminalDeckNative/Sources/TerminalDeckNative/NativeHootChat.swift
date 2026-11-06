@@ -2255,8 +2255,13 @@ struct HootMessageFrame<Content: View>: View {
             }
         }
         .font(.system(size: 10.5)).foregroundStyle(.secondary).buttonStyle(.plain)
-        .frame(height: 18).padding(.leading, trailing ? 0 : 38)
+        .frame(height: HootMessageRow.actionsHeight).padding(.leading, trailing ? 0 : 38)
     }
+}
+
+/// R2 (Asad, 6 Nov): Copy below every message. The one row of message actions under a message, this tall.
+enum HootMessageRow {
+    static let actionsHeight: CGFloat = 18
 }
 
 /// One icon-only message button with its quick tip.

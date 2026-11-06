@@ -344,7 +344,8 @@ import TerminalDeckPeer
         let endpoint = BackendRemoteHost(trust: trust, manager: manager, state: NativeStateStore(), home: "/var/empty",
             hostName: name, appVersion: version, privateRoots: ["/"], screenOnly: true)
         self.endpoint = endpoint
-        await endpoint.setLinkEngine(TerminalDeckPeerEngine())
+        // The keeper binary links WebRTC weakly. Inside the app bundle it is always loaded; never touch it when absent.
+        if TerminalDeckPeerLibrary.isLoaded { await endpoint.setLinkEngine(TerminalDeckPeerEngine()) }
         try Task.checkCancellation()
         let pointers = MacReachPointerCache()
         var source = BackendPhoneDevices.Source(list: { .object([.init("devices", .array([]))]) },

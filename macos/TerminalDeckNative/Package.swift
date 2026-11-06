@@ -63,11 +63,17 @@ let package = Package(
             name: "TerminalDeckSessionHostHelper",
             dependencies: ["TerminalDeckNativeCore", "TerminalDeckBackend", "TerminalDeckPeer"],
             swiftSettings: hostReleaseSettings,
+            // WebRTC is WEAK here (6 Nov, 0.21.3 stop): the app runs this keeper from a copy in its data folder
+            // (<data>/host/<version>/TerminalDeckNativeHelper, a stable path for privacy grants and app updates) with no
+            // framework beside it, so a strong link killed it in dyld. Only the Mac sign-in helper (--mac-reach-daemon)
+            // uses WebRTC, and launchd runs that from inside the app bundle; it checks TerminalDeckPeerLibrary.isLoaded.
+            // KeeperCopyOutLaunchTests fails if the keeper names any non-system library it cannot do without.
             linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Security"), .linkedFramework("IOKit"), .linkedFramework("SystemConfiguration"),
-                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", hostInfoPlist])]
+                .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", hostInfoPlist,
+                              "-Xlinker", "-weak_framework", "-Xlinker", "LiveKitWebRTC"])]
         ),
-        // stream-anywhere: the screen's direct connection (WebRTC data channels). Linked into the app only; the helpers
-        // and the session host never link WebRTC. Swift 5 mode: the library's Objective-C types carry no Sendable notes.
+        // stream-anywhere: the screen's direct connection (WebRTC data channels). Linked into the app; the session host
+        // links it weakly (above); the other helpers never link WebRTC. Swift 5 mode: the library's Objective-C types carry no Sendable notes.
         .target(name: "TerminalDeckPeer", dependencies: [
             "TerminalDeckBackend",
             .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),

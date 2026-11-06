@@ -159,10 +159,12 @@ struct ChatSendNowTests {
         do { _ = try await store.say("same words", clientMessageID: "failed-id"); Issue.record("Broken pipe accepted input") } catch {}
         let events = await store.snapshot()["events"].elements ?? []
         #expect(events.contains { $0["kind"].string == "user" && $0["value"]["text"].string == "same words" })
-        #expect(!events.contains { $0["value"]["clientMessageId"].string == "failed-id" })
+        // 4087fc85: the user row names its id before the write; only `deliveryConfirmed` is a delivery receipt.
+        func receipt(_ event: NativeRPCValue) -> Bool { event["value"]["clientMessageId"].string == "failed-id" && event["value"]["deliveryConfirmed"].bool == true }
+        #expect(!events.contains(where: receipt))
         await store.stop()
         let reloaded = try BackendHootChatStore(file: file)
-        #expect(!(await reloaded.snapshot()["events"].elements ?? []).contains { $0["value"]["clientMessageId"].string == "failed-id" })
+        #expect(!(await reloaded.snapshot()["events"].elements ?? []).contains(where: receipt))
     }
 
     /// The app waits for the helper's answer to Send now (stop, confirm, maybe start again), never cutting it off at 10 s.

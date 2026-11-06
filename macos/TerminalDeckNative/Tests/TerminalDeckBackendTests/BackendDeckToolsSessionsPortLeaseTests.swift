@@ -179,7 +179,10 @@ import TerminalDeckNativeCore
         for id in ["browser.open", "browser.read", "browser.step", "browser.screenshot", "browser.handover", "browser.close"] {
             XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(id)); XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(id.replacingOccurrences(of: ".", with: "_")))
         }
-        for id in ["sessions.start", "sessions_start", "sessions.send", "sessions_send", "report", "brief"] { XCTAssertFalse(BackendDeckToolsSessionsGrants.ordinary.contains(id)) }
+        // d58fd61f (5 Nov, bounded seat messaging): a seat may message sessions it can reach (BackendSessionDirectory.permits:
+        // its own project, or lead to lead), under the send's own approval tier. Starting, stopping and keys stay out.
+        for id in ["sessions.start", "sessions_start", "sessions.stop", "sessions_stop", "sessions.keys", "sessions_keys", "report", "brief"] { XCTAssertFalse(BackendDeckToolsSessionsGrants.ordinary.contains(id), id) }
+        for id in ["sessions.send", "sessions_send"] { XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(id), id) }
     }
     func testSessionToolsL651NeitherGrantReadsFillsOrEnumeratesCredentials() {
         for name in BackendDeckToolsSessionsGrants.ordinary.union(BackendDeckToolsSessionsGrants.elsewhere) {

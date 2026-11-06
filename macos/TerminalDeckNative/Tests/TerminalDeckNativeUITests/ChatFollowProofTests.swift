@@ -151,10 +151,13 @@ import TerminalDeckNativeCore
             scroll.contentView.scroll(to: .init(x: 0, y: 1_000_000)); scroll.reflectScrolledClipView(scroll.contentView); settle(host)
             try check("bottom-clamped")
             XCTAssertLessThanOrEqual(viewport.state.offset, viewport.state.maximumOffset + 0.5)
+            // R2 (Asad, 6 Nov): Copy sits below every message, so the last reply's one action row is under its last
+            // line on purpose. Beside that row, at most one line of space.
+            let actions = HootMessageRow.actionsHeight
             let proseGap = try glyphGap(host, viewport)
             let proseLine = NSLayoutManager().defaultLineHeight(for: NativeChatMarkdown.bodyFont)
             XCTAssertGreaterThanOrEqual(proseGap, 0)
-            XCTAssertLessThanOrEqual(proseGap, proseLine)
+            XCTAssertLessThanOrEqual(proseGap - actions, proseLine)
             measurements.append("\(name) literal-prose gap=\(proseGap) line=\(proseLine)")
             var codeEvents = final
             codeEvents.append(event(24, .text(.user, id: "code-question", "Show the code."), turn: "code"))
@@ -168,7 +171,7 @@ import TerminalDeckNativeCore
             let codeGap = try glyphGap(host, viewport)
             let codeLine = NSLayoutManager().defaultLineHeight(for: NSFont.monospacedSystemFont(ofSize: NativeChatMarkdown.bodyFont.pointSize * 0.92, weight: .regular))
             XCTAssertGreaterThanOrEqual(codeGap, 0)
-            XCTAssertLessThanOrEqual(codeGap, codeLine)
+            XCTAssertLessThanOrEqual(codeGap - actions, codeLine)
             measurements.append("\(name) literal-code gap=\(codeGap) line=\(codeLine)")
             try capture(host, name + "-completed-code")
             XCTAssertFalse(window.isVisible)

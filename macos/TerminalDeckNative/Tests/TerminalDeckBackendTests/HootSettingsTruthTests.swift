@@ -215,7 +215,12 @@ final class HootSettingsTruthTests: XCTestCase, @unchecked Sendable {
         let files = try FileManager.default.contentsOfDirectory(atPath: root.path)
         XCTAssertFalse(files.contains("AGENTS.md") || files.contains("GEMINI.md"), "Nothing is written into the folder")
         let empty = try scratch()
+        // No file, nothing of the folder's added. Since the rich chat (6 Nov) every chat carries the drawing instruction
+        // on purpose: Codex in its developer instructions, Gemini as an optional extra it can start without.
         let none = try BackendHootChatLaunchPlan(provider: .codex, cwd: empty.path, sessionID: nil, extra: [])
-        XCTAssertTrue(none.setup?.session["developerInstructions"].isNullish == true, "No file, nothing added")
+        XCTAssertEqual(none.setup?.session["developerInstructions"].string, ChatMarkdown.instruction, "No file, nothing of the folder's added")
+        let noneGemini = try BackendHootChatLaunchPlan(provider: .gemini, cwd: empty.path, sessionID: nil, extra: [])
+        XCTAssertEqual(noneGemini.setup?.instructions, "")
+        XCTAssertEqual(noneGemini.setup?.optionalInstructions, ChatMarkdown.instruction)
     }
 }

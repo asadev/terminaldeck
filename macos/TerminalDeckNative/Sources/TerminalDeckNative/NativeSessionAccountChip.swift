@@ -192,13 +192,17 @@ struct NativeLocalAccountChip: View {
         let sessionAgent = info?.provider == "shell" ? nil : (named?.provider ?? info?.provider)
         let switching = sessionAgent != nil
         let blocked = NewSessionProviders.isolationNotice(defaultProvider, apiAccountAvailable: rows.contains(where: \.isAPIKey))
+        // R9 (6 Nov): the account's chosen name, else the first part of its address, else which install; never "Default".
+        let sessionSignIn: CodingAISignIn? = knownEmail.map { CodingAISignIn(state: .signedIn, account: $0) } ?? currentId.flatMap { signIn[$0] }
+        let chipName = NativeChatAccountNames.shared.label(currentId, fallback: listed?.name ?? named?.name ?? identity.label,
+                                                           provider: mark, signIn: sessionSignIn)
         return Button {
             open.toggle()
         } label: {
             AccountChipLabel {
                 NativeCodingAIDot(token: names ? listed?.color : nil)
                 NativeCodingAIProviderMark(provider: mark, size: 13)
-                Text(names ? CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(currentId, fallback: listed?.name ?? named?.name ?? identity.label), provider: mark) : unnamed.label)
+                Text(names ? chipName : unnamed.label)
                     .help(knownEmail ?? identity.detail ?? "")
                     // `is-just-switched`: the name lit in the accent while "Switched to …" shows.
                     .foregroundStyle(switchNote?.lightsTheName == true ? Color.accentColor
@@ -267,7 +271,7 @@ struct NativeLocalAccountChip: View {
     private func row(_ account: CodingAIAccount, currentId: String?, switching: Bool, blocked: String?, from: String) -> some View {
         let state = signIn[account.id]
         let isCurrent = account.id == currentId
-        let login = CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(account.id, fallback: account.name), provider: account.provider)
+        let login = NativeChatAccountNames.shared.label(account.id, fallback: account.name, provider: account.provider, signIn: state)
         // Switching: the session's own account is the tick, not a choice. Otherwise (a shell's own agent) a pick
         // opens a new session on that account, unless the default coding tool holds one login only.
         let inert = switching ? isCurrent : blocked != nil

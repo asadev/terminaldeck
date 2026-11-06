@@ -219,15 +219,20 @@ private struct NativeChatCode: View {
                     copied = true
                 }.buttonStyle(.plain).font(.caption)
             }
+            // 6 Nov: the code's own line height and the card's one bottom margin inside the scroll area (scrolled code
+            // keeps it), so no empty band grows under the last line (it was 18 pt a line plus 8 pt).
             ScrollView([.horizontal, .vertical]) {
                 Text(NativeChatFindText.highlight(NativeChatSyntax.color(text), query: findQuery))
-                    .font(.system(size: NativeChatMarkdown.bodyFont.pointSize * 0.92, design: .monospaced))
+                    .font(.system(size: Self.fontSize, design: .monospaced))
                     .fixedSize(horizontal: true, vertical: true)
-            }.frame(height: min(320, CGFloat(text.components(separatedBy: "\n").count) * 18 + DeckTokens.Spacing.s8))
+                    .padding(.bottom, DeckTokens.Spacing.s12)
+            }.frame(height: min(320, CGFloat(text.components(separatedBy: "\n").count) * Self.lineHeight + DeckTokens.Spacing.s12))
         }
-        .padding(DeckTokens.Spacing.s12)
+        .padding([.top, .horizontal], DeckTokens.Spacing.s12)
         .background(DeckTokens.taskCard, in: .rect(cornerRadius: DeckTokens.Metrics.cardRadius))
     }
+    static let fontSize: CGFloat = NativeChatMarkdown.bodyFont.pointSize * 0.92
+    static let lineHeight: CGFloat = NSLayoutManager().defaultLineHeight(for: .monospacedSystemFont(ofSize: fontSize, weight: .regular))
 }
 
 /// Columns keep their readable width. Overflow belongs to the table, never the chat.

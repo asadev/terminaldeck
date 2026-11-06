@@ -113,6 +113,30 @@ struct CodingAIAccountModelTests {
         #expect(CodingAIAccountLabels.rowLabel(codex, signedOut) == "This Mac’s own Codex CLI login")
     }
 
+    /// R9 (6 Nov): a chat shows the account's name, never the generated "Default" and never a whole address, as the
+    /// phones do (AccountNaming): the chosen name, else the part of the signed-in address before "@", else the install.
+    @Test func chatShowsTheAccountsNameNeverDefault() {
+        let system = accounts[0], codex = accounts[1], gemini = accounts[2], work = accounts[3]
+        #expect(CodingAIAccountLabels.generatedName(nil) == "Default")
+        #expect(CodingAIAccountLabels.generatedName("codex") == codex.name)
+        #expect(CodingAIAccountLabels.generatedName("gemini") == gemini.name)
+        for install in [system, codex, gemini] { #expect(!CodingAIAccountLabels.hasChosenName(install), "\(install.name)") }
+        var older = codex; older.name = "Default (Codex)"           // an older host's generated name
+        #expect(!CodingAIAccountLabels.hasChosenName(older))
+        var renamed = system; renamed.name = "Studio login"
+        #expect(CodingAIAccountLabels.chatLabel(renamed, signedIn("app.imatch.ae@gmail.com")) == "Studio login")
+        #expect(CodingAIAccountLabels.chatLabel(system, signedIn("app.imatch.ae@gmail.com")) == "app.imatch.ae")
+        #expect(CodingAIAccountLabels.chatLabel(system, nil) == "Your own Claude Code install")
+        #expect(CodingAIAccountLabels.chatLabel(system, CodingAISignIn(state: .signedOut, account: "old@x.com")) == "Your own Claude Code install")
+        #expect(CodingAIAccountLabels.chatLabel(codex, signedIn(nil, plan: "ChatGPT")) == "Codex · signed in with ChatGPT")
+        #expect(CodingAIAccountLabels.chatLabel(work, nil) == "work")
+        // Two unnamed signed-in logins never read the same.
+        #expect(CodingAIAccountLabels.chatLabel(system, signedIn("a.one@x.com")) != CodingAIAccountLabels.chatLabel(codex, signedIn("b.two@y.com")))
+        for label in [CodingAIAccountLabels.chatLabel(system, nil), CodingAIAccountLabels.chatLabel(codex, nil), CodingAIAccountLabels.chatLabel(gemini, nil)] {
+            #expect(!label.hasPrefix("Default"), "\(label)")
+        }
+    }
+
     /// 4 Nov (Asad's recording): the Mac's own Claude Code login, signed out, was a row with "nothing" on it and
     /// its Sign in opened a new chat. It now says what it is and who was last signed in, and signs in by itself.
     @Test func thisMacsOwnLoginSaysWhatItIsWhenNobodyIsSignedIn() {

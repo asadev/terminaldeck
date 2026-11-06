@@ -167,6 +167,8 @@ public actor BackendHootChatStore {
     /// for, fails with this, never with a pipe error or a generic line (27 Oct).
     private var exitedWhileStarting: NativeRPCError?
     private var initializationTimeout: Task<Void, Never>?
+    /// R14 (6 Nov): messages sent while the AI is still starting, in the order they came, each waiting for its handshake.
+    private var startWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
     /// Current process evidence, never inferred from a saved conversation or a live PID.
     private var startupReceipt: NativeRPCValue = .null
     private var deliveryReceipt: NativeRPCValue = .null
@@ -971,10 +973,26 @@ public actor BackendHootChatStore {
                 .init("evidence", .string(provider == .claude ? "initialize-control-response" : "structured-session-ready")),
                 .init("at", .number(Date().timeIntervalSince1970 * 1000))])
         }
-        if let error { waiting?.resume(throwing: error) } else {
-            waiting?.resume()
-            Task { await self.drainQueuedMessages() }
-        }
+        if let error { waiting?.resume(throwing: error) } else { waiting?.resume() }
+        // Then the messages that waited for the handshake, in order: written now, or queued behind an answer.
+        let waiters = startWaiters; startWaiters = []
+        for waiter in waiters { if let error { waiter.continuation.resume(throwing: error) } else { waiter.continuation.resume() } }
+        if error == nil { Task { await self.drainQueuedMessages() } }
+    }
+    /// R14 (6 Nov): a message sent while the AI is still starting waits for its handshake (bounded by the handshake's own
+    /// time limit), the same way for Claude, Codex and Gemini. It is never written into setup and never refused for one
+    /// AI only; once the AI is ready it is written, or queued behind an answer, like any other message.
+    private func waitForStartup() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation(isolation: self) { continuation in
+                if initialization == nil { continuation.resume() } else { startWaiters.append((id, continuation)) }
+            }
+        }, onCancel: { Task { await self.cancelStartWaiter(id) } }, isolation: self)
+    }
+    private func cancelStartWaiter(_ id: UUID) {
+        guard let index = startWaiters.firstIndex(where: { $0.id == id }) else { return }
+        startWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
     /// `background`: a turn the app starts for Hoot (a task, a handoff). No user bubble; the turn's own
     /// records (turn id "bg:<reason>:<id>:…") stay out of the visible conversation, except its one compact line.
@@ -1044,6 +1062,8 @@ public actor BackendHootChatStore {
                 .init("attachments", .array(attachments)), .init("context", messageContext), .init("clientMessageId", .string(clientMessageID))])
             receiveHosted(result); return result
         }
+        guard !rebinding, !changingProviderHistory else { throw NativeRPCError(code: "busy", message: "Hoot is changing its idle AI. Keep this draft and send it again.") }
+        if !draining, initialization != nil, process?.alive == true { try await waitForStartup() }
         guard !rebinding, !changingProviderHistory else { throw NativeRPCError(code: "busy", message: "Hoot is changing its idle AI. Keep this draft and send it again.") }
         guard let process, process.alive else { throw NativeRPCError(code: "unavailable", message: "Start Hoot before sending a message.") }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,

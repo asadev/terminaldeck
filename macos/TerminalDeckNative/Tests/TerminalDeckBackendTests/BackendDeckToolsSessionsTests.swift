@@ -126,8 +126,13 @@ final class BackendDeckToolsSessionsTests: XCTestCase {
         XCTAssertThrowsError(try BackendDeckToolsSessionsRules.title(obj([("title", .string(String(repeating: "😀", count: 61)))])))
     }
     func testOrdinaryAndElsewhereGrantsKeepSessionDrivingAndCredentialsOut() {
-        for forbidden in ["sessions.send", "sessions_send", "sessions.start", "sessions_start", "report", "brief", "browser.password", "browser.lift", "devices.shutdown", "browser.extensions"] {
-            XCTAssertFalse(BackendDeckToolsSessionsGrants.ordinary.contains(forbidden)); XCTAssertFalse(BackendDeckToolsSessionsGrants.elsewhere.contains(forbidden))
+        // d58fd61f (5 Nov, bounded seat messaging): sessions.send is granted on purpose, in both grants, and still passes
+        // BackendSessionDirectory.permits and its approval tier. Starting, stopping, keys and credentials stay out.
+        for forbidden in ["sessions.start", "sessions_start", "sessions.stop", "sessions_stop", "sessions.keys", "sessions_keys", "report", "brief", "browser.password", "browser.lift", "devices.shutdown", "browser.extensions"] {
+            XCTAssertFalse(BackendDeckToolsSessionsGrants.ordinary.contains(forbidden), forbidden); XCTAssertFalse(BackendDeckToolsSessionsGrants.elsewhere.contains(forbidden), forbidden)
+        }
+        for messaging in ["sessions.send", "sessions_send"] {
+            XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(messaging)); XCTAssertTrue(BackendDeckToolsSessionsGrants.elsewhere.contains(messaging))
         }
         for name in BackendDeckToolsSessionsGrants.elsewhere { XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(name)) }
         for name in ["assets_fetch", "browser_network", "devices_tap", "memory_read", "knowledge_note"] { XCTAssertTrue(BackendDeckToolsSessionsGrants.ordinary.contains(name)); XCTAssertFalse(BackendDeckToolsSessionsGrants.elsewhere.contains(name)) }

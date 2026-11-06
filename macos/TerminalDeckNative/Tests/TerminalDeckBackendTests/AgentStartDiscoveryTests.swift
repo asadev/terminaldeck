@@ -163,8 +163,10 @@ final class AgentStartDiscoveryTests: XCTestCase {
         XCTAssertEqual(result["held"], .array([]))
         XCTAssertEqual(result["alreadyListed"], .array([]))
         XCTAssertEqual(result["unknown"], .missing)
+        // d58fd61f (5 Nov): one refusal for every session tool the seat is not allowed, naming where the owner allows it.
         let note = try XCTUnwrap(result["note"].string)
-        for label in ["Tools", "Allow only these tools", "Allowed tools", "Tools it must not use", "start a new session"] {
+        XCTAssertEqual(note, BackendSessionDirectory.toolRefusal)
+        for label in ["Agents", "Settings", "Allowed tools", "Blocked tools"] {
             XCTAssertTrue(note.contains(label), label)
         }
     }

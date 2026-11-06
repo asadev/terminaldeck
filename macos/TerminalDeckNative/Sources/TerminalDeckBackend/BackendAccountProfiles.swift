@@ -24,7 +24,7 @@ public struct BackendAccountProfile: Codable, Equatable, Sendable {
     public static func systemID(_ provider: String) -> String { provider == "claude" ? "system" : "system:" + provider }
     public static func systemProvider(_ id: String) -> String? { signInProviders.first { systemID($0) == id } }
     /// `generatedSystemName`: the name an agent's own install has until renamed.
-    public static func generatedSystemName(_ provider: String) -> String { provider == "claude" ? "Default" : "Default (\(providerLabel(provider)))" }
+    public static func generatedSystemName(_ provider: String) -> String { CodingAIAccountLabels.generatedName(provider) }
     public static func validSlot(_ value: String) -> Bool { value.range(of: "^(keychain|file|env):[A-Za-z0-9 ._-]{1,80}$", options: .regularExpression) != nil }
     public static func loginSlot(_ value: String) -> Bool { value.range(of: "^keychain:Claude Code(?:-[a-z]+)*-credentials$", options: .regularExpression) != nil }
 

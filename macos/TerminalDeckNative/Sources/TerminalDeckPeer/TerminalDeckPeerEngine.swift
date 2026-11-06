@@ -1,6 +1,12 @@
 import Foundation
 import TerminalDeckBackend
 
+/// Whether WebRTC is in this process. The session-host executable links it weakly: run from its copy in the data
+/// folder (no framework beside it) dyld leaves it out, and no WebRTC class may be touched there.
+public enum TerminalDeckPeerLibrary {
+    public static var isLoaded: Bool { NSClassFromString("LKRTCPeerConnectionFactory") != nil }
+}
+
 /// The app's WebRTC layer for the host's link (stream step 2, dc2): the Mac offers, the phone or browser answers.
 ///
 /// ICE servers: the device's OWN Cloudflare Realtime TURN login from our Worker (`POST /v1/turn {"device"}`, ≤ 1 h; one

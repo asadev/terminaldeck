@@ -77,7 +77,9 @@ final class HootToolNamesTests: XCTestCase {
         do { _ = try await registry.invoke("copilot:state", context: context, arguments: []); XCTFail("Legacy route still answered") }
         catch let error as NativeRPCError { XCTAssertEqual(error.code, "missing-handler") }
         XCTAssertEqual(Set(BackendHootChatChannels.invokes).count, BackendHootChatChannels.invokes.count)
-        XCTAssertEqual(BackendHootChatChannels.invokes.count, 8)
+        // 9 since b1a97421 (6 Nov): Hoot's Fork has its own route.
+        XCTAssertEqual(BackendHootChatChannels.invokes.count, 9)
+        XCTAssertTrue(BackendHootChatChannels.invokes.contains("hoot:chat:fork"))
     }
 
     /// 26 Oct 2026 (ec412557, accepted): TestFlight 0.20.0 phones still send Hoot's frames as `copilot.*`, and a

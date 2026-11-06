@@ -2,25 +2,33 @@ import Foundation
 import TerminalDeckNativeCore
 
 public struct BackendHootChatSetup: Codable, Sendable {
-    private enum CodingKeys: String, CodingKey { case cwd, session, expectedTools, instructions }
+    private enum CodingKeys: String, CodingKey { case cwd, session, expectedTools, instructions, optionalInstructions }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         cwd = try c.decode(String.self, forKey: .cwd)
         session = try NativeRPCValue.parseJSON(c.decode(Data.self, forKey: .session))
         expectedTools = try c.decode([String: Set<String>].self, forKey: .expectedTools)
         instructions = try c.decode(String.self, forKey: .instructions)
+        optionalInstructions = try c.decodeIfPresent(String.self, forKey: .optionalInstructions) ?? ""
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(cwd, forKey: .cwd); try c.encode(session.encodedJSON(), forKey: .session)
         try c.encode(expectedTools, forKey: .expectedTools); try c.encode(instructions, forKey: .instructions)
+        if !optionalInstructions.isEmpty { try c.encode(optionalInstructions, forKey: .optionalInstructions) }
     }
     public let cwd: String
     public let session: NativeRPCValue
     public let expectedTools: [String: Set<String>]
+    /// Gemini: the profile's and folder's instructions. A Gemini that cannot take them as prompt context is refused.
     public let instructions: String
-    public init(cwd: String, session: NativeRPCValue = .object([]), expectedTools: [String: Set<String>] = [:], instructions: String = "") {
+    /// Gemini: extras a chat can start without (the rich-chat drawing instruction). Sent beside `instructions` when the
+    /// CLI advertises prompt context, left out when it does not (6 Nov): a chat never fails to start because of them.
+    public let optionalInstructions: String
+    public init(cwd: String, session: NativeRPCValue = .object([]), expectedTools: [String: Set<String>] = [:], instructions: String = "",
+                optionalInstructions: String = "") {
         self.cwd = cwd; self.session = session; self.expectedTools = expectedTools; self.instructions = instructions
+        self.optionalInstructions = optionalInstructions
     }
 }
 
@@ -290,9 +298,10 @@ public struct BackendHootChatRPC: Sendable {
                 content.append(Self.object([("type", .string("skill")), ("name", .string(command.name)), ("path", skill["path"])]))
             }
         }
-        if provider == .gemini && !setup.instructions.isEmpty {
+        let instructions = [setup.instructions, embeddedContext ? setup.optionalInstructions : ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if provider == .gemini && !instructions.isEmpty {
             content.insert(Self.object([("type", .string("resource")), ("resource", Self.object([
-                ("uri", .string("hoot://instructions")), ("mimeType", .string("text/markdown")), ("text", .string(setup.instructions))]))]), at: 0)
+                ("uri", .string("hoot://instructions")), ("mimeType", .string("text/markdown")), ("text", .string(instructions))]))]), at: 0)
         }
         for attachment in attachments {
             let source = attachment["source"], media = source["media_type"].string ?? ""

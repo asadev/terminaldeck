@@ -43,7 +43,8 @@ final class SIDEBARSessionRowsTests: XCTestCase {
     func testTheRowsReadTheSameNamesAndPicturesAsThePhones() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let side = try String(contentsOf: root.appendingPathComponent("Sources/TerminalDeckNative/SidebarView.swift"), encoding: .utf8)
-        XCTAssertTrue(side.contains("agent: NativePhonePictureFaces.agent(session.id, agents: agents)"), "one answer to who works in it, the phones'")
+        // 7cf8e2df (6 Nov): every Mac session list keeps an assigned agent's profile icon, through the one row identity.
+        XCTAssertTrue(side.contains("agent: NativeSessionRowIdentity(id: session.id).agent"), "one answer to who works in it")
         XCTAssertTrue(side.contains("SIDEBARSessionLine.title(session, store: store)"))
         let phones = try String(contentsOf: root.appendingPathComponent("Sources/TerminalDeckNative/NativeCompositionPhonePictures.swift"), encoding: .utf8)
         XCTAssertTrue(phones.contains("if let agent = agent(id, agents: agents) { result[id] = face(agent) }"))

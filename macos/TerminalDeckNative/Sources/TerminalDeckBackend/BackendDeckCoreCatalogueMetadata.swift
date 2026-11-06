@@ -104,7 +104,7 @@ public enum BackendDeckCoreCatalogueDescribe {
     public static let maxNames = 20
     public static let inlineIndexMax = 12
     public static let areas: [BackendDeckCoreCatalogueToolArea] = [
-        .init(id: "sessions", covers: "sessions beyond the listed tools (wait for an answer, press keys, read the screen, rename, switch account, held sessions), past conversations, projects, files, git, dev servers, the overview, and Stays Fixed checks (that nothing which already worked has changed)", prefixes: ["sessions", "chats", "projects", "files", "git", "dev", "dashboard", "artifacts", "alerts", "log", "tour", "fixed"]),
+        .init(id: "sessions", covers: "sessions beyond the listed tools (wait for an answer, keys, the screen, rename, switch account, held sessions), past conversations, projects, files, git, dev servers, the overview and Stays Fixed checks (what worked still works)", prefixes: ["sessions", "chats", "projects", "files", "git", "dev", "dashboard", "artifacts", "alerts", "log", "tour", "fixed"]),
         // Asad retired Chrome imports/extensions; the native index names the Safari features that remain.
         .init(id: "browser", covers: "the built-in browser beyond the listed verbs: windows, toolbar, downloads, history, profiles, saved logins, site data, sign-in help, scraping, worker profiles and downloading files", prefixes: ["browser", "assets"]),
         .init(id: "machines", covers: "other paired computers and their sessions, servers (apps, deploys, addresses, databases, backups, advanced Docker resources, logs and terminals), who can reach this computer, and GitHub", prefixes: ["machines", "servers", "docker", "apps", "remote", "github"]),

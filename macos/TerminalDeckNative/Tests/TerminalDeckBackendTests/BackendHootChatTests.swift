@@ -84,13 +84,19 @@ final class BackendHootChatTests: XCTestCase, @unchecked Sendable {
         let store = try BackendHootChatStore(file: root.appendingPathComponent("history.json"))
         try await store.attach(.init(command: "/bin/sh", arguments: ["-c", "read first; read second"], cwd: root.path, environment: [:]))
         _ = try await store.say("one")
-        do { _ = try await store.say("two"); XCTFail("Concurrent send was accepted") } catch {}
+        // 483f4ffc (5 Nov, "save queued sends"): a second send while Hoot answers is kept in the chat's own queue,
+        // never written beside the answer.
+        let queued = try await store.say("two")
+        XCTAssertEqual(queued["queued"].bool, true)
+        XCTAssertEqual(queued["queuedMessages"].elements?.count, 1)
         await store.stop()
         let snapshot = await store.snapshot()
         XCTAssertEqual(snapshot["busy"].bool, false); XCTAssertEqual(snapshot["alive"].bool, false)
         XCTAssertTrue(snapshot["pending"].elements?.isEmpty == true)
         let kinds = snapshot["events"].elements?.compactMap { $0["kind"].string }
         XCTAssertTrue(kinds?.contains("interrupted") == true)
+        XCTAssertFalse(snapshot["events"].elements?.contains { $0["kind"].string == "user" && $0["value"]["text"].string == "two" } == true,
+                       "The queued message was never sent")
     }
     func testPrematureExitAndCorruptHistoryAreVisibleFailures() async throws {
         let root = try scratch(); defer { try? FileManager.default.removeItem(at: root) }

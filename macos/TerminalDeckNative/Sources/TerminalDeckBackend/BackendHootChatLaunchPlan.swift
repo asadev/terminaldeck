@@ -112,14 +112,13 @@ public struct BackendHootChatLaunchPlan: Sendable {
         if let folder = Self.folderInstructions(cwd: cwd) {
             instructions += (instructions.isEmpty ? "" : "\n\n") + folder
         }
-        instructions += (instructions.isEmpty ? "" : "\n\n") + ChatMarkdown.instruction
         if provider == .codex {
             // An empty thread override would erase the worker's CLI lease and account restrictions.
             if !sessionTools || !codexServers.isEmpty { config = config.setting("mcp_servers", .object(codexServers)) }
             // Ask is an explicit app choice, not an invitation to inherit a user's `never` default.
             if !session.has("approvalPolicy") { session = session.setting("approvalPolicy", .string("on-request")) }
             session = BackendCodexApprovalPolicy.session(session.setting("config", config))
-            let composed = [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            let composed = [profileInstructions, instructions, ChatMarkdown.instruction].filter { !$0.isEmpty }.joined(separator: "\n\n")
             if !composed.isEmpty { session = session.setting("developerInstructions", .string(composed)) }
         } else {
             session = session.setting("mcpServers", .array(geminiServers))
@@ -127,8 +126,11 @@ public struct BackendHootChatLaunchPlan: Sendable {
         // Last override wins over profile extras; this invocation must never wait on an update menu.
         if provider == .codex { cli += BackendAgentStartup.codexArguments }
         arguments = cli
+        // The rich-chat drawing instruction goes to every AI, but on Gemini as an optional extra: a CLI that cannot take
+        // prompt context still starts, without it (6 Nov). Codex has it in its developer instructions above.
         setup = .init(cwd: cwd, session: session, expectedTools: required,
-            instructions: provider == .gemini ? [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n") : "")
+            instructions: provider == .gemini ? [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n") : "",
+            optionalInstructions: provider == .gemini ? ChatMarkdown.instruction : "")
     }
 }
 
