@@ -388,8 +388,9 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
       ? Runtime.Sessions.FirstOrDefault(row => row.Definition.Id == live.Id && row.Definition.Provider != "shell") : null;
     var accounts = Runtime.Accounts.List(selectedDraft?.Provider);
     var stack = new StackPanel { Spacing = 16 };
-    var feedback = new TextBlock { TextWrapping = TextWrapping.Wrap };
+    var feedback = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
     feedback.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
+    feedback.RegisterPropertyChangedCallback(TextBlock.TextProperty, (_, _) => feedback.Visibility = string.IsNullOrEmpty(feedback.Text) ? Visibility.Collapsed : Visibility.Visible);
     if (accounts.Count == 0) stack.Children.Add(new TextBlock { Text = "No accounts yet.", TextWrapping = TextWrapping.Wrap });
     foreach (var account in accounts)
     {
@@ -430,11 +431,14 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         { feedback.Text = ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException ? ex.Message : "The account could not switch. Check the session before trying again."; }
         finally { button.IsEnabled = true; }
       };
-      row.Children.Add(button); row.Children.Add(feedback); stack.Children.Add(row);
+      row.Children.Add(button); stack.Children.Add(row);
     }
+    // One feedback line serves every row. An element can have only one parent:
+    // adding it to each row as well threw before the dialog could open.
+    stack.Children.Add(feedback);
     var manage = new Button { Content = "Manage accounts…" };
     manage.Click += (_, _) => { accountSheet?.Hide(); OpenCodingAIs(); };
-    stack.Children.Add(manage); stack.Children.Add(feedback);
+    stack.Children.Add(manage);
     var dialog = new ContentDialog { XamlRoot = hostRoot.XamlRoot, RequestedTheme = hostRoot.ActualTheme, Title = "Switch account", Content = new ScrollViewer { Content = stack, MaxHeight = 480, HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, CloseButtonText = "Done" };
     accountSheet = dialog;
     try { await dialog.ShowAsync(); } finally { if (ReferenceEquals(accountSheet, dialog)) accountSheet = null; }
