@@ -22,7 +22,7 @@ struct NativeSessionHeader: View {
             }
             // The page's window bar: the name on its own line, "where and who" under it.
             VStack(alignment: .leading, spacing: 1) {
-                NativeSessionTitle(title: header.title, rename: renamer)
+                NativeSessionTitle(title: sharedTitle(fallback: header.title), rename: renamer)
                 HStack(spacing: 5) {
                     if !header.folderPath.isEmpty {
                         NativeFolderChip(path: header.folderPath)
@@ -116,6 +116,15 @@ struct NativeSessionHeader: View {
             if let item = project.sessions.first(where: { $0.id == session.sessionId }) { return item }
         }
         return nil
+    }
+
+    private func sharedTitle(fallback: String) -> String {
+        guard case .local = session.target else { return fallback }
+        if let railItem { return SIDEBARSessionLine.title(railItem, store: SIDEBARProjectStore.shared) }
+        return SIDEBARSessionLine.title(given: NativeSessionNames.shared.names[session.sessionId],
+            own: SIDEBARProjectStore.shared.sessionTitles[session.sessionId] ?? session.info?.title,
+            rail: fallback, folder: session.info?.cwd,
+            retained: NativeSessionRailContinuity.shared.title(session.sessionId))
     }
 
     /// Which computer the session runs on, when it is not this one (`on <name>`).

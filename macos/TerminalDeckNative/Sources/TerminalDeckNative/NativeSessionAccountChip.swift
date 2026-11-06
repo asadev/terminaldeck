@@ -120,6 +120,7 @@ struct NativeLocalAccountChip: View {
             }
         }
         .task(id: session.sessionId) { await start() }
+        .task(id: EngineBridge.shared.isReady) { await NativeChatAccountNames.shared.start() }
         // 12 Oct: the chip's switch is the app's own (NativeAccountSwitch.swift), its dialog shown here.
         .modifier(NativeAccountChipSwitchSheet(sessionId: session.sessionId))
         .onChange(of: agentRunning) { Task { await readSessionAccount(); await loadAccounts() } }
@@ -197,7 +198,8 @@ struct NativeLocalAccountChip: View {
             AccountChipLabel {
                 NativeCodingAIDot(token: names ? listed?.color : nil)
                 NativeCodingAIProviderMark(provider: mark, size: 13)
-                Text(names ? identity.label : unnamed.label)
+                Text(names ? CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(currentId, fallback: listed?.name ?? named?.name ?? identity.label), provider: mark) : unnamed.label)
+                    .help(knownEmail ?? identity.detail ?? "")
                     // `is-just-switched`: the name lit in the accent while "Switched to …" shows.
                     .foregroundStyle(switchNote?.lightsTheName == true ? Color.accentColor
                                      : names && identity.verified ? Color.primary : Color.secondary)
@@ -265,7 +267,7 @@ struct NativeLocalAccountChip: View {
     private func row(_ account: CodingAIAccount, currentId: String?, switching: Bool, blocked: String?, from: String) -> some View {
         let state = signIn[account.id]
         let isCurrent = account.id == currentId
-        let login = CodingAIAccountLabels.profileLoginLabel(account, state)
+        let login = CodingAIAccountLabels.chatName(NativeChatAccountNames.shared.name(account.id, fallback: account.name), provider: account.provider)
         // Switching: the session's own account is the tick, not a choice. Otherwise (a shell's own agent) a pick
         // opens a new session on that account, unless the default coding tool holds one login only.
         let inert = switching ? isCurrent : blocked != nil
@@ -280,9 +282,14 @@ struct NativeLocalAccountChip: View {
                 NativeAccountSwitcher.shared.newSession(from: session.sessionId, in: info?.cwd, accountId: account.id, provider: account.provider)
             }
         } label: {
-            AccountRowLine(current: isCurrent, color: account.color, provider: account.provider,
-                           login: switching ? login : "New session · \(login)",
-                           state: AccountChipRules.stateSummary(state).label)
+            VStack(alignment: .leading, spacing: 2) {
+                AccountRowLine(current: isCurrent, color: account.color, provider: account.provider,
+                               login: switching ? login : "New session · \(login)",
+                               state: AccountChipRules.stateSummary(state).label)
+                if let email = CodingAIAccountLabels.accountLabel(state) ?? CodingAILogins.normalizedEmail(account.name) {
+                    Text(email).font(.caption).foregroundStyle(.secondary).padding(.leading, 8)
+                }
+            }
         }
         .buttonStyle(.plain)
         .disabled(inert)

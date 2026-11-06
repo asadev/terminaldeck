@@ -149,6 +149,7 @@ public final class BackendPTYManager: @unchecked Sendable {
         detachHOSTFrontend(); return true
     }
     public func localSessionCount() -> Int { synchronized { sessions.values.filter { $0.meta.exitCode == nil && !$0.process.exited }.count } }
+    public func preferLocalChat(_ id: String, _ local: Bool) { synchronized { hostFrontend }?.preferLocalChat(id, local) }
     public func isHostedSession(_ id: String) -> Bool { synchronized { hostFrontend }?.owns(id) ?? false }
     /// A finished job's history is opened again in the helper: let its row back into this app's list.
     public func readmitHosted(_ id: String) { synchronized { hostFrontend }?.readmit(id) }

@@ -237,8 +237,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                               if renamingID == session.id { renamingID = nil }
                               if let typed { renameInPlace?(session, typed) }
                           },
-                          // The phones' own answer: a session started with no agent shows only its AI.
-                          agent: NativePhonePictureFaces.agent(session.id, agents: agents)) {
+                          // Keep an assigned agent's profile icon in every Mac session list.
+                          agent: NativeSessionRowIdentity(id: session.id).agent) {
             sessionMenu(session)
         }
         .driveAnchor(DriveAnchor.sessionRow(sessionId: session.id).id)

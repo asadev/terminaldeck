@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ImageIO
 import UniformTypeIdentifiers
 import TerminalDeckNativeCore
 
@@ -331,8 +332,7 @@ struct HootComposer: View {
             HStack(spacing: 8) {
                 ForEach(draft.attachments) { attachment in
                     HStack(spacing: 8) {
-                        Image(systemName: ChatAttach.imageExtensions.contains(attachment.url.pathExtension.lowercased()) ? "photo" : "doc")
-                            .font(.system(size: 20)).foregroundStyle(.secondary)
+                        HootAttachmentThumbnail(url: attachment.url)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(attachment.name).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
                             if !attachment.source.isEmpty { Text(attachment.source).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
@@ -365,7 +365,7 @@ struct HootComposer: View {
         Menu {
             Button("Add files…", systemImage: NativeAttachMenu.symbol(.file)) { browse(images: false) }.keyboardShortcut("o")
             Button("Add photos…", systemImage: NativeAttachMenu.symbol(.image)) { browse(images: true) }
-            Button("Take a screenshot", systemImage: "camera.viewfinder") { onScreenshot?() }.disabled(onScreenshot == nil)
+            if let onScreenshot { Button("Take a screenshot", systemImage: "camera.viewfinder", action: onScreenshot) }
             Divider()
             Section("Mention") {
                 ForEach(HootMention.Kind.allCases, id: \.self) { kind in
@@ -847,13 +847,23 @@ final class HootComposerTextView: NSTextView {
         guard onShow else { return }
         super.insertText(string, replacementRange: replacementRange)
     }
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(paste(_:)), onShow, isEditable,
+           NSPasteboard.general.canReadObject(forClasses: [NSURL.self, NSImage.self], options: nil) { return true }
+        return super.validateMenuItem(menuItem)
+    }
     override func paste(_ sender: Any?) {
-        guard onShow else { return }
+        guard onShow, isEditable else { return }
+        guard let onFiles else { super.paste(sender); return }
         let board = NSPasteboard.general
         let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        if !urls.isEmpty { onFiles?(urls); return }
+        if !urls.isEmpty { onFiles(urls); return }
         if let data = board.data(forType: .png) ?? board.data(forType: .tiff) {
-            do { onFiles?([try HootPastedFiles.make(data, type: board.data(forType: .png) != nil ? "png" : "tiff")]) } catch { NSSound.beep() }
+            do { onFiles([try HootPastedFiles.make(data, type: board.data(forType: .png) != nil ? "png" : "tiff")]) } catch { NSSound.beep() }
+            return
+        }
+        if let image = NSImage(pasteboard: board), let data = image.tiffRepresentation {
+            do { onFiles([try HootPastedFiles.make(data, type: "tiff")]) } catch { NSSound.beep() }
             return
         }
         super.paste(sender)
@@ -996,6 +1006,39 @@ struct HootEffortSlider: View {
             let index = levels.firstIndex(of: selected) ?? 0
             let next = direction == .increment ? min(levels.count - 1, index + 1) : max(0, index - 1)
             if levels.indices.contains(next), levels[next] != selected { onChange(levels[next]) }
+        }
+    }
+}
+
+/// Decode only a small image, off the UI thread, rather than loading a full camera photo in the composer.
+private struct HootAttachmentThumbnail: View {
+    let url: URL
+    @State private var thumbnail: NSImage?
+    var body: some View {
+        Group {
+            if let thumbnail {
+                Image(nsImage: thumbnail).resizable().scaledToFill()
+            } else {
+                Image(systemName: ChatAttach.imageExtensions.contains(url.pathExtension.lowercased()) ? "photo" : "doc")
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 40, height: 40).clipped().clipShape(.rect(cornerRadius: 6))
+        .accessibilityLabel("Preview of \(url.lastPathComponent)")
+        .task(id: url) {
+            let sourceURL = url
+            let bytes = await Task.detached(priority: .utility) { () -> Data? in
+                guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+                      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 120
+                      ] as CFDictionary) else { return nil }
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                return bitmap.representation(using: .png, properties: [:])
+            }.value
+            guard !Task.isCancelled else { return }
+            thumbnail = bytes.flatMap(NSImage.init(data:))
         }
     }
 }

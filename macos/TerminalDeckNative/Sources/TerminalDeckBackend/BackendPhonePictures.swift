@@ -24,13 +24,18 @@ public actor BackendPhonePictures {
         public var name: String
         /// `AGTIcon.raw(icon, colour:)`: the symbol or emoji and its chosen colour.
         public var icon: String
+        public var png: Data?
         public var hoot: Bool
-        public init(id: String, name: String, icon: String, hoot: Bool = false) {
-            self.id = id; self.name = name; self.icon = icon; self.hoot = hoot
+        public init(id: String, name: String, icon: String, hoot: Bool = false, png: Data? = nil) {
+            self.id = id; self.name = name; self.icon = icon; self.hoot = hoot; self.png = png
+        }
+        var pictureHash: String? {
+            png.flatMap { $0.count <= 45_000 ? SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() : nil }
         }
         var wire: NativeRPCValue {
             var fields: [NativeRPCValue.Field] = [.init("id", .string(String(id.prefix(128)))), .init("name", .string(String(name.prefix(120)))),
                                                   .init("icon", .string(String(icon.prefix(80))))]
+            if let pictureHash { fields.append(.init("picture", .string(pictureHash))) }
             if hoot { fields.append(.init("hoot", .bool(true))) }
             return .object(fields)
         }
@@ -145,6 +150,12 @@ public actor BackendPhonePictures {
     // MARK: One logo
 
     func picture(rid: String, hash: String, context: BackendRemoteHostContext) async throws -> BackendRemoteServerMessage {
+        let visible = try await source.visibleSessions(context)
+        var faces = Array(await source.sessionAgents(Array(visible)).values)
+        if context.kind == .mine { faces += await source.agents() }
+        if let face = faces.first(where: { $0.pictureHash == hash }), let png = face.png {
+            return try .init(.picture, fields: [.init("rid", .string(rid)), .init("picture", .string(hash)), .init("png", .string(png.base64EncodedString()))])
+        }
         // Only a logo of a project this device reaches, found by the hash this Mac gave it.
         guard let row = await projectRows(context).first(where: { $0.hash == hash }), let logo = row.logo else {
             throw NativeRPCError(code: "unavailable", message: "That picture is no longer on this Mac.")

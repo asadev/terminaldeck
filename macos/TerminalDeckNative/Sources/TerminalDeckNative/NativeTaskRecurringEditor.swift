@@ -146,8 +146,7 @@ struct RoutinePanel: View {
                         Text("Paused. Save resumes it as shown.").font(.caption2).foregroundStyle(TaskTone.waiting)
                     }
                     if !ready, let reason = model.routine?.historyError ?? model.routineError {
-                        Text("On a schedule, After N times and One copy per assignee aren't available yet.")
-                            .font(.caption2).foregroundStyle(TaskTone.waiting).help(reason)
+                        Text(reason).font(.caption2).foregroundStyle(TaskTone.waiting)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -286,7 +285,7 @@ struct RoutinePanel: View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("Trigger", selection: Binding(get: { r.trigger }, set: { v in set { $0.trigger = v } })) {
                 Text("On status change").tag("status")
-                Text("On a schedule\(ready ? "" : " (not available yet)")").tag("schedule").disabled(!ready)
+                if ready { Text("On a schedule").tag("schedule") }
             }
             .labelsHidden()
             if r.trigger == "status" {

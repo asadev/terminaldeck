@@ -504,6 +504,13 @@ internal sealed partial class WorkspaceSurface : Grid
         AutomationProperties.SetName(titleHost, "Session title: " + tab.Title);
         AutomationProperties.SetHelpText(titleHost, "Double-click or use Rename in Session actions. F2 also renames the selected session.");
         title.SetResourceReference(TextBlock.ForegroundProperty, "DeckInkBrush");
+        if (tab.Kind == "chat" && session(tab) is { } chatSession && chatSession.HasAgent)
+        {
+          var agent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+          agent.Children.Add(new SessionPicture { Session = chatSession, Width = 28, Height = 28 });
+          agent.Children.Add(new TextBlock { Text = chatSession.AgentName, FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+          identity.Children.Add(agent);
+        }
         identity.Children.Add(titleHost);
         void ShowInfo(FrameworkElement anchor)
         {
@@ -603,7 +610,7 @@ internal sealed partial class WorkspaceSurface : Grid
 
         }
         var actions = IconButton(tab.Kind == "browser" ? "Pane actions" : "Session actions", "\uE712", () => { });
-        controls.Children.Add(actions);
+        if (tab.Kind != "chat") controls.Children.Add(actions);
         if (OpenDevice is { } openDevice) controls.Children.Add(IconButton("Session devices", "\uE8EA", () => openDevice(tab)));
         var splitChoice = IconButton("Split view", "\uE89F", () => { });
         var splitMenu = new MenuFlyout();

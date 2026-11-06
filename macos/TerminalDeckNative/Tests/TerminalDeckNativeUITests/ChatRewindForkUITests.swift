@@ -67,11 +67,9 @@ import TerminalDeckNativeCore
         XCTAssertFalse(model.messageAction("rewind", row: user))
         XCTAssertFalse(model.messageAction("fork", row: user))
         XCTAssertFalse(model.messageAction("fork", row: answer))
-        XCTAssertTrue(model.messageActionsUnavailable?.contains("first message") == true)
         model.acceptFixtureUpdate(state.setting("forkPrefix", .bool(false)).setting("providerConversationId", .string("confirmed-fork")))
         XCTAssertTrue(model.messageAction("rewind", row: user))
         XCTAssertTrue(model.messageAction("fork", row: answer))
-        XCTAssertNil(model.messageActionsUnavailable)
     }
     func testToolRewindReplacesVisibleHistoryAndRestoresTheEditableText() async throws {
         let first = HootChatEvent(conversationID: "rewind-tool", turnID: "first", sequence: 1, provider: .claude, record: .text(.user, id: "first", "keep this"))

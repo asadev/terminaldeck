@@ -299,7 +299,7 @@ struct HootChatSource: Equatable, Sendable {
     static let mentionEvents = ["session:created", "session:exit", "session:removed", "session:renamed", "tasks:changed"]
     @ObservationIgnored private var mentionFeed: [EngineSubscription] = []
     @ObservationIgnored private var mentionReload: Task<Void, Never>?
-    @ObservationIgnored private var referenceRoot = ""
+    private(set) var referenceRoot = ""
     @ObservationIgnored private var outboxTabKey: String?
     @ObservationIgnored private var outboxTransferred = false
     var composerDraft = HootComposerDraft() {
@@ -440,7 +440,6 @@ struct HootChatSource: Equatable, Sendable {
     var messageActions: [NativeRPCValue] = []
     var changingMessageHistory = false
     var messageActionProblem: String?
-    var messageActionsUnavailable: String?
     private(set) var providerConversationMissing = false
     /// Back to this message: what came after is set aside, a message of the person's returns to the box.
     func rewind(to row: HootChatRow) {
@@ -744,6 +743,8 @@ struct HootChatSource: Equatable, Sendable {
         initialHistoryLoading = true
         defer { initialHistoryLoading = false }
         if let session = source.sessionID {
+            AGTAgentsStore.shared.start()
+            await AGTTeamChatHistory.shared.start()
             if queueRemoval == nil {
                 queueRemoval = EngineBridge.shared.on("session:removed") { [weak self] values in
                     guard values.first as? String == session, let self else { return }
@@ -914,20 +915,15 @@ struct HootChatSource: Equatable, Sendable {
             let edits = rows.filter(BackendChatDiffs.isEdit)
             if edits != diffInputs { diffInputs = edits; fileDiffs = BackendChatDiffs.cards(edits) }
             if !fixtureMode { NativeHOOTSIMFeedback.retainPreviews(conversation: id, rowIDs: Set(rows.filter { $0.kind == .user }.map(\.id))) }
-            pending = value["pending"].elements ?? []; busy = value["busy"].bool == true
-            answering = value["answering"].bool ?? busy
+            pending = value["pending"].elements ?? []; busy = BackendHootChatStore.foreground(in: value)
+            answering = busy
             workingState = ChatWorkingState.read(value.setting("readOnly", .bool(readOnly)), events: events)
             // The "/" menu: the commands this AI itself offers.
             if value.has("commands") { chatReportedCommands = value["commands"]; catalogue.commands = HootSlashCommand.offered(value["commands"]) }
             canUndoRewind = value["rewound"].string != nil
-            messageActions = value["messageActions"].elements ?? []
-            if !source.isHoot, rows.contains(where: { $0.kind == .user }) {
-                if !value.has("messageActions") {
-                    messageActionsUnavailable = "This chat is still using the earlier session engine. Rewind and Fork will appear after it is updated."
-                } else if providerConversationMissing {
-                    messageActionsUnavailable = forkPrefix ? "Send this fork's first message to finish saving its conversation." : "The AI has not confirmed this conversation yet."
-                } else { messageActionsUnavailable = nil }
-            } else { messageActionsUnavailable = nil }
+            if value["earlierEngine"].bool == true {
+                messageActions = BackendEarlierChatMove.offeringActions(value.setting("messageActions", .null).setting("events", .array(events.map(\.wireValue))))["messageActions"].elements ?? []
+            } else { messageActions = value["messageActions"].elements ?? [] }
             guardOff = value["guardOff"].string
             alive = value["alive"].bool == true
             if !busy, !sending { flushOptions() }
@@ -998,7 +994,7 @@ struct HootChatSource: Equatable, Sendable {
         sending = true; startingCompact = Self.isCompact(saved.plainText); problem = nil; rewindProblem = nil
         if let queuedID, let index = queuedMessages.firstIndex(where: { $0.id == queuedID }) {
             queuedMessages[index].held = true
-            queuedMessages[index].problem = "Delivery confirmation pending. Review before resending after restart."
+            queuedMessages[index].problem = nil
         }
         clearDraft(saved)
         outgoingSend = Task {
@@ -1181,7 +1177,7 @@ struct HootChatSource: Equatable, Sendable {
         steeringQueuedID = id
         if let index = queuedMessages.firstIndex(where: { $0.id == id }) {
             queuedMessages[index].held = true
-            queuedMessages[index].problem = "Delivery confirmation pending. Review before resending after restart."
+            queuedMessages[index].problem = nil
         }
         defer { steeringQueuedID = nil; flushMessages() }
         if item.deliveryPending {
@@ -1439,21 +1435,6 @@ struct HootChatSource: Equatable, Sendable {
             } catch { problem = error.localizedDescription }
         }
     }
-    func screenshot() {
-        guard !fixtureMode else { return }
-        Task {
-            do {
-                let store = NativeBrowserTabs.shared
-                guard let id = store.selectedID, let tab = store.tab(id), let capture = await tab.snapshot() else {
-                    throw NativeRPCError.invalidArguments("Open a browser page first, then take its screenshot here.")
-                }
-                let saved: NativeBrowserShot
-                if let owner = store.browserComposition { saved = try await owner.saveShot(capture, tabID: id) }
-                else { saved = try capture.saved() }
-                composerDraft.add([URL(fileURLWithPath: saved.path)], source: "Screenshot from the browser · " + saved.title)
-            } catch { problem = error.localizedDescription }
-        }
-    }
     /// One source of truth: whoever changes Hoot's model, effort, permission or Fast mode (this
     /// box, the island's box, the gear popover, Settings → Hoot) writes through the shared
     /// HootChatChoices, and this box redraws at once from it.
@@ -1692,6 +1673,7 @@ struct NativeHootChat: View {
     @State private var toolDetail: HootChatRow?
     @State private var shownCount = NativeHootChat.pageSize
     @State private var followViewport = NativeChatFollowViewport()
+    @State private var richChatHeight: CGFloat = 700
     @Environment(\.nativeScreenActive) private var screenActive
     @Environment(\.agkitOffscreenSolid) private var inheritedSolid
     private var side: CGFloat { compact ? 12 : 20 }
@@ -1704,8 +1686,6 @@ struct NativeHootChat: View {
         let progressAnchor = model.taskProgress["anchorRowId"].string
         let progressAnchorVisible = shown.contains { $0.id == progressAnchor }
         VStack(spacing: 6) {
-            // One icon strip (Session, Command output, Changes, More), the same in every chat (Asad, 20 Oct 2026).
-            HStack { Spacer(); NativeChatMenu(model: model) }.frame(height: 26).padding(.horizontal, side + 16).hootColumn(compact)
             if model.findVisible { NativeChatFindBar(model: model) }
             VStack(spacing: 0) {
             ScrollView {
@@ -1746,9 +1726,6 @@ struct NativeHootChat: View {
                     ForEach(model.queuedMessages) { item in
                         NativeQueuedMessageRow(model: model, item: item, bubble: true).id("queued:" + item.id)
                     }
-                    if let unavailable = model.messageActionsUnavailable {
-                        Text(unavailable).font(.callout).foregroundStyle(.secondary)
-                    }
                     if let problem = model.messageActionProblem {
                         Label(problem, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     }
@@ -1767,6 +1744,9 @@ struct NativeHootChat: View {
             }
             // Like any chat app: open at the latest message, stay pinned while replies stream
             // in, and leave a person who scrolled up to read where they are.
+            .environment(\.nativeChatFolder, model.referenceRoot)
+            .environment(\.nativeChatToolSessionID, model.source.sessionID ?? "hoot")
+            .environment(\.nativeChatVisualMaximumHeight, richChatHeight * 0.7)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .scrollPosition($followViewport.position)
@@ -1835,6 +1815,7 @@ struct NativeHootChat: View {
             }
         }
         .padding(.bottom, compact ? 10 : 12)
+        .background { NativeChatMenu(model: model) }
         .environment(\.nativeChatFindQuery, model.findVisible ? model.findQuery : "")
         .background(NativeChatFindTarget(model: model))
         .onChange(of: model.findRevision) { _, _ in revealFind() }
@@ -1851,7 +1832,9 @@ struct NativeHootChat: View {
             followViewport.latest()
         }
         .onDisappear { model.chatViewports[followViewport.id] = nil }
-        .frame(maxWidth: .infinity, maxHeight: .infinity).task { await model.start() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { richChatHeight = $0 }
+        .task { await model.start(); if !model.fixtureMode { _ = try? await model.projectReferenceRoot() } }
         .background(model.source.isHoot ? Color.clear : DeckTokens.chatBody)
     }
     private func revealFind() {
@@ -1879,7 +1862,7 @@ struct NativeHootChat: View {
                                                       : "Message \(model.source.agentName) — type / for its commands",
                      agentName: model.source.agentName, plainMeta: !model.source.isHoot,
                      microphoneAvailable: model.fixtureMode ? false : nil,
-                     onSend: { followViewport.latest(); model.send($0) }, onStop: { model.stop() }, onScreenshot: { model.screenshot() },
+                     onSend: { followViewport.latest(); model.send($0) }, onStop: { model.stop() },
                      onManageTools: { if !model.fixtureMode { AppModel.shared.select("mcp") } },
                      onPermissionChange: { model.changePermission($0) }, onModelChange: { model.changeModel($0) },
                      onEffortChange: { model.changeEffort($0) }, onFastModeChange: { model.changeFastMode($0) },
@@ -1986,9 +1969,10 @@ struct NativeHootChat: View {
                 ScrollView { VStack(alignment: .leading, spacing: 12) {
                     Text(detail.value["name"].string ?? "Tool step").font(.headline)
                     Text(detail.value["input"].compact).font(.caption.monospaced()).textSelection(.enabled)
-                    if detail.value.has("output") { Text(detail.value["output"].string ?? detail.value["output"].compact).font(.caption.monospaced()).textSelection(.enabled) }
+                    if detail.value.has("output") { NativeChatToolResultContent(output: detail.value["output"]).environment(\.nativeChatToolRowID, detail.id) }
                 }.padding(16) }.frame(width: 320, height: 280)
             }
+            if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
         } else if row.kind == .user {
             HootMessageFrame(row: row, trailing: true, onRewind: model.messageAction("rewind", row: row) ? { model.rewind(to: row) } : nil,
                              onFork: model.messageAction("fork", row: row) ? { model.fork(from: row) } : nil,
@@ -2003,7 +1987,7 @@ struct NativeHootChat: View {
                     }
                 }
                 if row.value["attachmentCount"].number ?? 0 > 0 { attachmentCard(row) }
-                Text(NativeChatFindText.highlight(AttributedString(row.value["text"].string ?? ""), query: model.findVisible ? model.findQuery : "")).font(NativeChatMarkdown.bodyType).textSelection(.enabled)
+                NativeChatMarkdown(text: row.value["text"].string ?? "")
             }
                 .padding(14).frame(maxWidth: 520, alignment: .leading)
                 .background(Color.accentColor.opacity(0.12), in: UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18))
@@ -2086,6 +2070,9 @@ struct NativeHootChat: View {
             if !steps.isEmpty {
                 HootStepsView(rows: steps, live: live, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, indent: 0, expansion: toolExpansion(key))
             }
+            ForEach(steps.filter { $0.kind == .toolCall }) { row in
+                if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
+            }
             ForEach(model.fileDiffs.filter { card in steps.contains { $0.id == card.rowID } }) { card in
                 NativeChatDiffCard(card: card)
             }
@@ -2112,6 +2099,9 @@ struct NativeHootChat: View {
         } else if !steps.isEmpty {
             // Stopped before it answered: only the folded steps.
             HootStepsView(rows: steps, live: false, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, expansion: toolExpansion(key))
+            ForEach(steps.filter { $0.kind == .toolCall }) { row in
+                if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
+            }
         }
     }
     private func attachmentCard(_ row: HootChatRow) -> some View {
@@ -2175,6 +2165,7 @@ private extension View {
 enum HootChatActions {
     /// Takes the chat back to the message at this event; returns the text to put back in the box.
     static var rewind: (@MainActor (Int) async throws -> String)?
+    static var fork: (@MainActor (Int) async throws -> NativeRPCValue)?
     static var handoffConversation: (@MainActor (String, String, @escaping @MainActor (String) -> Void) async throws -> Void)?
     static var undoRewind: (@MainActor () async throws -> Void)?
     /// A handoff up to and including the message at this event; `progress` gets short plain lines. Returns at the end of the turn.
@@ -2225,9 +2216,8 @@ struct HootMessageFrame<Content: View>: View {
     @State private var confirmRewind = false
     var body: some View {
         VStack(alignment: trailing ? .trailing : .leading, spacing: 0) {
-            if !trailing { actions }
             content
-            if trailing { actions }
+            actions
         }
         .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
         .contentShape(Rectangle()).onHover { hovering = $0 }
@@ -2244,7 +2234,7 @@ struct HootMessageFrame<Content: View>: View {
                 Text(HootMessageTime.short(row.at)).foregroundStyle(.tertiary).hootQuickTip(HootMessageTime.exact(row.at)).padding(.trailing, 4)
             }
             if !trailing, let onHandoff, !copied, hovering { HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff) }
-            if onRewind != nil || onFork != nil || hovering || copied {
+            Group {
                 HootMessageIcon(symbol: copied ? "checkmark" : "doc.on.doc", tip: copied ? "Copied" : "Copy this message") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(HootCallout.plain(row.value["text"].string ?? ""), forType: .string)

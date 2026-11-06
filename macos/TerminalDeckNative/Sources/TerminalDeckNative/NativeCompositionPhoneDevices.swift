@@ -23,12 +23,16 @@ extension NativeCompositionProduction {
             list: { await manager.list() },
             power: { id, on in on ? try await manager.boot(id) : try await manager.shutDown(id) },
             stream: { id, row in
-                if id.hasPrefix("mac:") { return try await NativeMacScreen.stream(id) }
+                if id.hasPrefix("mac:") { return NativeMacReachSwitchingStream(display: id) }
                 if let direct = await NativePhoneDeviceScreens.shared.stream(row) { return direct }
                 return BackendPhoneDeviceStillStream { try await manager.capture(id).png }
             },
             input: { id, input in
-                if id.hasPrefix("mac:") { try await NativeMacScreen.input(id, input); return }
+                if id.hasPrefix("mac:") {
+                    if NativeMacScreen.screenState == .locked, await NativeMacReach.shared.available { try await NativeMacReach.shared.input(id, input) }
+                    else { try await NativeMacScreen.input(id, input) }
+                    return
+                }
                 if await NativePhoneDeviceScreens.shared.send(id, input) { return }
                 switch input {
                 case let .tap(x, y, hold): try await tools.tap(id, x: x, y: y, holdMS: hold.map { Int($0) })
@@ -50,7 +54,8 @@ extension NativeCompositionProduction {
             visibleSessions: { context in try await endpoint.panelSessionIDs(context) },
             send: { id, message in try await endpoint.sendToConnection(id, message: message) },
             macRows: {
-                let rows = await MainActor.run { NativeMacScreen.rows() }
+                let helperRows = NativeMacScreen.screenState == .locked ? await NativeMacReach.shared.screenRows() : nil
+                let rows = if let helperRows { helperRows } else { await MainActor.run { NativeMacScreen.rows() } }
                 // Settings → Devices switch off (round 3, #24): This Mac is still listed, with the reason.
                 guard !NativeMacScreenSetting.allowed else { return rows }
                 return rows.map { $0.setting("canWatch", .bool(false)).setting("canControl", .bool(false)).setting("note", .string(NativeMacScreenSetting.refusal)) }
@@ -72,6 +77,22 @@ extension NativeCompositionProduction {
         // Round 3: this Mac's input goes straight to the events (no main thread, no answer awaited), the phone draws the
         // pointer from `sims.pointer`, the Settings switch gates it all, and a phone can record a simulator or emulator.
         source.macPost = { id, input in NativeMacScreen.postNow(id, input) }
+        source.macInputAsyncWhen = { NativeMacScreen.screenState == .locked }
+        source.macSignIn = { id, password in
+            guard let client = await NativeMacReach.shared.client else {
+                throw NativeRPCError(code: "unavailable", message: MacReach.State.setup.words)
+            }
+            _ = try await client.value("password", .object([.init("id", .string(id)), .init("password", .string(password))]))
+        }
+        source.macControlNow = { id in await endpoint.canControlMacScreen(id) }
+        source.macState = {
+            switch NativeMacScreen.screenState {
+            case .locked: return MacReach.State.locked.rawValue
+            case .asleep: return MacReach.State.asleep.rawValue
+            case .awake: return MacReach.State.desktop.rawValue
+            case .unknown: return MacReach.State.unreachable.rawValue
+            }
+        }
         source.pointer = { id in NativeMacScreenPointer.read(id) }
         source.macAllowed = { NativeMacScreenSetting.allowed }
         source.macRefusal = NativeMacScreenSetting.refusal
@@ -88,7 +109,10 @@ extension NativeCompositionProduction {
                                             stop: { await installation.stop() }))
                 phoneDevices = installation
                 // Settings → Devices switched off: every phone watching this Mac is let go, with the reason.
-                NativeMacScreenSetting.changed = { on in if !on { Task { await installation.devices.stopMac(why: NativeMacScreenSetting.refusal) } } }
+                NativeMacScreenSetting.changed = { on in
+                    Task { @MainActor in await NativeMacReach.shared.permissionsChanged() }
+                    if !on { Task { await installation.devices.stopMac(why: NativeMacScreenSetting.refusal) } }
+                }
                 // A text field on this Mac took the focus: the watching phones bring their keyboard up (1 Nov).
                 NativeMacScreenFocus.shared.changed = { text in Task { await installation.devices.macFocus(text: text) } }
             } catch { await installation.stop(); throw error }
@@ -400,10 +424,12 @@ extension NativeCompositionProduction {
     /// This Mac's screen on a phone, for agents: what it is doing and a way to end it. There is deliberately no tool
     /// that starts showing the screen: only the person, from the phone, starts it.
     fileprivate func installMacScreenTools(_ devices: BackendPhoneDevices, authority: BackendCompositionAuthority) async {
+        await installMacReachTools(devices, authority: authority)
         let mcp = root.mcp, joins = self.joins
         let empty = NativeRPCValue.object([.init("type", .string("object")), .init("properties", .object([])), .init("additionalProperties", .bool(false))])
         let tools: [(String, BackendMCPTier, String)] = [
             ("mac_screen.status", .read, "This Mac's screen on paired phones and other Macs: whether Terminal Deck has the Screen Recording and Accessibility permissions, the displays, which phones or Macs are watching or controlling this Mac now, and which other Macs this Mac is showing (remote). Read only."),
+            ("mac_screen.wake", .act, "Ask the person to wake this Mac's sleeping displays once. Never unlocks it or starts screen sharing."),
             ("mac_screen.stop", .act, "Stop every phone or Mac watching or controlling this Mac's screen and close every window here showing another Mac's screen. Nothing can start a screen session except the person, from a phone or from Devices › Other Macs."),
 
         ]
@@ -414,6 +440,11 @@ extension NativeCompositionProduction {
                 try await mcp.registerTool(spec, ownerID: "native.phone-devices") { caller, _ in
                     guard caller.allowedTiers.contains(tier) else { throw NativeRPCError(code: "not-granted", message: "This caller cannot do that.") }
                     _ = try await authority.resolve(caller)
+                    if id == "mac_screen.wake" {
+                        try await joins.prepareNative(caller, tier: tier, sentence: "Wake this Mac's screen once", ownerMustAnswer: true)
+                        let message = try await NativeMacScreen.wakeForTool()
+                        return .value(.object([.init("message", .string(message)), .init("screenState", .string(NativeMacScreen.screenState.rawValue))]))
+                    }
                     if id == "mac_screen.stop" {
                         try await joins.prepareNative(caller, tier: tier, sentence: "Stop the phones and Macs watching this Mac's screen, and close the windows here showing other Macs' screens", ownerMustAnswer: false)
                         let before = await devices.macViewers().count
@@ -426,6 +457,10 @@ extension NativeCompositionProduction {
                     let viewers = await devices.macViewers()
                     let (rows, record, control) = await MainActor.run { (NativeMacScreen.rows(), NativeMacScreen.canRecord, NativeMacScreen.canControl) }
                     return .value(.object([
+                        .init("accessAfterRestart", await NativeMacReach.shared.status()),
+                        .init("screenState", .string(NativeMacScreen.screenState.rawValue)),
+                        .init("screenNote", .string(NativeMacScreen.screenState == .locked ? MacScreenAvailability.locked
+                            : NativeMacScreen.screenState == .asleep ? MacScreenAvailability.asleep : "")),
                         .init("screenRecording", .bool(record)), .init("accessibility", .bool(control)),
                         .init("phonesAllowed", .bool(NativeMacScreenSetting.allowed)),
                         .init("permissionNote", .string(NativeMacScreen.missingLine(record: record, control: control))),

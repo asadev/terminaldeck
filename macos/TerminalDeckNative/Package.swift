@@ -31,6 +31,7 @@ let package = Package(
         .trait(name: "ShippedHost", description: "Host seams on in every configuration, as in the shipped release build."),
     ],
     dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.9.0"),
         // The native session terminal (lane T). MIT.
         // The caret-in-place optimization relies on SwiftTerm 1.20.0's caret view.
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.20.0"),
@@ -42,7 +43,7 @@ let package = Package(
     targets: [
         // Pure Foundation logic (engine protocol, origin policy, commands, paths).
         // No UI, so the test target can exercise it directly.
-        .target(name: "TerminalDeckNativeCore", swiftSettings: hostReleaseSettings, linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "TerminalDeckNativeCore", dependencies: [.product(name: "Markdown", package: "swift-markdown")], swiftSettings: hostReleaseSettings, linkerSettings: [.linkedLibrary("sqlite3")]),
         // Finding 3 (22 Oct): a device screen handed from a helper to the app as a Mach port. Public calls only.
         .target(name: "TerminalDeckDirectMach"),
         // The iOS Simulator's screen and input from CoreSimulator/SimulatorKit (private). Linked ONLY into
@@ -60,7 +61,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TerminalDeckSessionHostHelper",
-            dependencies: ["TerminalDeckNativeCore", "TerminalDeckBackend"],
+            dependencies: ["TerminalDeckNativeCore", "TerminalDeckBackend", "TerminalDeckPeer"],
             swiftSettings: hostReleaseSettings,
             linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Security"), .linkedFramework("IOKit"), .linkedFramework("SystemConfiguration"),
                 .unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", hostInfoPlist])]
@@ -85,6 +86,7 @@ let package = Package(
                 "TerminalDeckPeer",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
+            resources: [.copy("Resources/ChatLibraries")],
             swiftSettings: hostReleaseSettings,
             linkerSettings: [
                 .linkedFramework("AppKit"),

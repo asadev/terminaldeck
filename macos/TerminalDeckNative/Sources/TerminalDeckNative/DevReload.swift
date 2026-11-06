@@ -113,7 +113,12 @@ final class DevReload: ObservableObject {
                 var answer: [String: Any]
                 do {
                     let value: Any
-                    if channel == "dev:receiver:deliver" { value = try await DevReceiverDelivery.deliver(args) }
+                    if channel == "dev:chat:earlier-trial" { value = try await DevEarlierChatTrial.run(args.compactMap { $0 as? String }) }
+                    else if channel == "dev:chat:rich-preview" { value = try DevRichChatPreview.show() }
+                    else if channel == "dev:chat:rich-status" { value = try await DevRichChatPreview.status() }
+                    else if channel == "dev:chat:rich-restore" { value = DevRichChatPreview.restore() }
+                    else if channel == "dev:chat:send-check" { value = try await DevChatSendCheck.run() }
+                    else if channel == "dev:receiver:deliver" { value = try await DevReceiverDelivery.deliver(args) }
                     else { value = try await EngineBridge.shared.invoke(channel, args) }
                     answer = ["ok": true, "value": value]
                 }

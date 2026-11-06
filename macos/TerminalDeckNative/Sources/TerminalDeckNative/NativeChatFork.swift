@@ -61,8 +61,9 @@ extension NativeCompositionProduction {
     /// F38 fork, F56 worktree launch/cleanup and F57 execution location for one project Chat. Every launch goes
     /// through the ordinary launcher, so the new Chat has its own account lease, tools and permission owner.
     func chatForkFeature(_ parentID: String, action: String, arguments: NativeRPCValue, context: NativeRPCContext) async throws -> NativeRPCValue {
+        let historyParent = await sessionChats?.conversation(parentID)?.session
         guard ["fork", "worktree-chat", "worktree-status", "worktree-remove", "location"].contains(action), let chats = sessionChats,
-              let parent = sessions?.manager.list().first(where: { $0.id == parentID }), parent.chat == true else {
+              let parent = sessions?.manager.list().first(where: { $0.id == parentID }) ?? historyParent, parent.chat == true else {
             throw NativeRPCError.invalidArguments("Choose a project Chat and a supported fork, worktree or location action.")
         }
         guard let authority else { throw BackendSessionFailure.missingCapability("the current Chat request owner") }
@@ -88,6 +89,9 @@ extension NativeCompositionProduction {
             if outcome["ok"].bool == true { NativeChatWorktreeLedger.forget(key: entry.key) }
             return outcome
         }
+        if action == "fork", arguments["worktree"].bool != true, arguments["throughTurn"].isNullish, let number = arguments["throughSequence"].number,
+           number.isFinite, number.rounded() == number, number > 0, number < Double(Int.max / 2),
+           let result = try await chats.forkHootConversation(parentID, through: Int(number)) { return result }
         guard let profile = parent.profileId, !profile.isEmpty else {
             throw NativeRPCError(code: "account-scope-unavailable", message: "This Chat's exact account identity was not recorded. Choose the account explicitly in New Session; no default account was substituted.")
         }
@@ -100,7 +104,8 @@ extension NativeCompositionProduction {
         input.tabKey = nil; input.replaces = nil
         input.resumeConversationId = nil; input.forkSession = nil; input.resumeSessionAt = nil
         input.taskID = nil; input.taskProject = nil
-        let choices = try await chats.options(parentID)
+        let sourceState = try await chats.read(parentID, cursor: 0, limit: 1)
+        let choices = sourceState["readOnly"].bool == true ? NativeRPCValue.object([]) : try await chats.options(parentID)
         if let model = choices["model"].string {
             let prefix = parent.provider + ":"
             input.model = model.hasPrefix(prefix) ? String(model.dropFirst(prefix.count)) : model
@@ -117,7 +122,7 @@ extension NativeCompositionProduction {
             if !arguments["throughSequence"].isNullish { args = args.setting("throughSequence", arguments["throughSequence"]) }
             plan = try await chats.providerFeature(parentID, operation: "fork/create", arguments: args)
         }
-        if action == "fork" {
+        if action == "fork", plan["historySeed"].bool != true {
             input.resume = true
             input.resumeConversationId = try plan["conversationId"].requireString("forked conversation", nonempty: true)
             if plan["requiresForkLaunch"].bool == true { input.forkSession = true; input.resumeSessionAt = plan["resumeSessionAt"].string }
@@ -138,7 +143,10 @@ extension NativeCompositionProduction {
                 worktreeEntry = .init(key: key, sessionID: "", parentSessionID: parentID, folder: made, createdAt: Date().timeIntervalSince1970 * 1000)
             }
             input.cwd = folder
-            created = try await root.registry.invoke("session:create", context: NativeChatForkRequest.child(context, authority: authority), arguments: [NativeRPCValue.parseJSON(JSONEncoder().encode(input))])
+            // A moved source belongs to this app; its child must share that owner before guarded seeding.
+            created = try await BackendChatForkLaunchScope.$sourceID.withValue(action == "fork" ? parentID : nil) {
+                try await root.registry.invoke("session:create", context: NativeChatForkRequest.child(context, authority: authority), arguments: [NativeRPCValue.parseJSON(JSONEncoder().encode(input))])
+            }
             let id = try created["id"].requireString("new Chat session", nonempty: true)
             createdID = id
             if var entry = worktreeEntry { entry.sessionID = id; NativeChatWorktreeLedger.record(entry) }
@@ -158,9 +166,10 @@ extension NativeCompositionProduction {
             let named = action == "fork" ? created.setting("title", .string(forkTitle)) : created
             let state = try await chats.read(id, cursor: nil, limit: 1)
             let actual = state["providerConversationId"].string ?? ""
-            let pendingFork = action == "fork" && plan["requiresForkLaunch"].bool == true && actual.isEmpty
+            let pendingFork = action == "fork" && (plan["requiresForkLaunch"].bool == true || plan["historySeed"].bool == true) && actual.isEmpty
             let confirmed: Bool
             if action != "fork" { confirmed = true }
+            else if plan["historySeed"].bool == true { confirmed = !actual.isEmpty && actual != plan["parentConversationId"].string }
             else if plan["requiresForkLaunch"].bool == true { confirmed = !actual.isEmpty && actual != plan["parentConversationId"].string }
             else { confirmed = actual == plan["conversationId"].string }
             if action == "fork", !confirmed, !pendingFork {
@@ -174,7 +183,7 @@ extension NativeCompositionProduction {
                 .init("forked", .bool(action == "fork" && confirmed)), .init("confirmed", .bool(confirmed)), .init("pending", .bool(pendingFork)),
                 .init("folder", .string(folder)), .init("worktree", .bool(worktreeEntry != nil)), .init("branchSafe", .bool(worktreeEntry != nil)),
                 .init("executionLocation", .string("this-mac")),
-                .init("warning", confirmed ? .null : .string(pendingFork ? "Claude saves this fork when you send its first message. The original chat stays unchanged." : "The provider did not confirm the new conversation. Inspect the new Chat before sending."))])
+                .init("warning", confirmed ? .null : .string(pendingFork ? "The copied history is ready. The AI saves its new conversation when you send the first message." : "The provider did not confirm the new conversation. Inspect the new Chat before sending."))])
         } catch {
             let cleanup = await NativeChatForkCleanup.run(sessionID: createdID, worktreeKey: worktreeEntry?.key, close: { id in
                 let cleanupContext = try authority.childContext(context)
@@ -194,7 +203,7 @@ extension NativeCompositionProduction {
 
     func chatForkToolDefinitions(gate: BackendCompositionDeckToolsGate) throws -> [BackendDeckToolsDefinition] {
         let spec = try BackendMCPTool(id: "sessions.chat_fork", wireName: "sessions_chat_fork",
-            description: "Fork a project Chat's provider conversation into a new Chat, start a new Chat in its own git worktree, check or clean up that worktree, or read where a Chat really runs. fork asks the provider for a real copy with its own conversation ID (Codex forks at completed assistant turn boundaries or into a worktree; Claude forks at recorded user or assistant messages in the same folder). worktree-chat starts a fresh Chat in a new worktree of the project. worktree-remove keeps a worktree that has uncommitted changes or a running session, and never deletes its branch. location reports the machine, folder and continuation limits; every Chat runs on this Mac. Use throughSequence from session chat read messageActions for an exact message. Claude reports pending until its first input saves the new provider ID. Fork and worktree actions belong to the Mac owner.",
+            description: "Fork a project Chat at a recorded message into a separate Chat; start a fresh Chat in a git worktree; inspect or remove an owned worktree; or read where the Chat runs. Claude and Codex use provider-native copies where supported. Gemini and earlier team or read-only histories use a fresh conversation seeded with checked, bounded history. The source keeps its own owner and messages. A fork keeps the exact source AI, account, folder and approval settings; only Codex provider forks support a different worktree. Use throughSequence from the chat read's messageActions for an exact supported message. A fresh fork can be pending until its first input saves the new provider identity. worktree-remove preserves changed worktrees, live sessions and branches. These operations use the existing Mac owner and approval checks.",
             inputSchema: try NativeRPCValue.parseJSON(Data(#"{"type":"object","properties":{"sessionId":{"type":"string"},"do":{"type":"string","enum":["fork","worktree-chat","worktree-status","worktree-remove","location"]},"throughTurn":{"type":"string"},"throughSequence":{"type":"integer","minimum":1},"worktree":{"type":"boolean"},"title":{"type":"string"},"session":{"type":"string"}},"required":["sessionId","do"],"additionalProperties":false}"#.utf8)), tier: .read)
         return [BackendDeckToolsDefinition(spec: spec, title: "Chat fork, worktree and location") { caller, args in
             await BackendDeckToolsSupport.reply {

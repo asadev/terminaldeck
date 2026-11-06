@@ -31,6 +31,38 @@ public sealed class ChatHistory(AppDataRoot root) : IChatHistory
     if (chat.Version != 1 || Guid.Parse(chat.Definition.Id) != Guid.Parse(id)) throw new IOException("This chat history belongs to another chat.");
     return chat;
   }
+  public void CopyBranch(string sourceId, ChatRecord child) => CopyCombinedBranch([sourceId], child);
+  internal void CopyCombinedBranch(IEnumerable<string> sourceIds, ChatRecord child)
+  {
+    var target = DirectoryFor(child.Definition.Id);
+    if (Directory.Exists(target)) throw new IOException("The destination chat already exists.");
+    var stage = target + ".copy-" + Guid.NewGuid().ToString("N");
+    try
+    {
+      Directory.CreateDirectory(stage);
+      foreach (var sourceId in sourceIds.Distinct())
+      {
+        var media = Path.Combine(DirectoryFor(sourceId), "media");
+        if (Directory.Exists(media))
+        {
+          if (File.GetAttributes(media).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Chat media cannot be a linked directory.");
+          Directory.CreateDirectory(Path.Combine(stage, "media"));
+          foreach (var file in Directory.EnumerateFiles(media))
+          {
+            if (File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Chat media cannot be a linked file.");
+            var copy = Path.Combine(stage, "media", Path.GetFileName(file));
+            if (File.Exists(copy))
+            { if (!File.ReadAllBytes(copy).AsSpan().SequenceEqual(File.ReadAllBytes(file))) throw new IOException("Two chats contain different media with the same identity."); }
+            else File.Copy(file, copy);
+          }
+        }
+      }
+      using (var stream = new FileStream(Path.Combine(stage, "chat.json"), FileMode.CreateNew, FileAccess.Write))
+      { JsonSerializer.Serialize(stream, child, Json); stream.Flush(true); }
+      Directory.Move(stage, target);
+    }
+    finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+  }
   public void Save(ChatRecord chat)
   {
     chat.Definition.Validate(allowSavedUnsupportedChoices: true); var directory = DirectoryFor(chat.Definition.Id); Directory.CreateDirectory(directory);

@@ -66,7 +66,16 @@ struct SIDEBARSessionPicture: View {
     var body: some View {
         Group {
             if let agent {
-                AgentAvatar(agent: agent, size: size)
+                if agent.isHoot || AGTAgentsStore.shared.profiles.first(where: { $0.id == (agent.profileID ?? agent.id) })?.icon.flatMap(AGTIcon.parse) != nil {
+                    AgentAvatar(agent: agent, size: size)
+                } else {
+                    let initials = String(agent.name.split(whereSeparator: { $0.isWhitespace }).prefix(2).compactMap(\.first)).uppercased()
+                    Text(initials.isEmpty ? "?" : initials)
+                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .foregroundStyle(AgentColour.color(id: agent.profileID ?? agent.id, chosen: agent.iconColour, icon: agent.icon))
+                        .frame(width: size, height: size)
+                        .background(DeckTokens.avatarTile, in: .rect(cornerRadius: size * 0.28))
+                }
             } else {
                 Image(systemName: chat ? "bubble.left" : "terminal")
                     .font(.system(size: size * 0.58, weight: .regular))
@@ -113,7 +122,8 @@ struct NativeSessionRowIdentity {
     init(id: String, folder: String? = nil, provider: String? = nil, chat: Bool = false,
          agent: AGTAgent? = nil, project: PROJProject? = nil) {
         let store = SIDEBARProjectStore.shared
-        self.agent = agent ?? NativePhonePictureFaces.agent(id, agents: Self.agentsThisTurn())
+        self.agent = agent ?? AGTAgentsStore.shared.sender(of: id)
+            ?? NativeSessionRailContinuity.shared.agent(id) ?? Self.agentsThisTurn()[id]
         self.provider = provider ?? store.sessionProviders[id]
         self.chat = chat || store.sessionChats.contains(id)
         let location = store.sessionProjects[id]

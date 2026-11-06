@@ -334,7 +334,7 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
   };
   private async ValueTask<JsonElement> SaveAgentAsync(SavedAgent original, JsonElement patch, McpCallContext c, CancellationToken ct, bool create = false)
   {
-    var allowed = new[] { "id", "name", "provider", "role", "description", "model", "effort", "projectId", "defaultProject", "seat", "reportsTo", "instructionsFile", "instructions", "icon", "skills", "accountId", "status", "expectedInstructions", "maxConcurrentTasks", "permissionMode", "workingFolder", "toolsPreferred", "toolsAvoided", "skillsOff" };
+    var allowed = new[] { "id", "name", "provider", "role", "description", "model", "effort", "projectId", "defaultProject", "seat", "reportsTo", "instructionsFile", "instructions", "icon", "photoPath", "skills", "accountId", "status", "expectedInstructions", "maxConcurrentTasks", "permissionMode", "workingFolder", "toolsPreferred", "toolsAvoided", "skillsOff" };
     if (patch.EnumerateObject().Any(p => !allowed.Contains(p.Name))) throw new McpRefusal("This profile field is not supported here. Use name, provider, role, model, effort, projectId, seat, reportsTo, instructions, icon, skills, accountId or status.");
     var projectId = S(patch, "projectId") ?? original.ProjectId;
     if (S(patch, "defaultProject") is { } folder) { c.Require("folders", folder); projectId = projects.Resolve(null, folder); }
@@ -344,7 +344,8 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
     var status = original.Status;
     if (S(patch, "status") is { } savedStatus && (!Enum.TryParse<SavedAgentStatus>(savedStatus, true, out status) || !Enum.IsDefined(status)))
       throw new McpRefusal("Choose active, paused or archived for the agent status.");
-    var row = original with { MaxConcurrentTasks = patch.TryGetProperty("maxConcurrentTasks", out var cap) ? cap.ValueKind == JsonValueKind.Null ? null : cap.GetInt32() : original.MaxConcurrentTasks, Status = status, Name = S(patch, "name") ?? original.Name, Provider = S(patch, "provider") ?? original.Provider,
+    if (S(patch, "photoPath") is { } photo) c.Require("folders", photo);
+    var row = original with { PhotoPath = patch.TryGetProperty("photoPath", out _) ? S(patch, "photoPath") : original.PhotoPath, MaxConcurrentTasks = patch.TryGetProperty("maxConcurrentTasks", out var cap) ? cap.ValueKind == JsonValueKind.Null ? null : cap.GetInt32() : original.MaxConcurrentTasks, Status = status, Name = S(patch, "name") ?? original.Name, Provider = S(patch, "provider") ?? original.Provider,
       Description = S(patch, "role") ?? S(patch, "description") ?? original.Description, Model = S(patch, "model") ?? original.Model, Effort = S(patch, "effort") ?? original.Effort,
       ProjectId = projectId, Seat = S(patch, "seat") ?? original.Seat, ReportsTo = boss, Icon = S(patch, "icon") ?? original.Icon,
       InstructionsFile = patch.TryGetProperty("instructionsFile", out _) ? S(patch, "instructionsFile") : original.InstructionsFile,
@@ -366,7 +367,7 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
   }
   private static object SettingsView(Project p) => p.Preferences.Values.SetItem("whoUsesWhat", Value(p.Preferences.WhoUsesWhat));
   private static object ProjectView(Project p) => new { p.Id, p.Name, path = p.HomeFolder, p.Folders, p.Icon, p.Colour, p.Logo, p.Lead, p.LeadName, p.IsOpen };
-  private static object AgentView(SavedAgent a) => new { a.Id, a.Name, provider = a.Provider, role = a.Description, a.Model, a.Effort, a.ProjectId, a.Seat, a.ReportsTo, a.InstructionsFile, a.Icon, a.Status, a.MaxConcurrentTasks, skills = a.Skills.IsDefault ? [] : a.Skills, a.AccountId,
+  private static object AgentView(SavedAgent a) => new { a.Id, a.Name, provider = a.Provider, role = a.Description, a.Model, a.Effort, a.ProjectId, a.Seat, a.ReportsTo, a.InstructionsFile, a.Icon, a.PhotoPath, a.Status, a.MaxConcurrentTasks, skills = a.Skills.IsDefault ? [] : a.Skills, a.AccountId,
     permissionMode = a.Settings.PermissionMode, workingFolder = a.Settings.WorkingFolder, toolsPreferred = a.Settings.ToolsPreferred.IsDefault ? [] : a.Settings.ToolsPreferred,
     toolsAvoided = a.Settings.ToolsAvoided.IsDefault ? [] : a.Settings.ToolsAvoided, skillsOff = a.Settings.SkillsOff };
   private object Activity(SavedAgent a) { var x = AgentActivity.For(a, agents.Runs(), sessions()); return new { state = x.Wire, label = x.Label, live = x.Live, busy = x.Busy }; }

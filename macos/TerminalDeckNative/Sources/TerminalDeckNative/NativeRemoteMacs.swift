@@ -241,6 +241,11 @@ struct NativeOtherMacsCard: View {
     private func apply(_ event: BackendRemoteMacEvent) {
         switch event {
         case let .state(state, note):
+            if MacReach.State(rawValue: state) != nil {
+                self.note = state == "desktop" ? "" : note
+                if state == "unreachable" { self.state = "opening" }
+                return
+            }
             self.state = state
             self.note = note
         case let .refused(words):

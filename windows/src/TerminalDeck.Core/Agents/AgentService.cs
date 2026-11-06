@@ -296,13 +296,25 @@ public sealed class AgentService : IAgents
     foreach (var run in Runs().Where(r => r.State != AgentRunState.Ended))
       if (rows.TryGetValue(run.SessionId, out var row) && row.Status is "Exited" or "exited" or "ended") EndHand(run.SessionId);
   }
+  public void InheritChatIdentity(string parentId, string childId)
+  {
+    lock (gate)
+    {
+      if (parentId == childId || state.Runs.Any(r => r.SessionId == childId)) return;
+      var parent = state.Runs.FirstOrDefault(r => r.SessionId == parentId && r.Mode == "chat");
+      if (parent is null) return;
+      var nextHand = state.Runs.Where(r => r.SeatKey == parent.SeatKey).Select(r => r.HandNumber).DefaultIfEmpty().Max() + 1;
+      Persist(state with { Runs = state.Runs.Add(parent with { SessionId = childId, HandNumber = nextHand, State = AgentRunState.Running, StartedAt = clock.GetUtcNow(), Problem = null }) });
+    }
+    Changed?.Invoke();
+  }
   public string SessionLabel(string sessionId, string provider) => SessionFace(sessionId)?.Name ?? AgentSeats.ProviderName(provider);
   public AgentFace? SessionFace(string sessionId)
   {
     var run = Runs().FirstOrDefault(r => r.SessionId == sessionId);
     if (run?.AgentId is not { } id) return null;
     var agent = List().FirstOrDefault(a => a.Id == id);
-    return new(id, agent?.Name ?? run.AgentName, agent?.Icon ?? "person");
+    return new(id, agent?.Name ?? run.AgentName, agent?.Icon ?? "person", PhotoPath: agent?.PhotoPath);
   }
   public IReadOnlyList<ProjectSetupAgent> SetupAgents() => List().Select(a => new ProjectSetupAgent(a.Id, a.ProjectId, a.Skills.IsDefault ? [] : a.Skills, a.Status == SavedAgentStatus.Archived)).ToArray();
   private AgentRun SetRun(string id, AgentRunState next, string? problem = null)
@@ -366,6 +378,7 @@ public sealed class AgentService : IAgents
     if (!ProjectIdentity.ValidId(agent.Id) || agent.Id is "hoot" or "independent" || string.IsNullOrWhiteSpace(agent.Name) || agent.Name.Length > 60 || agent.Name.Any(char.IsControl) ||
       agent.Provider.Length is 0 or > 40 || agent.Provider.Any(char.IsControl) || !allowSavedUnsupportedChoices && agent.Provider is not ("claude" or "codex" or "gemini") || agent.Description.Length > 4000 || agent.Description.Contains('\0') || agent.Model.Length > 160 || agent.Model.Any(char.IsControl) ||
       agent.Effort.Length is 0 or > 40 || agent.Effort.Any(char.IsControl) || !allowSavedUnsupportedChoices && agent.Effort is not ("auto" or "low" or "medium" or "high" or "xhigh" or "max") || !ProjectIdentity.ValidId(agent.ProjectId) || agent.Seat.Length > 0 && !AgentSeats.ValidRole(agent.Seat) ||
+      agent.PhotoPath is { } photo && (photo.Length > 4096 || !Path.IsPathFullyQualified(photo) || photo.Any(char.IsControl)) ||
       agent.MaxConcurrentTasks is < 1 || agent.Icon.Length is 0 or > 100 || agent.Icon.Any(char.IsControl) || !Enum.IsDefined(agent.Status) || !agent.Skills.IsDefault && (agent.Skills.Length > 80 || agent.Skills.Any(s => s.Length is 0 or > 200)))
       throw new ArgumentException("Choose a name, AI, project, model and role for this agent.");
   }

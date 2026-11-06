@@ -220,6 +220,14 @@ public enum BackendDeckCoreCatalogueDescribe {
                 ])
             }
         }
+        if area == "sessions", caller.kind == .session,
+           let granted, !BackendMCPToolNames.permits("sessions.list", granted: granted) || !BackendMCPToolNames.permits("sessions.send", granted: granted) {
+            if answer.fields?.isEmpty != false {
+                unknown.removeAll { $0 == "no area called sessions" }
+                answer = BackendDeckCoreCatalogueRules.object([("area", .string("sessions")), ("held", .array([])), ("alreadyListed", .array([]))])
+            }
+            answer = answer.setting("note", .string(BackendSessionDirectory.toolRefusal))
+        }
         if area == "agents", caller.kind == .key, !caller.tasks {
             let hidden = catalogue.filter { $0.keyGrant == "tasks" && areaOf($0.tool.id) == "agents" && $0.asListed(keyCaller: true) != nil }.count
             if hidden > 0 {

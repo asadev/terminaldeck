@@ -11,11 +11,11 @@ extension NativeHootChatModel {
             blocks.flatMap { block -> [NativeRPCValue] in
                 switch block {
                 case .table(let header, let rows):
-                    let widths = ChatTableLayout.widths(header: header, rows: rows, available: available)
-                    return [.object([.init("layout", .string(widths == nil ? "stacked" : "table")),
+                    let widths = NativeChatTable.columnWidths(header: header, rows: rows, available: CGFloat(available)).map(Double.init)
+                    return [.object([.init("layout", .string(widths.reduce(0, +) + Double(max(0, widths.count - 1)) * Double(DeckTokens.Spacing.s16) > available ? "scroll" : "table")),
                         .init("header", .array(header.map(NativeRPCValue.string))),
                         .init("rows", .array(rows.map { .array($0.map(NativeRPCValue.string)) })),
-                        .init("columnWidths", widths.map { .array($0.map(NativeRPCValue.number)) } ?? .null)])]
+                        .init("columnWidths", .array(widths.map(NativeRPCValue.number)))])]
                 case .quote(let inner): return tables(inner)
                 case .list(_, _, let items): return items.flatMap(tables)
                 default: return []
@@ -24,8 +24,11 @@ extension NativeHootChatModel {
         }
         return .object([.init("bodyPoints", .number(NativeChatMarkdown.bodyFont.pointSize)),
             .init("avatar", .string("inline-with-name")), .init("bodyAlignment", .string("name-line-left-edge")),
-            .init("tableSidewaysScroll", .bool(false)), .init("codeWrap", .bool(false)),
+            .init("tableSidewaysScroll", .bool(true)), .init("codeWrap", .bool(false)),
             .init("availableWidth", .number(available)),
+            .init("messages", .array(rows.filter { [.user, .message, .textDelta].contains($0.kind) }.map { row in
+                .object([.init("rowId", .string(row.id)), .init("blocks", ChatMarkdown.renderedBlocks(row.value["text"].string ?? "", streaming: row.kind == .textDelta))])
+            })),
             .init("tables", .array(rows.filter { [.message, .textDelta].contains($0.kind) }.flatMap { tables(ChatMarkdown.parse($0.value["text"].string ?? "")) }))])
     }
 }

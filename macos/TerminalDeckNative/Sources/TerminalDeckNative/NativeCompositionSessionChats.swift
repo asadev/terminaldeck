@@ -55,7 +55,7 @@ extension NativeCompositionProduction {
                     let resolved = try await gate.authority.resolve(caller)
                     let verb = args["do"].string ?? "", requestedID = args["sessionId"].string ?? ""
                     // 30 Oct: a team job may be named by its AI's own conversation id; the job's session id is used.
-                    let id = spec.id == start.id || requestedID == "hoot" ? requestedID : (await NativeChatSessionLookup.jobID(requestedID, chats: chats))
+                    let id = spec.id == start.id || requestedID == "hoot" ? requestedID : (try await NativeChatSessionLookup.jobID(requestedID, chats: chats, authority: gate.authority))
                     if spec.id == start.id {
                         guard resolved.caller.kind != .remote else {
                             throw NativeRPCError(code: "not-granted", message: "Ask Hoot to start a saved agent's session.")
@@ -187,7 +187,7 @@ extension NativeCompositionProduction {
                         await gate.noteResult(caller, .object([.init("sessionId", .string(id)), .init("action", .string("history"))]))
                         return .value(result)
                     }
-                    let meta = try await NativeChatSessionLookup.require(id, caller: caller, gate: gate, chats: chats)
+                    let meta = try await NativeChatSessionLookup.require(id, caller: caller, gate: gate, chats: chats, message: verb == "say")
                     let change = try operation.changes(args)
                     if verb != "answer" {
                         try await gate.authorize(caller, change ? .act : .read, change ? "Change this chat session" : "Read this chat session",
@@ -207,7 +207,7 @@ extension NativeCompositionProduction {
                         details = details.setting("todos", .array(steps)).setting("taskProgress", progress.wire.setting("steps", .array(steps)))
                         if (details["thoughts"].elements ?? []).isEmpty { details = details.setting("thoughts", .array(BackendChatThoughts.summaries(events))) }
                         let diffs = BackendChatDiffs.cards(HootChatProjection.rows(events)).map(\.wire)
-                        value = details.setting("draftReferences", .array(references)).setting("diffs", .array(diffs))
+                        value = details.setting("sessionId", .string(id)).setting("draftReferences", .array(references)).setting("diffs", .array(diffs))
                     case "say":
                         let text = try args["text"].requireString("text", nonempty: true)
                         let source = resolved.caller
@@ -216,14 +216,16 @@ extension NativeCompositionProduction {
                         let messageID = BackendChatRetryIdentity.messageID(args["clientMessageId"].string,
                             caller: callerID, conversation: id, text: text, frame: args)
                         let wanted = args["references"].elements ?? []
-                        if wanted.isEmpty { value = try await chats.say(id, text: text, clientMessageID: messageID) }
+                        if wanted.isEmpty { value = try await BackendSessionDirectory.say(id, text: text, chats: chats, rows: gate.authority.sessionViews(), clientMessageID: messageID,
+                            readTarget: { _ = try await gate.authority.requireSession(id, native: caller) }) }
                         else {
                             guard let referenceFiles else { throw NativeRPCError(code: "unavailable", message: "Project file context is not ready.") }
                             let rpc = try await gate.authority.rpc(caller)
                             let references = try await BackendChatReferences.read(wanted, root: meta.cwd, service: referenceFiles, context: rpc)
                             let sender = await lifecycle.conversationSender(resolved.caller)
                             let context = NativeRPCValue.object([.init("files", .array(references)), .init("source", .object([.init("kind", .string("agent")), .init("title", .string("Message from " + sender.name)), .init("sessionId", .string(caller.sessionID))]))])
-                            value = try await chats.say(id, text: text, context: context, clientMessageID: messageID)
+                            value = try await BackendSessionDirectory.say(id, text: text, chats: chats, rows: gate.authority.sessionViews(), context: context, clientMessageID: messageID,
+                            readTarget: { _ = try await gate.authority.requireSession(id, native: caller) })
                         }
                     case "files":
                         guard let referenceFiles else { throw NativeRPCError(code: "unavailable", message: "Project file search is not ready.") }
@@ -326,6 +328,7 @@ extension NativeCompositionProduction {
         let chats = BackendSessionChats(manager: sessions.manager,
             directory: root.dataRoot.appendingPathComponent("session-chats", isDirectory: true),
             publish: { [weak self] id, snapshot in
+                authority.note(.status(sessionID: id, status: BackendSessionDirectory.status(snapshot), source: "chat"))
                 // What is said in a session belongs to the person's own window, like its terminal output.
                 try? await registry.publish(BackendSessionChats.event, arguments: [.string(id), snapshot], ownerID: BackendCompositionRoot.appOwnerID)
                 // And to a paired phone watching this chat (it reads the conversation again through its own gates).
@@ -343,6 +346,20 @@ extension NativeCompositionProduction {
                 try await registry.invoke("usage:read", context: authority.localContext(), arguments: [.string(id)])
             })
         sessionChats = chats
+        await chats.setEarlierEngineMove { [state = root.state, launcher = sessions.launcher, joins] id in
+            let saved = try BackendSessionSaved(await state.ledgerGet(id))
+            let boundary: BackendDeviceBoundary?
+            if let device = saved.deviceID { boundary = try await joins.phoneStartBoundary(deviceID: device, folder: saved.cwd) }
+            else { boundary = nil }
+            let snapshot = try await chats.read(id, cursor: nil, limit: 1)
+            let conversation = try snapshot["providerConversationId"].requireString("saved AI conversation", nonempty: true)
+            var input = saved.input(resume: true, conversationID: conversation, replaces: id)
+            input.chat = true
+            _ = try await launcher.create(input, context: .init(deviceBoundary: boundary, rememberTab: false), chatMigration: { input, spawn in
+                try await chats.moveEarlierChat(id, input: input, spawn: spawn)
+            })
+        }
+
         await sessions.lifecycle.setChatOwners(typing: { id, data in try await chats.type(id, data: data) },
                                                removal: { meta in try await chats.removeSession(meta) })
         // 22 Oct (Asad, "remove this 128 limit"): a finished team job leaves the session list, the same close as
@@ -368,6 +385,7 @@ extension NativeCompositionProduction {
         #endif
         try await chats.restoreJobHistory()
         // The ones a running helper still lists from before this start leave after the page shows its tabs (pageReady).
+        await sessions.launcher.setLocalChatPreference { key in await chats.prefersLocalEngine(tabKey: key) }
         await sessions.launcher.setChatDispatch { input, spawn in try await chats.launch(input, spawn: spawn) }
         // Like Hoot's CLI: an app-owned AI holding an account ends before the sessions are handed to the helper.
         BackendHOSTKeepDetachPreparation.register("session-chats") { await chats.endAllForQuit() }
@@ -542,8 +560,8 @@ extension NativeCompositionProduction {
 /// team job by its id or its AI's conversation id, under the same project boundary as its history.
 enum NativeChatSessionLookup {
     static func require(_ id: String, caller: BackendMCPCallContext, gate: BackendCompositionDeckToolsGate,
-                        chats: BackendSessionChats) async throws -> BackendSessionMeta {
-        do { return try await gate.authority.requireSession(id, native: caller) }
+                        chats: BackendSessionChats, message: Bool = false) async throws -> BackendSessionMeta {
+        do { return try await gate.authority.requireSession(id, native: caller, message: message) }
         catch BackendSessionFailure.missingSession {
             guard let record = await chats.conversation(id) else { throw BackendSessionFailure.missingSession }
             try await gate.authority.requireHistorySession(record.session, native: caller)
@@ -551,7 +569,8 @@ enum NativeChatSessionLookup {
         }
     }
     /// The team job whose AI conversation this is, else the id as given.
-    static func jobID(_ id: String, chats: BackendSessionChats) async -> String {
+    static func jobID(_ id: String, chats: BackendSessionChats, authority: BackendCompositionAuthority) async throws -> String {
+        if let row = try BackendSessionDirectory.resolve(id, rows: authority.sessionViews()), let canonical = row["id"].string { return canonical }
         guard !id.isEmpty, await chats.conversation(id) == nil,
               let record = await chats.conversations().first(where: { $0.session.agentSessionId == id }) else { return id }
         return record.session.id

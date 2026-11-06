@@ -17,6 +17,7 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
   private string? clientId;
   private bool images;
   private bool rpcReady;
+  private bool contextSent;
   private readonly Dictionary<int, string> tools = [];
   private readonly Dictionary<int, System.Text.StringBuilder> toolInputs = [];
   private readonly Dictionary<string, JsonElement> approvalInputs = [];
@@ -34,9 +35,10 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
   {
     clientId = message.ClientId; messageId = ""; turnId = null; approvalInputs.Clear();
     var content = new List<object>();
-    var text = string.Join("\n\n", new[] { chat.Definition.Instructions, message.Text }.Where(s => s.Length > 0));
+    var replay = chat.ReplayHistory && !contextSent && chat.ConversationId is null;
+    var text = ChatRichContent.Prompt(chat with { ReplayHistory = replay }, message.Text);
     if (text.Length > 0) content.Add(new { type = "text", text });
-    foreach (var attachment in message.Media)
+    foreach (var attachment in (replay ? chat.Messages.SelectMany(m => m.Media).Concat(message.Media).DistinctBy(m => m.Id) : message.Media))
     {
       var bytes = media.ReadMedia(chat.Definition.Id, attachment);
       var data = Convert.ToBase64String(bytes);
@@ -49,6 +51,7 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
         content.Add(new { type = "image", mimeType = attachment.MimeType, data });
       }
     }
+    contextSent = true;
     if (provider == "claude") return Json(new { type = "user", uuid = message.ClientId, message = new { role = "user", content } });
     if (!IsRpc) throw new InvalidOperationException("Codex exec receives each message through its own input pipe.");
     if (conversation is null) throw new InvalidOperationException("This chat is still connecting.");

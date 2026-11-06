@@ -355,6 +355,19 @@ public actor BackendCopilotSessionRuntime {
     }
 
     // MARK: Rewind (the chat goes back to a message; Hoot's desk is rebuilt up to there; memory keeps the rest as history)
+    private var forkHandler: (@Sendable (Int) async throws -> NativeRPCValue)?
+    private var forking = false
+    public func setForkHandler(_ handler: @escaping @Sendable (Int) async throws -> NativeRPCValue) { forkHandler = handler }
+    public func forkChat(through sequence: Int) async throws -> NativeRPCValue {
+        guard !closing, !changingConversation, !forking, starting == nil, rewinding == nil,
+              let chat = structuredChat, !(await chat.isBusy) else {
+            throw NativeRPCError(code: "busy", message: "Wait for Hoot to finish before forking this conversation.")
+        }
+        guard let forkHandler else { throw NativeRPCError(code: "unavailable", message: "Hoot's conversation owner is unavailable.") }
+        forking = true
+        defer { forking = false }
+        return try await forkHandler(sequence)
+    }
     private var lastRewind: (chat: String, memory: Int64?)?
     private var rewinding: Task<String, Error>?
     /// Returns the text to put back in the message box ("" when the chosen message was Hoot's).
@@ -668,6 +681,11 @@ public actor BackendCopilotSessionRuntime {
                     throw NativeRPCError(code: "unavailable", message: "Hoot's chat options are unavailable.")
                 }
                 return try await options.conversationOptions(arguments.first)
+            case "hoot:chat:fork":
+                guard arguments.count == 1, let sequence = try BackendHootChatChannels.integer(arguments[0], maximum: Int.max / 2), sequence > 0 else {
+                    throw NativeRPCError.invalidArguments("Choose a message's event number.")
+                }
+                return try await forkChat(through: sequence)
             case "hoot:chat:new":
                 guard arguments.isEmpty, !changingConversation, !(await chat.isBusy), let options = deps.driver as? any BackendHOOTSIMConversationOptions else {
                     throw NativeRPCError(code: "busy", message: "Finish or stop Hoot before starting a new chat.")
@@ -756,8 +774,22 @@ public actor BackendCopilotSessionRuntime {
            text.contains("@") || !(context["mentions"].elements ?? []).isEmpty {
             let turn = await chat.activeTurnID
             Task {
+                var owner = turn
+                if accepted["queued"].bool == true || (accepted["queuedMessages"].elements ?? []).contains(where: { $0["id"].string == clientMessageID }) {
+                    var confirmed = false
+                    // A queued mention belongs to its eventual message, never the answer still running now.
+                    for await snapshot in await chat.subscribe() {
+                        if let receipt = (snapshot["events"].elements ?? []).last(where: {
+                            $0["value"]["clientMessageId"].string == clientMessageID && $0["value"]["deliveryConfirmed"].bool == true
+                        }), let deliveredTurn = receipt["turnId"].string {
+                            owner = deliveredTurn; confirmed = true; break
+                        }
+                        guard (snapshot["queuedMessages"].elements ?? []).contains(where: { $0["id"].string == clientMessageID }) else { return }
+                    }
+                    guard confirmed, !Task.isCancelled else { return }
+                }
                 let receipts = await delivery.deliver(text: text, context: context, by: "me")
-                if !receipts.isEmpty { await chat.noteReceipts(receipts.map(\.wireValue), turn: turn) }
+                if !receipts.isEmpty { await chat.noteReceipts(receipts.map(\.wireValue), turn: owner) }
             }
         }
         return accepted

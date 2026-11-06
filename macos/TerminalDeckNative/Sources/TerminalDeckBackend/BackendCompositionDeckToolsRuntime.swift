@@ -85,7 +85,7 @@ public struct BackendCompositionDeckToolsScope: Sendable {
             if authority.hidden.contains(meta.id) { continue }
             if core.caller.kind != .local {
                 let id = meta.id
-                guard try await passes({ _ = try await authority.requireSession(id, native: native) }) else { continue }
+                guard try await passes({ _ = try await authority.requireSession(id, native: native, message: true) }) else { continue }
             }
             rows.append(try await view(meta, core: core))
         }
@@ -98,8 +98,8 @@ public struct BackendCompositionDeckToolsScope: Sendable {
         let statusSince = live?["at"].number ?? meta.createdAt
         let attentionSince: Double? = meta.exitCode != nil && live == nil ? nil : statusSince
         let windows = try await browserSlots(meta.id, "")
-        return BackendDeckToolsSupport.object([("id", .string(meta.id)), ("cwd", .string(meta.cwd)), ("title", .string(meta.title)),
-            ("provider", .string(meta.provider)), ("status", .string(status)), ("statusSince", .number(statusSince))])
+        return BackendSessionDirectory.row(meta).merging(BackendDeckToolsSupport.object([("id", .string(meta.id)), ("cwd", .string(meta.cwd)), ("title", .string(meta.title)),
+            ("provider", .string(meta.provider)), ("status", .string(status)), ("statusSince", .number(statusSince))]))
             .merging(BackendDeckCoreAttention.view(status: status, statusSince: attentionSince, exitCode: meta.exitCode, now: core.now()))
             .merging(BackendDeckToolsSupport.object([
                 ("createdAt", .number(meta.createdAt)), ("chat", .bool(meta.chat == true)), ("exitCode", meta.exitCode.map { .number(Double($0)) } ?? .null),
@@ -112,6 +112,7 @@ public struct BackendCompositionDeckToolsScope: Sendable {
     }
     /// catalogue.ts requireSession: the caller-visible view, or the source sentence.
     public func session(_ id: String, native: BackendMCPCallContext) async throws -> NativeRPCValue {
+        _ = try await authority.requireSession(id, native: native)
         guard let row = try await sessions(native).first(where: { $0["id"].string == id }) else { throw Self.missingSession(id) }
         return row
     }
@@ -124,7 +125,11 @@ public struct BackendCompositionDeckToolsScope: Sendable {
         for project in authority.state.listProjects().compactMap({ $0["path"].string }) {
             if try await passes({ _ = try await authority.knownFolder(project, native: native) }) { folders.insert(project) }
         }
-        for row in try await sessions(native) { if let cwd = row["cwd"].string { folders.insert(cwd) } }
+        for row in try await sessions(native) {
+            guard let id = row["id"].string,
+                  try await passes({ _ = try await authority.requireSession(id, native: native) }) else { continue }
+            if let cwd = row["cwd"].string { folders.insert(cwd) }
+        }
         folders.formUnion(try await workspaceFolders(core))
         return folders
     }
@@ -132,7 +137,10 @@ public struct BackendCompositionDeckToolsScope: Sendable {
     public func knownFolder(_ path: String, native: BackendMCPCallContext) async throws -> String {
         let core = try await resolve(native)
         if try await passes({ _ = try await authority.knownFolder(path, native: native) }) { return path }
-        if try await sessions(native).contains(where: { $0["cwd"].string == path }) { return path }
+        for row in try await sessions(native) where row["cwd"].string == path {
+            if let id = row["id"].string,
+               try await passes({ _ = try await authority.requireSession(id, native: native) }) { return path }
+        }
         if try await workspaceFolders(core).contains(path) { return path }
         throw Self.notKnown(path)
     }

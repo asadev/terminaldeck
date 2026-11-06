@@ -22,6 +22,7 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   public event Action<string>? ControlRequested;
   public string? RequestedModel { get; private set; }
   public bool ReadingModels { get; private set; }
+  public string? ModelReadProblem { get; private set; }
   public string SelectedModelId => ChatProviderSnapshot.Read(Snapshot).Model ?? Snapshot.Definition.Options.Model;
   // Asad's rule: the chip always names a real model, never a blank prompt. With no
   // explicit choice it shows the AI's own default (greyed by the page, with why).
@@ -56,8 +57,9 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
   public void DiscardEditorCopy() => EditorCopies.Discard(draftBuffer);
   public long DraftRevision => draftBuffer.Read().Revision;
   public void ApplyDraft(string text, long expectedRevision) => draftBuffer.Apply(text, expectedRevision);
+  public string DataDirectory => chats.DataRoot?.DirectoryPath ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview");
   public string AttachmentPreviewDirectory => Path.Combine(chats.DataRoot?.DirectoryPath ?? throw new InvalidOperationException("This chat has no private attachment folder."), "attachment-previews");
-  public string AccountName => chats.Accounts(Id).FirstOrDefault(a => a.Id == Snapshot.Definition.AccountId) is { } account ? account.SignedIn ? account.Email ?? account.Name : "Not signed in" : "Not signed in";
+  public string AccountName => chats.Accounts(Id).FirstOrDefault(a => a.Id == Snapshot.Definition.AccountId) is { } account ? account.SignedIn ? account.Name : "Not signed in" : "Not signed in";
   public IReadOnlyList<AccountProfile> Accounts => chats.Accounts(Id);
   public event PropertyChangedEventHandler? PropertyChanged;
   public ChatViewModel(IChatSessions chats, string id, Action<Action> dispatch, AccountService? accountModels = null)
@@ -101,6 +103,7 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
     { await RunAsync(() => throw new ArgumentException("Keep this message’s images under 8 MB in total.")); return; }
     try { ChatText.ValidatePrompt(unconfirmedSend?.Text ?? Draft); }
     catch (ArgumentException ex) { Error = ex.Message; Changed(nameof(Error)); return; }
+    Error = null; Changed(nameof(Error));
     Sending = true; Changed(nameof(Sending));
     if (unconfirmedSend is null) { var source = draftBuffer.Read(); unconfirmedDraftRevision = source.Revision; unconfirmedSend = new(Guid.NewGuid().ToString(), source.Text, Attachments.ToArray()); }
     var attempt = unconfirmedSend;
@@ -203,9 +206,18 @@ public sealed partial class ChatViewModel : INotifyPropertyChanged, IAsyncDispos
     {
       var accountId = Snapshot.Definition.AccountId;
       IReadOnlyList<ProviderModel> result = [];
-      await RunAsync(async () => { result = accountModels is null ? await chats.ModelsAsync(Id, lifetime.Token) : (await accountModels.ModelsAsync(accountId, cancellationToken: lifetime.Token)).Models; });
+      result = accountModels is null ? await chats.ModelsAsync(Id, lifetime.Token) : (await accountModels.ModelsAsync(accountId, cancellationToken: lifetime.Token)).Models;
       if (Snapshot.Definition.AccountId != accountId) return [];
+      ModelReadProblem = null; Changed(nameof(ModelReadProblem));
       AvailableModels = result; Changed(nameof(AvailableModels)); return result;
+    }
+    catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return []; }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or TimeoutException)
+    {
+      // A background catalogue read cannot turn a successful send into a chat
+      // error, or clear a real send failure while that send is in flight.
+      ModelReadProblem = "Models could not be read. Check Coding AIs."; Changed(nameof(ModelReadProblem));
+      return AvailableModels;
     }
     finally { ReadingModels = false; Changed(nameof(ReadingModels)); }
   }

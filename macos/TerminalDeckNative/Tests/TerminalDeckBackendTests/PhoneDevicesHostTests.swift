@@ -25,6 +25,8 @@ struct PhoneDevicesHostTests {
         var streamsStopped = 0
         var macViewers: [[BackendPhoneMacViewer]] = []
         var inputIDs: [String] = []
+        var wakePermissions: [Bool] = []
+        func captureRequest() { wakePermissions.append(MacScreenAvailability.mayWake) }
         func viewers(_ value: [BackendPhoneMacViewer]) { macViewers.append(value) }
         func inputTo(_ id: String, _ value: BackendPhoneDeviceInput) { inputIDs.append(id); inputs.append(value) }
         func input(_ value: BackendPhoneDeviceInput) { inputs.append(value) }
@@ -114,9 +116,18 @@ struct PhoneDevicesHostTests {
         var source = BackendPhoneDevices.Source(
             list: { Self.rows },
             power: { id, on in await engine.power(id, on); return .object([.init("ok", .bool(true)), .init("id", .string("android:emulator-5560"))]) },
-            stream: { id, _ in FakeStream(engine: engine, noisy: id.hasPrefix("mac:"), encodes: encodes) },
+            stream: { id, _ in
+                if id.hasPrefix("mac:") {
+                    await engine.captureRequest()
+                    await MacScreenAvailability.progress(MacScreenAvailability.waking)
+                }
+                return FakeStream(engine: engine, noisy: id.hasPrefix("mac:"), encodes: encodes)
+            },
             input: { id, value in await engine.inputTo(id, value) },
-            shot: { _ in .init(png: shotPNG, width: 1170, height: 2532) },
+            shot: { id in
+                if id.hasPrefix("mac:") { await engine.captureRequest() }
+                return .init(png: shotPNG, width: 1170, height: 2532)
+            },
             deliver: { value in await engine.deliver(value); return "Sent to Hoot." },
             visibleSessions: { _ in ["s-chat-1"] },
             send: { [weak host] id, message in try await host?.sendToConnection(id, message: message) },
@@ -299,6 +310,38 @@ struct PhoneDevicesHostTests {
         try await waitFor { await wire.rows("error").count >= 2 }
         let inputs = await engine.inputs, powered = await engine.powered
         #expect(inputs.isEmpty && powered.isEmpty)
+    }
+
+    @Test func wakePermissionAndProgressFollowLiveAndStillRequests() async throws {
+        for level in [BackendINT2PhoneAccessLevel.work, .full] {
+            let (host, installation, wire, engine, id, trust, dir) = try await connect(level: level)
+            defer { Task { await installation.stop(); await host.stop(); await trust.close(); try? FileManager.default.removeItem(at: dir) } }
+            await host.receive(id, text: #"{"t":"sims.watch","rid":"wake-live","id":"mac:1","maxWidth":1600,"quality":70,"video":["h264"]}"#)
+            try await waitFor { await !wire.rows("sims.video").isEmpty }
+            #expect(await wire.rows("sims.state").contains { $0["state"].string == "opening" && $0["note"].string == MacScreenAvailability.waking })
+            await host.receive(id, text: #"{"t":"sims.shot","rid":"sleep-still","id":"mac:1"}"#)
+            try await waitFor { await engine.wakePermissions.count == 2 }
+            #expect(await engine.wakePermissions == [level == .full, level == .full])
+        }
+    }
+
+    @Test func aMissingDisplayIdentityCanRecoverThroughTheMainDisplay() async throws {
+        let (host, installation, wire, engine, id, trust, dir) = try await connect(level: .full)
+        defer { Task { await installation.stop(); await host.stop(); await trust.close(); try? FileManager.default.removeItem(at: dir) } }
+        let missing = "mac:9B20D968-C375-4C3E-8A44-39359C44254A"
+        await host.receive(id, text: "{\"t\":\"sims.watch\",\"rid\":\"recover\",\"id\":\"\(missing)\",\"maxWidth\":1600,\"quality\":70,\"fps\":20,\"video\":[\"h264\"]}")
+        try await waitFor {
+            let videos = await wire.rows("sims.video"), errors = await wire.rows("error")
+            return !videos.isEmpty || !errors.isEmpty
+        }
+        let errors = await wire.rows("error")
+        #expect(errors.isEmpty, "\(errors)")
+        #expect(await wire.rows("sims.video").contains { $0["id"].string == missing })
+        await host.receive(id, text: "{\"t\":\"sims.input\",\"rid\":\"move\",\"id\":\"\(missing)\",\"do\":\"click\",\"button\":\"left\"}")
+        try await waitFor { await engine.inputs.count == 1 }
+        #expect(await engine.inputIDs == [missing])
+        await host.receive(id, text: "{\"t\":\"sims.unwatch\",\"id\":\"\(missing)\"}")
+        try await waitFor { await engine.streamsStopped == 1 }
     }
 
     @Test func thisMacStreamsVideoAndOnlyFullControlDrives() async throws {

@@ -7,7 +7,7 @@ using TerminalDeck.Core.Storage;
 namespace TerminalDeck.Core.Hoot;
 
 // Keeper owns this service. Views attach; they never own or restart its AI.
-public sealed class HootService : IHoot, IAsyncDisposable
+public sealed partial class HootService : IHoot, IAsyncDisposable
 {
   private readonly IStateStore<HootState> store;
   private readonly IChatSessions chats;

@@ -7,11 +7,48 @@ import TerminalDeckNativeCore
 /// Comment action's wire. The adapter runs against a recording engine and host; parsing, access levels, frame
 /// validation and the Hoot account projection are the real code.
 final class PHONEChatsTests: XCTestCase {
+    func testExplicitIdleWinsOverBackgroundBusyOnPhone() async throws {
+        let snapshot = NativeRPCValue.object([.init("conversationId", .string("conv-1")), .init("busy", .bool(true)),
+            .init("foreground", .bool(false)), .init("events", .array([Self.event(1, .message, text: "Done")]))])
+        let frame = try await Self.adapter(Recorder(), snapshot: snapshot).conversation("chat-1")
+        XCTAssertEqual(frame.value["foreground"].bool, false)
+        XCTAssertEqual(frame.value["busy"].bool, false)
+        let hoot = try BackendINT2HootPhone.page(snapshot, before: nil)
+        XCTAssertEqual(hoot.value["foreground"].bool, false)
+        let older = try BackendINT2HootPhone.page(snapshot, before: 1)
+        XCTAssertEqual(older.value["older"].bool, true)
+    }
+
     // MARK: Shapes
 
     private func parse(_ json: String) -> BackendRemoteClientMessage? {
         if case .message(let message) = BackendRemoteProtocol.parseClientMessage(json) { return message }
         return nil
+    }
+
+    func testRichPhoneFeedIncludesClosedVisualSourceWithoutDuplicatingOrdinaryText() async throws {
+        let source = "```visual\n<div>chart</div>\n```\n\n```mermaid\ngraph LR; A-->B\n```"
+        let events = [Self.event(1, .user), Self.event(2, .message, text: source)]
+        let adapter = Self.adapter(Recorder(), snapshot: .object([.init("conversationId", .string("conv-1")), .init("events", .array(events))]))
+        let frame = try await adapter.conversation("chat-1")
+        let messages = try XCTUnwrap(frame.value["renderedMessages"].elements)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0]["blocks"].elements?.map { $0["type"].string }, ["visual", "mermaid"])
+        XCTAssertEqual(messages[0]["blocks"].elements?.first?["source"].string, "<div>chart</div>")
+        XCTAssertTrue(messages[0]["text"].isNullish)
+        XCTAssertEqual(frame.value["events"].elements?.last?["value"]["text"].string, source)
+    }
+    func testRichPhoneHintsYieldToTheOriginalMessageAtTheFrameLimit() async throws {
+        let source = "```visual\n<div>" + String(repeating: "a", count: 40_000) + "</div>\n```"
+        let adapter = Self.adapter(Recorder(), snapshot: .object([.init("conversationId", .string("conv-1")), .init("events", .array([Self.event(1, .message, text: source)]))]))
+        let frame = try await adapter.conversation("chat-1")
+        let event = try XCTUnwrap(frame.value["events"].elements?.first)
+        let preview = try XCTUnwrap(event["value"]["text"].string)
+        XCTAssertTrue(source.hasPrefix(preview))
+        XCTAssertLessThan(preview.utf8.count, source.utf8.count)
+        XCTAssertEqual(event["value"]["richSource"]["bytes"].number, Double(source.utf8.count))
+        XCTAssertEqual(event["value"]["richSource"]["rowId"].string, HootChatProjection.rows(try [HootChatEvent(wire: Self.event(1, .message, text: source))]).first?.id)
+        XCTAssertLessThan(try frame.value.encodedJSON().count, BackendRemoteProtocol.limits["MAX_MESSAGE_BYTES"] ?? 65_536)
     }
 
     func testChatFramesParse() throws {

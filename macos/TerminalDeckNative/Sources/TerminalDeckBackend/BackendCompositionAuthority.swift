@@ -260,18 +260,24 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
             return projects.filter { folder in (scope.readRoots + scope.writeRoots).contains { Self.within(folder, $0.path) } }
         }
     }
-    public func requireSession(_ id: String, native: BackendMCPCallContext) async throws -> BackendSessionMeta {
+    public func requireSession(_ id: String, native: BackendMCPCallContext, message: Bool = false) async throws -> BackendSessionMeta {
         let core = try await resolve(native)
-        guard let session = prepared.manager.list().first(where: { $0.id == id }) else { throw BackendSessionFailure.missingSession }
+        let sessions = prepared.manager.list()
+        guard let row = try BackendSessionDirectory.resolve(id, rows: sessions.map { BackendSessionDirectory.row($0) }),
+              let session = sessions.first(where: { $0.id == row["id"].string }) else { throw BackendSessionFailure.missingSession }
         switch core.caller.kind {
         case .local: break
         case .key:
             if let folders = core.caller.folders, !folders.contains(where: { Self.within(session.cwd, $0) }) { throw NativeRPCError(code: "access-denied", message: "This session is outside the key's granted folders") }
         case .session:
-            try requireSessionProject(session, caller: core.caller)
+            if message {
+                guard BackendSessionDirectory.permits(BackendSessionDirectory.row(session), rows: sessions.map { BackendSessionDirectory.row($0) }, caller: core.caller, message: true) else {
+                    throw NativeRPCError(code: "access-denied", message: BackendSessionDirectory.accessRefusal)
+                }
+            } else { try requireSessionProject(session, caller: core.caller) }
         case .remote:
-            guard let remote, !hidden.contains(id) else { throw BackendSessionFailure.missingSession }
-            try await remote.requireSession(id, core)
+            guard let remote, !hidden.contains(session.id) else { throw BackendSessionFailure.missingSession }
+            try await remote.requireSession(session.id, core)
         }
         return session
     }
@@ -293,7 +299,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
     private func requireSessionProject(_ session: BackendSessionMeta, caller: BackendDeckCoreSecurityCaller) throws {
         let own = prepared.manager.list().first { $0.id == caller.sessionID && $0.exitCode == nil }
         guard try Self.sessionProjectPermits(id: session.id, cwd: session.cwd, caller: caller, callerCWD: own?.cwd) else {
-            throw NativeRPCError(code: "access-denied", message: "This session belongs to a different caller/project")
+            throw NativeRPCError(code: "access-denied", message: BackendSessionDirectory.accessRefusal)
         }
     }
     /// Same issued roots as folder access, including a task's own temporary workspace.
@@ -419,7 +425,7 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
     }
     public func sessionViews() -> [NativeRPCValue] {
         prepared.manager.list().map { meta in
-            let value = BackendCompositionSuppliers.sessionWire(meta)
+            let value = BackendSessionDirectory.row(meta)
             guard let record = statusRecord(meta.id) else { return value }
             return value.setting("attention", record["status"]).setting("statusSince", record["at"])
         }

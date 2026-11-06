@@ -34,6 +34,7 @@ public struct BackendDeckCoreLiveSurface: BackendDeckCoreCatalogueSurface, Backe
     private let projectEvidence: any BackendDeckCoreProjectEvidence
     private let ownership: NativeStateStore.Ownership
     private let start: @Sendable (NativeRPCValue) async throws -> NativeRPCValue
+    private let chatSend: (@Sendable (String, String) async throws -> Void)?
     private let input: @Sendable (String, String) async throws -> Void
     private let close: @Sendable (String) async throws -> Void
     private let status: @Sendable (String) -> NativeRPCValue
@@ -70,7 +71,8 @@ public struct BackendDeckCoreLiveSurface: BackendDeckCoreCatalogueSurface, Backe
                 readSessions: (@Sendable () -> [NativeRPCValue])? = nil,
                 readScreen: (@Sendable (String) -> String?)? = nil,
                 readScrollback: (@Sendable (String) -> String)? = nil,
-                agentRecords: BackendDeckCoreAgentRecords.Locate? = nil) throws {
+                agentRecords: BackendDeckCoreAgentRecords.Locate? = nil,
+                sendChat: (@Sendable (String, String) async throws -> Void)? = nil) throws {
         guard (deviceFolders == nil) == (deviceStartSession == nil) else {
             throw NativeRPCError.invalidArguments("Device folder grants and the device-aware session starter must be supplied together.")
         }
@@ -81,16 +83,16 @@ public struct BackendDeckCoreLiveSurface: BackendDeckCoreCatalogueSurface, Backe
         profileChoices = accounts; workspaceFolders = taskWorkspaceFolders; remoteFolders = deviceFolders; remoteStart = deviceStartSession
         self.tellWindow = tellWindow; self.noteServerSettingsChanged = noteServerSettingsChanged
         self.readSessions = readSessions; self.readScreen = readScreen; self.readScrollback = readScrollback
-        self.agentRecords = agentRecords
+        self.agentRecords = agentRecords; chatSend = sendChat
     }
     public func listSessions() -> [NativeRPCValue] {
         if let readSessions { return readSessions() }
-        return manager.list().map(Self.wire)
+        return manager.list().map { BackendSessionDirectory.row($0) }
     }
     /// Only that session is encoded, not every open one.
     public func session(id: String) -> NativeRPCValue? {
         if let readSessions { return readSessions().first { $0["id"].string == id } }
-        return manager.list().first { $0.id == id }.map(Self.wire)
+        return manager.list().first { $0.id == id }.map { BackendSessionDirectory.row($0) }
     }
     private static func wire(_ meta: BackendSessionMeta) -> NativeRPCValue {
         // BackendSessionMeta's encoder owns the exact source field names.
@@ -145,6 +147,10 @@ public struct BackendDeckCoreLiveSurface: BackendDeckCoreCatalogueSurface, Backe
             return try await remoteStart(input, device)
         }
         return try await start(input)
+    }
+    public func sendChat(_ sessionID: String, text: String) async throws {
+        guard let chatSend else { throw BackendSessionFailure.missingCapability("confirmed chat delivery") }
+        try await chatSend(sessionID, text)
     }
     public func writeToSession(_ sessionID: String, data: String) async throws { try await input(sessionID, data) }
     public func writeToSession(id: String, data: String) async throws { try await input(id, data) }

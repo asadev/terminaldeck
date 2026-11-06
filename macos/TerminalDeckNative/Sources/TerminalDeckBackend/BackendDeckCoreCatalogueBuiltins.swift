@@ -51,6 +51,8 @@ public enum BackendDeckCoreCatalogueBuiltins {
         let attentionSince = exitCode != nil && live.isNullish ? nil : statusSince
         return Rules.object([
             ("id", meta["id"]), ("cwd", meta["cwd"]), ("title", meta["title"]), ("provider", meta["provider"]),
+            ("view", meta["view"]), ("kind", meta["kind"]), ("chat", meta["chat"]),
+            ("seat", meta["seat"]), ("agent", meta["agent"]), ("tabKey", meta["tabKey"]), ("agentSessionId", meta["agentSessionId"]),
             ("status", .string(status)), ("statusSince", .number(statusSince))
         ]).merging(BackendDeckCoreAttention.view(status: status, statusSince: attentionSince, exitCode: exitCode, now: context.now()))
             .merging(Rules.object([
@@ -84,9 +86,13 @@ public enum BackendDeckCoreCatalogueBuiltins {
         }
         guard directory.boolValue else { throw NativeRPCError.invalidArguments("that path is not a folder: \(path)") }
     }
-    public static func requireSession(surface: any BackendDeckCoreCatalogueSurface, context: Context, id: String) throws -> NativeRPCValue {
-        guard let meta = surface.listSessions().first(where: { $0["id"].string == id }) else {
+    public static func requireSession(surface: any BackendDeckCoreCatalogueSurface, context: Context, id: String, message: Bool = false) throws -> NativeRPCValue {
+        let rows = surface.listSessions()
+        guard let meta = try BackendSessionDirectory.resolve(id, rows: rows) else {
             throw NativeRPCError.invalidArguments("this app is not holding a session with id \(id). Either that is not one of its ids — check sessions.list — or the session was stopped, which drops it and everything this app knew about it. A session that exited on its own is still here, with its exit code; a stopped one is not. Ask before stopping something you will want to report on.")
+        }
+        guard BackendSessionDirectory.permits(meta, rows: rows, caller: context.caller, message: message) else {
+            throw NativeRPCError(code: "access-denied", message: BackendSessionDirectory.accessRefusal)
         }
         return viewOf(surface: surface, context: context, metadata: meta)
     }
@@ -283,7 +289,8 @@ public enum BackendDeckCoreCatalogueBuiltins {
         switch id {
         case "sessions.list":
             let cwd = try Rules.optionalString(args, "cwd")
-            let sessions = surface.listSessions().filter { cwd == nil || $0["cwd"].string == cwd }.map { viewOf(surface: surface, context: context, metadata: $0) }.sorted(by: BackendDeckCoreAttention.precedes)
+            let rows = surface.listSessions()
+            let sessions = rows.filter { (cwd == nil || $0["cwd"].string == cwd) && BackendSessionDirectory.permits($0, rows: rows, caller: context.caller, directory: true) }.map { viewOf(surface: surface, context: context, metadata: $0) }.sorted(by: BackendDeckCoreAttention.precedes)
             let blocked = sessions.filter { $0["attention"] == .string("blocked") }.count
             let summary = Rules.object([("count", .number(Double(sessions.count))), ("blocked", .number(Double(blocked)))])
             return .init(value: NativeRPCValue.object([.init("sessions", .array(sessions))]).merging(summary), summary: summary)
@@ -308,11 +315,16 @@ public enum BackendDeckCoreCatalogueBuiltins {
                 try await start(args: args, context: context, surface: surface)
             }
         case "sessions.send":
-            let session = try requireSession(surface: surface, context: context, id: Rules.string(args, "sessionId"))
+            let session = try requireSession(surface: surface, context: context, id: Rules.string(args, "sessionId"), message: true)
             let text = try Rules.sanitizeSendText(Rules.string(args, "text")), submit = try Rules.optionalBool(args, "submit", fallback: true)
             guard session["exitCode"] == .null else { throw NativeRPCError.invalidArguments("session \(session["id"].string ?? "") has already exited; there is nothing to type into") }
             let sentAt = context.now(), sessionID = session["id"].string ?? ""
-            try await BackendDeckCoreTyping.typeLine(write: { data in try await surface.writeToSession(sessionID, data: data) }, text: text, submit: submit, clock: typingClock)
+            if session["chat"].bool == true {
+                guard submit else { throw NativeRPCError.invalidArguments("Chat messages must be submitted together. Use sessions_chat with do: draft to edit a draft.") }
+                try await surface.sendChat(sessionID, text: text)
+            } else {
+                try await BackendDeckCoreTyping.typeLine(write: { data in try await surface.writeToSession(sessionID, data: data) }, text: text, submit: submit, clock: typingClock)
+            }
             noteTyped(sessionID: sessionID, text: text, caller: context.caller)
             return .init(value: Rules.object([("sessionId", session["id"]), ("sent", .number(Double(text.utf16.count))), ("submitted", .bool(submit)), ("sentAt", .number(sentAt))]),
                 summary: Rules.object([("sessionId", session["id"]), ("chars", .number(Double(text.utf16.count))), ("submitted", .bool(submit)), ("text", .string(text))]))
@@ -330,13 +342,15 @@ public enum BackendDeckCoreCatalogueBuiltins {
                 return .init(value: report, summary: Rules.object([("sessionId", report["sessionId"]), ("attention", report["attention"]), ("progress", report["progress"]["verdict"])]))
             }
             let minutes = try Rules.optionalInt(args, "sinceMinutes", fallback: 0, min: 0, max: 43_200)
-            let sessions = surface.listSessions().map { viewOf(surface: surface, context: context, metadata: $0) }.sorted(by: BackendDeckCoreAttention.precedes)
+            let rows = surface.listSessions()
+            let sessions = rows.filter { BackendSessionDirectory.permits($0, rows: rows, caller: context.caller) }.map { viewOf(surface: surface, context: context, metadata: $0) }.sorted(by: BackendDeckCoreAttention.precedes)
             let fleet = try await surface.reportOnFleet(sessions: sessions, since: minutes == 0 ? nil : context.now() - Double(minutes) * 60_000,
                 limit: Rules.optionalInt(args, "limit", fallback: 8, min: 1, max: 25), now: context.now())
             return .init(value: fleet, summary: Rules.object([("sessions", fleet["totals"]["sessions"]), ("blocked", fleet["totals"]["blocked"]), ("looping", fleet["totals"]["looping"]), ("failed", fleet["totals"]["failed"])]))
         case "git.diff":
             let cwd = try requireKnownFolder(surface, path: Rules.string(args, "cwd"), caller: context.caller)
-            let sessions = surface.listSessions().map { viewOf(surface: surface, context: context, metadata: $0) }
+            let rows = surface.listSessions()
+            let sessions = rows.filter { BackendSessionDirectory.permits($0, rows: rows, caller: context.caller) }.map { viewOf(surface: surface, context: context, metadata: $0) }
             let diff = try await surface.collectFolderDiff(sessions: sessions, cwd: cwd, path: Rules.optionalString(args, "path"), maxFiles: Rules.optionalInt(args, "maxFiles", fallback: 25, min: 1, max: 100))
             return .init(value: diff, summary: Rules.object([("cwd", .string(cwd)), ("files", diff["changedFiles"]), ("withDiff", diff["withDiff"]), ("bound", diff["bound"])]))
         case "git.status":

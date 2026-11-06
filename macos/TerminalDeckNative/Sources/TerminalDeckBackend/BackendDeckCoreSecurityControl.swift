@@ -202,7 +202,7 @@ public actor BackendDeckCoreSecurityControl {
                     return await call(name: inner.tool.id, arguments: target.arguments, options: options.with(reason: args["reason"].string))
                 }
                 scrubbed = .object([.init("name", .string(target.name))])
-                let problem = self.policy(named: target.name)?.tool.id == "tools.run" ? "tools_run runs other tools; name the tool you want to run instead" : "no tool called \(target.name)"
+                let problem = self.policy(named: target.name)?.tool.id == "tools.run" ? "tools_run runs other tools; name the tool you want to run instead" : (caller.kind == .session && target.name.hasPrefix("sessions") ? BackendSessionDirectory.toolRefusal : "no tool called \(target.name)")
                 return await record(tool: "tools.run", tier: .read, summary: "Run \(target.name)", outcome: .error, confirmed: .init(required: false), error: problem)
             } catch {
                 scrubbed = .object([])
@@ -245,7 +245,7 @@ public actor BackendDeckCoreSecurityControl {
             if await driving() { return await stopped(.whileDriving, Self.refusalSentence(.whileDriving, tool: policy.tool.id)) }
         }
         // Visibility is checked by the transport before logging, and again for direct in-process keys.
-        if !policy.visible(to: options.granted, caller: caller) { return await record(tool: policy.tool.id, tier: .read, summary: "Call \(name)", outcome: .error, confirmed: .init(required: false), error: "no tool called \(name)") }
+        if !policy.visible(to: options.granted, caller: caller) { return await record(tool: policy.tool.id, tier: .read, summary: "Call \(name)", outcome: .error, confirmed: .init(required: false), error: caller.kind == .session && policy.tool.id.hasPrefix("sessions.") ? BackendSessionDirectory.toolRefusal : "no tool called \(name)") }
         let windowKey = windowFor(caller, at: at)
         var window = callerWindows[windowKey] ?? Windows(budgets)
         func storeWindows(_ value: Windows) { callerWindows[windowKey] = value }

@@ -77,7 +77,7 @@ public sealed class ManagedMcpFactory : IMcpConnectionFactory
     }
     public async Task InitializeAsync(CancellationToken ct)
     {
-      await RpcAsync("initialize", new { protocolVersion = "2025-06-18", capabilities = new { }, clientInfo = new { name = "deck-control", version = "0.1.0" } }, ct);
+      await RpcAsync("initialize", new { protocolVersion = "2025-06-18", capabilities = new { extensions = new Dictionary<string, object> { ["io.modelcontextprotocol/ui"] = new { mimeTypes = new[] { "text/html;profile=mcp-app" } } } }, clientInfo = new { name = "deck-control", version = "0.1.0" } }, ct);
       using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(45));
       await ExchangeAsync(Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"), null, deadline.Token);
     }
@@ -88,13 +88,14 @@ public sealed class ManagedMcpFactory : IMcpConnectionFactory
       do
       {
         var result = await RpcAsync("tools/list", cursor is null ? new { } : (object)new { cursor }, ct);
-        tools.AddRange(result.GetProperty("tools").EnumerateArray().Select(t => new McpRemoteTool(t.GetProperty("name").GetString()!, t.GetProperty("inputSchema").Clone(), t.TryGetProperty("title", out var title) ? title.GetString() : null, t.TryGetProperty("description", out var description) ? description.GetString() : null)));
+        tools.AddRange(result.GetProperty("tools").EnumerateArray().Select(t => new McpRemoteTool(t.GetProperty("name").GetString()!, t.GetProperty("inputSchema").Clone(), t.TryGetProperty("title", out var title) ? title.GetString() : null, t.TryGetProperty("description", out var description) ? description.GetString() : null, t.TryGetProperty("_meta", out var meta) ? meta.Clone() : null)));
         cursor = result.TryGetProperty("nextCursor", out var next) ? next.GetString() : null;
         if (tools.Count > 4096 || cursor is not null && (!seen.Add(cursor) || seen.Count > 64)) throw new IOException("The MCP tool list is too large or repeats itself.");
       } while (cursor is not null);
       return tools;
     }
     public async ValueTask<JsonElement> CallAsync(string tool, JsonElement arguments, CancellationToken ct) => await RpcAsync("tools/call", new { name = tool, arguments }, ct);
+    public async ValueTask<JsonElement> ReadResourceAsync(string uri, CancellationToken ct) => await RpcAsync("resources/read", new { uri }, ct);
     protected static JsonElement? Reply(string text, long id)
     {
       if (Encoding.UTF8.GetByteCount(text) > Limit) throw new IOException("The MCP reply is too large.");

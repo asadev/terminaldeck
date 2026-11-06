@@ -71,6 +71,28 @@ extension NativeCompositionProduction {
     /// tools are sealed in, so nobody has to press Start. It is the same start the
     /// page's "Start Hoot" uses. A Mac with no signed-in Coding AI gets Hoot's honest
     /// "could not start" state instead. Starting the CLI sends nothing to the AI.
+    private func installHootFork(_ runtime: BackendCopilotSessionRuntime) async {
+        if let chats = sessionChats, let conversations = hoot?.taskConversations, let source = runtime.structuredChat {
+            await runtime.setForkHandler { [weak self, root] sequence in
+                let child = try await conversations.forkRuntime(source: source, through: sequence)
+                do {
+                    await self?.installHootFork(child)
+                    let state = try await child.ensure()
+                    guard state.status == .running else { throw NativeRPCError(code: "unavailable", message: state.problem ?? "The new Hoot conversation could not start.") }
+                    var job = BackendTeamChatJob(fromID: "hoot", fromName: "Hoot", agentID: "hoot", agentName: "Hoot", title: "Hoot · fork")
+                    job.keepOpen = true
+                    let meta = try await chats.exposeTaskRuntime(child, folder: state.folder.runningIn ?? "/", projectID: nil, job: job)
+                    let value = try NativeRPCValue.parseJSON(JSONEncoder().encode(meta))
+                    try await root.registry.publish("session:created", arguments: [value], ownerID: BackendCompositionRoot.appOwnerID)
+                    await MainActor.run {
+                        if let row = value.foundation as? [String: Any] { AppModel.shared.buttonActions.created(row); AppModel.shared.select(meta.id) }
+                    }
+                    return .object([.init("session", value), .init("confirmed", .bool(true)), .init("parentConversationId", .string(source.conversationID))])
+                } catch { await child.rest(); throw error }
+            }
+        }
+    }
+
     func startHootAtLaunch() {
         guard let runtime = hoot?.runtime, runtime.structuredChat != nil else { return }
         let report = self.report
@@ -103,6 +125,7 @@ extension NativeCompositionProduction {
                 Task { await chat.noteAnswer(answer.wireValue) }
             }
         }
+        Task { await installHootFork(runtime) }
         // The chat's Rewind and Undo (Hoot page and island): back to a message, the desk rebuilt up to there.
         Task { @MainActor in
             HootChatActions.handoffConversation = { id, prompt, progress in
@@ -115,6 +138,7 @@ extension NativeCompositionProduction {
                 }
                 guard result.finished else { throw NativeRPCError(code: "failed", message: result.problem ?? "Hoot did not finish the handoff.") }
             }
+            HootChatActions.fork = { sequence in try await runtime.forkChat(through: sequence) }
             HootChatActions.rewind = { sequence in try await runtime.rewindChat(to: sequence) }
             HootChatActions.undoRewind = { try await runtime.undoRewindChat() }
             HootChatActions.handoffUpTo = { sequence, progress in

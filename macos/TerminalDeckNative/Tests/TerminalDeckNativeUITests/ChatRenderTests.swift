@@ -37,7 +37,7 @@ import TerminalDeckNativeCore
         let state = try await model.featureTool("rendering", action: "read", args: .object([.init("request", .string("360"))]))
         XCTAssertEqual(state["bodyPoints"].number, 14)
         XCTAssertEqual(state["avatar"].string, "inline-with-name")
-        XCTAssertEqual(state["tableSidewaysScroll"].bool, false)
+        XCTAssertEqual(state["tableSidewaysScroll"].bool, true)
         XCTAssertEqual(state["codeWrap"].bool, false)
         XCTAssertThrowsError(try model.renderingTool(width: "nan"))
     }

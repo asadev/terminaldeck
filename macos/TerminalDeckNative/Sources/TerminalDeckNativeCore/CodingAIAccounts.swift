@@ -273,6 +273,18 @@ public enum CodingAIAccountLabels {
         account.system || isSystemAccountId(account.id)
     }
 
+    /// Compact names for headers; a login address belongs in a secondary line or hover only.
+    public static func chatName(_ name: String, provider: String? = nil) -> String {
+        let text = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let email = CodingAILogins.normalizedEmail(text) { return String(email.split(separator: "@")[0]) }
+        return text.isEmpty ? CodingAICatalog.label(provider ?? "claude") : text
+    }
+
+    public static func hasChosenName(_ account: CodingAIAccount) -> Bool {
+        !account.name.isEmpty && (!isGenerated(account) ||
+            !["Default", "Default (Codex)", "Default (Gemini)"].contains(account.name))
+    }
+
     /// `profileLoginLabel`: the address, else a chosen name, else which install.
     public static func profileLoginLabel(_ account: CodingAIAccount, _ signIn: CodingAISignIn?, namesTheAgent: Bool = true) -> String {
         if account.isAPIKey { return account.name + " · API key" }
@@ -298,6 +310,7 @@ public enum CodingAIAccountLabels {
     /// 4 Nov (Asad: "an account which has nothing … no name of the account"): this Mac's own login with nobody
     /// signed in says what it is, in words, instead of "Your own … install".
     public static func rowLabel(_ account: CodingAIAccount, _ signIn: CodingAISignIn?) -> String {
+        if hasChosenName(account) { return account.name }
         if let named = namedLogin(account, signIn) { return named }
         if signIn?.state == .signedIn { return unnamedLogin }
         if isGenerated(account), !account.isAPIKey { return ownLoginLabel(account.provider) }

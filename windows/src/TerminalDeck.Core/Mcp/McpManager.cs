@@ -10,7 +10,7 @@ public sealed record McpServerConfig(string Id, string Name, string Scope, strin
   Dictionary<string, string> HeaderReferences, bool Enabled = true, string[]? DisabledTools = null, Dictionary<int, string>? ArgumentReferences = null);
 public sealed record McpManagerState(int Version, McpServerConfig[] Servers);
 public sealed record McpServerView(string Id, string Name, string Scope, string? Folder, string Transport, bool Enabled, bool Connected, int? ToolCount = null);
-public sealed record McpRemoteTool(string Name, JsonElement InputSchema, string? Title = null, string? Description = null);
+public sealed record McpRemoteTool(string Name, JsonElement InputSchema, string? Title = null, string? Description = null, JsonElement? Meta = null);
 public sealed record McpServerSettings(McpServerView Server, string? Executable, string[] Arguments, string? Url,
   string[] EnvironmentNames, string[] HeaderNames, string[] DisabledTools)
 {
@@ -23,6 +23,7 @@ public interface IManagedMcpConnection : IAsyncDisposable
 {
   ValueTask<IReadOnlyList<McpRemoteTool>> ToolsAsync(CancellationToken cancellationToken);
   ValueTask<JsonElement> CallAsync(string tool, JsonElement arguments, CancellationToken cancellationToken);
+  ValueTask<JsonElement> ReadResourceAsync(string uri, CancellationToken ct) => ValueTask.FromException<JsonElement>(new NotSupportedException("This MCP connection does not read resources."));
 }
 public interface IMcpConnectionFactory
 {
@@ -220,6 +221,20 @@ public sealed class McpManager : IAsyncDisposable
       try { var data = await connection.CallAsync(tool, arguments, cancellationToken); return JsonSerializer.SerializeToElement(new { source = new { kind = "third-party-mcp", serverId = id, tool }, untrusted = true, data }); }
       catch (OperationCanceledException) { throw; }
       catch { Record(id, "A tool call failed. The server’s private error text was omitted."); throw new McpRefusal("This MCP server could not finish the action."); }
+    }
+    finally { gate.Release(); }
+  }
+  public async ValueTask<JsonElement> ReadUiResourceAsync(string id, string tool, string uri, CancellationToken ct = default)
+  {
+    if (!uri.StartsWith("ui://", StringComparison.Ordinal) || uri.Length > 2048) throw new McpRefusal("Choose an MCP App resource.");
+    await gate.WaitAsync(ct);
+    try
+    {
+      var config = Find(id);
+      if (!config.Enabled || config.DisabledTools?.Contains(tool, StringComparer.Ordinal) == true || !connected.TryGetValue(id, out var connection)) throw new McpRefusal("This MCP tool is not connected.");
+      var spec = (await connection.ToolsAsync(ct)).SingleOrDefault(t => t.Name == tool) ?? throw new McpRefusal("This tool is not offered by that MCP server.");
+      if (TerminalDeck.Core.Chats.ChatMcpApps.ResourceUri(spec.Meta) != uri) throw new McpRefusal("This resource does not belong to the tool's declared UI.");
+      return await connection.ReadResourceAsync(uri, ct);
     }
     finally { gate.Release(); }
   }

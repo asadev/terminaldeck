@@ -9,7 +9,7 @@ public enum AgentRunState { Starting, Running, Uncertain, Ended }
 public sealed record SavedAgent(string Id, string Name, string Provider, string Description = "", string Model = "", string Effort = "auto",
   string ProjectId = ProjectIdentity.IndependentId, string Seat = "", string? ReportsTo = null, string? InstructionsFile = null,
   string Icon = "person", SavedAgentStatus Status = SavedAgentStatus.Active, ImmutableArray<string> Skills = default, string? AccountId = null, int? MaxConcurrentTasks = null,
-  AgentOptions? Options = null)
+  AgentOptions? Options = null, string? PhotoPath = null)
 {
   [System.Text.Json.Serialization.JsonIgnore] public AgentOptions Settings => Options ?? AgentOptions.Default;
 }
@@ -40,7 +40,7 @@ public sealed record AgentLaunchPlan(string SessionId, string? AgentId, string? 
   string? InstructionsFile, string Title, string Job, string Mode, TerminalDeck.Core.Mcp.AiPermissionMode? Permission = null);
 public sealed record AgentSessionStarted(string SessionId, string Mode);
 public sealed record AgentTreeNode(SavedAgent Agent, ImmutableArray<AgentTreeNode> Reports);
-public sealed record AgentFace(string Id, string Name, string Icon, bool Hoot = false);
+public sealed record AgentFace(string Id, string Name, string Icon, bool Hoot = false, string? PhotoPath = null);
 
 // The integrate lane supplies the sessions/chat Core adapter. The full launch plan
 // must reach the driver; dropping model or instructions is not a successful start.

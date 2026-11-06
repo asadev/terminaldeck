@@ -65,6 +65,8 @@ public struct LidAwakeResult: Equatable, Sendable {
 
 /// The words the Power row in General uses, for a Mac.
 public enum PowerWords {
+    public static let title = "Keep this Mac awake"
+    public static let detail = "While on, this Mac never sleeps. Screens may turn off; your phone wakes them when you open the screen view. An approved access helper keeps the Mac awake after a restart, before sign-in or opening the app."
     /// `lidAwakeCaution`.
     public static func caution(hasLid: Bool) -> String? {
         guard hasLid else { return nil }

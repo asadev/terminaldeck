@@ -71,9 +71,18 @@ public actor BackendRemoteTrustStore {
     var kinds: [String: KindRecord] = [:]
     var windowAllowed: Set<String> = [], windowDenied: Set<String> = []
     var phoneAccessLevels: [String: BackendINT2PhoneAccessLevel] = [:]
+    private var changeObservers: [UUID: @Sendable () -> Void] = [:]
     public var onChanged: (@Sendable () -> Void)?
 
     public init(directory: URL, clock: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }) { self.directory = directory; self.clock = clock }
+    public func observeChanges(_ handler: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID(); changeObservers[id] = handler; return id
+    }
+    public func removeChangeObserver(_ id: UUID) { changeObservers[id] = nil }
+    func changed() { onChanged?(); for handler in changeObservers.values { handler() } }
+    public func approvedPhoneCount() -> Int {
+        devices.filter { $0.approved && !$0.revoked && (phoneAccessLevels[$0.id] != nil || ["ios", "android"].contains($0.platform ?? "")) }.count
+    }
     public func setChangeHandler(_ handler: (@Sendable () -> Void)?) { onChanged = handler }
     public func open() throws {
         if lease != nil { return }
@@ -317,7 +326,7 @@ public actor BackendRemoteTrustStore {
         if attempts.count > 1024 { for key in attempts.sorted(by: { $0.value.updatedAt < $1.value.updatedAt }).prefix(attempts.count - 1024).map(\.key) { attempts[key] = nil } }
     }
     private func clearFailures(_ keys: [String]) { for key in keys { attempts[key] = nil } }
-    private func commit(_ next: [StoredDevice]) throws { try persist(next); devices = next; onChanged?() }
+    private func commit(_ next: [StoredDevice]) throws { try persist(next); devices = next; changed() }
     private func persist(_ rows: [StoredDevice]) throws { try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .array(rows.map(\.value)))]), file: directory.appendingPathComponent("remote-auth.json")) }
     private func loadDevices() throws {
         let file = directory.appendingPathComponent("remote-auth.json")

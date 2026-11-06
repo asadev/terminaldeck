@@ -12,7 +12,7 @@ public struct BackendHootChatLaunchPlan: Sendable {
                 pageServers: [BackendMcpPolicy.HootServer] = [], privateDirectory: URL? = BackendMcpPolicy.launchDirectory(), sessionTools: Bool = false) throws {
         if provider == .claude {
             arguments = try BackendHootChatCLI.claudeArguments(sessionID: sessionID,
-                extra: Self.withPageServers(extra, pageServers, privateDirectory: privateDirectory))
+                extra: Self.withPageServers(try Self.richClaudeArguments(extra), pageServers, privateDirectory: privateDirectory))
             setup = nil; return
         }
         var cli = provider == .codex ? ["app-server", "--stdio"] : ["--acp"]
@@ -112,6 +112,7 @@ public struct BackendHootChatLaunchPlan: Sendable {
         if let folder = Self.folderInstructions(cwd: cwd) {
             instructions += (instructions.isEmpty ? "" : "\n\n") + folder
         }
+        instructions += (instructions.isEmpty ? "" : "\n\n") + ChatMarkdown.instruction
         if provider == .codex {
             // An empty thread override would erase the worker's CLI lease and account restrictions.
             if !sessionTools || !codexServers.isEmpty { config = config.setting("mcp_servers", .object(codexServers)) }
@@ -132,6 +133,20 @@ public struct BackendHootChatLaunchPlan: Sendable {
 }
 
 extension BackendHootChatLaunchPlan {
+    // A repeated CLI string flag can replace the earlier value. Merge existing
+    // appended text first; the separate private prompt file remains unchanged.
+    private static func richClaudeArguments(_ extra: [String]) throws -> [String] {
+        var kept: [String] = [], prompts: [String] = [], index = 0
+        while index < extra.count {
+            if extra[index] == "--append-system-prompt" {
+                guard index + 1 < extra.count else { throw NativeRPCError.invalidArguments("The appended chat instruction is missing.") }
+                prompts.append(extra[index + 1]); index += 2
+            } else { kept.append(extra[index]); index += 1 }
+        }
+        prompts.append(ChatMarkdown.instruction)
+        return kept + ["--append-system-prompt", prompts.joined(separator: "\n\n")]
+    }
+
     /// Claude Code: Hoot's lease file plus the MCP page's servers, in one private file (the lease stays as it is), and
     /// the page's tools that are off as disallowed tools. Unchanged when there is nothing to add.
     static func withPageServers(_ extra: [String], _ page: [BackendMcpPolicy.HootServer], privateDirectory: URL?) throws -> [String] {

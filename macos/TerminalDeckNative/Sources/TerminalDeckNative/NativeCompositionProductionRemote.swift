@@ -17,6 +17,8 @@ extension NativeCompositionProduction {
             usage = try wired(self.usage, "usage"), authority = try wired(self.authority, "authority")
         let trust = BackendRemoteTrustStore(directory: root.dataRoot.appendingPathComponent("remote"))
         try await trust.open()
+        // Hand the relay back before the app starts serving. No registration is performed here.
+        await NativeMacReach.shared.prepare(trust: trust)
         let windows = BackendRemoteServeWindowGrants(directory: root.dataRoot.appendingPathComponent("remote"),
             kindOf: { await trust.kindOf($0) }, report: report)
         await windows.open()

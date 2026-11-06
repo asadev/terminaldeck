@@ -176,6 +176,9 @@ mkdir -p "$APP/Contents/Frameworks" "$APP/Contents/Resources/licenses"
 ditto "$WEBRTC_FRAMEWORK" "$APP/Contents/Frameworks/LiveKitWebRTC.framework"
 [ -f "$APP/Contents/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC" ] || { echo "error: the copied LiveKitWebRTC.framework has no binary" >&2; exit 1; }
 otool -l "$APP/Contents/MacOS/$EXE" | grep -q '@executable_path/../Frameworks' || install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/$EXE"
+if [ "${TD_NATIVE_STANDALONE:-0}" = "1" ]; then
+  otool -l "$APP/Contents/MacOS/$SESSION_HOST_EXE" | grep -q '@executable_path/../Frameworks' || install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/$SESSION_HOST_EXE"
+fi
 WEBRTC_LICENSE=$(find "$SCRATCH/artifacts" -path '*LiveKitWebRTC.xcframework/LICENSE' -print -quit 2>/dev/null)
 [ -n "$WEBRTC_LICENSE" ] || { echo "error: the WebRTC licence (LiveKitWebRTC.xcframework/LICENSE) is missing from $SCRATCH/artifacts" >&2; exit 1; }
 cp "$WEBRTC_LICENSE" "$APP/Contents/Resources/licenses/WebRTC.txt"
@@ -238,6 +241,13 @@ TD_RESOURCE_PLIST
   fi
   echo "    + Resources/$(basename "$bundle")"
 done
+
+# The optional boot helper is bundled, never registered by packaging. Its capture/input process is the same keeper
+# executable and retains the stable .session-host privacy requirement below.
+if [ "${TD_NATIVE_STANDALONE:-0}" = "1" ]; then
+  mkdir -p "$APP/Contents/Library/LaunchDaemons"
+  cp "$PKG/Support/MacReach/dev.terminaldeck.app.mac-reach.plist" "$APP/Contents/Library/LaunchDaemons/"
+fi
 
 # Siri / Shortcuts (lane R): App Intents metadata, which swift build never makes. Before signing.
 echo "==> App Intents metadata (Siri, Shortcuts, Spotlight)"

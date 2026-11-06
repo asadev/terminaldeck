@@ -116,6 +116,74 @@ final class SessionRenameLifecycleTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testFix29PeerDirectoryCannotWriteRenameOrCancelSwitchAtFinalBoundary() async throws {
+        try await withLifecycle { lifecycle, manager, runtime, _ in
+            let profiles = await runtime.profiles
+            let attribution = BackendAccountAttribution(configuration: runtime.configuration, profiles: profiles)
+            let restoreContext = BackendSessionRestoreContext(readiness: .ready) { device, folder in .init(deviceKey: device, folder: folder) }
+            let planner = BackendSessionRestorePlanner(accounts: runtime.adapter, providers: Providers(), context: restoreContext)
+            let restore = BackendSessionRestoreCoordinator(lifecycle: lifecycle, planner: planner, store: runtime.state,
+                context: restoreContext, excludedAppWorkingDirectories: [], emit: { _ in })
+            let switches = try await BackendSessionSwitchCoordinator.start(lifecycle: lifecycle, accounts: runtime.adapter,
+                attribution: attribution, planner: planner, store: runtime.state, apiCredentialAvailable: { _ in false }, emit: { _ in })
+            let deferred = await BackendSessionSwitchDeferred.start(lifecycle: lifecycle, switches: switches, emit: { _ in })
+            let rpc = BackendSessionLifecycleRPC(lifecycle: lifecycle, switches: switches, restore: restore, deferred: deferred,
+                store: runtime.state, authorizeMutation: { _ in })
+            let files = BackendFilesystemService(authority: BackendFilesystemAuthority { _ in .init(readRoots: [runtime.root], writeRoots: [runtime.root]) })
+            let projects = try BackendProjectService(store: runtime.state, files: files, home: runtime.root.path,
+                appDataRoot: runtime.configuration.dataDirectory, liveSessions: { [] })
+            let cost = BackendCostService(projects: projects, scopeProvider: { _, _ in throw BackendAccountFailure("No transcripts in this fixture") }, push: { _, _, _ in })
+            let writes = BackendF4Box<[String]>([])
+            for (id, folder) in [("decker", "/deck"), ("commander", "/imatch")] {
+                var input = BackendCreateSessionInput(cwd: folder, provider: "codex"); input.chat = true
+                let meta = BackendSessionMeta(id: id, input: input, spawn: .init(provider: "codex", command: "/never-run", args: [], path: "/usr/bin"))
+                try manager.registerChat(meta, controls: .init(send: { text in writes.update { $0.append(text) } }, stop: {}, text: { "" }, pid: { nil }))
+            }
+            let rows = manager.list().map { meta in BackendSessionDirectory.row(meta, owner: .init(kind: .lead, id: meta.id, name: meta.id, project: meta.id)) }
+            let caller = BackendDeckCoreSecurityCaller(kind: .session, tiers: [.read, .act, .alter], sessionID: "decker")
+            let peer = try XCTUnwrap(rows.first { $0["id"].string == "commander" })
+            XCTAssertTrue(BackendSessionDirectory.permits(peer, rows: rows, caller: caller, directory: true))
+            XCTAssertTrue(BackendSessionDirectory.permits(peer, rows: rows, caller: caller, message: true))
+            let checked = BackendF4Box<[String]>([])
+            let cancelled = BackendF4Box(0)
+            let surface = BackendDeckToolsSessionsNativeSurface(lifecycle: lifecycle, rpc: rpc, profiles: profiles,
+                cost: cost, search: BackendSessionSearchService(cost: cost, projects: projects), insights: BackendInsightsService(cost: cost),
+                context: { _ in .init(caller: .nativeApp, ownerID: "fix29") }, statusRecord: { _, _ in nil }, planLimits: { _, _ in .null },
+                announceRenamed: { _, _ in }, tellSwitched: { _, _, _ in }, sessionView: { id, _ in
+                    checked.update { $0.append(id) }
+                    guard let row = rows.first(where: { $0["id"].string == id }), BackendSessionDirectory.permits(row, rows: rows, caller: caller) else {
+                        throw NativeRPCError(code: "access-denied", message: BackendSessionDirectory.accessRefusal)
+                    }
+                    return row
+                }, cancelArmed: { _, _ in cancelled.update { $0 += 1 }; return true }, launchContext: { _, _, _ in .init() })
+            let context = BackendDeckToolsSessionsPortValues.context(sessionID: "decker")
+            do { try await surface.write(sessionID: "commander", data: "escape", context: context); XCTFail("Peer keys accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.rename(sessionID: "commander", title: "stolen", context: context); XCTFail("Peer rename accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.cancelSwitch(sessionID: "commander", context: context); XCTFail("Peer switch cancellation accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.switchAccount(sessionID: "commander", profileID: "never-used", context: context); XCTFail("Peer account switch accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.switchLater(sessionID: "commander", profileID: "never-used", context: context); XCTFail("Peer deferred switch accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.accountPlan(sessionID: "commander", profileID: "never-used", context: context); XCTFail("Peer account plan accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            do { _ = try await surface.account(sessionID: "commander", context: context); XCTFail("Peer account details accepted") }
+            catch let error as NativeRPCError { XCTAssertEqual(error.code, "access-denied") }
+            XCTAssertEqual(checked.value, Array(repeating: "commander", count: 7))
+            XCTAssertEqual(writes.value, [])
+            XCTAssertEqual(cancelled.value, 0)
+            XCTAssertNotEqual(manager.list().first { $0.id == "commander" }?.title, "stolen")
+            // Ordinary access still works through these same final boundaries.
+            try await surface.write(sessionID: "decker", data: "own input", context: context)
+            let title = try await surface.rename(sessionID: "decker", title: "own title", context: context)
+            XCTAssertEqual(title, "own title")
+            XCTAssertEqual(writes.value, ["own input"])
+            await deferred.stop(); await switches.stop()
+        }
+    }
+
     func testRenameNamesTheSessionAndItsSavedLaunch() async throws {
         try await withLifecycle { lifecycle, manager, runtime, _ in
             let folder = runtime.root.path

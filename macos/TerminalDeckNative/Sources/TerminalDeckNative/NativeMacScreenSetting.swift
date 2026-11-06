@@ -42,7 +42,7 @@ enum NativeMacScreenSetting {
     }
 
     /// The saved value in this copy's settings file, or nil when it was never set (or the file cannot be read).
-    nonisolated private static func storedValue() -> Bool? {
+    nonisolated static func storedValue(_ name: String = key) -> Bool? {
         let standalone = Bundle.main.object(forInfoDictionaryKey: "TDNativeStandalone") as? Bool == true
         guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let root = EngineConfiguration.resolve(environment: ProcessInfo.processInfo.environment, applicationSupport: support,
@@ -50,6 +50,6 @@ enum NativeMacScreenSetting {
         guard let data = try? Data(contentsOf: root.appendingPathComponent("settings.json")),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let values = raw["values"] as? [String: Any] ?? raw
-        return values[key] as? Bool
+        return values[name] as? Bool
     }
 }

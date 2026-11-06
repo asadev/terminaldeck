@@ -140,7 +140,7 @@ public sealed partial class ShellWindow
     var account = Runtime.Accounts.List().FirstOrDefault(a => a.Id == accountId);
     var provider = Runtime.Sessions.FirstOrDefault(s => s.Definition.Id == tab.Subject)?.Definition.Provider ?? Model.Sessions.FirstOrDefault(s => s.Id == tab.Subject)?.Provider;
     if (!string.Equals(provider, "shell", StringComparison.OrdinalIgnoreCase) && accountId is not null && account is null) return "Unavailable account";
-    return WorkspaceText.AccountIdentity(provider, account?.SignedIn == true, account?.Email, account?.Name);
+    return tab.Kind == "chat" && account is not null ? account.Name : WorkspaceText.AccountIdentity(provider, account?.SignedIn == true, account?.Email, account?.Name);
   }
   private string? WindowAccountBadge(WorkspaceTab tab)
   {

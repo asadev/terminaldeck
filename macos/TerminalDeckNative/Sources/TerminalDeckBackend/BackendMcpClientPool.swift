@@ -73,7 +73,7 @@ public actor BackendMcpClientPool {
             transport = created; live[id] = Live(token: token, transport: created, status: status)
             let initialize = try await BackendMcpClientDeadline.run(timeouts.connect, label: "Connecting to " + name, scheduler: scheduler) {
                 try await created.start(stderr: { [weak self] text in Task { await self?.stderr(id, token: token, text: text) } }, closed: { [weak self] in Task { await self?.closed(id, token: token) } })
-                return try await created.request("initialize", params: .object([.init("protocolVersion", .string("2025-11-25")), .init("capabilities", .object([])), .init("clientInfo", .object([.init("name", .string("terminaldeck")), .init("version", .string("0.1.0"))]))]), timeout: timeouts.connect, label: "Connecting to " + name)
+                return try await created.request("initialize", params: .object([.init("protocolVersion", .string("2025-11-25")), .init("capabilities", .object([.init("extensions", .object([.init("io.modelcontextprotocol/ui", .object([.init("mimeTypes", .array([.string("text/html;profile=mcp-app")]))]))]))])), .init("clientInfo", .object([.init("name", .string("terminaldeck")), .init("version", .string("0.1.0"))]))]), timeout: timeouts.connect, label: "Connecting to " + name)
             }
             guard ["2024-10-07", "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"].contains(initialize["protocolVersion"].string ?? ""), initialize["capabilities"].fields != nil,
                   initialize["serverInfo"]["name"].string != nil, initialize["serverInfo"]["version"].string != nil else { throw BackendMcpClientValue.error("Invalid MCP initialize result.") }
@@ -201,7 +201,7 @@ public actor BackendMcpClientPool {
     }
     private static func inventoryItem(_ raw: NativeRPCValue, section: String) -> NativeRPCValue {
         var value = NativeRPCValue.object([.init("name", raw["name"]), .init("title", raw["title"].string.flatMap { $0.isEmpty ? nil : $0 }.map(NativeRPCValue.string) ?? .null), .init("description", raw["description"].string.flatMap { $0.isEmpty ? nil : $0 }.map(NativeRPCValue.string) ?? .null)])
-        if section == "tools" { return value.setting("inputSchema", raw["inputSchema"].isNullish ? .null : raw["inputSchema"]).setting("outputSchema", raw["outputSchema"].isNullish ? .null : raw["outputSchema"]) }
+        if section == "tools" { return value.setting("_meta", raw["_meta"]).setting("annotations", raw["annotations"]).setting("inputSchema", raw["inputSchema"].isNullish ? .null : raw["inputSchema"]).setting("outputSchema", raw["outputSchema"].isNullish ? .null : raw["outputSchema"]) }
         if section == "prompts" { return value.setting("arguments", .array((raw["arguments"].elements ?? []).map { .object([.init("name", $0["name"]), .init("description", $0["description"].string.flatMap { $0.isEmpty ? nil : $0 }.map(NativeRPCValue.string) ?? .null), .init("required", .bool($0["required"].bool == true))]) })) }
         value = value.setting(section == "resourceTemplates" ? "uriTemplate" : "uri", raw[section == "resourceTemplates" ? "uriTemplate" : "uri"])
         return value.setting("mimeType", raw["mimeType"].string.flatMap { $0.isEmpty ? nil : $0 }.map(NativeRPCValue.string) ?? .null)

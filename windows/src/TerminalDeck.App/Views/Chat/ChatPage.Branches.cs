@@ -6,6 +6,21 @@ namespace TerminalDeck.App.Views.Chat;
 
 public sealed partial class ChatPage
 {
+  private async Task BranchMessageAsync(TerminalDeck.Core.Chats.ChatRow row, bool rewind)
+  {
+    if (Model.Snapshot.Busy || Model.Snapshot.Stopping) return;
+    if (rewind)
+    {
+      var confirm = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Rewind to this message?", Content = "The complete conversation is kept as a separate saved chat. Files in the project stay as they are.", PrimaryButtonText = "Rewind", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close };
+      if (await ShowChatDialogAsync(confirm) != ContentDialogResult.Primary) return;
+    }
+    await Model.RunAsync(async () =>
+    {
+      var invoke = ChatBranchActions.Invoke ?? throw new InvalidOperationException("The chat workspace owner is not connected.");
+      var result = await invoke(Model.Id, rewind ? "rewind" : "fork", JsonSerializer.SerializeToElement(new { messageId = row.Id }), CancellationToken.None);
+      if (!rewind) navigation?.OpenChat(result.GetProperty("session").GetProperty("id").GetString()!);
+    });
+  }
   private async Task ShowBranchesAsync()
   {
     var invoke = ChatBranchActions.Invoke ?? throw new InvalidOperationException("The chat workspace owner is not connected.");

@@ -341,9 +341,9 @@ public actor BackendDeckCoreSecurityServer {
         case "tools/call":
             guard let name = message["params"]["name"].string else { return Self.rpcError(id: id, code: -32602, message: "Invalid tools/call params") }
             // Refuse hidden names before dispatch: no log row revealing the hidden tool.
-            if let allowed = grant.tools, !BackendMCPToolNames.permits(name, granted: allowed) { return result(Self.toolResult(value: .null, error: "no tool called \(name)")) }
+            if let allowed = grant.tools, !BackendMCPToolNames.permits(name, granted: allowed) { return result(Self.toolResult(value: .null, error: caller.kind == .session && name.hasPrefix("sessions") ? BackendSessionDirectory.toolRefusal : "no tool called \(name)")) }
             let canonical = await control.policy(named: name)
-            if let canonical, !canonical.visible(to: grant.tools, caller: caller) { return result(Self.toolResult(value: .null, error: "no tool called \(name)")) }
+            if let canonical, !canonical.visible(to: grant.tools, caller: caller) { return result(Self.toolResult(value: .null, error: caller.kind == .session && name.hasPrefix("sessions") ? BackendSessionDirectory.toolRefusal : "no tool called \(name)")) }
             do {
                 if let beforeTool = grant.beforeTool, let canonical {
                     if canonical.tool.id == "tools.run" {

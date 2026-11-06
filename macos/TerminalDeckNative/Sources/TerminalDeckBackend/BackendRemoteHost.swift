@@ -246,11 +246,14 @@ public actor BackendRemoteHost {
         /// 29 Oct: this connection's frames, answered alongside each other where they may be (`take`).
         var pipeline = Pipeline()
     }
+    private let screenOnly: Bool
+
     public init(trust: BackendRemoteTrustStore, manager: BackendPTYManager, state: NativeStateStore, home: String,
                 hostName: String, appVersion: String, privateRoots: [String], operations: BackendRemoteHostOperations = .init(),
-                ptySource: (any BackendRemoteServePTYSource)? = nil,
+                ptySource: (any BackendRemoteServePTYSource)? = nil, screenOnly: Bool = false,
                 sleep: @escaping @Sendable (Int) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
                 clock: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }) {
+        self.screenOnly = screenOnly
         self.trust = trust; self.manager = manager; self.state = state; self.home = home; name = hostName
         self.appVersion = appVersion; self.privateRoots = privateRoots; self.operations = operations
         if let ptySource { self.ptySource = ptySource } else { self.ptySource = manager }
@@ -267,6 +270,12 @@ public actor BackendRemoteHost {
     public func setLinkEngine(_ engine: (any BackendLinkEngine)?) async {
         linkEngine = engine
         if started { await linkRefreshLogins() }
+    }
+    /// The lock-screen path rechecks current grants without reading projects or sessions on every video frame.
+    public func canControlMacScreen(_ connection: UUID) async -> Bool {
+        guard let device = live[connection]?.device, await trust.isApproved(device.id) else { return false }
+        let kind = await trust.kindOf(device.id), level = await trust.phoneAccess(device.id)
+        return MacReach.mayControl(kind: kind.rawValue, access: level?.rawValue, approved: true)
     }
     public func setConnectionsHandler(_ handler: (@Sendable ([BackendRemoteHostConnection]) -> Void)?) { onConnections = handler }
     public func setPairingSpentHandler(_ handler: (@Sendable () async -> Void)?) { pairingSpent = handler }
@@ -656,6 +665,19 @@ public actor BackendRemoteHost {
             BackendRemoteRelayClient.note("link: dropped a \(message.type) that came over the relay (\(row.device?.name ?? "a device"))")
             return (Task {}, true)
         }
+        // A sign-in must never join an application queue. Refusals retain only the request ID, not the password.
+        if case .message(let message) = parsed, message.type == "sims.unlock", row.pipeline.next != row.pipeline.settled {
+            let rid = message["rid"]
+            return (Task { [weak self] in
+                guard let self else { return }
+                try? await self.sendToConnection(id, message: .init(.error, fields: [.init("rid", rid),
+                    .init("code", .string("unavailable")), .init("message", .string(BackendMacSignInAttempt.failureWords))]))
+            }, true)
+        }
+        let signIn: BackendMacSignInAttempt? = {
+            if case .message(let message) = parsed, message.type == "sims.unlock" { return BackendMacSignInAttempt() }
+            return nil
+        }()
         var alongside = false
         if case .message(let message) = parsed, Self.inputLane.contains(message.type) || Self.terminalLane.contains(message.type) {
             let number = row.pipeline.next
@@ -676,7 +698,7 @@ public actor BackendRemoteHost {
         if row.pipeline.reads.count >= Self.mostReadsAlongside { alongside = false }
         let number = row.pipeline.next
         row.pipeline.next += 1
-        let earlier = (alongside ? [] : Array(row.pipeline.reads.values)) + [row.pipeline.alone].compactMap { $0 }
+        let earlier = signIn != nil ? [] : (alongside ? [] : Array(row.pipeline.reads.values)) + [row.pipeline.alone].compactMap { $0 }
         #if DEBUG
         let arrivedAt = clock()
         let kind: String = { if case .message(let message) = parsed { return message.type }; return "refused" }()
@@ -687,7 +709,9 @@ public actor BackendRemoteHost {
             #if DEBUG
             let startedAt = self.clock()
             #endif
-            await Self.$ticket.withValue(Ticket(connection: id, number: number)) { await self.answer(id, parsed) }
+            await BackendMacSignInAttempt.$current.withValue(signIn) {
+                await Self.$ticket.withValue(Ticket(connection: id, number: number)) { await self.answer(id, parsed) }
+            }
             #if DEBUG
             let doneAt = self.clock()
             if doneAt - arrivedAt > 30 { BackendRemoteRelayClient.note("frame: \(kind) waited \(Int(startedAt - arrivedAt)) ms, took \(Int(doneAt - startedAt)) ms\(viaLink ? "" : " (relay)")") }
@@ -751,10 +775,18 @@ public actor BackendRemoteHost {
     }
     private func expireHello(_ id: UUID) async { if live[id]?.device == nil { await disconnect(id, code: 1008, reason: "Say hello before opening a session.") } }
     private func dispatch(_ id: UUID, _ message: BackendRemoteClientMessage) async throws {
+        if screenOnly && !MacReach.bootMessages.contains(message.type) {
+            await refuse(id, code: "unavailable", message: "Before sign-in, this Mac serves only its sign-in screen.")
+            return
+        }
         if message.type == "hello" { try await hello(id, message); return }
         if message.type == "enroll" { try await enroll(id, message); return }
         if message.type == "ping" { try await send(id, .init(.pong, fields: [])); return }
         guard let context = try await context(id) else { await refuse(id, code: "unauthenticated", message: "Say hello before opening a session.", close: 1008); return }
+        if screenOnly && !MacReach.mayControl(kind: context.kind.rawValue, access: context.phoneAccess?.rawValue, approved: true) {
+            await refuse(id, code: "unauthorized", message: "The sign-in screen needs your own device with Full control.")
+            return
+        }
         // The link's own signalling (stream step 2): part of the connection, like ping, at every access level.
         if message.type == "link.peer" { _ = context; await handleLinkPeer(id, message); return }
         do { try await trust.requirePhoneAccess(context.deviceID, message: message.type, panel: message["panel"].string) }
@@ -986,6 +1018,10 @@ public actor BackendRemoteHost {
         // must prove the new credential and its sealed public-key binding.
     }
     private func capabilities(_ context: BackendRemoteHostContext) -> [String] {
+        if screenOnly {
+            guard MacReach.mayControl(kind: context.kind.rawValue, access: context.phoneAccess?.rawValue, approved: true) else { return [] }
+            return ["sims", "device.access"]
+        }
         guard context.phoneAccess != nil else { return context.claimedCapabilities.contains("device.access") ? ["device.access"] : [] }
         // Hoot only: the phone is offered Hoot and its access frame, nothing else.
         if context.phoneAccess == .hoot {

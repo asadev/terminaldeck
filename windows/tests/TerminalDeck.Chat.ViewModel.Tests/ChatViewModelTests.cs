@@ -8,6 +8,16 @@ namespace TerminalDeck.Chat.ViewModel.Tests;
 
 public sealed class ChatViewModelTests
 {
+  [Fact] public async Task ModelCatalogueFailureCannotFlashAChatSendError()
+  {
+    var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
+    backend.CatalogueFailure = true;
+    await using var model = new ChatViewModel(chats, backend.Record.Definition.Id, action => action());
+    await model.ModelsAsync();
+    Assert.Null(model.Error); Assert.NotNull(model.ModelReadProblem);
+    model.Draft = "Normal send"; await model.SendAsync();
+    Assert.Null(model.Error); Assert.Single(backend.Deliveries); Assert.Empty(model.Draft);
+  }
   [Fact] public async Task SideQuestionUsesASeparateConversationAndPreservesMainDraftAndAccount()
   {
     var chats = DispatchProxy.Create<IChatSessions, ChatWatchProxy>(); var backend = (ChatWatchProxy)chats;
@@ -140,6 +150,7 @@ public class ChatWatchProxy : DispatchProxy
   public int Sends;
   public bool LoseNextReply;
   public bool SignedIn = true;
+  public bool CatalogueFailure;
   public TaskCompletionSource? ControlGate;
   public int ControlWrites;
   public ChatDefinition? SideDefinition;
@@ -154,6 +165,7 @@ public class ChatWatchProxy : DispatchProxy
       nameof(IChatSessions.Get) => Record,
       nameof(IChatSessions.ReadAsync) => ValueTask.FromResult(Record),
       nameof(IChatSessions.CreateAsync) when arguments![0] is ChatDefinition definition => Created(definition),
+      nameof(IChatSessions.ModelsAsync) => CatalogueFailure ? ValueTask.FromException<IReadOnlyList<ProviderModel>>(new IOException("Catalogue read failed")) : ValueTask.FromResult<IReadOnlyList<ProviderModel>>([]),
       nameof(IChatSessions.Accounts) => new AccountProfile[] { new(Record.Definition.AccountId, "claude", "Synthetic", null, AccountAuthentication.Subscription, SignedIn, Record.Definition.AccountHome) },
       nameof(IChatSessions.WatchAsync) => Watch((CancellationToken)arguments![1]!),
       nameof(IChatSessions.ReconnectAsync) => ValueTask.CompletedTask,

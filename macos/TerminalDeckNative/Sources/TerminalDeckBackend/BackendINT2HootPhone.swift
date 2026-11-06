@@ -202,14 +202,22 @@ public actor BackendINT2HootPhone: BackendDeckCoreConsentRelay {
 
     /// The newest events that fit one frame (`before` nil: every push, `reset`), or the page ending just before
     /// event `before` (`older`); each says where it starts (`first`) among all of them (`total`).
+    public static func historyFrame(_ store: BackendHootChatStore) async throws -> BackendRemoteServerMessage {
+        try page(await store.snapshot(limit: 100_000), before: nil)
+    }
+
     static func page(_ snapshot: NativeRPCValue, before: Int?) throws -> BackendRemoteServerMessage {
-        let all = snapshot["events"].elements ?? []
+        // The store's own per-row actions: Hoot's Rewind/Fork enforce provider boundaries, so phones offer only those.
+        let actions = snapshot["messageActions"].elements ?? []
+        let all = (snapshot["events"].elements ?? []).map { BackendChatMessageActions.phoneEvent(ChatRenderedContent.phoneEvent($0), actions: actions) }
         let end = min(max(before ?? all.count, 0), all.count)
         var first = max(0, end - 600)
         var events = Array(all[first..<end])
+        var includeRendered = true
         func frame() throws -> BackendRemoteServerMessage {
             var fields: [NativeRPCValue.Field] = [.init("conversationId", snapshot["conversationId"]), .init("reset", .bool(before == nil)),
-                .init("events", .array(events)), .init("first", .number(Double(first))), .init("total", .number(Double(all.count)))]
+                .init("foreground", .bool(BackendHootChatStore.foreground(in: snapshot))),
+                .init("events", .array(events)), .init("renderedMessages", includeRendered ? ChatRenderedContent.phoneMessages(events) : .array([])), .init("first", .number(Double(first))), .init("total", .number(Double(all.count)))]
             if before != nil { fields.append(.init("older", .bool(true))) }
             return try .init(.hootEvents, fields: fields)
         }
@@ -217,6 +225,9 @@ public actor BackendINT2HootPhone: BackendDeckCoreConsentRelay {
         let drop = oldestToDrop(events, budget: limit - 1_024)
         events.removeFirst(drop); first += drop
         var message = try frame()
+        // Original message text always wins the shared frame budget. A phone can
+        // derive the same visual fences from it when the additive block hints do not fit.
+        if try message.value.encodedJSON().count > limit { includeRendered = false; message = try frame() }
         while try message.value.encodedJSON().count > limit, !events.isEmpty {
             events.removeFirst()
             first += 1

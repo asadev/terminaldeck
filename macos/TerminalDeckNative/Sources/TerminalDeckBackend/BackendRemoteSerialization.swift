@@ -19,6 +19,7 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
         case githubState = "github.state", githubChanged = "github.changed", hostState = "host.state", sessionSent = "session.sent"
         case deviceRows = "devices.rows", deviceRevoked = "devices.revoked", devicesChanged = "devices.changed"
         case deviceAccess = "device.access", hootEvents = "hoot.events", chatsEvents = "chats.events", chatsOptions = "chats.options", chatsChoices = "chats.choices"
+        case chatsApp = "chats.app", chatsAppResult = "chats.app.result"
         case windowCall = "window.call", windowHolds = "window.holds", windowResult = "window.result"
         case browserFrame = "browser.frame", browserSurfaceRows = "browser.surfaces.rows", browserHandoverState = "browser.handover.state"
         case linkOpen = "link.open" // PHONE2: open this page on the phone (only to phones that claimed `link.open`)
@@ -69,6 +70,7 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
             .deviceRows: "rid:s devices:a", .deviceRevoked: "rid:s ok:b message:s devices:a", .devicesChanged: "devices:a",
             .deviceAccess: "level:s?", .hootEvents: "conversationId:s reset:b events:a",
             .chatsEvents: "id:s conversationId:s reset:b busy:b events:a",
+            .chatsApp: "rid:s id:s rowId:s app:o?", .chatsAppResult: "rid:s id:s rowId:s messages:a",
             .chatsOptions: "id:s options:o", .chatsChoices: "rid:s providers:a accounts:a agents:a",
             .linkOpen: "url:s session:s", .terminalSize: "id:s cols:n? rows:n? owner:s name:s?",
             .pictures: "rid:s projects:a agents:a sessions:a", .picture: "rid:s picture:s png:s",

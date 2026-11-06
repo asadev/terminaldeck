@@ -121,17 +121,29 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
         await nextStatus?(sessionID, milliseconds) ?? false
     }
     private func invoke(_ channel: String, _ arguments: [NativeRPCValue], _ caller: BackendMCPCallContext) async throws -> NativeRPCValue {
-        try await rpc.invoke(channel, args: arguments, context: context(caller))
+        if ["session:account", "session:switch-plan", "session:switch-account", "session:switch-later", "session:switch-cancel"].contains(channel),
+           let id = arguments.first?.string {
+            _ = try await view(id, caller)
+        }
+        return try await rpc.invoke(channel, args: arguments, context: context(caller))
     }
     public func status(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? { try await signal(sessionID, context) }
-    public func screen(sessionID: String, context: BackendMCPCallContext) async throws -> String? { lifecycle.manager.screen(sessionID) }
+    public func screen(sessionID: String, context caller: BackendMCPCallContext) async throws -> String? {
+        _ = try await signal(sessionID, caller)
+        return lifecycle.manager.screen(sessionID)
+    }
+    public func write(sessionID: String, data: String, context: BackendMCPCallContext) async throws {
+        _ = try await view(sessionID, context)
+        try await lifecycle.write(sessionID: sessionID, data: data)
+    }
     public func chatSnapshot(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue? {
+        _ = try await signal(sessionID, context)
         guard lifecycle.manager.list().contains(where: { $0.id == sessionID && $0.chat == true }) else { return nil }
         guard let chats else { throw BackendDeckToolsSupport.unavailable("The chat reader") }
         return try await chats.read(sessionID, cursor: nil, limit: 500)
     }
-    public func write(sessionID: String, data: String, context: BackendMCPCallContext) async throws { try await lifecycle.write(sessionID: sessionID, data: data) }
     public func rename(sessionID: String, title: String, context: BackendMCPCallContext) async throws -> String? {
+        _ = try await view(sessionID, context)
         guard try await lifecycle.rename(sessionID: sessionID, title: title) else { return nil }
         let resolved = lifecycle.manager.list().first { $0.id == sessionID }?.title ?? title
         try await renamed(sessionID, resolved); return resolved
@@ -143,7 +155,10 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
     public func retryHeld(key: String, context: BackendMCPCallContext) async throws -> [NativeRPCValue] { heldView(try await invoke("session:held-retry", [.string(key)], context)) }
     public func forgetHeld(key: String, context: BackendMCPCallContext) async throws -> [NativeRPCValue] { heldView(try await invoke("session:held-forget", [.string(key)], context)) }
     public func account(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue { try await invoke("session:account", [.string(sessionID)], context) }
-    public func limits(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue { try await planLimits(sessionID, context) }
+    public func limits(sessionID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue {
+        _ = try await view(sessionID, context)
+        return try await planLimits(sessionID, context)
+    }
     public func accountPlan(sessionID: String, profileID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue { try await invoke("session:switch-plan", [.string(sessionID), .string(profileID)], context) }
     public func switchAccount(sessionID: String, profileID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue {
         let meta = try await invoke("session:switch-account", [.string(sessionID), .string(profileID)], context)
@@ -152,7 +167,10 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
         return try await view(meta["id"].string ?? "", context)
     }
     public func switchLater(sessionID: String, profileID: String, context: BackendMCPCallContext) async throws -> NativeRPCValue { try await invoke("session:switch-later", [.string(sessionID), .string(profileID)], context) }
-    public func cancelSwitch(sessionID: String, context: BackendMCPCallContext) async throws -> Bool { try await cancelArmed(sessionID, context) }
+    public func cancelSwitch(sessionID: String, context: BackendMCPCallContext) async throws -> Bool {
+        _ = try await view(sessionID, context)
+        return try await cancelArmed(sessionID, context)
+    }
     public func armedSwitches(context: BackendMCPCallContext) async throws -> [NativeRPCValue] { try await invoke("session:switch-armed", [], context).elements ?? [] }
     public func accounts(context: BackendMCPCallContext) async throws -> [NativeRPCValue] {
         try await profiles.list(provider: nil).map { BackendDeckToolsSupport.object([("id", .string($0.id)), ("name", .string($0.name)), ("provider", .string($0.provider))]) }

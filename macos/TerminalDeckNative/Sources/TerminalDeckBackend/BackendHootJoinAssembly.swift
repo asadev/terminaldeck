@@ -219,7 +219,7 @@ public enum BackendHootJoinAssembly {
         let taskProvider = inputs.headlessProvider, taskConsent = inputs.deckCore.consent, taskConfinement = inputs.confinement
         let taskPolicy = inputs.headlessPolicy, taskOwner = inputs.ownerContext, taskProviders = root.providers
         let mainHome = RNMHootPaths(dataRoot: dataRoot).home.path
-        let taskConversations = BackendHootTaskConversations { taskID in
+        let makeConversation: @Sendable (String, HootChatProvider) async throws -> BackendCopilotSessionRuntime = { taskID, taskProvider in
             let folder = taskHome.appendingPathComponent(BackendHootTaskConversations.folderName(taskID) + "-" + UUID().uuidString.lowercased(), isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let taskChat = try BackendHootChatStore(file: folder.appendingPathComponent("chat-\(taskProvider.rawValue).json"),
@@ -227,10 +227,10 @@ public enum BackendHootJoinAssembly {
             await taskChat.setToolTier { name in await tierServer.control.policy(named: name)?.tool.tier }
             let taskDriver = BackendHootChatDriver(providers: taskProviders, sessions: sessions, confinement: taskConfinement, chat: taskChat,
                 exposure: boundary.exposureHook, policy: taskPolicy, readyDefaults: defaults, launchBinding: launchBinding,
-                defaultProjectPath: mainHome, ownerContext: taskOwner, taskID: taskID)
+                defaultProjectPath: mainHome, ownerContext: taskOwner, taskID: taskID.hasPrefix("fork-") ? nil : taskID)
             await usage.track(BackendHootUsage.taskPrefix + taskID, chat: taskChat) { await usageAccount(taskDriver) }
             let taskDoor: any BackendCopilotSessionToolProviding
-            if let host = await sessions.chatHost, host.hello.chatService == 1 {
+            if !taskID.hasPrefix("fork-"), let host = await sessions.chatHost, host.hello.chatService == 1 {
                 taskDoor = try await BackendHOSTTaskChatDoor(source: door, client: host, taskID: taskID)
             } else { taskDoor = door }
             return BackendCopilotSessionRuntime(dependencies: .init(userData: folder.path, storageDir: storageRoot.path,
@@ -239,7 +239,11 @@ public enum BackendHootJoinAssembly {
                     return value == .missing ? .null : value
                 },
                 // The task engine carries a task on after a restart itself ("Pick up where you left off").
-                driver: taskDriver, records: records, tools: taskDoor, chat: taskChat, picksUpAfterRestart: { false }))
+                driver: taskDriver, records: BackendHootConversationRecords(source: records, appRoot: dataRoot.path, conversationRoot: folder.path),
+                tools: taskDoor, chat: taskChat, picksUpAfterRestart: { false }))
+        }
+        let taskConversations = BackendHootTaskConversations(makeFork: makeConversation) { taskID in
+            try await makeConversation(taskID, taskProvider)
         }
         let folder = BackendCopilotFolderService(dependencies: BackendHootJoinFolderSupply(dataRoot: dataRoot, settings: settings,
             runningIn: { try? await runtime.state().folder.runningIn }, pick: inputs.pickFolder))
@@ -266,5 +270,23 @@ public enum BackendHootJoinAssembly {
             readyDefaults: inputs.readyDefaults, usage: usage))
         return .init(registration: registration, authority: authority, runtime: runtime, boundary: boundary,
             joins: joins, menu: menu, screenMonitor: monitor, policy: policy, taskConversations: taskConversations, usage: usage)
+    }
+}
+
+/// A child owns its desk and journal, while the protected app records still belong to the app root.
+private struct BackendHootConversationRecords: BackendCopilotSessionRecordsProviding {
+    let source: any BackendCopilotSessionRecordsProviding
+    let appRoot: String
+    let conversationRoot: String
+    func paths(userData: String) async throws -> BackendCopilotLayerRecords {
+        guard URL(fileURLWithPath: userData).standardizedFileURL.path == conversationRoot else {
+            throw NativeRPCError(code: "unavailable", message: "This Hoot conversation belongs to another folder.")
+        }
+        return try await source.paths(userData: appRoot)
+    }
+    func measure(userData: String) async -> BackendCopilotSessionFenceMeasurement {
+        do { _ = try await paths(userData: userData) }
+        catch { return .init(fence: nil, reason: error.localizedDescription) }
+        return await source.measure(userData: appRoot)
     }
 }

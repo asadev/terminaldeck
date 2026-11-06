@@ -17,9 +17,8 @@ enum NativeMacScreenElements {
         "AXSplitter", "AXScrollBar", "AXValueIndicator", "AXList", "AXOutline", "AXTable", "AXColumn", "AXWebArea", "AXToolbar"]
 
     static func read(_ id: String) async -> BackendPhoneDeviceInspection {
-        guard id.hasPrefix("mac:"), let number = UInt32(id.dropFirst(4)) else { return .init() }
+        guard let display = try? NativeMacScreen.display(id) else { return .init() }
         guard AXIsProcessTrusted() else { return .init(note: missing) }
-        let display = CGDirectDisplayID(number)
         // Other apps are read off the main thread (they may be slow to answer); Terminal Deck's own windows only on the
         // main thread, where AppKit answers them in this process (read from a background thread it trapped in our own
         // views: the install #18 crash).

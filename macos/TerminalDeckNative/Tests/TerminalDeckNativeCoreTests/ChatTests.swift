@@ -123,8 +123,8 @@ import Testing
         #expect(ChatMarkdown.parse("a | b\nnot a table") == [.paragraph("a | b not a table")])
     }
 
-    @Test func imagesBecomeTheirWords() {
-        #expect(ChatMarkdown.inlineSource("see ![chart](https://x/y.png) and ![](z.png)") == "see [chart](https://x/y.png) and [image](z.png)")
+    @Test func imageSourcesStayInMarkdown() {
+        #expect(ChatMarkdown.inlineSource("see ![chart](https://x/y.png) and ![](z.png)") == "see ![chart](https://x/y.png) and ![](z.png)")
         #expect(ChatMarkdown.inlineSource("plain") == "plain")
     }
 }

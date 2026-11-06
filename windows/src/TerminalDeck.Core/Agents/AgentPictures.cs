@@ -6,6 +6,13 @@ namespace TerminalDeck.Core.Agents;
 public sealed record AgentSymbol(string Id, string Name);
 public static class AgentPictures
 {
+  public static string Initials(string name)
+  {
+    var words = name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+    if (words.Length == 0) return "?";
+    var first = StringInfo.GetNextTextElement(words[0]);
+    return (words.Length > 1 ? first + StringInfo.GetNextTextElement(words[^1]) : first).ToUpperInvariant();
+  }
   public static readonly AgentSymbol[] Symbols =
   [
     new("person", "Person"), new("terminal", "Terminal"), new("code", "Code"), new("magnifyingglass", "Search"),

@@ -31,6 +31,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   private readonly Button account = new() { MinHeight = 40, MaxWidth = 200, HorizontalAlignment = HorizontalAlignment.Left };
   private readonly TextBlock title = new() { FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
   private readonly ScrollViewer scroll;
+  private readonly Dictionary<string, RichChatWebView> richMessages = [];
   private int visibleMessages = 200;
   private Button? earlierMessages;
   public ChatPage(IChatSessions chats, string chatId, nint ownerWindowHandle = 0, Func<nint>? currentWindowHandle = null, ChatNavigation? navigation = null, TerminalDeck.Core.Accounts.AccountService? accountModels = null)
@@ -54,7 +55,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = GridLength.Auto });
     Model = new(chats, chatId, action => DispatcherQueue.TryEnqueueHandled(() => action()), accountModels);
     if (navigation?.SignIn is { } signIn) Model.SignInRequested = () => signIn(Model.Snapshot.Definition.AccountId);
-    var heading = new Grid { ColumnSpacing = 12, Height = 26, MaxWidth = 688, HorizontalAlignment = HorizontalAlignment.Stretch };
+    var heading = new Grid { ColumnSpacing = 12, Height = 0, MaxWidth = 688, HorizontalAlignment = HorizontalAlignment.Stretch };
     heading.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
     heading.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); title.Visibility = Visibility.Collapsed; heading.Children.Add(title);
     var headerActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -226,14 +227,14 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     AutomationProperties.SetName(stop, Model.Snapshot.Stopping ? "Stopping…" : "Stop the current answer"); stop.IsEnabled = !Model.Snapshot.Stopping;
     stop.Visibility = Model.Snapshot.Busy ? Visibility.Visible : Visibility.Collapsed;
     var modelText = Model.SelectedModelName;
-    var modelChip = ChipText(modelText); var fallbackReason = Model.AccountName == "Not signed in" ? "Sign in to read this AI's models." : Model.AvailableModels.Count == 0 ? "This AI's model list is not available yet." : "";
+    var modelChip = ChipText(modelText); var fallbackReason = Model.AccountName == "Not signed in" ? "Sign in to read this AI's models." : Model.AvailableModels.Count == 0 ? "Read models from Coding AIs." : "";
     if (Model.ModelIsFallback && fallbackReason.Length > 0) { modelChip.Opacity = 0.6; ToolTipService.SetToolTip(model, modelText + " · " + fallbackReason); }
     else ToolTipService.SetToolTip(model, "Model: " + modelText);
     model.Content = modelChip;
     effort.Content = ChipText(ChatAppearance.EffortName(Model.EffectiveEffort));
     effort.Visibility = Model.Snapshot.Definition.Provider is "claude" or "codex" ? Visibility.Visible : Visibility.Collapsed;
     account.Content = ChipText(Model.AccountName);
-    ToolTipService.SetToolTip(account, Model.Accounts.Any(a => a.Id == Model.Snapshot.Definition.AccountId) ? "Switch account and keep this conversation" : "This saved account is unavailable. Choose an available account or open Coding AIs.");
+    ToolTipService.SetToolTip(account, Model.Accounts.Any(a => a.Id == Model.Snapshot.Definition.AccountId) ? (Model.Accounts.FirstOrDefault(a => a.Id == Model.Snapshot.Definition.AccountId)?.Email is { } email ? email + " · " : "") + "Switch account and keep this conversation" : "This saved account is unavailable. Choose an available account or open Coding AIs.");
     var unresolvedApproval = Model.Rows.Any(r => r.Kind == "approval" && r.Waiting);
     var canChange = !Model.Sending && !Model.ChangingControl && !unresolvedApproval && !Model.Snapshot.Ended && !Model.Snapshot.Busy && !Model.Snapshot.Messages.Any(m => m.State == ChatMessageState.Queued || ChatSessions.Unconfirmed(Model.Snapshot, m));
     permission.Content = ChipText(ChatPermissionModes.Label(Model.ShownPermission));
@@ -267,8 +268,12 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       var query = searchBar.Visibility == Visibility.Visible ? searchBox.Text : "";
       void AddRow(FrameworkElement element)
       { desired.Add(element); messageElements[rowKey] = element; rowCache[rowKey] = new(row, query, Model.Snapshot.Stopping, mediaKey, element); }
-      if (rowCache.TryGetValue(rowKey, out var cached) && cached.Row == row && cached.Query == query && cached.Stopping == Model.Snapshot.Stopping && cached.MediaKey == mediaKey)
-      { AddRow(cached.Element); continue; }
+      if (rowCache.TryGetValue(rowKey, out var cached) && cached.Query == query && cached.Stopping == Model.Snapshot.Stopping && cached.MediaKey == mediaKey)
+      {
+        if (cached.Row == row) { AddRow(cached.Element); continue; }
+        if (query.Length == 0 && row.Kind is "user" or "assistant" && richMessages.TryGetValue(rowKey, out var rich))
+        { rich.UpdateHtml(ChatRichContent.Html(row.Text, Model.Snapshot.Definition.Cwd)); AddRow(cached.Element); continue; }
+      }
       var content = new StackPanel { Spacing = 8 };
       if (row.Kind == "reasoning")
       {
@@ -278,21 +283,31 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       if (row.Kind == "tool")
       {
         var expander = ChatAppearance.ToolStep(row.Text, row.Details, row.Waiting, row.Status == "Failed");
-        RetainExpansion(expander, rowKey); AddRow(expander); continue;
+        RetainExpansion(expander, rowKey); content.Children.Add(expander); content.Children.Add(ChatToolContent.Render(Model.Snapshot, row, Model.DataDirectory, navigation?.Mcp, () => Model.Snapshot, CopyText, ShowLinkError, ShowChatDialogAsync, this)); AddRow(content); continue;
       }
-      content.Children.Add(searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0 ? SearchText(row.Text) : row.Kind == "assistant" ? ChatMarkdownView.Render(row.Text, CopyText, ShowLinkError) : Words(row.Text));
-      if (row.Kind is "user" or "assistant")
+      if (searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0) content.Children.Add(SearchText(row.Text));
+      else if (row.Kind is "assistant" or "user")
       {
-        var copy = Button("Copy", () => { CopyText(row.Text); return Task.CompletedTask; }); copy.MinHeight = 28; copy.FontSize = 11;
-        var at = Model.Snapshot.Events.FirstOrDefault(e => e.Id == row.Id)?.At;
-        if (at is { } time && time != default) ToolTipService.SetToolTip(content, time.ToLocalTime().ToString("F"));
-        content.Children.Add(copy);
+        var rich = (RichChatWebView)ChatMarkdownView.Render(row.Text, CopyText, ShowLinkError, Model.Snapshot.Definition.Cwd, Model.DataDirectory);
+        richMessages[rowKey] = rich; content.Children.Add(rich);
       }
+      else content.Children.Add(Words(row.Text));
       if (row.Kind == "user" && row.ClientId is { } client)
       {
         message = Model.Snapshot.Messages.FirstOrDefault(m => m.ClientId == client);
         foreach (var image in message?.Media ?? []) content.Children.Add(ImagePreview(image));
         if (message?.State == ChatMessageState.Uncertain) content.Children.Add(Words(ChatSessions.Unconfirmed(Model.Snapshot, message) ? "Delivery is being checked. This message will not be sent twice." : "Kept without resending. Delivery remains uncertain.", 12));
+      }
+      if (row.Kind is "user" or "assistant")
+      {
+        var copy = Button("Copy", () => { CopyText(Model.Rows.FirstOrDefault(r => r.Id == row.Id && r.Kind == row.Kind)?.Text ?? row.Text); return Task.CompletedTask; }); copy.MinHeight = 28; copy.FontSize = 11;
+        var at = Model.Snapshot.Events.FirstOrDefault(e => e.Id == row.Id)?.At;
+        if (at is { } time && time != default) ToolTipService.SetToolTip(content, time.ToLocalTime().ToString("F"));
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        actions.Children.Add(copy);
+        actions.Children.Add(Button("Rewind", () => BranchMessageAsync(row, true)));
+        actions.Children.Add(Button("Fork", () => BranchMessageAsync(row, false)));
+        content.Children.Add(actions);
       }
       if (row.Kind == "approval")
       {
@@ -352,7 +367,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       messages.Children.Insert(i, desired[i]);
     }
     while (messages.Children.Count > desired.Count) messages.Children.RemoveAt(messages.Children.Count - 1);
-    foreach (var key in rowCache.Keys.Where(key => !messageElements.ContainsKey(key)).ToArray()) rowCache.Remove(key);
+    foreach (var key in rowCache.Keys.Where(key => !messageElements.ContainsKey(key)).ToArray()) { rowCache.Remove(key); richMessages.Remove(key); }
     FitRows(); RenderProblem(); UpdateControls();
     if (!nearBottom) _ = DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (thisRender != renderSerial || findNavigationPending) return; scroll.UpdateLayout(); scroll.ChangeView(null, previousOffset, null, true); });
     if (nearBottom) _ = DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -493,7 +508,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       menu.Items.Clear();
       if (choices.Count == 0)
       {
-        menu.Items.Add(new MenuFlyoutItem { Text = loading ? "Loading models…" : "Models unavailable · check Coding AIs", IsEnabled = false });
+        menu.Items.Add(new MenuFlyoutItem { Text = loading ? "Loading models…" : Model.ModelReadProblem ?? "Models unavailable · check Coding AIs", IsEnabled = false });
         return;
       }
       if (Model.SelectedModelId is { Length: > 0 } saved && !choices.Any(m => m.Id == saved))

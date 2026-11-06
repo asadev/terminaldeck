@@ -8,6 +8,7 @@ using TerminalDeck.Core.Chats;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Sessions;
 using TerminalDeck.Core.Storage;
+using TerminalDeck.Core.Mcp;
 
 namespace TerminalDeck.Platform.Windows.Hoot;
 
@@ -86,6 +87,12 @@ public sealed class HootPipeServer(AppDataRoot root, IHoot hoot, ReadOnlyMemory<
             if (request.Attachments.Length > 0) await hoot.SayWithAttachmentsAsync(request.Id, request.Text, request.Attachments, request.Source, token);
             else await hoot.SayAsync(request.Id, request.Text, request.Source, token);
             break;
+          case "mcpSay":
+            // Only the authenticated app/keeper channel carries this operation.
+            // The public person-send path still rejects caller-selected sources.
+            if (request.Source is not { Kind: "session", Id.Length: > 0 }) throw new ArgumentException("Choose an authenticated MCP note source.");
+            await hoot.SayWithAttachmentsAsync(request.Id, request.Text, request.Attachments, request.Source, token);
+            break;
           case "background":
             var source = request.Source ?? throw new ArgumentException("Choose a background source.");
             await hoot.BackgroundTurnAsync(request.Id, source.Kind, source.Id, source.Title, request.Text, cancellationToken: token); break;
@@ -95,6 +102,7 @@ public sealed class HootPipeServer(AppDataRoot root, IHoot hoot, ReadOnlyMemory<
           case "continue": await hoot.ContinueAsync(token); break;
           case "answer": await hoot.AnswerAsync(request.Id, request.Allow, token); break;
           case "refresh": throw new InvalidOperationException("Memory upkeep does not start a new chat.");
+          case "branch": await hoot.BranchAsync(request.Id, request.Allow, token); break;
           case "newChat": await hoot.RefreshAsync(token); break;
           case "memory": await hoot.SaveMemoryAsync(request.Text, request.Extra, token); break;
           case "board": await hoot.SaveBoardAsync(request.Row ?? throw new ArgumentException("Choose a board row."), token); break;
@@ -182,6 +190,13 @@ public sealed class WindowsHootClient : IHoot, IAsyncDisposable
     if (source is not null && source.Kind != "person") throw new ArgumentException("Agent notes use the guarded MCP door.");
     return Send(new("", "say", clientId, text, Source: source), cancellationToken);
   }
+  public async ValueTask SayAuthenticatedNoteAsync(McpCallContext context, string clientId, string text, ChatAttachmentData[] attachments, CancellationToken ct)
+  {
+    context.Require("hoot", "main");
+    await context.EnsureCurrentAsync(ct);
+    var source = new HootSource("session", context.Grant.SessionId ?? context.Grant.CallerId, "A note from " + context.Grant.CallerId);
+    await Send(new("", "mcpSay", clientId, text, Source: source) { Attachments = attachments }, ct);
+  }
   public ValueTask SayWithAttachmentsAsync(string clientId, string text, ChatAttachmentData[] attachments, HootSource? source = null, CancellationToken cancellationToken = default)
   {
     if (source is not null && source.Kind != "person") throw new ArgumentException("Agent notes use the guarded MCP door.");
@@ -195,6 +210,7 @@ public sealed class WindowsHootClient : IHoot, IAsyncDisposable
   public ValueTask KeepUnconfirmedAsync(CancellationToken cancellationToken = default) => Send(new("", "keep"), cancellationToken);
   public ValueTask ContinueAsync(CancellationToken cancellationToken = default) => Send(new("", "continue"), cancellationToken);
   public ValueTask AnswerAsync(string requestId, bool allow, CancellationToken cancellationToken = default) => Send(new("", "answer", requestId, Allow: allow), cancellationToken);
+  public ValueTask BranchAsync(string lineId, bool rewind, CancellationToken ct = default) => Send(new("", "branch", lineId, Allow: rewind), ct);
   public ValueTask RefreshAsync(CancellationToken cancellationToken = default) => Send(new("", "newChat"), cancellationToken);
   public ValueTask SaveMemoryAsync(string card, string playbook, CancellationToken cancellationToken = default) => Send(new("", "memory", Text: card, Extra: playbook), cancellationToken);
   public ValueTask SaveBoardAsync(HootBoardRow row, CancellationToken cancellationToken = default) => Send(new("", "board", Row: row), cancellationToken);

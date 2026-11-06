@@ -72,6 +72,7 @@ final class NativeCompositionProduction {
     var phoneHoot: BackendINT2HootPhone?
     /// Agent chats on a paired phone (`chats`, NativeCompositionINT2PhoneChats).
     var phoneChats: BackendPhoneChats?
+    var chatMCPApps: BackendChatMCPApps?
     /// 31 Oct: alerts for phones whose app is closed (NativeCompositionPhonePush).
     var phonePush: BackendPhonePush?
     var phonePushWatcher: NativePhonePushWatcher?
@@ -156,6 +157,9 @@ final class NativeCompositionProduction {
             agentRecords: { [weak self] id in
                 guard let locate = await self?.agentRecordLocator() else { return nil }
                 return try await locate(id)
+            }, sendChat: { [weak self] id, text in
+                guard let chats = await self?.sessionChats else { throw BackendSessionFailure.closed }
+                _ = try await chats.say(id, text: text, clientMessageID: UUID().uuidString.lowercased())
             })
         coreSurface = surface
         // One tour stage for the tour tool and the core's tour channels (deck-tools handoff "Tours").
@@ -357,6 +361,7 @@ final class NativeCompositionProduction {
         await hoot?.usage.bindCheck { [usage] account in try await usage.usage.refreshAccount(account).detail }
         // Item 74 relay half: Hoot's figure moving pushes it to the phones following `hoot` / `hoot:task:<id>`.
         if let contextPush { await hoot?.usage.setChangeHandler { id in await contextPush.transcriptChanged(id) } }
+        try await installChatMCPApps()
         try await installINT2PhoneHoot()
         try await installINT2PhoneChats()
         await installPhonePictures()   // the Mac's project logos and agent pictures on the phone (28 Oct); never fatal

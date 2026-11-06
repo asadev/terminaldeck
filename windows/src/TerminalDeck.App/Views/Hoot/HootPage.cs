@@ -14,7 +14,7 @@ public sealed record HootSessionChoice(string Id, string Title);
 
 // Shell supplies its account list, live sessions and existing window actions.
 // There is deliberately no island, floating window or notification-area icon.
-public sealed class HootPage : Grid, IDisposable
+public sealed partial class HootPage : Grid, IDisposable
 {
   public HootViewModel Model { get; }
   private readonly Func<IReadOnlyList<AccountProfile>> accounts;
@@ -40,11 +40,21 @@ public sealed class HootPage : Grid, IDisposable
   private HootMemory? renderedMemory;
   private string? cardDraft;
   private string? playbookDraft;
+  private readonly Dictionary<string, (HootLine Line, string State, UIElement View)> messageCache = [];
+  private readonly Dictionary<string, RichChatWebView> richMessages = [];
+  private RichChatWebView RichMessage(HootLine line)
+  {
+    var view = (RichChatWebView)ChatMarkdownView.Render(line.Text, CopyMessage, ShowMessageError, Model.State.Settings?.Folder, DataDirectory);
+    richMessages[line.Id] = view; return view;
+  }
   private int visibleMessages = 300;
   private long renderedSequence = -1;
   private string renderedChanges = "";
   // The "/" menu's list (the shell supplies it from Hoot's chat, folder and account).
   public Func<IReadOnlyList<ChatSlashCommand>>? SlashCommands { get; init; }
+  public IChatSessions? Chats { get; init; }
+  public Func<string, ChatMcpNavigation>? McpNavigation { get; init; }
+  public string? DataDirectory { get; init; }
   public HootPage(IHoot hoot, Func<IReadOnlyList<AccountProfile>> accounts, Func<IReadOnlyList<HootSessionChoice>> sessions, Action<string>? openSession = null, Action? openCodingAis = null, Func<string, Task>? signIn = null)
   {
     this.accounts = accounts; this.sessions = sessions; this.openSession = openSession; this.openCodingAis = openCodingAis; this.signIn = signIn;
@@ -92,10 +102,10 @@ public sealed class HootPage : Grid, IDisposable
     // Mac "/" menu: Hoot's own AI commands and the skills of Hoot's working folder.
     var slash = new SlashCommandMenu(composer, () => SlashCommands?.Invoke() ?? Array.Empty<ChatSlashCommand>(), async () =>
     {
-      if (Model.Pending || Model.State.Settings is null || string.IsNullOrWhiteSpace(composer.Text)) return;
+      if (Model.Pending || Model.State.Settings is null || string.IsNullOrWhiteSpace(composer.Text) && Model.Attachments.Count == 0) return;
       Model.Draft = composer.Text; await Model.SendAsync();
     }, control => _ = ShowSettingsAsync());
-    var compose = new StackPanel { Spacing = 8 }; compose.Children.Add(slash.View); compose.Children.Add(composer);
+    var compose = new StackPanel { Spacing = 8 }; InitializeImagePaste(compose); compose.Children.Add(slash.View); compose.Children.Add(composer);
     var buttons = new Grid { ColumnSpacing = 8 }; buttons.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); buttons.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); buttons.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); buttons.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     resume = ActionButton("Continue queued turns", () => Model.ContinueAsync()); stop = ActionButton("Stop", () => Model.StopAsync()); send = ActionButton("Send", () => Model.SendAsync());
     send.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
@@ -178,7 +188,7 @@ public sealed class HootPage : Grid, IDisposable
     feedback.Visibility = feedback.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     pending.Visibility = Model.Pending ? Visibility.Visible : Visibility.Collapsed;
     // A signed-in AI is enough: the keeper connects Hoot to it on the first send.
-    send.IsEnabled = !Model.Pending && (state.Settings is not null || AnySignedIn()) && !string.IsNullOrWhiteSpace(composer.Text);
+    send.IsEnabled = !Model.Pending && (state.Settings is not null || AnySignedIn()) && (!string.IsNullOrWhiteSpace(composer.Text) || Model.Attachments.Count > 0);
     stop.IsEnabled = !Model.Pending && state.Active?.Source.Kind is "person" or "session";
     stop.Visibility = state.Busy ? Visibility.Visible : Visibility.Collapsed;
     AutomationProperties.SetName(send, state.Busy ? "Queue message" : "Send message");
@@ -210,7 +220,7 @@ public sealed class HootPage : Grid, IDisposable
     var state = Model.State; var sequence = state.Lines.LastOrDefault()?.Sequence ?? 0;
     var changes = string.Join('|', state.Lines.TakeLast(30).Select(l => l.Id + l.Text + l.Waiting)) + string.Join('|', state.Turns.TakeLast(30).Select(t => t.State + t.Answer)) + state.Waiting + state.Busy;
     if (renderedSequence == sequence && renderedChanges == changes) return;
-    var nearBottom = history.ScrollableHeight - history.VerticalOffset < 80; renderedSequence = sequence; renderedChanges = changes; messages.Children.Clear();
+    var nearBottom = history.ScrollableHeight - history.VerticalOffset < 80; renderedSequence = sequence; renderedChanges = changes; var desired = new List<UIElement>();
     if (state.Lines.Length == 0)
     {
       var empty = ChatAppearance.Empty("Ask Hoot anything about your projects.", "hoot");
@@ -231,16 +241,26 @@ public sealed class HootPage : Grid, IDisposable
           suggestions.Children.Add(ActionButton(suggestion, () => { composer.Text = suggestion; composer.Focus(FocusState.Programmatic); return Task.CompletedTask; }));
         empty.Children.Add(new ScrollViewer { Content = suggestions, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
       }
-      messages.Children.Add(empty);
+      desired.Add(empty);
     }
-    if (state.Lines.Length > visibleMessages) messages.Children.Add(ActionButton("Earlier messages", () =>
+    if (state.Lines.Length > visibleMessages) desired.Add(ActionButton("Earlier messages", () =>
     { visibleMessages += 300; renderedSequence = -1; Render(); return Task.CompletedTask; }));
     foreach (var line in state.Lines.TakeLast(visibleMessages))
     {
+      var turnState = state.Turns.FirstOrDefault(t => t.Id == line.TurnId) is { } currentTurn ? currentTurn.State + currentTurn.Answer : "";
+      if (messageCache.TryGetValue(line.Id, out var cached))
+      {
+        if (cached.Line == line && cached.State == turnState) { desired.Add(cached.View); continue; }
+        if (line.Kind == "assistant" && richMessages.TryGetValue(line.Id, out var rich))
+        {
+          rich.UpdateHtml(ChatRichContent.Html(line.Text, state.Settings?.Folder));
+          messageCache[line.Id] = (line, turnState, cached.View); desired.Add(cached.View); continue;
+        }
+      }
       UIElement row;
       if (line.Kind == "user")
       {
-        var text = Words(line.Text); text.Style = (Style)Resources["PersonText"];
+        var text = RichMessage(line);
         var bubble = new Border { Child = text, Style = (Style)Resources["Person"], MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Right };
         row = bubble;
         if (state.Turns.Any(t => t.Id == line.TurnId && t.State == HootTurnState.Queued))
@@ -268,7 +288,20 @@ public sealed class HootPage : Grid, IDisposable
         else body.Children.Add(Words("Answered", 13));
         row = Card(body);
       }
-      else if (line.Kind == "tool") row = ChatAppearance.ToolStep(line.Text, line.Details, line.Waiting);
+      else if (line.Kind == "tool")
+      {
+        var tools = new StackPanel { Spacing = 8 }; tools.Children.Add(ChatAppearance.ToolStep(line.Text, line.Details, line.Waiting));
+        var sourceId = state.Turns.FirstOrDefault(t => t.Id == line.TurnId)?.ChatId;
+        var record = Chats?.List().FirstOrDefault(c => c.Definition.Id == sourceId);
+        if (record is not null)
+        {
+          var prefix = record.Definition.Id + ":" + line.TurnId + ":";
+          var nativeId = line.Id.StartsWith(prefix, StringComparison.Ordinal) ? line.Id[prefix.Length..] : line.Id;
+          if (ChatProjection.Rows(record).FirstOrDefault(r => r.Kind == "tool" && r.Id == nativeId) is { } toolRow)
+            tools.Children.Add(ChatToolContent.Render(record, toolRow, DataDirectory ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview"), McpNavigation?.Invoke(record.Definition.Id), () => Chats!.Get(record.Definition.Id), CopyMessage, ShowMessageError, async dialog => await dialog.ShowAsync(), this));
+        }
+        row = tools;
+      }
       else if (line.Kind == "background")
       {
         var turn = state.Turns.FirstOrDefault(t => t.Id == line.TurnId); var body = new StackPanel { Spacing = 8 };
@@ -277,11 +310,31 @@ public sealed class HootPage : Grid, IDisposable
         if (turn?.Answer.Length > 0) body.Children.Add(new Expander { Header = "Task answer", Content = Words(turn.Answer), HorizontalContentAlignment = HorizontalAlignment.Stretch });
         row = body;
       }
-      else row = line.Kind == "assistant" ? ChatAppearance.Reply(ChatMarkdownView.Render(line.Text, text => { var content = new Windows.ApplicationModel.DataTransfer.DataPackage(); content.SetText(text); Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content); }, error => { feedback.Text = error; feedback.Visibility = Visibility.Visible; }), "Hoot") : Card(Words(line.Text, 13));
-      if (row is FrameworkElement element) element.MaxWidth = line.Kind == "user" ? 520 : 760; messages.Children.Add(row);
+      else row = line.Kind == "assistant" ? ChatAppearance.Reply(RichMessage(line), "Hoot") : Card(Words(line.Text, 13));
+      if (line.Kind is "user" or "assistant")
+      {
+        var message = new StackPanel { Spacing = 6, HorizontalAlignment = line.Kind == "user" ? HorizontalAlignment.Right : HorizontalAlignment.Stretch };
+        message.Children.Add(row);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        actions.Children.Add(ActionButton("Copy", () => { CopyMessage(Model.State.Lines.FirstOrDefault(l => l.Id == line.Id)?.Text ?? line.Text); return Task.CompletedTask; }));
+        actions.Children.Add(ActionButton("Rewind", () => BranchLineAsync(line, true)));
+        actions.Children.Add(ActionButton("Fork", () => BranchLineAsync(line, false)));
+        message.Children.Add(actions); row = message;
+      }
+      if (row is FrameworkElement element) element.MaxWidth = line.Kind == "user" ? 520 : 760; desired.Add(row); messageCache[line.Id] = (line, turnState, row);
     }
     if (state.Busy && state.Active?.Source.Kind == "person" && !state.Lines.Any(l => l.TurnId == state.Active.Id && l.Kind == "assistant"))
-      messages.Children.Add(new ProgressRing { IsActive = true, Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left });
+      desired.Add(new ProgressRing { IsActive = true, Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Left });
+    var retained = desired.ToHashSet();
+    for (var index = messages.Children.Count - 1; index >= 0; index--) if (!retained.Contains(messages.Children[index])) messages.Children.RemoveAt(index);
+    for (var index = 0; index < desired.Count; index++)
+    {
+      if (index < messages.Children.Count && ReferenceEquals(messages.Children[index], desired[index])) continue;
+      var oldIndex = messages.Children.IndexOf(desired[index]); if (oldIndex >= 0) messages.Children.RemoveAt(oldIndex);
+      messages.Children.Insert(index, desired[index]);
+    }
+    var visibleIds = state.Lines.TakeLast(visibleMessages).Select(l => l.Id).ToHashSet();
+    foreach (var id in messageCache.Keys.Where(id => !visibleIds.Contains(id)).ToArray()) { messageCache.Remove(id); richMessages.Remove(id); }
     if (nearBottom) DispatcherQueue.TryEnqueueHandled(() => history.ChangeView(null, history.ScrollableHeight, null, true));
   }
   private static string TurnWords(HootTurnState state) => state switch

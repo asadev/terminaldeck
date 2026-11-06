@@ -12,6 +12,8 @@
 	<string>TerminalDeckSessionHostHelper</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Your approved phone can show this Mac's screen, including its sign-in screen.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>A session uses the microphone only when you ask it to.</string>
 	<key>NSCameraUsageDescription</key>

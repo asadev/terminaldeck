@@ -117,6 +117,8 @@ public actor BackendHootChatStore {
         events = (snapshot["events"].elements ?? []).compactMap { try? HootChatEvent(wire: $0) }
         sequence = Int(snapshot["sequence"].number ?? 0)
         busy = snapshot["busy"].bool == true
+        completedTurn = !Self.foreground(in: snapshot)
+        cliStatus = snapshot["foreground"].bool == true ? "running" : nil
         turnID = events.last?.turnID ?? ""
         if let id = snapshot["conversationId"].string { identity.set(provider: provider, conversation: id) }
         // The host's figure is for the current turn only; the last one is kept here until its conversation changes.
@@ -169,6 +171,9 @@ public actor BackendHootChatStore {
     private var startupReceipt: NativeRPCValue = .null
     private var deliveryReceipt: NativeRPCValue = .null
     private var backgroundTasks: Set<String> = []
+    private var queuedMessages: [BackendHootQueuedMessage] = []
+    private var drainingQueue = false
+    private var queuedInputGate: BackendHootChatInputGate?
     private var completedTurn = false
     private var cliStatus: String?
     /// The commands the AI itself offers for the "/" menu: Claude's handshake (names, descriptions, hints) or its
@@ -252,7 +257,7 @@ public actor BackendHootChatStore {
         return id
     }
     private func requireQuiet() throws {
-        guard !busy, !rebinding, !changingProviderHistory, initialization == nil, stopping == 0 else {
+        guard !busy, queuedMessages.isEmpty, !rebinding, !changingProviderHistory, initialization == nil, stopping == 0 else {
             throw NativeRPCError(code: "busy", message: "Hoot is in the middle of an answer. Try again when it has finished.")
         }
     }
@@ -291,11 +296,79 @@ public actor BackendHootChatStore {
         }
         try persist()
     }
+    public var carriedHistoryActionRows: [NativeRPCValue] { BackendChatMessageActions.historyRows(events) }
     public var messageActionRows: [NativeRPCValue] { BackendChatMessageActions.rows(events, provider: provider) }
+    public func carriedHistoryPrefix(through sequence: Int) throws -> [HootChatEvent] {
+        try Self.carriedPrefix(events, through: sequence)
+    }
+    private func visibleCarriedJobEvents() throws -> [HootChatEvent] {
+        let snapshot = BackendSessionChats.visibleJobSnapshot(.object([.init("events", .array(events.map(\.wireValue)))]), adopted: true)
+        return try (snapshot["events"].elements ?? []).map(HootChatEvent.init(wire:))
+    }
+    var carriedJobHistoryActionRows: [NativeRPCValue] {
+        BackendChatMessageActions.historyRows((try? visibleCarriedJobEvents()) ?? [])
+    }
+    func carriedJobHistoryPrefix(through sequence: Int) throws -> [HootChatEvent] {
+        try Self.carriedPrefix(visibleCarriedJobEvents(), through: sequence)
+    }
+    private static func carriedPrefix(_ events: [HootChatEvent], through sequence: Int) throws -> [HootChatEvent] {
+        guard let chosen = events.first(where: { $0.sequence == sequence && [.user, .message].contains($0.record.kind) }) else {
+            throw NativeRPCError(code: "stale", message: "That message is no longer in this conversation. Nothing changed.")
+        }
+        let end = chosen.record.messageID.isEmpty ? sequence : (events.last { $0.turnID == chosen.turnID && $0.record.messageID == chosen.record.messageID }?.sequence ?? sequence)
+        let prefix = events.filter { $0.sequence <= end }
+        let messages = prefix.filter { [.user, .message].contains($0.record.kind) }
+        guard messages.count <= BackendHootHandover.maximumMessages,
+              messages.allSatisfy({ ($0.record.value["text"].string?.count ?? 0) <= BackendHootDesk.messageCap }),
+              messages.reduce(0, { $0 + ($1.record.value["text"].string?.utf8.count ?? 0) }) <= 40_000 else {
+            throw NativeRPCError(code: "unavailable", message: "This history is too large to carry safely into one new conversation.")
+        }
+        return prefix
+    }
     public func forkPrefix(through sequence: Int) throws -> [HootChatEvent] {
         let boundary = try BackendChatMessageActions.boundary(sequence, events: events, provider: provider, action: "fork")
         let end = provider == .codex ? (events.last { $0.turnID == boundary["turnId"].string && $0.record.kind == .completed }?.sequence ?? sequence) : sequence
         return events.filter { $0.sequence <= end }
+    }
+    func seedEarlierEngineHistory(_ history: [HootChatEvent], conversation: String, chatID: String, codexTurns: [String: String] = [:]) throws {
+        try requireQuiet()
+        guard process == nil, history.count <= 100_000 else { throw NativeRPCError.invalidArguments("The new chat owner already has history.") }
+        identity.set(provider: provider, conversation: chatID)
+        events = history.map { event in
+            var record = event.record
+            if record.kind == .completed, record.value["id"].string?.isEmpty != false, let id = codexTurns[event.turnID] {
+                record = .init(record.kind, id: record.messageID, value: record.value.setting("id", .string(id)))
+            }
+            return .init(conversationID: chatID, turnID: event.turnID, sequence: event.sequence, provider: event.provider, record: record, at: event.at)
+        }
+        sequence = history.last?.sequence ?? 0; sessionID = conversation
+        turnID = ""; pendingContinuation = nil; handover = nil
+        try persist()
+    }
+    /// Hoot forks its own saved desk, including the chosen message, into another conversation.
+    public func hootForkPrefix(through chosen: Int) throws -> [HootChatEvent] {
+        try requireQuiet()
+        guard let message = events.first(where: { $0.sequence == chosen && [.user, .message].contains($0.record.kind) }) else {
+            throw NativeRPCError(code: "stale", message: "That message is no longer in Hoot's chat. Nothing changed.")
+        }
+        let end = message.record.messageID.isEmpty ? chosen : (events.last { $0.turnID == message.turnID && $0.record.messageID == message.record.messageID }?.sequence ?? chosen)
+        let prefix = events.filter { $0.sequence <= end }
+        guard prefix.count <= 100_000 else { throw NativeRPCError.invalidArguments("This conversation is too large to fork safely.") }
+        return prefix
+    }
+    public func seedHootForkHistory(_ prefix: [HootChatEvent], mediaFrom source: URL? = nil) throws {
+        if let source {
+            let media = source.deletingLastPathComponent().appendingPathComponent("media", isDirectory: true)
+            let destination = file.deletingLastPathComponent().appendingPathComponent("media", isDirectory: true)
+            if FileManager.default.fileExists(atPath: media.path), !FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: media, to: destination)
+            }
+        }
+        try seedForkHistory(prefix)
+        // A fresh Hoot AI receives the saved conversation through its existing handover path.
+        sessionID = nil; handover = provider.rawValue
+        try persist()
     }
     public func seedForkHistory(_ prefix: [HootChatEvent]) throws {
         try requireQuiet()
@@ -562,18 +635,35 @@ public actor BackendHootChatStore {
         // 28 Oct: pictures saved inline by an earlier build are kept as files beside the conversation from now on;
         // the file itself is rewritten small at its next save (nothing is written here but the pictures).
         let media = Self.mediaFolder(file)
-        events = history.events.map { BackendChatMedia.keep($0, in: media) }; sequence = history.events.last?.sequence ?? 0
-        convertedInline = events != history.events
+        let deliveryEvents = Self.bindUncertainDeliveries(history.events, queued: history.queued)
+        events = deliveryEvents.map { BackendChatMedia.keep($0, in: media) }; sequence = history.events.last?.sequence ?? 0
+        convertedInline = events != deliveryEvents
+        queuedMessages = history.queued.filter { queued in
+            !history.events.contains { $0.record.value["clientMessageId"].string == queued.id && $0.record.value["deliveryConfirmed"].bool == true }
+        }
+        if let last = history.events.last { turnID = last.turnID }
+        completedTurn = history.events.last(where: { [.user, .completed, .interrupted].contains($0.record.kind) })?.record.kind == .completed
         sessionID = history.sessionID; contextKey = history.contextKey; setAside = history.setAside
         let savedBoundary = try? NativeRPCValue.parseJSON(Data(contentsOf: file))
         claudeResumeAt = savedBoundary?["claudeResumeAt"].string
         forkHistoryPrefix = savedBoundary?["forkHistoryPrefix"].bool == true
         appliedWindow = history.window; handover = history.handover; lastContext = history.lastContext
         // Opened at launch: an answer the app's last end cut off is carried on by itself once Hoot is awake.
-        pendingContinuation = forkHistoryPrefix ? nil : Self.cutOffTurn(history.events, before: Date().timeIntervalSince1970 * 1000)
+        pendingContinuation = forkHistoryPrefix ? nil : Self.cutOffTurn(history.events, uncertain: history.queued, before: Date().timeIntervalSince1970 * 1000)
+    }
+    /// Older journals saved queued user rows without their delivery id. Bind them before
+    /// the queue can be removed, so a later restart cannot mistake them for accepted input.
+    private static func bindUncertainDeliveries(_ events: [HootChatEvent], queued: [BackendHootQueuedMessage]) -> [HootChatEvent] {
+        events.map { event in
+            guard event.record.kind == .user, event.record.value["clientMessageId"].string == nil,
+                  let delivery = queued.first(where: { $0.deliveryPending && $0.text == event.record.value["text"].string }) else { return event }
+            return HootChatEvent(conversationID: event.conversationID, turnID: event.turnID, sequence: event.sequence, provider: event.provider,
+                record: .init(event.record.kind, id: event.record.messageID, value: event.record.value.setting("clientMessageId", .string(delivery.id))), at: event.at)
+        }
     }
     struct History { var id: String, events: [HootChatEvent], sessionID: String?, contextKey: String?, setAside: [NativeRPCValue], window: Int?, handover: String?
-        var lastContext: (tokens: Int, at: Double, session: String)? = nil }
+        var lastContext: (tokens: Int, at: Double, session: String)? = nil
+        var queued: [BackendHootQueuedMessage] = [] }
     /// The file's own provider must match (a file is one AI's), but the events in it may come from several AIs: the
     /// conversation the person sees travels with Hoot when it changes AI (Asad, 12 Oct). The CLI's own id never does.
     static func readHistory(file: URL, provider: HootChatProvider, retainAllHistory: Bool = false) throws -> History {
@@ -588,24 +678,32 @@ public actor BackendHootChatStore {
             return .init(id: savedID, events: events, sessionID: value["sessionId"].string, contextKey: value["contextKey"].string,
                          setAside: value["setAside"].elements ?? [], window: value["window"].number.map { Int($0) }, handover: value["handover"].string,
                          lastContext: value["contextReading"]["tokens"].number.flatMap { tokens in
-                             value["contextReading"]["sessionId"].string.map { (tokens: Int(tokens), at: value["contextReading"]["at"].number ?? 0, session: $0) } })
+                             value["contextReading"]["sessionId"].string.map { (tokens: Int(tokens), at: value["contextReading"]["at"].number ?? 0, session: $0) } },
+                         queued: try (value["queuedMessages"].elements ?? []).map(BackendHootQueuedMessage.init(wire:)))
         }
         return .init(id: UUID().uuidString.lowercased(), events: [], sessionID: nil, contextKey: nil, setAside: [], window: nil, handover: nil)
     }
     /// The person's last message (not a background turn, not one the app sent in) when the app's end cut its answer
     /// off: no "completed", not stopped by the person, not carried on before, last written before `before` and less
     /// than a day ago. nil otherwise.
-    static func cutOffTurn(_ events: [HootChatEvent], before: Double) -> (turn: String, text: String)? {
-        guard let cut = unanswered(events) else { return nil }
+    static func cutOffTurn(_ events: [HootChatEvent], uncertain: [BackendHootQueuedMessage] = [], before: Double) -> (turn: String, text: String)? {
+        guard let cut = unanswered(events, uncertain: uncertain) else { return nil }
         guard let last = events.filter({ $0.turnID == cut.turn }).map(\.at).max(), last < before, before - last < 86_400_000 else { return nil }
         return cut
     }
     /// The person's last message when its answer never finished and nobody chose that: no "completed", not stopped by
     /// the person, not carried on before.
-    static func unanswered(_ events: [HootChatEvent]) -> (turn: String, text: String)? {
+    static func unanswered(_ events: [HootChatEvent], uncertain: [BackendHootQueuedMessage] = []) -> (turn: String, text: String)? {
         guard let user = events.last(where: { $0.record.kind == .user && !$0.turnID.hasPrefix(BackendHootBackgroundTurn.turnPrefix)
                 && ($0.record.value["context"]["source"]["kind"].string ?? "").isEmpty }) else { return nil }
         let turn = events.filter { $0.turnID == user.turnID }
+        // A saved user row precedes stdin. Only its matching receipt permits an automatic restart.
+        if let delivery = user.record.value["clientMessageId"].string {
+            guard turn.contains(where: { $0.record.value["clientMessageId"].string == delivery && $0.record.value["deliveryConfirmed"].bool == true }) else { return nil }
+        } else if uncertain.contains(where: { $0.deliveryPending && $0.text == user.record.value["text"].string }) {
+            // Older journals had no delivery id. Hold a matching uncertain queued message conservatively.
+            return nil
+        }
         guard !turn.contains(where: { $0.record.kind == .completed }),
               !turn.contains(where: { $0.record.kind == .interrupted && $0.record.value["by"].string == "person" }),
               !turn.contains(where: { $0.record.kind == .session && !$0.record.value["continued"].isNullish }),
@@ -626,7 +724,7 @@ public actor BackendHootChatStore {
     }
     public func rebindProvider(_ next: HootChatProvider) async throws {
         guard next != provider else { return }
-        guard !busy, !rebinding, initialization == nil, stopping == 0 else {
+        guard !busy, queuedMessages.isEmpty, !rebinding, initialization == nil, stopping == 0 else {
             throw NativeRPCError(code: "busy", message: "Hoot is still answering. Its AI will change after this turn finishes.")
         }
         let nextFile = next == initialProvider ? initialFile : initialFile.deletingLastPathComponent()
@@ -787,6 +885,10 @@ public actor BackendHootChatStore {
         let reported = initializing || scoped ? row["model"].string ?? row["result"]["model"].string ?? row["params"]["thread"]["model"].string ?? row["response"]["response"]["model"].string : nil
         if let reported, !["default", "auto", ""].contains(reported.lowercased().replacingOccurrences(of: "[1m]", with: "")) { reportedModel = reported }
         if provider == .claude {
+            if scoped, row["parent_tool_use_id"].isNullish,
+               row["type"].string == "assistant" || (row["type"].string == "stream_event" && row["event"]["type"].string == "message_start") {
+                busy = true; completedTurn = false; cliStatus = "running"
+            }
             if row["type"].string == "control_response" { controlResponse(row, token: token); return }
             let previousSession = sessionID
             for record in try decoder.decode(row) { try accept(record, token: token) }
@@ -869,16 +971,71 @@ public actor BackendHootChatStore {
                 .init("evidence", .string(provider == .claude ? "initialize-control-response" : "structured-session-ready")),
                 .init("at", .number(Date().timeIntervalSince1970 * 1000))])
         }
-        if let error { waiting?.resume(throwing: error) } else { waiting?.resume() }
+        if let error { waiting?.resume(throwing: error) } else {
+            waiting?.resume()
+            Task { await self.drainQueuedMessages() }
+        }
     }
     /// `background`: a turn the app starts for Hoot (a task, a handoff). No user bubble; the turn's own
     /// records (turn id "bg:<reason>:<id>:…") stay out of the visible conversation, except its one compact line.
     /// The AI is answering in the foreground: its own turn, or a turn the CLI started by itself (after a background
     /// task's notification it reports "running"). Background tasks alone are not an answer to interrupt.
-    var foregroundWorking: Bool { busy && (!completedTurn || cliStatus == "running" || cliStatus == "requires_action") }
+    var foregroundWorking: Bool {
+        // An idle provider receipt also ends a turn when a watcher keeps the wider process flag set.
+        if cliStatus == "idle", pending.isEmpty { return false }
+        return busy && (!completedTurn || cliStatus == "running" || cliStatus == "requires_action")
+    }
+    /// A background job may outlive the answer. Reconnecting clients use the host's current foreground receipt.
+    public static func foreground(in snapshot: NativeRPCValue) -> Bool {
+        guard snapshot["alive"].bool != false, snapshot["readOnly"].bool != true else { return false }
+        return snapshot["foreground"].bool ?? snapshot["answering"].bool ?? (snapshot["busy"].bool == true)
+    }
+    public func queueFeature(_ operation: String, arguments: NativeRPCValue) async throws -> NativeRPCValue {
+        if let hostedOwner, let hostedSessionID {
+            return try await hostedOwner.call("provider", id: hostedSessionID, fields: [.init("operation", .string(operation)), .init("arguments", arguments)])
+        }
+        guard ["queue/list", "queue/resume", "queue/remove"].contains(operation) else { throw NativeRPCError.invalidArguments("Choose a message queue action.") }
+        if operation != "queue/list" {
+            let id = try arguments["id"].requireString("queued message", nonempty: true)
+            guard let index = queuedMessages.firstIndex(where: { $0.id == id }) else { throw NativeRPCError.invalidArguments("Choose a message in this chat's queue.") }
+            guard !drainingQueue else { throw NativeRPCError(code: "busy", message: "A queued message is being sent. Wait for its receipt.") }
+            if operation == "queue/remove" { queuedMessages.remove(at: index) }
+            else {
+                guard !queuedMessages[index].deliveryPending else { throw NativeRPCError(code: "uncertain-delivery", message: "This message may already have been sent. Check the conversation before sending it again.") }
+                queuedMessages[index].held = false
+            }
+            try persist(); publish(reset: false)
+            Task { await self.drainQueuedMessages() }
+        }
+        return .object([.init("items", .array(queuedMessages.map(\.summary)))])
+    }
+    private func drainQueuedMessages() async {
+        guard !drainingQueue, !foregroundWorking, pending.isEmpty, process?.alive == true,
+              !rebinding, stopping == 0, initialization == nil, let first = queuedMessages.first, !first.held else { return }
+        drainingQueue = true
+        let gate = BackendHootChatInputGate()
+        queuedInputGate = gate
+        defer { drainingQueue = false; queuedInputGate = nil }
+        do {
+            queuedMessages[0].deliveryPending = true
+            try persist()
+            _ = try await say(first.text, attachments: first.attachments, consentCaller: first.caller,
+                messageContext: first.context, besideBackgroundTasks: true, clientMessageID: first.id, draining: true)
+            queuedMessages.removeAll { $0.id == first.id }
+            try persist(); publish(reset: false)
+        } catch {
+            if let index = queuedMessages.firstIndex(where: { $0.id == first.id }) {
+                queuedMessages[index].held = true
+                if !gate.writeStarted { queuedMessages[index].deliveryPending = false }
+            }
+            lastError = "Your queued message is saved. Review it before sending again."
+            try? persist(); publish(reset: false)
+        }
+        if !foregroundWorking { Task { await self.drainQueuedMessages() } }
+    }
     public func say(_ text: String, attachments: [NativeRPCValue] = [], consentCaller: BackendDeckCoreSecurityCaller = .local,
                     messageContext: NativeRPCValue = .object([]), background: BackendHootBackgroundTurn? = nil,
-                    validateSource: (@Sendable () async throws -> Void)? = nil, besideBackgroundTasks: Bool = false, clientMessageID: String? = nil) async throws -> NativeRPCValue {
+                    validateSource: (@Sendable () async throws -> Void)? = nil, besideBackgroundTasks: Bool = false, clientMessageID: String? = nil, draining: Bool = false) async throws -> NativeRPCValue {
         if let hostedOwner, let hostedSessionID {
             let clientMessageID = BackendChatDeliveryQueue.identity(clientMessageID)
             try await validateSource?()
@@ -887,14 +1044,7 @@ public actor BackendHootChatStore {
                 .init("attachments", .array(attachments)), .init("context", messageContext), .init("clientMessageId", .string(clientMessageID))])
             receiveHosted(result); return result
         }
-        guard !rebinding, !changingProviderHistory else { throw NativeRPCError(code: "busy", message: "The AI conversation is changing. Keep this draft and send it again.") }
-        guard initialization == nil else {
-            throw NativeRPCError(code: "starting", message: "The AI is still starting. Wait for it to finish starting, then send the brief again. Nothing was sent.")
-        }
-        // Send now may go in beside background tasks that are still running (the CLI takes a message then).
-        guard !busy || (besideBackgroundTasks && !foregroundWorking && pending.isEmpty) else {
-            throw NativeRPCError(code: "busy", message: "Hoot is still answering. Stop it before sending another message.")
-        }
+        guard !rebinding, !changingProviderHistory else { throw NativeRPCError(code: "busy", message: "Hoot is changing its idle AI. Keep this draft and send it again.") }
         guard let process, process.alive else { throw NativeRPCError(code: "unavailable", message: "Start Hoot before sending a message.") }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
               text.utf8.count <= 262_144, attachments.count <= 4 else { throw NativeRPCError.invalidArguments("Hoot needs a message of at most 256 KiB or up to four attachments.") }
@@ -911,6 +1061,28 @@ public actor BackendHootChatStore {
                 throw NativeRPCError.invalidArguments("Unsupported Hoot attachment.")
             }
         }
+        _ = try BackendHOOTSIMChatContext(wire: messageContext).message(text)
+        let identity = BackendChatDeliveryQueue.identity(clientMessageID)
+        if !draining, let saved = queuedMessages.first(where: { $0.id == identity }) {
+            guard saved.text == text, saved.attachments == attachments, saved.context == messageContext else {
+                throw NativeRPCError.invalidArguments("This message id already belongs to another message.")
+            }
+            return snapshot().setting("queued", .bool(true)).setting("queueNotice", .string("Hoot is still writing — your message will send when it finishes."))
+        }
+        if !draining, foregroundWorking || !pending.isEmpty || !queuedMessages.isEmpty {
+            guard background == nil, validateSource == nil, BackendPCDecisionDelivery.validate == nil,
+                  BackendPCDecisionDelivery.finalEffect == nil, BackendPCDecisionDelivery.hostedReference == nil,
+                  !BackendPCDecisionDelivery.required else {
+                throw NativeRPCError(code: "busy", message: "Hoot is still writing. Keep this message and send it when it finishes.")
+            }
+            guard queuedMessages.count < 50 else { throw NativeRPCError(code: "busy", message: "The message queue is full. Wait for Hoot to finish.") }
+            queuedMessages.append(.init(id: identity, text: text, attachments: attachments, context: messageContext, caller: consentCaller))
+            do { try persist() } catch { queuedMessages.removeLast(); throw error }
+            publish(reset: false)
+            Task { await self.drainQueuedMessages() }
+            return snapshot().setting("queued", .bool(true)).setting("queueNotice", .string("Hoot is still writing — your message will send when it finishes."))
+        }
+        let inputGate = draining ? queuedInputGate : nil
         let token = generation
         let nextTurn = (background?.turnPrefix ?? "") + UUID().uuidString.lowercased()
         let context = try BackendHOOTSIMChatContext(wire: messageContext)
@@ -956,6 +1128,8 @@ public actor BackendHootChatStore {
             try await BackendPCDecisionDelivery.verifyFinal(.input)
             guard token == generation, process.alive else { throw NativeRPCError(code: "interrupted", message: "The AI changed during final input validation.") }
             guard turnID == nextTurn else { throw NativeRPCError(code: "provider-turn-started", message: "The provider started another turn while input validation waited. Keep the draft and wait.") }
+            try Task.checkCancellation()
+            try inputGate?.check()
             if let nextAdapter { rpc = nextAdapter }
             if let background {
                 // What Hoot was given is kept for the diary in a record no chat shows; it is the app's, not the person's.
@@ -966,23 +1140,23 @@ public actor BackendHootChatStore {
                     try append(.init(.message, value: .object([.init("text", .string(line)), .init("background", about)])))
                 }
             } else {
-                try append(.init(.user, id: turnID, value: .object([.init("text", .string(text)), .init("attachmentCount", .number(Double(attachments.count))), .init("context", context.value)])))
+                try append(.init(.user, id: turnID, value: .object([.init("text", .string(text)), .init("attachmentCount", .number(Double(attachments.count))), .init("context", context.value), .init("clientMessageId", .string(identity))])))
             }
             if provider == .claude { decoder.beginTurn(id: nextTurn) }
-            try await process.send(message)
+            try await process.send(message, gate: inputGate)
             guard token == generation else { throw NativeRPCError(code: "interrupted", message: "Hoot was stopped while sending this message.") }
             // The new AI (or account) has had its first message: what it was handed is in its own conversation now.
             handover = nil
             if claudeResumeAt != nil || forkHistoryPrefix {
                 claudeResumeAt = nil; forkHistoryPrefix = false; try persist()
             }
-            try confirmDelivery(clientMessageID, turn: nextTurn)
+            try confirmDelivery(identity, turn: nextTurn)
             return snapshot()
         } catch {
             // A server turn can take the idle pipe while a source/desk check is suspended.
             // Reject this unsent message without killing the provider's now-visible work.
             if token == generation, turnID != nextTurn { throw error }
-            if token == generation, ["provider-input-limit", "decision-held"].contains((error as? NativeRPCError)?.code ?? "") {
+            if token == generation, ["provider-input-limit", "decision-held", "queued-send-stopped"].contains((error as? NativeRPCError)?.code ?? "") {
                 rpc = previous.rpc; turnID = previous.turnID; completedTurn = previous.completedTurn
                 pending = previous.pending; answered = previous.answered; lastError = previous.lastError
                 undoable = previous.undoable; pendingContinuation = previous.continuation; taskScope = previous.taskScope
@@ -999,7 +1173,7 @@ public actor BackendHootChatStore {
             let result = try await hostedOwner.steer(hostedSessionID, text: text, attachments: attachments, context: messageContext, clientMessageID: BackendChatDeliveryQueue.identity(clientMessageID))
             receiveHosted(result); return result
         }
-        guard busy else { return try await say(text, attachments: attachments, messageContext: messageContext, clientMessageID: clientMessageID) }
+        guard foregroundWorking || !pending.isEmpty else { return try await say(text, attachments: attachments, messageContext: messageContext, clientMessageID: clientMessageID) }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
               text.utf8.count <= 262_144, attachments.count <= 4 else { throw NativeRPCError.invalidArguments("Send a message of at most 256 KiB or four attachments.") }
         let token = generation
@@ -1091,7 +1265,7 @@ public actor BackendHootChatStore {
     public func takeContinuation() -> (turn: String, text: String)? {
         // Taken: "resuming" ends now, and the chat hears it (its "Send again" line may show again).
         defer { if pendingContinuation != nil { pendingContinuation = nil; publish(reset: false) } }
-        guard let cut = pendingContinuation, Self.unanswered(events)?.turn == cut.turn else { return nil }
+        guard let cut = pendingContinuation, Self.unanswered(events, uncertain: queuedMessages)?.turn == cut.turn else { return nil }
         return cut
     }
     /// After a restart: Hoot carries on with the person's message whose answer the app's end cut off, in that same
@@ -1102,7 +1276,7 @@ public actor BackendHootChatStore {
         guard !busy else { throw NativeRPCError(code: "busy", message: "Hoot is already answering.") }
         guard let process, process.alive else { throw NativeRPCError(code: "unavailable", message: "Hoot is not awake yet.") }
         // Still the person's last message, still without an answer (they may have sent something else meanwhile).
-        guard Self.unanswered(events)?.turn == turn else { return }
+        guard Self.unanswered(events, uncertain: queuedMessages)?.turn == turn else { return }
         let token = generation
         let line = BackendHootHandover.restartLine(text)
         var delivered = line
@@ -1128,7 +1302,7 @@ public actor BackendHootChatStore {
     /// The same writer starts a fresh conversation and keeps the exact old
     /// history beside it. No second chat store, process or background work.
     public func newConversation() async throws -> NativeRPCValue {
-        guard !busy, !rebinding, initialization == nil, stopping == 0 else {
+        guard !busy, queuedMessages.isEmpty, !rebinding, initialization == nil, stopping == 0 else {
             throw NativeRPCError(code: "busy", message: "Finish or stop Hoot's answer before starting a new chat.")
         }
         rebinding = true
@@ -1262,7 +1436,12 @@ public actor BackendHootChatStore {
             }
             receiveHosted(try await hostedOwner.call("interrupt", id: hostedSessionID)); return
         }
-        guard foregroundWorking, let child = process else { return }
+        let cancelledPreparing = queuedInputGate?.cancel() == true
+        if !queuedMessages.isEmpty {
+            for index in queuedMessages.indices { queuedMessages[index].held = true }
+            try persist(); publish(reset: false)
+        }
+        guard !cancelledPreparing, foregroundWorking, let child = process else { return }
         // The CLI cancels only foreground permission requests and reports their cancellation;
         // denying every pending request here would also cancel a background agent's work.
         let message: NativeRPCValue
@@ -1392,10 +1571,11 @@ public actor BackendHootChatStore {
         return provider == .claude ? response["response"] : response["result"]
     }
     public func stop() async {
+        queuedInputGate?.cancel()
         if let hostedOwner, let hostedSessionID {
             _ = try? await hostedOwner.call("close", id: hostedSessionID)
             hostedOwner.detach(); self.hostedOwner = nil; self.hostedSessionID = nil
-            hostedSnapshot = hostedSnapshot?.setting("alive", .bool(false)).setting("busy", .bool(false)).setting("effectivePolicy", .null); busy = false
+            hostedSnapshot = hostedSnapshot?.setting("alive", .bool(false)).setting("busy", .bool(false)).setting("foreground", .bool(false)).setting("answering", .bool(false)).setting("effectivePolicy", .null); busy = false
             publish(reset: false); return
         }
         _ = await closeOwnedTerminals(reason: "The parent Chat is stopping")
@@ -1414,7 +1594,7 @@ public actor BackendHootChatStore {
         if let child { stopping += 1; await child.stopAndWait(); stopping -= 1 }
     }
     public func snapshot(after cursor: Int? = nil, limit: Int = 200) -> NativeRPCValue {
-        if let hostedSnapshot { return hostedSnapshot }
+        if let hostedSnapshot { return ChatRenderedContent.snapshot(hostedSnapshot) }
         let bounded = min(500, max(1, limit))
         let reset = cursor == nil || (cursor ?? 0) < (events.first?.sequence ?? 1) - 1 || (cursor ?? 0) > sequence
         let slice = reset ? Array(Self.projectedRoutingHistory(events).suffix(bounded)) : Array(events.filter { $0.sequence > (cursor ?? 0) }.prefix(bounded))
@@ -1429,9 +1609,11 @@ public actor BackendHootChatStore {
             .init("attachmentLimits", (rpc?.attachmentLimits ?? ChatAttachmentLimits(provider: provider.rawValue)).wire),
             .init("foregroundStopPreservesChildren", .bool(true)),
             .init("providerFeatureCursor", .number(Double(providerFeatureCursor))),
-            .init("answering", .bool(busy && !completedTurn)), .init("foreground", .bool(foregroundWorking)),
+            .init("answering", .bool(foregroundWorking)), .init("foreground", .bool(foregroundWorking)),
+            .init("queuedMessages", .array(queuedMessages.map(\.summary))),
             .init("children", .array(ChatChildTasks.list(events))),
             .init("reset", .bool(reset)), .init("events", .array(slice.map(\.wireValue))),
+            .init("renderedMessages", ChatRenderedContent.messages(slice.map(\.wireValue))),
             .init("cursor", .number(Double(slice.last?.sequence ?? cursor ?? sequence))), .init("sequence", .number(Double(sequence))),
             .init("hasMore", .bool((slice.last?.sequence ?? cursor ?? sequence) < (events.last?.sequence ?? 0))),
             .init("alive", .bool(alive || deskRefreshing)), .init("busy", .bool(busy)),
@@ -1573,6 +1755,7 @@ public actor BackendHootChatStore {
         var value = NativeRPCValue.object([.init("version", .number(1)), .init("conversationId", .string(conversationID)),
             .init("provider", .string(provider.rawValue)), .init("sessionId", sessionID.map(NativeRPCValue.string) ?? .null),
             .init("contextKey", contextKey.map(NativeRPCValue.string) ?? .null), .init("claudeResumeAt", claudeResumeAt.map(NativeRPCValue.string) ?? .null), .init("forkHistoryPrefix", .bool(forkHistoryPrefix)), .init("events", .array(events.map(\.wireValue)))])
+        if !queuedMessages.isEmpty { value = value.setting("queuedMessages", .array(queuedMessages.map(\.wire))) }
         if !setAside.isEmpty { value = value.setting("setAside", .array(setAside)) }
         if let appliedWindow { value = value.setting("window", .number(Double(appliedWindow))) }
         if let handover { value = value.setting("handover", .string(handover)) }
@@ -1784,13 +1967,17 @@ public actor BackendHootChatStore {
         if record.kind == .completed {
             completedTurn = true
             if let window = (record.value["modelUsage"].fields ?? []).compactMap({ $0.value["contextWindow"].number }).max(), window > 0 { deskWindow = Int(window); appliedWindow = Int(window) }
-            busy = !backgroundTasks.isEmpty || !pending.isEmpty || cliStatus == "running" || cliStatus == "requires_action"
+            // The final provider result supersedes its earlier running status.
+            // Child tasks and their outstanding permissions keep their own records.
+            cliStatus = "idle"
+            busy = !backgroundTasks.isEmpty || !pending.isEmpty
         }
         if record.kind == .error {
             if lastError == record.value["text"].string { return }
             lastError = record.value["text"].string
         }
         try append(record)
+        if !foregroundWorking, pending.isEmpty { Task { await self.drainQueuedMessages() } }
     }
     private func invalidateEffectivePolicy(_ reason: String) {
         effectivePolicyReceipt = .null; instructionReceipt = .null; executionEvidence = .null; ownedTerminalScopeRevision = UUID()

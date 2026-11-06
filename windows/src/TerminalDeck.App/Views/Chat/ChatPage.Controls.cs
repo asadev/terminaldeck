@@ -69,11 +69,11 @@ public sealed partial class ChatPage
       }
     };
     var info = Button("Session info", ShowInspectorAsync);
-    ChatAppearance.IconButton(info, "\uE946", "Session info"); heading.Children.Add(info);
+    ChatAppearance.IconButton(info, "\uE946", "Session info"); // Kept for MCP; hidden in chat.
     var commandOutput = Button("Command output", ShowCommandOutputAsync);
-    ChatAppearance.IconButton(commandOutput, "\uE756", "Command output from this chat"); heading.Children.Add(commandOutput);
+    ChatAppearance.IconButton(commandOutput, "\uE756", "Command output from this chat"); // Kept for MCP; hidden in chat.
     var changes = Button("Changes", ShowChangesAsync);
-    ChatAppearance.IconButton(changes, "\uE8EF", "Recorded changes"); heading.Children.Add(changes);
+    ChatAppearance.IconButton(changes, "\uE8EF", "Recorded changes"); // Kept for MCP; hidden in chat.
     foreach (var control in heading.Children.OfType<Button>())
     { control.Width = control.Height = control.MinWidth = control.MinHeight = 26; control.CornerRadius = new CornerRadius(8); }
     var more = new Button { Content = "More", MinHeight = 32 };
@@ -100,7 +100,7 @@ public sealed partial class ChatPage
     Item("End chat…", EndChatAsync);
     ChatAppearance.IconButton(more, "\uE712", "Chat actions");
     more.Width = more.Height = more.MinWidth = more.MinHeight = 26; more.CornerRadius = new CornerRadius(8);
-    more.Flyout = menu; heading.Children.Add(more);
+    more.Flyout = menu; // Kept for MCP; hidden in chat.
     searchBar.Children.Add(searchBox); searchBar.Children.Add(searchCount);
     searchBar.Children.Add(Button("Previous", () => { MoveMatch(-1); return Task.CompletedTask; }));
     searchBar.Children.Add(Button("Next", () => { MoveMatch(1); return Task.CompletedTask; }));

@@ -105,7 +105,7 @@ final class OneIdentityTests: XCTestCase {
         let build = try String(contentsOf: repo.appendingPathComponent("macos/build-app.sh"), encoding: .utf8)
         XCTAssertTrue(build.contains("td_sign_privacy_helper")); XCTAssertTrue(build.contains("$PRIVACY_APP_ID.session-host"))
     }
-    func testProductionCoreAndAgentsAssociateWithAppButScratchNeverDoes() throws {
+    func testProductionAndScratchKeepersAssociateWithTheirOwnApp() throws {
         let root = try scratch()
         let production = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/terminaldeck")
         // Planning only: no directory creation or launchctl calls on production paths.
@@ -117,9 +117,9 @@ final class OneIdentityTests: XCTestCase {
                 XCTAssertEqual(raw["AssociatedBundleIdentifiers"] as? [String], ["dev.terminaldeck.app"])
             }
         }
-        let scratchPlan = try BackendHOSTLaunchAgent(paths: BackendHOSTPaths(dataDirectory: root), version: "v1", launchAgentsDirectory: root)
+        let scratchPlan = try BackendHOSTLaunchAgent(paths: BackendHOSTPaths(dataDirectory: root), version: "v1", launchAgentsDirectory: root, appBundleIdentifier: "dev.terminaldeck.app.dev")
         let raw = try XCTUnwrap(PropertyListSerialization.propertyList(from: scratchPlan.propertyList(), format: nil) as? [String: Any])
-        XCTAssertNil(raw["AssociatedBundleIdentifiers"])
+        XCTAssertEqual(raw["AssociatedBundleIdentifiers"] as? [String], ["dev.terminaldeck.app.dev"])
     }
     func testCleanupGuideIsManualAndListsEveryRequestedPrivacyService() {
         XCTAssertEqual(BackendDeckCoreCatalogueDescribe.areaOf("privacy.cleanup_guide"), "app")

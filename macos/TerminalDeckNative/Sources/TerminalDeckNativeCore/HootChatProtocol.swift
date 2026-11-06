@@ -376,7 +376,7 @@ public struct HootChatDecoder: Sendable {
             case "command_execution", "mcp_tool_call", "file_change", "web_search":
                 let name = item["tool"].string ?? item["command"].string ?? item["type"].string ?? "Tool"
                 let input = !item["arguments"].isNullish ? item["arguments"] : !item["changes"].isNullish ? .object([.init("changes", item["changes"])]) : .object([.init("command", item["command"]), .init("query", item["query"])])
-                var records = [HootChatRecord(.toolCall, id: id, value: .object([.init("name", .string(name)), .init("input", input)]))]
+                var records = [HootChatRecord(.toolCall, id: id, value: .object([.init("name", .string(name)), .init("input", input), .init("mcpCall", HootChatMCPProvenance.record(item))]))]
                 if done { records.append(.init(.toolResult, id: id, value: .object([.init("output", item["result"].isNullish ? item["aggregated_output"] : item["result"]),
                     .init("error", item["error"]), .init("isError", .bool(item["status"].string == "failed" || !item["error"].isNullish)),
                     .init("status", item["status"]), .init("exitCode", item["exit_code"])]))) }
@@ -397,7 +397,7 @@ public struct HootChatDecoder: Sendable {
             return [.text(row["delta"].bool == true ? .textDelta : .message, id: id, text)]
         case "tool_use":
             geminiSegment += 1
-            return [.init(.toolCall, id: row["tool_id"].string ?? "", value: .object([.init("name", row["tool_name"]), .init("input", row["parameters"])]))]
+            return [.init(.toolCall, id: row["tool_id"].string ?? "", value: .object([.init("name", row["tool_name"]), .init("input", row["parameters"]), .init("mcpCall", HootChatMCPProvenance.record(row))]))]
         case "tool_result":
             return [.init(.toolResult, id: row["tool_id"].string ?? "", value: .object([.init("output", row["output"]), .init("status", row["status"]),
                 .init("isError", .bool(row["status"].string == "error")), .init("error", row["error"])]))]

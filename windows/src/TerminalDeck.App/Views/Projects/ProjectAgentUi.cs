@@ -208,7 +208,7 @@ public static class ProjectAgentUi
     var project = projects.List().FirstOrDefault(p => p.Id == projectId);
     var face = agents.SessionFace(id);
     var row = new TerminalDeck.App.ViewModels.SessionDraft(title, provider, "", mode.Equals("chat", StringComparison.OrdinalIgnoreCase) ? TerminalDeck.App.ViewModels.SessionPresentation.Chat : TerminalDeck.App.ViewModels.SessionPresentation.Terminal) { Id = id };
-    row.SetAppearance(project?.Name ?? "", project is null ? null : projects.PicturePath(project.Id), agents.SessionLabel(id, provider), projectId, face?.Icon, face is not null && (face.Hoot || face.Id == AgentSeats.HootId));
+    row.SetAppearance(project?.Name ?? "", project is null ? null : projects.PicturePath(project.Id), agents.SessionLabel(id, provider), projectId, face?.Icon, face is not null && (face.Hoot || face.Id == AgentSeats.HootId), face?.PhotoPath);
     return row;
   }
   public static Grid SessionIdentityRow(TerminalDeck.App.ViewModels.SessionDraft session, string? detail = null)
@@ -229,6 +229,7 @@ public static class ProjectAgentUi
   public static UIElement AgentPicture(SavedAgent? agent, double size = 44, bool hoot = false)
   {
     if (hoot) return ChatAppearance.Avatar("hoot", size);
+    if (agent is not null && agent.PhotoPath is not null) return AgentProfileAvatar.Create(agent.Name, agent.PhotoPath, size);
     var (icon, colour) = AgentPictures.Parse(agent?.Icon ?? "person");
     var emoji = icon.StartsWith("emoji:", StringComparison.Ordinal) ? icon[6..] : null;
     // Quiet neutral tile with the glyph or emoji (Mac AgentAvatar / phone AgentTile): never a coloured block.

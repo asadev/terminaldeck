@@ -52,59 +52,127 @@ import UniformTypeIdentifiers
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber).map { CGDirectDisplayID($0.uint32Value) }
     }
 
+    /// Same read-only probe as screen-capture: login lock plus each physically online display's sleep state.
+    nonisolated static var screenState: MacScreenAvailability.State {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return .unknown }
+        if session["CGSSessionScreenIsLocked"] as? Bool == true
+            || session[kCGSessionOnConsoleKey as String] as? Bool == false
+            || session[kCGSessionLoginDoneKey as String] as? Bool == false { return .locked }
+        let displays = (try? NativeMacDisplayInventory.read()) ?? []
+        return !displays.isEmpty && displays.allSatisfy { CGDisplayIsAsleep($0.number) != 0 } ? .asleep : .awake
+    }
+
+    static func captureContent() async throws -> SCShareableContent {
+        var assertion: IOPMAssertionID?
+        defer { if let assertion { IOPMAssertionRelease(assertion) } }
+        do {
+            return try await MacScreenAvailability.capture(mayWake: MacScreenAvailability.mayWake,
+                state: { screenState }, helperApproved: { NativeMacReach.shared.registration == .enabled },
+                read: { try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) },
+                isEmpty: { $0.displays.isEmpty }, wake: {
+                    assertion = declareWake()
+                    return assertion != nil
+                }, wait: { try await Task.sleep(for: .seconds(1)) }, progress: MacScreenAvailability.progress)
+        } catch let failure as MacScreenAvailability.Failure {
+            throw NativeRPCError(code: "unavailable", message: failure.message)
+        } catch { throw captureFailure(error) }
+    }
+
+    nonisolated static func captureFailure(_ error: any Error) -> any Error {
+        switch screenState {
+        case .asleep: return NativeRPCError(code: "unavailable", message: MacScreenAvailability.asleep)
+        default: return error
+        }
+    }
+
+    private static func declareWake() -> IOPMAssertionID? {
+        var assertion = IOPMAssertionID(0)
+        guard IOPMAssertionDeclareUserActivity("Phone screen view" as CFString, kIOPMUserActiveLocal, &assertion) == kIOReturnSuccess else { return nil }
+        return assertion
+    }
+
+    /// The approved MCP action uses the same bounded activity declaration; it never unlocks the Mac.
+    static func wakeForTool() async throws -> String {
+        guard screenState != .locked else { return MacScreenAvailability.locked }
+        guard screenState != .unknown else { return MacScreenAvailability.unavailable }
+        guard screenState == .asleep else { return "Your Mac's screen is awake." }
+        guard let assertion = declareWake() else { return MacScreenAvailability.asleep }
+        defer { IOPMAssertionRelease(assertion) }
+        try await Task.sleep(for: .seconds(1))
+        switch screenState {
+        case .locked: return MacScreenAvailability.locked
+        case .asleep: return MacScreenAvailability.asleep
+        case .awake: return "Your Mac's screen is awake."
+        case .unknown: return MacScreenAvailability.unavailable
+        }
+    }
+
     /// One row per display, the main display first, as the phone's Devices page lists them.
     static func rows() -> [NativeRPCValue] {
         let screens = NSScreen.screens
         let record = canRecord, control = canControl
-        return screens.compactMap { screen -> NativeRPCValue? in
-            guard let id = displayID(screen) else { return nil }
+        // Sleeping monitors remain online even when AppKit temporarily has no active screens.
+        let online = ((try? NativeMacDisplayInventory.read()) ?? []).sorted { $0.main && !$1.main }
+        let state = screenState
+        return online.map { display -> NativeRPCValue in
+            let id = display.number
+            let screen = screens.first { displayID($0) == id }
             let bounds = CGDisplayBounds(id)
-            let name = screens.count > 1 ? "\(macName) · \(screen.localizedName)" : macName
+            let name = online.count > 1 ? "\(macName) · \(screen?.localizedName ?? "Display \(id)")" : macName
             let pixels = CGDisplayCopyDisplayMode(id).map { "\($0.pixelWidth) × \($0.pixelHeight)" } ?? "\(Int(bounds.width)) × \(Int(bounds.height))"
-            return .object([.init("id", .string("mac:\(id)")), .init("name", .string(name)), .init("platform", .string("mac")),
+            return .object([.init("id", .string(display.wireID)), .init("name", .string(name)), .init("platform", .string("mac")),
                             .init("kind", .string("display")), .init("state", .string("ready")), .init("runtime", .string(pixels)),
                             .init("canStart", .bool(false)), .init("canStop", .bool(false)), .init("canRotate", .bool(false)),
                             .init("buttons", .array([])), .init("main", .bool(CGDisplayIsMain(id) != 0)),
                             .init("canWatch", .bool(record)), .init("canControl", .bool(control)),
-                            .init("note", .string(missingLine(record: record, control: control)))])
+                            .init("note", .string(state == .asleep ? MacScreenAvailability.asleep : missingLine(record: record, control: control)))])
         }
     }
 
-    static func display(_ id: String) throws -> CGDirectDisplayID {
-        guard id.hasPrefix("mac:"), let number = UInt32(id.dropFirst(4)) else { throw NativeRPCError.invalidArguments("That is not one of this Mac's displays.") }
-        return CGDirectDisplayID(number)
+    /// Also used off the main thread by input and pointer reporting; all paths choose the same display.
+    nonisolated static func display(_ id: String) throws -> CGDirectDisplayID {
+        let displays = try NativeMacDisplayInventory.read()
+        do { return try MacDisplaySelection.resolve(id, displays: displays).number }
+        catch MacDisplaySelection.Failure.invalidID { throw NativeRPCError.invalidArguments("That is not one of this Mac's displays.") }
+        catch { throw NativeRPCError(code: "unavailable", message: "No displays are available on this Mac. Connect or wake a display, then try again.") }
     }
 
     // MARK: Pictures
 
     /// A live stream of one display, or a refusal in words (the Mac shows the permission card too).
     static func stream(_ id: String) async throws -> any BackendPhoneDeviceStream {
-        let display = try display(id)
         guard canRecord else {
             NativeMacScreenIndicator.shared.needsPermission(record: false, control: canControl)
             throw NativeRPCError(code: "unavailable", message: recordingLine)
         }
+        let display = try display(id)
         let capture = try await NativeMacScreenCaptures.shared.open(display)
         return NativeMacScreenStream(capture: capture)
     }
 
     /// A full-size still of one display, as PNG.
     static func shot(_ id: String) async throws -> BackendAppDeviceScreenshot {
-        let display = try display(id)
         guard canRecord else {
             NativeMacScreenIndicator.shared.needsPermission(record: false, control: canControl)
             throw NativeRPCError(code: "unavailable", message: recordingLine)
         }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let content = try await NativeMacScreen.captureContent()
+        let display = try display(id)
         guard let screen = content.displays.first(where: { $0.displayID == display }) else {
-            throw NativeRPCError(code: "unavailable", message: "That display is no longer connected to this Mac.")
+            NativeCompositionRoot.note("mac screen: requested display \(display); ScreenCaptureKit returned \(content.displays.map(\.displayID)) (recording preflight \(NativeMacScreen.canRecord))")
+            throw NativeRPCError(code: "unavailable", message: content.displays.isEmpty
+                ? MacScreenAvailability.unavailable
+                : "macOS isn't making this display available for screen sharing. Choose another display or try again.")
         }
         let configuration = SCStreamConfiguration()
         let mode = CGDisplayCopyDisplayMode(display)
         configuration.width = mode?.pixelWidth ?? screen.width * 2
         configuration.height = mode?.pixelHeight ?? screen.height * 2
         configuration.showsCursor = true
-        let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: screen, excludingWindows: []), configuration: configuration)
+        let image: CGImage
+        do {
+            image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: screen, excludingWindows: []), configuration: configuration)
+        } catch { throw captureFailure(error) }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
             throw NativeRPCError(code: "unavailable", message: "The screenshot could not be made.")
@@ -119,26 +187,27 @@ import UniformTypeIdentifiers
     /// Clicks, scrolls and keys from the phone, as ordinary events on this Mac (posted off the main thread: a drag
     /// takes its time). Refused in words without Accessibility.
     nonisolated static func input(_ id: String, _ input: BackendPhoneDeviceInput) async throws {
-        guard id.hasPrefix("mac:"), let number = UInt32(id.dropFirst(4)) else { throw NativeRPCError.invalidArguments("That is not one of this Mac's displays.") }
+        let display = try display(id)
         guard canControl else {
             let record = canRecord
             await MainActor.run { NativeMacScreenIndicator.shared.needsPermission(record: record, control: false) }
             throw NativeRPCError(code: "unavailable", message: controlLine)
         }
-        await NativeMacScreenInput.post(input, bounds: CGDisplayBounds(CGDirectDisplayID(number)))
+        await NativeMacScreenInput.post(input, bounds: CGDisplayBounds(display))
     }
 
     /// Round 3 (1 Nov, Asad: "the cursor starts the instant the finger starts… lagging on the PC side also"): one input
     /// posted now, on the caller's thread (the phone's input lane), never through the main thread; a click lets the
     /// keyboard follow the field it landed in. Answers a refusal in words, or nil.
     nonisolated static func postNow(_ id: String, _ input: BackendPhoneDeviceInput) -> String? {
-        guard id.hasPrefix("mac:"), let number = UInt32(id.dropFirst(4)) else { return "That is not one of this Mac's displays." }
+        let display: CGDirectDisplayID
+        do { display = try Self.display(id) } catch { return error.localizedDescription }
         guard NativeMacScreenInput.trusted() else {
             let record = canRecord
             Task { @MainActor in NativeMacScreenIndicator.shared.needsPermission(record: record, control: false) }
             return controlLine
         }
-        NativeMacScreenInput.postNow(input, bounds: CGDisplayBounds(CGDirectDisplayID(number)))
+        NativeMacScreenInput.postNow(input, bounds: CGDisplayBounds(display))
         switch input {
         case let .click(button, phase) where button == "left" && phase != "down": NativeMacScreenFocus.recheck()
         case .tap: NativeMacScreenFocus.recheck()
@@ -149,226 +218,7 @@ import UniformTypeIdentifiers
 }
 
 /// Posting the phone's input as CoreGraphics events, in global display points (top-left origin).
-enum NativeMacScreenInput {
-    private static let clickLock = NSLock()
-    nonisolated(unsafe) private static var lastClick: (at: CGPoint, time: Date, count: Int64)?
-
-    static func point(_ x: Double, _ y: Double, in bounds: CGRect) -> CGPoint {
-        CGPoint(x: bounds.minX + min(max(x, 0), 1) * bounds.width, y: bounds.minY + min(max(y, 0), 1) * bounds.height)
-    }
-
-    /// Accessibility granted (asked of macOS at most once a second: the trackpad posts up to 120 moves a second).
-    private static let trustLock = NSLock()
-    nonisolated(unsafe) private static var trust: (at: Date, granted: Bool) = (.distantPast, false)
-    static func trusted() -> Bool {
-        if let cached = trustLock.withLock({ Date().timeIntervalSince(trust.at) < 1 ? trust.granted : nil }) { return cached }
-        let granted = AXIsProcessTrusted()
-        trustLock.withLock { trust = (Date(), granted) }
-        return granted
-    }
-
-    /// Async (Reviewer, 31 Oct): a drag's steps wait with `Task.sleep`, never a `usleep` that would hold a thread of the
-    /// shared cooperative pool for the whole drag. Everything but a drag-swipe is posted at once (`postNow`).
-    static func post(_ input: BackendPhoneDeviceInput, bounds: CGRect) async {
-        let source = CGEventSource(stateID: .hidSystemState)
-        func mouse(_ type: CGEventType, _ at: CGPoint, _ button: CGMouseButton = .left, clicks: Int64 = 1) {
-            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: button) else { return }
-            event.setIntegerValueField(.mouseEventClickState, value: clicks)
-            event.post(tap: .cghidEventTap)
-        }
-        guard case let .swipe(fromX, fromY, toX, toY, ms) = input else { postNow(input, bounds: bounds); return }
-        // A drag with the button held: press, move in small steps, release.
-        let from = point(fromX, fromY, in: bounds), to = point(toX, toY, in: bounds)
-        mouse(.mouseMoved, from)
-        mouse(.leftMouseDown, from)
-        let steps = max(6, min(60, Int(ms / 16)))
-        for step in 1...steps {
-            let t = Double(step) / Double(steps)
-            mouse(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
-            try? await Task.sleep(for: .milliseconds(max(4, min(25, ms / Double(steps)))))
-        }
-        mouse(.leftMouseUp, to)
-    }
-
-    /// One input as events, now, on the caller's thread (round 3: the phone's input lane). A drag-swipe goes through
-    /// `post` (it takes its time).
-    static func postNow(_ input: BackendPhoneDeviceInput, bounds: CGRect) {
-        let source = CGEventSource(stateID: .hidSystemState)
-        func mouse(_ type: CGEventType, _ at: CGPoint, _ button: CGMouseButton = .left, clicks: Int64 = 1) {
-            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: button) else { return }
-            event.setIntegerValueField(.mouseEventClickState, value: clicks)
-            event.post(tap: .cghidEventTap)
-        }
-        switch input {
-        case let .tap(x, y, hold):
-            let at = point(x, y, in: bounds)
-            if let hold, hold >= 450 { click(at, button: .right, mouse: mouse); return }
-            click(at, button: .left, mouse: mouse)
-        case let .secondaryTap(x, y):
-            click(point(x, y, in: bounds), button: .right, mouse: mouse)
-        case let .swipe(fromX, fromY, toX, toY, _):
-            // Only through `post`; here (never expected) at once, without the steps.
-            let from = point(fromX, fromY, in: bounds), to = point(toX, toY, in: bounds)
-            mouse(.mouseMoved, from); mouse(.leftMouseDown, from); mouse(.leftMouseDragged, to); mouse(.leftMouseUp, to)
-        case let .scroll(x, y, dx, dy):
-            mouse(.mouseMoved, point(x, y, in: bounds))
-            // A share of the picture becomes points on this display: a finger moving the content down scrolls up.
-            let wheelY = Int32((dy * bounds.height).rounded()), wheelX = Int32((dx * bounds.width).rounded())
-            CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: wheelY, wheel2: wheelX, wheel3: 0)?
-                .post(tap: .cghidEventTap)
-        case .type(let text):
-            for chunk in chunks(text) {
-                for down in [true, false] {
-                    guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
-                    let units = Array(chunk.utf16)
-                    event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-                    event.post(tap: .cghidEventTap)
-                }
-            }
-        case .key(let name):
-            key(name, modifiers: [], source: source)
-        case let .shortcut(name, modifiers):
-            key(name, modifiers: modifiers, source: source)
-        case let .mouse(phase, button, x, y, clicks):
-            // Another Mac's real mouse: where the pointer is, with its own press, release and drag (Mac to Mac).
-            let at = point(x, y, in: bounds)
-            let which: CGMouseButton = button == "right" ? .right : button == "middle" ? .center : .left
-            let type: CGEventType
-            switch (phase, which) {
-            case ("down", .left): type = .leftMouseDown
-            case ("down", .right): type = .rightMouseDown
-            case ("down", _): type = .otherMouseDown
-            case ("up", .left): type = .leftMouseUp
-            case ("up", .right): type = .rightMouseUp
-            case ("up", _): type = .otherMouseUp
-            case ("drag", .left): type = .leftMouseDragged
-            case ("drag", .right): type = .rightMouseDragged
-            case ("drag", _): type = .otherMouseDragged
-            default: type = .mouseMoved
-            }
-            mouse(type, at, which, clicks: Int64(clicks))
-        case let .keyCode(code, down, modifiers):
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(code), keyDown: down) else { break }
-            event.flags = Self.flags(modifiers)
-            event.post(tap: .cghidEventTap)
-        case let .pointer(dx, dy, held):
-            // The trackpad (older phones): from where this Mac last put the pointer while that is fresh, else where it
-            // is (item 60: the system's reading lags a posted move by a few ms; read back, moves were lost).
-            mouse(held ? .leftMouseDragged : .mouseMoved, pointerModel.move(dx: dx, dy: dy, real: CGEvent(source: nil)?.location, bounds: bounds, now: now()))
-        case let .pointerTo(x, y, held):
-            // Item 60: exactly where the phone draws it.
-            mouse(held ? .leftMouseDragged : .mouseMoved, pointerModel.moveTo(x: x, y: y, bounds: bounds, now: now()))
-        case let .click(button, phase):
-            let at = pointer(in: bounds)
-            let which: CGMouseButton = button == "right" ? .right : button == "middle" ? .center : .left
-            switch phase {
-            case "down": mouse(which == .left ? .leftMouseDown : which == .right ? .rightMouseDown : .otherMouseDown, at, which, clicks: 1)
-            case "up": mouse(which == .left ? .leftMouseUp : which == .right ? .rightMouseUp : .otherMouseUp, at, which, clicks: 1)
-            default:
-                if which == .center {
-                    mouse(.otherMouseDown, at, .center); mouse(.otherMouseUp, at, .center)
-                } else {
-                    click(at, button: which, mouse: mouse)
-                }
-            }
-        case let .wheel(dx, dy):
-            // Where the pointer is; a finger moving the content down scrolls up, as on a trackpad.
-            let wheelY = Int32((dy * bounds.height).rounded()), wheelX = Int32((dx * bounds.width).rounded())
-            CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: wheelY, wheel2: wheelX, wheel3: 0)?
-                .post(tap: .cghidEventTap)
-        case .button, .rotate:
-            break
-        }
-    }
-
-    /// Where this Mac's pointer is (on this display; its middle when it is on another), moved by a share of the display
-    /// and kept inside it.
-    static func pointer(in bounds: CGRect, dx: Double = 0, dy: Double = 0) -> CGPoint {
-        let at = pointerModel.current(real: CGEvent(source: nil)?.location, bounds: bounds, now: now())
-        return clamp(CGPoint(x: at.x + dx * bounds.width, y: at.y + dy * bounds.height), to: bounds)
-    }
-
-    /// Where the phone's moves last put the pointer (item 60; MacPointerModel). One for the Mac: the pointer is one.
-    static let pointerModel = MacPointerModel()
-    static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
-
-    static func clamp(_ point: CGPoint, to bounds: CGRect) -> CGPoint {
-        CGPoint(x: min(max(point.x, bounds.minX), bounds.maxX - 1), y: min(max(point.y, bounds.minY), bounds.maxY - 1))
-    }
-
-    /// A click, counted as a double click when it lands near the last one within half a second.
-    private static func click(_ at: CGPoint, button: CGMouseButton, mouse: (CGEventType, CGPoint, CGMouseButton, Int64) -> Void) {
-        let count: Int64 = clickLock.withLock {
-            var count: Int64 = 1
-            if button == .left, let last = lastClick, Date().timeIntervalSince(last.time) < 0.5, hypot(last.at.x - at.x, last.at.y - at.y) < 8 {
-                count = min(last.count + 1, 3)
-            }
-            lastClick = button == .left ? (at, Date(), count) : nil
-            return count
-        }
-        mouse(.mouseMoved, at, button, count)
-        mouse(button == .left ? .leftMouseDown : .rightMouseDown, at, button, count)
-        mouse(button == .left ? .leftMouseUp : .rightMouseUp, at, button, count)
-    }
-
-    private static func chunks(_ text: String) -> [String] {
-        var out: [String] = [], current = ""
-        for character in text {
-            if current.utf16.count + character.utf16.count > 16 { out.append(current); current = "" }
-            current.append(character)
-        }
-        if !current.isEmpty { out.append(current) }
-        return out
-    }
-
-    /// US-layout key codes for the named keys and for letters and digits (a shortcut such as ⌘C).
-    static let codes: [String: CGKeyCode] = {
-        var map: [String: CGKeyCode] = ["return": 36, "enter": 76, "tab": 48, "space": 49, "delete": 51, "escape": 53, "forward-delete": 117,
-            "home": 115, "end": 119, "page-up": 116, "page-down": 121, "arrow-left": 123, "arrow-right": 124, "arrow-down": 125, "arrow-up": 126,
-            "select-all": 0]
-        let letters: [(String, CGKeyCode)] = [("a", 0), ("s", 1), ("d", 2), ("f", 3), ("h", 4), ("g", 5), ("z", 6), ("x", 7), ("c", 8), ("v", 9),
-            ("b", 11), ("q", 12), ("w", 13), ("e", 14), ("r", 15), ("y", 16), ("t", 17), ("1", 18), ("2", 19), ("3", 20), ("4", 21), ("6", 22),
-            ("5", 23), ("9", 25), ("7", 26), ("8", 28), ("0", 29), ("o", 31), ("u", 32), ("i", 34), ("p", 35), ("l", 37), ("j", 38), ("k", 40),
-            ("n", 45), ("m", 46)]
-        for (name, code) in letters { map[name] = code }
-        return map
-    }()
-
-    static func flags(_ modifiers: [String]) -> CGEventFlags {
-        var flags: CGEventFlags = []
-        for modifier in modifiers {
-            switch modifier {
-            case "command": flags.insert(.maskCommand)
-            case "option": flags.insert(.maskAlternate)
-            case "control": flags.insert(.maskControl)
-            case "shift": flags.insert(.maskShift)
-            case "fn": flags.insert(.maskSecondaryFn)
-            default: break
-            }
-        }
-        return flags
-    }
-
-    private static func key(_ name: String, modifiers: [String], source: CGEventSource?) {
-        var flags: CGEventFlags = []
-        for modifier in modifiers {
-            switch modifier {
-            case "command": flags.insert(.maskCommand)
-            case "option": flags.insert(.maskAlternate)
-            case "control": flags.insert(.maskControl)
-            case "shift": flags.insert(.maskShift)
-            default: break
-            }
-        }
-        if name == "select-all" { flags.insert(.maskCommand) }
-        guard let code = codes[name] else { return }
-        for down in [true, false] {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
-            event.flags = flags
-            event.post(tap: .cghidEventTap)
-        }
-    }
-}
+typealias NativeMacScreenInput = BackendMacReachInput
 
 /// One display's ScreenCaptureKit stream, shared by every phone watching it.
 final class NativeMacScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
@@ -401,10 +251,13 @@ final class NativeMacScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, 
         return (max(2, Int(width) / 2 * 2), max(2, Int(height) / 2 * 2))
     }
 
-    func start() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    @MainActor func start() async throws {
+        let content = try await NativeMacScreen.captureContent()
         guard let screen = content.displays.first(where: { $0.displayID == display }) else {
-            throw NativeRPCError(code: "unavailable", message: "That display is no longer connected to this Mac.")
+            NativeCompositionRoot.note("mac screen: requested display \(display); ScreenCaptureKit returned \(content.displays.map(\.displayID)) (recording preflight \(NativeMacScreen.canRecord))")
+            throw NativeRPCError(code: "unavailable", message: content.displays.isEmpty
+                ? MacScreenAvailability.unavailable
+                : "macOS isn't making this display available for screen sharing. Choose another display or try again.")
         }
         let configuration = SCStreamConfiguration()
         let (width, height) = Self.size(of: display)
@@ -419,7 +272,8 @@ final class NativeMacScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, 
         configuration.capturesAudio = false
         let stream = SCStream(filter: SCContentFilter(display: screen, excludingWindows: []), configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try await stream.startCapture()
+        do { try await stream.startCapture() }
+        catch { throw NativeMacScreen.captureFailure(error) }
         lock.withLock { self.stream = stream; self.configuration = configuration }
     }
 
@@ -459,7 +313,9 @@ final class NativeMacScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
         // Screen Recording taken away while a phone watched (learning 7): say so on the phone and on the Mac.
         let revoked = !NativeMacScreen.canRecord
-        lock.withLock { ended = revoked ? NativeMacScreen.recordingLine : "The Mac stopped sharing its screen (\(error.localizedDescription))." }
+        let state = NativeMacScreen.screenState
+        lock.withLock { ended = state == .asleep ? MacScreenAvailability.asleep
+            : revoked ? NativeMacScreen.recordingLine : "The Mac stopped sharing its screen (\(error.localizedDescription))." }
         wakeAll()
         if revoked { Task { @MainActor in NativeMacScreenIndicator.shared.needsPermission(record: false, control: NativeMacScreen.canControl) } }
     }
@@ -473,7 +329,12 @@ final class NativeMacScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, 
 
     /// The newest picture if it is newer than `seen`, the reason it ended, or nil when there is nothing new yet.
     func latest(after seen: Int) -> (pixels: CVPixelBuffer?, generation: Int, ended: String?) {
-        lock.withLock { (generation != seen ? pixels : nil, generation, ended) }
+        // Read along the existing frame request: sleep can stop capture callbacks entirely.
+        let state = NativeMacScreen.screenState
+        return lock.withLock {
+            if state == .asleep { ended = MacScreenAvailability.asleep }
+            return (generation != seen ? pixels : nil, generation, ended)
+        }
     }
 
     /// Waits for the next picture (or the end), at most `seconds`; a cancelled caller stops waiting at once.
@@ -627,8 +488,8 @@ enum NativeMacScreenPointer {
     nonisolated(unsafe) private static var lastAt = CGPoint(x: -1, y: -1)
 
     static func read(_ id: String) -> BackendPhoneDevicePointer? {
-        guard id.hasPrefix("mac:"), let number = UInt32(id.dropFirst(4)) else { return nil }
-        let bounds = CGDisplayBounds(CGDirectDisplayID(number))
+        guard let display = try? NativeMacScreen.display(id) else { return nil }
+        let bounds = CGDisplayBounds(display)
         guard bounds.width > 0, bounds.height > 0, let real = CGEvent(source: nil)?.location else { return nil }
         // Item 60: while the phone's moves are fresh, where this Mac put the pointer (the system's own reading lags a
         // posted move and would pull the phone's drawn pointer back); otherwise where it really is.

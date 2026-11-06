@@ -14,6 +14,15 @@ public sealed class HootViewModel : INotifyPropertyChanged, IDisposable
   public bool Pending { get; private set; }
   private string? sendId;
   private string? sentText;
+  private TerminalDeck.Core.Chats.ChatAttachmentData[]? sentAttachments;
+  public List<TerminalDeck.Core.Chats.ChatAttachmentData> Attachments { get; } = [];
+  public void AddAttachment(TerminalDeck.Core.Chats.ChatAttachmentData image)
+  {
+    if (Attachments.Count >= 8 || Attachments.Sum(a => a.Data.Length) + image.Data.Length > 4 * 1024 * 1024) throw new ArgumentException("Send up to eight images totalling at most 4 MB to Hoot.");
+    Attachments.Add(image); Notify(nameof(Attachments));
+  }
+  public void RemoveAttachment(TerminalDeck.Core.Chats.ChatAttachmentData image) { Attachments.Remove(image); Notify(nameof(Attachments)); }
+  public Task BranchAsync(string id, bool rewind) => RunAsync(() => hoot.BranchAsync(id, rewind));
   public event PropertyChangedEventHandler? PropertyChanged;
   public HootViewModel(IHoot hoot, Action<Action>? dispatch = null)
   { this.hoot = hoot; this.dispatch = dispatch ?? (a => a()); State = hoot.Read(); hoot.Changed += Changed; }
@@ -30,14 +39,16 @@ public sealed class HootViewModel : INotifyPropertyChanged, IDisposable
   }
   public async Task SendAsync()
   {
-    if (Pending || string.IsNullOrWhiteSpace(Draft)) return;
+    if (Pending || string.IsNullOrWhiteSpace(Draft) && Attachments.Count == 0) return;
     if (sendId is not null && sentText != Draft)
     { Error = "Check the previous send before changing this message. Its delivery has not been confirmed."; Notify(nameof(Error)); return; }
-    sendId ??= Guid.NewGuid().ToString(); sentText = Draft; var text = Draft;
+    sendId ??= Guid.NewGuid().ToString(); sentText = Draft; sentAttachments ??= Attachments.ToArray(); var text = Draft; var images = sentAttachments;
     await RunAsync(async () =>
     {
-      await hoot.SayAsync(sendId, text);
-      sendId = null; sentText = null;
+      if (images.Length > 0) await hoot.SayWithAttachmentsAsync(sendId, text, images);
+      else await hoot.SayAsync(sendId, text);
+      foreach (var image in images) Attachments.Remove(image); Notify(nameof(Attachments));
+      sendId = null; sentText = null; sentAttachments = null;
       if (Draft == text) { Draft = ""; Notify(nameof(Draft)); }
     });
   }

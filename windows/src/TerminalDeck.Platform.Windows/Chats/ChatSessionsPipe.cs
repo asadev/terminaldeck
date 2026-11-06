@@ -112,6 +112,7 @@ public sealed class ChatSessionsPipeServer(AppDataRoot root, IChatSessions chats
           case "stop": await chats.StopAsync(id, requestDeadline.Token); break;
           case "retry": await chats.RetryAsync(id, requestDeadline.Token); break;
           case "reconnect": await chats.ReconnectAsync(id, requestDeadline.Token); break;
+          case "branch": reply = new(Chat: await chats.BranchAsync(id, request.ClientId, request.Allow, requestDeadline.Token, request.Text)); break;
           case "rename": await chats.RenameAsync(id, request.Text ?? "", requestDeadline.Token); break;
           case "permission":
             if (!Enum.TryParse<AiPermissionMode>(request.Text, true, out var mode)) throw new ArgumentException("Choose a supported permission mode.");
@@ -196,6 +197,8 @@ public sealed class WindowsChatSessionsClient : IChatSessions
   public ValueTask RetryAsync(string id, CancellationToken cancellationToken = default) => ActionAsync("retry", id, cancellationToken);
   public ValueTask ReconnectAsync(string id, CancellationToken cancellationToken = default) => ActionAsync("reconnect", id, cancellationToken);
   public ValueTask SetOptionsAsync(string id, ChatOptions options, CancellationToken cancellationToken = default) => ActionAsync("options", id, cancellationToken, options: options);
+  public async ValueTask<ChatRecord> BranchAsync(string id, string? messageId, bool rewind, CancellationToken ct = default, string? title = null) =>
+    (await CallAsync(new() { Secret = secret, Operation = "branch", Id = id, ClientId = messageId, Allow = rewind, Text = title }, ct)).Chat ?? throw new IOException("The copied history was not returned.");
   public ValueTask RenameAsync(string id, string title, CancellationToken cancellationToken = default) => ActionAsync("rename", id, cancellationToken, text: title);
   public ValueTask SetPermissionAsync(string id, AiPermissionMode mode, CancellationToken cancellationToken = default) => ActionAsync("permission", id, cancellationToken, text: mode.ToString());
   public ValueTask SetAccountAsync(string id, string accountId, CancellationToken cancellationToken = default) => ActionAsync("account", id, cancellationToken, text: accountId);

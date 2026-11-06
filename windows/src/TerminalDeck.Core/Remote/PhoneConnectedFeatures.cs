@@ -126,14 +126,14 @@ public sealed partial class PhoneConnectedFeatures(IProjects projects, IAgents a
       var project = VisibleProjects(device).FirstOrDefault(p => p.Folders.Any(f => Same(f, path)));
       if (project is null) throw new PhoneRefusal("unauthorized", "Choose a shared project folder.");
       result["title"] = "Artifacts";
-      foreach (var a in artifacts.List(path).Take(200))
+      foreach (var a in artifacts.List(path).Where(a => device.Platform == "web" || CanPreviewArtifact(a.RelPath)).Take(200))
         rows.Add(new JsonObject { ["id"] = ArtifactId(device, path, a, false), ["title"] = a.RelPath, ["detail"] = a.ProducedAt.ToLocalTime().ToString("g"), ["sessionId"] = sessionVisible(device, a.SessionId) ? a.SessionId : null, ["value"] = ArtifactCatalogPolicy.Kind(a.RelPath) });
       result["note"] = "Recorded outputs. Tap an output to preview it.";
       if (Text(request, "t") == "panel.act")
       {
         if (Text(request, "action") != "preview") throw new PhoneRefusal("unavailable", "This artifact action is not available on this host.");
         var id = Required(request, "id");
-        var found = artifacts.List(path).FirstOrDefault(a => Token(a) == id || a.Id == id) ?? throw new PhoneRefusal("unavailable", "That output is no longer in this project's list.");
+        var found = artifacts.List(path).FirstOrDefault(a => CanPreviewArtifact(a.RelPath) && (Token(a) == id || a.Id == id)) ?? throw new PhoneRefusal("unavailable", "That output is no longer in this project's list.");
         var preview = artifacts.Preview(path, found.RelPath);
         if (artifactServer is not null)
         {
@@ -147,13 +147,15 @@ public sealed partial class PhoneConnectedFeatures(IProjects projects, IAgents a
           rows.Insert(0, new JsonObject { ["id"] = found.Id + "-preview", ["title"] = found.RelPath, ["body"] = text[..Math.Min(12000, text.Length)], ["bodyStyle"] = "code" });
           result["notice"] = preview.Truncated || text.Length > 12000 ? "Text preview shortened. Read the full output on the PC." : "Text preview.";
         }
-        else result["notice"] = "This output needs its preview on the PC. Remote image, PDF and video serving is not available yet.";
+        else throw new PhoneRefusal("unavailable", "Refresh the output list before previewing this file.");
       }
     }
     for (var index = rows.Count - 1; index >= 0; index--)
       if (query.Length > 0 && !rows[index]!.ToJsonString().Contains(query, StringComparison.OrdinalIgnoreCase)) rows.RemoveAt(index);
     return PhonePanelPagination.Apply(request, result);
   }
+  // Without a media server this panel can preview text documents only.
+  private bool CanPreviewArtifact(string path) => artifactServer is not null || Path.GetExtension(path).ToLowerInvariant() is ".html" or ".htm" or ".xhtml";
   private static string Token(ReceiverArtifact artifact) => "#" + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(artifact.RelPath))).ToLowerInvariant()[..16];
   private string ArtifactId(ApprovedDevice device, string path, ReceiverArtifact artifact, bool serve)
   {

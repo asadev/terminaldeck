@@ -23,6 +23,8 @@ public enum BackendHootChatMCP {
              #"{"type":"object","properties":{"model":{"type":"string"}},"required":["model"],"additionalProperties":false}"#),
             ("hoot.chat.rewind", "hoot_chat_rewind", "Take Hoot's chat back to one message, as the Rewind button does: what came after is set aside (kept, not deleted) and Hoot's desk is rebuilt up to there. `sequence` is that message's event number from hoot.chat.read. Can be undone with hoot.chat.rewind_undo until the next message. Runs at once when the calling AI's permission mode allows it; the action is logged.", .alter,
              #"{"type":"object","properties":{"sequence":{"type":"integer","minimum":1}},"required":["sequence"],"additionalProperties":false}"#),
+            ("hoot.chat.fork", "hoot_chat_fork", "Start a separate Hoot conversation through the chosen message, keeping the original conversation unchanged. The new conversation appears in sessions_conversations and the chat list.", .alter,
+             #"{"type":"object","properties":{"sequence":{"type":"integer","minimum":1}},"required":["sequence"],"additionalProperties":false}"#),
             ("hoot.chat.rewind_undo", "hoot_chat_rewind_undo", "Undo the last rewind of Hoot's chat: the messages and Hoot's desk go back as they were. Only until the next message is sent. Runs at once when the calling AI's permission mode allows it; the action is logged.", .alter,
              #"{"type":"object","properties":{},"additionalProperties":false}"#),
             ("hoot.chat.background", "hoot_chat_background", "What Hoot is working on in the background (a task, a handoff): the one running now, and how many are waiting their turn. Changes nothing.", .read,
@@ -83,6 +85,9 @@ public enum BackendHootChatMCP {
                     guard let sequence = args["sequence"].number, sequence >= 1, sequence.rounded() == sequence else { throw NativeRPCError.invalidArguments("sequence must be a message's event number.") }
                     let text = try await runtime.rewindChat(to: Int(sequence))
                     value = try await runtime.invoke("hoot:chat:read", arguments: []).setting("returnedText", .string(text))
+                case "hoot.chat.fork":
+                    guard let sequence = args["sequence"].number, sequence.isFinite, sequence >= 1, sequence.rounded() == sequence, sequence < Double(Int.max / 2) else { throw NativeRPCError.invalidArguments("Choose a message's event number.") }
+                    value = try await runtime.forkChat(through: Int(sequence))
                 case "hoot.chat.rewind_undo":
                     try await runtime.undoRewindChat()
                     value = try await runtime.invoke("hoot:chat:read", arguments: [])

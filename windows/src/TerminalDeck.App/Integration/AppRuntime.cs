@@ -327,7 +327,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     serverTools?.Register(Door);
     serverSettingsTools?.Register(Door);
     if (serverCapabilityTools is not null) foreach (var contribution in serverCapabilityTools.Contributions()) Door.Register(contribution.Spec.Id, contribution.Handler);
-    new TerminalDeck.Core.Hoot.HootMcpTools(Hoot, HootSurface).Register(Door);
+    new TerminalDeck.Core.Hoot.HootMcpTools(Hoot, HootSurface, (context, id, text, attachments, ct) => ((TerminalDeck.Platform.Windows.Hoot.WindowsHootClient)Hoot).SayAuthenticatedNoteAsync(context, id, text, attachments, ct)).Register(Door);
     RegisterPhoneWorkspaceTools();
     DeckCoreTools.RegisterManager(Door, Mcp);
     Door.Register("mcp.callers", async (c, a, ct) =>

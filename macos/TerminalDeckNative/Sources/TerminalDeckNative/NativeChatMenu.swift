@@ -102,16 +102,14 @@ struct NativeChatMenu: View {
     /// Feature panels with no entry since 20 Oct 2026 that their chat feature tools still open.
     static let toolOnlyFeatures = [("agents", "Child agents"), ("model-timing", "Model switch"), ("notifications", "Notifications"), ("policy", "Permission policy")]
     var body: some View {
-        HStack(spacing: 4) {
-            icon(.session)
-                .popover(isPresented: Binding(get: { model.chatSessionShown }, set: { if !$0 { model.closeChatSession() } })) { NativeChatSessionPanel(model: model) }
-            icon(.commandOutput)
-                .background { NativeChatFeaturePopover(model: model, feature: "terminal-context", title: NativeChatStripIcon.commandOutput.title) }
-            icon(.changes)
-                .popover(isPresented: Binding(get: { model.chatChangesShown }, set: { if !$0 { model.closeChatChanges() } })) { NativeChatChangesPanel(model: model) }
-            more
-        }
-        .fixedSize()
+        // Chat keeps its tool-driven panels, without visible toolbar buttons or a reserved row.
+        Color.clear.frame(width: 0, height: 0)
+            .popover(isPresented: Binding(get: { model.chatSessionShown }, set: { if !$0 { model.closeChatSession() } })) { NativeChatSessionPanel(model: model) }
+            .background { NativeChatFeaturePopover(model: model, feature: "terminal-context", title: NativeChatStripIcon.commandOutput.title) }
+            .background {
+                Color.clear.popover(isPresented: Binding(get: { model.chatChangesShown }, set: { if !$0 { model.closeChatChanges() } })) { NativeChatChangesPanel(model: model) }
+            }
+            .background { panels }
     }
     private func icon(_ icon: NativeChatStripIcon) -> some View {
         Button { icon.open(in: model) } label: { NativeChatStripGlyph(symbol: icon.symbol, active: icon.shown(in: model)) }

@@ -14,7 +14,7 @@ public enum BackendDeckToolsSessionsArea {
     static func bad(_ message: String) -> NativeRPCError { Args.bad(message) }
     static func refused(_ message: String, code: String = "not-permitted") -> NativeRPCError { .init(code: code, message: message) }
     static func session(_ id: String, runtime: any BackendDeckToolsSessionsRuntime, context: BackendMCPCallContext) async throws -> NativeRPCValue {
-        guard let value = try await runtime.sessions(context).first(where: { $0["id"].string == id }) else {
+        guard let value = try BackendSessionDirectory.resolve(id, rows: await runtime.sessions(context)) else {
             throw bad("this app is not holding a session with id \(id). Either that is not one of its ids — check sessions.list — or the session was stopped, which drops it and everything this app knew about it. A session that exited on its own is still here, with its exit code; a stopped one is not. Ask before stopping something you will want to report on.")
         }
         return value

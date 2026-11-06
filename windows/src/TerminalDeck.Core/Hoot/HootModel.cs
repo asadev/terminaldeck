@@ -68,6 +68,7 @@ public interface IHoot
   ValueTask CancelBackgroundAsync(string id, CancellationToken cancellationToken = default);
   ValueTask StopAsync(CancellationToken cancellationToken = default);
   ValueTask AnswerAsync(string requestId, bool allow, CancellationToken cancellationToken = default);
+  ValueTask BranchAsync(string lineId, bool rewind, CancellationToken ct = default) => ValueTask.FromException(new InvalidOperationException("This Hoot history cannot be copied."));
   ValueTask RefreshAsync(CancellationToken cancellationToken = default);
   ValueTask KeepUnconfirmedAsync(CancellationToken cancellationToken = default);
   ValueTask ContinueAsync(CancellationToken cancellationToken = default);

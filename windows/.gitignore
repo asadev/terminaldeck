@@ -7,3 +7,5 @@ TestResults/
 *.user
 *.download.sh
 .DS_Store
+
+REFERENCES.local.md

@@ -27,7 +27,7 @@ public static class HootPolicy
         tool is "agents.set_control" or "sessions.account" && ownSession ||
         (tool.StartsWith("accounts.", StringComparison.Ordinal) || tool == "hooks.change") && ownAccount)
       throw new McpRefusal("Hoot cannot change its own settings. Only you can, in Hoot's settings.");
-    if (tool is "hoot.chat.new" or "hoot.send" or "hoot.chat.ask" or "hoot.chat.stop" or "hoot.background.start" or "hoot.background.cancel" or "hoot.chat.continue" or "hoot.chat.keep_unconfirmed")
+    if (tool is "hoot.chat.new" or "hoot.chat.branch" or "hoot.send" or "hoot.chat.ask" or "hoot.chat.stop" or "hoot.background.start" or "hoot.background.cancel" or "hoot.chat.continue" or "hoot.chat.keep_unconfirmed")
       throw new McpRefusal("Hoot cannot ask or stop itself through its own tool door.");
   }
   public static McpToolHandler Wrap(McpToolSpec spec, McpToolHandler run, Func<HootState> read) => async (context, args, ct) =>

@@ -136,12 +136,12 @@ struct HootReplyText: View {
         let parts = HootCallout.parts(text, streaming: streaming)
         let single: String? = { if parts.count == 1, case .text(let words) = parts[0] { return words }; return nil }()
         if let single {
-            NativeChatMarkdown(text: single)
+            NativeChatMarkdown(text: single, streaming: streaming)
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
                     switch part {
-                    case .text(let words): NativeChatMarkdown(text: words)
+                    case .text(let words): NativeChatMarkdown(text: words, streaming: streaming)
                     case .box(let kind, let words): HootCalloutBox(kind: kind, text: words, onReply: onReply)
                     }
                 }

@@ -111,11 +111,18 @@ public actor BackendChatForkProcess {
     public static func fork(launch: BackendHootChatLaunch, params: NativeRPCValue, timeout: Duration = .seconds(45)) async throws -> NativeRPCValue {
         let process = BackendChatForkProcess()
         do {
-            let result = try await process.run(launch, params: params, timeout: timeout)
+            let result = try await process.run(launch, method: "thread/fork", params: params, timeout: timeout)
             await process.stop(); return result
         } catch { await process.stop(); throw error }
     }
-    private func run(_ launch: BackendHootChatLaunch, params: NativeRPCValue, timeout: Duration) async throws -> NativeRPCValue {
+    static func readConversation(launch: BackendHootChatLaunch, id: String) async throws -> NativeRPCValue {
+        let process = BackendChatForkProcess()
+        do {
+            let result = try await process.run(launch, method: "thread/read", params: .object([.init("threadId", .string(id)), .init("includeTurns", .bool(true))]), timeout: .seconds(45))
+            await process.stop(); return result
+        } catch { await process.stop(); throw error }
+    }
+    private func run(_ launch: BackendHootChatLaunch, method: String, params: NativeRPCValue, timeout: Duration) async throws -> NativeRPCValue {
         try child.start(.init(command: launch.command, arguments: launch.arguments + ["--disable", "apps", "--disable", "plugins"],
             cwd: launch.cwd, environment: launch.environment, setup: launch.setup))
         consumer = Task { [weak self, child] in
@@ -135,7 +142,7 @@ public actor BackendChatForkProcess {
             .init("name", .string("terminaldeck-fork")), .init("version", .string("1"))])),
             .init("capabilities", .object([.init("experimentalApi", .bool(true))]))]), timeout: timeout)
         try await child.send(BackendHootChatRPC.request("initialized"))
-        return try await request("thread/fork", params, timeout: timeout)
+        return try await request(method, params, timeout: timeout)
     }
     private func request(_ method: String, _ params: NativeRPCValue, timeout: Duration) async throws -> NativeRPCValue {
         let id = UUID().uuidString

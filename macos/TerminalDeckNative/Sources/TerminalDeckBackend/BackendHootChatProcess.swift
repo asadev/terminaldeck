@@ -13,6 +13,27 @@ public struct BackendHootChatLaunch: Sendable {
 }
 public enum BackendHootChatOutput: Sendable { case stdout(Data), stderr(Data), exit(Int32) }
 
+/// Stop can cancel a prepared input until the writer takes it. Once writing starts,
+/// delivery is uncertain until its receipt, even when Stop arrives meanwhile.
+final class BackendHootChatInputGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var writing = false
+    var writeStarted: Bool { lock.withLock { writing } }
+    @discardableResult func cancel() -> Bool { lock.withLock { cancelled = true; return !writing } }
+    func check() throws {
+        try lock.withLock {
+            if cancelled { throw NativeRPCError(code: "queued-send-stopped", message: "Stopped. Review this queued message before sending it.") }
+        }
+    }
+    func beginWrite() throws {
+        try lock.withLock {
+            if cancelled { throw NativeRPCError(code: "queued-send-stopped", message: "Stopped. Review this queued message before sending it.") }
+            writing = true
+        }
+    }
+}
+
 /// A pipe process, deliberately separate from the PTY/session terminal owner, on the standard
 /// child runner (`NativeChild`): its own process group, so a stop, or its own exit, takes every
 /// program the CLI started with it. EOF on BOTH output pipes precedes exit, so the final result cannot be lost.
@@ -121,11 +142,15 @@ public final class BackendHootChatProcess: @unchecked Sendable {
         return bytes
     }
     public func send(_ value: NativeRPCValue) async throws {
+        try await send(value, gate: nil)
+    }
+    func send(_ value: NativeRPCValue, gate: BackendHootChatInputGate?) async throws {
         let input = try Self.inputData(value)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             writer.async { [self] in
                 do {
                     guard let child = lock.withLock({ !closed && !inputClosed ? self.child : nil }), child.isRunning else { throw NativeRPCError(code: "unavailable", message: "Hoot's CLI input is no longer available.") }
+                    try gate?.beginWrite()
                     try child.write(input)
                     continuation.resume()
                 } catch { continuation.resume(throwing: error) }

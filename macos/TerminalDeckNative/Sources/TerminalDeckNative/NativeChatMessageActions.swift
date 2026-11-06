@@ -5,7 +5,7 @@ import TerminalDeckNativeCore
 extension NativeHootChatModel {
     func messageAction(_ action: String, row: HootChatRow) -> Bool {
         guard !readOnly else { return false }
-        if source.isHoot { return action == "rewind" && canRewind }
+        if source.isHoot { return action == "rewind" ? canRewind : action == "fork" && HootChatActions.fork != nil }
         guard !providerConversationMissing else { return false }
         return messageActions.contains { ($0["rowId"].string == row.id || $0["sequence"].number == Double(row.sequence)) && $0[action].bool == true }
     }
@@ -17,7 +17,11 @@ extension NativeHootChatModel {
             do {
                 let boundary = messageActions.first { $0["rowId"].string == row.id || $0["sequence"].number == Double(row.sequence) }
                 let options = NativeRPCValue.object([.init("throughSequence", boundary?["sequence"] ?? .number(Double(row.sequence)))])
-                let result = try NativeRPCValue.fromFoundation(await invokeChat("fork", ["fork", options.foundation]))
+                let result: NativeRPCValue
+                if source.isHoot {
+                    guard let fork = HootChatActions.fork else { throw NativeRPCError(code: "unavailable", message: "Hoot's conversation owner is unavailable.") }
+                    result = try await fork(row.sequence)
+                } else { result = try NativeRPCValue.fromFoundation(await invokeChat("fork", ["fork", options.foundation])) }
                 guard result["confirmed"].bool == true || result["pending"].bool == true, result["session"]["id"].string != nil else {
                     throw NativeRPCError(code: "fork-unconfirmed", message: result["warning"].string ?? "The AI did not confirm the fork. The original chat was kept.")
                 }

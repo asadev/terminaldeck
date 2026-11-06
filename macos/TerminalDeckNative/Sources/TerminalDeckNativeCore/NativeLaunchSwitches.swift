@@ -14,6 +14,8 @@ public enum NativeLaunchSwitches {
     public static let dumpRoutes = "TD_NATIVE_DUMP_ROUTES"
     /// "1": never shows macOS's own permission questions (development copy and renders).
     public static let noSystemPrompts = "TD_NO_SYSTEM_PROMPTS"
+    /// "1": test-only child keeper; refused against the installed app's data folder.
+    public static let hostChild = "TD_TEST_HOST_CHILD"
     /// "1": sessions run inside the app without the session keeper; the app's notice says so.
     public static let hostDisabled = "TD_HOST_DISABLED"
     /// "1": emergency override that keeps Hoot's ready defaults and setup off.

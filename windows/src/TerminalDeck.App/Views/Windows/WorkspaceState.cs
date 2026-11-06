@@ -88,7 +88,7 @@ public sealed class WorkspaceState
     {
       if (explicitPage && !tabs[index].ExplicitPage) { tabs[index] = tabs[index] with { ExplicitPage = true }; Publish(); }
       if (kind == "browser" && tabs[index].Owner != owner) { Adopt(id, owner); index = tabs.FindIndex(t => t.Id == id); }
-      if (tabs[index].Title != title && !tabs[index].CustomTitle) { tabs[index] = tabs[index] with { Title = title }; Publish(); }
+      if (tabs[index].Title != title && (kind == "chat" || !tabs[index].CustomTitle)) { tabs[index] = tabs[index] with { Title = title }; Publish(); }
     }
   }
   private readonly HashSet<string> renamed = [];

@@ -357,7 +357,7 @@ struct HootStepDetails: View {
                 }
                 if row.value.has("output") {
                     Divider()
-                    Text(row.value["output"].string ?? row.value["output"].compact).font(.caption.monospaced()).textSelection(.enabled)
+                    NativeChatToolResultContent(output: row.value["output"]).environment(\.nativeChatToolRowID, row.id)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }.frame(width: 420, height: 320)

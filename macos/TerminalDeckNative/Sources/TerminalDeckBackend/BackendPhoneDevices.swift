@@ -41,6 +41,7 @@ public struct BackendPhoneDeviceFrame: Sendable, Equatable {
 public protocol BackendPhoneDeviceStream: AnyObject, Sendable {
     /// Why the stream ended, in plain words.
     func endReason() async -> String
+    func isStarting() async -> Bool
     func stop() async
     func drawsPointer(_ phone: Bool) async
     /// Item 61: the newest picture as raw pixels for the hardware video encoder, waiting at most `seconds` (0: answer
@@ -49,6 +50,7 @@ public protocol BackendPhoneDeviceStream: AnyObject, Sendable {
 }
 
 extension BackendPhoneDeviceStream {
+    public func isStarting() async -> Bool { false }
     /// Round 3: the phone draws this Mac's pointer itself, so the pictures leave it out (a stream that cannot, ignores it).
     public func drawsPointer(_ phone: Bool) async {}
     public func pixels(within seconds: Double) async -> BackendPhoneDevicePixelsAnswer { .unsupported }
@@ -155,7 +157,7 @@ public struct BackendPhoneDeviceInspection: Sendable, Equatable {
 public actor BackendPhoneDevices {
     public static let capability = "sims"
     public static let messages: Set<String> = ["sims.list", "sims.power", "sims.watch", "sims.unwatch", "sims.ack", "sims.input",
-                                               "sims.shot", "sims.annotate", "sims.key"]
+                                               "sims.shot", "sims.annotate", "sims.key", "sims.unlock"]
     /// Recording a simulator or emulator from the phone (round 3), offered as its own capability.
     public static let recordCapability = "sims.record"
     /// The JPEG bytes Annotate's still preview may carry.
@@ -184,6 +186,9 @@ public actor BackendPhoneDevices {
     /// The level check for watching or taking a still of this Mac; a Mac without levels admits only the person's own device.
     static func mayWatchMac(_ context: BackendRemoteHostContext) -> Bool {
         context.phoneAccess.map { macWatchLevels.contains($0) } ?? (context.kind == .mine)
+    }
+    static func mayWakeMac(_ context: BackendRemoteHostContext) -> Bool {
+        context.phoneAccess.map { $0 == .full } ?? (context.kind == .mine)
     }
     /// A frame never acked is given up on after this long, so a lost ack never stops the stream.
     static let lostAfter = 4_000.0
@@ -233,6 +238,12 @@ public actor BackendPhoneDevices {
         /// Round 3: posts one input on this Mac at once, on the caller's thread (no answer awaited, no main thread);
         /// answers a refusal in words, or nil. Without it, input takes the device way (`input`).
         public var macPost: (@Sendable (String, BackendPhoneDeviceInput) -> String?)? = nil
+        /// Locked-screen input crosses the private helper asynchronously and retains the ordinary refusal path.
+        public var macInputAsyncWhen: @Sendable () -> Bool = { false }
+        public var macState: (@Sendable () async -> String?)? = nil
+        public var macControlNow: (@Sendable (UUID) async -> Bool)? = nil
+        /// A transient password for macOS's own focused secure field. Never retained as input history or held keys.
+        public var macSignIn: (@Sendable (String, String) async throws -> Void)? = nil
         /// Round 3: where this Mac's pointer is on a display (0…1), and its shape, for a phone that draws it itself.
         public var pointer: (@Sendable (String) -> BackendPhoneDevicePointer?)? = nil
         /// Round 3 (#24): the Mac's Settings switch "Phones may view and control this Mac's screen", and the words
@@ -337,6 +348,8 @@ public actor BackendPhoneDevices {
     var watches: [WatchKey: Watch] = [:]
     private var stills: [String: Still] = [:]
     private var inputs: [String: Task<Void, Never>] = [:]
+    private(set) var pendingInputs: [String: Int] = [:]
+    private var signIns: [WatchKey: BackendMacSignInAttempt] = [:]
     /// Mouse buttons (with where they went down) and key codes another Mac holds down on this Mac, per connection and
     /// display (Reviewer, 31 Oct): when its view ends for any reason, they are let go, so nothing stays pressed here.
     struct Held: Sendable { var buttons: [String: (x: Double, y: Double)] = [:]; var keys: Set<Int> = []; var at = (x: 0.5, y: 0.5) }
@@ -420,6 +433,30 @@ public actor BackendPhoneDevices {
         case "sims.ack":
             ack(.init(connection: context.connectionID, device: try deviceID(message["id"])), seq: Int(message["seq"].number ?? -1))
             return []
+        case "sims.unlock":
+            let id = try deviceID(message["id"])
+            guard Self.isMac(id), source.macAllowed(), context.kind == .mine,
+                  context.phoneAccess == nil || context.phoneAccess == .full,
+                  watches[WatchKey(connection: context.connectionID, device: id)] != nil,
+                  let signIn = source.macSignIn, let password = message["password"].string,
+                  !password.isEmpty, password.utf16.count <= 2_000 else {
+                throw NativeRPCError(code: "unauthorized", message: "Sign-in needs your own device with Full control and an open Mac screen.")
+            }
+            let key = WatchKey(connection: context.connectionID, device: id)
+            let attempt = BackendMacSignInAttempt.current ?? BackendMacSignInAttempt()
+            guard pendingInputs[id, default: 0] == 0, !signIns.keys.contains(where: { $0.device == id }),
+                  lanes.filter({ $0.key.device == id }).values.allSatisfy({ $0.isIdle }) else { throw BackendMacSignInAttempt.failure }
+            try attempt.check()
+            signIns[key] = attempt
+            defer { signIns[key] = nil; attempt.cancel() }
+            if let control = source.macControlNow, !(await control(context.connectionID)) {
+                throw NativeRPCError(code: "unauthorized", message: "Sign-in needs your own device with Full control.")
+            }
+            try attempt.check()
+            guard watches[key] != nil, source.macAllowed() else { throw BackendMacSignInAttempt.failure }
+            try await BackendMacSignInAttempt.$current.withValue(attempt) { try await signIn(id, password) }
+            return [try .init(.simsSent, fields: [.init("rid", message["rid"]), .init("ok", .bool(true)),
+                .init("message", .string("Password sent. Check your Mac's screen."))])]
         case "sims.input":
             try await input(message, context: context)
             return []
@@ -427,7 +464,9 @@ public actor BackendPhoneDevices {
             let rid = try message["rid"].requireString("request", nonempty: true), id = try deviceID(message["id"])
             if Self.isMac(id), !Self.mayWatchMac(context) { throw NativeRPCError(code: "access-denied", message: Self.macWatchRefused) }
             if Self.isMac(id), !source.macAllowed() { throw NativeRPCError(code: "access-denied", message: source.macRefusal) }
-            let answer = try await shot(rid: rid, id: id)
+            let answer = try await MacScreenAvailability.$mayWake.withValue(Self.mayWakeMac(context)) {
+                try await shot(rid: rid, id: id)
+            }
             // A phone with Pick asks for the elements too: they follow in their own frame (a still is near the size
             // limit already), read beside the connection so the still is never held back by a slow element tree.
             if message["inspect"].bool == true, let token = answer.value["shot"].string {
@@ -451,8 +490,8 @@ public actor BackendPhoneDevices {
     }
 
     func deviceID(_ value: NativeRPCValue) throws -> String {
-        // This Mac's displays (`mac:<display number>`), or a device this app listed.
-        if let id = value.string, id.range(of: #"^mac:[0-9]{1,10}$"#, options: .regularExpression) != nil { return id }
+        // UUIDs survive a reboot; numeric ids remain accepted for older phones.
+        if let id = value.string, MacDisplaySelection.isValidID(id) { return id }
         return try BackendAppDeviceChannels.deviceID(value)
     }
 
@@ -535,7 +574,8 @@ public actor BackendPhoneDevices {
             throw NativeRPCError(code: "unavailable", message: "This phone already watches two devices. Close one first.")
         }
         let candidates = Self.isMac(id) ? await source.macRows() : (await source.list()["devices"].elements ?? [])
-        guard let row = candidates.first(where: { $0["id"].string == id }) else {
+        guard let row = candidates.first(where: { $0["id"].string == id })
+                ?? (MacDisplaySelection.isValidID(id) ? candidates.first(where: { $0["main"].bool == true }) ?? candidates.first : nil) else {
             throw NativeRPCError(code: "unavailable", message: "That device is no longer on this Mac. Pull to refresh the list.")
         }
         guard row["state"].string == "ready" else {
@@ -554,7 +594,13 @@ public actor BackendPhoneDevices {
         let source = self.source
         let pump = Task { [weak self] in
             do {
-                let stream = try await source.stream(id, row)
+                let stream = try await MacScreenAvailability.$mayWake.withValue(Self.mayWakeMac(context)) {
+                    try await MacScreenAvailability.$progress.withValue({ note in
+                        try? await source.send(key.connection, try BackendRemoteServerMessage(.simsState, fields: [.init("id", .string(id)), .init("state", .string("opening")), .init("note", .string(note))]))
+                    }) {
+                        try await source.stream(id, row)
+                    }
+                }
                 guard let self, await self.opened(key, stream) else { await stream.stop(); return }
                 if cursor { await stream.drawsPointer(true) }
                 try? await source.send(key.connection, try self.state(id, "live", note: ""))
@@ -582,6 +628,7 @@ public actor BackendPhoneDevices {
 
     /// The stream ended by itself (or never opened): the phone is told, the watch forgotten.
     private func ended(_ key: WatchKey, why: String) async {
+        signIns[key]?.cancel()
         guard let watch = watches.removeValue(forKey: key) else { return }
         watch.waiter?.resume.resume()
         watch.pointerTask?.cancel()
@@ -592,6 +639,7 @@ public actor BackendPhoneDevices {
     }
 
     func stopWatch(_ key: WatchKey) async {
+        signIns[key]?.cancel()
         guard let watch = watches.removeValue(forKey: key) else { return }
         watch.pump?.cancel()
         watch.waiter?.resume.resume()
@@ -626,6 +674,7 @@ public actor BackendPhoneDevices {
 
     /// Stop on the Mac: every phone watching this Mac's screen is let go and told so.
     public func stopMac(why: String = "Stopped on the Mac.") async {
+        for attempt in signIns.values { attempt.cancel() }
         for key in watches.keys where Self.isMac(key.device) {
             guard let watch = watches.removeValue(forKey: key) else { continue }
             watch.pump?.cancel()
@@ -654,6 +703,11 @@ public actor BackendPhoneDevices {
 
     /// The screen for one viewer: hardware H.264 on the link (item 61), or the watch ends.
     private func pump(_ key: WatchKey, _ stream: any BackendPhoneDeviceStream) async {
+        if Self.isMac(key.device), let control = source.macControlNow,
+           let phase = await source.macState?(), ["locked", "signing-in"].contains(phase), !(await control(key.connection)) {
+            await ended(key, why: "The lock screen needs your own device with Full control.")
+            return
+        }
         let first = await stream.pixels(within: 2)
         if case .unsupported = first { await ended(key, why: Self.cannotShow); return }
         await pumpVideo(key, stream, first: first)
@@ -669,6 +723,7 @@ public actor BackendPhoneDevices {
         var pending: BackendPhoneDevicePixels?
         var last: BackendPhoneDevicePixels?
         var owesStill = false
+        var lastMacState: String?
         // Pictures VideoToolbox gave nothing for, while it has never given anything at all (a real-time encoder also
         // drops a frame now and then on purpose, which is not a failure).
         var failures = 0, produced = false
@@ -684,14 +739,28 @@ public actor BackendPhoneDevices {
         watches[key]?.videoEncoder = encoder
         defer { encoder.invalidate() }
         while !Task.isCancelled, watches[key] != nil {
-            if watches[key]?.videoResend == true, pending == nil, let last {
+            if Self.isMac(key.device), let state = await source.macState?() {
+                if state == MacReach.State.locked.rawValue || state == MacReach.State.signingIn.rawValue {
+                    if let control = source.macControlNow, !(await control(key.connection)) {
+                        await ended(key, why: "The lock screen needs your own device with Full control.")
+                        return
+                    }
+                }
+                if state != lastMacState, let phase = MacReach.State(rawValue: state) {
+                    lastMacState = state
+                    try? await source.send(key.connection, .init(.simsState, fields: [.init("id", .string(key.device)),
+                        .init("state", .string(state)), .init("note", .string(phase.words))]))
+                }
+            }
+            if watches[key]?.videoResend == true, pending == nil, let cached = last {
                 watches[key]?.videoResend = false
                 encoder.requestKey()
                 // M5: asked while the screen moves (a frame lost on the way), the next moving picture is the keyframe:
                 // about 0.4 s of the link, not a sharp still several times that size.
                 if case .pixels(let pixels) = await stream.pixels(within: 0) { pending = pixels; continue }
+                if await stream.isStarting() { last = nil; owesStill = false; encoder.requestKey(); continue }
                 // A phone asked again on a still screen: the last picture as a keyframe.
-                switch await sendStill(key, encoder, last, stream: stream) {
+                switch await sendStill(key, encoder, cached, stream: stream) {
                 case .gone: return
                 case .overtaken(let pixels): pending = pixels
                 case .sent: owesStill = false
@@ -702,6 +771,7 @@ public actor BackendPhoneDevices {
                 switch await stream.pixels(within: owesStill ? Self.stillAfter : 1) {
                 case .pixels(let pixels): pending = pixels
                 case .unchanged:
+                    if await stream.isStarting() { last = nil; owesStill = false; encoder.requestKey(); continue }
                     guard owesStill, let last else { continue }
                     await room(key)
                     guard !Task.isCancelled, watches[key] != nil else { return }
@@ -1034,7 +1104,7 @@ public actor BackendPhoneDevices {
         if mac, !source.macAllowed() { throw NativeRPCError(code: "access-denied", message: source.macRefusal) }
         // This Mac: only the owner's phone at Full control clicks and types; Look and Work only watch.
         if mac {
-            guard context.phoneAccess == .full else { throw NativeRPCError(code: "access-denied", message: Self.macControlRefused) }
+            guard context.phoneAccess == .full || context.phoneAccess == nil && context.kind == .mine else { throw NativeRPCError(code: "access-denied", message: Self.macControlRefused) }
             var began = false
             for key in watches.keys where key.device == id && key.connection == context.connectionID {
                 if source.clock() - (watches[key]?.controlledAt ?? 0) >= 15_000 { began = true }
@@ -1043,11 +1113,12 @@ public actor BackendPhoneDevices {
             // Who controls this Mac changed: said in the background, never before the input is applied.
             if began { Task { await self.reportMac() } }
         }
+        guard !signIns.keys.contains(where: { $0.device == id }) else { throw BackendMacSignInAttempt.failure }
         let what = try Self.input(message, mac: mac)
         if mac { note(what, key: WatchKey(connection: context.connectionID, device: id)) }
         // Round 3: this Mac's input is applied the moment it arrives, on its own queue, in order (a pointer move waits
         // for no answer, no picture and no main thread); only a drag-swipe of an older phone still takes the long way.
-        if mac, let lane = lane(WatchKey(connection: context.connectionID, device: id)) {
+        if mac, !source.macInputAsyncWhen(), let lane = lane(WatchKey(connection: context.connectionID, device: id)) {
             if case .swipe = what {} else {
                 let source = self.source, connection = context.connectionID
                 let refused: @Sendable (String) -> Void = { words in
@@ -1065,7 +1136,9 @@ public actor BackendPhoneDevices {
             }
         }
         let previous = inputs[id], source = self.source, connection = context.connectionID
+        pendingInputs[id, default: 0] += 1
         inputs[id] = Task {
+            defer { self.pendingInputs[id, default: 1] -= 1 }
             await previous?.value
             do {
                 try await BackendAppDeviceDeadline.run(within: 30, "Sending to the device") { try await source.input(id, what) }
@@ -1110,7 +1183,9 @@ public actor BackendPhoneDevices {
             return
         }
         let previous = inputs[key.device], source = self.source, id = key.device
+        pendingInputs[id, default: 0] += 1
         inputs[id] = Task {
+            defer { self.pendingInputs[id, default: 1] -= 1 }
             await previous?.value
             for release in releases { try? await BackendAppDeviceDeadline.run(within: 10, "Letting go of a key") { try await source.input(id, release) } }
         }
@@ -1575,13 +1650,18 @@ extension BackendRemoteProtocol {
         guard r.type.hasPrefix("sims.") else { return nil }
         func device() throws -> String {
             let id = try r.text("id", reason: "\(r.type) without a device", bytes: 128)
-            guard id.range(of: #"^(ios|android|avd):[A-Za-z0-9._:-]{1,120}$|^mac:[0-9]{1,10}$"#, options: .regularExpression) != nil else { throw r.bad("\(r.type) with an unusable device") }
+            guard MacDisplaySelection.isValidID(id) || id.range(of: #"^(ios|android|avd):[A-Za-z0-9._:-]{1,120}$"#, options: .regularExpression) != nil else { throw r.bad("\(r.type) with an unusable device") }
             return id
         }
         func rid() throws -> String { try r.id("rid", reason: "\(r.type) without a request id") }
         func unit(_ key: String) throws -> NativeRPCValue { .number(min(max(try r.finite(key, reason: "\(r.type) with an unusable \(key)"), 0), 1)) }
         var m = r.base
         switch r.type {
+        case "sims.unlock":
+            let id = try device()
+            guard id.hasPrefix("mac:") else { throw r.bad("Sign-in needs a Mac display") }
+            return m.setting("rid", .string(try rid())).setting("id", .string(id))
+                .setting("password", .string(try r.text("password", reason: "Sign-in needs a password", units: 2_000, oversize: "The password is too long")))
         case "sims.list": return m.setting("rid", .string(try rid()))
         case "sims.power":
             return m.setting("rid", .string(try rid())).setting("id", .string(try device())).setting("on", .bool(try r.boolean("on", reason: "sims.power without on")))
@@ -1756,6 +1836,8 @@ final class BackendMacInputLane: @unchecked Sendable {
     /// A flush queued before a click must not take the moves that came after that click.
     private var epoch = 0
     private var appliedN = 0
+    private var queuedBlocks = 0
+    var isIdle: Bool { lock.withLock { queuedBlocks == 0 } }
 
     init(label: String, post: @escaping @Sendable (BackendPhoneDeviceInput) -> String?) {
         queue = DispatchQueue(label: "dev.terminaldeck.mac-input." + label, qos: .userInteractive)
@@ -1773,9 +1855,13 @@ final class BackendMacInputLane: @unchecked Sendable {
             pendingN = max(pendingN, n)
             guard !scheduled else { return nil }
             scheduled = true
+            queuedBlocks += 1
             return epoch
         }
-        if let schedule { queue.async { self.flushPointer(schedule, refused) } }
+        if let schedule { queue.async {
+            defer { self.lock.withLock { self.queuedBlocks -= 1 } }
+            self.flushPointer(schedule, refused)
+        } }
     }
 
     /// Older callers (tests): a move by a share of the display.
@@ -1788,9 +1874,11 @@ final class BackendMacInputLane: @unchecked Sendable {
         // (Reviewer M1: the moves waiting are taken now, when the click is queued, not when its block runs).
         let (move, n) = lock.withLock { () -> ((move: Move, held: Bool)?, Int) in
             defer { pending = nil; scheduled = false; epoch += 1 }
+            queuedBlocks += 1
             return (pending, pendingN)
         }
         queue.async {
+            defer { self.lock.withLock { self.queuedBlocks -= 1 } }
             if let move { self.apply(move, n: n, refused) }
             if let words = self.post(input) { refused(words) }
         }

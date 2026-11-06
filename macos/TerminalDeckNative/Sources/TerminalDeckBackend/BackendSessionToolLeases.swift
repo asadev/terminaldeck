@@ -25,6 +25,7 @@ public enum BackendOrdinarySessionToolGrant {
         "tools.run",
         // Saved leads and workers use visible chats through the same project/session gate.
         "sessions.chat", "sessions.start_agent", "sessions.conversations", "browser.feedback",
+        "sessions.list", "sessions.get", "sessions.send", "sessions.screen", "sessions.wait", "sessions.result",
         // 30 Oct (Decker could not see or set a seat's account: no "accounts"/"agents" area for a session). A lead
         // reads the accounts, who uses which, and its team, and sets a seat's or project's account; setting asks
         // exactly as it does anywhere else (alter tier, logged).

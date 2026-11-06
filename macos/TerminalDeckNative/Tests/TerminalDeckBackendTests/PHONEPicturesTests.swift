@@ -9,6 +9,24 @@ import TerminalDeckNativeCore
 /// The phone's pictures (Asad, 28 Oct: "the images of the projects, profile photos of the agents … same as web
 /// version"): the `pictures` capability answers only what the device reaches and sees, and sends a logo small, once.
 final class PHONEPicturesTests: XCTestCase {
+    func testProfileImageIsHashedAndReadOnlyWithinTheVisibleDirectory() async throws {
+        let folder = try logos()
+        let png = try Data(contentsOf: folder.appendingPathComponent("crm-1234abcd.png"))
+        let face = BackendPhonePictures.Face(id: "agent", name: "Agent", icon: "sf:star", png: png)
+        let pictures = BackendPhonePictures(source: .init(projects: { [] }, logos: folder,
+            agents: { [face] }, sessionAgents: { _ in [:] }, visibleSessions: { _ in [] }))
+        let owner = Self.context(folders: [])
+        let list = try await pictures.list(rid: "list", context: owner)
+        let hash = try XCTUnwrap(list.value["agents"].elements?.first?["picture"].string)
+        XCTAssertEqual(hash.count, 64)
+        let image = try await pictures.picture(rid: "image", hash: hash, context: owner)
+        XCTAssertEqual(image.value["png"].string, png.base64EncodedString())
+        do {
+            _ = try await pictures.picture(rid: "guest", hash: hash, context: Self.context(kind: .guest, folders: []))
+            XCTFail("A guest must not read another agent's image")
+        } catch { XCTAssertTrue(error is NativeRPCError) }
+    }
+
     private func parse(_ json: String) -> BackendRemoteClientMessage? {
         if case .message(let message) = BackendRemoteProtocol.parseClientMessage(json) { return message }
         return nil

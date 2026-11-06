@@ -240,6 +240,22 @@ func execute(_ operation: String, _ args: [String: Any]) throws -> Any {
 }
 
 // Harmless packaging probe: no data folder, launchd, account or Keychain access.
+// Separate modes, no session-host startup or account initialization in either process.
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == MacReach.daemonArgument {
+    let daemon = MacReachDaemon()
+    daemon.run()
+    withExtendedLifetime(daemon) { CFRunLoopRun() }
+    exit(0)
+}
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == MacReach.agentArgument {
+    do {
+        let agent = MacReachAgent()
+        try agent.run()
+        withExtendedLifetime(agent) { CFRunLoopRun() }
+    } catch { exit(78) }
+    exit(0)
+}
+
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--session-host-capabilities" {
 #if TD_HOST_INTEGRATED && TD_HOST_PTY_GATE_INTEGRATED
     print("{\"sessionHost\":true,\"protocolVersion\":\(BackendHOSTProtocol.version)}")
@@ -288,7 +304,27 @@ if (CommandLine.arguments.count == 4 || CommandLine.arguments.count == 5), Comma
             resources: factory,
             onIdle: { finished.yield(()); finished.finish() })
         reference.bind(runtime)
+        // Event driven: a test helper stops when its owning app exits, including a crash or force quit.
+        var parentWatch: (any DispatchSourceProcess)?
+        if ProcessInfo.processInfo.environment[NativeLaunchSwitches.hostChild] == "1" {
+            let parent = getppid()
+            guard parent > 1 else { throw BackendHOSTFailure.unavailable }
+            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .global())
+            watch.setEventHandler {
+                runtime.stopAccepting()
+                manager.beginShutdown()
+                Task {
+                    for row in (try? runtime.inventory.list()) ?? [] {
+                        _ = try? await runtime.inventory.stopOwned(sessionID: row.record.sessionID)
+                    }
+                    finished.yield(()); finished.finish()
+                }
+            }
+            watch.resume(); parentWatch = watch
+            if getppid() != parent { finished.yield(()); finished.finish() }
+        }
         for await _ in events {}
+        parentWatch?.cancel()
         runtime.stopAccepting()
         exit(0)
     } catch {

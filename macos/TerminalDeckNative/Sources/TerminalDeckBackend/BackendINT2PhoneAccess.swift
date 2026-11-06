@@ -49,7 +49,7 @@ public enum BackendINT2PhoneAccessLevel: String, CaseIterable, Sendable {
         "browser.windows", "browser.window.steps", "browser.surfaces", "browser.watch", "browser.unwatch", "browser.frame.ack",
         "hoot.hello", "hoot.attach", "hoot.detach", "hoot.state", "hoot.sessions", "hoot.log", "hoot.pending", "hoot.older",
         "hoot.files", "hoot.file.read", "routines", "routine.text", "chats.watch", "chats.unwatch", "chats.older", "hoot.account.read",
-        "chats.choices", "chats.options", "hoot.options.read",
+        "chats.choices", "chats.options", "hoot.options.read", "chats.app.read", "chats.app.bridge",
         // 28 Oct: the Mac's pictures (project logos, agent pictures, who works in each session).
         "pictures", "picture",
         // 31 Oct: alerts while the phone's app is closed — the phone's own registration, at every level.
@@ -66,7 +66,7 @@ public enum BackendINT2PhoneAccessLevel: String, CaseIterable, Sendable {
         // 31 Oct: driving a simulator or emulator, starting or stopping it, and sending an annotated still.
         "sims.input", "sims.power", "sims.annotate", "sims.record"]
     /// Hoot only: the Hoot conversation's reads and its say/start/stop, never files, memory or answers.
-    public static let hootMessages: Set<String> = ["hello", "ping", "hoot.hello", "hoot.attach", "hoot.detach", "hoot.older",
+    public static let hootMessages: Set<String> = ["chats.app.read", "chats.app.bridge", "hello", "ping", "hoot.hello", "hoot.attach", "hoot.detach", "hoot.older",
         "hoot.bye", "hoot.state", "hoot.sessions", "hoot.log", "hoot.pending",
         "hoot.start", "hoot.say", "hoot.cancel", "hoot.stop", "hoot.account.read", "hoot.options.read",
         "push.register", "push.presence", "push.forget",
@@ -85,7 +85,7 @@ public extension BackendRemoteTrustStore {
         try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .object(next.sorted { $0.key < $1.key }.map {
             .init($0.key, .string($0.value.rawValue))
         }))]), file: directory.appendingPathComponent("remote-access.json"))
-        phoneAccessLevels = next; onChanged?()
+        phoneAccessLevels = next; changed()
     }
     /// The pairing sheet's "Let it in": the chosen access is written first, then the device is
     /// approved as the owner's own, in one actor turn — no connection can attach in between, and
@@ -113,7 +113,7 @@ public extension BackendRemoteTrustStore {
         guard isApproved(id), phoneAccess(id) == level else {
             throw NativeRPCError(code: "access-unconfirmed", message: "The device was not approved. Try again.")
         }
-        onChanged?()
+        changed()
     }
     func writePhoneAccessLevels(_ next: [String: BackendINT2PhoneAccessLevel]) throws {
         try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .object(next.sorted { $0.key < $1.key }.map {

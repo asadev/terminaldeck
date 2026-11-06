@@ -68,6 +68,12 @@ public static class AgentEditors
     // General
     var name = Field("Name", agent.Name, max: 60); var description = Field("What it does", agent.Description, true);
     var icon = new AgentPicturePicker(agent.Icon);
+    var photo = Field("Profile photo", agent.PhotoPath ?? "", max: 4096);
+    var choosePhoto = AsyncButton("Choose profile photo…", async () =>
+    {
+      var handle = AgentEditorWindow.Find(agents, agent.Id) is { } window ? WinRT.Interop.WindowNative.GetWindowHandle(window) : 0;
+      if (handle != 0 && await PickPictureAsync(handle) is { } path) photo.Text = path;
+    });
     var project = Choice("Project", projects.List().Select(p => (p.Id, p.Name)), agent.ProjectId); var seat = Field("Role · lowercase words and dashes", agent.Seat, max: 64);
     var boss = Choice("Reports to", new[] { ("", "No one · independent"), (AgentSeats.HootId, "Hoot") }.Concat(agents.List().Where(a => a.Id != agent.Id && (a.Status == SavedAgentStatus.Active || a.Id == agent.ReportsTo)).OrderBy(a => a.Name).Select(a => (a.Id, a.Name + " · " + (projects.List().FirstOrDefault(p => p.Id == a.ProjectId)?.Name ?? a.ProjectId)))), agent.ReportsTo ?? "");
     var status = Choice("Status", new[] { ("active", "Active"), ("paused", "Paused · takes no new work"), ("archived", "Archived") }, agent.Status.ToString().ToLowerInvariant());
@@ -141,7 +147,7 @@ public static class AgentEditors
     var category = agents.SeatOf(agent.Id).Category; var template = agents.Templates().Single(t => t.Category == category);
     string Limit(int value) => value == 0 ? "No limit" : value.ToString();
     var error = new TerminalDeck.App.Views.Notices.CompactNotice { IsClosable = false, Severity = InfoBarSeverity.Error };
-    Panel("General", name, icon, description, project, seat, boss, status, Words("Changing the role leaves its memory in the old seat for the next hire.", 12, true));
+    Panel("General", name, photo, choosePhoto, icon, description, project, seat, boss, status, Words("Changing the role leaves its memory in the old seat for the next hire.", 12, true));
     Panel("Coding AI", ai, account, accountLine, model, effort, permission,
       Words("Before it changes files: App default uses the app's setting; Plan only lets it read and plan; Change without asking lets it edit files in its folder.", 12, true));
     Panel("Limits", limits, taskLimit, Words("Category template: " + Limit(template.MaxHandsPerSeat) + " hands per seat; " + Limit(template.MaxHandsPerProject) + " per project.", 12, true),
@@ -182,7 +188,7 @@ public static class AgentEditors
       var ok = await operation.RunAsync(() => agents.Save(agent with
       {
         Name = name.Text, Description = description.Text, Provider = Picked(ai), Model = Picked(model) is { Length: > 0 } selectedModel ? selectedModel : throw new ArgumentException("Choose a model before saving."), Effort = Picked(effort), ProjectId = Picked(project), Seat = seat.Text,
-        ReportsTo = Picked(boss).Length == 0 ? null : Picked(boss), Icon = icon.Value, Skills = Split(skills.Text),
+        ReportsTo = Picked(boss).Length == 0 ? null : Picked(boss), Icon = icon.Value, PhotoPath = string.IsNullOrWhiteSpace(photo.Text) ? null : photo.Text.Trim(), Skills = Split(skills.Text),
         MaxConcurrentTasks = Picked(limits) == "none" ? null : double.IsFinite(taskLimit.Value) && taskLimit.Value >= 1 && taskLimit.Value <= int.MaxValue && taskLimit.Value == Math.Truncate(taskLimit.Value) ? (int)taskLimit.Value : throw new ArgumentException("Choose a whole number of tasks or No limit."),
         Status = Enum.Parse<SavedAgentStatus>(Picked(status), true), AccountId = Picked(account).Length == 0 ? null : Picked(account),
         Options = o with { PermissionMode = Picked(permission).Length == 0 ? null : Picked(permission), WorkingFolder = string.IsNullOrWhiteSpace(folder.Text) ? null : folder.Text.Trim(),

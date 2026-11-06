@@ -111,7 +111,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
       {
         await Runtime.InitializeAsync();
         tasksPage = new(new(Runtime.Tasks, Runtime.Projects, Runtime.TaskMachineIdentity, Runtime.TaskPeople, Runtime.ConnectedTasks), this, PresentTaskPopup);
-        hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands };
+        hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands, Chats = Runtime.Chats, DataDirectory = Runtime.Root.DirectoryPath, McpNavigation = id => new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(id, server, tool, args, ct)) };
         serversPage = new(new(Runtime.Servers), this);
         Runtime.RegisterTools();
         RegisterWindowTools();
@@ -204,11 +204,11 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
       var projects = Runtime.Projects.List().ToDictionary(p => p.Id);
       foreach (var group in Runtime.Projects.GroupSessions(Runtime.ProjectSessions()))
         foreach (var row in group.Sessions)
-          Model.Sessions.FirstOrDefault(s => s.Id == row.Id)?.SetAppearance(projects.GetValueOrDefault(group.ProjectId)?.Name ?? "", Runtime.Projects.PicturePath(group.ProjectId), Runtime.Agents.SessionLabel(row.Id, row.Provider), group.ProjectId, Runtime.Agents.SessionFace(row.Id)?.Icon, Runtime.Agents.SessionFace(row.Id) is { } face && (face.Hoot || face.Id == TerminalDeck.Core.Agents.AgentSeats.HootId));
+          Model.Sessions.FirstOrDefault(s => s.Id == row.Id)?.SetAppearance(projects.GetValueOrDefault(group.ProjectId)?.Name ?? "", Runtime.Projects.PicturePath(group.ProjectId), Runtime.Agents.SessionLabel(row.Id, row.Provider), group.ProjectId, Runtime.Agents.SessionFace(row.Id)?.Icon, Runtime.Agents.SessionFace(row.Id) is { } face && (face.Hoot || face.Id == TerminalDeck.Core.Agents.AgentSeats.HootId), Runtime.Agents.SessionFace(row.Id)?.PhotoPath);
     }
     finally { syncingWindows = false; }
     foreach (var row in Model.Sessions)
-      if (windowState.Tabs.FirstOrDefault(t => t.Subject == row.Id && t.CustomTitle) is { } named) row.Rename(named.Title);
+      if (row.Presentation != SessionPresentation.Chat && windowState.Tabs.FirstOrDefault(t => t.Subject == row.Id && t.CustomTitle) is { } named) row.Rename(named.Title);
     if (windowState.Layout(Scope).Active is { } active) Model.Sessions.FirstOrDefault(s => s.Id == active)?.MarkRead();
     foreach (var child in detached.Values) if (windowState.Layout(child.Owner, child.Host).Active is { } visible) Model.Sessions.FirstOrDefault(s => s.Id == visible)?.MarkRead();
     SyncWindows();
@@ -254,7 +254,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         chat = new ChatPage(Runtime.Chats, draft.Id, WindowHandle, currentWindowHandle: () => ChatWindowHandle(draft.Id),
           navigation: new ChatNavigation(OpenCodingAis, OpenSession, Runtime.Agents.SessionFace(draft.Id)?.Name,
             Runtime.Projects.Get(Runtime.Projects.Resolve(null, draft.Folder)).Folders,
-            async id => { await Runtime.Accounts.SignInAsync(id, draft.Folder); await Runtime.RefreshSessionsAsync(); }), accountModels: Runtime.Accounts);
+            async id => { await Runtime.Accounts.SignInAsync(id, draft.Folder); await Runtime.RefreshSessionsAsync(); }, new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(draft.Id, server, tool, args, ct)), id => Model.Sessions.FirstOrDefault(s => s.Id == id)), accountModels: Runtime.Accounts);
         chat.Model.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(ChatViewModel.Snapshot)) SyncSessions(); };
 
         chatPanes.Add(draft.Id, chat);

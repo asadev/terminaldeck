@@ -223,6 +223,8 @@ public actor BackendSessionLauncher {
     private var hostedChatAttachment: (@Sendable (BackendSessionMeta) async throws -> Void)?
     public func setHostedChatAttachment(_ attach: @escaping @Sendable (BackendSessionMeta) async throws -> Void) { hostedChatAttachment = attach }
     private var chatDispatch: ChatDispatch?
+    private var localChatPreference: (@Sendable (String?) async -> Bool)?
+    public func setLocalChatPreference(_ preference: @escaping @Sendable (String?) async -> Bool) { localChatPreference = preference }
     public func setChatDispatch(_ dispatch: @escaping ChatDispatch) { chatDispatch = dispatch }
 
     public init(manager: BackendPTYManager, dependencies: BackendSessionLaunchDependencies) {
@@ -246,7 +248,7 @@ public actor BackendSessionLauncher {
         fresh ? (BackendTAGLaunchArguments.newSessionPermission(provider: provider) ?? requested) : requested
     }
 
-    public func create(_ requested: BackendCreateSessionInput, context: BackendLaunchContext = BackendLaunchContext()) async throws -> BackendSessionMeta {
+    public func create(_ requested: BackendCreateSessionInput, context: BackendLaunchContext = BackendLaunchContext(), chatMigration: ChatDispatch? = nil) async throws -> BackendSessionMeta {
         await gate.enter()
         defer { gate.leave() }
         try Task.checkCancellation()
@@ -338,11 +340,21 @@ public actor BackendSessionLauncher {
             spec.beforeExposure = context.beforeExposure
             try await BackendPCDecisionDelivery.verify()
             try Task.checkCancellation()
+            if let chatMigration {
+                guard input.chat == true, input.replaces != nil else { throw BackendSessionFailure.invalidInput("A chat move needs its original identity.") }
+                guard let original = manager.list().first(where: { $0.id == input.replaces }) else { throw BackendSessionFailure.missingSession }
+                // Validate/bind the replacement lease before releasing the earlier AI's writer.
+                try await dependencies.accounts.bind(account, session: original)
+                return try await chatMigration(input, spec)
+            }
             let created: BackendSessionMeta
             if input.chat == true {
                 guard let chatDispatch else { throw BackendSessionFailure.missingCapability("the chat sessions' owner") }
                 #if TD_HOST_INTEGRATED
-                if let hostedDispatch, let hosted = try await hostedDispatch(input, spec, account, context) {
+                if await localChatPreference?(spec.tabKey) == true {
+                    created = try await chatDispatch(input, spec)
+                }
+                else if let hostedDispatch, let hosted = try await hostedDispatch(input, spec, account, context) {
                     created = hosted
                     try await hostedChatAttachment?(hosted)
                 }

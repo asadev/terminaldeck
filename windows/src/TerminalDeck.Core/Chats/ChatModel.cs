@@ -30,7 +30,7 @@ public sealed record ChatDefinition(string Id, string Provider, string Cwd, stri
 public sealed record ChatRecord(int Version, ChatDefinition Definition, string CreationKey, ChatEvent[] Events, ChatMessage[] Messages,
   long WorkerSequence = 0, bool Busy = false, string? ActiveClientId = null, string? ConversationId = null, string? Problem = null,
   DateTimeOffset? WaitingSince = null, bool Paused = false, bool Stopping = false, bool Ended = false,
-  long AccountRevision = 0, string? LastAccountSwitch = null, bool HasCustomTitle = false);
+  long AccountRevision = 0, string? LastAccountSwitch = null, bool HasCustomTitle = false, bool ReplayHistory = false);
 public sealed record ChatSignal(long Sequence, string Kind, string Id = "", string Text = "", string? ClientId = null, JsonElement? Data = null);
 public sealed record ChatDelivery(string ClientId, ChatMessageState State);
 
@@ -76,6 +76,7 @@ public interface IChatSessions
   ValueTask RetryAsync(string id, CancellationToken cancellationToken = default);
   ValueTask SetOptionsAsync(string id, ChatOptions options, CancellationToken cancellationToken = default);
   ValueTask SetAccountAsync(string id, string accountId, CancellationToken cancellationToken = default);
+  ValueTask<ChatRecord> BranchAsync(string id, string? messageId, bool rewind, CancellationToken ct = default, string? title = null) => ValueTask.FromException<ChatRecord>(new NotSupportedException("This chat cannot copy history."));
   ValueTask RenameAsync(string id, string title, CancellationToken cancellationToken = default) => ValueTask.FromException(new NotSupportedException("This chat cannot be renamed."));
   ValueTask SetPermissionAsync(string id, AiPermissionMode mode, CancellationToken cancellationToken = default) => ValueTask.FromException(new NotSupportedException("This chat cannot change permissions."));
   ValueTask<bool> CanSwitchAccountAsync(string id, string accountId, CancellationToken cancellationToken = default) => ValueTask.FromResult(false);

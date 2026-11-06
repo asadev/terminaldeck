@@ -52,7 +52,7 @@ public sealed class ChatHistoryTools(IChatSessions chats)
     var before = parts is { Length: 4 } && parts[2] == "before" && long.TryParse(parts[3], out var cursor) ? cursor : long.MaxValue;
     var events = chat.Events.Where(e => e.Sequence < before).TakeLast(limit).ToArray();
     var oldest = events.FirstOrDefault()?.Sequence ?? 0;
-    return JsonSerializer.SerializeToElement(new { sessionId = chat.Definition.Id, events,
+    return JsonSerializer.SerializeToElement(new { sessionId = chat.Definition.Id, events, renderedToolBlocks = ChatMcpApps.RenderedBlocks(chat.Definition.Id), renderedMessages = ChatProjection.Rows(chat).Where(r => r.Kind is "user" or "assistant" && events.Any(e => e.Id == r.Id)).Select(r => new { r.Id, r.Kind, blocks = ChatRichContent.Blocks(r.Text) }),
       media = chat.Messages.Where(m => m.State != ChatMessageState.Removed).SelectMany(m => m.Media).DistinctBy(m => m.Id).Select(m => new { m.Id, m.Name, m.MimeType, transcriptPath = $"chat:{chat.Definition.Id}:media:{m.Id}" }),
       nextTranscriptPath = chat.Events.Any(e => e.Sequence < oldest) ? $"chat:{chat.Definition.Id}:before:{oldest}" : null }, Json);
   }

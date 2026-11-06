@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import AppKit
 import TerminalDeckBackend
 import TerminalDeckNativeCore
 
@@ -42,8 +44,22 @@ extension NativeCompositionProduction {
 /// An agent's picture as the phone draws it: the same icon and colour `AgentAvatar` draws here, Hoot as Hoot.
 @MainActor
 enum NativePhonePictureFaces {
+    private static var thumbnails: [String: Data] = [:]
+
     static func face(_ agent: AGTAgent) -> BackendPhonePictures.Face {
-        .init(id: agent.profileID ?? agent.id, name: agent.name, icon: AGTIcon.raw(agent.icon, colour: agent.iconColour), hoot: agent.isHoot)
+        let id = agent.profileID ?? agent.id
+        let raw = AGTIcon.raw(agent.icon, colour: agent.iconColour)
+        let key = id + ":" + raw
+        if thumbnails[key] == nil {
+            let renderer = ImageRenderer(content: AgentAvatar(agent: agent, size: 64))
+            renderer.scale = 3
+            if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+                if thumbnails.count >= 400 { thumbnails.removeAll() }
+                thumbnails[key] = png
+            }
+        }
+        return .init(id: id, name: agent.name, icon: raw, hoot: agent.isHoot, png: thumbnails[key])
     }
 
     /// The Agents page's agents and Hoot (a live session without a profile is not an agent of its own).

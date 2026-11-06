@@ -12,11 +12,20 @@ public struct BackendHOSTLaunchAgent: Sendable {
     public let label: String
     public let helper: URL
     public let plist: URL
+    public let associatedBundleIdentifier: String
+    private let childOnly: Bool
 
     public init(paths: BackendHOSTPaths, version: String, launchAgentsDirectory: URL,
-                label: String? = nil) throws {
+                label: String? = nil, appBundleIdentifier: String? = Bundle.main.bundleIdentifier) throws {
         let dataRoot = paths.dataDirectory.path
         let productionRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/terminaldeck").standardizedFileURL.resolvingSymlinksInPath().path
+        // Every isolated copy is temporary. It must never register a background item, even if its launcher
+        // forgot the explicit test switch. Refuse a child-only launch against the real data folder.
+        let requestedChild = ProcessInfo.processInfo.environment[NativeLaunchSwitches.hostChild] == "1"
+        guard dataRoot != productionRoot || !requestedChild else {
+            throw BackendHOSTFailure.invalid("A child keeper needs a separate test data folder.")
+        }
+        childOnly = dataRoot != productionRoot
         let hash = SHA256.hash(data: Data(dataRoot.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
         let baseLabel = dataRoot == productionRoot ? Self.productionLabel : Self.productionLabel + ".scratch-" + hash
         let expectedLabel = baseLabel + (paths.namespace.map { "." + $0 } ?? "")
@@ -26,6 +35,9 @@ public struct BackendHOSTLaunchAgent: Sendable {
               launchAgentsDirectory.isFileURL, launchAgentsDirectory.path.hasPrefix("/") else {
             throw BackendHOSTFailure.invalid("Invalid session host installation identity.")
         }
+        // A scratch keeper belongs to its own app, never the installed app's privacy identity.
+        associatedBundleIdentifier = dataRoot == productionRoot ? "dev.terminaldeck.app" :
+            (appBundleIdentifier == "dev.terminaldeck.app" ? nil : appBundleIdentifier) ?? "dev.terminaldeck.app.scratch"
         self.paths = paths; self.version = version; self.label = resolvedLabel
         helper = paths.directory.appendingPathComponent(version, isDirectory: true).appendingPathComponent("TerminalDeckNativeHelper")
         plist = launchAgentsDirectory.appendingPathComponent(resolvedLabel + ".plist")
@@ -53,7 +65,14 @@ public struct BackendHOSTLaunchAgent: Sendable {
             let folder = directory.appendingPathComponent(name, isDirectory: true)
             var info = stat()
             guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid(),
-                  let inside = try? FileManager.default.contentsOfDirectory(atPath: folder.path), inside == ["TerminalDeckNativeHelper"],
+                  let inside = try? FileManager.default.contentsOfDirectory(atPath: folder.path), inside.contains("TerminalDeckNativeHelper"),
+                  inside.filter({ $0 != "TerminalDeckNativeHelper" }).allSatisfy({ name in
+                      let link = folder.appendingPathComponent(name)
+                      var entry = stat()
+                      return ["framework", "dylib"].contains(link.pathExtension)
+                          && lstat(link.path, &entry) == 0 && entry.st_mode & S_IFMT == S_IFLNK && entry.st_uid == geteuid()
+                          && ((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))?.hasSuffix("/Contents/MacOS/" + name) == true)
+                  }),
                   lstat(folder.appendingPathComponent("TerminalDeckNativeHelper").path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
             if (try? FileManager.default.removeItem(at: folder)) != nil { removed.append(name) }
         }
@@ -76,9 +95,7 @@ public struct BackendHOSTLaunchAgent: Sendable {
         // launchd starts the keeper outside the GUI process tree. Without this association,
         // privacy decisions belong to its versioned executable path, rather than to the app.
         // Never lend the installed app's grants to a scratch host.
-        if !label.contains(".scratch-") {
-            value["AssociatedBundleIdentifiers"] = ["dev.terminaldeck.app"]
-        }
+        value["AssociatedBundleIdentifiers"] = [associatedBundleIdentifier]
         if label.contains(".scratch-") {
             // launchd does not inherit the dev app's isolation switches. The
             // helper's hook owner must refuse the same global-config writes.
@@ -125,26 +142,31 @@ public struct BackendHOSTLaunchAgent: Sendable {
             }
             defer { withExtendedLifetime(idleLock) {} }
             try installHelper(from: sourceHelper)
+            if childOnly { try linkScratchLibraries(from: sourceHelper) }
             _ = try paths.secret(create: true)
-            try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // An old, idle launchd registration retains old ProgramArguments.
-            // The owner lock proves it cannot own any conforming live host.
-            let service = "gui/" + String(geteuid()) + "/" + label
-            if let registered = try await Self.registeredArguments(service) {
-                guard registered.count == programArguments.count, registered[1] == "--session-host", registered[2] == paths.dataDirectory.path,
-                      registered.count == 4 || registered[4] == paths.namespace,
-                      registered[0].hasPrefix(paths.directory.path + "/") else {
-                    throw BackendHOSTFailure.invalid("This launchd label belongs to another data folder. It was left untouched.")
+            if childOnly {
+                if pruneStaleHelpers { _ = Self.pruneOtherHelpers(in: paths.directory, keeping: version) }
+            } else {
+                try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+                // An old, idle launchd registration retains old ProgramArguments.
+                // The owner lock proves it cannot own any conforming live host.
+                let service = "gui/" + String(geteuid()) + "/" + label
+                if let registered = try await Self.registeredArguments(service) {
+                    guard registered.count == programArguments.count, registered[1] == "--session-host", registered[2] == paths.dataDirectory.path,
+                          registered.count == 4 || registered[4] == paths.namespace,
+                          registered[0].hasPrefix(paths.directory.path + "/") else {
+                        throw BackendHOSTFailure.invalid("This launchd label belongs to another data folder. It was left untouched.")
+                    }
+                    guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.unavailable }
                 }
-                guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.unavailable }
+                try BackendHOSTFiles.atomicWrite(try propertyList(), to: plist)
+                // Still under the owner lock and after the old registration was booted out: older
+                // builds' helpers are no longer referenced (77 MB each).
+                if pruneStaleHelpers { _ = Self.pruneOtherHelpers(in: paths.directory, keeping: version) }
             }
-            try BackendHOSTFiles.atomicWrite(try propertyList(), to: plist)
-            // Still under the owner lock and after the old registration was booted out: older
-            // builds' helpers are no longer referenced (77 MB each).
-            if pruneStaleHelpers { _ = Self.pruneOtherHelpers(in: paths.directory, keeping: version) }
         }
-        // The owner lock is now released before launchd starts the helper.
-        return try await startAfterInstall()
+        // The owner lock is now released before the helper starts.
+        return try await startAfterInstall(sourceHelper: sourceHelper)
     }
 
     private enum OwnerLock { case locked(BackendHOSTFileLock), attached(BackendHOSTClient) }
@@ -166,17 +188,22 @@ public struct BackendHOSTLaunchAgent: Sendable {
         throw BackendHOSTFailure.occupiedHost
     }
 
-    private func startAfterInstall() async throws -> Result {
+    private func startAfterInstall(sourceHelper: URL) async throws -> Result {
         // No '-k': kickstart must never kill an occupied service. A bootstrap
         // failure is accepted only if this exact label is already registered.
         let domain = "gui/" + String(geteuid())
         let service = domain + "/" + label
-        let bootstrap = try await Self.launchctl(["bootstrap", domain, plist.path])
-        if bootstrap != 0 {
-            guard try await Self.launchctl(["print", service]) == 0 else { throw BackendHOSTFailure.remote("Launchd could not register the session helper (status \(bootstrap)).") }
+        if childOnly {
+            // A dev helper can use libraries beside its executable. Keep it in its own app bundle.
+            try BackendHOSTChildKeeper.start(helper: sourceHelper, arguments: Array(programArguments.dropFirst()), data: paths.dataDirectory)
+        } else {
+            let bootstrap = try await Self.launchctl(["bootstrap", domain, plist.path])
+            if bootstrap != 0 {
+                guard try await Self.launchctl(["print", service]) == 0 else { throw BackendHOSTFailure.remote("Launchd could not register the session helper (status \(bootstrap)).") }
+            }
+            let kickstart = try await Self.launchctl(["kickstart", service])
+            guard kickstart == 0 else { throw BackendHOSTFailure.remote("Launchd could not start the registered session helper (status \(kickstart)).") }
         }
-        let kickstart = try await Self.launchctl(["kickstart", service])
-        guard kickstart == 0 else { throw BackendHOSTFailure.remote("Launchd could not start the registered session helper (status \(kickstart)).") }
         // Startup-only retry, bounded to fifteen seconds. No resident polling.
         for _ in 0..<150 {
             do { return .started(try BackendHOSTClient(paths: paths)) }
@@ -200,6 +227,7 @@ public struct BackendHOSTLaunchAgent: Sendable {
     /// Explicit one-time upgrade: stage this build, then let the app's existing recovery restart saved conversations.
     /// This ends the old helper once. It never retries bootout or stops another helper.
     public func restartUsingSavedConversations(sourceHelper: URL) async throws {
+        guard !childOnly else { throw BackendHOSTFailure.invalid("Restart the test copy to update its child keeper.") }
         let client = try BackendHOSTClient(paths: paths)
         guard client.hello.hostVersion != version else { throw BackendHOSTFailure.invalid("This helper build is already running.") }
         let installationLock = try BackendHOSTFileLock(paths.directory.appendingPathComponent("install.lock"))
@@ -209,6 +237,26 @@ public struct BackendHOSTLaunchAgent: Sendable {
         let service = "gui/\(geteuid())/" + label
         guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.remote("The one helper stop was requested but launchd did not confirm it. Do not retry.") }
     }
+    /// Account handling pins a private helper too. Its library links stay beside that helper,
+    /// pointing to this test copy's libraries, so no library bytes or registration need duplicating.
+    private func linkScratchLibraries(from source: URL) throws {
+        let directory = source.deletingLastPathComponent()
+        let libraries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for library in libraries where ["framework", "dylib"].contains(library.pathExtension) {
+            let destination = helper.deletingLastPathComponent().appendingPathComponent(library.lastPathComponent)
+            var info = stat()
+            if lstat(destination.path, &info) == 0 {
+                guard info.st_mode & S_IFMT == S_IFLNK, info.st_uid == geteuid(),
+                      try FileManager.default.destinationOfSymbolicLink(atPath: destination.path) == library.path else {
+                    throw BackendHOSTFailure.invalid("A test helper library belongs to another copy. It was left untouched.")
+                }
+            } else {
+                guard errno == ENOENT else { throw BackendHOSTFailure.io(errno) }
+                try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: library)
+            }
+        }
+    }
+
     private func installHelper(from source: URL) throws {
         var info = stat()
         guard source.isFileURL, lstat(source.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,

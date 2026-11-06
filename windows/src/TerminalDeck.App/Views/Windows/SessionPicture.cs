@@ -6,7 +6,6 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using TerminalDeck.App.Shell;
 using TerminalDeck.App.ViewModels;
-using TerminalDeck.Core.Agents;
 
 namespace TerminalDeck.App.Views;
 
@@ -38,7 +37,7 @@ public sealed class SessionPicture : Grid
   }
   private void Changed(object? sender, PropertyChangedEventArgs args)
   {
-    if (args.PropertyName is null or nameof(SessionDraft.AgentIcon) or nameof(SessionDraft.PicturePath) or nameof(SessionDraft.HasProject)) Refresh();
+    if (args.PropertyName is null or nameof(SessionDraft.AgentPhotoPath) or nameof(SessionDraft.HasAgent) or nameof(SessionDraft.AgentName) or nameof(SessionDraft.AgentIcon) or nameof(SessionDraft.PicturePath) or nameof(SessionDraft.HasProject)) Refresh();
   }
   internal void RowSurface(string resource) { SurfaceResource = resource; Refresh(); }
   private Brush Ink(string key) => (Brush)ShellTheme.Resource(this, key);
@@ -49,18 +48,13 @@ public sealed class SessionPicture : Grid
     var size = double.IsFinite(Width) ? Width : 28;
     if (row.HasAgent)
     {
-      var (symbol, colour) = AgentPictures.Parse(row.AgentIcon);
-      if (symbol.StartsWith("sf:", StringComparison.Ordinal)) symbol = symbol[3..];
-      var tile = new Border { Width = size, Height = size, CornerRadius = new(size * 0.28), Background = Ink("DeckSessionAvatarBrush") };
       if (row.IsHoot)
+      {
+        var tile = new Border { Width = size, Height = size, CornerRadius = new(size * 0.28), Background = Ink("DeckSessionAvatarBrush") };
         tile.Child = new Image { Width = size * 0.78, Height = size * 0.78, Source = new SvgImageSource(new("ms-appx:///Assets/icons/hoot.svg")) };
-      else if (symbol.StartsWith("emoji:", StringComparison.Ordinal))
-        tile.Child = new TextBlock { Text = symbol[6..], FontSize = size * 0.60, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-      else if (symbol == "chart.bar")
-        tile.Child = new DeckIcon { Glyph = "usage", FontSize = size * 0.52, Foreground = Ink(ColourBrush(colour)) };
-      else
-        tile.Child = new DeckIcon { Glyph = Glyph(symbol), FontSize = size * 0.52, FontFamily = TerminalDeck.App.Views.DeckFonts.Icons, Foreground = Ink(ColourBrush(colour)) };
-      Children.Add(tile);
+        Children.Add(tile);
+      }
+      else Children.Add(AgentProfileAvatar.Create(row.AgentName, row.AgentPhotoPath, size));
     }
     else if (row.Provider == "shell" && ShellIcons.For(row.Shell) is { } program)
       Children.Add(new Image { Source = program, Width = size * 0.62, Height = size * 0.62, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
@@ -96,16 +90,4 @@ public sealed class SessionPicture : Grid
     }
     return path;
   }
-  private static string ColourBrush(string colour) => colour switch
-  {
-    "purple" => "DeckProjectPurpleBrush", "pink" => "DeckProjectPinkBrush", "orange" => "DeckProjectOrangeBrush",
-    "green" => "DeckProjectGreenBrush", "mint" => "DeckAgentMintBrush", "teal" => "DeckProjectTealBrush", "yellow" => "DeckProjectYellowBrush",
-    "graphite" => "DeckProjectGraphiteBrush", "brown" => "DeckAgentBrownBrush", "red" => "DeckAgentRedBrush", "indigo" => "DeckAgentIndigoBrush", _ => "DeckProjectBlueBrush"
-  };
-  private static string Glyph(string symbol) => symbol switch
-  {
-    "terminal" => "\uE756", "code" => "\uE943", "magnifyingglass" => "\uE721", "pencil" => "\uE70F", "hammer" => "\uE90F",
-    "lightbulb" => "\uEA80", "briefcase" => "\uE821", "chart.bar" => "\uE9D2", "gearshape" => "\uE713", "shield" => "\uEA18",
-    "star" => "\uE734", "bolt" => "\uE945", _ => WorkspaceIcons.For("agents")
-  };
 }

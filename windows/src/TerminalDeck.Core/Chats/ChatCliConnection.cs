@@ -51,7 +51,7 @@ public sealed class ChatCliConnection(ChatRecord chat, IChatHistory media, Proce
     activeClientId = message.ClientId; sawTerminalSignal = false;
     // exec has no interactive approval channel. Its prompt is stdin, never argv.
     await writeGate.WaitAsync(cancellationToken);
-    try { await process!.StandardInput.WriteAsync(string.Join("\n\n", new[] { chat.Definition.Instructions, message.Text }.Where(s => s.Length > 0)).AsMemory(), cancellationToken); await process.StandardInput.FlushAsync(cancellationToken); process.StandardInput.Close(); }
+    try { await process!.StandardInput.WriteAsync(ChatRichContent.Prompt(chat, message.Text).AsMemory(), cancellationToken); await process.StandardInput.FlushAsync(cancellationToken); process.StandardInput.Close(); }
     finally { writeGate.Release(); }
   }
   public ValueTask AnswerAsync(string requestId, bool allow, System.Text.Json.JsonElement input, CancellationToken cancellationToken = default)

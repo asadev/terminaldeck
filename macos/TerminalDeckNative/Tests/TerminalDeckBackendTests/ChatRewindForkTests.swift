@@ -50,7 +50,9 @@ final class ChatRewindForkTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(BackendChatMessageActions.rows(Array(events(.codex).dropLast()), provider: .codex).allSatisfy { $0["fork"].bool == false })
     }
     func testGeminiAndUnknownMessagesHaveNoInventedActions() {
-        XCTAssertTrue(BackendChatMessageActions.rows(events(.gemini), provider: .gemini).allSatisfy { $0["rewind"].bool == false && $0["fork"].bool == false })
+        let gemini = BackendChatMessageActions.rows(events(.gemini), provider: .gemini)
+        XCTAssertTrue(gemini.allSatisfy { $0["rewind"].bool == false })
+        XCTAssertTrue(gemini.allSatisfy { $0["fork"].bool == true }, "Gemini uses a separately seeded conversation, never an invented provider rewind")
         XCTAssertThrowsError(try BackendChatMessageActions.boundary(99, events: events(.claude), provider: .claude, action: "fork"))
     }
     func testClaudeDecoderRetainsTranscriptUUIDInsteadOfUsingAPIMessageID() throws {

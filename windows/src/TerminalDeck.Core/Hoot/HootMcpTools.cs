@@ -4,7 +4,8 @@ using TerminalDeck.Core.Mcp;
 
 namespace TerminalDeck.Core.Hoot;
 
-public sealed class HootMcpTools(IHoot hoot, IHootSurface? surface = null)
+public sealed class HootMcpTools(IHoot hoot, IHootSurface? surface = null,
+  Func<McpCallContext, string, string, TerminalDeck.Core.Chats.ChatAttachmentData[], CancellationToken, ValueTask>? authenticatedNote = null)
 {
   private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
   private static JsonElement Value<T>(T value) => JsonSerializer.SerializeToElement(value, Json);
@@ -16,8 +17,9 @@ public sealed class HootMcpTools(IHoot hoot, IHootSurface? surface = null)
   public static IReadOnlyList<McpToolSpec> Specs { get; } = [
     Spec("hoot.chat.read", McpTier.Read, "\"cursor\":{\"type\":\"integer\",\"minimum\":0},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}"),
     Spec("hoot.chat.history", McpTier.Read), Spec("hoot.chat.new", McpTier.Alter),
+    Spec("hoot.chat.branch", McpTier.Alter, $"\"lineId\":{{\"type\":\"string\",\"maxLength\":2048}},\"rewind\":{{\"type\":\"boolean\"}}", "\"lineId\""),
     Spec("hoot.chat.background", McpTier.Read), Spec("hoot.settings.read", McpTier.Read), Spec("memory.hoot.read", McpTier.Read),
-    Spec("hoot.send", McpTier.Alter, $"\"clientId\":{Id},\"text\":{Text}", "\"clientId\",\"text\""),
+    Spec("hoot.send", McpTier.Alter, $"\"clientId\":{Id},\"text\":{Text},\"attachments\":{{\"type\":\"array\",\"maxItems\":8,\"items\":{{\"type\":\"object\",\"properties\":{{\"name\":{Id},\"data\":{{\"type\":\"string\",\"maxLength\":5600000}}}},\"required\":[\"name\",\"data\"],\"additionalProperties\":false}}}}", "\"clientId\",\"text\""),
     Spec("hoot.chat.stop", McpTier.Alter), Spec("hoot.chat.continue", McpTier.Alter), Spec("hoot.chat.keep_unconfirmed", McpTier.Alter),
     Spec("hoot.background.start", McpTier.Alter, $"\"clientId\":{Id},\"reason\":{{\"type\":\"string\",\"enum\":[\"task\",\"handoff\",\"dev-test\",\"background\"]}},\"sourceId\":{Id},\"title\":{{\"type\":\"string\",\"minLength\":1,\"maxLength\":200}},\"text\":{Text}", "\"clientId\",\"reason\",\"sourceId\",\"title\",\"text\""),
     Spec("hoot.background.cancel", McpTier.Alter, $"\"turnId\":{Id}", "\"turnId\""),
@@ -49,7 +51,8 @@ public sealed class HootMcpTools(IHoot hoot, IHootSurface? surface = null)
     {
       var cursor = args.TryGetProperty("cursor", out var c) ? c.GetInt64() : 0;
       var limit = args.TryGetProperty("limit", out var l) ? l.GetInt32() : 200;
-      return Value(HootTranscript.Read(state, cursor, limit));
+      var slice = HootTranscript.Read(state, cursor, limit);
+      return Value(new { slice.ConversationId, slice.Status, slice.Busy, slice.Lines, slice.NextCursor, renderedToolBlocks = state.Turns.Select(t => t.ChatId).Append(state.ChatId).OfType<string>().Distinct().SelectMany(TerminalDeck.Core.Chats.ChatMcpApps.RenderedBlocks), renderedMessages = slice.Lines.Where(l => l.Kind is "user" or "assistant").Select(l => new { l.Id, blocks = TerminalDeck.Core.Chats.ChatRichContent.Blocks(l.Text) }) });
     }
     if (tool == "hoot.chat.history") return Value(state.History);
     if (tool == "hoot.settings.read") return Value(state.Settings);
@@ -60,7 +63,14 @@ public sealed class HootMcpTools(IHoot hoot, IHootSurface? surface = null)
     {
       // Agent notes always keep their authenticated source. Arguments cannot
       // claim to be the person or widen their own permission.
-      case "hoot.send": await hoot.SayAsync(S("clientId"), S("text"), new("session", context.Grant.SessionId ?? context.Grant.CallerId, "A note from " + context.Grant.CallerId), ct); break;
+      case "hoot.send":
+        var source = new HootSource("session", context.Grant.SessionId ?? context.Grant.CallerId, "A note from " + context.Grant.CallerId);
+        var files = args.TryGetProperty("attachments", out var attachments) ? attachments.EnumerateArray().Select(a => TerminalDeck.Core.Chats.ChatAttachmentData.Read(a.GetProperty("name").GetString()!, Convert.FromBase64String(a.GetProperty("data").GetString()!))).ToArray() : [];
+        if (authenticatedNote is not null) await authenticatedNote(context, S("clientId"), S("text"), files, ct);
+        else if (files.Length > 0) await hoot.SayWithAttachmentsAsync(S("clientId"), S("text"), files, source, ct);
+        else await hoot.SayAsync(S("clientId"), S("text"), source, ct);
+        break;
+      case "hoot.chat.branch": await hoot.BranchAsync(S("lineId"), args.TryGetProperty("rewind", out var rewind) && rewind.GetBoolean(), ct); break;
       case "hoot.chat.stop": await hoot.StopAsync(ct); break;
       case "hoot.chat.keep_unconfirmed": await hoot.KeepUnconfirmedAsync(ct); break;
       case "hoot.chat.continue": await hoot.ContinueAsync(ct); break;

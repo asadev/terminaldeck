@@ -142,14 +142,14 @@ public sealed partial class SessionPane : Grid
     area.RowDefinitions.Add(new() { Height = GridLength.Auto });
     var intro = new StackPanel { Spacing = 12, Margin = new Thickness(32), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 460 };
     intro.Children.Add(new TextBlock { Text = "What are we working on?", FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-    intro.Children.Add(new TextBlock { Text = "Keep your first message here. Sending and streamed replies will be available when the chat service is connected.", TextWrapping = TextWrapping.Wrap, Opacity = 0.65 });
+    intro.Children.Add(new TextBlock { Text = "Keep your first message here.", TextWrapping = TextWrapping.Wrap, Opacity = 0.65 });
     area.Children.Add(intro);
     var compose = new StackPanel { Spacing = 12, Margin = new Thickness(24) };
     var input = new TextBox { PlaceholderText = "Write a message…", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 96, MaxHeight = 240 };
     input.SetBinding(TextBox.TextProperty, new Microsoft.UI.Xaml.Data.Binding { Source = draft, Path = new PropertyPath(nameof(SessionDraft.Message)), Mode = Microsoft.UI.Xaml.Data.BindingMode.TwoWay, UpdateSourceTrigger = Microsoft.UI.Xaml.Data.UpdateSourceTrigger.PropertyChanged });
     compose.Children.Add(input);
     var save = new Button { Content = "Keep draft", HorizontalAlignment = HorizontalAlignment.Right };
-    save.Click += (_, _) => ShowSessionNotice("Message kept in this window. It has not been sent. The chat service is not connected yet.");
+    save.Click += (_, _) => ShowSessionNotice("Message kept in this window.");
     compose.Children.Add(save); SetRow(compose, 1); area.Children.Add(compose);
   }
   internal async Task SetSurfaceThemeAsync(ElementTheme theme)

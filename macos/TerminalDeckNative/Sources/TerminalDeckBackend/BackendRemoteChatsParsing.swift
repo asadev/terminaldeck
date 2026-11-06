@@ -7,8 +7,26 @@ extension BackendRemoteProtocol {
     static func parseChats(_ r: BackendRemoteReader) throws -> NativeRPCValue? {
         var message = r.base
         switch r.type {
+        case "chats.app.read", "chats.app.bridge":
+            message = message.setting("id", .string(try r.id("id", reason: "Choose a source chat.")))
+                .setting("rid", .string(try r.id("rid", reason: "Choose a request id.")))
+                .setting("rowId", .string(try r.text("rowId", reason: "Choose a recorded tool row.", bytes: 1024, controls: true)))
+            if !r["viewId"].isNullish { message = message.setting("viewId", .string(try r.text("viewId", reason: "Choose an app view.", bytes: 128, controls: true))) }
+            if r.type == "chats.app.read" {
+                if !r["offset"].isNullish { message = message.setting("offset", .number(try r.whole("offset", 0, 8_388_608, reason: "Invalid app transfer offset."))) }
+                if !r["documentId"].isNullish { message = message.setting("documentId", .string(try r.text("documentId", reason: "Choose an app transfer.", bytes: 128, controls: true))) }
+            }
+            if r.type == "chats.app.bridge" {
+                guard r["message"].fields != nil, r["message"]["jsonrpc"].string == "2.0",
+                      r["message"]["method"].string != nil, r["message"].compact.utf8.count <= 32_768 else { throw r.bad("Invalid app bridge message") }
+                message = message.setting("message", r["message"])
+            }
+            return message
         case "chats.watch", "chats.unwatch", "chats.interrupt", "chats.options":
             return message.setting("id", .string(try r.id("id", reason: "\(r.type) without a chat id")))
+        case "chats.rewind", "chats.fork":
+            return message.setting("id", .string(try r.id("id", reason: "History action without a chat id")))
+                .setting("messageId", .string(try r.text("messageId", reason: "Choose a message in this chat.", bytes: 512, controls: true)))
         case "chats.older":
             return message.setting("id", .string(try r.id("id", reason: "chats.older without a chat id")))
                 .setting("before", .number(try r.whole("before", 0, 1_000_000, reason: "chats.older without a place to read back from")))

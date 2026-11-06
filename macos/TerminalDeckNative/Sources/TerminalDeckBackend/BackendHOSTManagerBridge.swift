@@ -13,6 +13,7 @@ public final class BackendHOSTManagerBridge: @unchecked Sendable {
     private let stampIndependent: @Sendable (inout BackendHOSTProtocol.Launch) -> Void
     private let lock = NSLock()
     private var owned: Set<String> = []
+    private var localChats: Set<String> = []
     private var rows: [String: BackendSessionMeta] = [:]
     private var order: [String] = []
     private var epochs: [String: UInt64] = [:]
@@ -106,7 +107,7 @@ public final class BackendHOSTManagerBridge: @unchecked Sendable {
         try client.attach(onSnapshot: { [weak self] value in
             guard let self else { return }
             let deliver = lock.withLock { () -> Bool in
-                guard !detached else { return false }
+                guard !detached, !localChats.contains(value.session.id) else { return false }
                 if removed.contains(value.session.id) {
                     guard readmitting.remove(value.session.id) != nil else { return false }
                     removed.remove(value.session.id)
@@ -120,7 +121,7 @@ public final class BackendHOSTManagerBridge: @unchecked Sendable {
         }, onEvent: { [weak self] value in
             guard let self else { return }
             let deliver = lock.withLock { () -> Bool in
-                guard !detached, !removed.contains(value.id) else { return false }; sequence = max(sequence, value.sequence); owned.insert(value.id)
+                guard !detached, !localChats.contains(value.id), !removed.contains(value.id) else { return false }; sequence = max(sequence, value.sequence); owned.insert(value.id)
                 outputGeneration[value.id, default: 0] &+= 1 // any event can change the visible screen
                 if value.kind == .removed { screens[value.id] = nil }
                 if value.kind == .exit || value.kind == .removed { epochs[value.id, default: 0] &+= 1 }
@@ -156,7 +157,14 @@ public final class BackendHOSTManagerBridge: @unchecked Sendable {
     private func peer(_ id: String) -> BackendHOSTManagerBridge? {
         let values = lock.withLock { peers }; return values.first { $0.owns(id) }
     }
-    public func owns(_ id: String) -> Bool { lock.withLock { owned.contains(id) } || peer(id) != nil }
+    public func owns(_ id: String) -> Bool { !lock.withLock { localChats.contains(id) } && (lock.withLock { owned.contains(id) } || peer(id) != nil) }
+    public func preferLocalChat(_ id: String, _ local: Bool) {
+        let children = lock.withLock { () -> [BackendHOSTManagerBridge] in
+            if local { localChats.insert(id) } else { localChats.remove(id) }
+            return peers
+        }
+        for child in children { child.preferLocalChat(id, local) }
+    }
     /// Before the app opens a finished job's kept history again in the helper (`chats.open`): that one snapshot is
     /// accepted even when it follows the row's removal. Peers get the same mark; only the owner's snapshot arrives.
     public func readmit(_ id: String) {
@@ -165,7 +173,7 @@ public final class BackendHOSTManagerBridge: @unchecked Sendable {
         for peer in values { peer.readmit(id) }
     }
     public func list() -> [BackendSessionMeta] {
-        let current = lock.withLock { (order.compactMap { rows[$0] }, peers) }
+        let current = lock.withLock { (order.filter { !localChats.contains($0) }.compactMap { rows[$0] }, peers) }
         return current.0 + current.1.flatMap { $0.list() }
     }
     public func currentSequence() -> UInt64 { lock.withLock { sequence } }

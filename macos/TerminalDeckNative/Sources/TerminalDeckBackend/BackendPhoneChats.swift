@@ -284,12 +284,12 @@ public actor BackendPhoneChats {
     /// The newest page (`before` nil: the watch and every push, `reset`), or the page that ends just before event
     /// `before` (`older`). Each page says where it starts among all the conversation's events (`first`) and how many
     /// there are (`total`), so a phone can ask for the page before it.
-    func conversation(_ chat: String, before: Int? = nil) async throws -> BackendRemoteServerMessage {
+    public func conversation(_ chat: String, before: Int? = nil) async throws -> BackendRemoteServerMessage {
         // A picture's bytes never travel to a phone: each page carries its stand-in (BackendChatMedia), so a chat
         // with pictures still pages back through all of its history (28 Oct).
         let snapshot = BackendChatMedia.slim(try await engine.read(chat))
         let conversation = snapshot["conversationId"].string.flatMap { $0.isEmpty ? nil : $0 } ?? chat
-        let all = (snapshot["events"].elements ?? []).filter { event in
+        let all = (snapshot["events"].elements ?? []).map { BackendChatMessageActions.phoneEvent(ChatRenderedContent.phoneEvent($0), actions: snapshot["messageActions"].elements ?? []) }.filter { event in
             guard let decoded = try? HootChatEvent(wire: event), decoded.conversationID == conversation else { return false }
             return (event["value"]["text"].string?.utf8.count ?? 0) <= 65536
                 && ((try? event["value"]["input"].encodedJSON().count) ?? 0) <= 16384
@@ -297,10 +297,12 @@ public actor BackendPhoneChats {
         let end = min(max(before ?? all.count, 0), all.count)
         var first = max(0, end - Self.maxEvents)
         var events = Array(all[first..<end])
-        let busy = snapshot["busy"].bool == true
+        let busy = BackendHootChatStore.foreground(in: snapshot)
+        var includeRendered = true
         func frame() throws -> BackendRemoteServerMessage {
             var fields: [NativeRPCValue.Field] = [.init("id", .string(chat)), .init("conversationId", .string(conversation)),
-                .init("reset", .bool(before == nil)), .init("busy", .bool(busy)), .init("events", .array(events)),
+                .init("reset", .bool(before == nil)), .init("foreground", .bool(busy)), .init("busy", .bool(busy)), .init("events", .array(events)),
+                .init("renderedMessages", includeRendered ? ChatRenderedContent.phoneMessages(events) : .array([])),
                 .init("first", .number(Double(first))), .init("total", .number(Double(all.count)))]
             if before != nil { fields.append(.init("older", .bool(true))) }
             return try .init(.chatsEvents, fields: fields)
@@ -310,6 +312,9 @@ public actor BackendPhoneChats {
         let drop = BackendINT2HootPhone.oldestToDrop(events, budget: limit - 1_024)
         events.removeFirst(drop); first += drop
         var message = try frame()
+        // Original message text always wins the shared frame budget. A phone can
+        // derive the same visual fences from it when the additive block hints do not fit.
+        if try message.value.encodedJSON().count > limit { includeRendered = false; message = try frame() }
         while try message.value.encodedJSON().count > limit, !events.isEmpty {
             events.removeFirst()
             first += 1

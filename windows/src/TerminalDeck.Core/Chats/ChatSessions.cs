@@ -67,6 +67,15 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
         }
         return;
       }
+      // The worker may have finished while its watch was detached or behind.
+      // Read its durable turn events before deciding to hold another message.
+      if (chat.Busy || chat.Messages.Any(m => Unconfirmed(chat, m)))
+      {
+        await RecoverChatAsync(chat, cancellationToken, sending: true);
+        chat = Get(id);
+      }
+      if (chat.Messages.Any(m => Unconfirmed(chat, m)))
+        throw new InvalidOperationException("Check the previous message’s delivery before sending again. Reconnect, or keep it without resending.");
       // Signing in again can move an account's login to a newer folder (the old one is
       // signed out). An idle chat follows its account there before this turn, keeping
       // its conversation, so chats and terminals of one account use the same login.
@@ -102,7 +111,7 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
         if (title.Length > 80) title = title[..80];
         if (title.Length > 0) chat = chat with { Definition = chat.Definition with { Title = title } };
       }
-      chat = chat with { Messages = [.. chat.Messages, message], Paused = false }; Save(chat);
+      chat = chat with { Messages = [.. chat.Messages, message], Paused = false, Problem = null }; Save(chat);
       if (!chat.Busy && !chat.Messages.Any(m => Unconfirmed(chat, m))) await DispatchAsync(chat, message, cancellationToken);
     }
     finally { gate.Release(); }
@@ -304,43 +313,49 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
     try
     {
       await RecoverAccountSwitchesAsync(cancellationToken);
-      foreach (var original in selected)
-      {
-        var chat = Get(original.Definition.Id);
-        if (chat.Ended) continue;
-        if (processes is IChatRecoveryJournal journal)
-        {
-          foreach (var signal in await journal.ReadSavedSignalsAsync(chat, chat.WorkerSequence, cancellationToken))
-          {
-            if (signal.Sequence <= chat.WorkerSequence) continue;
-            if (signal.Sequence != chat.WorkerSequence + 1) throw new IOException("This chat’s saved events have a gap. Its messages are kept.");
-            chat = ApplySignal(chat, signal); Save(chat);
-          }
-        }
-        var observation = await processes.ObserveAsync(Session(chat), cancellationToken);
-        if (observation.Presence == ProcessPresence.Live)
-        {
-          Follow(chat);
-          foreach (var pending in chat.Messages.Where(m => Unconfirmed(chat, m)))
-          {
-            var receipt = await processes.SendAsync(chat, pending, cancellationToken);
-            if (receipt.ClientId != pending.ClientId) throw new IOException("The chat returned another message’s receipt.");
-            Save(Replace(Get(chat.Definition.Id), pending with { State = receipt.State }));
-          }
-          if (!chat.Busy && !chat.Paused && !chat.Messages.Any(m => Unconfirmed(chat, m)) && chat.Messages.FirstOrDefault(m => m.State == ChatMessageState.Queued) is { } queued) await DispatchAsync(Get(chat.Definition.Id), queued, cancellationToken);
-          if (chat.ActiveClientId is { } client && chat.WaitingSince is { } since) _ = NoAnswerAsync(chat.Definition.Id, client, since);
-        }
-        else if (observation.Presence == ProcessPresence.Dead)
-        {
-          var messages = chat.Messages.Select(m => m.State == ChatMessageState.Dispatching ? m with { State = ChatMessageState.Uncertain } : chat.Busy && m.ClientId == chat.ActiveClientId && m.State == ChatMessageState.Sent ? m with { State = ChatMessageState.Failed } : m).ToArray();
-          Save(chat with { Busy = false, ActiveClientId = null, WaitingSince = null, Messages = messages,
-            CreationKey = Guid.NewGuid().ToString("N"), WorkerSequence = 0, Paused = chat.Paused || chat.Busy, Stopping = false,
-            Problem = messages.Any(m => Unconfirmed(chat, m)) ? "A message may have reached the coding AI. Check its history before sending again." : chat.Busy ? "The coding AI stopped. Your messages are kept. Retry to continue." : chat.Problem });
-        }
-        else Save(chat with { Problem = "This chat is waiting to reconnect. Your messages are kept." });
-      }
+      foreach (var original in selected) await RecoverChatAsync(original, cancellationToken);
     }
     finally { gate.Release(); }
+  }
+  // Caller holds gate, including sends: a completion cannot race this decision.
+  private async ValueTask RecoverChatAsync(ChatRecord original, CancellationToken cancellationToken, bool sending = false)
+  {
+    var chat = Get(original.Definition.Id);
+    if (chat.Ended) return;
+    if (processes is IChatRecoveryJournal journal)
+    {
+      foreach (var signal in await journal.ReadSavedSignalsAsync(chat, chat.WorkerSequence, cancellationToken))
+      {
+        if (signal.Sequence <= chat.WorkerSequence) continue;
+        if (signal.Sequence != chat.WorkerSequence + 1) throw new IOException("This chat’s saved events have a gap. Its messages are kept.");
+        chat = ApplySignal(chat, signal); Save(chat);
+      }
+    }
+    var observation = await processes.ObserveAsync(Session(chat), cancellationToken);
+    if (observation.Presence == ProcessPresence.Live)
+    {
+      Follow(chat);
+      foreach (var pending in chat.Messages.Where(m => Unconfirmed(chat, m)))
+      {
+        var receipt = await processes.SendAsync(chat, pending, cancellationToken);
+        if (receipt.ClientId != pending.ClientId) throw new IOException("The chat returned another message’s receipt.");
+        Save(Replace(Get(chat.Definition.Id), pending with { State = receipt.State }));
+      }
+      if (!chat.Busy && !chat.Paused && !chat.Messages.Any(m => Unconfirmed(chat, m)) && chat.Messages.FirstOrDefault(m => m.State == ChatMessageState.Queued) is { } queued) await DispatchAsync(Get(chat.Definition.Id), queued, cancellationToken);
+      if (chat.ActiveClientId is { } client && chat.WaitingSince is { } since) _ = NoAnswerAsync(chat.Definition.Id, client, since);
+    }
+    else if (observation.Presence == ProcessPresence.Dead)
+    {
+      var messages = chat.Messages.Select(m => m.State == ChatMessageState.Dispatching ? m with { State = ChatMessageState.Uncertain } : chat.Busy && m.ClientId == chat.ActiveClientId && m.State == ChatMessageState.Sent ? m with { State = ChatMessageState.Failed } : m).ToArray();
+      Save(chat with { Busy = false, ActiveClientId = null, WaitingSince = null, Messages = messages,
+        CreationKey = Guid.NewGuid().ToString("N"), WorkerSequence = 0, Paused = chat.Paused || chat.Busy, Stopping = false,
+        Problem = messages.Any(m => Unconfirmed(chat, m)) ? "A message may have reached the coding AI. Check its history before sending again." : chat.Busy ? "The coding AI stopped. Your messages are kept. Retry to continue." : chat.Problem });
+    }
+    else
+    {
+      Save(chat with { Problem = "This chat is waiting to reconnect. Your messages are kept." });
+      if (sending) throw new IOException("This chat is waiting to reconnect. Your messages are kept.");
+    }
   }
   // Update handover: stop each chat's coding-AI process but keep the chat, its
   // messages and its conversation id. The next version resumes that
@@ -425,6 +440,8 @@ public sealed partial class ChatSessions(IChatHistory history, IChatProcessKeepe
     if (matchesActive && signal.Kind is "complete" or "error" or "exit")
     {
       var active = chat.Messages.FirstOrDefault(m => m.ClientId == chat.ActiveClientId);
+      if (signal.Kind == "complete" && active is not null && Unconfirmed(chat, active))
+        chat = Replace(chat, active with { State = ChatMessageState.Sent });
       if (signal.Kind == "error" && active is not null) chat = Replace(chat, active with { State = ChatMessageState.Failed });
       chat = chat with { Busy = false, ActiveClientId = null, WaitingSince = null, Stopping = false, Problem = signal.Kind == "error" ? signal.Text : chat.Problem };
     }

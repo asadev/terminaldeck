@@ -29,7 +29,7 @@ public sealed partial class ChatPage
             sideBusy = side.Busy; stopSide.IsEnabled = sideBusy;
             sideStatus.Text = side.Problem ?? (side.Busy ? "Answering in the side chat…" : side.WaitingSince is not null ? "This side chat needs your approval. Open it to answer." : "Side chat ready. Its conversation is saved separately.");
             answer.Children.Clear();
-            foreach (var row in ChatProjection.Rows(side).Where(r => r.Kind == "assistant")) answer.Children.Add(ChatMarkdownView.Render(row.Text, CopyText, text => sideStatus.Text = text));
+            foreach (var row in ChatProjection.Rows(side).Where(r => r.Kind == "assistant")) answer.Children.Add(ChatMarkdownView.Render(row.Text, CopyText, text => sideStatus.Text = text, side.Definition.Cwd, Model.DataDirectory));
             Refresh();
           });
       }

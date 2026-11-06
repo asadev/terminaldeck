@@ -6,6 +6,7 @@ import TerminalDeckNativeCore
 public actor BackendHOSTChats {
     private let manager: BackendPTYManager
     private let directory: URL
+    private let modelCatalogue: @Sendable () async -> NativeRPCValue
     private var engine: BackendSessionChats?
     private var opening: Task<BackendSessionChats, Error>?
     private var observers: [UUID: AsyncStream<NativeRPCValue>.Continuation] = [:]
@@ -14,14 +15,17 @@ public actor BackendHOSTChats {
     public func setProcessBinding(_ bind: @escaping @Sendable (String, Int32) async throws -> Void) { processBinding = bind }
     private func processStarted(_ id: String, _ pid: Int32) async throws { try await processBinding?(id, pid) }
     private var launches: [String: Data] = [:]
-    public init(manager: BackendPTYManager, directory: URL) { self.manager = manager; self.directory = directory }
+    public init(manager: BackendPTYManager, directory: URL,
+                modelCatalogue: @escaping @Sendable () async -> NativeRPCValue = { await BackendHootModelSource.liveCatalogue() }) {
+        self.manager = manager; self.directory = directory; self.modelCatalogue = modelCatalogue
+    }
     private func owner() async throws -> BackendSessionChats {
         if let engine { return engine }
         if let opening { return try await opening.value }
-        let task = Task { [manager, directory] in
+        let task = Task { [manager, directory, modelCatalogue] in
             let chats = BackendSessionChats(manager: manager, directory: directory,
                 publish: { [weak self] id, snapshot in await self?.changed(id, snapshot) },
-                processStarted: { [weak self] id, pid in try await self?.processStarted(id, pid) })
+                processStarted: { [weak self] id, pid in try await self?.processStarted(id, pid) }, modelCatalogue: modelCatalogue)
             try await chats.restoreJobHistory()
             return chats
         }
@@ -124,6 +128,7 @@ public actor BackendHOSTChats {
         case "chats.inventory":
             reply = .object([.init("sessions", try NativeRPCValue.parseJSON(JSONEncoder().encode(manager.list().filter { $0.chat == true }))),
                 .init("jobs", try NativeRPCValue.parseJSON(JSONEncoder().encode(await chats.conversations())))])
+        case "chats.media": reply = try await chats.media(id, rowID: args["rowId"].requireString("source tool row", nonempty: true))
         case "chats.read": reply = try await chats.read(id, cursor: args["cursor"].number.map(Int.init), limit: Int(args["limit"].number ?? 500), seen: args["seen"].number.map(Int.init), conversation: args["conversation"].string)
         case "chats.resume-input": reply = try NativeRPCValue.parseJSON(JSONEncoder().encode(await chats.jobResumeInput(id)))
         case "chats.resume-continue": reply = try await chats.continueResumedJob(id)

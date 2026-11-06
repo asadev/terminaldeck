@@ -526,16 +526,16 @@ final class BackendDeckCoreTestPortS1CatalogueCostTests: BackendDeckCoreTestPort
         let held = visible.filter { $0.index != nil }
         XCTAssertGreaterThan(held.count, Describe.inlineIndexMax)
         let listing = try advertised(visible), cost = Cost.measure(listing)
-        XCTAssertEqual(cost.tools, 7, "\(listing.map { $0.tool.wireName })")
+        XCTAssertEqual(cost.tools, 10, "\(listing.map { $0.tool.wireName })")
         XCTAssertLessThan(cost.tokens, 3_000)
         XCTAssertFalse(cost.overBudget)
-        // The areas are this caller's: the two it holds tools in, and not the
-        // sessions, machines, agents or app areas it cannot reach.
+        // The index includes the held session reads beside the existing browser, device and agent tools.
         let description = listing.first { $0.tool.id == Describe.id }?.tool.description ?? ""
         XCTAssertTrue(description.contains("browser — "))
         XCTAssertTrue(description.contains("devices — "))
         // 30 Oct (Decker): a session reads accounts and its team and sets a seat's account, so it holds tools in agents.
         XCTAssertTrue(description.contains("agents — "))
-        for hidden in ["sessions — ", "machines — ", "app — "] { XCTAssertFalse(description.contains(hidden), hidden) }
+        XCTAssertTrue(description.contains("sessions — "))
+        for hidden in ["machines — ", "app — "] { XCTAssertFalse(description.contains(hidden), hidden) }
     }
 }

@@ -268,14 +268,21 @@ final class BackendHootChatRPCTests: XCTestCase, @unchecked Sendable {
         let codex = try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: "saved", extra: ["--model", "chosen", "-c", #"developer_instructions="Profile identity""#] + common, expectedTools: ["read"])
         XCTAssertEqual(codex.arguments, ["app-server", "--stdio", "-c", "check_for_update_on_startup=false"])
         XCTAssertEqual(codex.setup?.session["model"].string, "chosen")
-        XCTAssertEqual(codex.setup?.session["developerInstructions"].string, "Profile identity\n\nHoot contract")
+        XCTAssertEqual(codex.setup?.session["developerInstructions"].string, "Profile identity\n\nHoot contract\n\n" + ChatMarkdown.instruction)
         XCTAssertEqual(codex.setup?.session["config"]["mcp_servers"]["deck-control"]["required"].bool, true)
         XCTAssertEqual(codex.setup?.session["config"]["mcp_servers"]["deck-control"]["http_headers"]["Authorization"].string, "scratch-only")
         let gemini = try BackendHootChatLaunchPlan(provider: .gemini, cwd: root.path, sessionID: nil, extra: ["--approval-mode", "plan", "-c", #"developer_instructions="Gemini profile""#] + common)
         XCTAssertEqual(gemini.arguments, ["--acp", "--approval-mode", "plan"])
-        XCTAssertEqual(gemini.setup?.instructions, "Gemini profile\n\nHoot contract")
+        XCTAssertEqual(gemini.setup?.instructions, "Gemini profile\n\nHoot contract\n\n" + ChatMarkdown.instruction)
         XCTAssertEqual(gemini.setup?.session["mcpServers"].elements?.first?["headers"].elements?.first?["value"].string, "scratch-only")
         XCTAssertThrowsError(try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: nil, extra: ["--disallowedTools", "Write"]))
+        let claude = try BackendHootChatLaunchPlan(provider: .claude, cwd: root.path, sessionID: nil,
+            extra: common + ["--append-system-prompt", "Keep my profile", "--append-system-prompt", "Keep my extra rules"])
+        XCTAssertEqual(claude.arguments.filter { $0 == "--append-system-prompt" }.count, 1)
+        if let prompt = claude.arguments.firstIndex(of: "--append-system-prompt") {
+            XCTAssertEqual(claude.arguments[prompt + 1], "Keep my profile\n\nKeep my extra rules\n\n" + ChatMarkdown.instruction)
+        } else { XCTFail("The drawing instruction must reach Claude.") }
+        XCTAssertTrue(claude.arguments.contains("--append-system-prompt-file"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("config.toml").path))
     }
 }

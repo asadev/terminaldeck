@@ -43,18 +43,20 @@ public sealed class SessionDraft(string title, string provider, string folder, S
   public string? Shell { get => shell; init { shell = value; AgentName = DisplaySubtitle = ProviderLabel; } }
   private string ProviderLabel => Provider.ToLowerInvariant() == "shell" ? TerminalDeck.Core.Sessions.TerminalShells.Label(Shell) : TerminalDeck.Core.Agents.AgentSeats.ProviderName(Provider.ToLowerInvariant());
   public string ProviderMark => Provider.ToLowerInvariant() switch { "claude" => "✳", "codex" => "◎", "gemini" => "✦", _ => ">_" };
+  public string? AgentPhotoPath { get; private set; }
   public string? PicturePath { get; private set; }
   public string? PictureUri => PicturePath is { } path ? new Uri(path).AbsoluteUri : null;
-  public void SetAppearance(string projectName, string? picturePath, string agentLabel, string? projectId = null, string? agentIcon = null, bool hoot = false)
+  public void SetAppearance(string projectName, string? picturePath, string agentLabel, string? projectId = null, string? agentIcon = null, bool hoot = false, string? agentPhotoPath = null)
   {
     var ai = ProviderLabel;
     if (agentLabel == TerminalDeck.Core.Agents.AgentSeats.ProviderName(Provider.ToLowerInvariant())) agentLabel = ai;
     ProjectInitial = Initial(string.IsNullOrWhiteSpace(projectName) ? Title : projectName);
     ProjectId = projectId; AgentName = agentLabel; AgentIcon = agentIcon ?? "person";
-    HasAgent = agentIcon is not null || hoot; IsHoot = hoot;
+    AgentPhotoPath = agentPhotoPath;
+    HasAgent = agentIcon is not null || agentPhotoPath is not null || hoot; IsHoot = hoot;
     PicturePath = picturePath; Subtitle = agentLabel + " · " + State;
     DisplaySubtitle = agentLabel == ai ? ai : agentLabel + " · " + ai;
-    foreach (var name in new[] { nameof(HasAgent), nameof(IsHoot), nameof(HasProject), nameof(ProjectId), nameof(AgentName), nameof(AgentIcon), nameof(DisplaySubtitle), nameof(ProjectInitial), nameof(PicturePath), nameof(PictureUri), nameof(Subtitle), nameof(State) }) PropertyChanged?.Invoke(this, new(name));
+    foreach (var name in new[] { nameof(AgentPhotoPath), nameof(HasAgent), nameof(IsHoot), nameof(HasProject), nameof(ProjectId), nameof(AgentName), nameof(AgentIcon), nameof(DisplaySubtitle), nameof(ProjectInitial), nameof(PicturePath), nameof(PictureUri), nameof(Subtitle), nameof(State) }) PropertyChanged?.Invoke(this, new(name));
   }
   public void ObserveStatus(string state)
   {

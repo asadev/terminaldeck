@@ -593,7 +593,7 @@ public struct BackendHootChatRPC: Sendable {
                     if done { update.records = [.init(.message, id: id, value: Self.object([("text", item["text"]), ("planReview", .bool(planningTurn || item["type"].string == "plan"))]))] }
                 } else if ["commandExecution", "mcpToolCall", "fileChange", "webSearch", "collabAgentToolCall", "dynamicToolCall"].contains(item["type"].string ?? "") {
                     let name = item["tool"].string ?? item["command"].string ?? item["type"].string ?? "Tool"
-                    update.records = [.init(.toolCall, id: id, value: Self.object([("name", .string(name)), ("input", item)]))]
+                    update.records = [.init(.toolCall, id: id, value: Self.object([("name", .string(name)), ("input", item["type"].string == "mcpToolCall" ? item["arguments"] : item), ("mcpCall", HootChatMCPProvenance.record(item))]))]
                     for task in ChatChildTasks.codexAgents(item) where task["threadId"].string != sessionID {
                         if let thread = task["threadId"].string {
                             updateChild(thread, running: ChatChildTasks.running(task))
@@ -640,7 +640,7 @@ public struct BackendHootChatRPC: Sendable {
                 let changes = HootChatProviderRecords.acpChanges(current["content"])
                 let input = changes.isEmpty ? (current["rawInput"].isNullish ? current["content"] : current["rawInput"]) :
                     Self.object([("changes", .array(changes)), ("providerInput", current["rawInput"]), ("sourceEvent", .string("session/update/diff"))])
-                update.records = [.init(.toolCall, id: id, value: Self.object([("name", changes.isEmpty ? current["title"] : .string("fileChange")), ("input", input)]))]
+                update.records = [.init(.toolCall, id: id, value: Self.object([("name", changes.isEmpty ? current["title"] : .string("fileChange")), ("input", input), ("mcpCall", HootChatMCPProvenance.record(current))]))]
                 if ["completed", "failed"].contains(current["status"].string ?? "") {
                     update.records.append(.init(.toolResult, id: id, value: Self.object([("output", current["rawOutput"].isNullish ? current["content"] : current["rawOutput"]), ("status", current["status"]), ("isError", .bool(current["status"].string == "failed"))])))
                 }

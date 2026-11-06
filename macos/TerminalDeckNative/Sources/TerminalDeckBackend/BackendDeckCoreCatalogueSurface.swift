@@ -33,6 +33,7 @@ public protocol BackendDeckCoreCatalogueSurface: Sendable {
     func sessionScreen(_ sessionID: String) async throws -> String?
     /// forDevice is mandatory for a remote caller; owner credentials must never substitute.
     func startSession(input: NativeRPCValue, forDevice: String?) async throws -> NativeRPCValue
+    func sendChat(_ sessionID: String, text: String) async throws
     func writeToSession(_ sessionID: String, data: String) async throws
     func killSession(_ sessionID: String) async throws
     func reportOnSession(session: NativeRPCValue) async throws -> NativeRPCValue
@@ -64,6 +65,7 @@ public extension BackendDeckCoreCatalogueSurface {
     func agentRecord(session: NativeRPCValue, windowBytes: Int) async -> BackendDeckCoreAgentRecord? { nil }
     func sessionScreen(_ sessionID: String) async throws -> String? { throw BackendSessionFailure.missingCapability("session screen") }
     func startSession(input: NativeRPCValue, forDevice: String?) async throws -> NativeRPCValue { throw BackendSessionFailure.missingCapability("native session start") }
+    func sendChat(_ sessionID: String, text: String) async throws { throw BackendSessionFailure.missingCapability("confirmed chat delivery") }
     func writeToSession(_ sessionID: String, data: String) async throws { throw BackendSessionFailure.missingCapability("native session input") }
     func killSession(_ sessionID: String) async throws { throw BackendSessionFailure.missingCapability("native session stop") }
     func reportOnSession(session: NativeRPCValue) async throws -> NativeRPCValue { throw BackendSessionFailure.missingCapability("session evidence report") }

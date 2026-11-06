@@ -164,6 +164,8 @@ public sealed class ChatMcpTools(IChatSessions chats, Func<string, AiPermissionM
     sideQuestion = ChatDraftWorkspace.ReadSideQuestion(chat.Definition.Id),
     draft = ChatDraftWorkspace.Read(chat.Definition.Id) is { } draft ? new { revision = draft.Revision, preview = draft.Text[..Math.Min(draft.Text.Length, 4000)], characters = draft.Text.Length, source = "unsent app draft" } : null,
     ended = chat.Ended, busy = chat.Busy, stopping = chat.Stopping, problem = chat.Problem, sequence = chat.Events.LastOrDefault()?.Sequence ?? 0,
+    renderedToolBlocks = ChatMcpApps.RenderedBlocks(chat.Definition.Id),
+    renderedMessages = ChatProjection.Rows(chat).Where(r => r.Kind is "user" or "assistant").TakeLast(200).Select(r => new { r.Id, r.Kind, blocks = ChatRichContent.Blocks(r.Text) }),
     events = chat.Events.TakeLast(200), messages = chat.Messages.Where(m => m.State != ChatMessageState.Removed).TakeLast(100)
   });
 }

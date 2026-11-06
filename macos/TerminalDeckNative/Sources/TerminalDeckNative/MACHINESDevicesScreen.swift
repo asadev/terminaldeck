@@ -460,6 +460,7 @@ struct MACHINESDevicesAccessContent: View {
     /// The one place for whether phones may view and control this Mac's screen (round 3, #24); it works on its own,
     /// whatever the device list is doing.
     private var macScreenSection: some View {
+        Group {
         Section {
             Toggle(NativeMacScreenSetting.title, isOn: Binding(get: { macScreenAllowed }, set: { on in
                 macScreenAllowed = on
@@ -468,6 +469,8 @@ struct MACHINESDevicesAccessContent: View {
             .toggleStyle(.switch).disabled(fixture)
             .accessibilityIdentifier("devices.access.macScreen")
             Text(NativeMacScreenSetting.detail).font(.callout).foregroundStyle(.secondary)
+        }
+        NativeMacReachSettings(fixture: fixture)
         }
     }
 }

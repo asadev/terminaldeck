@@ -22,6 +22,7 @@ extension BackendCopilotSessionRuntime: BackendHootTaskWorker {
 
 public actor BackendHootTaskConversations {
     public typealias Make = @Sendable (_ taskID: String) async throws -> any BackendHootTaskWorker
+    private let makeFork: (@Sendable (String, HootChatProvider) async throws -> BackendCopilotSessionRuntime)?
     private let make: Make
     private let memory: @Sendable () async -> any DeckMemoryStoring
     private var workers: [String: any BackendHootTaskWorker] = [:]
@@ -36,8 +37,18 @@ public actor BackendHootTaskConversations {
 
     /// Each turn runs in the task's own conversation; its process rests when the turn ends,
     /// and the next turn resumes the same conversation.
-    public init(memory: @escaping @Sendable () async -> any DeckMemoryStoring = { await DeckMemory.ready() }, make: @escaping Make) {
-        self.make = make; self.memory = memory
+    public init(memory: @escaping @Sendable () async -> any DeckMemoryStoring = { await DeckMemory.ready() },
+                makeFork: (@Sendable (String, HootChatProvider) async throws -> BackendCopilotSessionRuntime)? = nil, make: @escaping Make) {
+        self.make = make; self.memory = memory; self.makeFork = makeFork
+    }
+
+    public func forkRuntime(source: BackendHootChatStore, through sequence: Int) async throws -> BackendCopilotSessionRuntime {
+        let prefix = try await source.hootForkPrefix(through: sequence)
+        guard let makeFork else { throw NativeRPCError(code: "unavailable", message: "Hoot's conversation owner is unavailable.") }
+        let runtime = try await makeFork("fork-" + UUID().uuidString.lowercased(), source.provider)
+        guard let chat = runtime.structuredChat else { throw NativeRPCError(code: "unavailable", message: "The new Hoot conversation could not be prepared.") }
+        do { try await chat.seedHootForkHistory(prefix, mediaFrom: source.historyFileURL); return runtime }
+        catch { await runtime.rest(); throw error }
     }
 
     /// The folder a task's conversation lives in (one per task, safe as a file name).

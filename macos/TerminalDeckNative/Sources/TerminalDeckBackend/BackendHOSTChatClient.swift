@@ -7,10 +7,16 @@ public final class BackendHOSTChatClient: @unchecked Sendable {
     private let lock = NSLock()
     private var jobs: [String: BackendTeamChatRecord] = [:]
     private var ids: Set<String> = []
+    private var localIDs: Set<String> = []
     private var cancelWatch: (@Sendable () -> Void)?
     private var observers: [UUID: AsyncStream<NativeRPCValue>.Continuation] = [:]
     public init(client: BackendHOSTClient) { self.client = client }
-    public func owns(_ id: String) -> Bool { lock.withLock { ids.contains(id) } || client.cachedSessions().contains { $0.id == id && $0.chat == true } }
+    public func owns(_ id: String) -> Bool { !lock.withLock { localIDs.contains(id) } && (lock.withLock { ids.contains(id) } || client.cachedSessions().contains { $0.id == id && $0.chat == true }) }
+    public func useLocal(_ id: String, _ local: Bool) { lock.withLock { if local { localIDs.insert(id) } else { localIDs.remove(id) } } }
+    public func restoreEarlierChat(_ launch: BackendHOSTProtocol.Launch) async throws {
+        _ = try await client.resource("chats.launch", arguments: NativeRPCValue.parseJSON(JSONEncoder().encode(launch)))
+        try await refreshInventory()
+    }
     public func conversation(_ id: String) -> BackendTeamChatRecord? { lock.withLock { jobs[id] } }
     public func conversations() -> [BackendTeamChatRecord] { lock.withLock { Array(jobs.values) } }
     public func attach(changed: @escaping @Sendable (String, NativeRPCValue) async -> Void) async throws {
@@ -97,9 +103,9 @@ public final class BackendHOSTChatClient: @unchecked Sendable {
     }
     public func steer(_ id: String, text: String, attachments: [NativeRPCValue], context: NativeRPCValue, clientMessageID: String? = nil) async throws -> NativeRPCValue {
         let fields: [NativeRPCValue.Field] = [.init("text", .string(text)), .init("attachments", .array(attachments)), .init("context", context), .init("clientMessageId", .string(BackendChatDeliveryQueue.identity(clientMessageID)))]
-        if client.hello.chatSteering == 1 { return try await call("steer", id: id, fields: fields) }
         let before = try await call("read", id: id, fields: [.init("limit", .number(1))])
-        if before["busy"].bool != true { return try await call("say", id: id, fields: fields) }
+        if !BackendHootChatStore.foreground(in: before), before["pending"].elements?.isEmpty != false { return try await call("say", id: id, fields: fields) }
+        if client.hello.chatSteering == 1 { return try await call("steer", id: id, fields: fields) }
         guard before["provider"].string != "codex" else {
             throw NativeRPCError(code: "chat-steering-unavailable", message: "This running session helper predates Codex steering. Your message stays queued until the turn ends; the helper was not restarted.")
         }
@@ -107,7 +113,7 @@ public final class BackendHOSTChatClient: @unchecked Sendable {
         _ = try await call("interrupt", id: id)
         _ = try await waitForTurn(id, timeout: .seconds(10))
         let stopped = try await call("read", id: id, fields: [.init("limit", .number(1))])
-        guard stopped["busy"].bool != true else { throw NativeRPCError(code: "busy", message: "The AI has not confirmed the interruption. Your message stays queued.") }
+        guard !BackendHootChatStore.foreground(in: stopped) else { throw NativeRPCError(code: "busy", message: "The AI has not confirmed the interruption. Your message stays queued.") }
         return try await call("say", id: id, fields: fields)
     }
     public func turn(_ id: String) async throws -> BackendSessionChats.Turn {

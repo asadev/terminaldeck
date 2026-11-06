@@ -60,7 +60,12 @@ public sealed partial class ChatPage
         var text = item.Row.Kind == "tool" ? item.Row.Text + "\n" + item.Row.Details : item.Row.Text;
         var index = query.Text.Length > 0 ? Math.Max(0, text.IndexOf(query.Text, StringComparison.OrdinalIgnoreCase) - 60) : 0;
         var snippet = text.Substring(index, Math.Min(280, text.Length - index));
-        var row = new StackPanel { Spacing = 4 }; row.Children.Add(Words(item.Chat.Definition.Title + " · " + item.Row.Kind + "\n" + item.Chat.Definition.Cwd, 12)); row.Children.Add(Words(snippet));
+        var row = new StackPanel { Spacing = 4 };
+        var heading = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        if (navigation?.SessionIdentity?.Invoke(item.Chat.Definition.Id) is { HasAgent: true } identity)
+          heading.Children.Add(new SessionPicture { Session = identity, Width = 28, Height = 28 });
+        heading.Children.Add(Words(item.Chat.Definition.Title + " · " + item.Row.Kind + "\n" + item.Chat.Definition.Cwd, 12));
+        row.Children.Add(heading); row.Children.Add(Words(snippet));
         row.Children.Add(Button("Preview excerpt", () => { ShowPreview(item.Chat, text); return Task.CompletedTask; })); results.Children.Add(row);
       }
     }
