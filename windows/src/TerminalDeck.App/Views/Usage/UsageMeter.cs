@@ -22,11 +22,11 @@ public sealed class UsageMeter : StackPanel
   private readonly string provider;
   private readonly DispatcherQueue queue;
   private readonly Button stripButton = new(), ringButton = new();
-  private readonly Grid strip = new() { Width = 12, Height = 12, VerticalAlignment = VerticalAlignment.Center };
-  private readonly Border stripFill = new() { CornerRadius = new(2.5), HorizontalAlignment = HorizontalAlignment.Left };
-  private const double RingSize = 14, RingLine = 2;
+  // Context window and plan limits share the CPU and memory meters' ring and capsule.
+  private readonly Grid strip = MeterRing.Create();
+  private readonly Border stripCapsule = MeterRing.Capsule();
   private Storyboard? pulse;
-  private readonly Grid ring = new() { Width = RingSize, Height = RingSize };
+  private readonly Grid ring = MeterRing.Create();
   private readonly StackPanel contextCard = new() { Spacing = 5, Width = 276 }, planCard = new() { Spacing = 8, Width = 276 };
   private readonly Flyout contextFlyout = new(), planFlyout = new();
   private readonly DispatcherQueueTimer tick;
@@ -43,14 +43,11 @@ public sealed class UsageMeter : StackPanel
   {
     this.usage = usage; this.sessionId = sessionId; this.provider = provider;
     queue = DispatcherQueue.GetForCurrentThread();
-    Orientation = Orientation.Horizontal; Spacing = 6; VerticalAlignment = VerticalAlignment.Center; Margin = new(0, 0, 4, 0);
+    Orientation = Orientation.Horizontal; Spacing = 4; VerticalAlignment = VerticalAlignment.Center; Margin = new(0, 0, 4, 0);
 
-    var track = new Border { CornerRadius = new(2.5) }; track.SetResourceReference(Border.BackgroundProperty, "DeckDividerBrush");
-    strip.Children.Add(track); strip.Children.Add(stripFill);
-    Plain(stripButton, strip); stripButton.Visibility = Visibility.Collapsed;
-    var capsule = new Border { CornerRadius = new((RingSize + 6) / 2), Padding = new(6, 3, 6, 3), Child = ring };
-    capsule.SetResourceReference(Border.BackgroundProperty, "DeckHoverBrush");
-    Plain(ringButton, capsule);
+    stripCapsule.Child = strip;
+    MeterRing.Host(stripButton, stripCapsule); stripButton.Visibility = Visibility.Collapsed;
+    MeterRing.Host(ringButton, MeterRing.Capsule(ring));
     Children.Add(stripButton); Children.Add(ringButton);
 
     foreach (var (flyout, card) in new[] { (contextFlyout, contextCard), (planFlyout, planCard) })
@@ -93,13 +90,6 @@ public sealed class UsageMeter : StackPanel
     };
     Unloaded += (_, _) => { usage.Changed -= OnChanged; watch?.Dispose(); watch = null; tick.Stop(); cap?.Cancel(); Pulse(false); };
     Render();
-  }
-
-  private static void Plain(Button button, UIElement content)
-  {
-    button.Content = content; button.Padding = new(0); button.MinWidth = 0; button.MinHeight = 0; button.BorderThickness = new(0);
-    button.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent); button.VerticalAlignment = VerticalAlignment.Center;
-    button.Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"]; button.Width = double.NaN; button.Height = double.NaN;
   }
 
   // At most one read a second while an AI streams (Mac: once a second while output flows).
@@ -206,14 +196,14 @@ public sealed class UsageMeter : StackPanel
     var fresh = context is { } c && c.IsFresh(now) && c.Figure() is not null ? c : null;
     if (fresh is not null && fresh.Share is { } share)
     {
-      stripButton.Visibility = Visibility.Visible; stripButton.Content = strip;
-      DesktopResourceMeter.Draw(strip, share, "DeckProjectPurpleBrush");
+      stripButton.Visibility = Visibility.Visible; stripCapsule.Child = strip;
+      MeterRing.Draw(strip, share, "DeckProjectPurpleBrush");
     }
     else if (fresh?.Figure() is { } figure)
     {
       stripButton.Visibility = Visibility.Visible;
       var text = new TextBlock { Text = figure, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-      text.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush"); stripButton.Content = text;
+      text.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush"); stripCapsule.Child = text;
     }
     else { stripButton.Visibility = Visibility.Collapsed; if (contextFlyout.IsOpen) contextFlyout.Hide(); }
     var summary = fresh?.Summary(now) ?? "Context window";
@@ -252,22 +242,7 @@ public sealed class UsageMeter : StackPanel
 
   private static Brush PlanBrush(UsageLevel level) => level == UsageLevel.Critical ? LevelBrush(level) : (Brush)Application.Current.Resources["DeckProjectOrangeBrush"];
 
-  private void DrawRing(double? percent, UsageLevel level)
-  {
-    ring.Children.Clear();
-    var track = new Ellipse { Width = RingSize, Height = RingSize, StrokeThickness = RingLine, Opacity = 0.3 };
-    track.SetResourceReference(Shape.StrokeProperty, "DeckSecondaryInkBrush"); ring.Children.Add(track);
-    var filled = Math.Clamp((percent ?? 0) / 100, 0, 1);
-    if (filled <= 0) return;
-    if (filled >= 0.999) { ring.Children.Add(new Ellipse { Width = RingSize, Height = RingSize, StrokeThickness = RingLine, Stroke = PlanBrush(level) }); return; }
-    // Both strokes share a centre line, including the rounded arc caps.
-    const double centre = RingSize / 2, radius = (RingSize - RingLine) / 2;
-    var angle = filled * 2 * Math.PI; var end = new Windows.Foundation.Point(centre + radius * Math.Sin(angle), centre - radius * Math.Cos(angle));
-    var figure = new PathFigure { StartPoint = new(centre, centre - radius), IsClosed = false };
-    figure.Segments.Add(new ArcSegment { Point = end, Size = new(radius, radius), SweepDirection = SweepDirection.Clockwise, IsLargeArc = filled > 0.5 });
-    var geometry = new PathGeometry(); geometry.Figures.Add(figure);
-    ring.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Stroke = PlanBrush(level), StrokeThickness = RingLine, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-  }
+  private void DrawRing(double? percent, UsageLevel level) => MeterRing.Draw(ring, percent, PlanBrush(level));
 
   private void Pulse(bool checkingNow)
   {
