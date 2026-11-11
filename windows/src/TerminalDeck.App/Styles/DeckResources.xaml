@@ -35,6 +35,7 @@
    <SolidColorBrush x:Key="DeckTopBarBrush" Color="#E9E9EE"/>
    <SolidColorBrush x:Key="DeckSecondaryInkBrush" Color="#606060"/>
    <SolidColorBrush x:Key="DeckTabDividerBrush" Color="#D6D6D6"/>
+   <SolidColorBrush x:Key="DeckTabRimBrush" Color="#B4B4BC"/>
    <SolidColorBrush x:Key="DeckInkBrush" Color="#202020"/>
    <SolidColorBrush x:Key="DeckDividerBrush" Color="#E7E7E7"/>
    <SolidColorBrush x:Key="DeckRailBrush" Color="#E9E9EE"/>
@@ -105,6 +106,7 @@
    <SolidColorBrush x:Key="DeckTopBarBrush" Color="#121212"/>
    <SolidColorBrush x:Key="DeckSecondaryInkBrush" Color="#AEAEAE"/>
    <SolidColorBrush x:Key="DeckTabDividerBrush" Color="#505054"/>
+   <SolidColorBrush x:Key="DeckTabRimBrush" Color="#56565C"/>
    <SolidColorBrush x:Key="DeckInkBrush" Color="#EEEEEE"/>
    <SolidColorBrush x:Key="DeckDividerBrush" Color="#333337"/>
    <SolidColorBrush x:Key="DeckRailBrush" Color="#121212"/>
@@ -177,6 +179,7 @@
    <SolidColorBrush x:Key="DeckTopBarBrush" Color="{ThemeResource SystemColorWindowColor}"/>
    <SolidColorBrush x:Key="DeckSecondaryInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
    <SolidColorBrush x:Key="DeckTabDividerBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+   <SolidColorBrush x:Key="DeckTabRimBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
    <SolidColorBrush x:Key="DeckInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
    <SolidColorBrush x:Key="DeckDividerBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
    <SolidColorBrush x:Key="DeckRailBrush" Color="{ThemeResource SystemColorWindowColor}"/>
