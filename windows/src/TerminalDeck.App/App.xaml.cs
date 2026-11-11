@@ -91,6 +91,7 @@ public partial class App : Application
       TerminalDeck.Platform.Windows.Integration.PreviewShareRoot.Remember(root);
       taskCoordinatorHost = Services.TaskCoordinatorHost.Register(root);
       var shell = new ShellWindow(root); window = shell;
+      TerminalDeck.App.Shell.FrameClock.Start();
       shell.Closed += (_, _) => taskCoordinatorHost?.Dispose();
       instance.Activated += (_, incoming) => { shell.QueueReceiverActivation(incoming); shell.DispatcherQueue.TryEnqueue(() => _ = shell.CheckForUpdateOnOpenAsync()); };
       shell.QueueReceiverActivation(activation);
