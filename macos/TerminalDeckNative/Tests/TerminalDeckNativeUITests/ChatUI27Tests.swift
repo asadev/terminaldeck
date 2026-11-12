@@ -55,6 +55,20 @@ import TerminalDeckNativeCore
         settle(host)
         return (panel, host)
     }
+    /// macOS gives a person's typing only to the box holding the keyboard of the key window; the
+    /// shared input rule refuses text that reaches any other box (a stale input client). So this test
+    /// types the way a person does: the box takes the keyboard in a key window, never ordered in.
+    private final class TypingWindow: NSWindow { override var isKeyWindow: Bool { true } }
+    private func typingWindow<V: View>(_ content: V, dark: Bool) -> (NSWindow, NSHostingView<V>) {
+        let host = NSHostingView(rootView: content)
+        let window = TypingWindow(contentRect: .init(x: -30000, y: -30000, width: 820, height: 650),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.contentView = host
+        settle(host)
+        return (window, host)
+    }
     @discardableResult private func shot(_ host: NSView, _ name: String) throws -> NSBitmapImageRep? {
         guard let path = ProcessInfo.processInfo.environment["CHAT_UI_27_PROOF"], path.hasSuffix(".noindex") else { return nil }
         let out = URL(fileURLWithPath: path)
@@ -70,9 +84,10 @@ import TerminalDeckNativeCore
             let first = model("scratch-one"), second = model("scratch-two"), third = model("scratch-three")
             let hoot = NativeHootChatModel(fixture: snapshot("scratch-hoot"))
             let seat = Seat([first, second, third, hoot])
-            let (panel, host) = window(ReusedChat(seat: seat).environment(\.colorScheme, dark ? .dark : .light), dark: dark)
+            let (panel, host) = typingWindow(ReusedChat(seat: seat).environment(\.colorScheme, dark ? .dark : .light), dark: dark)
             defer { panel.contentView = nil; panel.close() }
             let firstBox = try XCTUnwrap(boxes(host).first)
+            XCTAssertTrue(panel.makeFirstResponder(firstBox))
             firstBox.insertText("Only session one", replacementRange: .init(location: 0, length: 0))
             XCTAssertEqual(first.composerDraft.text, "Only session one")
             settle(host); try shot(host, "draft-one-" + theme)

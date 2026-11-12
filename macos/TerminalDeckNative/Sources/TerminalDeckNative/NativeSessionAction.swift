@@ -33,12 +33,14 @@ private struct NativeSessionButtonContent<Content: View>: View {
         inputRule.bind(to: scope)
         inputRule.update(active: scope == nil ? active : true, enabled: enabled)
         return Button(role: role, action: {
+            // Asked when the action runs: is this button's OWNER on screen right now? With a
+            // scope, `acceptsFocus` reads the owner scope's live state. It never depends on this
+            // button's own view: a menu or a confirmation dialog closes, and may report its items
+            // gone, before AppKit runs the picked item, which must still run for a visible owner.
             guard inputRule.acceptsFocus else { return }
             action()
         }, label: { label })
         .disabled(!inputRule.acceptsFocus)
-        .onAppear { inputRule.update(active: scope == nil ? active : true, enabled: enabled) }
-        .onDisappear { inputRule.update(active: false, enabled: false) }
     }
 }
 

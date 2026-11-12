@@ -307,13 +307,16 @@ final class NativeServerShellTerminal: DeckTerminalView {
         return true
     }
 
+    /// A drop is the person's own act aimed at this shell: it needs the setup page on screen, not
+    /// the keyboard or an active window (Finder is in front while a file is dragged from it).
+    /// A hidden page's shell refuses it (`inputActive` is false).
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard inputActive, !frozen, let window, window.isKeyWindow,
-              window.attachedSheet == nil, NSApp.modalWindow == nil,
-              !isHiddenOrHasHiddenAncestor else { return false }
-        guard sender.draggingPasteboard.string(forType: .string) != nil,
-              window.makeFirstResponder(self) else { return false }
-        return paste(from: sender.draggingPasteboard)
+        guard inputActive, !frozen, let window, !isHiddenOrHasHiddenAncestor,
+              window.attachedSheet == nil, NSApp.modalWindow == nil || NSApp.modalWindow === window,
+              let text = sender.draggingPasteboard.string(forType: .string) else { return false }
+        sendExplicitText(TerminalText.pasteData(text, bracketed: getTerminal().bracketedPasteMode))
+        window.makeFirstResponder(self)
+        return true
     }
 }
 

@@ -102,12 +102,14 @@ private struct NativeSessionExitCommand: ViewModifier {
         inputRule.bind(to: scope)
         inputRule.update(active: scope == nil ? active : true, enabled: enabled)
         let guarded = {
+            // Asked when Escape is pressed: is the owner session on screen right now (the owner
+            // scope's live state)? Never whether this view has reported itself gone, which left
+            // Escape dead in an editor until its screen redrew.
             guard inputRule.acceptsFocus else { return }
             action()
         }
         return content
             .environment(\.nativeSessionEditorExit, NativeSessionEditorAction(guarded))
             .onExitCommand(perform: guarded)
-            .onDisappear { inputRule.update(active: false, enabled: false) }
     }
 }

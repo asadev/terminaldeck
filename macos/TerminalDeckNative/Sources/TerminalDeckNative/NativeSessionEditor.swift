@@ -17,10 +17,14 @@ final class NativeSessionInputRule {
     var requestedActive: Bool { viewActive }
     var hasScope: Bool { scope != nil }
     private var explicitDepth = 0
+    private var ownerActionDepth = 0
     weak var owner: NSView?
 
     var acceptsFocus: Bool { active && enabled }
     var isExplicitUpdate: Bool { explicitDepth > 0 }
+    /// Also asks for the owner on screen, so a counter left raised (an exception skipping the
+    /// `defer`) can never let a hidden box take text.
+    var isOwnerAction: Bool { ownerActionDepth > 0 && acceptsFocus }
 
     func update(active: Bool, enabled: Bool) {
         let locallyClosing = viewActive && self.enabled && (!active || !enabled)
@@ -60,9 +64,40 @@ final class NativeSessionInputRule {
         onScopeChanged?()
     }
 
+    #if DEBUG
+    /// Checks stand in a panel for the key window here; release builds have no such hook.
+    static var keyWindow: () -> NSWindow? = { NSApp.keyWindow }
+    #endif
+    private static var currentKeyWindow: NSWindow? {
+        #if DEBUG
+        keyWindow()
+        #else
+        NSApp.keyWindow
+        #endif
+    }
+
+    /// A system panel working on this window's box: the Spelling panel's "Change", the Translate
+    /// panel's "Replace", the Font panel. That panel is the key window while this window stays the
+    /// main window and its box keeps this window's keyboard, so the correction is the person's own.
+    /// A panel holding a box of ours (Hoot's panel, a pop-over with a field in use) does not count:
+    /// typing there is that box's, and a stale client must not reach this one.
+    static func servedByPanel(_ window: NSWindow) -> Bool {
+        guard window.isMainWindow, let key = currentKeyWindow, key !== window, key is NSPanel,
+              key.attachedSheet == nil else { return false }
+        let responder = key.firstResponder
+        if nativeSessionInputRule(for: responder) != nil { return false }
+        var view = responder as? NSView
+        while let current = view {
+            if current is DeckTerminalView { return false }
+            view = current.superview
+        }
+        return true
+    }
+
     func allowsUserInput(in view: NSView) -> Bool {
         guard acceptsFocus, !view.isHiddenOrHasHiddenAncestor,
-              let window = view.window, window.isKeyWindow, window.attachedSheet == nil,
+              let window = view.window, window.isKeyWindow || Self.servedByPanel(window),
+              window.attachedSheet == nil,
               NSApp.modalWindow == nil || NSApp.modalWindow === window else { return false }
         if let control = owner as? NSControl {
             guard !control.isHiddenOrHasHiddenAncestor,
@@ -70,6 +105,28 @@ final class NativeSessionInputRule {
             return window.firstResponder === editor && (view === control || view === editor)
         }
         return window.firstResponder === view
+    }
+
+    /// A change the app makes for a person's own action on this box: a pick from its @ list,
+    /// its "@" button, a drop onto it. That needs the OWNER on screen, not the keyboard: during
+    /// a pick the keyboard is in the list (or its popover is the key window), and a drop comes
+    /// while another app is in front. A hidden owner refuses it like typing.
+    /// Keystrokes, input methods, dictation, paste and accessibility edits still need the box to
+    /// hold the keyboard in the key window: macOS routes a person's own only there, so anything
+    /// reaching a box that does not hold it is a stale client aimed at another box.
+    func allowsOwnerAction(in view: NSView) -> Bool {
+        guard acceptsFocus, !view.isHiddenOrHasHiddenAncestor, let window = view.window,
+              window.attachedSheet == nil,
+              NSApp.modalWindow == nil || NSApp.modalWindow === window else { return false }
+        if let control = owner as? NSControl, control.isHiddenOrHasHiddenAncestor { return false }
+        return true
+    }
+
+    @discardableResult
+    func withOwnerAction<T>(_ body: () throws -> T) rethrows -> T {
+        ownerActionDepth += 1
+        defer { ownerActionDepth -= 1 }
+        return try body()
     }
 
     @discardableResult
@@ -118,7 +175,9 @@ class NativeSessionTextView: NSTextView, NativeSessionInputProtected {
 
     var allowsUserInput: Bool { inputRule.allowsUserInput(in: self) }
     func isComposing(over value: String) -> Bool { hasMarkedText() && compositionSnapshot?.string == value }
-    private var allowsMutation: Bool { inputRule.isExplicitUpdate || allowsUserInput }
+    private var allowsMutation: Bool { inputRule.isExplicitUpdate || inputRule.isOwnerAction || allowsUserInput }
+    /// A drop is aimed by the person at this box itself (see `allowsOwnerAction`).
+    private var allowsDrop: Bool { inputRule.allowsOwnerAction(in: self) }
 
     override var acceptsFirstResponder: Bool { inputRule.acceptsFocus && super.acceptsFirstResponder }
 
@@ -188,14 +247,32 @@ class NativeSessionTextView: NSTextView, NativeSessionInputProtected {
         super.doCommand(by: selector)
     }
 
+    /// The window lost the keyboard for a moment while an input method was composing here (another
+    /// window or app came forward). The box's session is still on screen and the box still holds its
+    /// window's keyboard, so the input method's commit is the person's own text and is kept.
+    /// Hiding the session discards the composition instead (`scopeWillDeactivate`).
+    private var allowsCompositionCommit: Bool {
+        hasMarkedText() && window?.firstResponder === self && inputRule.allowsOwnerAction(in: self)
+    }
+
     override func insertText(_ insertString: Any) {
-        guard allowsMutation else { return }
+        guard allowsMutation else {
+            guard allowsCompositionCommit else { return }
+            inputRule.withOwnerAction { super.insertText(insertString) }
+            compositionSnapshot = nil
+            return
+        }
         super.insertText(insertString)
         compositionSnapshot = nil
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        guard allowsMutation else { return }
+        guard allowsMutation else {
+            guard allowsCompositionCommit else { return }
+            inputRule.withOwnerAction { super.insertText(insertString, replacementRange: replacementRange) }
+            compositionSnapshot = nil
+            return
+        }
         super.insertText(insertString, replacementRange: replacementRange)
         compositionSnapshot = nil
     }
@@ -212,11 +289,14 @@ class NativeSessionTextView: NSTextView, NativeSessionInputProtected {
     }
 
     override func unmarkText() {
-        guard allowsMutation else { discardComposition(); return }
-        let didCompose = compositionSnapshot != nil
-        super.unmarkText()
-        compositionSnapshot = nil
-        if didCompose && !discardingComposition { didChangeText() }
+        guard allowsMutation || allowsCompositionCommit else { discardComposition(); return }
+        let commit = {
+            let didCompose = self.compositionSnapshot != nil
+            super.unmarkText()
+            self.compositionSnapshot = nil
+            if didCompose && !self.discardingComposition { self.didChangeText() }
+        }
+        if allowsMutation { commit() } else { inputRule.withOwnerAction(commit) }
     }
 
     override func paste(_ sender: Any?) {
@@ -225,27 +305,28 @@ class NativeSessionTextView: NSTextView, NativeSessionInputProtected {
     }
 
     override func readSelection(from pboard: NSPasteboard) -> Bool {
-        allowsUserInput && super.readSelection(from: pboard)
+        (allowsUserInput || inputRule.isOwnerAction) && super.readSelection(from: pboard)
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        allowsUserInput && super.readSelection(from: pboard, type: type)
+        (allowsUserInput || inputRule.isOwnerAction) && super.readSelection(from: pboard, type: type)
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        allowsUserInput ? super.draggingEntered(sender) : []
+        allowsDrop ? super.draggingEntered(sender) : []
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        allowsUserInput ? super.draggingUpdated(sender) : []
+        allowsDrop ? super.draggingUpdated(sender) : []
     }
 
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        allowsUserInput && super.prepareForDragOperation(sender)
+        allowsDrop && super.prepareForDragOperation(sender)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        allowsUserInput && super.performDragOperation(sender)
+        guard allowsDrop else { return false }
+        return inputRule.withOwnerAction { super.performDragOperation(sender) }
     }
 
     override func setAccessibilityValue(_ accessibilityValue: Any?) {
@@ -289,6 +370,10 @@ final class NativeSessionTextControl: NSTextField, NativeSessionInputProtected {
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { inputRule.acceptsFocus && super.acceptsFirstResponder }
+
+    // Like 0.21.3, a field without the cursor is no drop target: a reorder drag or a Finder file
+    // passing over it reaches the view behind it. A field being edited takes a text drop in its
+    // editor (`NativeSessionTextView.performDragOperation`), as AppKit's field editor always did.
 
     // Only code can focus a field behind a sheet (the sheet takes every click and key).
     // SwiftUI's focus state would otherwise place it there at once; the coordinator
@@ -1063,7 +1148,7 @@ final class NativeSessionFieldCoordinator: NSObject, NSTextFieldDelegate {
 
     func controlTextDidChange(_ obj: Notification) {
         guard !updating, let field = obj.object as? NSTextField,
-              rule?.allowsUserInput(in: field) == true,
+              rule?.allowsUserInput(in: field) == true || rule?.isOwnerAction == true,
               (field.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
         // Completion supplies a one-use selection. A later edit must not select
         // that old suffix again during an unrelated SwiftUI render.
@@ -1096,7 +1181,10 @@ final class NativeSessionFieldCoordinator: NSObject, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textShouldBeginEditing fieldEditor: NSText) -> Bool {
-        guard rule?.acceptsFocus == true, control.window?.isKeyWindow == true else { return false }
+        // Typing begins editing only in the key window; a drop (an owner action) begins it while
+        // another app is in front.
+        guard rule?.acceptsFocus == true,
+              control.window?.isKeyWindow == true || rule?.isOwnerAction == true else { return false }
         if let secure = control as? NativeSessionSecureControl, let editor = fieldEditor as? NSTextView {
             secure.protect(editor)
         }
@@ -1198,7 +1286,7 @@ private struct NativeSessionTextEditorContent: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !updating, let editor = notification.object as? NativeSessionTextView,
-                  editor.allowsUserInput, !editor.hasMarkedText() else { return }
+                  editor.allowsUserInput || editor.inputRule.isOwnerAction, !editor.hasMarkedText() else { return }
             parent.text = editor.string
         }
 

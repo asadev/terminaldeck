@@ -716,17 +716,20 @@ extension EnvironmentValues {
     /// A "Mention someone" button: types "@" at the caret THROUGH THE BOX, as the person would, so
     /// the box's own change notice runs and the @ list opens there (a space first when the "@"
     /// would otherwise stick to the word before it).
+    /// The click (or the add panel closing) may leave the box without the keyboard and its window
+    /// not key for that moment, so this is an owner action: allowed while the box's owner is on
+    /// screen, refused while it is hidden (`NativeSessionInputRule.allowsOwnerAction`).
     func typeMentionSign() {
-        guard let textView = textView as? NativeSessionTextView,
-              textView.inputRule.acceptsFocus, let window = textView.window,
-              window.isKeyWindow, window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
-        window.makeFirstResponder(textView)
+        guard let textView else { return }
+        let rule = (textView as? NativeSessionTextView)?.inputRule
+        if let rule, !rule.allowsOwnerAction(in: textView) { return }
         let text = textView.string as NSString
         var range = textView.selectedRange()
         range.location = min(range.location, text.length); range.length = min(range.length, text.length - range.location)
         let before = range.location > 0 ? text.substring(with: NSRange(location: range.location - 1, length: 1)) : ""
         let spaced = before.isEmpty || before.unicodeScalars.allSatisfy(CharacterSet.whitespacesAndNewlines.contains)
-        textView.insertText((spaced ? "" : " ") + "@", replacementRange: range)
+        let type = { textView.insertText((spaced ? "" : " ") + "@", replacementRange: range) }
+        if let rule { rule.withOwnerAction(type) } else { type() }
         textView.window?.makeFirstResponder(textView)
     }
     /// Puts a mention at the caret, or over the "@…" being typed (a pick from the @ list).
@@ -734,11 +737,16 @@ extension EnvironmentValues {
     /// real app: "@", click an agent, nothing is mentioned): the box's own change notice writes the
     /// new text into the draft while this runs; an `inout` copy taken before that was then written
     /// back over it with the OLD text, so the box was redrawn from "@…" and the mention was gone.
+    /// A pick is an owner action (see `typeMentionSign`): a click on the list's row can make the
+    /// list's popover the key window, so the box neither holds the keyboard nor is in the key window.
     func insert(_ mention: HootMention, draft: Binding<HootComposerDraft>, replaceQuery: Bool) {
-        guard let textView = textView as? NativeSessionTextView, textView.inputRule.acceptsFocus,
-              let window = textView.window, window.isKeyWindow, window.attachedSheet == nil,
-              NSApp.modalWindow == nil, let storage = textView.textStorage else { return }
-        window.makeFirstResponder(textView)
+        guard let textView, let storage = textView.textStorage else { draft.wrappedValue.insert(mention); return }
+        guard let rule = (textView as? NativeSessionTextView)?.inputRule else { place(mention, in: textView, storage: storage, draft: draft, replaceQuery: replaceQuery); return }
+        guard rule.allowsOwnerAction(in: textView) else { return }
+        rule.withOwnerAction { place(mention, in: textView, storage: storage, draft: draft, replaceQuery: replaceQuery) }
+    }
+    private func place(_ mention: HootMention, in textView: NSTextView, storage: NSTextStorage,
+                       draft: Binding<HootComposerDraft>, replaceQuery: Bool) {
         var range = textView.selectedRange()
         range.location = min(range.location, storage.length); range.length = min(range.length, storage.length - range.location)
         if replaceQuery {
@@ -941,7 +949,8 @@ private struct HootComposerEditor: NSViewRepresentable {
         func raw(_ text: NSTextView) -> String { HootComposerEditor.raw(text) }
         func textDidChange(_ notification: Notification) {
             guard !updating, let text = notification.object as? NativeSessionTextView,
-                  text.allowsUserInput, !text.hasMarkedText(), text === parent.handle.textView else { return }
+                  text.allowsUserInput || text.inputRule.isOwnerAction, !text.hasMarkedText(),
+                  text === parent.handle.textView else { return }
             parent.draft.text = raw(text); parent.draft.mentions = parent.draft.activeMentions
             let prefix = (text.string as NSString).substring(to: min(text.selectedRange().location, (text.string as NSString).length))
             // FORK-L1: the picker says what still counts as asking for the @ list (a name can have spaces).

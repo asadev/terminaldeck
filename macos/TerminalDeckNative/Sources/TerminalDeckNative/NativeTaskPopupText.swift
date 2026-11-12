@@ -233,7 +233,8 @@ struct TaskRichText: View {
 
         func textDidChange(_ notification: Notification) {
             guard !rendering, let view = notification.object as? RichTextView,
-                  applyingInsertion || view.allowsUserInput, !view.hasMarkedText() else { return }
+                  applyingInsertion || view.allowsUserInput || (view.editingAllowed && view.inputRule.isOwnerAction),
+                  !view.hasMarkedText() else { return }
             let value = serialise(view)
             rendered = "\(value)|\(parent.editable)|\(parent.strike)|\(parent.mentionNames.joined(separator: ","))"
             parent.text = value
@@ -299,6 +300,9 @@ struct TaskRichText: View {
             inputRule.acceptsFocus && !isHiddenOrHasHiddenAncestor && window?.isKeyWindow == true
                 && window?.attachedSheet == nil && (NSApp.modalWindow == nil || NSApp.modalWindow === window)
         }
+        /// A drop is the person's own act aimed at this text: it needs the task on screen, not an
+        /// active window (Finder is in front while a file is dragged from it).
+        var allowsDropInput: Bool { inputRule.allowsOwnerAction(in: self) }
 
         override func updateInput(active: Bool, enabled: Bool) {
             super.updateInput(active: active, enabled: enabled)
@@ -342,11 +346,11 @@ struct TaskRichText: View {
         }
 
         private func takesFiles(_ sender: NSDraggingInfo) -> Bool {
-            allowsPointerInput && fileDoor != nil && isEditable && Self.hasFiles(on: sender.draggingPasteboard)
+            allowsDropInput && fileDoor != nil && isEditable && Self.hasFiles(on: sender.draggingPasteboard)
         }
 
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            guard allowsPointerInput else { return [] }
+            guard allowsDropInput else { return [] }
             let op = super.draggingEntered(sender)
             guard takesFiles(sender) else { return op }
             fileDoor?.hover(true)
@@ -354,7 +358,7 @@ struct TaskRichText: View {
         }
 
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-            guard allowsPointerInput else { return [] }
+            guard allowsDropInput else { return [] }
             let op = super.draggingUpdated(sender)
             return takesFiles(sender) ? .copy : op
         }
@@ -365,12 +369,12 @@ struct TaskRichText: View {
         }
 
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            allowsPointerInput && (takesFiles(sender) || super.prepareForDragOperation(sender))
+            allowsDropInput && (takesFiles(sender) || super.prepareForDragOperation(sender))
         }
 
         /// A file dropped on the text being written lands where it was dropped (task-text-field.tsx handleDrop).
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            guard allowsPointerInput else { return false }
+            guard allowsDropInput else { return false }
             guard takesFiles(sender), let door = fileDoor, let urls = Self.files(on: sender.draggingPasteboard), !urls.isEmpty else {
                 return super.performDragOperation(sender)
             }

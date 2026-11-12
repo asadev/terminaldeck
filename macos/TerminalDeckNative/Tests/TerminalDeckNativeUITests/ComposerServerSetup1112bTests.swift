@@ -230,6 +230,33 @@ import TerminalDeckNativeCore
         XCTAssertFalse(transport.calls.contains("servers:shell:close"))
     }
 
+    /// A drop from Finder arrives while Finder is in front: the shown setup shell takes it without the
+    /// keyboard or an active window; a hidden setup page refuses it.
+    func testSetupShellTakesADropWithoutTheKeyboardAndRefusesItWhileHidden() async throws {
+        let transport = ServerTransport()
+        let shell = NativeServerShell(serverId: "inert-server", transport: transport.transport)
+        let pages = CachedPages(shell: shell)
+        let host = NSHostingView(rootView: CachedSetupAndSession(pages: pages))
+        let window = self.window(host)
+        let board = ComposerLeak1112bDropSweepTests.textBoard("dropped path")
+        defer { board.releaseGlobally(); shell.close(); window.contentView = nil; window.close() }
+        settle(host)
+        shell.open()
+        await drainTasks()
+        let terminal = try XCTUnwrap(shell.view as? NativeServerShellTerminal)
+        window.keyboardActive = false
+        window.makeFirstResponder(nil)
+        XCTAssertTrue(ComposerLeak1112bDropSweepTests.drop(board, on: terminal, in: window), "The shown shell takes the drop")
+        XCTAssertEqual(transport.writes.map(\.text), ["dropped path"])
+        transport.writes = []
+
+        pages.setupShown = false
+        settle(host)
+        XCTAssertFalse(ComposerLeak1112bDropSweepTests.drop(board, on: terminal, in: window), "A hidden setup shell refuses it")
+        XCTAssertTrue(transport.writes.isEmpty)
+        XCTAssertTrue(pages.sessionInput.bytes.isEmpty, "Nothing reaches the shown session either")
+    }
+
     func testSetupOpenCompletionPreservesAnotherVisibleField() async {
         let transport = ServerTransport()
         transport.holdOpen = true
