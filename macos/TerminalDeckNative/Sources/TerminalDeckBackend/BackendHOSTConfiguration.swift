@@ -36,7 +36,7 @@ public struct BackendHOSTConfiguration: Codable, Sendable {
     }
     public func accountConfiguration(paths: BackendHOSTPaths, hostVersion: String) throws -> BackendAccountConfiguration {
         guard hostVersion.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", options: .regularExpression) != nil else { throw BackendHOSTFailure.invalid("Invalid pinned helper version.") }
-        let helper = paths.directory.appendingPathComponent(hostVersion).appendingPathComponent("TerminalDeckNativeHelper")
+        let helper = BackendHOSTLaunchAgent.keeperExecutable(in: paths.directory.appendingPathComponent(hostVersion, isDirectory: true))
         return try .init(dataDirectory: paths.dataDirectory, homeDirectory: URL(fileURLWithPath: home, isDirectory: true),
             appName: appName, appID: appID, helperExecutable: helper, inheritedEnvironment: environment)
     }

@@ -77,39 +77,39 @@ struct NativeChatOwnedTerminalsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Runs on the same host as this Chat, through a separate helper-owned connection. It uses the confirmed provider boundary with app approval. Parent close, reconnect or policy changes end it; closing this panel keeps it available. The default shell lifetime is 10 minutes.").font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button("Check availability") { model.perform("capabilities") }
-                    Button("Open shell") { model.perform("create") }
-                    Button("Refresh terminals") { model.perform("list") }
+                    NativeSessionButton("Check availability") { model.perform("capabilities") }
+                    NativeSessionButton("Open shell") { model.perform("create") }
+                    NativeSessionButton("Refresh terminals") { model.perform("list") }
                 }
                 ForEach(Array(model.terminals.enumerated()), id: \.offset) { _, row in
                     if let handle = row["handle"].string {
-                        Button((row["title"].string ?? "Shell") + " · " + (row["state"].string ?? "unknown")) { model.select(handle) }
+                        NativeSessionButton((row["title"].string ?? "Shell") + " · " + (row["state"].string ?? "unknown")) { model.select(handle) }
                     }
                 }
                 if let handle = model.selected {
                     HStack {
-                        Button("Read output") { model.perform("read", fields: [.init("handle", .string(handle))]) }
-                        Button("Stop terminal") { model.perform("stop", fields: [.init("handle", .string(handle))]) }
-                        Button("Close terminal") { model.perform("close", fields: [.init("handle", .string(handle))]) }
+                        NativeSessionButton("Read output") { model.perform("read", fields: [.init("handle", .string(handle))]) }
+                        NativeSessionButton("Stop terminal") { model.perform("stop", fields: [.init("handle", .string(handle))]) }
+                        NativeSessionButton("Close terminal") { model.perform("close", fields: [.init("handle", .string(handle))]) }
                     }
                     ScrollView([.vertical, .horizontal]) {
                         Text(model.output.isEmpty ? "No output received yet." : model.output).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(minHeight: 80, maxHeight: 220)
                     if model.truncated { Text("Earlier output was clipped by the terminal's bounded output buffer.").font(.caption).foregroundStyle(.secondary) }
-                    TextField("Text to send", text: $input)
+                    NativeSessionTextField("Text to send", text: $input)
                     HStack {
-                        Button("Send line") {
+                        NativeSessionButton("Send line") {
                             let original = input
                             model.perform("write", fields: [.init("handle", .string(handle)), .init("text", .string(original + "\n"))]) { accepted in
                                 if accepted && input == original { input = "" }
                             }
                         }
-                        Button("Close input") { model.perform("write", fields: [.init("handle", .string(handle)), .init("closeStdin", .bool(true))]) }
+                        NativeSessionButton("Close input") { model.perform("write", fields: [.init("handle", .string(handle)), .init("closeStdin", .bool(true))]) }
                     }
                     HStack {
                         Stepper("Columns: \(columns)", value: $columns, in: 20...300)
                         Stepper("Rows: \(rows)", value: $rows, in: 5...100)
-                        Button("Resize") { model.perform("resize", fields: [.init("handle", .string(handle)), .init("cols", .number(Double(columns))), .init("rows", .number(Double(rows)))]) }
+                        NativeSessionButton("Resize") { model.perform("resize", fields: [.init("handle", .string(handle)), .init("cols", .number(Double(columns))), .init("rows", .number(Double(rows)))]) }
                     }
                 }
                 if let available = model.receipt["available"].bool {

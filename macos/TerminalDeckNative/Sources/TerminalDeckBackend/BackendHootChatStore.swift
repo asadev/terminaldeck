@@ -797,6 +797,31 @@ public actor BackendHootChatStore {
     public func takeEndReason() -> String? { defer { endReason = nil }; return endReason }
     public var processPID: Int32? { process?.processPID }
     public var isBusy: Bool { busy }
+
+    // MARK: Background tasks whose process is gone (9 Nov, Asad: "Working · 1 running" for two days)
+    // An idle chat's AI writes no finish for a background task until its next turn, so the record is closed here when
+    // nothing alive under the AI process can be that task (ChatChildTasks.gone). Only the record changes; no process is
+    // stopped or signalled, and a later finish notice from the AI still fills in its own status.
+    private var hostProcessEvents = false
+    private var processWatch: BackendChatProcessWatch?
+    private var processCandidates: (sequence: Int, items: [ChatChildTasks.ProcessCandidate])?
+    /// In the helper: its descendant watch reports this chat's process changes, so the store keeps no watch of its own.
+    public func useHostProcessEvents() { hostProcessEvents = true; processWatch?.cancel(); processWatch = nil }
+    /// A process under the AI started or ended.
+    public func processesChanged() { settleGoneTasks() }
+    private func settleGoneTasks() {
+        guard hostedOwner == nil, !rebinding, pending.isEmpty, !foregroundWorking, let root = process?.processPID else { return }
+        if processCandidates?.sequence != sequence { processCandidates = (sequence, ChatChildTasks.awaitingProcess(events)) }
+        guard let candidates = processCandidates?.items, !candidates.isEmpty,
+              let tree = BackendChatProcesses.tree(root: root, enough: { ChatChildTasks.gone(candidates, tree: $0).isEmpty }) else { return }
+        // Their end is the next thing to hear about.
+        processWatch?.watch(tree.descendants.map(\.pid))
+        let token = generation
+        for id in ChatChildTasks.gone(candidates, tree: tree) {
+            try? accept(.init(.session, value: .object([.init("taskFinished", .string(id)), .init("childTask", .object([
+                .init("id", .string(id)), .init("status", .string("completed")), .init("endedBy", .string("process-gone"))]))])), token: token)
+        }
+    }
     /// The account and folder the next launch runs with. Another account (or folder) never borrows the old one's CLI
     /// conversation (its own id belongs to that account's login): that id is dropped, and the visible conversation
     /// carries on, handed to the new account with the next message (Asad, 12 Oct). Never throws any more.
@@ -842,6 +867,10 @@ public actor BackendHootChatStore {
         launchDirectory = launch.cwd
         process = child; deskRefreshing = false; exitedWhileStarting = nil
         providerLaunch = launch
+        processWatch?.cancel(); processWatch = nil
+        if !hostProcessEvents, let pid = child.processPID {
+            processWatch = BackendChatProcessWatch(root: pid) { [weak self] in Task { await self?.processesChanged() } }
+        }
         consumer = Task { [weak self] in
             var lines = HootChatJSONLines(), stderr = Data()
             for await output in child.output {
@@ -978,6 +1007,8 @@ public actor BackendHootChatStore {
         let waiters = startWaiters; startWaiters = []
         for waiter in waiters { if let error { waiter.continuation.resume(throwing: error) } else { waiter.continuation.resume() } }
         if error == nil { Task { await self.drainQueuedMessages() } }
+        // Tasks the previous AI process was running ended with it.
+        if error == nil { settleGoneTasks() }
     }
     /// R14 (6 Nov): a message sent while the AI is still starting waits for its handshake (bounded by the handshake's own
     /// time limit), the same way for Claude, Codex and Gemini. It is never written into setup and never refused for one
@@ -1602,6 +1633,7 @@ public actor BackendHootChatStore {
         cancelConsentBindings()
         finishInitialization(error: NativeRPCError(code: "interrupted", message: "Hoot's CLI initialization was stopped."))
         generation = UUID(); let child = process; process = nil
+        processWatch?.cancel(); processWatch = nil
         startupReceipt = .null
         invalidateEffectivePolicy("The provider process stopped. No current boundary is confirmed.")
         rpc = nil; decoder = HootChatDecoder(provider: .claude)
@@ -1997,6 +2029,7 @@ public actor BackendHootChatStore {
             lastError = record.value["text"].string
         }
         try append(record)
+        if record.kind == .completed || record.kind == .interrupted || record.value["status"].string == "idle" { settleGoneTasks() }
         if !foregroundWorking, pending.isEmpty { Task { await self.drainQueuedMessages() } }
     }
     private func invalidateEffectivePolicy(_ reason: String) {
@@ -2044,7 +2077,7 @@ public actor BackendHootChatStore {
         _ = await closeOwnedTerminals(reason: "The parent provider connection ended")
         guard generation == token else { return }
         cancelConsentBindings()
-        process = nil; consumer = nil
+        process = nil; consumer = nil; processWatch?.cancel(); processWatch = nil
         invalidateEffectivePolicy("The provider process exited. No current boundary is confirmed.")
         let detail = diagnostic.trimmingCharacters(in: .whitespacesAndNewlines)
         let reason = "Hoot's CLI exited with code \(code)" + (busy ? " during a turn" : " while idle") + (detail.isEmpty ? "" : ": " + String(detail.suffix(400)))
@@ -2114,7 +2147,7 @@ public actor BackendHootChatStore {
         endReason = reason
         if let exitObserver { Task { await exitObserver(reason) } }
         finishInitialization(error: error)
-        lastError = error.localizedDescription; let child = process; process = nil
+        lastError = error.localizedDescription; let child = process; process = nil; processWatch?.cancel(); processWatch = nil
         invalidateEffectivePolicy("The provider process failed. No current boundary is confirmed.")
         busy = false; pending = [:]; generation = UUID(); consumer?.cancel(); consumer = nil
         // The raw CLI error goes to the log; the chat gets one plain line at most.

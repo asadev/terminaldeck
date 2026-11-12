@@ -128,8 +128,9 @@ struct CommentCard: View {
                          : "Waiting to be sent — only you can see it until it goes out")
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if footer {
-                        Button { model.sendNow(c.id) } label: { Label("Send now", systemImage: "paperplane").font(.caption.weight(.medium)) }
+                        NativeSessionButton { model.sendNow(c.id) } label: { Label("Send now", systemImage: "paperplane").font(.caption.weight(.medium)) }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("task-comment-send-now")
                     }
                 }
                 .font(.caption).foregroundStyle(TaskTone.accent)
@@ -166,7 +167,7 @@ struct CommentCard: View {
                     }
                     Spacer()
                     if footer {
-                        Button { model.resolve(c.id, !resolved) } label: {
+                        NativeSessionButton { model.resolve(c.id, !resolved) } label: {
                             Label(resolved ? "Reopen" : "Resolve", systemImage: resolved ? "arrow.counterclockwise" : "checkmark").font(.caption.weight(.medium))
                         }
                         .buttonStyle(.plain)
@@ -216,7 +217,7 @@ struct CommentCard: View {
                 HStack {
                     Reactions(model: model, commentId: c.id, small: false)
                     Spacer()
-                    Button { replyingTo = replyingTo == c.id ? nil : c.id } label: { Label("Reply", systemImage: "arrowshape.turn.up.left").font(.system(size: 13)) }
+                    NativeSessionButton { replyingTo = replyingTo == c.id ? nil : c.id } label: { Label("Reply", systemImage: "arrowshape.turn.up.left").font(.system(size: 13)) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
@@ -374,6 +375,9 @@ struct Reactions: View {
 }
 
 struct ReplyBox: View {
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeScreenActive) private var screenActive
+    @State private var inputRule = NativeSessionInputRule()
     let model: TaskDetailModel
     let onCancel: () -> Void
     let onSend: (String) async -> Bool
@@ -382,15 +386,18 @@ struct ReplyBox: View {
     @State private var insertion: TaskTextInsertion?
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: !busy)
+        return VStack(alignment: .trailing, spacing: 6) {
             TaskTextEditor(text: Binding(get: { value }, set: { value = String($0.prefix(4000)) }), team: model.team, placeholder: "Reply…",
                            font: .systemFont(ofSize: 13), onEscape: onCancel, onSubmit: { go() }, insertion: $insertion)
                 .frame(minHeight: 36, alignment: .topLeading)
                 .padding(.horizontal, 12).padding(.top, 8)
                 .accessibilityLabel("Write a reply")
             HStack(spacing: 6) {
-                Button("Cancel", action: onCancel)
-                Button("Reply") { go() }.buttonStyle(.borderedProminent).tint(TaskTone.accent)
+                NativeSessionButton("Cancel", action: onCancel)
+                NativeSessionButton("Reply") { go() }.buttonStyle(.borderedProminent).tint(TaskTone.accent)
+                    .accessibilityIdentifier("task-reply-submit")
                     .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
             }
             .controlSize(.small)
@@ -401,6 +408,7 @@ struct ReplyBox: View {
     }
 
     private func go() {
+        guard inputRule.acceptsFocus else { return }
         let body = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty, !busy else { return }
         busy = true

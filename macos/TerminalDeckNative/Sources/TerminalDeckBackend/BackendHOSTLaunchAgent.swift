@@ -5,15 +5,35 @@ import TerminalDeckNativeCore
 
 /// Installation is explicit. Constructing a plan touches no launchd service,
 /// installed app, account, Keychain or session.
+///
+/// One name (9 Nov, Asad: "everything on one name … so i can allow only one time"): the keeper's launchd job is one of
+/// Terminal Deck.app's own background items (SMAppService, plist inside the app, see `BackendHOSTService`). launchd starts
+/// the app's own program, which hands over (`execv`) to the stable copied-out keeper. macOS fixes "responsible" when it
+/// starts a process, so permissions, prompts and notices belong to Terminal Deck while app updates still never touch the
+/// running keeper. The copy is named "Terminal Deck" too (Activity Monitor, keychain and crash notices name the file).
 public struct BackendHOSTLaunchAgent: Sendable {
     public static let productionLabel = "dev.terminaldeck.session-host"
+    /// The copied-out keeper's file name. Versions up to 0.21.3 used `legacyKeeperFileName`; their folders still work.
+    public static let keeperFileName = "Terminal Deck"
+    public static let legacyKeeperFileName = "TerminalDeckNativeHelper"
+    /// Folder generation of the full graph's keepers (`<marketing>-host3-<hash>`).
+    public static let hostGeneration = "-host3"
     public let paths: BackendHOSTPaths
     public let version: String
     public let label: String
     public let helper: URL
     public let plist: URL
     public let associatedBundleIdentifier: String
+    private let appBundleIdentifier: String?
     private let childOnly: Bool
+
+    /// The keeper inside one version folder: the new name, or an older build's legacy name when only that exists.
+    public static func keeperExecutable(in folder: URL) -> URL {
+        let current = folder.appendingPathComponent(keeperFileName), legacy = folder.appendingPathComponent(legacyKeeperFileName)
+        var info = stat()
+        if lstat(current.path, &info) != 0, lstat(legacy.path, &info) == 0 { return legacy }
+        return current
+    }
 
     public init(paths: BackendHOSTPaths, version: String, launchAgentsDirectory: URL,
                 label: String? = nil, appBundleIdentifier: String? = Bundle.main.bundleIdentifier) throws {
@@ -38,8 +58,9 @@ public struct BackendHOSTLaunchAgent: Sendable {
         // A scratch keeper belongs to its own app, never the installed app's privacy identity.
         associatedBundleIdentifier = dataRoot == productionRoot ? "dev.terminaldeck.app" :
             (appBundleIdentifier == "dev.terminaldeck.app" ? nil : appBundleIdentifier) ?? "dev.terminaldeck.app.scratch"
-        self.paths = paths; self.version = version; self.label = resolvedLabel
-        helper = paths.directory.appendingPathComponent(version, isDirectory: true).appendingPathComponent("TerminalDeckNativeHelper")
+        self.paths = paths; self.version = version; self.label = resolvedLabel; self.appBundleIdentifier = appBundleIdentifier
+        helper = Self.keeperExecutable(in: paths.directory.appendingPathComponent(version, isDirectory: true))
+        // Only an older version's per-user launch file lives here now; it is removed once its keeper is idle.
         plist = launchAgentsDirectory.appendingPathComponent(resolvedLabel + ".plist")
     }
     /// One install directory per helper BUILD (QUIT, 9 Oct): the marketing version plus a short
@@ -64,21 +85,26 @@ public struct BackendHOSTLaunchAgent: Sendable {
         for name in names where name != version && !name.hasPrefix(".") {
             let folder = directory.appendingPathComponent(name, isDirectory: true)
             var info = stat()
+            // Exactly one keeper (new or legacy name) and nothing else but this copy's own library links.
             guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid(),
-                  let inside = try? FileManager.default.contentsOfDirectory(atPath: folder.path), inside.contains("TerminalDeckNativeHelper"),
-                  inside.filter({ $0 != "TerminalDeckNativeHelper" }).allSatisfy({ name in
+                  let inside = try? FileManager.default.contentsOfDirectory(atPath: folder.path),
+                  let keeper = [keeperFileName, legacyKeeperFileName].first(where: { inside.contains($0) }),
+                  inside.filter({ $0 != keeper }).allSatisfy({ name in
                       let link = folder.appendingPathComponent(name)
                       var entry = stat()
                       return ["framework", "dylib"].contains(link.pathExtension)
                           && lstat(link.path, &entry) == 0 && entry.st_mode & S_IFMT == S_IFLNK && entry.st_uid == geteuid()
                           && ((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))?.hasSuffix("/Contents/MacOS/" + name) == true)
                   }),
-                  lstat(folder.appendingPathComponent("TerminalDeckNativeHelper").path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
+                  lstat(folder.appendingPathComponent(keeper).path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
             if (try? FileManager.default.removeItem(at: folder)) != nil { removed.append(name) }
         }
         return removed
     }
 
+    /// The per-user launch description older versions (up to 0.21.3) installed in ~/Library/LaunchAgents. Nothing loads
+    /// it any more: production uses Terminal Deck's own background item (`BackendHOSTService.properties`), and isolated
+    /// copies run a child keeper. Kept as the plan's description for the isolation checks.
     public func propertyList() throws -> Data {
         var value: [String: Any] = [
             "Label": label,
@@ -147,19 +173,13 @@ public struct BackendHOSTLaunchAgent: Sendable {
             if childOnly {
                 if pruneStaleHelpers { _ = Self.pruneOtherHelpers(in: paths.directory, keeping: version) }
             } else {
-                try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
-                // An old, idle launchd registration retains old ProgramArguments.
-                // The owner lock proves it cannot own any conforming live host.
-                let service = "gui/" + String(geteuid()) + "/" + label
-                if let registered = try await Self.registeredArguments(service) {
-                    guard registered.count == programArguments.count, registered[1] == "--session-host", registered[2] == paths.dataDirectory.path,
-                          registered.count == 4 || registered[4] == paths.namespace,
-                          registered[0].hasPrefix(paths.directory.path + "/") else {
-                        throw BackendHOSTFailure.invalid("This launchd label belongs to another data folder. It was left untouched.")
-                    }
-                    guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.unavailable }
+                // Only the installed release app owns the production background item; a renamed copy never claims it.
+                guard appBundleIdentifier == BackendHOSTService.releaseBundleIdentifier else {
+                    throw BackendHOSTFailure.invalid("Only the installed Terminal Deck app can start the session keeper for this data folder.")
                 }
-                try BackendHOSTFiles.atomicWrite(try propertyList(), to: plist)
+                // The owner lock proves no conforming live host: an older version's idle launch file can go now.
+                // Terminal Deck's own item takes its label after the lock is released (startAfterInstall).
+                try await retireLegacyRegistration()
                 // Still under the owner lock and after the old registration was booted out: older
                 // builds' helpers are no longer referenced (77 MB each).
                 if pruneStaleHelpers { _ = Self.pruneOtherHelpers(in: paths.directory, keeping: version) }
@@ -167,6 +187,26 @@ public struct BackendHOSTLaunchAgent: Sendable {
         }
         // The owner lock is now released before the helper starts.
         return try await startAfterInstall(sourceHelper: sourceHelper)
+    }
+
+    /// The production start, run only after the owner lock is released (review-one-name-0609 #1): the request first,
+    /// then the item (registering makes launchd run the app program once at once, and that run must already find the
+    /// request), then kickstart. A job already running from that load-time run is fine; the socket wait is the proof.
+    struct ServiceStart: Sendable {
+        var writeRequest: @Sendable () throws -> Void
+        var register: @Sendable () throws -> Void
+        var kickstart: @Sendable () async throws -> Int32
+        var loaded: @Sendable () async throws -> Bool
+    }
+    static func startServiceItem(_ steps: ServiceStart) async throws {
+        try steps.writeRequest()
+        try steps.register()
+        let status = try await steps.kickstart()
+        if status != 0 {
+            guard try await steps.loaded() else {
+                throw BackendHOSTFailure.remote("Terminal Deck's background item could not start the session keeper (status \(status)).")
+            }
+        }
     }
 
     private enum OwnerLock { case locked(BackendHOSTFileLock), attached(BackendHOSTClient) }
@@ -189,20 +229,21 @@ public struct BackendHOSTLaunchAgent: Sendable {
     }
 
     private func startAfterInstall(sourceHelper: URL) async throws -> Result {
-        // No '-k': kickstart must never kill an occupied service. A bootstrap
-        // failure is accepted only if this exact label is already registered.
+        // No '-k': kickstart must never kill an occupied service. A kickstart
+        // failure is accepted only if this exact label is loaded.
         let domain = "gui/" + String(geteuid())
         let service = domain + "/" + label
         if childOnly {
             // A dev helper can use libraries beside its executable. Keep it in its own app bundle.
             try BackendHOSTChildKeeper.start(helper: sourceHelper, arguments: Array(programArguments.dropFirst()), data: paths.dataDirectory)
         } else {
-            let bootstrap = try await Self.launchctl(["bootstrap", domain, plist.path])
-            if bootstrap != 0 {
-                guard try await Self.launchctl(["print", service]) == 0 else { throw BackendHOSTFailure.remote("Launchd could not register the session helper (status \(bootstrap)).") }
-            }
-            let kickstart = try await Self.launchctl(["kickstart", service])
-            guard kickstart == 0 else { throw BackendHOSTFailure.remote("Launchd could not start the registered session helper (status \(kickstart)).") }
+            let request = paths.directory.appendingPathComponent(BackendHOSTService.launchRequestFile)
+            let namespace = paths.namespace, version = version
+            try await Self.startServiceItem(.init(
+                writeRequest: { try BackendHOSTFiles.atomicWrite(Data(version.utf8), to: request) },
+                register: { try BackendHOSTService.ensureRegistered(namespace: namespace) },
+                kickstart: { try await Self.launchctl(["kickstart", service]) },
+                loaded: { try await Self.launchctl(["print", service]) == 0 }))
         }
         // Startup-only retry, bounded to fifteen seconds. No resident polling.
         for _ in 0..<150 {
@@ -233,9 +274,48 @@ public struct BackendHOSTLaunchAgent: Sendable {
         let installationLock = try BackendHOSTFileLock(paths.directory.appendingPathComponent("install.lock"))
         defer { withExtendedLifetime(installationLock) {} }
         try installHelper(from: sourceHelper)
-        try BackendHOSTFiles.atomicWrite(try propertyList(), to: plist)
         let service = "gui/\(geteuid())/" + label
-        guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.remote("The one helper stop was requested but launchd did not confirm it. Do not retry.") }
+        if let job = try await Self.registeredJob(service), Self.isAppItem(job) {
+            // Terminal Deck's own background item: end the old keeper once. The item stays registered; launchd or the
+            // app's reconnect starts this build through the request below.
+            try BackendHOSTFiles.atomicWrite(Data(version.utf8), to: paths.directory.appendingPathComponent(BackendHOSTService.launchRequestFile))
+            guard try await Self.launchctl(["kill", "SIGTERM", service]) == 0 else { throw BackendHOSTFailure.remote("The one helper stop was requested but launchd did not confirm it. Do not retry.") }
+        } else {
+            // An older version's own launch file: end it once and remove the file; the reconnect registers the item.
+            guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.remote("The one helper stop was requested but launchd did not confirm it. Do not retry.") }
+            try removeLegacyPlist()
+        }
+    }
+    /// Versions up to 0.21.3 registered each keeper from ~/Library/LaunchAgents: a Login Items row and privacy identity
+    /// of its own, named after the copied file. Only under the owner lock (no conforming live host): end that idle
+    /// registration and remove its file. A registration of Terminal Deck's own background item is left alone.
+    private func retireLegacyRegistration() async throws {
+        let service = "gui/" + String(geteuid()) + "/" + label
+        if let job = try await Self.registeredJob(service), !Self.isAppItem(job) {
+            let registered = job.arguments ?? []
+            guard registered.count == (paths.namespace == nil ? 4 : 5), registered[1] == "--session-host", registered[2] == paths.dataDirectory.path,
+                  registered.count == 4 || registered[4] == paths.namespace,
+                  registered[0].hasPrefix(paths.directory.path + "/") else {
+                throw BackendHOSTFailure.invalid("This launchd label belongs to another data folder. It was left untouched.")
+            }
+            guard try await Self.launchctl(["bootout", service]) == 0 else { throw BackendHOSTFailure.unavailable }
+        }
+        try removeLegacyPlist()
+    }
+    /// Removes the old per-user launch file only when it is ours: this label, and a keeper inside this data folder.
+    private func removeLegacyPlist() throws {
+        var info = stat()
+        guard lstat(plist.path, &info) == 0 else {
+            guard errno == ENOENT else { throw BackendHOSTFailure.io(errno) }
+            return
+        }
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_uid == geteuid(),
+              let raw = try? PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any],
+              raw["Label"] as? String == label,
+              let program = (raw["ProgramArguments"] as? [String])?.first, program.hasPrefix(paths.directory.path + "/") else {
+            throw BackendHOSTFailure.invalid("A launch file named like the session keeper belongs to something else. It was left untouched.")
+        }
+        guard unlink(plist.path) == 0 else { throw BackendHOSTFailure.io(errno) }
     }
     /// Account handling pins a private helper too. Its library links stay beside that helper,
     /// pointing to this test copy's libraries, so no library bytes or registration need duplicating.
@@ -257,7 +337,10 @@ public struct BackendHOSTLaunchAgent: Sendable {
         }
     }
 
-    private func installHelper(from source: URL) throws {
+    private func installHelper(from source: URL) throws { try Self.installKeeper(from: source, to: helper) }
+    /// Copies the bundled keeper to its version folder (private, 0700). Idempotent and race-safe: an existing copy must
+    /// hold the same bytes; a new one appears by rename, never by writing over a running keeper.
+    static func installKeeper(from source: URL, to helper: URL) throws {
         var info = stat()
         guard source.isFileURL, lstat(source.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               access(source.path, X_OK) == 0 else { throw BackendHOSTFailure.invalid("The bundled session helper is missing.") }
@@ -284,15 +367,24 @@ public struct BackendHOSTLaunchAgent: Sendable {
     private static func launchctl(_ arguments: [String]) async throws -> Int32 {
         try await NativeChild.run(.init("/bin/launchctl", arguments, output: .discard, errors: .discard), timeoutMilliseconds: 60_000, outputLimit: 1).code
     }
-    private static func registeredArguments(_ service: String) async throws -> [String]? {
+    /// A loaded job as `launchctl print` shows it, or nil when the label is not loaded. A job the app registered through
+    /// SMAppService prints `managed_by = com.apple.xpc.ServiceManagement` and `program identifier`, not `program =`
+    /// (seen on macOS 27.3); an older version's own launch file prints its `program` and `arguments`.
+    typealias Job = (program: String?, arguments: [String]?, managedBy: String?)
+    static func registeredJob(_ service: String) async throws -> Job? {
         let run = try await NativeChild.run(.init("/bin/launchctl", ["print", service], errors: .discard), timeoutMilliseconds: 15_000, outputLimit: 256 * 1024)
         guard !run.outputLimited, !run.timedOut else { throw BackendHOSTFailure.invalid("The registered session service could not be verified.") }
-        let data = run.output
         guard run.code == 0 else { return nil }
-        let lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard let start = lines.firstIndex(of: "arguments = {"), let end = lines[(start + 1)...].firstIndex(of: "}") else {
-            throw BackendHOSTFailure.invalid("The registered session service's arguments could not be verified.")
-        }
-        return Array(lines[(start + 1)..<end])
+        let lines = String(decoding: run.output, as: UTF8.self).components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        func value(_ key: String) -> String? { lines.first { $0.hasPrefix(key + " = ") }.map { String($0.dropFirst(key.count + 3)) } }
+        let program = value("program"), managedBy = value("managed_by")
+        guard let start = lines.firstIndex(of: "arguments = {"), let end = lines[(start + 1)...].firstIndex(of: "}") else { return (program, nil, managedBy) }
+        return (program, Array(lines[(start + 1)..<end]), managedBy)
+    }
+    /// Terminal Deck's own background item (registered through SMAppService), never an older version's launch file.
+    static func isAppItem(_ job: Job) -> Bool {
+        if job.managedBy == "com.apple.xpc.ServiceManagement" { return true }
+        if let arguments = job.arguments, arguments.count >= 2 { return arguments[1] == BackendHOSTService.launchArgument }
+        return job.program?.hasSuffix("/" + BackendHOSTService.bundleProgram) == true
     }
 }

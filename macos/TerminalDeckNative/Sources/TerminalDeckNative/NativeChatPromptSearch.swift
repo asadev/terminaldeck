@@ -25,14 +25,14 @@ struct NativeChatPromptSearchView: View {
     @State private var problem: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Find a past prompt in this chat", text: $query)
+            NativeSessionTextField("Find a past prompt in this chat", text: $query)
                 .accessibilityLabel("Find a past prompt")
             if !query.isEmpty { ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(model.searchPrompts(query).reversed()) { row in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(row.value["text"].string ?? "").lineLimit(6).textSelection(.enabled)
-                            Button("Insert into draft") { do { try model.insertPrompt(row.id); problem = nil } catch { problem = error.localizedDescription } }
+                            NativeSessionButton("Insert into draft") { do { try model.insertPrompt(row.id); problem = nil } catch { problem = error.localizedDescription } }
                                 .disabled(model.readOnly || model.loading || model.changingConversation)
                         }
                     }

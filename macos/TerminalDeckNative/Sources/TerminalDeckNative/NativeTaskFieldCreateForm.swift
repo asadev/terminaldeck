@@ -34,7 +34,7 @@ struct CreateFieldPanel: View {
             let info = TaskFields.info(kind)
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
-                    Button { picking = true } label: {
+                    NativeSessionButton{ picking = true } label: {
                         HStack(spacing: 6) {
                             FieldTypeIcon(kind: kind, size: 18)
                             Text(info.name).font(.system(size: 13, weight: .medium))
@@ -47,23 +47,23 @@ struct CreateFieldPanel: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Field type: \(info.name). Change type")
                     Spacer()
-                    Button(action: onCancel) { Image(systemName: "xmark").font(.system(size: 12)) }
+                    NativeSessionButton(action: onCancel) { Image(systemName: "xmark").font(.system(size: 12)) }
                         .buttonStyle(.plain).foregroundStyle(.tertiary).accessibilityLabel("Close")
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     FieldCaption(text: "Field name", required: true)
-                    TextField("Enter name…", text: Binding(get: { label }, set: { label = String($0.prefix(80)); error = nil }))
+                    NativeSessionTextField("Enter name…", text: Binding(get: { label }, set: { label = String($0.prefix(80)); error = nil }))
                         .textFieldStyle(.roundedBorder)
-                        .focused($nameFocused)
-                        .onSubmit { if nameOk && !saving { create() } }
+                        .sessionFocused($nameFocused)
+                        .sessionOnSubmit { if nameOk && !saving { create() } }
                         .accessibilityLabel("Field name")
                 }
                 FieldConfigForm(kind: kind, config: Binding(get: { config }, set: { config = $0; error = nil }), siblings: siblings, team: team)
                 if let error { Text(error).font(.caption).foregroundStyle(TaskTone.input) }
                 HStack(spacing: 8) {
                     Spacer()
-                    Button("Cancel", action: onCancel)
-                    Button { create() } label: {
+                    NativeSessionButton("Cancel", action: onCancel)
+                    NativeSessionButton{ create() } label: {
                         HStack(spacing: 4) {
                             if saving { ProgressView().controlSize(.mini) }
                             Text("Create")

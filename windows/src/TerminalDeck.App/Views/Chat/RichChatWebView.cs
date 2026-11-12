@@ -34,7 +34,12 @@ internal sealed class RichChatWebView : Grid
     Children.Add(pending);
     EffectiveViewportChanged += async (_, args) => { if (args.EffectiveViewport.Width > 0 && args.EffectiveViewport.Height > 0) await StartAsync(); };
     Unloaded += (_, _) => { generation++; web?.Close(); web = null; starting = false; Children.Clear(); Children.Add(pending); };
-    ActualThemeChanged += (_, _) => Post(new { type = "theme", theme = Theme() });
+    ActualThemeChanged += (_, _) => { ColorScheme(web?.CoreWebView2); Post(new { type = "theme", theme = Theme() }); };
+  }
+  // prefers-color-scheme inside messages and drawings follows the app's theme, not Windows' own setting.
+  private void ColorScheme(CoreWebView2? core)
+  {
+    if (core is not null) core.Profile.PreferredColorScheme = ActualTheme == ElementTheme.Dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
   }
   private Dictionary<string, string> StyleVariables()
   {
@@ -58,7 +63,7 @@ internal sealed class RichChatWebView : Grid
       return FormattableString.Invariant($"rgba({color.R},{color.G},{color.B},{color.A / 255d})");
     }
     return new { dark = ActualTheme == ElementTheme.Dark, variables = StyleVariables(), colors = new Dictionary<string, string>
-      { ["ink"] = Color("DeckInkBrush"), ["background"] = Color("DeckCanvasBrush"), ["tint"] = Color("DeckHoverBrush"), ["accent"] = Color("DeckProjectBlueBrush") } };
+      { ["ink"] = Color("DeckInkBrush"), ["background"] = Color("DeckCanvasBrush"), ["tint"] = Color("DeckHoverBrush"), ["accent"] = Color("DeckProjectBlueBrush"), ["muted"] = Color("DeckSecondaryInkBrush") } };
   }
   private void Post(object value)
   {
@@ -85,6 +90,7 @@ internal sealed class RichChatWebView : Grid
       core.Settings.IsPasswordAutosaveEnabled = false;
       core.Settings.IsGeneralAutofillEnabled = false;
       core.Settings.IsWebMessageEnabled = true;
+      ColorScheme(core);
       core.SetVirtualHostNameToFolderMapping("rich-chat.deck.invalid", Path.Combine(AppContext.BaseDirectory, "Assets", "chat"), CoreWebView2HostResourceAccessKind.Allow);
       core.NavigationCompleted += (_, args) => { if (args.IsSuccess && app is null) Post(new { type = "content", html }); };
       core.NavigationStarting += (_, args) => args.Cancel = args.Uri != "about:blank";

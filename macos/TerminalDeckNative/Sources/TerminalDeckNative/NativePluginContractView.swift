@@ -62,8 +62,8 @@ import TerminalDeckNativeCore
                 if model.pending { ProgressView("Waiting for the plugin acknowledgement…").controlSize(.small) }
                 if let problem = model.problem ?? model.state["problem"].string { Text(problem).font(.caption).foregroundStyle(DeckTokens.bad) }
                 HStack {
-                    if !enabled { Button("Start plugin explicitly") { act("start") }.disabled(model.pending || !plugin.enabled || !plugin.allowed) }
-                    Button("Refresh cards") { act("read") }.disabled(model.pending || !enabled || !plugin.granted.contains("ui.contribute") || !methods.contains("ui/read"))
+                    if !enabled { NativeSessionButton("Start plugin explicitly") { act("start") }.disabled(model.pending || !plugin.enabled || !plugin.allowed) }
+                    NativeSessionButton("Refresh cards") { act("read") }.disabled(model.pending || !enabled || !plugin.granted.contains("ui.contribute") || !methods.contains("ui/read"))
                 }
                 if enabled && methods.isEmpty { Text("Unavailable: this protocol-1 plugin has not advertised the extension methods.").font(.caption).foregroundStyle(.secondary) }
                 ForEach(model.state["cards"].elements ?? [], id: \.compact) { card in
@@ -77,7 +77,7 @@ import TerminalDeckNativeCore
                             ForEach(declaration["actions"].elements ?? [], id: \.compact) { action in
                                 VStack(alignment: .leading, spacing: 4) {
                                     ForEach(action["inputSchema"]["properties"].fields ?? [], id: \.key) { field in input(card, action, field) }
-                                    Button(action["title"].string ?? "Run") { Task { await model.runCard(card: card, action: action) } }.disabled(model.pending || !enabled || action["kind"].string == "job" && (!methods.contains("jobs/start") || !plugin.granted.contains("jobs.run")) || action["kind"].string == "tool" && !plugin.granted.contains("tools.contribute"))
+                                    NativeSessionButton(action["title"].string ?? "Run") { Task { await model.runCard(card: card, action: action) } }.disabled(model.pending || !enabled || action["kind"].string == "job" && (!methods.contains("jobs/start") || !plugin.granted.contains("jobs.run")) || action["kind"].string == "tool" && !plugin.granted.contains("tools.contribute"))
                                 }
                             }
                         }.padding(8).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
@@ -87,7 +87,7 @@ import TerminalDeckNativeCore
                     HStack {
                         Text("Finished-task events: " + (model.state["events"]["paused"].bool == false ? "Receiving" : "Paused"))
                         Text("\(model.state["events"]["pending"].elements?.count ?? 0) waiting").foregroundStyle(.secondary)
-                        Button(model.state["events"]["paused"].bool == false ? "Pause events" : "Resume events") { act(model.state["events"]["paused"].bool == false ? "events-pause" : "events-resume") }.disabled(model.pending || !enabled || !methods.contains("events/deliver") || !plugin.granted.contains("events.receive"))
+                        NativeSessionButton(model.state["events"]["paused"].bool == false ? "Pause events" : "Resume events") { act(model.state["events"]["paused"].bool == false ? "events-pause" : "events-resume") }.disabled(model.pending || !enabled || !methods.contains("events/deliver") || !plugin.granted.contains("events.receive"))
                     }.font(.caption)
                     if let overflow = model.state["events"]["overflow"].number, overflow > 0 { Text("\(Int(overflow)) events were refused because the 50-event backlog was full. Event work is held.").font(.caption).foregroundStyle(DeckTokens.warn) }
                     if let problem = model.state["events"]["problem"].string { Text(problem).font(.caption).foregroundStyle(DeckTokens.warn) }
@@ -98,9 +98,9 @@ import TerminalDeckNativeCore
                         Text("Receipt " + (job["request"].string ?? "") + " · attempt " + (job["attempt"].string ?? "")).font(.caption2).textSelection(.enabled)
                         if let reason = job["reason"].string { Text(reason).font(.caption).foregroundStyle(.secondary) }
                         if !job["checkpoint"].isNullish { Text("Untrusted checkpoint: " + job["checkpoint"].compact).font(.caption).lineLimit(4).textSelection(.enabled) }
-                        if ["queued", "running", "pause-requested"].contains(job["state"].string ?? "") { Button("Pause job") { act("job-pause") }.disabled(model.pending || !enabled) }
+                        if ["queued", "running", "pause-requested"].contains(job["state"].string ?? "") { NativeSessionButton("Pause job") { act("job-pause") }.disabled(model.pending || !enabled) }
                         if ["paused", "interrupted"].contains(job["state"].string ?? "") {
-                            Button("Resume this job explicitly") { Task { await model.perform(.object([.init("op", .string("job-resume")), .init("job", job["job"]), .init("project", job["project"]), .init("input", job["input"])])) } }.disabled(model.pending || !enabled || !methods.contains("jobs/start") || job["input"].fields == nil || !plugin.projects.contains(job["project"].string ?? ""))
+                            NativeSessionButton("Resume this job explicitly") { Task { await model.perform(.object([.init("op", .string("job-resume")), .init("job", job["job"]), .init("project", job["project"]), .init("input", job["input"])])) } }.disabled(model.pending || !enabled || !methods.contains("jobs/start") || job["input"].fields == nil || !plugin.projects.contains(job["project"].string ?? ""))
                         }
                     }
                 }
@@ -123,7 +123,7 @@ import TerminalDeckNativeCore
             Picker(field.key, selection: Binding(get: { model.values[key] ?? "0" }, set: { model.values[key] = $0 })) { ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in Text(display(choice)).tag(String(index)) } }
         } else if field.value["type"].string == "boolean" {
             Toggle(field.key, isOn: Binding(get: { model.values[key] == "true" }, set: { model.values[key] = $0 ? "true" : "false" }))
-        } else { TextField(field.key, text: value).textFieldStyle(.roundedBorder) }
+        } else { NativeSessionTextField(field.key, text: value).textFieldStyle(.roundedBorder) }
     }
 }
 

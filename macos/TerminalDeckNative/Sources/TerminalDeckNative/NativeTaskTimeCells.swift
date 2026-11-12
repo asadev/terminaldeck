@@ -15,7 +15,7 @@ struct TrackTimeCell: View {
         let running = extras.timeEntries.first { $0.userId == me?.id && $0.endedAt == nil }
         let total = CrmTime.totalTracked(extras.timeEntries, now: now)
         let elapsed = running.flatMap { CrmTime.date($0.startedAt) }.map { max(0, now.timeIntervalSince($0).rounded(.down)) } ?? 0
-        Button { open.toggle() } label: {
+        NativeSessionButton{ open.toggle() } label: {
             HStack(spacing: 6) {
                 if running != nil {
                     Image(systemName: "stop.fill").font(.system(size: 7)).foregroundStyle(.white)
@@ -87,11 +87,11 @@ struct TimePopover: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 8) {
-                    TextField("Enter time (ex: 3h 20m) or start timer", text: $text)
+                    NativeSessionTextField("Enter time (ex: 3h 20m) or start timer", text: $text)
                         .textFieldStyle(.plain)
-                        .onSubmit { if let parsed, !busy { add(parsed) } }
+                        .sessionOnSubmit { if let parsed, !busy { add(parsed) } }
                         .accessibilityLabel("Enter time")
-                    Button {
+                    NativeSessionButton{
                         run { running != nil ? await model.timeStop() : await model.timeStart() }
                     } label: {
                         Image(systemName: running != nil ? "stop.fill" : "play.fill").font(.system(size: 11)).foregroundStyle(.white)
@@ -106,13 +106,13 @@ struct TimePopover: View {
                 Divider()
                 HStack(spacing: 8) {
                     Image(systemName: "calendar").foregroundStyle(.tertiary)
-                    DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date).labelsHidden()
+                    NativeSessionDatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date).labelsHidden()
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 Divider()
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "text.alignleft").foregroundStyle(.tertiary)
-                    TextField("Notes", text: Binding(get: { note }, set: { note = String($0.prefix(2000)) }), axis: .vertical)
+                    NativeSessionTextField("Notes", text: Binding(get: { note }, set: { note = String($0.prefix(2000)) }), axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...4)
                 }
@@ -124,14 +124,14 @@ struct TimePopover: View {
                         ForEach(newTags, id: \.self) { t in
                             HStack(spacing: 2) {
                                 Text(t).font(.caption)
-                                Button { newTags.removeAll { $0 == t } } label: { Image(systemName: "xmark").font(.system(size: 8)) }
+                                NativeSessionButton{ newTags.removeAll { $0 == t } } label: { Image(systemName: "xmark").font(.system(size: 8)) }
                                     .buttonStyle(.plain).accessibilityLabel("Remove time tag \(t)")
                             }
                             .padding(.horizontal, 6).background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.12)))
                         }
-                        TextField("Add tags", text: $tagText)
+                        NativeSessionTextField("Add tags", text: $tagText)
                             .textFieldStyle(.plain)
-                            .onSubmit {
+                            .sessionOnSubmit {
                                 let t = String(tagText.trimmingCharacters(in: .whitespaces).prefix(40))
                                 if !t.isEmpty && !newTags.contains(t) && newTags.count < 10 { newTags.append(t) }
                                 tagText = ""
@@ -146,7 +146,7 @@ struct TimePopover: View {
                 Toggle("Billable", isOn: $billable).toggleStyle(.switch).controlSize(.mini).labelsHidden().accessibilityLabel("Billable")
                 Text("Billable").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button {
+                NativeSessionButton{
                     if let parsed { add(parsed, clearAll: true) }
                 } label: {
                     HStack(spacing: 4) {
@@ -183,7 +183,7 @@ struct TimePopover: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 if e.billable { Text("$").font(.caption).foregroundStyle(TaskTone.accent) }
                                 if e.userId == me?.id && e.endedAt != nil {
-                                    Button { run { await model.timeDelete(e.id) } } label: { Image(systemName: "xmark").font(.caption2) }
+                                    NativeSessionButton{ run { await model.timeDelete(e.id) } } label: { Image(systemName: "xmark").font(.caption2) }
                                         .buttonStyle(.plain).foregroundStyle(.tertiary)
                                         .opacity(hovered == e.id ? 1 : 0)
                                         .accessibilityLabel("Remove time entry")
@@ -201,11 +201,11 @@ struct TimePopover: View {
                 Text("Time estimate").foregroundStyle(.secondary)
                 Spacer()
                 if model.canEditRow {
-                    TextField("e.g. 2h", text: $estimate)
+                    NativeSessionTextField("e.g. 2h", text: $estimate)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 96)
-                        .onSubmit(saveEstimate)
+                        .sessionOnSubmit(saveEstimate)
                         .accessibilityLabel("Time estimate")
                 } else {
                     Text(extras?.estimateMinutes.map { CrmTime.duration($0 * 60) } ?? "—").foregroundStyle(.secondary)

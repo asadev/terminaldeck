@@ -29,8 +29,8 @@ struct NativeMemoryDiaryPart: View {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search what was said", text: $query).textFieldStyle(.plain).focused($focused).onSubmit(search)
-                    if !query.isEmpty { Button { stopSearch(); query = ""; result = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary) }
+                    NativeSessionTextField("Search what was said", text: $query).sessionFocused($focused).onSubmit(search).textFieldStyle(.plain)
+                    if !query.isEmpty { NativeSessionButton { stopSearch(); query = ""; result = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary) }
                 }
                 .padding(.horizontal, 10).frame(height: 30)
                 .background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 8))
@@ -47,7 +47,7 @@ struct NativeMemoryDiaryPart: View {
                     Toggle("Show rewound (\(rewoundCount))", isOn: $showRewound).toggleStyle(.switch)
                         .help("Rows from before a rewind: kept as history, no longer part of the conversation")
                 }
-                Button("Search", action: search).buttonStyle(.borderedProminent).disabled(query.trimmingCharacters(in: .whitespaces).isEmpty || searching)
+                NativeSessionButton("Search", action: search).buttonStyle(.borderedProminent).disabled(query.trimmingCharacters(in: .whitespaces).isEmpty || searching)
             }.padding(.horizontal, 20)
             if let notice = result?.notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20) }
             if searching {
@@ -57,7 +57,7 @@ struct NativeMemoryDiaryPart: View {
                     DeckEmpty(title: "Nothing found", message: "Try other words, or search by meaning.", symbol: "magnifyingglass").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     NativeMemoryColumn {
-                        DeckCard(padding: 6) { VStack(spacing: 0) { ForEach(result.hits) { hit in Button { jump(hit) } label: { hitRow(hit) }.buttonStyle(DeckRowStyle()) } } }
+                        DeckCard(padding: 6) { VStack(spacing: 0) { ForEach(result.hits) { hit in NativeSessionButton { jump(hit) } label: { hitRow(hit) }.buttonStyle(DeckRowStyle()) } } }
                     }
                 }
             } else if rows.isEmpty {
@@ -68,7 +68,7 @@ struct NativeMemoryDiaryPart: View {
                     DeckCard(padding: 6) {
                         VStack(spacing: 0) {
                             ForEach(shown) { entry in
-                                Button { openMoment(entry.id) } label: { entryRow(entry, strong: false, writers) }.buttonStyle(DeckRowStyle())
+                                NativeSessionButton { openMoment(entry.id) } label: { entryRow(entry, strong: false, writers) }.buttonStyle(DeckRowStyle())
                             }
                         }
                     }
@@ -205,7 +205,7 @@ struct NativeMemoryDiaryPart: View {
                     VStack(spacing: 2) { ForEach(moment.rows) { entryRow($0, strong: $0.id == moment.id, writers).id($0.id) } }
                 }.onAppear { proxy.scrollTo(moment.id, anchor: .center) }
             }
-            HStack { Spacer(); Button("Done") { self.moment = nil }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); NativeSessionButton("Done") { self.moment = nil }.keyboardShortcut(.defaultAction) }
         }.padding(20).frame(width: 720, height: 560)
     }
 }
@@ -278,14 +278,14 @@ struct NativeMemoryBoardPart: View {
                 if let state = row.state { NativeMemoryTag(text: state.title, color: NativeMemoryTag.color(state)) }
                 Text(NativeMemoryStore.when(row.updatedAt)).font(.caption).foregroundStyle(.secondary)
             }
-            Button { store.act("board", done: "Taken off the board") { _ = try await $0.archiveBoardRow(id: row.id); return nil } } label: {
+            NativeSessionButton { store.act("board", done: "Taken off the board") { _ = try await $0.archiveBoardRow(id: row.id); return nil } } label: {
                 Image(systemName: "xmark.circle").frame(width: 24, height: 24).contentShape(.rect)
             }.buttonStyle(.borderless).foregroundStyle(.secondary).disabled(store.busy != nil || store.fixture)
                 .help("Take off the board").accessibilityLabel("Take off the board")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .contextMenu {
-            Button("Take off the board") { store.act("board", done: "Taken off the board") { _ = try await $0.archiveBoardRow(id: row.id); return nil } }
+            NativeSessionButton("Take off the board") { store.act("board", done: "Taken off the board") { _ = try await $0.archiveBoardRow(id: row.id); return nil } }
         }
     }
 }

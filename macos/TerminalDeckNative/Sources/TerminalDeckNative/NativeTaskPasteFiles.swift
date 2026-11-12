@@ -9,17 +9,20 @@ import TerminalDeckNativeCore
 /// the responder chain while the popup is up, so anything that types takes a paste first;
 /// with nothing to type in, Edit ▸ Paste (⌘V) reaches it.
 @MainActor
-final class TaskPasteDoor: NSResponder, NSMenuItemValidation {
+final class TaskPasteDoor: NSResponder, NSMenuItemValidation, NativeSessionInputProtected {
+    let inputRule = NativeSessionInputRule()
+    var acceptsWindowInput: (() -> Bool)?
     var attach: (@MainActor ([URL]) -> Void)?
     var board: NSPasteboard = .general
 
     @objc func paste(_ sender: Any?) {
-        guard let files = TaskRichText.RichTextView.files(on: board), !files.isEmpty else { return }
+        guard inputRule.acceptsFocus, acceptsWindowInput?() != false,
+              let files = TaskRichText.RichTextView.files(on: board), !files.isEmpty else { return }
         attach?(files)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action == #selector(paste(_:)) && TaskRichText.RichTextView.hasFiles(on: board)
+        inputRule.acceptsFocus && acceptsWindowInput?() != false && menuItem.action == #selector(paste(_:)) && TaskRichText.RichTextView.hasFiles(on: board)
     }
 }
 
@@ -29,21 +32,40 @@ final class TaskPasteDoor: NSResponder, NSMenuItemValidation {
 /// that ⌘V is caught here first.
 struct TaskPasteDoorHost: NSViewRepresentable {
     let attach: @MainActor ([URL]) -> Void
+    @Environment(\.nativeSessionInputScope) private var scope
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.isEnabled) private var enabled
 
     func makeNSView(context: Context) -> DoorView {
         let view = DoorView()
-        view.door.attach = attach
+        view.door.acceptsWindowInput = { [weak view] in view?.acceptsFileInput == true }
+        updateNSView(view, context: context)
         return view
     }
 
-    func updateNSView(_ view: DoorView, context: Context) { view.door.attach = attach }
+    func updateNSView(_ view: DoorView, context: Context) {
+        view.door.inputRule.bind(to: scope)
+        view.door.inputRule.update(active: scope == nil ? active : true, enabled: enabled)
+        view.door.attach = attach
+    }
 
-    static func dismantleNSView(_ view: DoorView, coordinator: ()) { view.uninstall() }
+    static func dismantleNSView(_ view: DoorView, coordinator: ()) {
+        view.door.inputRule.update(active: false, enabled: false)
+        view.uninstall()
+    }
 
     final class DoorView: NSView {
         let door = TaskPasteDoor()
         private weak var host: NSWindow?
         private var monitor: Any?
+
+        var acceptsFileInput: Bool {
+            guard door.inputRule.acceptsFocus, let host,
+                  !isHiddenOrHasHiddenAncestor else { return false }
+            if host.isKeyWindow { return true }
+            guard let key = NSApp.keyWindow else { return false }
+            return key === host || key.parent === host || key.sheetParent === host
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -65,7 +87,7 @@ struct TaskPasteDoorHost: NSViewRepresentable {
         /// ⌘V with a file or picture on the clipboard, typed in a plain box of the popup (or
         /// one of its popovers and sheets): attached, and the box gets nothing.
         func take(_ event: NSEvent) -> Bool {
-            guard let host, let window = event.window,
+            guard acceptsFileInput, let host, let window = event.window,
                   window === host || window.parent === host || window.sheetParent === host,
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                   event.charactersIgnoringModifiers?.lowercased() == "v",

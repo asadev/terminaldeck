@@ -16,9 +16,9 @@ struct NativeAppsSRV2ServerPage: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    Button("Back to apps", action: onBack)
+                    NativeSessionButton("Back to apps", action: onBack)
                     Spacer(minLength: 12)
-                    Button { model.load() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    NativeSessionButton { model.load() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .disabled(model.loading || model.busy != nil)
                 }
                 NativeSettingsHead(title: "Server", blurb: "How \(serverName) runs your apps when this Mac is off.")
@@ -91,7 +91,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                     NativePageNote("Checking this server…", busy: true).frame(height: 28)
                 } else {
                     NativeCodingAINotice(tone: .error, text: model.loadProblem ?? "This server could not be checked.")
-                    Button("Check again", action: model.load)
+                    NativeSessionButton("Check again", action: model.load)
                 }
             }
             .task(id: model.serverID) { model.loadIfNeeded() }
@@ -135,7 +135,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                     }
                     .padding(.vertical, 4)
                     HStack(spacing: 8) {
-                        Button(plan.upgrade == true ? "Update the helper set" : "Set up this server") { model.install(writesDisabled: writesDisabled) }
+                        NativeSessionButton(plan.upgrade == true ? "Update the helper set" : "Set up this server") { model.install(writesDisabled: writesDisabled) }
                             .disabled(controlsDisabled)
                         Text("You’ll review the server change before it runs.").font(.callout).foregroundStyle(.secondary)
                     }
@@ -150,7 +150,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                 VStack(alignment: .leading, spacing: 8) {
                     NativeSettingsProse(text: "Removes Terminal Deck’s helpers, duties and settings from this server. Your apps, their data and backups stay.")
                         .font(.callout)
-                    Button("Remove Terminal Deck from this server…", role: .destructive) { confirm = .remove }
+                    NativeSessionButton("Remove Terminal Deck from this server…", role: .destructive) { confirm = .remove }
                         .disabled(controlsDisabled)
                 }
                 .padding(.vertical, 4)
@@ -172,7 +172,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(.quaternary, in: .rect(cornerRadius: 6))
                     Text("In \(file)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                    Button("Add this line…") { confirm = .addLine(file: file, line: line) }
+                    NativeSessionButton("Add this line…") { confirm = .addLine(file: file, line: line) }
                         .disabled(controlsDisabled)
                 }
             }
@@ -240,7 +240,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                 NativeSettingsProse(text: "Set up this server first. The server then sends alerts itself, even when this Mac is off.")
             } else if let problem = model.alertsProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
-                Button("Read again", action: model.load).disabled(model.loading || model.busy != nil)
+                NativeSessionButton("Read again", action: model.load).disabled(model.loading || model.busy != nil)
             } else if model.alerts != nil {
                 NativeSettingsProse(text: "The server warns you when an app stops or keeps restarting, the disk or memory runs low, a backup or deploy fails, or a certificate is not renewing.")
                 NativeSettingRow(label: "Send alerts") {
@@ -258,7 +258,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                 }
                 Menu("Add a channel") {
                     ForEach(Model.ChannelKind.allCases) { kind in
-                        Button { model.addChannel(kind) } label: { Label(kind.title, systemImage: kind.symbol) }
+                        NativeSessionButton { model.addChannel(kind) } label: { Label(kind.title, systemImage: kind.symbol) }
                     }
                 }
                 .menuStyle(.button)
@@ -277,18 +277,18 @@ struct NativeAppsSRV2ServerSectionList: View {
                     NativeAppsSRV2NumberField(label: "Remind again after", value: $model.alertsDraft.remindMinutes, range: 10...10_080, unit: "minutes")
                 }
                 NativeSettingRow(label: "Also watch", help: "Other running services on this server, by name, separated by commas. Terminal Deck’s own apps are always watched.") {
-                    TextField("Also watch", text: $model.alertsDraft.watch, prompt: Text("my-proxy, my-database")).labelsHidden()
+                    NativeSessionTextField("Also watch", text: $model.alertsDraft.watch, prompt: Text("my-proxy, my-database")).textFieldStyle(.roundedBorder).labelsHidden()
                         .frame(minWidth: 160, maxWidth: 260)
                 }
                 HStack(spacing: 8) {
-                    Button("Save") { model.saveAlerts(writesDisabled: writesDisabled) }
+                    NativeSessionButton("Save") { model.saveAlerts(writesDisabled: writesDisabled) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.alertsChanged || controlsDisabled)
                     if model.alertsChanged {
-                        Button("Undo changes", action: model.revertAlerts).disabled(controlsDisabled)
+                        NativeSessionButton("Undo changes", action: model.revertAlerts).disabled(controlsDisabled)
                     }
                     Spacer(minLength: 12)
-                    Button("Send a test alert") { model.testAlerts(writesDisabled: writesDisabled) }
+                    NativeSessionButton("Send a test alert") { model.testAlerts(writesDisabled: writesDisabled) }
                         .disabled(!model.canTestAlerts || controlsDisabled)
                         .help(model.alertsChanged ? "Save your changes first." : "Sends a short test message to every channel that is on.")
                 }
@@ -350,7 +350,7 @@ struct NativeAppsSRV2ServerSectionList: View {
                 NativeSettingsProse(text: "Set up this server first. Cleanup then runs on the server by itself.")
             } else if let problem = model.cleanupProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
-                Button("Read again", action: model.load).disabled(model.loading || model.busy != nil)
+                NativeSessionButton("Read again", action: model.load).disabled(model.loading || model.busy != nil)
             } else if model.cleanup != nil {
                 NativeSettingsProse(text: "Cleanup removes only what Terminal Deck made: unused leftovers from its own builds. Other tools’ files and programs are never touched, except the shared build cache below if you turn it on.")
                 NativeSettingRow(label: "Automatic cleanup") {
@@ -379,11 +379,11 @@ struct NativeAppsSRV2ServerSectionList: View {
                     Toggle("Every tool’s build cache older than a week", isOn: $model.cleanupDraft.buildCache).labelsHidden().toggleStyle(.switch)
                 }
                 HStack(spacing: 8) {
-                    Button("Save") { model.saveCleanup(writesDisabled: writesDisabled) }
+                    NativeSessionButton("Save") { model.saveCleanup(writesDisabled: writesDisabled) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.cleanupChanged || controlsDisabled)
                     if model.cleanupChanged {
-                        Button("Undo changes", action: model.revertCleanup).disabled(controlsDisabled)
+                        NativeSessionButton("Undo changes", action: model.revertCleanup).disabled(controlsDisabled)
                     }
                 }
                 NativeAppsSRV2ResultLine(busy: model.busy, problem: model.problem, note: model.note, shown: model.resultPart == .cleanup)
@@ -393,9 +393,9 @@ struct NativeAppsSRV2ServerSectionList: View {
                     }
                 }
                 HStack(spacing: 8) {
-                    Button("Show what would be removed", action: model.previewCleanup)
+                    NativeSessionButton("Show what would be removed", action: model.previewCleanup)
                         .disabled(model.busy != nil)
-                    Button("Run cleanup now") { model.runCleanup(writesDisabled: writesDisabled) }
+                    NativeSessionButton("Run cleanup now") { model.runCleanup(writesDisabled: writesDisabled) }
                         .disabled(model.cleanupPreview == nil || controlsDisabled)
                         .help(model.cleanupPreview == nil ? "Check what would be removed first." : "Removes the items listed below.")
                 }
@@ -504,14 +504,14 @@ struct NativeAppsSRV2AlertChannelRow: View {
                 }
                 Toggle("On", isOn: $channel.enabled).toggleStyle(.checkbox).font(.callout)
                 if channel.saved {
-                    Button(expanded ? "Done" : "Edit") { expanded.toggle() }
+                    NativeSessionButton(expanded ? "Done" : "Edit") { expanded.toggle() }
                 }
-                Button("Remove…", role: .destructive) { removing = true }
+                NativeSessionButton("Remove…", role: .destructive) { removing = true }
             }
             if expanded {
                 if !channel.saved {
                     NativeSettingRow(label: "Name", help: "Letters, numbers, dashes and underscores. It can’t change after saving.") {
-                        TextField("Name", text: $channel.name, prompt: Text("my-phone")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                        NativeSessionTextField("Name", text: $channel.name, prompt: Text("my-phone")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     }
                 }
                 switch channel.kind {
@@ -530,7 +530,7 @@ struct NativeAppsSRV2AlertChannelRow: View {
                     NativeSettingRow(label: "Address", help: "The address of a Receiver source.") { field("Address", $channel.url, "https://…/in/…") }
                 }
                 NativeSettingRow(label: secretLabel, help: channel.hasSecret ? "Saved on the server and never shown again." : nil) {
-                    SecureField(secretLabel, text: $channel.secret, prompt: Text(secretPrompt)).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                    NativeSessionSecureField(secretLabel, text: $channel.secret, prompt: Text(secretPrompt)).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                 }
                 if touched, let problem = NativeAppsSRV2ServerModel.channelProblem(channel) {
                     Text(problem).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -539,15 +539,15 @@ struct NativeAppsSRV2AlertChannelRow: View {
         }
         .padding(.vertical, 4)
         .alert("Remove \(channel.name)?", isPresented: $removing) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove channel", role: .destructive, action: onRemove)
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Remove channel", role: .destructive, action: onRemove)
         } message: {
             Text("Alerts stop going to this channel after you save.")
         }
     }
 
     private func field(_ label: String, _ text: Binding<String>, _ prompt: String) -> some View {
-        TextField(label, text: text, prompt: Text(prompt)).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+        NativeSessionTextField(label, text: text, prompt: Text(prompt)).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
     }
 }
 
@@ -608,13 +608,13 @@ struct NativeAppsSRV2ScheduleEditor: View {
         }
         if schedule.preset == .daily || schedule.preset == .weekly {
             NativeSettingRow(label: "At", help: "24-hour time: 03:00 means 3 am.") {
-                TextField("At", text: $schedule.time, prompt: Text("03:00")).labelsHidden().frame(width: 90)
+                NativeSessionTextField("At", text: $schedule.time, prompt: Text("03:00")).textFieldStyle(.roundedBorder).labelsHidden().frame(width: 90)
                     .accessibilityLabel("Time of day on the server")
             }
         }
         if schedule.preset == .custom {
             NativeSettingRow(label: "Schedule", help: "A systemd calendar time, such as Mon *-*-* 03:00:00.") {
-                TextField("Schedule", text: $schedule.custom, prompt: Text("*-*-* 02:30:00")).labelsHidden()
+                NativeSessionTextField("Schedule", text: $schedule.custom, prompt: Text("*-*-* 02:30:00")).textFieldStyle(.roundedBorder).labelsHidden()
                     .font(.callout.monospaced()).frame(minWidth: 160, maxWidth: 260)
             }
         }
@@ -642,8 +642,8 @@ struct NativeAppsSRV2SecretValue: View {
                 .truncationMode(.middle)
                 .textSelection(.enabled)
                 .accessibilityLabel(value == nil ? "Secret hidden" : "Secret shown")
-            Button(value == nil ? "Show" : "Hide") { value == nil ? onShow() : onHide() }
-            Button("Copy", action: onCopy)
+            NativeSessionButton(value == nil ? "Show" : "Hide") { value == nil ? onShow() : onHide() }
+            NativeSessionButton("Copy", action: onCopy)
         }
         .disabled(busy)
     }
@@ -694,15 +694,15 @@ struct NativeAppsSRV2ConfirmationSheet: View {
             }
             if let typedName {
                 Text("Type \(typedName) to confirm.").font(.callout)
-                TextField("Server name", text: $typed)
+                NativeSessionTextField("Server name", text: $typed)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .accessibilityLabel("Type \(typedName) to confirm")
             }
             HStack(spacing: 8) {
                 Spacer()
-                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
-                Button(confirmTitle, role: destructive ? .destructive : nil) { onConfirm(typed.trimmingCharacters(in: .whitespaces), option) }
+                NativeSessionButton("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                NativeSessionButton(confirmTitle, role: destructive ? .destructive : nil) { onConfirm(typed.trimmingCharacters(in: .whitespaces), option) }
                     .disabled(busy || (typedName.map { typed.trimmingCharacters(in: .whitespaces) != $0 } ?? false))
             }
         }

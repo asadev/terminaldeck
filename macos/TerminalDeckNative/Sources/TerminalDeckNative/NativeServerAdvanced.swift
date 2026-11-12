@@ -25,10 +25,10 @@ struct NativeServerAdvanced: View {
 
     var body: some View {
         if !open && !expanded {
-            Button("Advanced") { open = true }
+            NativeSessionButton("Advanced") { open = true }
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                if !expanded { Button("Hide advanced") { open = false } }
+                if !expanded { NativeSessionButton("Hide advanced") { open = false } }
 
                 heading("What this server is")
                 let facts = state?.view?.facts
@@ -65,7 +65,7 @@ struct NativeServerAdvanced: View {
                     .toggleStyle(.checkbox)
 
                 heading("What to call it here")
-                TextField("What to call this server", text: Binding(get: { name ?? server.name }, set: { name = $0 }))
+                NativeSessionTextField("What to call this server", text: Binding(get: { name ?? server.name }, set: { name = $0 }))
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("What to call this server")
                     .onChange(of: name) { _, value in
@@ -87,14 +87,14 @@ struct NativeServerAdvanced: View {
                         Text("This removes \(server.name) from this list and forgets the sign-in kept on this computer. Nothing on the server changes, and you can add it again with the same details.")
                             .fixedSize(horizontal: false, vertical: true)
                         HStack {
-                            Button("Remove server", role: .destructive, action: onForget)
-                            Button("Cancel") { confirmForget = false }
+                            NativeSessionButton("Remove server", role: .destructive, action: onForget)
+                            NativeSessionButton("Cancel") { confirmForget = false }
                         }
                     }
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
                 } else {
-                    Button("Remove server", role: .destructive) { confirmForget = true }
+                    NativeSessionButton("Remove server", role: .destructive) { confirmForget = true }
                 }
             }
         }
@@ -114,10 +114,10 @@ struct NativeServerAdvanced: View {
         if let grant = state?.grant, grant.expiresAt > now {
             HStack(spacing: 10) {
                 Text(ServerAdvancedText.allowedFor(grant, now: now))
-                Button("Stop allowing it", action: onRevoke)
+                NativeSessionButton("Stop allowing it", action: onRevoke)
             }
         } else {
-            Button("Allow it for an hour") { onGrant(ServerAdvancedText.grantMs) }
+            NativeSessionButton("Allow it for an hour") { onGrant(ServerAdvancedText.grantMs) }
         }
     }
 

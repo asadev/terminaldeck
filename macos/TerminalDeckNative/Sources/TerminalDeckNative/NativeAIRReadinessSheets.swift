@@ -48,10 +48,10 @@ struct NativeAIRFixReview: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Button("Cancel", action: cancel)
+                NativeSessionButton("Cancel", action: cancel)
                     .keyboardShortcut(.cancelAction)
                     .disabled(working)
-                Button(working ? "Working…" : "Confirm fix", action: confirm)
+                NativeSessionButton(working ? "Working…" : "Confirm fix", action: confirm)
                     .keyboardShortcut(.defaultAction)
                     .disabled(working)
             }
@@ -114,7 +114,7 @@ struct NativeAIRSessionSheet: View {
                         Text("Ready prompt").font(.body.weight(.medium))
                         Text("Review or edit the directions before opening the session.")
                             .font(.callout).foregroundStyle(.secondary)
-                        TextEditor(text: $model.prompt)
+                        NativeSessionTextEditor(text: $model.prompt)
                             .font(.body.monospaced())
                             .frame(minHeight: 240, maxHeight: 340)
                             .accessibilityLabel("AI readiness prompt")
@@ -135,10 +135,10 @@ struct NativeAIRSessionSheet: View {
                     Text("Choosing the project login…").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Cancel", action: cancel)
+                NativeSessionButton("Cancel", action: cancel)
                     .keyboardShortcut(.cancelAction)
                     .disabled(model.starting)
-                Button(model.starting ? "Starting…" : "Start AI session") { Task { await model.start() } }
+                NativeSessionButton(model.starting ? "Starting…" : "Start AI session") { Task { await model.start() } }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!model.canStart)
             }

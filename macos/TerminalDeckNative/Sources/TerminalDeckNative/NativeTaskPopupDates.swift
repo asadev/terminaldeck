@@ -55,7 +55,7 @@ struct TaskDatesField: View {
         let dueWord = task.dueDate.isEmpty ? "" : relativeDay(task.dueDate) + (dueTime.map { ", \(CrmTime.hmLabel($0))" } ?? "")
         let summary = task.startDate.isEmpty && task.dueDate.isEmpty ? "none" : "\(startWord.isEmpty ? "Start" : startWord) → \(dueWord.isEmpty ? "Due" : dueWord)"
         ZStack(alignment: .trailing) {
-            Button { open.toggle() } label: {
+            NativeSessionButton { open.toggle() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar").font(.caption)
                     Text(startWord.isEmpty ? "Start" : startWord).foregroundStyle(task.startDate.isEmpty ? Color.secondary : Color.primary)
@@ -78,7 +78,7 @@ struct TaskDatesField: View {
             .help("Change start and due dates")
             .accessibilityLabel("Dates: \(summary)\(task.recurrence.map { ", repeats \($0)" } ?? "")")
             if (!task.startDate.isEmpty || !task.dueDate.isEmpty) && hovering {
-                Button { model.saveDates(start: "", due: "") } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                NativeSessionButton { model.saveDates(start: "", due: "") } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 8)
@@ -216,7 +216,7 @@ struct TimelinePanel: View {
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(list, id: \.0) { label, value, hint in
                 let on = task.dueDate == value
-                Button {
+                NativeSessionButton {
                     emit(start: task.startDate, due: on ? "" : value)
                     if !on { onPicked() }
                 } label: {
@@ -236,7 +236,7 @@ struct TimelinePanel: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Quick due dates")
             Divider().padding(.horizontal, 12).padding(.vertical, 4)
-            Button { recurring = true } label: {
+            NativeSessionButton { recurring = true } label: {
                 HStack(spacing: 8) {
                     if routineText != nil || task.recurrence != nil { Image(systemName: "repeat").font(.caption) }
                     Text(routineText ?? (task.recurrence.map { "Repeats \(TaskRecurrence.short($0).lowercased())" } ?? "Set Recurring"))
@@ -269,13 +269,13 @@ struct TimelinePanel: View {
             HStack(spacing: 4) {
                 Text("\(names[cursor.month]) \(String(cursor.year))").font(.callout.weight(.medium))
                 Spacer()
-                Button("Today") { cursor = Self.monthOf(today) ?? cursor }
+                NativeSessionButton("Today") { cursor = Self.monthOf(today) ?? cursor }
                 .buttonStyle(.plain).font(.caption)
-                Button { cursor = cursor.month == 0 ? (cursor.year - 1, 11) : (cursor.year, cursor.month - 1) } label: {
+                NativeSessionButton { cursor = cursor.month == 0 ? (cursor.year - 1, 11) : (cursor.year, cursor.month - 1) } label: {
                     Image(systemName: "chevron.up")
                 }
                 .buttonStyle(.plain).accessibilityLabel("Previous month")
-                Button { cursor = cursor.month == 11 ? (cursor.year + 1, 0) : (cursor.year, cursor.month + 1) } label: {
+                NativeSessionButton { cursor = cursor.month == 11 ? (cursor.year + 1, 0) : (cursor.year, cursor.month + 1) } label: {
                     Image(systemName: "chevron.down")
                 }
                 .buttonStyle(.plain).accessibilityLabel("Next month")
@@ -289,7 +289,7 @@ struct TimelinePanel: View {
                     let other = Int(day.split(separator: "-")[1]) != cursor.month + 1
                     let picked = day == task.startDate || day == task.dueDate
                     let inRange = !task.startDate.isEmpty && !task.dueDate.isEmpty && day > task.startDate && day < task.dueDate
-                    Button { pick(day) } label: {
+                    NativeSessionButton { pick(day) } label: {
                         Text("\(Int(day.split(separator: "-")[2]) ?? 0)")
                             .font(.caption.weight(picked || day == today ? .semibold : .regular))
                             .frame(width: 32, height: 32)
@@ -336,7 +336,7 @@ struct DateBox: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button(action: onClick) {
+            NativeSessionButton(action: onClick) {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
                     Text(value.isEmpty ? label : display(value)).lineLimit(1)
@@ -352,7 +352,7 @@ struct DateBox: View {
             .accessibilityLabel(value.isEmpty ? label : "\(label): \(display(value))")
             .accessibilityAddTraits(active ? .isSelected : [])
             if !value.isEmpty {
-                Button(action: onClear) { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                NativeSessionButton(action: onClear) { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 32)
@@ -365,7 +365,7 @@ struct DateBox: View {
         if !value.isEmpty && canTime {
             if editingTime || time != nil {
                 HStack(spacing: 2) {
-                    DatePicker("\(label) time", selection: $draft, displayedComponents: .hourAndMinute)
+                    NativeSessionDatePicker("\(label) time", selection: $draft, displayedComponents: .hourAndMinute)
                         .labelsHidden()
                         .frame(width: 92)
                         .onAppear { draft = Self.date(time) }
@@ -374,7 +374,7 @@ struct DateBox: View {
                             if hm != time { onTime(hm) }
                         }
                     if time != nil {
-                        Button {
+                        NativeSessionButton {
                             editingTime = false
                             onTime(nil)
                         } label: { Image(systemName: "xmark").font(.caption2) }
@@ -385,7 +385,7 @@ struct DateBox: View {
                     }
                 }
             } else {
-                Button("Add time") { editingTime = true }
+                NativeSessionButton("Add time") { editingTime = true }
                     .buttonStyle(.plain)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(TaskTone.accent)

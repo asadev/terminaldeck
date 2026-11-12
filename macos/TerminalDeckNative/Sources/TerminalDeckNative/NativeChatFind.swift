@@ -117,16 +117,17 @@ struct NativeChatFindBar: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in conversation", text: $model.findQuery)
-                .textFieldStyle(.plain).focused($focused)
+            NativeSessionTextField("Find in conversation", text: $model.findQuery)
+                .sessionFocused($focused)
                 .onSubmit { model.findChat(NSEvent.modifierFlags.contains(.shift) ? "previous" : "next") }
-                .onKeyPress(.escape) { model.findChat("close"); return .handled }
+                .onExitCommand { model.findChat("close") }
+                .textFieldStyle(.plain)
                 .onChange(of: model.findQuery) { _, _ in model.updateFind(); model.findRevision += 1 }
             Text(model.findMatches.isEmpty ? "0 matches" : "\(model.findIndex + 1) of \(model.findMatches.count)")
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary).fixedSize()
-            Button { model.findChat("previous") } label: { Image(systemName: "chevron.up") }.help("Previous match").disabled(model.findMatches.isEmpty)
-            Button { model.findChat("next") } label: { Image(systemName: "chevron.down") }.help("Next match").disabled(model.findMatches.isEmpty)
-            Button { model.findChat("close") } label: { Image(systemName: "xmark") }.help("Close search")
+            NativeSessionButton { model.findChat("previous") } label: { Image(systemName: "chevron.up") }.help("Previous match").disabled(model.findMatches.isEmpty)
+            NativeSessionButton { model.findChat("next") } label: { Image(systemName: "chevron.down") }.help("Next match").disabled(model.findMatches.isEmpty)
+            NativeSessionButton { model.findChat("close") } label: { Image(systemName: "xmark") }.help("Close search")
         }.buttonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 8)
             .onAppear { focused = true }
     }

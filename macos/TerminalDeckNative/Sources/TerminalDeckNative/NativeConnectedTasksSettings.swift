@@ -26,7 +26,7 @@ struct ConnectedTaskSystemsGroup: View {
             if adding || store.systems.isEmpty && draft.prefilled {
                 ConnectedTaskSystemForm(draft: draft) { adding = false }
             } else {
-                Button("Connect a task system") { adding = true }.buttonStyle(.borderedProminent)
+                NativeSessionButton("Connect a task system") { adding = true }.buttonStyle(.borderedProminent)
             }
         } header: {
             Text("Connected task systems")
@@ -69,14 +69,14 @@ struct ConnectedTaskSystemForm: View {
                 GridRow {
                     Text("Name").gridColumnAlignment(.trailing)
                     VStack(alignment: .leading, spacing: 2) {
-                        TextField("Name", text: $name, prompt: Text("e.g. Sales CRM")).textFieldStyle(.roundedBorder).labelsHidden()
+                        NativeSessionTextField("Name", text: $name, prompt: Text("e.g. Sales CRM")).textFieldStyle(.roundedBorder).labelsHidden()
                         Text("Shown on every task from it.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 GridRow {
                     Text("MCP address")
                     VStack(alignment: .leading, spacing: 2) {
-                        TextField("MCP address", text: $url, prompt: Text("https://…/mcp")).textFieldStyle(.roundedBorder).labelsHidden()
+                        NativeSessionTextField("MCP address", text: $url, prompt: Text("https://…/mcp")).textFieldStyle(.roundedBorder).labelsHidden()
                             .onChange(of: url) { tested = nil }
                         Text("The system’s MCP server address — the one you would give an AI app.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -84,12 +84,12 @@ struct ConnectedTaskSystemForm: View {
                 GridRow {
                     Text("Access token")
                     VStack(alignment: .leading, spacing: 2) {
-                        SecureField("Access token", text: $token, prompt: Text("Paste the token")).textFieldStyle(.roundedBorder).labelsHidden()
+                        NativeSessionSecureField("Access token", text: $token, prompt: Text("Paste the token")).textFieldStyle(.roundedBorder).labelsHidden()
                             .onChange(of: token) { tested = nil }
                         HStack(spacing: 4) {
                             Text("Make one in the system’s AI-access or API page. It acts as you there.").font(.caption).foregroundStyle(.secondary)
                             if let docs = tested?["docsUrl"].string, let link = URL(string: docs) {
-                                Button("Open that page") { NSWorkspace.shared.open(link) }.buttonStyle(.link).font(.caption)
+                                NativeSessionButton("Open that page") { NSWorkspace.shared.open(link) }.buttonStyle(.link).font(.caption)
                             }
                         }
                     }
@@ -108,11 +108,11 @@ struct ConnectedTaskSystemForm: View {
             if let tested { testReport(tested) }
             if let problem { NativeCodingAINotice(tone: .error, text: problem) }
             HStack(spacing: 8) {
-                Button("Test connection") { Task { await test() } }.disabled(busy || url.isEmpty || token.isEmpty)
-                Button("Connect") { Task { await connect() } }.buttonStyle(.borderedProminent)
+                NativeSessionButton("Test connection") { Task { await test() } }.disabled(busy || url.isEmpty || token.isEmpty)
+                NativeSessionButton("Connect") { Task { await connect() } }.buttonStyle(.borderedProminent)
                     .disabled(busy || tested == nil || name.trimmingCharacters(in: .whitespaces).isEmpty)
                     .help(tested == nil ? "Test the connection first" : "")
-                Button("Cancel") { onDone() }.disabled(busy)
+                NativeSessionButton("Cancel") { onDone() }.disabled(busy)
                 if busy { ProgressView().controlSize(.small) }
             }
         }
@@ -191,7 +191,7 @@ private struct ConnectedTaskSystemRow: View {
                     if let problem = system.problem { Text(problem).font(.caption).foregroundStyle(TaskTone.input) }
                 }
                 Spacer()
-                Button(open ? "Close" : "Change", action: toggle).disabled(busy)
+                NativeSessionButton(open ? "Close" : "Change", action: toggle).disabled(busy)
             }
             if open { editor }
         }
@@ -210,17 +210,17 @@ private struct ConnectedTaskSystemRow: View {
                     .disabled(busy)
             }
             HStack(spacing: 8) {
-                SecureField("New access token", text: $newToken, prompt: Text("Paste a new token to replace it")).textFieldStyle(.roundedBorder)
-                Button("Replace token") { save(["token": newToken]); newToken = "" }.disabled(busy || newToken.isEmpty)
+                NativeSessionSecureField("New access token", text: $newToken, prompt: Text("Paste a new token to replace it")).textFieldStyle(.roundedBorder)
+                NativeSessionButton("Replace token") { save(["token": newToken]); newToken = "" }.disabled(busy || newToken.isEmpty)
             }
             if let problem { NativeCodingAINotice(tone: .error, text: problem) }
             HStack(spacing: 8) {
                 if removing {
                     Text("Remove \(system.name)? Its token leaves the Keychain; nothing changes in \(system.name).").font(.callout)
-                    Button("Remove") { remove() }.buttonStyle(.borderedProminent).tint(.red)
-                    Button("Cancel") { removing = false }
+                    NativeSessionButton("Remove") { remove() }.buttonStyle(.borderedProminent).tint(.red)
+                    NativeSessionButton("Cancel") { removing = false }
                 } else {
-                    Button("Remove this system…") { removing = true }.disabled(busy)
+                    NativeSessionButton("Remove this system…") { removing = true }.disabled(busy)
                 }
             }
         }

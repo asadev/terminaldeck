@@ -63,7 +63,7 @@ struct NativeSessionHeader: View {
                 NativeModeSwitch(layout: layout)
             }
             if popOutOffered {
-                Button {
+                NativeSessionButton {
                     NativePoppedSessions.shared.popOut(session.sessionId, title: header.title)
                 } label: {
                     Image(systemName: "arrow.up.forward.square").font(.system(size: 14))
@@ -176,18 +176,18 @@ struct NativeSessionTitle: View {
 
     var body: some View {
         if let draft {
-            TextField("", text: Binding(get: { draft }, set: { self.draft = String($0.prefix(SessionTitleRules.maxLength)) }))
+            NativeSessionTextField("", text: Binding(get: { draft }, set: { self.draft = String($0.prefix(SessionTitleRules.maxLength)) }))
+                .sessionFocused($focused)
+                .onSubmit { finish(save: true) }
+                .onExitCommand { finish(save: false) }
                 .textFieldStyle(.roundedBorder)
                 .font(scale)
                 .frame(minWidth: 120, maxWidth: 280)
-                .focused($focused)
                 .accessibilityLabel("New name for \(title)")
-                .onSubmit { finish(save: true) }
-                .onExitCommand { finish(save: false) }
                 .onChange(of: focused) { _, now in if !now { finish(save: true) } }
                 .onAppear { focused = true }
         } else if rename != nil {
-            Button(action: begin) {
+            NativeSessionButton(action: begin) {
                 Text(title)
                     .font(scale)
                     .lineLimit(1)
@@ -197,7 +197,7 @@ struct NativeSessionTitle: View {
             }
                 .buttonStyle(SIDEBARRowStyle())
                 .help("\(title) — click or F2 to rename")
-                .contextMenu { Button("Rename", action: begin) }
+                .contextMenu { NativeSessionButton("Rename", action: begin) }
                 .focusable()
                 .onKeyPress(keys: [KeyEquivalent(Character(UnicodeScalar(0xF705)!))]) { _ in begin(); return .handled }
                 .accessibilityAddTraits(.isHeader)

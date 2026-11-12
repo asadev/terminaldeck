@@ -14,9 +14,9 @@ struct NativeGHRepositoryDetail: View {
             HStack(spacing: 8) {
                 Text(model.item.raw["private"].isTrue ? "Private repository" : "Public repository").font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Button("Use repository", action: use)
-                Button("Clone into a project…", action: clone)
-                Button("New draft release…", action: release).disabled(model.item.raw["archived"].isTrue)
+                NativeSessionButton("Use repository", action: use)
+                NativeSessionButton("Clone into a project…", action: clone)
+                NativeSessionButton("New draft release…", action: release).disabled(model.item.raw["archived"].isTrue)
             }
             .controlSize(.small)
             NativeGHKeyValue(label: "Default branch", value: defaultBranch)
@@ -44,7 +44,7 @@ struct NativeGHRepositoryDetail: View {
             else {
                 ForEach(Array(model.branches.enumerated()), id: \.offset) { _, branch in
                     let name = branch["name"].text ?? "Branch"
-                    Button {
+                    NativeSessionButton {
                         model.commitBranch = name
                         tab = "commits"
                         Task { await model.loadSection("commits", branch: name) }
@@ -83,8 +83,8 @@ struct NativeGHRepositoryDetail: View {
                     .onChange(of: model.commitBranch) { _, value in Task { await model.loadSection("commits", branch: value) } }
                     .disabled(model.loading || model.loadingSections.contains("commits"))
                 } else {
-                    TextField("Branch (optional)", text: $model.commitBranch).textFieldStyle(.roundedBorder)
-                    Button("Show") { Task { await model.loadSection("commits", branch: model.commitBranch) } }
+                    NativeSessionTextField("Branch (optional)", text: $model.commitBranch).textFieldStyle(.roundedBorder)
+                    NativeSessionButton("Show") { Task { await model.loadSection("commits", branch: model.commitBranch) } }
                         .disabled(model.loading || model.loadingSections.contains("commits"))
                 }
                 if model.loadingSections.contains("commits") { ProgressView().controlSize(.small) }

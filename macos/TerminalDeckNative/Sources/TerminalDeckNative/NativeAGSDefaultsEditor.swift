@@ -39,7 +39,7 @@ struct NativeAGSDefaultsEditor: View {
                         editingHook = nil
                     }, cancel: { editingHook = nil }).id(hook.id)
                 } else if let event = AGSCapabilities.appEvents.first {
-                    Button("Add hook") { editingHook = AGSAppHook(event: event) }.disabled(defaults.hooks.count >= 50)
+                    NativeSessionButton("Add hook") { editingHook = AGSAppHook(event: event) }.disabled(defaults.hooks.count >= 50)
                     if defaults.hooks.count >= 50 { Text("Up to 50 Terminal Deck hooks.").font(.caption).foregroundStyle(.secondary) }
                 }
             }
@@ -79,11 +79,11 @@ struct NativeAGSDefaultsEditor: View {
                 Text(hook.webhook != nil ? "Web address hidden" : "Command hidden")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Button(testingID == hook.id ? "Testing…" : "Test") { test(hook) }
+                NativeSessionButton(testingID == hook.id ? "Testing…" : "Test") { test(hook) }
                     .disabled(testingID != nil || editingHook != nil || !canTest(hook))
                     .help(canTest(hook) ? "Run this saved hook once through the app's approval path, even when the hook is off" : "Save this hook before testing")
-                Button("Change") { editingHook = hook }.disabled(testingID != nil)
-                Button("Remove", role: .destructive) {
+                NativeSessionButton("Change") { editingHook = hook }.disabled(testingID != nil)
+                NativeSessionButton("Remove", role: .destructive) {
                     defaults.hooks.removeAll { $0.id == hook.id }
                     testResults.removeValue(forKey: hook.id)
                     failedTests.remove(hook.id)
@@ -176,12 +176,12 @@ private struct NativeAGSAppHookEditor: View {
             }
             if kind == "command" {
                 NativeAGSField(label: "Command") {
-                    SecureField("Command to run", text: Binding(get: { draft.command ?? "" }, set: { draft.command = $0 }))
+                    NativeSessionSecureField("Command to run", text: Binding(get: { draft.command ?? "" }, set: { draft.command = $0 }))
                         .textFieldStyle(.roundedBorder).accessibilityLabel("Terminal Deck hook command, hidden")
                 }
             } else {
                 NativeAGSField(label: "Web address", help: "Use an HTTPS address. Any secret in the address stays hidden.") {
-                    SecureField("https://…", text: Binding(get: { draft.webhook ?? "" }, set: { draft.webhook = $0 }))
+                    NativeSessionSecureField("https://…", text: Binding(get: { draft.webhook ?? "" }, set: { draft.webhook = $0 }))
                         .textFieldStyle(.roundedBorder).accessibilityLabel("Hook web address, hidden")
                 }
             }
@@ -193,13 +193,13 @@ private struct NativeAGSAppHookEditor: View {
             }
             Toggle("Enabled", isOn: $draft.enabled)
             HStack {
-                Button("Save hook") {
+                NativeSessionButton("Save hook") {
                     var next = draft
                     if kind == "command" { next.webhook = nil }
                     else { next.command = nil; next.webhook = NativeAGSWords.optional(next.webhook ?? "") }
                     save(next)
                 }.disabled(!valid)
-                Button("Cancel", action: cancel)
+                NativeSessionButton("Cancel", action: cancel)
             }
         }
         .padding(10)

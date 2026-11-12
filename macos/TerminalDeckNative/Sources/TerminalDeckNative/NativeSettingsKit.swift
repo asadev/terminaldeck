@@ -338,7 +338,7 @@ struct NativeSettingsFoot: View {
                 .foregroundStyle(store.saveState.isFailure ? Color.red : Color.secondary)
                 .accessibilityAddTraits(.updatesFrequently)
             Spacer()
-            Button {
+            NativeSessionButton {
                 NativeSettingsShortcuts.present()
             } label: {
                 Label("Shortcuts", systemImage: "keyboard")
@@ -497,17 +497,17 @@ struct NativeSettingNumberField: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            TextField(setting.label, text: Binding(
+            NativeSessionTextField(setting.label, text: Binding(
                 get: { draft ?? Self.format(value) },
                 set: { raw in
                     draft = raw
                     if let next = SettingsSchema.numberWhileTyping(setting, raw) { onCommit(next) }
                 }))
+                .sessionFocused($focused)
+                .onSubmit(leave)
                 .labelsHidden()
                 .multilineTextAlignment(.trailing)
                 .frame(width: 64)
-                .focused($focused)
-                .onSubmit(leave)
                 .onChange(of: focused) { _, now in if !now { leave() } }
             if let unit = setting.number?.unit {
                 Text(unit).foregroundStyle(.secondary)
@@ -541,7 +541,7 @@ struct NativeSettingTextField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField(setting.label, text: Binding(
+        NativeSessionTextField(setting.placeholder ?? setting.label, text: Binding(
             get: { draft ?? value },
             set: { next in
                 draft = next
@@ -550,12 +550,13 @@ struct NativeSettingTextField: View {
                     try? await Task.sleep(for: .milliseconds(400))
                     if !Task.isCancelled { flush() }
                 }
-            }), prompt: setting.placeholder.map { Text($0) })
+            }))
+            .sessionFocused($focused)
+            .onSubmit(flush)
+            .accessibilityLabel(setting.label)
             .labelsHidden()
             .autocorrectionDisabled()
             .frame(minWidth: 200, maxWidth: 260)
-            .focused($focused)
-            .onSubmit(flush)
             .onChange(of: focused) { _, now in if !now { flush() } }
             .onChange(of: value) { _, _ in
                 // The stored value moved under the field: drop the draft and any pending save.

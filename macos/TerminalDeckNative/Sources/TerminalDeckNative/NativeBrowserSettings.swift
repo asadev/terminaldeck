@@ -29,7 +29,7 @@ struct NativeBrowserSettings: View {
             Section("Sign-ins") {
                 NativeSettingsList(section: "browser", omit: ["browser.startUrl"],
                     helpFor: ["browser.persistSession": "Keeps sign-ins between app launches."])
-                Button("More…") { destination.showPasswords = true }
+                NativeSessionButton("More…") { destination.showPasswords = true }
                     .popover(isPresented: $destination.showPasswords) {
                         Form {
                             profiles
@@ -66,17 +66,17 @@ struct NativeBrowserSettings: View {
             }
             if model.adding {
                 HStack {
-                    TextField("", text: $model.draft, prompt: Text("Work"))
+                    NativeSessionTextField("", text: $model.draft, prompt: Text("Work"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Name for the new profile")
-                        .onSubmit(model.createProfile)
-                        .onExitCommand { model.adding = false }
-                    Button("Add", action: model.createProfile).buttonStyle(.bordered)
-                    Button("Cancel") { model.adding = false }
+                        .sessionOnSubmit(model.createProfile)
+                        .sessionOnExitCommand { model.adding = false }
+                    NativeSessionButton("Add", action: model.createProfile).buttonStyle(.bordered)
+                    NativeSessionButton("Cancel") { model.adding = false }
                 }
             } else {
-                Button("Add a profile") { model.adding = true }.buttonStyle(.bordered)
+                NativeSessionButton("Add a profile") { model.adding = true }.buttonStyle(.bordered)
             }
             Text("One tab can also have its own, thrown away on quit — the tab’s **Shared / Isolated** switch. Switching reopens the page.")
                 .foregroundStyle(.secondary)
@@ -95,7 +95,7 @@ struct NativeBrowserSettings: View {
                         + Text(store.path).font(.callout.monospaced())
                         + Text(". It holds the site, the username and the password of every saved login, in every profile, and nothing else.")
                     if store.exists {
-                        Button("Show me the file", action: model.showFile)
+                        NativeSessionButton("Show me the file", action: model.showFile)
                     }
                 }
                 .foregroundStyle(.secondary)
@@ -122,9 +122,9 @@ struct NativeBrowserSettings: View {
                     }
                     Spacer()
                     // Copy, never Reveal: the engine writes the clipboard; the password never comes here.
-                    Button("Copy") { model.copyLogin(entry) }
+                    NativeSessionButton("Copy") { model.copyLogin(entry) }
                         .help("Put this password on the clipboard. It is not shown here.")
-                    Button("Forget", role: .destructive) { model.forgetLogin(entry) }
+                    NativeSessionButton("Forget", role: .destructive) { model.forgetLogin(entry) }
                 }
             }
             if let note = model.loginNote {
@@ -136,7 +136,7 @@ struct NativeBrowserSettings: View {
                                              yes: "Forget them all", no: "Keep them",
                                              onYes: model.forgetAllLogins, onNo: { model.confirmForgetAll = false })
             } else {
-                Button("Forget all saved passwords", role: .destructive) { model.confirmForgetAll = true }
+                NativeSessionButton("Forget all saved passwords", role: .destructive) { model.confirmForgetAll = true }
                     .disabled(model.loginTotal == 0 && !faulted)
                     .help(BrowserSettings.forgetAllHelp(model.loginTotal, faulted: faulted))
             }
@@ -156,7 +156,7 @@ struct NativeBrowserSettings: View {
                                              yes: "Clear it", no: "Keep it",
                                              onYes: model.clear, onNo: { model.confirmClear = false })
             } else {
-                Button("Clear stored browsing data", role: .destructive) { model.confirmClear = true }
+                NativeSessionButton("Clear stored browsing data", role: .destructive) { model.confirmClear = true }
             }
         }
     }
@@ -173,15 +173,15 @@ private struct NativeBrowserSettingsProfileRow: View {
         VStack(alignment: .leading, spacing: 6) {
             if model.renaming?.id == profile.id {
                 HStack {
-                    TextField("", text: Binding(get: { model.renaming?.name ?? "" },
+                    NativeSessionTextField("", text: Binding(get: { model.renaming?.name ?? "" },
                                                     set: { model.renaming = (profile.id, $0) }))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Name for \(profile.name)")
-                        .onSubmit { model.rename(profile.id) }
-                        .onExitCommand { model.renaming = nil }
-                    Button("Save") { model.rename(profile.id) }.buttonStyle(.bordered)
-                    Button("Cancel") { model.renaming = nil }
+                        .sessionOnSubmit { model.rename(profile.id) }
+                        .sessionOnExitCommand { model.renaming = nil }
+                    NativeSessionButton("Save") { model.rename(profile.id) }.buttonStyle(.bordered)
+                    NativeSessionButton("Cancel") { model.renaming = nil }
                 }
             } else {
                 HStack {
@@ -191,12 +191,12 @@ private struct NativeBrowserSettingsProfileRow: View {
                         if !caption.isEmpty { Text(caption).font(.callout).foregroundStyle(.secondary) }
                     }
                     Spacer()
-                    Button(active ? "In use" : "Use it") { model.activate(profile.id) }
+                    NativeSessionButton(active ? "In use" : "Use it") { model.activate(profile.id) }
                         .disabled(active)
                         .help(active ? "New tabs already open in this profile." : "New tabs will open in this profile.")
-                    Button("Rename") { model.renaming = (profile.id, profile.name) }
+                    NativeSessionButton("Rename") { model.renaming = (profile.id, profile.name) }
                     if !profile.isDefault {
-                        Button("Delete", role: .destructive) { model.confirmDelete = profile.id }
+                        NativeSessionButton("Delete", role: .destructive) { model.confirmDelete = profile.id }
                             .help("Delete this profile and everything signed in inside it")
                     }
                 }
@@ -222,8 +222,8 @@ struct NativeBrowserSettingsConfirm: View {
         HStack {
             Text(text).lineLimit(1)
             Spacer()
-            Button(yes, role: .destructive, action: onYes)
-            Button(no, action: onNo)
+            NativeSessionButton(yes, role: .destructive, action: onYes)
+            NativeSessionButton(no, action: onNo)
         }
     }
 }

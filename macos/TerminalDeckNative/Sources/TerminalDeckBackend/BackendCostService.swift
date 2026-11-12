@@ -187,12 +187,13 @@ public actor BackendCostService {
         }
         return value
     }
-    private func projectStep(_ project: String, context: NativeRPCContext, cancellation: BackendMCPCancellation? = nil, watching: Bool = false) async throws -> NativeRPCValue {
+    private func projectStep(_ project: String, context: NativeRPCContext, cancellation: BackendMCPCancellation? = nil, watching: Bool = false,
+                             revalidateCatalogue: Bool = true) async throws -> NativeRPCValue {
         _ = try await projects.requireKnown(project)
         _ = try await projects.files.authority.authorize(project, context: context, intent: .read)
         let scope = try await scopeProvider(project, context)
         let deadline = BackendFIXESUsageCache.budgetNow() + 250
-        let catalogue = try await transcriptCache.catalogue(project: project, scope: scope, deadline: deadline)
+        let catalogue = try await transcriptCache.catalogue(project: project, scope: scope, deadline: deadline, revalidate: revalidateCatalogue)
         let all = catalogue.files, cutoff = BackendUsageIO.now() - 90 * 86_400_000
         let candidates = Array(all.filter { $0.modifiedAt >= cutoff }.prefix(400))
         let roots = try NativeTranscriptPaths.approvedRoots(scope).sorted().joined(separator: "\n")
@@ -383,7 +384,7 @@ public actor BackendCostService {
                 var publishedAt = 0.0
                 repeat {
                     try Task.checkCancellation()
-                    value = try await self.projectStep(project, context: context, watching: true)
+                    value = try await self.projectStep(project, context: context, watching: true, revalidateCatalogue: false)
                     let progress = BackendUsageIO.object([("requests", value["requests"]), ("bytes", value["scanBytesRead"]),
                         ("position", value["scanProgress"]), ("sessions", value["sessions"]), ("skipped", value["skippedTranscripts"])])
                     unchanged = value["scanBytesRead"].number == 0 && progress == previous ? unchanged + 1 : 0

@@ -39,20 +39,20 @@ struct NativeChatDetailView: View {
     var body: some View {
         let records = model.detailRecords(model.chatDetailQuery)
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Recorded transcript details").font(.headline); Spacer(); Button("Normal conversation") { model.chatDetailsVisible = false } }
+            HStack { Text("Recorded transcript details").font(.headline); Spacer(); NativeSessionButton("Normal conversation") { model.chatDetailsVisible = false } }
             Text("Only app-recorded events, tool values and emitted metadata are available. Provider records outside this journal are not shown.").font(.caption).foregroundStyle(.secondary)
             HStack {
-                TextField("Find in recorded events", text: $model.chatDetailQuery).onChange(of: model.chatDetailQuery) { _, _ in model.chatDetailIndex = 0 }
+                NativeSessionTextField("Find in recorded events", text: $model.chatDetailQuery).onChange(of: model.chatDetailQuery) { _, _ in model.chatDetailIndex = 0 }
                 Text("\(records.count) records").font(.caption).monospacedDigit()
-                Button { _ = try? model.detailTool("previous") } label: { Image(systemName: "chevron.up") }.help("Previous matching record").disabled(records.isEmpty)
-                Button { _ = try? model.detailTool("next") } label: { Image(systemName: "chevron.down") }.help("Next matching record").disabled(records.isEmpty)
+                NativeSessionButton { _ = try? model.detailTool("previous") } label: { Image(systemName: "chevron.up") }.help("Previous matching record").disabled(records.isEmpty)
+                NativeSessionButton { _ = try? model.detailTool("next") } label: { Image(systemName: "chevron.down") }.help("Next matching record").disabled(records.isEmpty)
             }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(records) { record in
                             VStack(alignment: .leading, spacing: 6) {
-                                HStack { Text("\(record.sequence) · \(record.record.kind.rawValue) · \(record.provider.rawValue)").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Copy") { do { _ = try model.detailTool("copy", recordID: record.id); outcome = "Record copied." } catch { outcome = error.localizedDescription } } }
+                                HStack { Text("\(record.sequence) · \(record.record.kind.rawValue) · \(record.provider.rawValue)").font(.caption).foregroundStyle(.secondary); Spacer(); NativeSessionButton("Copy") { do { _ = try model.detailTool("copy", recordID: record.id); outcome = "Record copied." } catch { outcome = error.localizedDescription } } }
                                 Text(NativeChatFindText.highlight(AttributedString(model.chatDetailText(record)), query: model.chatDetailQuery))
                                     .font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                             }.padding(10).background(.quaternary.opacity(0.25), in: .rect(cornerRadius: 8)).id(record.id)

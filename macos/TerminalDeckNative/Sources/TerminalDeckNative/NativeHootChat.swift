@@ -1856,7 +1856,7 @@ struct NativeHootChat: View {
     }
     private func composer(_ part: HootComposerPart) -> some View {
         // The island uses the very same box as the page: glass, and the permission/model/effort row.
-        HootComposer(draft: model.ownedComposerBinding, ownerID: model.source.sessionID ?? "hoot", catalogue: model.catalogue, showMeta: true, part: part,
+        HootComposer(draft: model.ownedComposerBinding, ownerID: (model.source.sessionID ?? "hoot") + "/" + model.conversationID, focusWhenShown: true, catalogue: model.catalogue, showMeta: true, part: part,
                      busy: model.busy || model.sending || model.stopping || model.steeringQueuedID != nil, allowsSteering: !model.stopping, enabled: composerEnabled,
                      placeholder: model.source.isHoot ? "Ask Hoot — type @ to mention a session, page, agent or app"
                                                       : "Message \(model.source.agentName) — type / for its commands",
@@ -1871,6 +1871,7 @@ struct NativeHootChat: View {
                      dictationOwner: model.chatVoice.dictation, onDictationStart: { model.chatVoice.beginDictation() },
                      onExpandLongPrompt: { _ = try? model.longDraftTool("open", text: nil) },
                      status: part == .meta ? nil : composerStatus)
+            .id((model.source.sessionID ?? "hoot") + "/" + model.conversationID)
     }
     /// Who answers: Hoot's owl, or a chat session's own AI.
     private var replyAgent: AGTAgent? {
@@ -2063,13 +2064,22 @@ struct NativeHootChat: View {
     }
     /// One job's reply: the avatar and name, then steps and the answer on the same left edge. With no
     /// answer yet it says "Thinking…" where the answer will be, so the first words take its place without a jump.
+    /// One fold of a job's steps, or a failed step on its own card (D1). The first fold keeps the job's own key, so a
+    /// fold opened before this split stays open.
+    @ViewBuilder private func stepPart(_ part: HootStepPart, live: Bool, key: String, indent: CGFloat) -> some View {
+        switch part {
+        case .fold(let index, let rows):
+            HootStepsView(rows: rows, live: live, agents: model.flowAgents(rows), openTask: { task in model.openTask(task) }, indent: indent,
+                          expansion: toolExpansion(index == 0 ? key : key + "#" + String(index)))
+        case .failed(let row):
+            HootFailedStepCard(row: row).padding(.leading, indent)
+        }
+    }
     @ViewBuilder private func replyRow(_ answer: HootChatRow?, steps: [HootChatRow], live: Bool, latest: Bool, key: String) -> some View {
         let column = VStack(alignment: .leading, spacing: 10) {
             replyName(live ? model.avatarState : .awake, animated: live && !model.fixtureMode)
             if let thought = model.thought(for: key) { NativeChatThoughtRow(thought: thought) }
-            if !steps.isEmpty {
-                HootStepsView(rows: steps, live: live, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, indent: 0, expansion: toolExpansion(key))
-            }
+            ForEach(HootStepPart.parts(steps)) { part in stepPart(part, live: live, key: key, indent: 0) }
             ForEach(steps.filter { $0.kind == .toolCall }) { row in
                 if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
             }
@@ -2097,8 +2107,8 @@ struct NativeHootChat: View {
         } else if live {
             VStack(spacing: 0) { Color.clear.frame(height: 18); reply }
         } else if !steps.isEmpty {
-            // Stopped before it answered: only the folded steps.
-            HootStepsView(rows: steps, live: false, agents: model.flowAgents(steps), openTask: { task in model.openTask(task) }, expansion: toolExpansion(key))
+            // Stopped before it answered: only the folded steps (a failed one still on its own).
+            ForEach(HootStepPart.parts(steps)) { part in stepPart(part, live: false, key: key, indent: 38) }
             ForEach(steps.filter { $0.kind == .toolCall }) { row in
                 if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
             }

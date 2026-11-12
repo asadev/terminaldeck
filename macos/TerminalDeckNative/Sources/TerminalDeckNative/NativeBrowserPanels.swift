@@ -17,8 +17,8 @@ struct NativeBrowserSavedLoginBar: View {
                     Text("Save \(offer.login.username.isEmpty ? "this sign-in" : offer.login.username) for \(offer.login.origin)?")
                         .font(.callout).lineLimit(2)
                     Spacer(minLength: 8)
-                    Button("Not now") { tab.answerSavedPassword(keep: false) }
-                    Button("Save") { tab.answerSavedPassword(keep: true) }.buttonStyle(.borderedProminent)
+                    NativeSessionButton("Not now") { tab.answerSavedPassword(keep: false) }
+                    NativeSessionButton("Save") { tab.answerSavedPassword(keep: true) }.buttonStyle(.borderedProminent)
                 }
             } else if let offer = tab.savedSignInOffer {
                 HStack(spacing: 8) {
@@ -27,11 +27,11 @@ struct NativeBrowserSavedLoginBar: View {
                         .font(.callout)
                     Spacer(minLength: 8)
                     if usernames.count == 1, let username = usernames.first {
-                        Button("Fill \(username.isEmpty ? "saved sign-in" : username)") { tab.fillSavedLogin(username: username) }
+                        NativeSessionButton("Fill \(username.isEmpty ? "saved sign-in" : username)") { tab.fillSavedLogin(username: username) }
                     } else if !usernames.isEmpty {
                         Menu("Fill saved sign-in") {
                             ForEach(usernames, id: \.self) { username in
-                                Button(username.isEmpty ? "Saved sign-in" : username) { tab.fillSavedLogin(username: username) }
+                                NativeSessionButton(username.isEmpty ? "Saved sign-in" : username) { tab.fillSavedLogin(username: username) }
                             }
                         }
                     }
@@ -69,7 +69,7 @@ struct NativeBrowserStartView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     if let url = failure.url {
-                        Button("Try \(url.absoluteString) again") { tab.load(url) }
+                        NativeSessionButton("Try \(url.absoluteString) again") { tab.load(url) }
                             .controlSize(.large)
                     }
                 } else {
@@ -78,11 +78,11 @@ struct NativeBrowserStartView: View {
                 }
 
                 HStack(spacing: 8) {
-                    TextField("localhost:5173, or any address", text: $typed)
+                    NativeSessionTextField("localhost:5173, or any address", text: $typed)
+                        .onSubmit(open)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
-                        .onSubmit(open)
-                    Button("Open", action: open)
+                    NativeSessionButton("Open", action: open)
                         .disabled(typed.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .controlSize(.large)
@@ -90,7 +90,7 @@ struct NativeBrowserStartView: View {
                 portsSection
 
                 if ports != nil || problem != nil {
-                    Button("Scan Again") { Task { await scan(force: true) } }
+                    NativeSessionButton("Scan Again") { Task { await scan(force: true) } }
                         .padding(.top, 2)
                 }
             }
@@ -173,7 +173,7 @@ struct NativeBrowserPortRow: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: open) {
+        NativeSessionButton(action: open) {
             HStack(spacing: 10) {
                 Text(":\(port.port)")
                     .font(.body.monospacedDigit().weight(.medium))
@@ -204,6 +204,9 @@ struct NativeBrowserPortRow: View {
 /// into the session through the engine's `session:write`: the text, a short
 /// pause, then Return.
 struct NativeBrowserSendRow: View {
+    @Environment(\.nativeScreenActive) private var screenActive
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @State private var inputRule = NativeSessionInputRule()
     var placeholder: String
     var action = "Send"
     /// The box must have something in it (Annotate's "What should change?").
@@ -240,7 +243,9 @@ struct NativeBrowserSendRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
+        return VStack(alignment: .leading, spacing: 8) {
             if hootImages == nil && fixture == nil {
                 Picker("To", selection: $chosen) {
                     Text("Choose a session…").tag("")
@@ -259,6 +264,7 @@ struct NativeBrowserSendRow: View {
             }
         }
         .onChange(of: chosen) { _, id in
+            guard inputRule.acceptsFocus else { return }
             sent = false; problem = nil
             if fixture == nil, hootImages != nil, !id.isEmpty { NativeHOOTSIMTargets.shared.remember(id, scope: feedbackScope) }
         }
@@ -280,24 +286,19 @@ struct NativeBrowserSendRow: View {
             ]
         }
         .onDisappear {
+            inputRule.update(active: false, enabled: false)
             subscriptions.forEach { $0.cancel() }
             subscriptions = []
         }
     }
 
     private var instructionField: some View {
-            Group {
-                if multiline {
-                    TextField(placeholder, text: $instruction, axis: .vertical)
-                        .lineLimit(2...5)
-                } else {
-                    TextField(placeholder, text: $instruction)
-                }
-            }
+            NativeSessionTextField(placeholder, text: $instruction, axis: multiline ? .vertical : .horizontal)
+            .sessionFocused($fieldFocused)
+            .onSubmit(send)
+            .lineLimit(multiline ? 2...5 : 1...1)
             .textFieldStyle(.roundedBorder)
             .disabled(sending)
-            .focused($fieldFocused)
-            .onSubmit(send)
             .onChange(of: instruction) { sent = false; problem = nil }
 
     }
@@ -309,14 +310,19 @@ struct NativeBrowserSendRow: View {
                     Text(line).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                if let cancel { NativeCardCancelButton(action: cancel).disabled(sending) }
+                if let cancel {
+                    NativeCardCancelButton(action: {
+                        guard inputRule.acceptsFocus else { return }
+                        cancel()
+                    }).disabled(sending)
+                }
                 if hootImages != nil || fixture != nil {
                     SendTargetButton(targetID: $chosen, sessions: sendSessions,
                         sending: sending, disabled: blocked, reason: notReady, canCopy: fixture == nil,
                         send: send, copy: copyFeedback)
                     .fixedSize()
                 } else {
-                    Button(sending ? "Sending…" : sent ? "Sent" : action, action: send)
+                    NativeSessionButton(sending ? "Sending…" : sent ? "Sent" : action, action: send)
                         .buttonStyle(.borderedProminent).disabled(blocked || sending)
                 }
             }
@@ -360,7 +366,7 @@ struct NativeBrowserSendRow: View {
     }
 
     private func copyFeedback() {
-        guard let hootImages, !sending else { return }
+        guard inputRule.acceptsFocus, let hootImages, !sending else { return }
         Task {
             do {
                 _ = try await makeLine(instruction)
@@ -370,7 +376,7 @@ struct NativeBrowserSendRow: View {
     }
 
     private func send() {
-        guard fixture == nil, !blocked, !sending else { return }
+        guard inputRule.acceptsFocus, fixture == nil, !blocked, !sending else { return }
         let target = chosen
         sending = true
         problem = nil
@@ -473,12 +479,12 @@ struct NativeBrowserShotView: View {
                         .truncationMode(.middle)
                         .help(current.path)
                     if !cropping {
-                        Button("Reveal") {
+                        NativeSessionButton("Reveal") {
                             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                         }
                         .buttonStyle(.link)
                         .font(.caption)
-                        Button(copied ? "Copied" : "Copy") {
+                        NativeSessionButton(copied ? "Copied" : "Copy") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.writeObjects([current.image])
                             copied = true
@@ -600,6 +606,8 @@ struct NativeBrowserDownloadsButton: View {
 /// The profiles are the engine's (`browser-profile:list`), so both browsers list
 /// the same names; each profile's cookies live in its own website-data store.
 struct NativeBrowserProfileButton: View {
+    @Environment(\.nativeScreenActive) private var screenActive
+    @Environment(\.nativeSessionInputScope) private var inputScope
     let store: NativeBrowserTabs
     let tab: NativeBrowserTab
 
@@ -618,7 +626,7 @@ struct NativeBrowserProfileButton: View {
                 }
             }
             if !store.profiles.isEmpty { Divider() }
-            Button("New Profile…") { askForNewProfile() }
+            NativeSessionButton("New Profile…") { askForNewProfile() }
                 .disabled(!EngineBridge.shared.isReady)
             Divider()
             NativeBrowserMenuActions(store: store, tab: tab)
@@ -641,14 +649,16 @@ struct NativeBrowserProfileButton: View {
         let alert = NSAlert()
         alert.messageText = "New browser profile"
         alert.informativeText = "A profile keeps its own sign-ins and cookies."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        let field = NativeSessionTextControl(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.inputRule.bind(to: inputScope)
+        field.updateInput(active: inputScope == nil ? screenActive : true, enabled: true)
         field.placeholderString = "Name"
         alert.accessoryView = field
         alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = field
         let finish: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .alertFirstButtonReturn else { return }
+            guard field.inputRule.acceptsFocus, response == .alertFirstButtonReturn else { return }
             let name = field.stringValue
             Task { await store.createProfile(named: name, for: tab) }
         }
@@ -668,7 +678,7 @@ struct NativeBrowserDownloadsList: View {
             HStack {
                 Text("Downloads").font(.headline)
                 Spacer()
-                Button("Clear") { downloads.clearFinished() }
+                NativeSessionButton("Clear") { downloads.clearFinished() }
                     .disabled(!downloads.items.contains { $0.state != .running })
             }
             .padding(.horizontal, 14)
@@ -695,7 +705,7 @@ struct NativeBrowserDownloadsList: View {
                 .frame(maxHeight: 320)
             }
             Divider()
-            Button("Open Downloads Folder") { downloads.openDownloadsFolder() }
+            NativeSessionButton("Open Downloads Folder") { downloads.openDownloadsFolder() }
                 .buttonStyle(.link)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -743,14 +753,14 @@ struct NativeBrowserDownloadRow: View {
         .onTapGesture(count: 2) { if item.state == .finished && localFile { downloads.open(item.id) } }
         .contextMenu {
             if item.state == .finished && localFile {
-                Button("Open") { downloads.open(item.id) }
-                Button("Show in Finder") { downloads.reveal(item.id) }
+                NativeSessionButton("Open") { downloads.open(item.id) }
+                NativeSessionButton("Show in Finder") { downloads.reveal(item.id) }
             }
             if item.state == .running {
-                Button("Stop") { downloads.cancel(item.id) }
+                NativeSessionButton("Stop") { downloads.cancel(item.id) }
             }
             if let source = item.source {
-                Button("Copy Address") {
+                NativeSessionButton("Copy Address") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(source.absoluteString, forType: .string)
                 }

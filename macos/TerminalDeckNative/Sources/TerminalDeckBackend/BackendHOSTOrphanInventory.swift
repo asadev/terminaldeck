@@ -14,6 +14,9 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
     private var records: [String: BackendHOSTOrphanRecord] = [:]
     private var watches: [String: [Int32: BackendHOSTOrphanWatch]] = [:]
     private var problems: [String: String] = [:]
+    /// 9 Nov: told (on this queue) when a session's tree gained or lost a process, so a chat can see that its
+    /// background shell ended. Never told what to stop.
+    private var changeHandler: (@Sendable (String) -> Void)?
     private var stopping: Set<String> = []
     /// 18 Oct (#436): watch-driven captures share one write a moment later; record() and explicit
     /// observation still write at once (the pre-exec record must be durable before exec).
@@ -99,6 +102,7 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
         }
     }
     public func observationProblem(sessionID: String) -> String? { serialized { problems[sessionID] } }
+    public func onChange(_ handler: @escaping @Sendable (String) -> Void) { serialized { changeHandler = handler } }
 
     public func list() throws -> [BackendHOSTOrphanRecovery] {
         serialized { records.values.sorted { $0.sessionID < $1.sessionID }.map(recovery) }
@@ -268,7 +272,7 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
         defer { record.processes = kept }
         return kept.count != record.processes.count
     }
-    private func captureDescendants(_ sessionID: String, durable: Bool) throws {
+    @discardableResult private func captureDescendants(_ sessionID: String, durable: Bool) throws -> Bool {
         guard var record = records[sessionID] else { throw BackendHOSTOrphanFailure.missingSession }
         var offset = 0, changed = pruneGone(&record)
         while offset < record.processes.count {
@@ -284,7 +288,7 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
                 record.processes.append(child); changed = true
             }
         }
-        guard changed else { return }
+        guard changed else { return false }
         let original = records[sessionID]; records[sessionID] = record
         if durable {
             do { try persist() } catch { records[sessionID] = original; throw error }
@@ -293,6 +297,7 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
         for (pid, watch) in watches[sessionID] ?? [:] where !record.processes.contains(where: { $0.pid == pid }) {
             watch.cancel(); watches[sessionID]?[pid] = nil
         }
+        return true
     }
     private func schedulePersist() {
         guard pendingPersist == nil else { return }
@@ -312,7 +317,10 @@ public final class BackendHOSTOrphanInventory: @unchecked Sendable {
                 guard let self else { return }
                 queue.async { [weak self] in
                     guard let self, records[sessionID] != nil else { return }
-                    do { try captureDescendants(sessionID, durable: false); installWatches(sessionID) }
+                    do {
+                        let changed = try captureDescendants(sessionID, durable: false); installWatches(sessionID)
+                        if changed { changeHandler?(sessionID) }
+                    }
                     catch { problems[sessionID] = "Descendant observation could not establish complete ownership. Recovery is limited to recorded identities." }
                 }
             }) { watches[sessionID, default: [:]][identity.pid] = watch }

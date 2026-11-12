@@ -50,12 +50,12 @@ struct NativeDebugPanel: View {
             HStack {
                 Text("IPC calls").font(.headline)
                 Spacer()
-                TextField("Filter channels", text: $filter)
+                NativeSessionTextField("Filter channels", text: $filter)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
                     .accessibilityLabel("Filter IPC channels")
-                Button(paused ? "Resume" : "Pause") { paused.toggle() }
-                Button("Clear") {
+                NativeSessionButton(paused ? "Resume" : "Pause") { paused.toggle() }
+                NativeSessionButton("Clear") {
                     calls = []
                     Task { _ = try? await EngineBridge.shared.invoke("debug:ipc-clear") }
                 }
@@ -104,7 +104,7 @@ struct NativeDebugPanel: View {
             HStack {
                 Text("Session processes").font(.headline)
                 Spacer()
-                Button("Refresh") { Task { await readSessions() } }
+                NativeSessionButton("Refresh") { Task { await readSessions() } }
             }
             if sessions.isEmpty {
                 Text("No sessions are running.").font(.callout).foregroundStyle(.secondary)
@@ -131,9 +131,9 @@ struct NativeDebugPanel: View {
             HStack {
                 Text("Support bundle").font(.headline)
                 Spacer()
-                Button(collecting ? "Collecting…" : bundle == nil ? "Collect" : "Recollect") { collect() }
+                NativeSessionButton(collecting ? "Collecting…" : bundle == nil ? "Collect" : "Recollect") { collect() }
                     .disabled(collecting || !wired)
-                Button(copied ? "Copied" : "Copy") { copyBundle() }.disabled(bundle == nil)
+                NativeSessionButton(copied ? "Copied" : "Copy") { copyBundle() }.disabled(bundle == nil)
             }
             Text(DebugPanelRules.bundleHint)
                 .font(.callout).foregroundStyle(.secondary)
@@ -147,9 +147,9 @@ struct NativeDebugPanel: View {
             HStack {
                 Text("Log").font(.headline)
                 Spacer()
-                Button("Refresh") { Task { await readLog() } }.disabled(!wired)
-                Button("Open log folder") { Task { _ = try? await EngineBridge.shared.invoke("log:open-folder") } }.disabled(!wired)
-                Button("Clear") {
+                NativeSessionButton("Refresh") { Task { await readLog() } }.disabled(!wired)
+                NativeSessionButton("Open log folder") { Task { _ = try? await EngineBridge.shared.invoke("log:open-folder") } }.disabled(!wired)
+                NativeSessionButton("Clear") {
                     Task {
                         if (try? await EngineBridge.shared.invoke("log:clear")) != nil { await readLog() }
                     }

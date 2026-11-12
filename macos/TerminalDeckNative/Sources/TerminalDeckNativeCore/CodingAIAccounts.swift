@@ -611,6 +611,14 @@ public enum CodingAILogins {
         return copies
     }
 
+    /// 10 Nov (Asad: the New session pop-up lists exactly what Settings › Coding AIs lists): the row an account shows
+    /// as there — itself, or the row Settings folds it under as a copy; nil for an id that is not an account.
+    public static func shownRow(for id: String?, accounts: [CodingAIAccount], signIn: [String: CodingAISignIn]) -> String? {
+        guard let id else { return nil }
+        if oneRowPerEmail(accounts, signIn: signIn).contains(where: { $0.id == id }) { return id }
+        return duplicates(accounts, signIn: signIn)[id]?.id
+    }
+
     public static func copies(of account: CodingAIAccount, accounts: [CodingAIAccount], signIn: [String: CodingAISignIn]) -> [CodingAIAccount] {
         let duplicates = duplicates(accounts, signIn: signIn)
         return accounts.filter { duplicates[$0.id]?.id == account.id }

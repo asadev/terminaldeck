@@ -149,7 +149,7 @@ public struct BackendDeckToolsSessionsNativeSurface: BackendDeckToolsSessionsSur
         try await renamed(sessionID, resolved); return resolved
     }
     private func heldView(_ rows: NativeRPCValue) -> [NativeRPCValue] {
-        (rows.elements ?? []).map { row in BackendDeckToolsSupport.object(["key", "cwd", "provider", "profileId", "reason", "at", "lastSeenAt"].map { ($0, row[$0]) }) }
+        (rows.elements ?? []).map { row in BackendDeckToolsSupport.object(["key", "cwd", "provider", "profileId", "homeProfileId", "reason", "at", "lastSeenAt", "pick", "recoveryAction"].map { ($0, row[$0]) }) }
     }
     public func held(context: BackendMCPCallContext) async throws -> [NativeRPCValue] { heldView(try await invoke("sessions:held", [], context)) }
     public func retryHeld(key: String, context: BackendMCPCallContext) async throws -> [NativeRPCValue] { heldView(try await invoke("session:held-retry", [.string(key)], context)) }

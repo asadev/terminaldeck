@@ -12,8 +12,8 @@ struct NativeMemoryTemplatesButton: View {
     @State private var open = false
     var body: some View {
         Group {
-            if prominent { Button(title) { open = true }.buttonStyle(.borderedProminent) }
-            else { Button(title) { open = true } }
+            if prominent { NativeSessionButton(title) { open = true }.buttonStyle(.borderedProminent) }
+            else { NativeSessionButton(title) { open = true } }
         }
         .help("The three templates: Orchestrator, Lead and Agent. A change applies to everyone in the category.")
         .sheet(isPresented: $open) { NativeMemoryTemplatesView(category: category, onClose: { open = false }) }
@@ -69,7 +69,7 @@ struct NativeMemoryTemplatesView: View {
                 GlassSwitch(selection: $category, items: DeckMemoryCategory.allCases.map { .init(id: $0, title: $0.title, symbol: $0 == .orchestrator ? "bird" : $0 == .lead ? "person.2" : "person") })
                 Spacer()
                 // Done and Escape never throw away an unsaved edit silently, even one on another tab.
-                Button("Done") { if unsaved.isEmpty { onClose() } else { confirmClose = true } }.keyboardShortcut(.cancelAction).disabled(busy)
+                NativeSessionButton("Done") { if unsaved.isEmpty { onClose() } else { confirmClose = true } }.keyboardShortcut(.cancelAction).disabled(busy)
             }.padding(.horizontal, 20).padding(.vertical, 12)
             HStack(spacing: 8) {
                 Image(systemName: "person.3.fill").foregroundStyle(Color.accentColor)
@@ -107,8 +107,8 @@ struct NativeMemoryTemplatesView: View {
                     Text(unsaved == [category] ? "Not saved yet" : "Not saved yet: \(Self.names(unsaved))").font(.callout).foregroundStyle(DeckTokens.warn)
                 }
                 Spacer()
-                Button("Revert") { draft[category] = saved[category] }.disabled(!dirty || busy)
-                Button(busy ? "Saving…" : "Save for \(category.everyone)") { save() }
+                NativeSessionButton("Revert") { draft[category] = saved[category] }.disabled(!dirty || busy)
+                NativeSessionButton(busy ? "Saving…" : "Save for \(category.everyone)") { save() }
                     .buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command).disabled(!dirty || busy)
             }.padding(.horizontal, 20).frame(height: 48)
         }
@@ -116,9 +116,9 @@ struct NativeMemoryTemplatesView: View {
         .background(DeckTokens.page)
         .interactiveDismissDisabled(!unsaved.isEmpty)
         .confirmationDialog("Close without saving?", isPresented: $confirmClose) {
-            Button("Close Without Saving", role: .destructive) { onClose() }
+            NativeSessionButton("Close Without Saving", role: .destructive) { onClose() }
             // Back to the window, on the tab that holds the unsaved edit.
-            Button("Keep Editing", role: .cancel) { if !unsaved.contains(category), let first = unsaved.first { category = first } }
+            NativeSessionButton("Keep Editing", role: .cancel) { if !unsaved.contains(category), let first = unsaved.first { category = first } }
         } message: { Text(Self.closeWarning(unsaved)) }
         .task { await load() }
     }
@@ -131,7 +131,7 @@ struct NativeMemoryTemplatesView: View {
     }
 
     private func editor(_ text: Binding<String>) -> some View {
-        TextEditor(text: text).font(.system(size: 12.5, design: .monospaced)).scrollContentBackground(.hidden)
+        NativeSessionTextEditor(text: text).font(.system(size: 12.5, design: .monospaced)).scrollContentBackground(.hidden)
             .padding(8).background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DeckTokens.hairline))
     }

@@ -77,7 +77,7 @@ public enum NativeChatSealedDocument {
         let encoded = Data(child.utf8).base64EncodedString()
         return """
         <!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="\(outerPolicy)">
-        <style>html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%}</style></head><body>
+        <style>:root{color-scheme:\(colors.dark ? "dark" : "light")}html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%;color-scheme:\(colors.dark ? "dark" : "light")}</style></head><body>
         <iframe id="attachment" title="Chat content" sandbox="allow-scripts" allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'; display-capture 'none'; fullscreen 'none'; payment 'none'; usb 'none'; serial 'none'; hid 'none'" referrerpolicy="no-referrer"></iframe>
         <script>
         'use strict';
@@ -100,7 +100,7 @@ public enum NativeChatSealedDocument {
     public static func childDocument(source: String, kind: String, colors: Colors) -> String {
         let encoded = Data((kind == "math-inline" ? ChatMarkdown.mathInlineHTML(source) : source).utf8).base64EncodedString()
         let styles = """
-        :root{color-scheme:\(colors.dark ? "dark" : "light");--background:\(safeColor(colors.background));--foreground:\(safeColor(colors.foreground));--accent:\(safeColor(colors.accent));--secondary:\(safeColor(colors.secondary));--surface:\(safeColor(colors.surface));--color-background-primary:var(--background);--color-text-primary:var(--foreground);--color-text-secondary:var(--secondary);--color-accent:var(--accent)}
+        :root{color-scheme:\(colors.dark ? "dark" : "light");--background:\(safeColor(colors.background));--foreground:\(safeColor(colors.foreground));--text:\(safeColor(colors.foreground));--muted:\(safeColor(colors.secondary));--accent:\(safeColor(colors.accent));--secondary:\(safeColor(colors.secondary));--surface:\(safeColor(colors.surface));--color-background-primary:var(--background);--color-text-primary:var(--foreground);--color-text-secondary:var(--secondary);--color-accent:var(--accent)}
         html{overflow:auto;background:var(--background);color:var(--foreground)}body{margin:0;padding:8px;box-sizing:border-box;font:14px -apple-system,BlinkMacSystemFont,sans-serif;overflow-wrap:anywhere}*,*:before,*:after{box-sizing:border-box}img,svg{max-width:100%}pre{white-space:pre-wrap}a{color:var(--accent)}#td-content{display:flow-root}#td-error{color:var(--secondary);padding:12px}.katex-display{overflow-x:auto;overflow-y:hidden}
         """
         var libraries = ""
@@ -146,17 +146,23 @@ public enum NativeChatSealedDocument {
           const source64='\(encoded)';
           const source=new TextDecoder().decode(Uint8Array.from(atob(source64),c=>c.charCodeAt(0)));
           const content=document.getElementById('td-content');
-          let pending=false;
-          const size=()=>{if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;tdReport({__tdChat:'size',height:Math.ceil(Math.max(content.scrollHeight,content.getBoundingClientRect().height)+16)});});};
+          // Measured with timers and DOM changes, never a painted frame: a view that is off screen (a hidden
+          // window, a background check) paints none, and the box would keep its starting height.
+          let pending=0,last=-1;
+          const measure=()=>{pending=0;const height=Math.ceil(Math.max(content.scrollHeight,content.getBoundingClientRect().height)+16);if(height!==last){last=height;tdReport({__tdChat:'size',height});}};
+          const size=()=>{if(!pending)pending=setTimeout(measure,30);};
           try{\(render)
             new ResizeObserver(size).observe(content);
+            new MutationObserver(size).observe(content,{subtree:true,childList:true,attributes:true,characterData:true});
             window.addEventListener('resize',size);
             if(document.fonts)document.fonts.ready.then(size);
             document.addEventListener('load',size,true);
-            size();tdReport({__tdChat:'ready'});
+            window.addEventListener('load',size);
+            for(const delay of [150,500,1200,2500,5000])setTimeout(size,delay);
+            measure();tdReport({__tdChat:'ready'});
           }catch(error){
             const failure=document.createElement('div');failure.id='td-error';failure.textContent='This content could not be drawn. Use Code to view its source.';content.replaceChildren(failure);
-            size();tdReport({__tdChat:'error'});
+            measure();tdReport({__tdChat:'error'});
           }
         })();
         </script></body></html>

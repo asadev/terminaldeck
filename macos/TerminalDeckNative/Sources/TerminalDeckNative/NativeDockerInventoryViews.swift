@@ -96,12 +96,12 @@ struct NativeDockerInventoryList: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField("Search \(section.title.lowercased())", text: $search)
+            NativeSessionTextField("Search \(section.title.lowercased())", text: $search)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
                 .accessibilityLabel("Search \(section.title.lowercased())")
             if !search.isEmpty {
-                Button { search = "" } label: {
+                NativeSessionButton { search = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
@@ -222,7 +222,7 @@ private struct NativeDockerSectionRow: View {
     @State private var hovered = false
 
     var body: some View {
-        Button(action: choose) {
+        NativeSessionButton(action: choose) {
             HStack(spacing: 8) {
                 Image(systemName: symbol)
                     .font(.system(size: 13))
@@ -263,7 +263,7 @@ private struct NativeDockerInventoryRow: View {
     @State private var hovered = false
 
     var body: some View {
-        Button(action: choose) {
+        NativeSessionButton(action: choose) {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: symbol)
                     .font(.system(size: 14))

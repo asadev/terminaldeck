@@ -27,7 +27,7 @@ struct NativeChatPastSearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Search past chats").font(.headline)
             Text(initialProject).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            HStack { TextField("Search conversation text", text: $query).onSubmit(search); Button("Search", action: search).disabled(query.count < 2 || loading) }
+            HStack { NativeSessionTextField("Search conversation text", text: $query).onSubmit(search); NativeSessionButton("Search", action: search).disabled(query.count < 2 || loading) }
             HStack {
                 Picker("Scope", selection: $scope) { Text("This project").tag("project"); Text("All projects").tag("all") }
                 Picker("Speaker", selection: $role) { Text("Everyone").tag("all"); Text("You").tag("user"); Text("Assistant").tag("assistant"); Text("Tools").tag("tool") }
@@ -39,7 +39,7 @@ struct NativeChatPastSearchView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(Array(hits.enumerated()), id: \.offset) { _, hit in
-                        Button {
+                        NativeSessionButton {
                             Task {
                                 do {
                                     let raw = try await EngineBridge.shared.invoke("chat:load", [["transcriptPath": hit["transcriptPath"].string ?? ""]])

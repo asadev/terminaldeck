@@ -100,4 +100,22 @@ final class BackendFoundationTestsAgentsInstructions: XCTestCase {
         let gemini = try await launch(root, provider: "gemini", id: nil)
         XCTAssertEqual(gemini, [])
     }
+    // APPMGMT (8 Nov): every AI is steered off the installed Google Chrome's code-sign clone (the App Management
+    // notice that blames TerminalDeckNativeHelper). Guidance only: Claude and Codex in their note, Gemini in its chat extra.
+    func testEveryAIIsToldHowToStartChromeWithoutTheAppManagementNotice() async throws {
+        let line = BackendANDROIDSessionPhoneNote.browserLine
+        XCTAssertTrue(line.contains("--disable-features=MacAppCodeSignClone"))
+        XCTAssertTrue(line.contains("browser_*") && line.contains("Playwright's bundled Chromium") && line.contains("/Applications/Google Chrome.app"))
+        XCTAssertEqual(BackendANDROIDSessionPhoneNote.note.components(separatedBy: line).count, 2, "Claude's note carries it once")
+        XCTAssertEqual(BackendANDROIDSessionPhoneNote.codexNote.components(separatedBy: line).count, 2, "Codex's note carries it once")
+        XCTAssertTrue(BackendANDROIDSessionPhoneNote.note.hasPrefix("You are running inside Terminal Deck"), "the existing note is kept")
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let claude = try await launch(root, provider: "claude", id: nil)
+        XCTAssertTrue(claude[try XCTUnwrap(claude.firstIndex(of: "--append-system-prompt")) + 1].contains(line))
+        let codex = try await launch(root, provider: "codex", id: nil)
+        XCTAssertTrue(codex.contains("developer_instructions=" + BackendNativeInstructions.tomlString(BackendANDROIDSessionPhoneNote.codexNote)))
+        let gemini = try BackendHootChatLaunchPlan(provider: .gemini, cwd: root.path, sessionID: nil, extra: [])
+        XCTAssertTrue(try XCTUnwrap(gemini.setup?.optionalInstructions).contains(line))
+        XCTAssertFalse(try XCTUnwrap(gemini.setup?.instructions).contains(line), "optional: a Gemini without prompt context still starts")
+    }
 }

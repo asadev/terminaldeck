@@ -53,7 +53,7 @@ struct NativeMACHINESManagedApps: View {
                 }
             }
             HStack(spacing: 12) {
-                Button { if live { model.newApp() } } label: { Label("New app", systemImage: "plus") }
+                NativeSessionButton { if live { model.newApp() } } label: { Label("New app", systemImage: "plus") }
                     .buttonStyle(.bordered)
                     .disabled(live && (model.busy != nil || !model.canChange))
                     .help("Deploy a repository, use a template, or add a database.")
@@ -65,15 +65,15 @@ struct NativeMACHINESManagedApps: View {
                     DeckRetryButton("Try again", autoRetry: true) { model.refresh() } // autoRetry: re-reads the app list
                 } else if live, let reason = model.writesUnavailableReason, !model.checkingCapabilities {
                     Text(reason).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(reason)
-                    Button("Check again") { model.refreshCapabilities() }
+                    NativeSessionButton("Check again") { model.refreshCapabilities() }
                 }
                 Spacer(minLength: 0)
             }
         }
         .alert("Remove \(removing?.name ?? "this app")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
-            TextField("Type the app’s name", text: $confirmationName)
-            Button("Cancel", role: .cancel) { removing = nil }
-            Button("Remove app", role: .destructive) {
+            NativeSessionTextField("Type the app’s name", text: $confirmationName)
+            NativeSessionButton("Cancel", role: .cancel) { removing = nil }
+            NativeSessionButton("Remove app", role: .destructive) {
                 if live, let app = removing { model.removeApp(app, confirmationName: confirmationName) }
                 removing = nil
             }.disabled(confirmationName != removing?.name)
@@ -102,7 +102,7 @@ struct NativeMACHINESManagedApps: View {
 
     private func managedRow(_ app: NativeAppsSummary) -> some View {
         HStack(spacing: 8) {
-            Button { open(app) } label: {
+            NativeSessionButton { open(app) } label: {
                 HStack(spacing: 12) {
                     Image(systemName: app.kind == "app" ? "cube" : "externaldrive").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 3) {
@@ -119,8 +119,8 @@ struct NativeMACHINESManagedApps: View {
             }.buttonStyle(MACHINESRowStyle())
             HStack(spacing: 6) {
                 if hovering == app.id {
-                    Button("Logs") { open(app, tab: .logs) }.buttonStyle(.bordered)
-                    Button("Restart") { if live { model.restartApp(app) } }
+                    NativeSessionButton("Logs") { open(app, tab: .logs) }.buttonStyle(.bordered)
+                    NativeSessionButton("Restart") { if live { model.restartApp(app) } }
                         .buttonStyle(.bordered).disabled(live && (model.busy != nil || !model.canChange))
                 }
             }.frame(minWidth: 110)
@@ -132,15 +132,15 @@ struct NativeMACHINESManagedApps: View {
     }
 
     @ViewBuilder private func managedActions(_ app: NativeAppsSummary) -> some View {
-        Button("Open app") { open(app) }
-        Button("Logs") { open(app, tab: .logs) }
-        Button("Restart") { if live { model.restartApp(app) } }.disabled(live && !model.canChange)
-        Button("Deploy") { if live { model.deployApp(app) } }.disabled(live && !model.canChange)
-        Button("Deploy history") { open(app, tab: .deploys) }
-        Button("Settings") { open(app, tab: .settings) }
-        if app.kind != "app" { Button("Backups") { open(app, tab: .backups) } }
+        NativeSessionButton("Open app") { open(app) }
+        NativeSessionButton("Logs") { open(app, tab: .logs) }
+        NativeSessionButton("Restart") { if live { model.restartApp(app) } }.disabled(live && !model.canChange)
+        NativeSessionButton("Deploy") { if live { model.deployApp(app) } }.disabled(live && !model.canChange)
+        NativeSessionButton("Deploy history") { open(app, tab: .deploys) }
+        NativeSessionButton("Settings") { open(app, tab: .settings) }
+        if app.kind != "app" { NativeSessionButton("Backups") { open(app, tab: .backups) } }
         if let url = NativeAppsRules.safeAddress(app.address) { Link("Open address", destination: url) }
-        Button("Remove…", role: .destructive) { if live { confirmationName = ""; removing = app } }.disabled(live && !model.canChange)
+        NativeSessionButton("Remove…", role: .destructive) { if live { confirmationName = ""; removing = app } }.disabled(live && !model.canChange)
     }
 
     private func statusColor(_ status: String) -> Color {

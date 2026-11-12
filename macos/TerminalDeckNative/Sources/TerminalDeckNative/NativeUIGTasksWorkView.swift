@@ -43,7 +43,7 @@ struct NativeUIGTasksWorkView: View {
                             if d.shown.contains(where: { !TaskList.statusOrder.contains($0.crmStatus) }) {
                                 HStack(spacing: 8) {
                                     Text("Tasks with another status are in List.").foregroundStyle(.secondary)
-                                    Button("Show List") { model.view.tab = .table }
+                                    NativeSessionButton("Show List") { model.view.tab = .table }
                                 }.font(.callout)
                             }
                             StageBoard(tasks: d.shown, today: d.today, nowHm: d.nowHm, busy: store.busy,
@@ -100,7 +100,7 @@ struct NativeUIGTasksWorkView: View {
                 : "No tasks match this search and filters.")
                 .foregroundStyle(.secondary)
             if model.view.filters.narrows || model.view.filters.archived {
-                Button("Clear search and filters") { model.view.filters = ListFilters() }
+                NativeSessionButton("Clear search and filters") { model.view.filters = ListFilters() }
             }
         }
         .font(.callout)
@@ -116,7 +116,7 @@ struct NativeUIGTasksWorkView: View {
             HStack {
                 Text("Filters").font(.callout.weight(.semibold))
                 Spacer()
-                Button("Done") { filtersOpen = false }.buttonStyle(.bordered)
+                NativeSessionButton("Done") { filtersOpen = false }.buttonStyle(.bordered)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -152,7 +152,7 @@ struct NativeUIGTasksWorkView: View {
             }
             .frame(maxHeight: 460)
             Divider()
-            Button("Reset filters") { model.view = UIGTasksPresentation.resetFoldedFilters(model.view) }
+            NativeSessionButton("Reset filters") { model.view = UIGTasksPresentation.resetFoldedFilters(model.view) }
                 .disabled(UIGTasksPresentation.filterCount(model.view.filters) == 0)
                 .help("Clear these filters. Search and table layout stay as you left them.")
         }
@@ -170,7 +170,7 @@ struct NativeUIGTasksWorkView: View {
             Text(label)
             Spacer(minLength: 8)
             Menu {
-                Button("Any") { onClear() }
+                NativeSessionButton("Any") { onClear() }
                 Divider()
                 ForEach(values, id: \.self) { value in
                     Toggle(value == "none" ? noneLabel : value, isOn: Binding(
@@ -206,30 +206,30 @@ struct NativeUIGTasksWorkView: View {
         return TasksFlow(spacing: 8, lineSpacing: 8) {
             Text("\(selected.count) selected").font(.callout.weight(.semibold))
             if selected.count < all.count {
-                Button("Select all \(all.count)") { model.selected = Set(all) }
+                NativeSessionButton("Select all \(all.count)") { model.selected = Set(all) }
             }
             Menu("Status") {
                 ForEach(TaskList.statusOrder, id: \.self) { status in
-                    Button(status) { runBulk(selected) { await store.update($0, ["status": status]) } }
+                    NativeSessionButton(status) { runBulk(selected) { await store.update($0, ["status": status]) } }
                 }
             }
             .fixedSize()
             Menu("Priority") {
                 ForEach(TaskList.priorities, id: \.self) { priority in
-                    Button(priority) { runBulk(selected) { await store.update($0, ["priority": priority]) } }
+                    NativeSessionButton(priority) { runBulk(selected) { await store.update($0, ["priority": priority]) } }
                 }
                 Divider()
-                Button("No priority") { runBulk(selected) { await store.update($0, ["priority": NSNull()]) } }
+                NativeSessionButton("No priority") { runBulk(selected) { await store.update($0, ["priority": NSNull()]) } }
             }
             .fixedSize()
-            Button("Due date") { bulkDueOpen = true }
+            NativeSessionButton("Due date") { bulkDueOpen = true }
                 .popover(isPresented: $bulkDueOpen) {
                     DayPicker(ymd: nil) { date in
                         bulkDueOpen = false
                         runBulk(selected) { await store.update($0, ["dueDate": date ?? NSNull()]) }
                     }
                 }
-            Button("Tags") { bulkTagsText = ""; bulkTagsMode = "add"; bulkTagsOpen = true }
+            NativeSessionButton("Tags") { bulkTagsText = ""; bulkTagsMode = "add"; bulkTagsOpen = true }
                 .popover(isPresented: $bulkTagsOpen) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Tags for \(selected.count) tasks").font(.headline)
@@ -237,11 +237,11 @@ struct NativeUIGTasksWorkView: View {
                             Text("Add").tag("add"); Text("Remove").tag("remove")
                             Text("Replace").tag("replace"); Text("Clear all").tag("clear")
                         }
-                        if bulkTagsMode != "clear" { TextField("Tags, separated by commas", text: $bulkTagsText) }
+                        if bulkTagsMode != "clear" { NativeSessionTextField("Tags, separated by commas", text: $bulkTagsText) }
                         HStack {
-                            Button("Cancel") { bulkTagsOpen = false }
+                            NativeSessionButton("Cancel") { bulkTagsOpen = false }
                             Spacer()
-                            Button("Apply") {
+                            NativeSessionButton("Apply") {
                                 let tags = bulkTagsText.components(separatedBy: ",")
                                 let mode = bulkTagsMode
                                 bulkTagsOpen = false
@@ -253,13 +253,13 @@ struct NativeUIGTasksWorkView: View {
                         }
                     }.padding(16).frame(width: 320)
                 }
-            Button("Mark done") { runBulk(selected) { await store.update($0, ["status": "Done"]) } }
-            Button(model.view.filters.archived ? "Restore" : "Archive") {
+            NativeSessionButton("Mark done") { runBulk(selected) { await store.update($0, ["status": "Done"]) } }
+            NativeSessionButton(model.view.filters.archived ? "Restore" : "Archive") {
                 let archived = !model.view.filters.archived
                 runBulk(selected) { await store.update($0, ["archived": archived]) }
             }
-            Button("Delete", role: .destructive) { runBulk(selected) { await store.remove($0) } }.foregroundStyle(.red)
-            Button("Clear selection") { model.selected = [] }
+            NativeSessionButton("Delete", role: .destructive) { runBulk(selected) { await store.remove($0) } }.foregroundStyle(.red)
+            NativeSessionButton("Clear selection") { model.selected = [] }
         }
         .buttonStyle(.bordered)
         .controlSize(.small)

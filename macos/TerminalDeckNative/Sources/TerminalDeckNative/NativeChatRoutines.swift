@@ -52,11 +52,11 @@ struct NativeChatRoutinesPopover: View {
                     Text("Schedule a prompt").font(.headline)
                     Text(NativeChatRoutines.availability).font(.caption).foregroundStyle(.secondary)
                     Text("The routine runs with the agent chosen in its editor; it does not resume this conversation. Files and mention chips stay in Chat. Write all recurring instructions below.").font(.caption).foregroundStyle(.secondary)
-                    TextEditor(text: $prompt).font(.body).frame(height: 150).accessibilityLabel("Plain prompt for routine")
-                    Button(model.chatRoutinePreparing ? "Preparing editor…" : "Review as a new routine…") { run("prepare", text: prompt) }
+                    NativeSessionTextEditor(text: $prompt).font(.body).frame(height: 150).accessibilityLabel("Plain prompt for routine")
+                    NativeSessionButton(model.chatRoutinePreparing ? "Preparing editor…" : "Review as a new routine…") { run("prepare", text: prompt) }
                         .disabled(model.chatRoutinePreparing || model.readOnly || model.loading || model.changingConversation || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Text("The editor starts with the routine off. Nothing is saved until you choose Save routine.").font(.caption).foregroundStyle(.secondary)
-                    Button("Manage routines and recent runs") { run("open", request: "manage") }
+                    NativeSessionButton("Manage routines and recent runs") { run("open", request: "manage") }
                     if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
                 }.padding(16).frame(width: 520)
             }

@@ -3,7 +3,19 @@ import AppKit
 import TerminalDeckBackend
 import TerminalDeckNativeCore
 
-@main
+/// The program's entry. launchd starts this same program for Terminal Deck's own background items (the session keepers,
+/// `BackendHOSTService`): it hands over to the keeper before any app code, so macOS counts the keeper as Terminal Deck.
+@main @MainActor
+enum TerminalDeckNativeMain {
+    static func main() {
+        let arguments = CommandLine.arguments
+        if arguments.count > 1, arguments[1] == BackendHOSTService.launchArgument {
+            BackendHOSTService.handOver(BackendHOSTService.launch(arguments: arguments))
+        }
+        TerminalDeckNativeApp.main()
+    }
+}
+
 struct TerminalDeckNativeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let model: AppModel

@@ -485,7 +485,27 @@ public actor BackendCompositionSessions {
     /// are installed. Activation itself never launches saved CLI processes.
     public func restoreSavedSessions() async throws -> BackendSessionRestoreCoordinator.Result {
         guard !stopped, !stopping, ownerID != nil else { throw BackendSessionFailure.closed }
-        return try await restore.restore()
+        // 10 Nov (Asad: "/resume can't see past chats when I switch account"): before the tabs come back, every
+        // account folder the app made that no running session uses joins the one chat history of its AI.
+        let notes = await joinSharedHistory()
+        // 10 Nov (Asad's Decker tab): the last resort for a tab whose own conversations are gone from disk.
+        await restore.setConversationHint(BackendRestoreConversationHint.make(dataRoot: dependencies.accounts.dataDirectory))
+        var result = try await restore.restore()
+        result.notes = notes + result.notes
+        return result
+    }
+    private func joinSharedHistory() async -> [String] {
+        let live = manager.list().filter { $0.exitCode == nil }
+        let inUse = Set(live.flatMap { [$0.profileId, $0.homeProfileId].compactMap { $0 } })
+        guard let accounts = try? await profiles.list(provider: nil) else { return ["shared history: the account list could not be read; nothing was joined"] }
+        let profiles = self.profiles
+        let outcome = await BackendSharedHistoryJoin.joinAll(accounts, configuration: dependencies.accounts,
+            managed: { (try? await profiles.managed($0)) ?? false }, inUse: inUse)
+        var notes: [String] = []
+        if !outcome.joined.isEmpty { notes.append("shared history: \(outcome.joined.count) account folder(s) joined (\(outcome.joined.joined(separator: ", "))); \(outcome.keptBeside) clashing file(s) kept beside") }
+        for line in outcome.skipped where line.contains("in use") { notes.append("shared history: waits for a later start: " + line) }
+        for line in outcome.failed { notes.append("shared history: not joined: " + line) }
+        return notes
     }
 
     /// The existing quit owner retains native processes for the user's Keep

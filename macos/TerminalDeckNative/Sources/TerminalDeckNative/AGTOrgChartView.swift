@@ -121,20 +121,20 @@ struct AGTOrgChartView: View {
     private var findPanel: some View {
         @Bindable var bound = AGTAgentsStore.shared
         return VStack(alignment: .leading, spacing: 12) {
-            TextField("Find an agent, role or model", text: $bound.search)
-                .textFieldStyle(.roundedBorder).focused($findFocused)
+            NativeSessionTextField("Find an agent, role or model", text: $bound.search)
+                .textFieldStyle(.roundedBorder).sessionFocused($findFocused)
             HStack {
                 let count = agents.filter { matches.contains($0.id) }.count
                 Text(searching ? "\(count) \(count == 1 ? "match" : "matches")" : "The whole team stays on the chart.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                 Spacer()
-                if searching { Button("Clear") { store.search = "" }.buttonStyle(.borderless) }
-                Button("Done") { findPresented = false }.keyboardShortcut(.defaultAction)
+                if searching { NativeSessionButton("Clear") { store.search = "" }.buttonStyle(.borderless) }
+                NativeSessionButton("Done") { findPresented = false }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(16).frame(width: 340)
         .onAppear { findFocused = true }
-        .onExitCommand { findPresented = false }
+        .sessionOnExitCommand { findPresented = false }
     }
 
     private func chart(_ tree: AGTOrgLayout.Result, byID: [String: AGTAgent]) -> some View {
@@ -195,11 +195,11 @@ struct AGTOrgChartView: View {
     }
     /// A vacant seat that still holds memory: hire someone new into it, or seat an existing agent.
     @ViewBuilder private func vacantMenu(_ seat: AGTSeat) -> some View {
-        Button { hire(into: seat) } label: { Label("Hire a new agent into this seat…", systemImage: "person.badge.plus") }
+        NativeSessionButton { hire(into: seat) } label: { Label("Hire a new agent into this seat…", systemImage: "person.badge.plus") }
         let members = store.agents.filter { $0.kind == .profile && $0.status != "archived" && (seat.projectID == nil || project(for: $0) == seat.projectID) }
         Menu("Put an existing agent in this seat") {
             ForEach(members) { agent in
-                Button {
+                NativeSessionButton {
                     Task {
                         if case .lead(let id) = seat, let project = NativePROJLabels.shared.projects.first(where: { $0.id == id }) { await AGTLeads.setLead(agent, of: project) }
                         else if let role = seat.role { await AGTLeads.setRole(role, title: nil, for: agent) }
@@ -210,7 +210,7 @@ struct AGTOrgChartView: View {
         }
         .disabled(changing)
         Divider()
-        Button {
+        NativeSessionButton {
             Task {
                 let root = await DeckMemory.store.location().root
                 NSWorkspace.shared.open(root.appendingPathComponent(seat.owner.folder))
@@ -278,7 +278,7 @@ struct AGTOrgChartView: View {
         .onTapGesture { selectedID = agent.id }
         .contextMenu {
             if let seat = AGTLeads.vacantSeat(agent) { vacantMenu(seat) }
-            else if AGTLeads.isHand(agent) { Button("Open its session") { store.openSession(agent) } }
+            else if AGTLeads.isHand(agent) { NativeSessionButton("Open its session") { store.openSession(agent) } }
             else { ORGAgentMenu(agent: agent) }
         }
         .accessibilityElement(children: .combine)
@@ -324,15 +324,15 @@ struct AGTOrgChartView: View {
 
     private func zoomControl(_ tree: AGTOrgLayout.Result, viewport: CGSize) -> some View {
         HStack(spacing: 4) {
-            Button { setZoom(zoom - 0.1, in: viewport) } label: { Image(systemName: "minus").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Zoom out (Command minus)")
+            NativeSessionButton { setZoom(zoom - 0.1, in: viewport) } label: { Image(systemName: "minus").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Zoom out (Command minus)")
                 .disabled(zoom <= 0.25)
-            Button { setZoom(1, in: viewport) } label: {
+            NativeSessionButton { setZoom(1, in: viewport) } label: {
                 Text("\(Int((zoom * 100).rounded()))%").monospacedDigit().frame(width: 44, height: 28).contentShape(Rectangle())
             }.help("Actual size (Command 1)")
-            Button { setZoom(zoom + 0.1, in: viewport) } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Zoom in (Command plus)")
+            NativeSessionButton { setZoom(zoom + 0.1, in: viewport) } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Zoom in (Command plus)")
                 .disabled(zoom >= 2)
             Divider().frame(height: 20).padding(.horizontal, 4)
-            Button { fit(tree, in: viewport); touched = false } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Fit (Command 0)")
+            NativeSessionButton { fit(tree, in: viewport); touched = false } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("Fit (Command 0)")
         }
         .font(.system(size: 12)).buttonStyle(.plain).foregroundStyle(.primary)
         .padding(12).frame(width: 192, height: 62)

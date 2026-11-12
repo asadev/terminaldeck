@@ -63,16 +63,16 @@ struct NativeCodingAIAddAccountSheet: View {
                         Label("Already signed in on this Mac: \(macLogin)", systemImage: "laptopcomputer")
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    TextField("Email address", text: $draft, prompt: Text("you@example.com"))
+                    NativeSessionTextField("Email address", text: $draft, prompt: Text("you@example.com"))
                         .labelsHidden()
                         .textContentType(.emailAddress)
                         .autocorrectionDisabled()
-                        .focused($emailFocused)
+                        .sessionFocused($emailFocused)
                         .accessibilityLabel("Email address for the new account")
                         .onChange(of: draft) { _, text in
                             if text.count > CodingAILogins.maxNameLength { draft = String(text.prefix(CodingAILogins.maxNameLength)) }
                         }
-                        .onSubmit { if !blocked { submit(chosen: chosen, unfinished: unfinished) } }
+                        .sessionOnSubmit { if !blocked { submit(chosen: chosen, unfinished: unfinished) } }
                 }
 
                 Section {
@@ -105,9 +105,9 @@ struct NativeCodingAIAddAccountSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                NativeSessionButton("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(store.busy ? "Opening…" : "Sign in") {
+                NativeSessionButton(store.busy ? "Opening…" : "Sign in") {
                     submit(chosen: chosen, unfinished: unfinished)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -138,7 +138,7 @@ struct NativeCodingAIAddAccountSheet: View {
     }
 
     private func agentChoice(_ row: CodingAIProviderRow, selected: Bool) -> some View {
-        Button {
+        NativeSessionButton {
             clicked = row.id
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {

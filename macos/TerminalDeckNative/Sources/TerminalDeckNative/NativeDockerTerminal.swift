@@ -86,7 +86,7 @@ final class NativeDockerTerminalModel {
         container = DeckTerminalContainer(terminal: terminal)
         proxy.owner = self
         terminal.owner = self
-        terminal.terminalDelegate = proxy
+        terminal.eventDelegate = proxy
         terminal.optionAsMetaKey = false
         terminal.lineSpacing = NativeTerminalSession.lineSpacing
         terminal.freeze(true)
@@ -336,7 +336,7 @@ final class NativeDockerTerminalModel {
     }
 
     fileprivate func focusIfConnected() {
-        if isConnected, !terminal.frozen { terminal.window?.makeFirstResponder(terminal) }
+        if isConnected, !terminal.frozen { DeckTerminalSlot.requestFocus(for: terminal) }
     }
 
     fileprivate func paste(from pasteboard: NSPasteboard) {
@@ -352,7 +352,7 @@ final class NativeDockerTerminalModel {
                 return
             }
             note = nil
-            terminal.send(txt: TerminalText.pasteData(text, bracketed: terminal.getTerminal().bracketedPasteMode))
+            terminal.sendExplicitText(TerminalText.pasteData(text, bracketed: terminal.getTerminal().bracketedPasteMode))
         case .paths(let paths):
             copyIn(Self.readDropped(paths))
         case .stageImage(let name):
@@ -383,7 +383,7 @@ final class NativeDockerTerminalModel {
                 self.note = "Copied into \(answer.folder): " + chosen.map(\.name).joined(separator: ", ")
                 if self.isConnected, !self.terminal.frozen {
                     let words = answer.paths.map(TerminalText.promptWord).joined()
-                    self.terminal.send(txt: TerminalText.pasteData(words, bracketed: self.terminal.getTerminal().bracketedPasteMode))
+                    self.terminal.sendExplicitText(TerminalText.pasteData(words, bracketed: self.terminal.getTerminal().bracketedPasteMode))
                 }
             } catch {
                 guard let self, self.generation == ticket else { return }
@@ -465,12 +465,12 @@ fileprivate final class NativeDockerTerminalSurface: DeckTerminalView {
     weak var owner: NativeDockerTerminalModel?
 
     override func paste(_ sender: Any) {
-        guard !frozen else { return }
+        guard acceptsUserInput else { return }
         owner?.paste(from: .general)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard !frozen else { return false }
+        guard inputActive, !frozen else { return false }
         owner?.paste(from: sender.draggingPasteboard)
         return true
     }
@@ -535,17 +535,20 @@ struct NativeDockerTerminalView: View {
 }
 
 private struct NativeDockerTerminalHost: NSViewRepresentable {
+    @Environment(\.nativeScreenActive) private var onShow
     let model: NativeDockerTerminalModel
     let preferences: TerminalPreferences
     let scheme: TerminalScheme
 
-    func makeNSView(context: Context) -> DeckTerminalContainer { model.container }
+    func makeNSView(context: Context) -> DeckTerminalSlot { DeckTerminalSlot(container: model.container, active: onShow) }
 
-    func updateNSView(_ nsView: DeckTerminalContainer, context: Context) {
+    func updateNSView(_ nsView: DeckTerminalSlot, context: Context) {
         model.applyAppearance(preferences: preferences, scheme: scheme)
+        nsView.show(model.container, active: onShow, focus: true)
     }
 
-    static func dismantleNSView(_ nsView: DeckTerminalContainer, coordinator: ()) {
-        (nsView.terminal as? NativeDockerTerminalSurface)?.owner?.stop()
+    static func dismantleNSView(_ nsView: DeckTerminalSlot, coordinator: ()) {
+        nsView.setActive(false)
+        (nsView.container?.terminal as? NativeDockerTerminalSurface)?.owner?.stop()
     }
 }

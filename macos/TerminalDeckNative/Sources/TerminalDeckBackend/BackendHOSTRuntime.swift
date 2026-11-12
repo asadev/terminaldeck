@@ -164,6 +164,8 @@ private final class BackendHOSTRuntimeState: @unchecked Sendable {
             do {
                 let created = try await factory!(payload, identity)
                 await created.chats.setProcessBinding { [self] id, pid in try await bindChatProcess(id, pid: pid) }
+                // 9 Nov: a chat's background shell that ends while the chat is idle is seen by this same descendant watch.
+                inventory.onChange { [weak self] id in self?.chatProcessesChanged(id) }
                 lock.withLock { resources = created; configuring = false }
                 return Data("{\"configured\":true}".utf8)
             } catch { lock.withLock { configuring = false }; throw error }
@@ -241,6 +243,10 @@ private final class BackendHOSTRuntimeState: @unchecked Sendable {
                 }
             }
         }
+    }
+    private func chatProcessesChanged(_ id: String) {
+        guard let owner = lock.withLock({ chatPIDs[id] != nil && !quiescing ? resources : nil }) else { return }
+        Task { await owner.chats.processesChanged(id) }
     }
     private func bindChatProcess(_ id: String, pid: Int32) async throws {
         let (launch, previous, owner) = try lock.withLock { () throws -> (BackendHOSTProtocol.Launch, Int32?, BackendHOSTResources) in

@@ -7,7 +7,15 @@ import WebKit
 private struct NativeScreenActiveKey: EnvironmentKey {
     static let defaultValue = true
 }
+private struct NativeTerminalSelectedKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
 extension EnvironmentValues {
+    /// A layout knows its selected pane directly; no global-window inference is needed.
+    var nativeTerminalSelected: Bool? {
+        get { self[NativeTerminalSelectedKey.self] }
+        set { self[NativeTerminalSelectedKey.self] = newValue }
+    }
     var nativeScreenActive: Bool {
         get { self[NativeScreenActiveKey.self] }
         set { self[NativeScreenActiveKey.self] = newValue }

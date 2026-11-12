@@ -79,40 +79,40 @@ struct NativePCTaskDecisionView: View {
                             ForEach(Array((model.state["policies"].elements ?? []).enumerated()), id: \.offset) { _, row in Text((row["name"].string ?? "Workflow") + " · " + (row["mode"].string ?? "off")).tag(row["id"].string ?? "") }
                         }
                         HStack {
-                            Button("Use workflow") { Task { await model.act("bind", extra: [.init("policy", model.workflowID.isEmpty ? .null : .string(model.workflowID))]) } }.disabled(model.state["bindable"].bool != true)
-                            Button("New task in this workflow") { Task { await model.act("create", extra: [.init("policy", .string(model.workflowID))]) } }.disabled(model.workflowID.isEmpty)
+                            NativeSessionButton("Use workflow") { Task { await model.act("bind", extra: [.init("policy", model.workflowID.isEmpty ? .null : .string(model.workflowID))]) } }.disabled(model.state["bindable"].bool != true)
+                            NativeSessionButton("New task in this workflow") { Task { await model.act("create", extra: [.init("policy", .string(model.workflowID))]) } }.disabled(model.workflowID.isEmpty)
                         }
                         HStack {
-                            TextField("Workflow name", text: $fields.workflowName)
+                            NativeSessionTextField("Workflow name", text: $fields.workflowName)
                             Picker("Requirement", selection: $fields.workflowMode) { Text("Off").tag("off"); Text("Owner before start").tag("owner-before-start") }
-                            Button("Create workflow") { Task { await model.act("policy", extra: [.init("name", .string(model.workflowName)), .init("mode", .string(model.workflowMode)), .init("policyExpected", .number(0))]) } }.disabled(model.workflowName.isEmpty || model.editing)
-                            Button("Update selected") {
+                            NativeSessionButton("Create workflow") { Task { await model.act("policy", extra: [.init("name", .string(model.workflowName)), .init("mode", .string(model.workflowMode)), .init("policyExpected", .number(0))]) } }.disabled(model.workflowName.isEmpty || model.editing)
+                            NativeSessionButton("Update selected") {
                                 let selected = (model.state["policies"].elements ?? []).first { $0["id"].string == model.workflowID } ?? .null
                                 Task { await model.act("policy", extra: [.init("policy", .string(model.workflowID)), .init("name", .string(model.workflowName)), .init("mode", .string(model.workflowMode)), .init("policyExpected", selected["revision"])]) }
                             }.disabled(model.workflowID.isEmpty || model.workflowName.isEmpty || model.editing)
                         }
                         if model.state["decision"].fields != nil, model.state["decision"]["required"].bool == true {
                             Text("Proposal revision \(Int(model.state["decision"]["proposalRevision"].number ?? 0))").font(.headline)
-                            TextField("Proposal title", text: userText(\.title))
-                            TextEditor(text: userText(\.proposal)).frame(height: 90).accessibilityLabel("Proposal")
-                            TextField("Why this approach", text: userText(\.rationale))
+                            NativeSessionTextField("Proposal title", text: userText(\.title))
+                            NativeSessionTextEditor(text: userText(\.proposal)).frame(height: 90).accessibilityLabel("Proposal")
+                            NativeSessionTextField("Why this approach", text: userText(\.rationale))
                             HStack {
-                                Button("Save revised proposal") { Task { await model.act("draft", extra: [.init("title", .string(model.title)), .init("body", .string(model.proposal)), .init("rationale", .string(model.rationale))]) } }
-                                if model.can("submit") { Button("Submit / resubmit") { Task { await model.act("submit") } }.disabled(model.editing) }
+                                NativeSessionButton("Save revised proposal") { Task { await model.act("draft", extra: [.init("title", .string(model.title)), .init("body", .string(model.proposal)), .init("rationale", .string(model.rationale))]) } }
+                                if model.can("submit") { NativeSessionButton("Submit / resubmit") { Task { await model.act("submit") } }.disabled(model.editing) }
                             }
-                            TextField("Discussion or decision reason", text: $fields.discussion)
+                            NativeSessionTextField("Discussion or decision reason", text: $fields.discussion)
                             HStack {
-                                Button("Comment") { Task { await model.act("comment", extra: [.init("text", .string(model.discussion))]) } }.disabled(model.discussion.isEmpty)
-                                if model.can("changes") { Button("Request changes") { decide("changes") }.disabled(model.discussion.isEmpty || model.editing) }
-                                if model.can("reject") { Button("Reject") { decide("reject") }.disabled(model.discussion.isEmpty || model.editing) }
+                                NativeSessionButton("Comment") { Task { await model.act("comment", extra: [.init("text", .string(model.discussion))]) } }.disabled(model.discussion.isEmpty)
+                                if model.can("changes") { NativeSessionButton("Request changes") { decide("changes") }.disabled(model.discussion.isEmpty || model.editing) }
+                                if model.can("reject") { NativeSessionButton("Reject") { decide("reject") }.disabled(model.discussion.isEmpty || model.editing) }
                             }
                             if model.can("approve") || model.can("release") {
                                 HStack {
                                     if model.can("approve") {
-                                        Button("Approve") { decide("approve") }
-                                        Button("Approve and start") { decide("approve-start") }
+                                        NativeSessionButton("Approve") { decide("approve") }
+                                        NativeSessionButton("Approve and start") { decide("approve-start") }
                                     }
-                                    if model.can("release") { Button("Start approved work") { decide("release") } }
+                                    if model.can("release") { NativeSessionButton("Start approved work") { decide("release") } }
                                 }.disabled(model.editing)
                             }
                             if let held = model.state["held"].string { Text(held).font(.callout).foregroundStyle(.orange) }
@@ -126,14 +126,14 @@ struct NativePCTaskDecisionView: View {
                                 }
                             }
                         }
-                        Button(model.editing ? "Reload and discard my edits" : "Refresh") { Task { await model.load(discardEdits: true) } }
+                        NativeSessionButton(model.editing ? "Reload and discard my edits" : "Refresh") { Task { await model.load(discardEdits: true) } }
                         if model.pending { ProgressView("Saving decision…").controlSize(.small) }
                         if let problem = model.problem { Text(problem).foregroundStyle(.red).font(.callout).textSelection(.enabled) }
                         if let message = model.message { Text(message).font(.caption).textSelection(.enabled) }
                     }.disabled(model.pending).padding(.vertical, 8)
                 }
             } else if let problem = model.problem {
-                VStack(alignment: .leading) { Text("Optional business review could not be read: " + problem).font(.callout).foregroundStyle(.red); Button("Retry review") { Task { await model.load() } } }
+                VStack(alignment: .leading) { Text("Optional business review could not be read: " + problem).font(.callout).foregroundStyle(.red); NativeSessionButton("Retry review") { Task { await model.load() } } }
             }
         }.task {
             await model.load()

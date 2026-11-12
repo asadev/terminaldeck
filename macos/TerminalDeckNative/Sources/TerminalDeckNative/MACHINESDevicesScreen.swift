@@ -32,12 +32,12 @@ struct MACHINESDevicesScreen: View {
 
     var body: some View {
         MACHINESPage(title: "Devices", subtitle: "Phones, browsers and computers that can drive this Mac", switcher: { EmptyView() }, actions: {
-            Button(model.busy == "web" ? "Opening…" : "Open web version", systemImage: "globe") { model.openWebVersion() }
+            NativeSessionButton(model.busy == "web" ? "Opening…" : "Open web version", systemImage: "globe") { model.openWebVersion() }
                 .buttonStyle(.bordered).disabled(fixture || model.busy != nil)
                 .help(webTurnsAccessOn ? Self.webAccessNote : "Open the web version in this Mac’s browser")
                 .accessibilityIdentifier("devices.openWebVersion")
-            Button("Device access", systemImage: "lock") { openAccess() }.buttonStyle(.bordered)
-            Button("Pair a device", systemImage: "qrcode") { pairingShown = true }.buttonStyle(.borderedProminent)
+            NativeSessionButton("Device access", systemImage: "lock") { openAccess() }.buttonStyle(.bordered)
+            NativeSessionButton("Pair a device", systemImage: "qrcode") { pairingShown = true }.buttonStyle(.borderedProminent)
         }) {
             VStack(alignment: .leading, spacing: 16) {
                 if webTurnsAccessOn {
@@ -87,7 +87,7 @@ struct MACHINESDevicesScreen: View {
                     .task(id: approved.map(\.id)) { await model.readAccess() }
                 }
                 if let pending = model.state?.devices.first(where: { $0.state == .pending }) {
-                    Button { pairingShown = true } label: {
+                    NativeSessionButton { pairingShown = true } label: {
                         HStack {
                             Image(systemName: "iphone.gen3").foregroundStyle(.secondary)
                             Text("\(pending.name) wants to connect")
@@ -123,13 +123,13 @@ struct MACHINESDevicesScreen: View {
             MACHINESDevicesPairSheet(model: model, machines: machines, fixture: fixture) { pairingShown = false }
         }
         .alert("Revoke \(revoke?.name ?? "device")?", isPresented: Binding(get: { revoke != nil }, set: { if !$0 { revoke = nil } })) {
-            Button("Cancel", role: .cancel) { revoke = nil }
-            Button("Revoke", role: .destructive) { if let device = revoke { model.revoke(device) }; revoke = nil }
+            NativeSessionButton("Cancel", role: .cancel) { revoke = nil }
+            NativeSessionButton("Revoke", role: .destructive) { if let device = revoke { model.revoke(device) }; revoke = nil }
         } message: { Text("It will be disconnected immediately and must pair again.") }
         .alert("Rename device", isPresented: Binding(get: { rename != nil }, set: { if !$0 { rename = nil } })) {
-            TextField("Name", text: $newName)
-            Button("Cancel", role: .cancel) { rename = nil }
-            Button("Rename") { if let device = rename { model.rename(device, to: newName) }; rename = nil }
+            NativeSessionTextField("Name", text: $newName)
+            NativeSessionButton("Cancel", role: .cancel) { rename = nil }
+            NativeSessionButton("Rename") { if let device = rename { model.rename(device, to: newName) }; rename = nil }
                 .disabled(!validRename)
         } message: { Text("Use a name from 1 to 128 characters.") }
     }
@@ -152,7 +152,7 @@ struct MACHINESDevicesScreen: View {
     private func deviceRow(_ device: RemoteDevice) -> some View {
         let connected = model.state?.connections.contains { $0.deviceId == device.id } == true
         return HStack(spacing: 12) {
-            Button { openAccess() } label: {
+            NativeSessionButton { openAccess() } label: {
                 HStack(spacing: 12) {
                     Image(systemName: symbol(device)).foregroundStyle(.secondary)
                         .frame(width: 32, height: 32).background(MACHINESTokens.selection, in: .rect(cornerRadius: 8))
@@ -171,18 +171,18 @@ struct MACHINESDevicesScreen: View {
                                          problem: model.accessProblem) { try await model.setAccess(device.id, to: $0) }
                 .frame(width: 140)
             Menu {
-                Button("Device access…") { openAccess() }
-                Button("Rename…") { newName = device.name; rename = device }
-                Button("Revoke…", role: .destructive) { revoke = device }
+                NativeSessionButton("Device access…") { openAccess() }
+                NativeSessionButton("Rename…") { newName = device.name; rename = device }
+                NativeSessionButton("Revoke…", role: .destructive) { revoke = device }
             } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28).contentShape(.rect) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Device actions").accessibilityLabel("Actions for \(device.name)")
         }
         .padding(.vertical, 6)
         .background(model.highlightedDeviceID == device.id ? MACHINESTokens.selection : Color.clear, in: .rect(cornerRadius: 8))
         .contextMenu {
-            Button("Device access…") { openAccess() }
-            Button("Rename…") { newName = device.name; rename = device }
-            Button("Revoke…", role: .destructive) { revoke = device }
+            NativeSessionButton("Device access…") { openAccess() }
+            NativeSessionButton("Rename…") { newName = device.name; rename = device }
+            NativeSessionButton("Revoke…", role: .destructive) { revoke = device }
         }
     }
 
@@ -243,11 +243,11 @@ struct MACHINESDevicesPairSheet: View {
                                 Text("Works once · \(seconds / 60):\(String(format: "%02d", seconds % 60)) left").font(.callout).foregroundStyle(.secondary)
                             } else {
                                 Text("This code expired").font(.callout).foregroundStyle(.secondary)
-                                Button("Make a new code") { model.pair() }.buttonStyle(.bordered)
+                                NativeSessionButton("Make a new code") { model.pair() }.buttonStyle(.bordered)
                             }
-                            Button("Copy code") { DeckProject.copy(RemoteRules.codeShown(pairing.token)) }.buttonStyle(.borderless)
+                            NativeSessionButton("Copy code") { DeckProject.copy(RemoteRules.codeShown(pairing.token)) }.buttonStyle(.borderless)
                         } else if model.busy != nil { ProgressView().controlSize(.small) }
-                        else { Button("Make a code") { model.pair() }.buttonStyle(.bordered) }
+                        else { NativeSessionButton("Make a code") { model.pair() }.buttonStyle(.bordered) }
                     }
                     Spacer(minLength: 0)
                 }.frame(height: 140)
@@ -283,19 +283,19 @@ struct MACHINESDevicesPairSheet: View {
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Show a code on the other computer, then type it here.").font(.callout).foregroundStyle(.secondary)
-                    TextField("Pairing code", text: $typedCode).textFieldStyle(.roundedBorder).font(.system(.title3, design: .monospaced))
+                    NativeSessionTextField("Pairing code", text: $typedCode).textFieldStyle(.roundedBorder).font(.system(.title3, design: .monospaced))
                     if let error = machines.pairError { Text(error).font(.callout).foregroundStyle(.secondary).lineLimit(2).help(error) }
                 }.frame(height: 216, alignment: .top)
             }
             if let notice = model.notice, !notice.ok { Text(notice.text).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(notice.text) }
             HStack {
                 Spacer()
-                Button(pending == nil ? "Cancel" : "Not now") { cancel() }.buttonStyle(.bordered)
+                NativeSessionButton(pending == nil ? "Cancel" : "Not now") { cancel() }.buttonStyle(.bordered)
                 if segment == "Type a code" {
-                    Button(machines.busy ? "Pairing…" : "Pair a device") { machines.type(typedCode); machines.pair() }
+                    NativeSessionButton(machines.busy ? "Pairing…" : "Pair a device") { machines.type(typedCode); machines.pair() }
                         .buttonStyle(.borderedProminent).disabled(machines.busy || CodeEntryRules.normalise(typedCode) == nil)
                 } else if !guestOpen {
-                    Button(submitting ? "Letting it in…" : "Let it in") {
+                    NativeSessionButton(submitting ? "Letting it in…" : "Let it in") {
                         guard let request = pending else { return }
                         submitting = true
                         Task { if await model.letIn(request, access: access) { close() }; submitting = false }
@@ -320,7 +320,7 @@ struct MACHINESDevicesPairSheet: View {
             if model.approving != nil { model.approving = nil }
             if !fixture, model.pairing != nil { model.closePairing() }
         }
-        .onExitCommand { cancel() }
+        .sessionOnExitCommand { cancel() }
     }
 
     private var pending: RemoteDevice? { model.state?.devices.first { $0.state == .pending } }
@@ -482,7 +482,7 @@ struct MACHINESDevicesSettingsTabs: View {
         GlassEffectContainer(spacing: 4) {
             HStack(spacing: 4) {
                 ForEach(items, id: \.0) { item in
-                    Button { withAnimation(.smooth) { selection = item.0 } } label: {
+                    NativeSessionButton { withAnimation(.smooth) { selection = item.0 } } label: {
                         VStack(spacing: 6) {
                             Image(systemName: item.1).font(.system(size: 15))
                             Text(item.0).font(.system(size: 11))

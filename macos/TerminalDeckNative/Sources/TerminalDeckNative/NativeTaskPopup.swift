@@ -24,6 +24,8 @@ struct NativeTaskPopup: View {
         Group {
             if let model, model.taskId == task.id {
                 TaskPageView(model: model, tasks: tasks, linkedTasks: linkedTasks, siblings: siblings, onNavigate: onNavigate, onClose: onClose, onDelete: onDelete)
+                    .nativeSessionInputScope(ownerID: "task/" + model.taskId)
+                    .id(model.taskId)
             } else {
                 Color(nsColor: .windowBackgroundColor)
             }
@@ -61,6 +63,9 @@ struct SlashCommand: Identifiable {
 }
 
 private struct TaskPageView: View {
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeScreenActive) private var screenActive
+    @State private var inputRule = NativeSessionInputRule()
     let model: TaskDetailModel
     let tasks: [TaskRow]
     let linkedTasks: [TaskRow]
@@ -88,8 +93,10 @@ private struct TaskPageView: View {
     }
 
     var body: some View {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
         let t = model.task
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             TaskPageHeader(model: model, boards: boards, siblings: siblings, taskOptions: taskOptions,
                            onNavigate: onNavigate, onClose: onClose, onDelete: { onDelete(model.taskId) },
                            onGone: { open in if let open { onNavigate(open) } else { onClose() } },
@@ -102,13 +109,13 @@ private struct TaskPageView: View {
             if model.more?.archivedAt != nil {
                 banner(icon: "archivebox", text: "This task is archived — it is out of the list.", tone: TaskTone.waiting) {
                     if model.canEditRow {
-                        Button("Restore") { model.setArchived(false) }.buttonStyle(.link).font(.caption.weight(.medium))
+                        NativeSessionButton("Restore") { model.setArchived(false) }.buttonStyle(.link).font(.caption.weight(.medium))
                     }
                 }
             }
             if let error = model.error {
                 banner(icon: "exclamationmark.circle", text: error, tone: TaskTone.input) {
-                    Button { model.error = nil } label: { Image(systemName: "xmark").font(.caption2) }
+                    NativeSessionButton{ model.error = nil } label: { Image(systemName: "xmark").font(.caption2) }
                         .buttonStyle(.plain).accessibilityLabel("Dismiss")
                 }
             }
@@ -135,12 +142,19 @@ private struct TaskPageView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay { if dropping { dropOverlay } }
         .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+            guard inputRule.acceptsFocus else { return false }
             Task { await dropped(providers) }
             return true
         }
-        .environment(\.taskFileDoor, TaskFileDoor(attach: { urls in Task { await attach(urls) } }, hover: { dropping = $0 }))
-        .background(TaskPasteDoorHost { urls in Task { await attach(urls) } })
-        .onExitCommand { if !editingTitle { onClose() } }
+        .environment(\.taskFileDoor, TaskFileDoor(attach: { urls in
+            guard inputRule.acceptsFocus else { return }
+            Task { await attach(urls) }
+        }, hover: { next in if inputRule.acceptsFocus { dropping = next } }))
+        .background(TaskPasteDoorHost { urls in
+            guard inputRule.acceptsFocus else { return }
+            Task { await attach(urls) }
+        })
+        .sessionOnExitCommand { if !editingTitle { onClose() } }
         .sheet(isPresented: Binding(get: { model.historyOpen }, set: { model.historyOpen = $0 })) {
             DescriptionHistorySheet(model: model)
         }
@@ -234,8 +248,8 @@ private struct TaskPageView: View {
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(TaskTone.accent.opacity(0.6)))
                         .accessibilityLabel("Task")
                     HStack(spacing: 8) {
-                        Button("Cancel") { editingTitle = false }.disabled(savingTitle)
-                        Button {
+                        NativeSessionButton("Cancel") { editingTitle = false }.disabled(savingTitle)
+                        NativeSessionButton{
                             Task {
                                 savingTitle = true
                                 if await model.saveTitle(titleDraft) { editingTitle = false }
@@ -274,7 +288,7 @@ private struct TaskPageView: View {
             }
             HStack(spacing: 12) {
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
-                Button(model.hideEmpty ? "Show empty fields" : "Collapse empty fields") { model.hideEmpty.toggle() }
+                NativeSessionButton(model.hideEmpty ? "Show empty fields" : "Collapse empty fields") { model.hideEmpty.toggle() }
                     .buttonStyle(.plain).font(.caption).foregroundStyle(.tertiary)
                     .accessibilityAddTraits(model.hideEmpty ? .isSelected : [])
             }
@@ -422,7 +436,7 @@ private struct TaskPageView: View {
                     Image(systemName: "exclamationmark.circle")
                     Text("Could not load the people, subtasks, checklists, dependencies and attachments: \(message)")
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Button { model.retryBundle() } label: { Label("Retry", systemImage: "arrow.clockwise") }.buttonStyle(.plain)
+                    NativeSessionButton{ model.retryBundle() } label: { Label("Retry", systemImage: "arrow.clockwise") }.buttonStyle(.plain)
                         .deckRetriesItself { model.retryBundle() } // reads the rest of the task again by itself (DeckReconnect)
                 }
                 .font(.caption).foregroundStyle(TaskTone.input)
@@ -447,10 +461,10 @@ private struct TaskPageView: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         if !model.shown.contains(.subtasks) {
-                            Button { model.reveal(.subtasks) } label: { actionLabel("Add subtask", "arrow.triangle.branch") }
+                            NativeSessionButton{ model.reveal(.subtasks) } label: { actionLabel("Add subtask", "arrow.triangle.branch") }
                                 .buttonStyle(ActionRowStyle())
                         }
-                        Button { relateOpen.toggle() } label: { actionLabel("Relate items or add dependencies", "point.3.connected.trianglepath.dotted") }
+                        NativeSessionButton{ relateOpen.toggle() } label: { actionLabel("Relate items or add dependencies", "point.3.connected.trianglepath.dotted") }
                             .buttonStyle(ActionRowStyle())
                             .popover(isPresented: $relateOpen, arrowEdge: .bottom) {
                                 VStack(alignment: .leading, spacing: 0) {
@@ -462,7 +476,7 @@ private struct TaskPageView: View {
                                 .padding(.vertical, 4).frame(width: 260)
                             }
                         if !model.shown.contains(.checklist) {
-                            Button { model.reveal(.checklist) } label: { actionLabel("Create checklist", "checklist") }
+                            NativeSessionButton{ model.reveal(.checklist) } label: { actionLabel("Create checklist", "checklist") }
                                 .buttonStyle(ActionRowStyle())
                         }
                         AttachFileRow(model: model)
@@ -483,7 +497,7 @@ private struct TaskPageView: View {
     }
 
     private func relateRow(_ title: String, _ icon: String, _ kind: DependencyKind, _ proxy: ScrollViewProxy) -> some View {
-        Button {
+        NativeSessionButton{
             relateOpen = false
             model.relate(kind)
             withAnimation { proxy.scrollTo("dependencies", anchor: .center) }
@@ -515,7 +529,7 @@ private struct TaskPageView: View {
     }
 
     private func railButton(_ icon: String, _ label: String, on: Bool = false, help: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Image(systemName: icon).font(.system(size: 13))
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.secondary.opacity(0.2) : .clear))
@@ -587,7 +601,7 @@ private struct DetailsBlock: View {
         let canEdit = model.canEditRow
         if !editing {
             if canEdit || !saved.isEmpty {
-                Button {
+                NativeSessionButton{
                     if canEdit {
                         value = saved
                         editing = true
@@ -611,10 +625,10 @@ private struct DetailsBlock: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                TextEditor(text: Binding(get: { value }, set: { value = String($0.prefix(5000)) }))
+                NativeSessionTextEditor(text: Binding(get: { value }, set: { value = String($0.prefix(5000)) }))
                     .font(.system(size: 13))
                     .scrollContentBackground(.hidden)
-                    .focused($focused)
+                    .sessionFocused($focused)
                     .frame(minHeight: 80)
                     .padding(6)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
@@ -624,7 +638,7 @@ private struct DetailsBlock: View {
                     }
                     .onAppear { focused = true }
                     .onChange(of: focused) { _, now in if !now { finish(saved) } }
-                    .onExitCommand {
+                    .sessionOnExitCommand {
                         value = saved
                         editing = false
                     }
@@ -700,7 +714,7 @@ private struct TaskPageHeader: View {
                 Text("Created \(CrmTime.monthDay(created))").font(.caption).foregroundStyle(.secondary).help(localStamp(created))
                     .padding(.trailing, 8)
             }
-            Button { shareOpen.toggle() } label: { Label("Share", systemImage: "person.2") }
+            NativeSessionButton{ shareOpen.toggle() } label: { Label("Share", systemImage: "person.2") }
                 .buttonStyle(.borderless)
                 .padding(.trailing, 4)
                 .popover(isPresented: $shareOpen, arrowEdge: .bottom) { SharePanel(model: model) { shareOpen = false } }
@@ -710,7 +724,7 @@ private struct TaskPageHeader: View {
                              onDelete: onDelete, onGone: onGone, onRelate: onRelate,
                              onDuplicated: onNavigate, onShare: { shareOpen = true })
                 }
-            Button { favorites.toggle(model.taskId) } label: {
+            NativeSessionButton{ favorites.toggle(model.taskId) } label: {
                 Image(systemName: fav ? "star.fill" : "star").foregroundStyle(fav ? Color.yellow : Color.secondary)
                     .frame(width: 28, height: 28).contentShape(Rectangle())
             }
@@ -727,7 +741,7 @@ private struct TaskPageHeader: View {
     }
 
     private func icon(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Image(systemName: name).font(.system(size: 13)).frame(width: 28, height: 28).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -747,7 +761,7 @@ private struct BoardList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach([""] + boards.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }, id: \.self) { b in
-                Button { onPick(b) } label: {
+                NativeSessionButton{ onPick(b) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "checklist").foregroundStyle(.tertiary)
                         Text(CrmText.boardLabel(b))
@@ -759,9 +773,9 @@ private struct BoardList: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(b == board ? .isSelected : [])
             }
-            TextField("New board…", text: Binding(get: { name }, set: { name = String($0.prefix(40)) }))
+            NativeSessionTextField("New board…", text: Binding(get: { name }, set: { name = String($0.prefix(40)) }))
                 .textFieldStyle(.roundedBorder)
-                .onSubmit {
+                .sessionOnSubmit {
                     let n = name.trimmingCharacters(in: .whitespaces)
                     if !n.isEmpty { onPick(String(n.prefix(40))) }
                 }
@@ -783,7 +797,7 @@ private struct SharePanel: View {
             HStack {
                 Text("Share this task").font(.headline)
                 Spacer()
-                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundStyle(.tertiary)
+                NativeSessionButton(action: onClose) { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundStyle(.tertiary)
                     .accessibilityLabel("Close share")
             }
             HStack(spacing: 4) {
@@ -809,7 +823,7 @@ private struct SharePanel: View {
                             Text(p.name).lineLimit(1)
                             Spacer()
                             if i == 0 { Text("MAIN").font(.system(size: 10)).foregroundStyle(.tertiary) }
-                            Button { model.removeFromTask(p.id) } label: { Image(systemName: "xmark").font(.caption2) }
+                            NativeSessionButton{ model.removeFromTask(p.id) } label: { Image(systemName: "xmark").font(.caption2) }
                                 .buttonStyle(.plain).foregroundStyle(.tertiary).accessibilityLabel("Remove \(p.name)")
                         }
                         .font(.callout)
@@ -863,6 +877,9 @@ private struct SharePanel: View {
 }
 
 private struct MoreMenu: View {
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeScreenActive) private var screenActive
+    @State private var inputRule = NativeSessionInputRule()
     let model: TaskDetailModel
     let boards: [String]
     let taskOptions: [(id: String, title: String)]
@@ -884,21 +901,23 @@ private struct MoreMenu: View {
     @State private var order: [String] = []
 
     var body: some View {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
         let more = model.more
         let partTwo = more != nil
         let fav = favorites.contains(model.taskId)
         let rule = Routine.normalize(model.routine?.rule)
-        ScrollView {
+        return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 0) {
                     // #315: only a connected system's task has a link; a task on this computer offers its ID.
                     if let link = model.connected?.link, !link.isEmpty {
-                        Button(copied == "link" ? "Copied" : "Copy link") { copy(link, as: "link") }
+                        NativeSessionButton(copied == "link" ? "Copied" : "Copy link") { copy(link, as: "link") }
                             .help("Copy this task's address in its task system.")
                             .frame(maxWidth: .infinity, minHeight: 28)
                         Divider()
                     }
-                    Button(copied == "id" ? "Copied" : "Copy ID") { copy(model.taskId, as: "id") }
+                    NativeSessionButton(copied == "id" ? "Copied" : "Copy ID") { copy(model.taskId, as: "id") }
                     .frame(maxWidth: .infinity, minHeight: 28)
                 }
                 .buttonStyle(.plain).font(.caption)
@@ -938,7 +957,7 @@ private struct MoreMenu: View {
                     if sub == "relate" {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach([(DependencyKind.linked, "Relate a task"), (.blocks, "This task blocks…"), (.blockedBy, "This task is blocked by…")], id: \.1) { kind, label in
-                                Button {
+                                NativeSessionButton{
                                     onClose()
                                     onRelate(kind)
                                 } label: {
@@ -959,7 +978,7 @@ private struct MoreMenu: View {
                     if sub == "type" {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach([("task", "Task (default)"), ("milestone", "Milestone")], id: \.0) { id, label in
-                                Button {
+                                NativeSessionButton{
                                     onClose()
                                     model.setTypeFromMenu(id)
                                 } label: {
@@ -987,12 +1006,12 @@ private struct MoreMenu: View {
                         item("Stop recurring", "repeat") { arming = "stop" }
                     } else {
                         HStack {
-                            Button("Stop recurring?") {
+                            NativeSessionButton("Stop recurring?") {
                                 onClose()
                                 model.stopRoutine()
                             }
                             .buttonStyle(.borderedProminent).tint(TaskTone.input)
-                            Button("Cancel") { arming = nil }
+                            NativeSessionButton("Cancel") { arming = nil }
                         }
                         .controlSize(.small).padding(.horizontal, 8).padding(.vertical, 6)
                         .accessibilityElement(children: .contain)
@@ -1014,19 +1033,19 @@ private struct MoreMenu: View {
                 }
                 if model.canEditRow {
                     if arming != "delete" {
-                        Button { arming = "delete" } label: {
+                        NativeSessionButton{ arming = "delete" } label: {
                             Label("Delete task", systemImage: "trash").foregroundStyle(.red)
                                 .padding(.horizontal, 12).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     } else {
                         HStack {
-                            Button {
+                            NativeSessionButton{
                                 onClose()
                                 onDelete()
                             } label: { Label("Delete?", systemImage: "trash") }
                                 .buttonStyle(.borderedProminent).tint(TaskTone.input)
-                            Button("Cancel") { arming = nil }
+                            NativeSessionButton("Cancel") { arming = nil }
                         }
                         .controlSize(.small).padding(.horizontal, 8).padding(.vertical, 6)
                         .accessibilityElement(children: .contain)
@@ -1036,7 +1055,7 @@ private struct MoreMenu: View {
                 if !partTwo, let note = model.moreErrorText {
                     Text(note).font(.caption2).foregroundStyle(TaskTone.waiting).padding(.horizontal, 12).padding(.vertical, 4)
                 }
-                Button {
+                NativeSessionButton{
                     onClose()
                     onShare()
                 } label: {
@@ -1049,7 +1068,7 @@ private struct MoreMenu: View {
         .frame(width: 256)
         .frame(maxHeight: 720)
         .onKeyPress(keys: [.downArrow, .upArrow, .home, .end]) { press in
-            guard !order.isEmpty else { return .ignored }
+            guard inputRule.acceptsFocus, !order.isEmpty else { return .ignored }
             let at = focused.flatMap { order.firstIndex(of: $0) } ?? -1
             let n = order.count
             switch press.key {
@@ -1062,7 +1081,7 @@ private struct MoreMenu: View {
         }
         .task {
             try? await Task.sleep(for: .milliseconds(50))
-            if focused == nil { focused = order.first }
+            if inputRule.acceptsFocus, focused == nil { focused = order.first }
         }
     }
 
@@ -1083,7 +1102,7 @@ private struct MoreMenu: View {
     }
 
     private func item(_ title: String, _ icon: String, chevron: Bool = false, count: Int? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon).foregroundStyle(icon == "star.fill" ? Color.yellow : Color.secondary).frame(width: 16)
                 Text(title)
@@ -1098,8 +1117,8 @@ private struct MoreMenu: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused, equals: title)
-        .onKeyPress(.return) { action(); return .handled }
-        .onKeyPress(.space) { action(); return .handled }
+        .onKeyPress(.return) { guard inputRule.acceptsFocus else { return .ignored }; action(); return .handled }
+        .onKeyPress(.space) { guard inputRule.acceptsFocus else { return .ignored }; action(); return .handled }
         .onAppear { if !order.contains(title) { order.append(title) } }
         .onDisappear { order.removeAll { $0 == title } }
     }
@@ -1112,24 +1131,24 @@ private struct MoreMenu: View {
                 Text("\(verb) “\(pick.title)”? \(verb == "Merge into" ? "This task's comments, subtasks, checklists and time move there; this one goes to Trash." : "This task goes to Trash; its first line becomes the subtask.")")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button(verb == "Merge into" ? "Merge" : "Convert") {
+                    NativeSessionButton(verb == "Merge into" ? "Merge" : "Convert") {
                         let id = pick.id
                         onClose()
                         run(id)
                     }
                     .buttonStyle(.borderedProminent)
-                    Button("Cancel") { self.pick = nil }
+                    NativeSessionButton("Cancel") { self.pick = nil }
                 }
                 .controlSize(.small)
             } else {
-                TextField("Search tasks…", text: $query).textFieldStyle(.roundedBorder).accessibilityLabel("Search tasks")
+                NativeSessionTextField("Search tasks…", text: $query).textFieldStyle(.roundedBorder).accessibilityLabel("Search tasks")
                 let words = query.trimmingCharacters(in: .whitespaces).lowercased()
                 let choices = Array(taskOptions.filter { words.isEmpty || $0.title.lowercased().contains(words) }.prefix(8))
                 if choices.isEmpty {
                     Text("No other task in this list.").font(.caption).foregroundStyle(.tertiary)
                 }
                 ForEach(choices, id: \.id) { t in
-                    Button { pick = t } label: {
+                    NativeSessionButton{ pick = t } label: {
                         Text(t.title.isEmpty ? "Untitled" : t.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1145,7 +1164,7 @@ private struct MoreMenu: View {
     private func remind(_ more: TaskMore) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(reminderPresets(), id: \.key) { r in
-                Button {
+                NativeSessionButton{
                     onClose()
                     model.remind(r.at)
                 } label: {
@@ -1155,8 +1174,8 @@ private struct MoreMenu: View {
                 .buttonStyle(.plain)
             }
             HStack(spacing: 4) {
-                DatePicker("Remind me at", selection: $custom, in: Date()..., displayedComponents: [.date, .hourAndMinute]).labelsHidden()
-                Button("Set") {
+                NativeSessionDatePicker("Remind me at", selection: $custom, in: Date()..., displayedComponents: [.date, .hourAndMinute]).labelsHidden()
+                NativeSessionButton("Set") {
                     onClose()
                     model.remind(custom)
                 }
@@ -1168,7 +1187,7 @@ private struct MoreMenu: View {
                     Image(systemName: "clock").font(.caption2).foregroundStyle(TaskTone.accent)
                     Text(localStamp(r.remindAt)).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button { model.clearReminder(r.id) } label: { Image(systemName: "xmark").font(.caption2) }
+                    NativeSessionButton{ model.clearReminder(r.id) } label: { Image(systemName: "xmark").font(.caption2) }
                         .buttonStyle(.plain).foregroundStyle(.tertiary).accessibilityLabel("Cancel reminder")
                 }
                 .padding(.horizontal, 16).padding(.vertical, 2)

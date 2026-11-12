@@ -525,7 +525,7 @@ extension NativeCompositionProduction {
         let lifecycle = sessions.lifecycle
         let agentSpecs = try BackendTaskPersistence(directory: root.dataRoot.appendingPathComponent("remote/task-briefs"), ownership: root.state.ownership)
         try await registry.register("session:start-agent", ownerID: owner, policy: local) { _, args in
-            guard (1...5).contains(args.count) else { throw NativeRPCError.invalidArguments("Expected the agent, its project, the folder, chat or not and the session permission choice.") }
+            guard (1...6).contains(args.count) else { throw NativeRPCError.invalidArguments("Expected the agent, its project, the folder, chat or not, the session permission choice and the account picked for this session.") }
             let agentID = try args[0].requireString("agent", nonempty: true)
             let projectID = args.count > 1 ? args[1].string.flatMap { $0.isEmpty ? nil : $0 } : nil
             let saved = try await registry.invoke("tasks:state", context: try authority.localContext(), arguments: [])
@@ -546,6 +546,9 @@ extension NativeCompositionProduction {
                 }
                 input.permissionMode = permission
             }
+            // 10 Nov (Asad: the account picked in New session is the account the session starts on): an explicit pick
+            // wins over the agent's own saved account; no pick keeps the agent's.
+            if args.count > 5, let picked = args[5].string, !picked.isEmpty { input.profileId = picked }
             let meta = try await lifecycle.create(input, context: BackendLaunchContext(rememberTab: true, fromWindow: true))
             return try NativeRPCValue.parseJSON(JSONEncoder().encode(meta)).setting("agentProfileID", .string(agentID))
         }

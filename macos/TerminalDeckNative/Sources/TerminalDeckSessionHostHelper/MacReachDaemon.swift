@@ -224,7 +224,9 @@ import TerminalDeckPeer
         let executable = try stageScreenHelper().path
         let plist: [String: Any] = ["Label": MacReach.agentLabel, "ProgramArguments": [executable, MacReach.agentArgument],
             "LimitLoadToSessionType": MacReach.agentSessionTypes, "RunAtLoad": true, "KeepAlive": true,
-            "ProcessType": "Interactive", "ThrottleInterval": 5]
+            "ProcessType": "Interactive", "ThrottleInterval": 5,
+            // One app in Login Items (9 Nov): this global sign-in-screen agent is listed under Terminal Deck, not by its file.
+            "AssociatedBundleIdentifiers": [BackendHOSTService.releaseBundleIdentifier]]
         let file = URL(fileURLWithPath: "/Library/LaunchAgents/" + MacReach.agentPlist)
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         if (try? Data(contentsOf: file)) != data {

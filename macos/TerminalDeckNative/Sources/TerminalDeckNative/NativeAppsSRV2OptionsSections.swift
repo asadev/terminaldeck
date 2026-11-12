@@ -56,7 +56,7 @@ struct NativeAppsSRV2OptionsSectionList: View {
                     NativePageNote("Reading app options…", busy: true).frame(height: 28)
                 } else {
                     NativeCodingAINotice(tone: .error, text: model.loadProblem ?? "The app’s options could not be read.")
-                    Button("Read again", action: model.load)
+                    NativeSessionButton("Read again", action: model.load)
                 }
             }
             .task(id: loadKey) { model.loadIfNeeded() }
@@ -68,15 +68,15 @@ struct NativeAppsSRV2OptionsSectionList: View {
     private var build: some View {
         Section("Build") {
             NativeSettingRow(label: "App folder", help: "The folder in your code that holds the app. Leave blank for the top folder.") {
-                TextField("App folder", text: $model.draft.build.baseDirectory, prompt: Text("Top folder")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("App folder", text: $model.draft.build.baseDirectory, prompt: Text("Top folder")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("App folder")
             }
             NativeSettingRow(label: "Build file", help: "Leave blank to use the standard build file in the app folder.") {
-                TextField("Build file", text: $model.draft.build.dockerfile, prompt: Text("Standard")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("Build file", text: $model.draft.build.dockerfile, prompt: Text("Standard")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("Build file")
             }
             NativeSettingRow(label: "Build stage", help: "Leave blank to build every stage.") {
-                TextField("Build stage", text: $model.draft.build.target, prompt: Text("Last stage")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("Build stage", text: $model.draft.build.target, prompt: Text("Last stage")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("Build stage")
             }
             NativeSettingRow(label: "Build from scratch each time", help: "Slower, but nothing is reused from earlier builds.") {
@@ -128,11 +128,11 @@ struct NativeAppsSRV2OptionsSectionList: View {
             }
             if model.draft.health.enabled {
                 NativeSettingRow(label: "Path", help: "The page to ask for, such as / or /health.") {
-                    TextField("Path", text: $model.draft.health.path, prompt: Text("/")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                    NativeSessionTextField("Path", text: $model.draft.health.path, prompt: Text("/")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                         .accessibilityLabel("Health check path")
                 }
                 NativeSettingRow(label: "Expected answer", help: "Leave blank to accept any OK answer.") {
-                    TextField("Expected answer", value: $model.draft.health.expectedStatus, format: IntegerFormatStyle<Int>().grouping(.never),
+                    NativeSessionNumberField("Expected answer", value: $model.draft.health.expectedStatus, format: IntegerFormatStyle<Int>().grouping(.never),
                               prompt: Text("Any OK answer"))
                         .labelsHidden()
                         .multilineTextAlignment(.trailing)
@@ -200,13 +200,13 @@ struct NativeAppsSRV2OptionsSectionList: View {
             NativeSettingRow(label: "Password protection", help: "Visitors sign in as \(savedName) before they see the app.") {
                 HStack(spacing: 8) {
                     Text("A password is set").foregroundStyle(.secondary)
-                    Button("Change") { model.changingPassword = true; model.newPassword = "" }
-                    Button("Remove") { model.draft.web.password = nil; model.newPassword = "" }
+                    NativeSessionButton("Change") { model.changingPassword = true; model.newPassword = "" }
+                    NativeSessionButton("Remove") { model.draft.web.password = nil; model.newPassword = "" }
                 }
             }
         } else if savedName != nil, !protected {
             NativeSettingRow(label: "Password protection", help: "Saving removes the password. Anyone with the address can open the app.") {
-                Button("Keep password") { model.draft.web.password = saved.web.password }
+                NativeSessionButton("Keep password") { model.draft.web.password = saved.web.password }
             }
         } else if savedName == nil {
             NativeSettingRow(label: "Password protection", help: "Visitors must sign in before they see the app.") {
@@ -222,18 +222,18 @@ struct NativeAppsSRV2OptionsSectionList: View {
                 NativeSettingRow(label: "Password protection", help: "Enter a new password, then save.") { EmptyView() }
             }
             NativeSettingRow(label: "User name", help: "Letters, numbers, dots, dashes, underscores and @.") {
-                TextField("User name", text: Binding(get: { model.draft.web.password?.username ?? "" },
-                                                     set: { model.draft.web.password?.username = $0 }), prompt: Text("visitor"))
+                NativeSessionTextField("User name", text: Binding(get: { model.draft.web.password?.username ?? "" },
+                                                     set: { model.draft.web.password?.username = $0 }), prompt: Text("visitor")).textFieldStyle(.roundedBorder)
                     .labelsHidden()
                     .frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("Password protection user name")
             }
             NativeSettingRow(label: savedName == nil ? "Password" : "New password", help: "8 to 72 characters. It is saved only in scrambled form.") {
-                SecureField("Password", text: $model.newPassword, prompt: Text("8 or more characters")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionSecureField("Password", text: $model.newPassword, prompt: Text("8 or more characters")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel(savedName == nil ? "Password" : "New password")
             }
             if model.changingPassword {
-                Button("Keep the current password") {
+                NativeSessionButton("Keep the current password") {
                     model.draft.web.password = saved.web.password
                     model.newPassword = ""
                     model.changingPassword = false
@@ -249,7 +249,7 @@ struct NativeAppsSRV2OptionsSectionList: View {
             NativeSettingsProse(text: "Values your app reads, such as keys and passwords. Locked values stay hidden here and from AI tools.")
             if let problem = model.variablesProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
-                Button("Read again", action: model.load).disabled(model.loading || model.busy != nil)
+                NativeSessionButton("Read again", action: model.load).disabled(model.loading || model.busy != nil)
             } else if model.variableDrafts.isEmpty {
                 NativePageNote("No variables yet.").frame(height: 28)
             }
@@ -283,9 +283,9 @@ struct NativeAppsSRV2OptionsSectionList: View {
                 }
             }
             Menu("Add storage") {
-                Button { model.addStorage(.volume) } label: { Label("Saved volume", systemImage: "externaldrive") }
-                Button { model.addStorage(.file) } label: { Label("File", systemImage: "doc.text") }
-                Button { model.addStorage(.folder) } label: { Label("Server folder", systemImage: "folder") }
+                NativeSessionButton { model.addStorage(.volume) } label: { Label("Saved volume", systemImage: "externaldrive") }
+                NativeSessionButton { model.addStorage(.file) } label: { Label("File", systemImage: "doc.text") }
+                NativeSessionButton { model.addStorage(.folder) } label: { Label("Server folder", systemImage: "folder") }
             }
             .menuStyle(.button)
             .fixedSize()
@@ -301,11 +301,11 @@ struct NativeAppsSRV2OptionsSectionList: View {
     @ViewBuilder private func saveRow(_ part: Part) -> some View {
         let changed = model.isChanged(part)
         HStack(spacing: 8) {
-            Button("Save") { model.save(part, writesDisabled: writesDisabled) }
+            NativeSessionButton("Save") { model.save(part, writesDisabled: writesDisabled) }
                 .buttonStyle(.borderedProminent)
                 .disabled(!changed || controlsDisabled)
             if changed {
-                Button("Undo changes") { model.revert(part) }
+                NativeSessionButton("Undo changes") { model.revert(part) }
                     .disabled(controlsDisabled)
             }
         }
@@ -361,7 +361,7 @@ struct NativeAppsSRV2VariableRow: View {
                 if changed {
                     Text("Not saved").font(.caption).foregroundStyle(.secondary)
                 }
-                Button {
+                NativeSessionButton {
                     row.locked.toggle()
                 } label: {
                     Image(systemName: row.locked ? "lock" : "lock.open")
@@ -370,10 +370,10 @@ struct NativeAppsSRV2VariableRow: View {
                 .foregroundStyle(.secondary)
                 .help(row.locked ? "Locked: the value stays hidden here and from AI tools." : "Unlocked: the value is shown here and to AI tools.")
                 .accessibilityLabel(row.locked ? "Unlock \(row.key)" : "Lock \(row.key)")
-                Button(row.replacement == nil ? "Replace value" : "Cancel") {
+                NativeSessionButton(row.replacement == nil ? "Replace value" : "Cancel") {
                     row.replacement = row.replacement == nil ? startingReplacement : nil
                 }
-                Button("Remove…", role: .destructive) { removing = true }
+                NativeSessionButton("Remove…", role: .destructive) { removing = true }
             }
             HStack(spacing: 12) {
                 Toggle("During build", isOn: $row.build).toggleStyle(.checkbox)
@@ -388,8 +388,8 @@ struct NativeAppsSRV2VariableRow: View {
         .padding(.vertical, 4)
         .disabled(busy)
         .alert("Remove \(row.key) from \(appName)?", isPresented: $removing) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove variable", role: .destructive, action: onRemove)
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Remove variable", role: .destructive, action: onRemove)
         } message: {
             Text("The app will no longer receive \(row.key) after its next deploy. You can add it again with a new value.")
         }
@@ -404,7 +404,7 @@ struct NativeAppsSRV2NewVariableRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Add a variable").font(.callout.weight(.medium))
             NativeSettingRow(label: "Name", help: "Use letters, numbers and underscores, such as API_KEY.") {
-                TextField("Name", text: $variable.key, prompt: Text("API_KEY")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("Name", text: $variable.key, prompt: Text("API_KEY")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("New variable name")
             }
             NativeSettingRow(label: "Value") { EmptyView() }
@@ -464,21 +464,21 @@ struct NativeAppsSRV2StorageRow: View {
                 Spacer(minLength: 12)
                 Toggle("Read only", isOn: $item.mount.readOnly).toggleStyle(.checkbox).font(.callout)
                     .help("The app can read it but not change it.")
-                Button("Remove…", role: .destructive) { removing = true }
+                NativeSessionButton("Remove…", role: .destructive) { removing = true }
             }
             NativeSettingRow(label: "Inside the app", help: "Where the app finds it, starting with /.") {
-                TextField("Inside the app", text: $item.mount.path, prompt: Text(kind == .file ? "/app/config.json" : "/data")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("Inside the app", text: $item.mount.path, prompt: Text(kind == .file ? "/app/config.json" : "/data")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("\(title) path inside the app")
             }
             switch kind {
             case .volume:
                 NativeSettingRow(label: "Volume name", help: "Lowercase letters, numbers, dots and dashes. Its data is kept between deploys.") {
-                    TextField("Volume name", text: $item.mount.source, prompt: Text("myapp-data")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                    NativeSessionTextField("Volume name", text: $item.mount.source, prompt: Text("myapp-data")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                         .accessibilityLabel("Saved volume name")
                 }
             case .folder:
                 NativeSettingRow(label: "Server folder", help: "A folder of your own on the server, such as /srv/myapp/uploads.") {
-                    TextField("Server folder", text: $item.mount.source, prompt: Text("/srv/myapp/uploads")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                    NativeSessionTextField("Server folder", text: $item.mount.source, prompt: Text("/srv/myapp/uploads")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                         .accessibilityLabel("Folder on the server")
                 }
             case .file:
@@ -490,8 +490,8 @@ struct NativeAppsSRV2StorageRow: View {
         .padding(.vertical, 4)
         .disabled(busy)
         .alert("Remove this \(title.lowercased()) from \(appName)?", isPresented: $removing) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove", role: .destructive, action: onRemove)
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Remove", role: .destructive, action: onRemove)
         } message: {
             Text(removalMessage)
         }
@@ -508,7 +508,7 @@ struct NativeAppsSRV2TextEditor: View {
     let label: String
 
     var body: some View {
-        TextEditor(text: $text)
+        NativeSessionTextEditor(text: $text)
             .font(.system(.callout, design: .monospaced))
             .scrollContentBackground(.hidden)
             .autocorrectionDisabled()
@@ -540,7 +540,7 @@ struct NativeAppsSRV2NumberField: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            TextField(label, value: Binding(get: { value }, set: { value = min(range.upperBound, max(range.lowerBound, $0)) }),
+            NativeSessionNumberField(label, value: Binding(get: { value }, set: { value = min(range.upperBound, max(range.lowerBound, $0)) }),
                       format: IntegerFormatStyle<Int>().grouping(.never))
                 .labelsHidden()
                 .multilineTextAlignment(.trailing)

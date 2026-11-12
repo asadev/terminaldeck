@@ -12,7 +12,9 @@ public sealed record ChatRenderedBlock(string Type, string Source, string Langua
 
 public static class ChatRichContent
 {
-  public const string Instruction = "This chat shows GitHub Markdown (tables, lists, math), ```mermaid diagrams and ```visual blocks (HTML/SVG/JS; scripts only from cdnjs/jsdelivr) drawn live.";
+  // The same words on every app (Mac: ChatMarkdown.instruction). Visuals follow the app's light or dark theme
+  // through the sealed document's variables (release check, 6 Nov: dark grey chart text on the dark card).
+  public const string Instruction = "This chat shows GitHub Markdown (tables, lists, math), ```mermaid diagrams and ```visual blocks (HTML/SVG/JS; scripts only from cdnjs/jsdelivr) drawn live. Visuals follow the app's light or dark theme: colour text, labels, axes and lines with var(--text) or currentColor, secondary text with var(--muted), highlights with var(--accent) and fills behind text with var(--background); never fixed dark or light text colours. Canvas charts read them with getComputedStyle(document.documentElement).getPropertyValue('--text').";
   private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
   public static MarkdownDocument Parse(string text) => Markdown.Parse(text, Pipeline);
   public static IReadOnlyList<ChatRenderedBlock> Blocks(string text)
@@ -28,11 +30,15 @@ public static class ChatRichContent
   }
   private static string Kind(FencedCodeBlock block) => block.Info?.Trim().ToLowerInvariant() switch
   { "visual" => "visual", "mermaid" => "mermaid", "svg" => "svg", _ => "code" };
-  public static string Prompt(ChatRecord chat, string text)
+  // Decker, 8 Nov (D3): the drawing instruction goes to the AI ONCE per session, as on the Mac, not with
+  // every message (about 85 tokens each). Codex's app-server gets it in its thread's developer
+  // instructions (the Mac's point); Claude and Gemini with the first message of each connection;
+  // Codex exec with the first turn of a conversation.
+  public static string Prompt(ChatRecord chat, string text, bool drawing = true)
   {
     // Replayed context stays complete on disk and crosses stdin, never argv.
     var replay = chat.ReplayHistory && chat.ConversationId is null ? "Saved conversation (context only; do not repeat its operations):\n" + ChatText.Export(chat with { Events = chat.Events.Where(e => e.Kind != "historySeed").ToArray() }) : "";
-    return string.Join("\n\n", new[] { chat.Definition.Instructions, Instruction, replay, text }.Where(s => s.Length > 0));
+    return string.Join("\n\n", new[] { chat.Definition.Instructions, drawing ? Instruction : "", replay, text }.Where(s => s.Length > 0));
   }
   public static string Html(string text, string? folder = null)
   {

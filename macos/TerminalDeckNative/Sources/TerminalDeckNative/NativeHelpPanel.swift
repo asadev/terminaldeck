@@ -44,9 +44,9 @@ struct NativeHelpPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField(hasShortcuts ? "Search help and shortcuts" : "Search help", text: $query)
+                NativeSessionTextField(hasShortcuts ? "Search help and shortcuts" : "Search help", text: $query)
                     .textFieldStyle(.plain)
-                    .focused($searchFocused)
+                    .sessionFocused($searchFocused)
                     .accessibilityLabel("Search help")
                 if searching {
                     Text(Help.resultLabel(resultCount)).font(.caption).foregroundStyle(.secondary)
@@ -68,7 +68,7 @@ struct NativeHelpPanel: View {
                     if !searching && sections.count > 1 {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(sections, id: \.id) { entry in
-                                Button { section = entry.id } label: {
+                                NativeSessionButton { section = entry.id } label: {
                                     Text(entry.label)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.horizontal, 8)
@@ -93,7 +93,7 @@ struct NativeHelpPanel: View {
                             }
                             ForEach(visible) { topic in topicView(topic, appName: appName) }
                             if !searching && current == "trouble", let onOpenDebug {
-                                Button("Open the Debug panel", action: onOpenDebug).buttonStyle(.link)
+                                NativeSessionButton("Open the Debug panel", action: onOpenDebug).buttonStyle(.link)
                             }
                             if showShortcuts {
                                 if searching { Text("Shortcuts").font(.headline) }
@@ -189,7 +189,7 @@ struct NativeHelpPanel: View {
                         GridRow { Text(label).foregroundStyle(.secondary); Text(value).textSelection(.enabled) }
                     }
                 }
-                Button("Copy version details") {
+                NativeSessionButton("Copy version details") {
                     NSPasteboard.general.clearContents()
                     copied = NSPasteboard.general.setString(about.copyText, forType: .string)
                     Task { try? await Task.sleep(for: .seconds(2)); copied = false }
@@ -237,7 +237,7 @@ struct NativeHelpSheet: View {
                     Text("How this works, and what to do when it does not.").font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Done", action: close).keyboardShortcut(.cancelAction)
+                NativeSessionButton("Done", action: close).keyboardShortcut(.cancelAction)
             }
             NativeHelpPanel()
         }

@@ -29,12 +29,12 @@ struct FieldRow: View {
                 HStack(spacing: 6) {
                     FieldTypeIcon(kind: field.kind, size: 18)
                     if renaming {
-                        TextField("Field name", text: Binding(get: { name }, set: { name = String($0.prefix(80)) }))
+                        NativeSessionTextField("Field name", text: Binding(get: { name }, set: { name = String($0.prefix(80)) }))
                             .textFieldStyle(.roundedBorder)
-                            .focused($nameFocused)
+                            .sessionFocused($nameFocused)
                             .onAppear { nameFocused = true }
-                            .onSubmit { nameFocused = false }
-                            .onExitCommand {
+                            .sessionOnSubmit { nameFocused = false }
+                            .sessionOnExitCommand {
                                 name = field.label
                                 renaming = false
                             }
@@ -51,7 +51,7 @@ struct FieldRow: View {
                 FieldValueEditor(field: field, ctx: ctx) { v in Task { await store.commitValue(field, v) } }
                     .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 if !ctx.readOnly {
-                    Button {
+                    NativeSessionButton{
                         menuErr = nil
                         menu = menu == nil ? .menu : nil
                     } label: {
@@ -110,8 +110,8 @@ struct FieldRow: View {
                 Text("Delete “\(field.label)” and its value?").font(.system(size: 13))
                 HStack {
                     Spacer()
-                    Button("Cancel") { menu = nil }
-                    Button("Delete field", role: .destructive) {
+                    NativeSessionButton("Cancel") { menu = nil }
+                    NativeSessionButton("Delete field", role: .destructive) {
                         menu = nil
                         Task { await store.delete(field) }
                     }
@@ -130,8 +130,8 @@ struct FieldRow: View {
                 if let menuErr { Text(menuErr).font(.caption).foregroundStyle(TaskTone.input) }
                 HStack {
                     Spacer()
-                    Button("Cancel") { menu = nil }
-                    Button("Save") { saveOptions() }.buttonStyle(.borderedProminent).disabled(saving)
+                    NativeSessionButton("Cancel") { menu = nil }
+                    NativeSessionButton("Save") { saveOptions() }.buttonStyle(.borderedProminent).disabled(saving)
                 }
             }
             .padding(12)

@@ -21,10 +21,10 @@ struct FieldTypePicker: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-                TextField("Search…", text: $query)
+                NativeSessionTextField("Search…", text: $query)
                     .textFieldStyle(.plain)
-                    .focused($focused)
-                    .onSubmit { if let first = shown.first { onPick(first.kind) } }
+                    .sessionFocused($focused)
+                    .sessionOnSubmit { if let first = shown.first { onPick(first.kind) } }
                     .accessibilityLabel("Search field types")
             }
             .padding(.horizontal, 10).padding(.vertical, 6)

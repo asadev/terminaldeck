@@ -156,11 +156,11 @@ struct AGTAddHandSheet: View {
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text("Its job, in one line").font(.caption).foregroundStyle(.secondary)
-                TextField("For example: fix the failing import for March", text: $job).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("For example: fix the failing import for March", text: $job).textFieldStyle(.roundedBorder)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text("Details (optional)").font(.caption).foregroundStyle(.secondary)
-                TextEditor(text: $details).font(.system(size: 12)).frame(height: 96)
+                NativeSessionTextEditor(text: $details).font(.system(size: 12)).frame(height: 96)
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DeckTokens.hairline, lineWidth: 1))
             }
             Toggle(isOn: $helper) {
@@ -175,8 +175,8 @@ struct AGTAddHandSheet: View {
             if let problem { Text(problem).font(.callout).foregroundStyle(DeckTokens.bad).fixedSize(horizontal: false, vertical: true) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button { add() } label: { HStack(spacing: 6) { if busy { ProgressView().controlSize(.mini) }; Text(helper ? "Start the helper" : "Add the hand") } }
+                NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                NativeSessionButton { add() } label: { HStack(spacing: 6) { if busy { ProgressView().controlSize(.mini) }; Text(helper ? "Start the helper" : "Add the hand") } }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(busy || job.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

@@ -204,7 +204,7 @@ struct NativeNarrationWordsEditor: View {
                 .padding(.horizontal, 5).padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .hidden()
-            TextEditor(text: $text)
+            NativeSessionTextEditor(text: $text)
                 .font(.callout)
                 .scrollContentBackground(.hidden)
                 .scrollDisabled(false)

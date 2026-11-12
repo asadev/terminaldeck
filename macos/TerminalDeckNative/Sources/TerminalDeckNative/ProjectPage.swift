@@ -44,12 +44,12 @@ struct ProjectPage: View {
         } actions: {
             Menu {
                 if registered {
-                    Button("Project settings…") { Self.openSettings(project) }
-                    Button("Setup guide…") { PROJGuideWindow.open(project: project) }
+                    NativeSessionButton("Project settings…") { Self.openSettings(project) }
+                    NativeSessionButton("Setup guide…") { PROJGuideWindow.open(project: project) }
                 } else if let folder {
-                    Button("Set up as a project…") { PROJGuideWindow.open(folder: folder) }
+                    NativeSessionButton("Set up as a project…") { PROJGuideWindow.open(folder: folder) }
                 }
-                Button("Show hidden cards") { overview.hidden = [] }
+                NativeSessionButton("Show hidden cards") { overview.hidden = [] }
                 if let agents = readiness.report?.agents, !agents.isEmpty {
                     Picker("Report on", selection: $readiness.agent) {
                         Text("Any agent").tag(String?.none)
@@ -58,7 +58,7 @@ struct ProjectPage: View {
                 }
             } label: { Image(systemName: "gearshape").frame(width: 28, height: 28) }
             .menuStyle(.borderlessButton).help("Project settings").accessibilityLabel("Project settings")
-            Button { NativeNewSession.show(project: project) } label: { Label("New session", systemImage: "plus") }.buttonStyle(.borderedProminent)
+            NativeSessionButton { NativeNewSession.show(project: project) } label: { Label("New session", systemImage: "plus") }.buttonStyle(.borderedProminent)
         } content: {
             if let folder {
                 switch tab {
@@ -312,14 +312,14 @@ struct PROJPAGEProjectSettings: View {
                     Section(section) {
                         switch section {
                         case "General":
-                            TextField("Name", text: Binding(get: { shown.name }, set: { var next = shown; next.name = $0; save(next) }))
+                            NativeSessionTextField("Name", text: Binding(get: { shown.name }, set: { var next = shown; next.name = $0; save(next) }))
                             // Asad 10 Oct: a logo instead of a colour dot. Drop an image here, choose one,
                             // or pick one found in the project's folder. It is copied into the app's data.
                             LabeledContent("Logo") {
                                 HStack(spacing: 8) {
                                     ProjectLogoView(project: shown, size: 28)
-                                    Button("Choose…") { chooseLogo() }
-                                    if !shown.logo.isEmpty { Button("Remove") { setLogo(nil) } }
+                                    NativeSessionButton("Choose…") { chooseLogo() }
+                                    if !shown.logo.isEmpty { NativeSessionButton("Remove") { setLogo(nil) } }
                                 }
                             }
                             .padding(2)
@@ -336,7 +336,7 @@ struct PROJPAGEProjectSettings: View {
                                 LabeledContent("Found in the folder") {
                                     HStack(spacing: 6) {
                                         ForEach(logoSuggestions, id: \.self) { url in
-                                            Button { setLogo(url) } label: {
+                                            NativeSessionButton { setLogo(url) } label: {
                                                 Group {
                                                     if let image = NSImage(contentsOf: url) {
                                                         Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
@@ -355,7 +355,7 @@ struct PROJPAGEProjectSettings: View {
                             }
                             LabeledContent("Folder") {
                                 HStack { Text(shown.folders.first.map(PROJPAGEStyle.shortPath) ?? "Independent").font(.system(size: 12, design: .monospaced)).lineLimit(1)
-                                    Button("Choose…") { chooseFolder() }
+                                    NativeSessionButton("Choose…") { chooseFolder() }
                                 }
                             }
                         case "Server":
@@ -372,7 +372,7 @@ struct PROJPAGEProjectSettings: View {
                             LabeledContent("Account") {
                                 HStack {
                                     Text(accountLine ?? "…").foregroundStyle(.secondary).lineLimit(2)
-                                    Button("Change in Settings…") {
+                                    NativeSessionButton("Change in Settings…") {
                                         AppModel.shared.requestSettings()
                                         AppModel.shared.selectSettingsSection("agents")
                                     }
@@ -441,6 +441,6 @@ struct PROJPAGEProjectSettings: View {
         }
     }
     private func field(_ label: String, _ key: String) -> some View {
-        TextField(label, text: Binding(get: { model.values[key] as? String ?? "" }, set: { model.set(key, $0, projectID: project.id) }))
+        NativeSessionTextField(label, text: Binding(get: { model.values[key] as? String ?? "" }, set: { model.set(key, $0, projectID: project.id) }))
     }
 }

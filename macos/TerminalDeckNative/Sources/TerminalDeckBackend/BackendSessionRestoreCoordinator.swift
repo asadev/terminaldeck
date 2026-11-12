@@ -7,6 +7,16 @@ public typealias BackendHOSTSessionRestoreCoordinatorProfiles = any BackendHOSTP
 public typealias BackendHOSTSessionRestoreCoordinatorProfiles = BackendAccountProfileStore
 #endif
 
+private struct RestoreAccountMissing: LocalizedError {
+    let id: String
+    var errorDescription: String? {
+        if BackendAPIAccountRecord.isAPIAccountID(id) {
+            return "this tab's original API account is no longer available. Its conversation is kept. A new account with the same name cannot reopen it."
+        }
+        return "this tab's account or conversation history account was removed. Add it again with its original name in Settings › Coding AIs, then press Retry."
+    }
+}
+
 public actor BackendSessionRestorePlanner {
     private let profiles: BackendHOSTSessionRestoreCoordinatorProfiles
     private let providers: any BackendProviderLaunchResolver
@@ -17,8 +27,24 @@ public actor BackendSessionRestorePlanner {
     public init(accounts: BackendAccountLaunchAdapter, providers: any BackendProviderLaunchResolver, context: BackendSessionRestoreContext) {
         self.init(profiles: accounts.profiles, providers: providers, context: context)
     }
+    private func validateRecordedAccounts(_ saved: BackendSessionSaved) async throws {
+        for key in ["profileId", "homeProfileId"] where !saved.raw[key].isNullish && saved.raw[key].string == nil {
+            throw RestoreAccountMissing(id: "invalid " + key)
+        }
+        for id in [saved.profileID, saved.homeProfileID].compactMap({ $0 }) where !id.isEmpty {
+            guard let profile = try await profiles.find(id), profile.provider == saved.provider else { throw RestoreAccountMissing(id: id) }
+            if BackendAPIAccountRecord.isAPIAccountID(id), !BackendAPIAccountRecord.isOwnedAPIProfile(profile, configuration: await profiles.configuration) {
+                throw RestoreAccountMissing(id: id)
+            }
+        }
+    }
     public func accountFolder(_ saved: BackendSessionSaved) async throws -> BackendAccountProfile {
+        try await validateRecordedAccounts(saved)
         if let home = saved.homeProfileID, let profile = try await profiles.find(home), profile.provider == saved.provider { return profile }
+        // A saved account names a history folder, not a new-login choice. Resolving Default can choose a
+        // different signed-in account and probe every login again for every stale row before any tab appears.
+        if let id = saved.profileID, BackendAccountProfile.systemProvider(id) == saved.provider,
+           let profile = try await profiles.find(id) { return profile }
         return try await profiles.resolve(sessionProfileID: saved.profileID, projectPath: saved.cwd, provider: saved.provider)
     }
     public func configDirectory(_ saved: BackendSessionSaved) async throws -> String {
@@ -64,7 +90,55 @@ public actor BackendSessionRestorePlanner {
             return .none
         }.value
     }
+    /// 10 Nov: whether a Claude transcript with this id is in `config`'s history for `cwd` (any spelling of the folder).
+    static func transcriptExists(_ id: String, cwd: String, config: String) -> Bool {
+        guard id.range(of: "^[a-zA-Z0-9_-]{1,128}$", options: .regularExpression) != nil else { return false }
+        for spelling in NativeTranscriptPaths.projectSpellings(cwd) {
+            let file = URL(fileURLWithPath: config).appendingPathComponent("projects")
+                .appendingPathComponent(NativeTranscriptPaths.encodeProjectPath(spelling)).appendingPathComponent(id + ".jsonl")
+            if let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]), values.isRegularFile == true, (values.fileSize ?? 0) > 0 { return true }
+        }
+        return false
+    }
+    /// 10 Nov (Asad: "each one on its own account, resumed into its own chat"). Before planning, a saved Claude tab is
+    /// put right in two ways:
+    /// - its saved conversation is not on disk but one it was in before is (`knownConversations`, newest first):
+    ///   it continues that one instead of being held (a background session's id had replaced the real one);
+    /// - it changed account while it ran (an in-place switch: the login of one account served into another's folder):
+    ///   it uses the login's history only when its recorded history has none of its conversations and the login
+    ///   does. A matching ID in both folders never establishes that their contents are the same.
+    public func corrected(_ session: BackendSessionSaved) async -> BackendSessionSaved {
+        guard session.provider == "claude", session.deviceID == nil else { return session }
+        do { try await validateRecordedAccounts(session) } catch { return session }
+        var raw = session.raw
+        // Default may now borrow a kept login. The restored CLI must still see the history in which this tab
+        // actually ran, just as an in-place account switch already records homeProfileId separately.
+        if session.homeProfileID == nil, let id = session.profileID,
+           BackendAccountProfile.systemProvider(id) == session.provider {
+            raw = raw.setting("homeProfileId", .string(id))
+        }
+        let known = (raw[NativeOpenSessionLedger.knownConversationsKey].elements ?? []).compactMap(\.string)
+        var ids = [session.conversationID].compactMap { $0 } + known
+        if let home = session.homeProfileID, home != session.profileID, let id = session.profileID,
+           let history = try? await profiles.find(home), let login = try? await profiles.find(id), login.provider == "claude",
+           !ids.isEmpty,
+           !ids.contains(where: { Self.transcriptExists($0, cwd: session.cwd, config: history.configDir) }),
+           ids.contains(where: { Self.transcriptExists($0, cwd: session.cwd, config: login.configDir) }) {
+            raw = raw.removing("homeProfileId")
+        }
+        if let current = session.conversationID, let corrected = try? BackendSessionSaved(raw),
+           let config = try? await configDirectory(corrected), !Self.transcriptExists(current, cwd: session.cwd, config: config),
+           let found = known.first(where: { Self.transcriptExists($0, cwd: session.cwd, config: config) }) {
+            ids.removeAll { $0 == found }
+            raw = raw.setting("agentSessionId", .string(found))
+            let rest = ids.filter { $0 != found }.prefix(NativeOpenSessionLedger.knownConversationsLimit).map(NativeRPCValue.string)
+            raw = rest.isEmpty ? raw.removing(NativeOpenSessionLedger.knownConversationsKey) : raw.setting(NativeOpenSessionLedger.knownConversationsKey, .array(Array(rest)))
+        }
+        return (try? BackendSessionSaved(raw)) ?? session
+    }
     public func plan(_ saved: [BackendSessionSaved], exact: Bool = true, claimedLive: [BackendSessionMeta] = []) async -> [BackendSessionRestoreDecision] {
+        var saved = saved
+        if exact { for index in saved.indices { saved[index] = await corrected(saved[index]) } }
         var decisions: [BackendSessionRestoreDecision] = [], configs: [Int: String] = [:], continuing: [Int: Bool] = [:]
         let path: String
         do { path = try await providers.loginPath() }
@@ -74,7 +148,10 @@ public actor BackendSessionRestorePlanner {
                 let spec = try await providers.resolve(session.input(resume: false), loginPath: path)
                 continuing[index] = !spec.resumeArgs.isEmpty
                 configs[index] = try await configDirectory(session)
-            } catch { decisions.append(BackendSessionRestoreDecision(session: session, outcome: .failed, reason: error.localizedDescription)) }
+            } catch {
+                decisions.append(BackendSessionRestoreDecision(session: session, outcome: .failed, reason: error.localizedDescription,
+                    recoveryAction: error is RestoreAccountMissing ? "retry" : nil))
+            }
         }
         var latest: [String: Int] = [:]
         for (index, session) in saved.enumerated() where continuing[index] == true {
@@ -105,7 +182,8 @@ public actor BackendSessionRestorePlanner {
             let config = configs[index]!
             if exact && (session.provider == "claude" || session.conversationID != nil) {
                 guard let id = session.conversationID else {
-                    ordered[index] = BackendSessionRestoreDecision(session: session, outcome: .skip, reason: "no conversation was saved for this tab — open it to choose one", pick: session.provider == "claude"); continue
+                    ordered[index] = BackendSessionRestoreDecision(session: session, outcome: .skip, reason: "no conversation was saved for this tab — open it to choose one", configDirectory: config,
+                        conversation: BackendSessionRestoreDecision.Conversation.none, pick: session.provider == "claude", recoveryAction: "choose-conversation"); continue
                 }
                 guard ["claude", "codex"].contains(session.provider) else {
                     ordered[index] = BackendSessionRestoreDecision(session: session, outcome: .skip, reason: "the exact conversation cannot be continued by this agent; kept for recovery"); continue
@@ -116,8 +194,9 @@ public actor BackendSessionRestorePlanner {
                 let key = session.provider + "\0" + id
                 if found == .none || claimed.contains(key) {
                     ordered[index] = BackendSessionRestoreDecision(session: session, outcome: .skip,
-                        reason: found == .none ? "the saved conversation was not found; kept for recovery" : "another live tab already holds that conversation",
-                        configDirectory: config, conversation: found, pick: session.provider == "claude"); continue
+                        reason: found == .none ? "The saved conversation could not be verified. Choose a conversation to recover this tab." : "Another tab is using this conversation. This tab is kept; close the other tab before retrying.",
+                        configDirectory: config, conversation: found, pick: found == .none && session.provider == "claude",
+                        recoveryAction: found == .none ? "choose-conversation" : "wait-for-conversation"); continue
                 }
                 claimed.insert(key)
                 ordered[index] = BackendSessionRestoreDecision(session: session, outcome: .resume, reason: "continuing the saved conversation by its exact id", configDirectory: config, conversation: found)
@@ -162,7 +241,30 @@ extension BackendSessionLifecycleCoordinator: BackendRestoreSessionStarting {
 }
 
 public actor BackendSessionRestoreCoordinator {
-    public struct Result: Sendable { public let started: [BackendSessionMeta]; public let decisions: [BackendSessionRestoreDecision] }
+    public struct Result: Sendable {
+        public let started: [BackendSessionMeta]; public let decisions: [BackendSessionRestoreDecision]
+        /// 10 Nov: saved tabs that were not brought back because they were not open at the last quit (closed, stale,
+        /// or an unused empty tab), each with why. They are removed from the list, not held.
+        public var dropped: [String] = []
+        /// The copy of state.json the one-time clean-up kept, when it ran.
+        public var cleanUpCopy: String?
+        /// Lines for the app's log from the steps before the restore (the shared chat history).
+        public var notes: [String] = []
+    }
+    /// Legacy pending rows older than this interval are cleaned up. Held rows are stamped as still open.
+    public static let heldKeptFor: Double = 72 * 3_600_000
+    /// The one-time clean-up keeps a saved tab that is not live only when it really did something this recently
+    /// before the newest saved moment (it was open at the last quit: a crash or a Mac restart stopped it).
+    public static let cleanUpWindow: Double = 7 * 24 * 3_600_000
+    /// An AI tab with no agent and no conversation whose activity never moved after its start, open longer than
+    /// this, is an unused empty tab: it is not brought back again.
+    public static let unusedOpenFor: Double = 3_600_000
+    public static let startOutputGrace: Double = 60_000
+    public static let cleanUpCopySuffix = "before-restore-1110"
+    /// Recovery requires a recorded link to this saved tab/session and the same history owner and path.
+    public typealias ConversationHint = @Sendable (_ saved: BackendSessionSaved, _ claimed: Set<String>, _ configDirectory: String) async -> BackendRestoreConversationHint.Candidate?
+    private var conversationHint: ConversationHint?
+    public func setConversationHint(_ hint: ConversationHint?) { conversationHint = hint }
     private let starter: any BackendRestoreSessionStarting
     private let planner: BackendSessionRestorePlanner
     private let store: NativeStateStore
@@ -170,6 +272,7 @@ public actor BackendSessionRestoreCoordinator {
     private let excluded: [String]
     private let emit: @Sendable (BackendSessionLifecycleEvent) -> Void
     private var restoring = false
+    private var launchClaims = Set<String>()
     private var hostedClaims: @Sendable () -> [BackendSessionMeta] = { [] }
     public func setHostedClaims(_ claims: @escaping @Sendable () -> [BackendSessionMeta]) { hostedClaims = claims }
     /// Capture before stopping the helper: its final exit packets can erase the live rows and ledger.
@@ -214,12 +317,13 @@ public actor BackendSessionRestoreCoordinator {
         restoring = true; defer { restoring = false }
         guard await store.getPreferences()["restoreSessions"].bool != false else { return Result(started: [], decisions: []) }
         let live = hostedClaims()
-        let raw = await store.getOpenSessions().filter { record in
-            !BackendHOSTPolicy.claimed(savedID: record["id"].string, tabKey: record["tabKey"].string,
-                provider: record["provider"].string ?? "", conversation: record["agentSessionId"].string, attached: live)
-        }
+        // 10 Nov (Asad: "a restart brings back exactly the tabs that were open at quit"): first the tabs that were not
+        // open at the last quit leave the list (they were closed long ago, held for days, or never used).
+        let (dropped, copy) = try await dropTabsNotOpen(live: live)
+        let raw = await store.getOpenSessions().filter { !Self.sameTab($0, in: live) }
+        let liveKeys = (try? await store.ledgerLiveKeys()) ?? []
         var saved: [BackendSessionSaved] = []
-        for record in raw {
+        for record in raw where !liveKeys.contains(NativeOpenSessionLedger.stampKey(record)) {
             let session: BackendSessionSaved
             do { session = try BackendSessionSaved(record) }
             catch { if record.fields != nil { _ = try await store.holdSession(record, reason: "the saved session has invalid launch fields: " + error.localizedDescription) }; continue }
@@ -230,22 +334,40 @@ public actor BackendSessionRestoreCoordinator {
             if record["taskID"].string.map({ !$0.isEmpty }) == true { continue }
             saved.append(session)
         }
-        let planned = await planner.plan(saved, exact: true, claimedLive: await starter.liveSessions())
-        var started: [BackendSessionMeta] = [], decisions: [BackendSessionRestoreDecision] = []
-        for decision in planned {
+        let running = await starter.liveSessions()
+        var planned = await planner.plan(saved, exact: true, claimedLive: running)
+        planned = await recoverLostConversations(planned, running: running)
+        var started: [BackendSessionMeta] = [], decisions: [BackendSessionRestoreDecision] = [], successfulClaims = Set<String>()
+        for var decision in planned {
             try Task.checkCancellation()
+            // Planning reserves IDs before launches. A failed launch must not strand the later tab.
+            if decision.outcome == .skip, decision.recoveryAction == "wait-for-conversation",
+               let again = await planner.plan([decision.session], exact: true, claimedLive: await starter.liveSessions()).first {
+                decision = again
+            }
+            if let key = Self.conversationKey(decision.session), successfulClaims.contains(key), decision.outcome == .resume {
+                decision = Self.claimedDecision(decision.session, config: decision.configDirectory)
+            }
+            // Missing or unproven history stays held. Opening a picker is an explicit recovery action.
             if decision.outcome == .skip || decision.outcome == .failed {
-                _ = try await store.holdSession(decision.session.raw, reason: decision.reason, pick: decision.pick); decisions.append(decision); continue
+                _ = try await store.holdSession(decision.session.raw, reason: decision.reason, pick: decision.pick, recoveryAction: decision.recoveryAction); decisions.append(decision); continue
             }
             do {
                 let restoredContext = try await context.context(for: decision.session)
                 var input = decision.session.input(resume: decision.outcome == .resume)
+                if decision.outcome == .fresh, decision.session.provider == "claude", decision.conversation == BackendSessionRestoreDecision.Conversation.none {
+                    input.resumeConversationId = nil
+                }
+                if input.projectId == nil { input.projectId = Self.projectOf(decision.session.cwd) }
                 BackendAGTShellAgents.applyResume(to: &input) // AGT: a shell tab's own AI resumes with it
-                let meta = try await Self.startingAgain(alreadyRunning: { await self.running(decision.session) }) {
-                    try await BackendAGSLaunchScope.$restoring.withValue(true) {
-                        try await starter.create(input, context: restoredContext, holdOnFailure: false, named: decision.session.title)
+                let meta = try await withConversationClaim(decision) {
+                    try await Self.startingAgain(alreadyRunning: { await self.running(decision.session) }) {
+                        try await BackendAGSLaunchScope.$restoring.withValue(true) {
+                            try await starter.create(input, context: restoredContext, holdOnFailure: false, named: decision.session.title)
+                        }
                     }
                 }
+                if decision.outcome == .resume, let key = Self.conversationKey(decision.session) { successfulClaims.insert(key) }
                 started.append(meta); decisions.append(decision)
             } catch {
                 let failed = BackendSessionRestoreDecision(session: decision.session, outcome: .failed, reason: "it could not be started again: " + error.localizedDescription)
@@ -254,7 +376,105 @@ public actor BackendSessionRestoreCoordinator {
         }
         try await store.ledgerDropPending(); try await store.ledgerFlush()
         emit(.held(try await store.heldSessions())); emit(.restored(decisions))
-        return Result(started: started, decisions: decisions)
+        var result = Result(started: started, decisions: decisions)
+        result.dropped = dropped
+        result.cleanUpCopy = copy
+        return result
+    }
+    /// The project a saved tab's folder belongs to (nil: none), for a tab saved before the project was written down.
+    static func projectOf(_ cwd: String) -> String? {
+        let id = PROJProjects.resolve(projectID: nil, folder: cwd)
+        return id == PROJProjects.independentID ? nil : id
+    }
+    /// 10 Nov: removes, before planning, every pending tab that was not open at the last quit. Without stamps (a
+    /// state.json from before this rule) the one-time clean-up runs instead, after keeping a copy of the file.
+    func dropTabsNotOpen(live: [BackendSessionMeta]) async throws -> (dropped: [String], copy: String?) {
+        let liveKeys = try await store.ledgerLiveKeys()
+        let pending = await store.getOpenSessions().filter { record in
+            !liveKeys.contains(NativeOpenSessionLedger.stampKey(record))
+                && !Self.sameTab(record, in: live)
+        }
+        var dropped: [String] = [], discard = Set<String>(), copy: String?
+        func name(_ row: NativeRPCValue) -> String {
+            let title = row["title"].string ?? URL(fileURLWithPath: row["cwd"].string ?? "").lastPathComponent
+            return "\(row["provider"].string ?? "?") tab \(title) (\(NativeOpenSessionLedger.stampKey(row).prefix(8)))"
+        }
+        if !(try await store.ledgerStampsReady()) {
+            // One time, on the first start of this build: keep only the tabs that were really open. A live one is
+            // already noted; a stopped one is kept when it really did something shortly before the newest saved
+            // moment (a crash or a Mac restart stopped it). A list from before activity was recorded at all falls
+            // back to when each tab was last seen.
+            let all = await store.getOpenSessions()
+            let tracked = all.contains { $0[NativeOpenSessionLedger.activityKey].number != nil }
+            let newest = all.map { max($0[NativeOpenSessionLedger.activityKey].number ?? 0, $0["lastSeenAt"].number ?? 0) }.max() ?? 0
+            var keep: [String: Double] = [:]
+            for row in pending {
+                let at = tracked ? row[NativeOpenSessionLedger.activityKey].number : row["lastSeenAt"].number
+                if let at, newest - at <= (tracked ? Self.cleanUpWindow : Self.heldKeptFor) { keep[NativeOpenSessionLedger.stampKey(row)] = at }
+                else { discard.insert(NativeOpenSessionLedger.stampKey(row)); dropped.append(name(row) + ": not open at the last quit (one-time clean-up)") }
+            }
+            copy = discard.isEmpty ? nil : await store.keepCopyOfStateFile(suffix: Self.cleanUpCopySuffix)
+            // Never clean up a file without its copy; the next start tries again.
+            if !discard.isEmpty, copy == nil, store.file != nil { return ([], nil) }
+            try await store.ledgerCleanUp(keep: keep, discard: discard)
+            discard = []
+        } else {
+            var stamps: [Double] = Array((try await store.ledgerPreviousOpenStamps() ?? [:]).values)
+            for row in pending { if let at = try await store.ledgerOpenStamp(row) { stamps.append(at) } }
+            let newest = stamps.max() ?? 0
+            for row in pending {
+                guard let at = try await store.ledgerOpenStamp(row), newest - at <= Self.heldKeptFor else {
+                    discard.insert(NativeOpenSessionLedger.stampKey(row)); dropped.append(name(row) + ": not open at the last quit"); continue
+                }
+            }
+        }
+        for row in pending where !discard.contains(NativeOpenSessionLedger.stampKey(row)) {
+            guard let stamp = try await store.ledgerOpenStamp(row), Self.unusedEmpty(row, openUntil: stamp),
+                  let session = try? BackendSessionSaved(row), !(await hasConversationOnDisk(session)) else { continue }
+            discard.insert(NativeOpenSessionLedger.stampKey(row)); dropped.append(name(row) + ": an empty tab nobody used since it started")
+        }
+        try await store.ledgerDiscardPending(discard)
+        return (dropped, copy)
+    }
+    /// An AI tab with no agent whose activity never moved after its own start, and that stayed open over an hour.
+    static func unusedEmpty(_ row: NativeRPCValue, openUntil: Double) -> Bool {
+        guard ["claude", "codex", "gemini"].contains(row["provider"].string ?? ""),
+              (row["agentProfileID"].string ?? "").isEmpty, (row["claudeAgent"].string ?? "").isEmpty,
+              (row["agentInstructions"].string ?? "").isEmpty, row["chat"].bool != true,
+              let started = row[NativeOpenSessionLedger.startedAtKey].number else { return false }
+        let activity = row[NativeOpenSessionLedger.activityKey].number ?? started
+        return activity <= started + startOutputGrace && openUntil - started > unusedOpenFor
+    }
+    private func hasConversationOnDisk(_ session: BackendSessionSaved) async -> Bool {
+        let ids = [session.conversationID].compactMap { $0 } + (session.raw[NativeOpenSessionLedger.knownConversationsKey].elements ?? []).compactMap(\.string)
+        guard !ids.isEmpty else { return false }
+        guard session.provider == "claude" else { return true }   // Codex/Gemini: a recorded conversation was used
+        guard let config = try? await planner.configDirectory(session) else { return true }
+        return ids.contains { BackendSessionRestorePlanner.transcriptExists($0, cwd: session.cwd, config: config) }
+    }
+    /// Only an explicitly linked memory record in this history can recover a missing conversation.
+    /// The planner still checks the candidate on disk and against live claims before any launch.
+    private func recoverLostConversations(_ planned: [BackendSessionRestoreDecision], running: [BackendSessionMeta]) async -> [BackendSessionRestoreDecision] {
+        guard let conversationHint else { return planned }
+        var claimed = Set(running.filter { $0.exitCode == nil }.compactMap(\.agentSessionId))
+        for decision in planned where decision.outcome == .resume { if let id = decision.session.conversationID { claimed.insert(id) } }
+        var result = planned
+        for index in result.indices {
+            let decision = result[index]
+            guard decision.session.provider == "claude", decision.outcome == .skip, decision.pick,
+                  decision.conversation != .found, let config = decision.configDirectory,
+                  let hint = await conversationHint(decision.session, claimed, config),
+                  hint.belongs(to: decision.session, configDirectory: config), !claimed.contains(hint.conversationID) else { continue }
+            let id = hint.conversationID
+            var known = [decision.session.conversationID].compactMap { $0 } + (decision.session.raw[NativeOpenSessionLedger.knownConversationsKey].elements ?? []).compactMap(\.string)
+            known.removeAll { $0 == id }
+            var raw = decision.session.raw.setting("agentSessionId", .string(id))
+            if !known.isEmpty { raw = raw.setting(NativeOpenSessionLedger.knownConversationsKey, .array(known.prefix(NativeOpenSessionLedger.knownConversationsLimit).map(NativeRPCValue.string))) }
+            guard let session = try? BackendSessionSaved(raw), let again = await planner.plan([session], exact: true, claimedLive: running).first,
+                  again.outcome == .resume else { continue }
+            claimed.insert(id); result[index] = again
+        }
+        return result
     }
     /// 29 Oct: sessions coming back together (a keeper restart, an app start) can catch each other's start-up writes
     /// between a launch's two reads of its configuration. One fresh attempt follows that one refusal, so a restart
@@ -270,10 +490,36 @@ public actor BackendSessionRestoreCoordinator {
             return try await start()
         }
     }
+    private static func sameTab(_ raw: NativeRPCValue, in live: [BackendSessionMeta]) -> Bool {
+        live.contains { meta in
+            guard meta.exitCode == nil else { return false }
+            if let key = raw["tabKey"].string, !key.isEmpty { return meta.tabKey == key }
+            return raw["id"].string == meta.id
+        }
+    }
+    private static func conversationKey(_ saved: BackendSessionSaved) -> String? {
+        saved.conversationID.map { saved.provider + "\0" + $0 }
+    }
+    private static func claimedDecision(_ saved: BackendSessionSaved, config: String?) -> BackendSessionRestoreDecision {
+        .init(session: saved, outcome: .skip,
+              reason: "Another tab is using this conversation. This tab is kept; close the other tab before retrying.",
+              configDirectory: config, conversation: .found, recoveryAction: "wait-for-conversation")
+    }
+    private func withConversationClaim(_ decision: BackendSessionRestoreDecision,
+                                       start: () async throws -> BackendSessionMeta) async throws -> BackendSessionMeta {
+        guard decision.outcome == .resume, let key = Self.conversationKey(decision.session) else { return try await start() }
+        let live = await starter.liveSessions()
+        guard !live.contains(where: { $0.exitCode == nil && $0.provider == decision.session.provider && $0.agentSessionId == decision.session.conversationID }),
+              launchClaims.insert(key).inserted else {
+            throw BackendSessionFailure.invalidInput("Another tab is using this conversation. Close it before retrying; this tab is kept.")
+        }
+        defer { launchClaims.remove(key) }
+        return try await start()
+    }
     /// The live session that is this saved one again: same AI, same conversation, still running.
     private func running(_ saved: BackendSessionSaved) async -> BackendSessionMeta? {
         guard let conversation = saved.conversationID else { return nil }
-        return await starter.liveSessions().first { $0.exitCode == nil && $0.provider == saved.provider && $0.agentSessionId == conversation }
+        return await starter.liveSessions().first { $0.exitCode == nil && $0.provider == saved.provider && $0.agentSessionId == conversation && Self.sameTab(saved.raw, in: [$0]) }
     }
     static func raced(_ error: Error) -> Bool { error.localizedDescription.contains("changed during launch") }
     public func retryHeld(_ key: String) async throws -> [NativeHeldSession] {
@@ -282,15 +528,19 @@ public actor BackendSessionRestoreCoordinator {
         let plan = await planner.plan([saved], exact: true, claimedLive: await starter.liveSessions())
         guard let decision = plan.first else { throw BackendSessionFailure.invalidInput("The held session could not be planned.") }
         if (decision.outcome == .skip && !decision.pick) || decision.outcome == .failed {
-            try await store.failHeldSession(key, reason: decision.reason)
+            try await store.failHeldSession(key, reason: decision.reason, pick: decision.pick, recoveryAction: decision.recoveryAction)
         } else {
             do {
-                let restoredContext = try await context.context(for: saved)
-                var input = saved.input(resume: decision.outcome == .resume || decision.pick, pick: decision.pick)
+                let restored = decision.session
+                let restoredContext = try await context.context(for: restored)
+                var input = restored.input(resume: decision.outcome == .resume || decision.pick, pick: decision.pick)
+                if decision.pick { input.resumeConversationId = nil }
                 BackendAGTShellAgents.applyResume(to: &input) // AGT
-                _ = try await Self.startingAgain(alreadyRunning: { await self.running(saved) }) {
-                    try await BackendAGSLaunchScope.$restoring.withValue(true) {
-                        try await starter.create(input, context: restoredContext, holdOnFailure: false, named: saved.title)
+                _ = try await withConversationClaim(decision) {
+                    try await Self.startingAgain(alreadyRunning: { await self.running(decision.session) }) {
+                        try await BackendAGSLaunchScope.$restoring.withValue(true) {
+                            try await starter.create(input, context: restoredContext, holdOnFailure: false, named: decision.session.title)
+                        }
                     }
                 }
                 _ = try await store.releaseHeldSession(key)

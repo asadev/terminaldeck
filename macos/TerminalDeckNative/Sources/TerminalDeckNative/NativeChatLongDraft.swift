@@ -77,10 +77,10 @@ struct NativeChatLongDraftPopover: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Edit full prompt").font(.headline)
                     Text("\(editor.text.utf8.count) / 262144 UTF-8 bytes · files and mention chips stay in the original draft. Apply/import refuses to overwrite a changed draft or conversation.").font(.caption).foregroundStyle(.secondary)
-                    TextEditor(text: $editor.text).font(.body.monospaced()).frame(height: 320).accessibilityLabel("Full prompt editor")
-                    HStack { Button("Apply editor text to draft") { run("apply") }; Button("Open private copy in editor") { run("open-editor") } }
-                    if editor.file != nil { Button("Import saved editor copy") { run("import") } }
-                    Button("Discard editor copy") { run("cancel") }
+                    NativeSessionTextEditor(text: $editor.text).font(.body.monospaced()).frame(height: 320).accessibilityLabel("Full prompt editor")
+                    HStack { NativeSessionButton("Apply editor text to draft") { run("apply") }; NativeSessionButton("Open private copy in editor") { run("open-editor") } }
+                    if editor.file != nil { NativeSessionButton("Import saved editor copy") { run("import") } }
+                    NativeSessionButton("Discard editor copy") { run("cancel") }
                     if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
                 }.padding(16).frame(width: 660)
             }

@@ -9,11 +9,11 @@ struct AGTProfileInstructions: View {
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle).help(model.filePath ?? "")
                 Spacer(minLength: 8)
-                Button("Show in Finder") { model.showFile() }.disabled(model.filePath == nil)
-                Button("Open in my editor") { model.openFile() }.disabled(model.filePath == nil)
+                NativeSessionButton("Show in Finder") { model.showFile() }.disabled(model.filePath == nil)
+                NativeSessionButton("Open in my editor") { model.openFile() }.disabled(model.filePath == nil)
                 Text(model.sourceSaving ? "Saving…" : model.sourceHasChanges ? "Unsaved changes" : "Saved")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Save") { Task { await model.saveSource() } }
+                NativeSessionButton("Save") { Task { await model.saveSource() } }
                     .buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command)
                     .disabled(!model.canWriteSource || !model.sourceHasChanges || model.sourceSaving || model.sourceChanged)
             }.controlSize(.small)
@@ -22,15 +22,15 @@ struct AGTProfileInstructions: View {
                     HStack {
                         Text("This file changed on disk.").font(.callout)
                         Spacer()
-                        Button("Keep mine") {
+                        NativeSessionButton("Keep mine") {
                             model.sourceRevision = model.snapshot["source"]["revision"].string
                             model.sourceChanged = false
                         }
-                        Button("Use the file") { Task { await model.useFileVersion() } }
+                        NativeSessionButton("Use the file") { Task { await model.useFileVersion() } }
                     }
                 }
             }
-            TextEditor(text: $model.sourceBody)
+            NativeSessionTextEditor(text: $model.sourceBody)
                 .font(.system(size: 12, design: .monospaced)).scrollContentBackground(.hidden)
                 .padding(10).background(AGOPTStyle.card, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(AGOPTStyle.hairline, lineWidth: 0.5))
@@ -48,7 +48,7 @@ struct AGTProfileInstructions: View {
             if model.separateExtraInstructions && model.snapshot["source"]["imported"].bool == true { AGOPTCard {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Extra instructions for every task").font(.headline)
-                    TextEditor(text: $model.draft.instructions)
+                    NativeSessionTextEditor(text: $model.draft.instructions)
                         .font(.system(size: 12, design: .monospaced)).frame(height: 120)
                         .accessibilityLabel("Extra instructions for every task")
                         .onChange(of: model.draft.instructions) { _, _ in model.changed() }

@@ -30,7 +30,9 @@ private final class ChatMarkdownCache: @unchecked Sendable {
 /// (closed visual fences, math and footnote labels) live here.
 public enum ChatMarkdown {
     private static let cache = ChatMarkdownCache()
-    public static let instruction = "This chat shows GitHub Markdown (tables, lists, math), ```mermaid diagrams and ```visual blocks (HTML/SVG/JS; scripts only from cdnjs/jsdelivr) drawn live."
+    /// The same words on every app (Windows: ChatRichContent.Instruction). Visuals follow the app's light or dark theme
+    /// through the sealed document's variables (Asad's release check, 6 Nov: dark grey chart text on the dark card).
+    public static let instruction = "This chat shows GitHub Markdown (tables, lists, math), ```mermaid diagrams and ```visual blocks (HTML/SVG/JS; scripts only from cdnjs/jsdelivr) drawn live. Visuals follow the app's light or dark theme: colour text, labels, axes and lines with var(--text) or currentColor, secondary text with var(--muted), highlights with var(--accent) and fills behind text with var(--background); never fixed dark or light text colours. Canvas charts read them with getComputedStyle(document.documentElement).getPropertyValue('--text')."
 
     public static func parse(_ text: String, streaming: Bool = false) -> [ChatBlock] {
         if let hit = cache.values.object(forKey: text as NSString) { return hit.blocks }

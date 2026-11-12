@@ -22,7 +22,7 @@ struct NativePrivacySettings: View {
                     }
                 }
                 Section("Older versions") {
-                    Text("Older session helpers may still appear as TerminalDeckNativeHelper. Remove those entries after updating the helper.").foregroundStyle(.secondary)
+                    Text("Lists may still show TerminalDeckNativeHelper from older versions. Sessions now use Terminal Deck’s entry, so those can go.").foregroundStyle(.secondary)
                     Button("Remove old Terminal Deck entries") { showCleanup.toggle() }
                     if showCleanup { NativePrivacyCleanupSteps() }
                 }

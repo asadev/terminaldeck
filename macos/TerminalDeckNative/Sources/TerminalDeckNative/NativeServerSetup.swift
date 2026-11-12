@@ -274,12 +274,56 @@ struct NativeServerOneTimeCode: View {
 
 // MARK: - The terminal a setup runs in
 
+/// The real shell and an inert test shell share the same input/output path. Merely
+/// constructing this value does not connect an engine or open a server terminal.
+@MainActor
+struct NativeServerShellTransport {
+    let invoke: @MainActor (String, [Any?]) async throws -> CodingAIJSON
+    let send: @MainActor (String, [Any?]) -> Void
+    let subscribe: @MainActor (String, @escaping ([Any]) -> Void) -> EngineSubscription
+
+    static let live = Self(invoke: { channel, args in
+        CodingAIJSON(try await EngineBridge.shared.invoke(channel, args))
+    }, send: { channel, args in
+        EngineBridge.shared.send(channel, args)
+    }, subscribe: { channel, receive in
+        EngineBridge.shared.on(channel, receive)
+    })
+}
+
+/// Setup shells have no NativeTerminalSession host. Keep their plain-text paste
+/// working while sharing the same keyboard gate and terminal protocol handling.
+@MainActor
+final class NativeServerShellTerminal: DeckTerminalView {
+    override func paste(_ sender: Any) {
+        guard acceptsUserInput else { return }
+        paste(from: .general)
+    }
+
+    @discardableResult
+    func paste(from pasteboard: NSPasteboard) -> Bool {
+        guard acceptsUserInput, let text = pasteboard.string(forType: .string) else { return false }
+        sendExplicitText(TerminalText.pasteData(text, bracketed: getTerminal().bracketedPasteMode))
+        return true
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard inputActive, !frozen, let window, window.isKeyWindow,
+              window.attachedSheet == nil, NSApp.modalWindow == nil,
+              !isHiddenOrHasHiddenAncestor else { return false }
+        guard sender.draggingPasteboard.string(forType: .string) != nil,
+              window.makeFirstResponder(self) else { return false }
+        return paste(from: sender.draggingPasteboard)
+    }
+}
+
 /// A shell on one server (`servers:shell:*`), drawn by SwiftTerm.
 @MainActor
 @Observable
 final class NativeServerShell {
     @ObservationIgnored let serverId: String
-    @ObservationIgnored let view: TerminalView
+    @ObservationIgnored let view: DeckTerminalView
+    @ObservationIgnored let container: DeckTerminalContainer
     @ObservationIgnored private(set) var shellId: String?
     private(set) var refused: String?
     @ObservationIgnored var onOpened: ((String) -> Void)?
@@ -289,17 +333,21 @@ final class NativeServerShell {
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var subscriptions: [EngineSubscription] = []
     @ObservationIgnored private let proxy = NativeServerShellDelegate()
+    @ObservationIgnored private let transport: NativeServerShellTransport
 
-    init(serverId: String) {
+    init(serverId: String, transport: NativeServerShellTransport = .live) {
         self.serverId = serverId
-        view = TerminalView(frame: CGRect(x: 0, y: 0, width: 720, height: 280))
+        self.transport = transport
+        view = NativeServerShellTerminal(frame: CGRect(x: 0, y: 0, width: 720, height: 280),
+                                         font: .monospacedSystemFont(ofSize: 12, weight: .regular))
+        container = DeckTerminalContainer(terminal: view)
+        container.ground = .textBackgroundColor
         view.nativeBackgroundColor = .textBackgroundColor
         view.nativeForegroundColor = .textColor
-        view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         proxy.owner = self
-        view.terminalDelegate = proxy
+        view.eventDelegate = proxy
         subscriptions = [
-            EngineBridge.shared.on("servers:shell:output") { [weak self] args in
+            transport.subscribe("servers:shell:output") { [weak self] args in
                 guard let self, let chunk = CodingAISetupReply.shellOutput(CodingAIJSON(args.first)) else { return }
                 if let id = self.shellId {
                     if chunk.shellId == id { self.view.feed(text: chunk.data) }
@@ -308,11 +356,12 @@ final class NativeServerShell {
                     self.held.append(chunk)
                 }
             },
-            EngineBridge.shared.on("servers:shell:closed") { [weak self] args in
+            transport.subscribe("servers:shell:closed") { [weak self] args in
                 guard let self, let chunk = CodingAISetupReply.shellOutput(CodingAIJSON(args.first)),
                       let id = self.shellId, chunk.shellId == id else { return }
                 self.view.feed(text: "\r\n\r\n\u{1b}[2m[This terminal ended.]\u{1b}[0m\r\n")
                 self.shellId = nil
+                self.view.freeze(true)
                 self.onEnded?()
             },
         ]
@@ -324,7 +373,7 @@ final class NativeServerShell {
         let rows = max(terminal.rows, 10)
         Task {
             do {
-                let raw = CodingAIJSON(try await EngineBridge.shared.invoke("servers:shell:open", [serverId, cols, rows]))
+                let raw = try await transport.invoke("servers:shell:open", [serverId, cols, rows])
                 settled = true
                 guard let id = CodingAISetupReply.shellId(raw) else {
                     held = []
@@ -332,7 +381,7 @@ final class NativeServerShell {
                     return
                 }
                 if closed {
-                    _ = try? await EngineBridge.shared.invoke("servers:shell:close", [id])
+                    _ = try? await transport.invoke("servers:shell:close", [id])
                     return
                 }
                 shellId = id
@@ -343,7 +392,9 @@ final class NativeServerShell {
                 let missed = held.filter { $0.shellId == id }.map(\.data).joined()
                 held = []
                 if !missed.isEmpty { view.feed(text: missed) }
-                view.window?.makeFirstResponder(view)
+                // Opening can finish after its cached server page was hidden. The
+                // slot keeps that completion from taking another session's keyboard.
+                DeckTerminalSlot.requestFocus(for: view)
             } catch {
                 settled = true
                 held = []
@@ -354,22 +405,23 @@ final class NativeServerShell {
 
     func close() {
         closed = true
+        view.freeze(true)
         subscriptions.forEach { $0.cancel() }
         subscriptions = []
         if let id = shellId {
             shellId = nil
-            Task { _ = try? await EngineBridge.shared.invoke("servers:shell:close", [id]) }
+            Task { _ = try? await transport.invoke("servers:shell:close", [id]) }
         }
     }
 
     fileprivate func send(_ data: ArraySlice<UInt8>) {
         guard let id = shellId else { return }
-        EngineBridge.shared.send("servers:shell:write", [id, String(decoding: data, as: UTF8.self)])
+        transport.send("servers:shell:write", [id, String(decoding: data, as: UTF8.self)])
     }
 
     fileprivate func resized(cols: Int, rows: Int) {
         guard let id = shellId, cols > 0, rows > 0 else { return }
-        Task { _ = try? await EngineBridge.shared.invoke("servers:shell:resize", [id, cols, rows]) }
+        Task { _ = try? await transport.invoke("servers:shell:resize", [id, cols, rows]) }
     }
 
     fileprivate func open(link: String) {
@@ -409,8 +461,19 @@ private final class NativeServerShellDelegate: TerminalViewDelegate {
 }
 
 struct NativeServerShellView: NSViewRepresentable {
+    @Environment(\.nativeScreenActive) private var onShow
     let shell: NativeServerShell
 
-    func makeNSView(context: Context) -> TerminalView { shell.view }
-    func updateNSView(_ view: TerminalView, context: Context) {}
+    func makeNSView(context: Context) -> DeckTerminalSlot {
+        DeckTerminalSlot(container: shell.container, active: onShow)
+    }
+
+    func updateNSView(_ view: DeckTerminalSlot, context: Context) {
+        view.show(shell.container, active: onShow)
+    }
+
+    static func dismantleNSView(_ view: DeckTerminalSlot, coordinator: ()) {
+        // A flow keeps running when its page leaves. Only release its keyboard.
+        view.setActive(false)
+    }
 }

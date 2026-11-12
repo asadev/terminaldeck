@@ -18,29 +18,29 @@ struct NativeToolUseRestrictionsEditor: View {
             Text("Other tools still follow existing access. This cannot grant a missing tool, folder or permission. External keys and Hoot keep their own access. It does not limit Bash or files outside Deck's tool door.").font(.caption).foregroundStyle(.secondary)
             if let invalid = ToolUseRestrictions.problem(value) {
                 Text(invalid).font(.caption).foregroundStyle(DeckTokens.bad)
-                Button("Clear invalid rules (owner repair)") { value = nil; problem = nil }.disabled(busy)
+                NativeSessionButton("Clear invalid rules (owner repair)") { value = nil; problem = nil }.disabled(busy)
             } else {
                 if policy?.rules.isEmpty != false { Text("No extra Deck tool rules.").font(.caption).foregroundStyle(.secondary) }
                 ForEach(policy?.rules ?? [], id: \.tool) { rule in
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(rule.service + " · " + rule.tool).font(.callout.bold()); Spacer(); Button("Remove restriction") { remove(rule.tool) }.disabled(busy) }
+                        HStack { Text(rule.service + " · " + rule.tool).font(.callout.bold()); Spacer(); NativeSessionButton("Remove restriction") { remove(rule.tool) }.disabled(busy) }
                         if rule.cases.isEmpty { Text("Blocked for this agent.").font(.caption).foregroundStyle(DeckTokens.bad) }
                         ForEach(Array(rule.cases.enumerated()), id: \.offset) { index, item in
                             HStack(alignment: .top) {
                                 Text("Only this complete call: " + item["arguments"].compact).font(.system(.caption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                 Spacer()
-                                Button("Remove case") { removeCase(rule.tool, index) }.disabled(busy)
+                                NativeSessionButton("Remove case") { removeCase(rule.tool, index) }.disabled(busy)
                             }
                         }
                     }.padding(.vertical, 4)
                 }
-                TextField("Canonical tool, e.g. tasks.comment", text: $tool).textFieldStyle(.roundedBorder).disabled(busy)
+                NativeSessionTextField("Canonical tool, e.g. tasks.comment", text: $tool).textFieldStyle(.roundedBorder).disabled(busy)
                 Text("Canonical IDs are checked when saved; aliases and unknown IDs are refused.").font(.caption).foregroundStyle(.secondary)
                 Text("Complete arguments as JSON. Include the action and every field the call will send; extra fields are refused.").font(.caption).foregroundStyle(.secondary)
-                TextEditor(text: $arguments).font(.system(.caption, design: .monospaced)).frame(minHeight: 70, maxHeight: 120).disabled(busy)
+                NativeSessionTextEditor(text: $arguments).font(.system(.caption, design: .monospaced)).frame(minHeight: 70, maxHeight: 120).disabled(busy)
                 HStack {
-                    Button("Allow this exact call") { add(blocked: false) }.disabled(busy || tool.isEmpty)
-                    Button("Block this tool") { add(blocked: true) }.disabled(busy || tool.isEmpty)
+                    NativeSessionButton("Allow this exact call") { add(blocked: false) }.disabled(busy || tool.isEmpty)
+                    NativeSessionButton("Block this tool") { add(blocked: true) }.disabled(busy || tool.isEmpty)
                 }
             }
             if let problem { Text(problem).font(.caption).foregroundStyle(DeckTokens.bad) }

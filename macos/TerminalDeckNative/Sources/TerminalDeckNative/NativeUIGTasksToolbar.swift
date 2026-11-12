@@ -50,7 +50,7 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
     private var tabsRow: some View {
         ScrollView(.horizontal) { HStack(alignment: .bottom, spacing: 18) {
             ForEach(TasksTab.allCases, id: \.self) { destination in
-                Button { if let model { model.selectTab(destination) } else { tab = destination } } label: {
+                NativeSessionButton { if let model { model.selectTab(destination) } else { tab = destination } } label: {
                     VStack(spacing: 5) {
                         Label(destination.label, systemImage: symbol(destination))
                             .font(.callout.weight(tab == destination && model?.activeViewID == nil ? .semibold : .regular))
@@ -66,7 +66,7 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
             if let model {
                 ForEach(model.savedViews) { saved in
                     HStack(spacing: 4) {
-                    Button { model.selectView(saved.id) } label: {
+                    NativeSessionButton { model.selectView(saved.id) } label: {
                         VStack(spacing: 5) {
                             Text(saved.name).font(.callout).lineLimit(1)
                             Capsule().fill(model.activeViewID == saved.id ? Color.accentColor : .clear).frame(height: 2)
@@ -75,37 +75,37 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
                     .accessibilityAddTraits(model.activeViewID == saved.id ? .isSelected : [])
                     let edited = model.activeViewID == saved.id && model.activeViewChanged
                     if edited {
-                        Button("Update view") { model.resaveView(saved.id) }
+                        NativeSessionButton("Update view") { model.resaveView(saved.id) }
                             .buttonStyle(.plain).font(.caption).foregroundStyle(Color.accentColor).padding(.bottom, 6)
                             .help("Keep the filters and columns shown now in \(saved.name)")
                     }
                     Menu {
-                        Button("Update view") { model.resaveView(saved.id) }.disabled(!edited)
-                        Button("Revert to saved") { model.revertView(saved.id) }.disabled(!edited)
+                        NativeSessionButton("Update view") { model.resaveView(saved.id) }.disabled(!edited)
+                        NativeSessionButton("Revert to saved") { model.revertView(saved.id) }.disabled(!edited)
                         Divider()
-                        Button("Rename") { renameID = saved.id; viewName = saved.name; namingView = true }
-                        Button("Delete view", role: .destructive) { model.deleteView(saved.id) }
+                        NativeSessionButton("Rename") { renameID = saved.id; viewName = saved.name; namingView = true }
+                        NativeSessionButton("Delete view", role: .destructive) { model.deleteView(saved.id) }
                     } label: { Image(systemName: "ellipsis").accessibilityLabel("View menu for \(saved.name)") }
                     .menuStyle(.borderlessButton).fixedSize().padding(.bottom, 6)
                     }
                 }
-                Button("+ View") { renameID = nil; viewName = ""; namingView = true }
+                NativeSessionButton("+ View") { renameID = nil; viewName = ""; namingView = true }
                     .buttonStyle(.plain).padding(.bottom, 6)
                     .popover(isPresented: $namingView) {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(renameID == nil ? "Save this view" : "Rename view").font(.headline)
-                            TextField("View name", text: $viewName).onSubmit { saveName(model) }
+                            NativeSessionTextField("View name", text: $viewName).sessionOnSubmit { saveName(model) }
                             HStack {
-                                Button("Cancel") { namingView = false }
+                                NativeSessionButton("Cancel") { namingView = false }
                                 Spacer()
-                                Button("Save") { saveName(model) }.disabled(viewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                NativeSessionButton("Save") { saveName(model) }.disabled(viewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
                         }.padding(16).frame(width: 280)
                     }
             }
             Spacer(minLength: 8)
             countLine.padding(.bottom, 6)
-            Button { trashOpen = true } label: {
+            NativeSessionButton { trashOpen = true } label: {
                 Label(trashCount == 0 ? "Trash" : "Trash · \(trashCount)", systemImage: "trash")
                     .font(.callout).foregroundStyle(.secondary)
             }
@@ -120,7 +120,7 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
 
     private var trashControls: some View {
         HStack(spacing: 10) {
-            Button { trashOpen = false } label: { Label("Back to tasks", systemImage: "chevron.left") }
+            NativeSessionButton { trashOpen = false } label: { Label("Back to tasks", systemImage: "chevron.left") }
                 .buttonStyle(.bordered)
             Text("Trash · \(trashCount)").font(.callout).foregroundStyle(.secondary)
         }
@@ -170,10 +170,10 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
                 }.pickerStyle(.inline)
             } label: { Label("Sort: \(sort.label)", systemImage: "arrow.up.arrow.down") }
             .fixedSize()
-            Button { columnsOpen.toggle() } label: { Label("Columns", systemImage: "rectangle.split.3x1") }
+            NativeSessionButton { columnsOpen.toggle() } label: { Label("Columns", systemImage: "rectangle.split.3x1") }
                 .fixedSize().popover(isPresented: $columnsOpen) { columnsMenu() }
         }
-        Button { filtersOpen.toggle() } label: {
+        NativeSessionButton { filtersOpen.toggle() } label: {
             Label(filterCount == 0 ? "Filter" : "Filter · \(filterCount)", systemImage: "line.3.horizontal.decrease")
         }
         .popover(isPresented: $filtersOpen, arrowEdge: .bottom, content: filters)
@@ -192,7 +192,7 @@ struct NativeUIGTasksToolbar<Filters: View, ColumnsMenu: View>: View {
     }
 
     private var searchField: some View {
-        TextField("Search tasks", text: $search)
+        NativeSessionTextField("Search tasks", text: $search)
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 160, maxWidth: 240)
             .accessibilityLabel("Search tasks")

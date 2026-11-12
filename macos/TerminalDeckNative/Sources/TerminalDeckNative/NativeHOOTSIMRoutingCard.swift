@@ -71,7 +71,7 @@ struct NativeHOOTSIMRoutingCard: View {
                     Text(settledLine).font(.callout).lineLimit(2)
                     Spacer(minLength: 8)
                     if let task = route["taskId"].string {
-                        Button("Open task") { if !fixtureMode { AppModel.shared.select("tasks"); TasksStore.shared.openTask(task) } }.buttonStyle(.link)
+                        NativeSessionButton("Open task") { if !fixtureMode { AppModel.shared.select("tasks"); TasksStore.shared.openTask(task) } }.buttonStyle(.link)
                     }
                 }.foregroundStyle(.secondary)
             }
@@ -80,10 +80,10 @@ struct NativeHOOTSIMRoutingCard: View {
         .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5) }
         .popover(isPresented: $choosing) {
             VStack(alignment: .leading, spacing: 8) {
-                TextField("Find an agent or running session", text: $search).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Find an agent or running session", text: $search).textFieldStyle(.roundedBorder)
                 ScrollView {
                     ForEach(choices.filter { [.agent, .session].contains($0.kind) && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }) { choice in
-                        Button {
+                        NativeSessionButton {
                             choosing = false
                             answer("other", .object([.init("kind", .string(choice.kind.rawValue)), .init("id", .string(choice.id)), .init("projectId", .string(choice.group))]))
                         } label: {
@@ -91,7 +91,7 @@ struct NativeHOOTSIMRoutingCard: View {
                                 .padding(8).frame(maxWidth: .infinity).contentShape(.rect)
                         }.buttonStyle(.plain)
                     }
-                    Button("Make a task only") {
+                    NativeSessionButton("Make a task only") {
                         choosing = false
                         answer("other", .object([.init("kind", .string("task")), .init("id", .string("task-only")), .init("projectId", target["projectId"])]))
                     }.buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
@@ -115,7 +115,7 @@ struct NativeHOOTSIMRoutingCard: View {
                 }
             }
             Spacer(minLength: 8)
-            Button("Undo") { answer("dismiss", .null) }.buttonStyle(.bordered).controlSize(.regular).buttonBorderShape(.capsule)
+            NativeSessionButton("Undo") { answer("dismiss", .null) }.buttonStyle(.bordered).controlSize(.regular).buttonBorderShape(.capsule)
                 .help("Stop this before it is sent. Nothing will be sent.")
         }
     }
@@ -129,9 +129,9 @@ struct NativeHOOTSIMRoutingCard: View {
     }
     private var actions: some View {
         HStack(spacing: 8) {
-            Button("Someone else…") { choosing = true }.buttonStyle(.bordered)
-            Button("Not now") { answer("dismiss", .null) }.buttonStyle(.bordered)
-            Button(target["kind"].string == "task" ? "Create task" : "Send to \(name)") { answer("approve", .null) }.buttonStyle(.borderedProminent)
+            NativeSessionButton("Someone else…") { choosing = true }.buttonStyle(.bordered)
+            NativeSessionButton("Not now") { answer("dismiss", .null) }.buttonStyle(.bordered)
+            NativeSessionButton(target["kind"].string == "task" ? "Create task" : "Send to \(name)") { answer("approve", .null) }.buttonStyle(.borderedProminent)
         }.controlSize(.regular).buttonBorderShape(.capsule)
     }
     private var settledLine: String {

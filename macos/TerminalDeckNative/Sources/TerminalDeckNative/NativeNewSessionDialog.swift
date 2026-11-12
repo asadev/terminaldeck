@@ -371,16 +371,22 @@ final class NativeNewSessionModel {
         return NewSessionProjects.shortlist(projects, filter: filter)
     }
 
+    /// 10 Nov (Asad: "the pop-up must show exactly the accounts in Settings › Accounts"): the same rows Settings
+    /// lists (one per login, copies folded the same way, nothing preferred) under the same names.
     var loginAccounts: [CodingAIAccount] {
-        CodingAILogins.oneRowPerEmail(snapshot.accounts, signIn: accountSignIns, prefer: chosenProfileId ?? decided?.profileId)
+        CodingAILogins.oneRowPerEmail(snapshot.accounts, signIn: accountSignIns)
     }
+    /// The row an account shows as: itself, or the row Settings folds it under as a copy.
+    func shownLogin(_ id: String?) -> String? { CodingAILogins.shownRow(for: id, accounts: snapshot.accounts, signIn: accountSignIns) }
+    func loginLabel(_ account: CodingAIAccount) -> String { CodingAIAccountLabels.rowLabel(account, accountSignIns[account.id]) }
 
     func chooseLogin(_ id: String) {
         let previous = chosenAgent?.provider ?? decided?.provider
         chosenProfileId = id.isEmpty ? nil : id
-        // A personal account choice cannot be ignored by the named-agent launch
-        // route, which always owns its account. Show the plain-session choice.
-        if !id.isEmpty { chosenAgentID = nil }
+        // 10 Nov: the picked account goes with the chosen agent (session:start-agent carries it). Only an account of
+        // another AI leaves the agent, which cannot run on it.
+        if !id.isEmpty, let agent = chosenAgent, let account = snapshot.accounts.first(where: { $0.id == id }),
+           account.provider != nil, account.provider != agent.provider { chosenAgentID = nil }
         if let account = snapshot.accounts.first(where: { $0.id == id }), let provider = account.provider,
            providerRows.contains(where: { $0.id == provider && $0.available }) {
             if previous != provider { chosenModelId = nil }
@@ -737,7 +743,8 @@ final class NativeNewSessionModel {
             let raw: Any
             if let agent = chosenAgent {
                 // As that agent: its seat, memory, AI and account (the engine reads its saved record).
-                raw = try await effects.invoke("session:start-agent", [agent.id, identity, request.cwd, asChat, permission as Any? ?? NSNull()])
+                raw = try await effects.invoke("session:start-agent", [agent.id, identity, request.cwd, asChat, permission as Any? ?? NSNull(),
+                                                                       chosenProfileId as Any? ?? NSNull()])
             } else {
                 raw = try await effects.invoke("session:create", [input])
             }
@@ -1157,14 +1164,13 @@ struct NativeNewSessionDialog: View {
                 AppModel.shared.requestSettings()
                 AppModel.shared.selectSettingsSection("agents")
             }.buttonStyle(.link)
-            Picker("Login", selection: Binding(get: { model.decided?.profileId ?? "" },
+            Picker("Login", selection: Binding(get: { model.shownLogin(model.chosenProfileId ?? model.decided?.profileId) ?? "" },
                                                set: { model.chooseLogin($0) })) {
-                if model.decided?.profileId == nil {
+                if model.shownLogin(model.chosenProfileId ?? model.decided?.profileId) == nil {
                     Text(model.profileNotice != nil ? "Not applicable" : "The agent’s own login").tag("")
                 }
                 ForEach(model.loginAccounts) { account in
-                    Text(CodingAIAccountLabels.profileLoginLabel(account, model.accountSignIns[account.id]))
-                        .tag(account.id)
+                    Text(model.loginLabel(account)).tag(account.id)
                 }
             }
             .labelsHidden()

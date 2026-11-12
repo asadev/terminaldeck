@@ -223,13 +223,13 @@ struct NativeAccountSignInSheet: View {
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     if flow.state == "needs-code" {
                         HStack(spacing: 6) {
-                            SecureField("Code from the sign-in page", text: $model.code)
+                            NativeSessionSecureField("Code from the sign-in page", text: $model.code)
                                 .textFieldStyle(.roundedBorder)
-                                .onSubmit { model.submitCode() }
-                            Button("Paste") {
+                                .sessionOnSubmit { model.submitCode() }
+                            NativeSessionButton("Paste") {
                                 if let text = NSPasteboard.general.string(forType: .string) { model.code = text.trimmingCharacters(in: .whitespacesAndNewlines) }
                             }
-                            Button("Continue") { model.submitCode() }.buttonStyle(.borderedProminent).disabled(model.code.isEmpty)
+                            NativeSessionButton("Continue") { model.submitCode() }.buttonStyle(.borderedProminent).disabled(model.code.isEmpty)
                         }
                     }
                 }
@@ -237,11 +237,11 @@ struct NativeAccountSignInSheet: View {
                 HStack {
                     Spacer()
                     switch flow.state {
-                    case "done": Button("Done") { model.close() }.keyboardShortcut(.defaultAction)
+                    case "done": NativeSessionButton("Done") { model.close() }.keyboardShortcut(.defaultAction)
                     case "failed", "cancelled":
-                        Button("Close") { model.close() }
-                        Button("Try Again") { model.tryAgain(accounts) }.buttonStyle(.borderedProminent)
-                    default: Button("Cancel") { model.cancel() }.keyboardShortcut(.cancelAction)
+                        NativeSessionButton("Close") { model.close() }
+                        NativeSessionButton("Try Again") { model.tryAgain(accounts) }.buttonStyle(.borderedProminent)
+                    default: NativeSessionButton("Cancel") { model.cancel() }.keyboardShortcut(.cancelAction)
                     }
                 }
             }

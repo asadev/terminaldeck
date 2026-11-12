@@ -33,7 +33,7 @@ struct InlineFile {
 }
 
 /// The rich text, display or editing.
-struct TaskRichText: NSViewRepresentable {
+struct TaskRichText: View {
     @Binding var text: String
     var editable: Bool
     var font: NSFont = .systemFont(ofSize: 14)
@@ -57,57 +57,46 @@ struct TaskRichText: NSViewRepresentable {
     /// Set to insert something at the caret (a picked "@Name ", a file); cleared after.
     @Binding var insertion: TaskTextInsertion?
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> NSTextView {
-        let view = RichTextView()
-        view.coordinator = context.coordinator
-        view.delegate = context.coordinator
-        view.isRichText = false
-        view.importsGraphics = false
-        view.allowsUndo = true
-        view.drawsBackground = false
-        view.textContainerInset = .zero
-        view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.widthTracksTextView = true
-        view.isVerticallyResizable = true
-        view.isHorizontallyResizable = false
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        context.coordinator.render(view, force: true)
-        if autoFocus {
-            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
-        }
-        return view
-    }
-
-    func updateNSView(_ view: NSTextView, context: Context) {
-        context.coordinator.parent = self
-        (view as? RichTextView)?.fileDoor = context.environment.taskFileDoor
-        view.isEditable = editable
-        view.isSelectable = true
-        context.coordinator.render(view, force: false)
-        if let insertion {
-            context.coordinator.insert(insertion, into: view)
-            DispatchQueue.main.async { self.insertion = nil }
-        }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? 400
-        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let used = layout.usedRect(for: container)
-        let line = font.ascender - font.descender + font.leading
-        return CGSize(width: width, height: max(ceil(used.height), ceil(line)))
-    }
+    var body: some View { TaskRichTextOwner(parent: self) }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: TaskRichText
         private var rendered: String?
+        private var rendering = false
+        private var applyingInsertion = false
+        private var wantsFocus: Bool
+        private var appliedInsertion: TaskTextInsertion?
 
-        init(_ parent: TaskRichText) { self.parent = parent }
+        init(_ parent: TaskRichText) {
+            self.parent = parent
+            wantsFocus = parent.editable && parent.autoFocus
+        }
+
+        func update(_ parent: TaskRichText) {
+            if parent.editable && !self.parent.editable && parent.autoFocus { wantsFocus = true }
+            if !parent.editable || !parent.autoFocus { wantsFocus = false }
+            if parent.insertion == nil { appliedInsertion = nil }
+            self.parent = parent
+        }
+
+        func focusIfNeeded(_ view: RichTextView) {
+            if !view.inputRule.acceptsFocus {
+                if parent.editable && parent.autoFocus { wantsFocus = true }
+                return
+            }
+            guard wantsFocus, parent.autoFocus, parent.editable, view.inputRule.acceptsFocus,
+                  let window = view.window, window.isKeyWindow, window.attachedSheet == nil,
+                  NSApp.modalWindow == nil || NSApp.modalWindow === window else { return }
+            if window.firstResponder === view { wantsFocus = false; return }
+            if let current = window.firstResponder as? NSView, current.window === window,
+               !current.isHiddenOrHasHiddenAncestor, NativeKeyboardFocus.isTyping(current) {
+                let hidden = nativeSessionInputRule(for: current).map { !$0.acceptsFocus } ?? false
+                let staleTerminal = (current as? DeckTerminalView).map { !$0.inputActive || $0.frozen } ?? false
+                if !hidden && !staleTerminal { return }
+            }
+            if window.makeFirstResponder(view) { wantsFocus = false }
+        }
 
         /// The attributed form of the storage text.
         func attributed(_ storage: String) -> NSAttributedString {
@@ -208,33 +197,52 @@ struct TaskRichText: NSViewRepresentable {
             }
             rendered = key
             let selection = view.selectedRange()
-            view.textStorage?.setAttributedString(attributed(parent.text))
-            view.typingAttributes = [.font: parent.font, .foregroundColor: parent.color]
-            if parent.editable { view.setSelectedRange(NSRange(location: min(selection.location, view.string.utf16.count), length: 0)) }
+            guard let view = view as? RichTextView else { return }
+            rendering = true
+            defer { rendering = false }
+            view.discardComposition()
+            view.inputRule.withExplicitUpdate {
+                view.textStorage?.setAttributedString(attributed(parent.text))
+                view.typingAttributes = [.font: parent.font, .foregroundColor: parent.color]
+                if parent.editable { view.setSelectedRange(NSRange(location: min(selection.location, view.string.utf16.count), length: 0)) }
+            }
         }
 
         func insert(_ insertion: TaskTextInsertion, into view: NSTextView) {
-            switch insertion {
-            case .mention(let start, let name):
-                let caret = view.selectedRange().location
-                let range = NSRange(location: start, length: max(0, caret - start))
-                view.insertText("@\(name) ", replacementRange: range)
-            case .file(let id):
-                view.textStorage?.insert(chip(id), at: view.selectedRange().location)
+            guard let view = view as? RichTextView, appliedInsertion != insertion else { return }
+            appliedInsertion = insertion
+            view.discardComposition()
+            applyingInsertion = true
+            defer { applyingInsertion = false }
+            view.inputRule.withExplicitUpdate {
+                let length = view.string.utf16.count
+                let caret = min(view.selectedRange().location, length)
+                switch insertion {
+                case .mention(let start, let name):
+                    let start = min(max(0, start), caret)
+                    let value = NSAttributedString(string: "@\(name) ", attributes: [.font: parent.font, .foregroundColor: parent.color])
+                    view.textStorage?.replaceCharacters(in: NSRange(location: start, length: caret - start), with: value)
+                    view.setSelectedRange(NSRange(location: start + value.length, length: 0))
+                case .file(let id):
+                    view.textStorage?.insert(chip(id), at: caret)
+                    view.setSelectedRange(NSRange(location: caret + 1, length: 0))
+                }
                 textDidChange(Notification(name: NSText.didChangeNotification, object: view))
             }
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let view = notification.object as? NSTextView else { return }
+            guard !rendering, let view = notification.object as? RichTextView,
+                  applyingInsertion || view.allowsUserInput, !view.hasMarkedText() else { return }
             let value = serialise(view)
             rendered = "\(value)|\(parent.editable)|\(parent.strike)|\(parent.mentionNames.joined(separator: ","))"
             parent.text = value
-            noteCaret(view)
+            if view.allowsUserInput { noteCaret(view) }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let view = notification.object as? NSTextView, parent.editable else { return }
+            guard !rendering, let view = notification.object as? RichTextView,
+                  view.allowsUserInput, !view.hasMarkedText(), parent.editable else { return }
             noteCaret(view)
         }
 
@@ -252,6 +260,8 @@ struct TaskRichText: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard let view = textView as? RichTextView, view.allowsUserInput else { return true }
+            guard !view.hasMarkedText() else { return false }
             if let key = Self.keys[selector], parent.onMentionKey?(key) == true { return true }
             if selector == #selector(NSResponder.cancelOperation(_:)), let escape = parent.onEscape {
                 escape()
@@ -272,6 +282,7 @@ struct TaskRichText: NSViewRepresentable {
         ]
 
         func textView(_ textView: NSTextView, clickedOn cell: any NSTextAttachmentCellProtocol, in cellFrame: NSRect, at charIndex: Int) {
+            guard let view = textView as? RichTextView, view.allowsPointerInput else { return }
             if let id = textView.textStorage?.attribute(.crmFileId, at: charIndex, effectiveRange: nil) as? String {
                 parent.onClickFile?(id)
             }
@@ -279,8 +290,40 @@ struct TaskRichText: NSViewRepresentable {
     }
 
     /// The text view, which tells a click on plain text while not editing.
-    final class RichTextView: NSTextView {
+    final class RichTextView: NativeSessionTextView {
         weak var coordinator: Coordinator?
+        private var focusObservers: [NSObjectProtocol] = []
+        var editingAllowed = false
+        override var allowsUserInput: Bool { editingAllowed && super.allowsUserInput }
+        var allowsPointerInput: Bool {
+            inputRule.acceptsFocus && !isHiddenOrHasHiddenAncestor && window?.isKeyWindow == true
+                && window?.attachedSheet == nil && (NSApp.modalWindow == nil || NSApp.modalWindow === window)
+        }
+
+        override func updateInput(active: Bool, enabled: Bool) {
+            super.updateInput(active: active, enabled: enabled)
+            isEditable = editingAllowed && inputRule.acceptsFocus
+        }
+
+        func observeFocusEvents() {
+            guard focusObservers.isEmpty else { return }
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didEndSheetNotification,
+                         NSApplication.didBecomeActiveNotification] {
+                focusObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let notifiedWindow = (note.object as? NSWindow).map(ObjectIdentifier.init)
+                    let notificationName = note.name
+                    MainActor.assumeIsolated {
+                        guard let self, let window = self.window,
+                              notifiedWindow == ObjectIdentifier(window) || notificationName == NSApplication.didBecomeActiveNotification else { return }
+                        self.coordinator?.focusIfNeeded(self)
+                    }
+                })
+            }
+        }
+
+        isolated deinit {
+            for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
+        }
         /// Files pasted or dropped here go to the task, not into the text as a path.
         var fileDoor: TaskFileDoor? {
             didSet { if (oldValue == nil) != (fileDoor == nil) { updateDragTypeRegistration() } }
@@ -299,10 +342,11 @@ struct TaskRichText: NSViewRepresentable {
         }
 
         private func takesFiles(_ sender: NSDraggingInfo) -> Bool {
-            fileDoor != nil && isEditable && Self.hasFiles(on: sender.draggingPasteboard)
+            allowsPointerInput && fileDoor != nil && isEditable && Self.hasFiles(on: sender.draggingPasteboard)
         }
 
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard allowsPointerInput else { return [] }
             let op = super.draggingEntered(sender)
             guard takesFiles(sender) else { return op }
             fileDoor?.hover(true)
@@ -310,6 +354,7 @@ struct TaskRichText: NSViewRepresentable {
         }
 
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard allowsPointerInput else { return [] }
             let op = super.draggingUpdated(sender)
             return takesFiles(sender) ? .copy : op
         }
@@ -320,11 +365,12 @@ struct TaskRichText: NSViewRepresentable {
         }
 
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            takesFiles(sender) ? true : super.prepareForDragOperation(sender)
+            allowsPointerInput && (takesFiles(sender) || super.prepareForDragOperation(sender))
         }
 
         /// A file dropped on the text being written lands where it was dropped (task-text-field.tsx handleDrop).
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            guard allowsPointerInput else { return false }
             guard takesFiles(sender), let door = fileDoor, let urls = Self.files(on: sender.draggingPasteboard), !urls.isEmpty else {
                 return super.performDragOperation(sender)
             }
@@ -338,15 +384,18 @@ struct TaskRichText: NSViewRepresentable {
 
         /// A file or a picture on the clipboard is attached; anything else goes in as plain text.
         override func paste(_ sender: Any?) {
+            guard inputRule.allowsUserInput(in: self) else { return }
             if let fileDoor, let files = Self.files(on: board), !files.isEmpty {
                 fileDoor.attach(files)
                 return
             }
-            pasteAsPlainText(sender)
+            guard allowsUserInput, let text = board.string(forType: .string) else { return }
+            insertText(text, replacementRange: selectedRange())
         }
 
         /// Shown text takes a pasted file too, as the web's popup does with focus anywhere in it.
         override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+            guard inputRule.allowsUserInput(in: self) else { return false }
             if menuItem.action == #selector(paste(_:)), fileDoor != nil, Self.hasFiles(on: board) { return true }
             return super.validateMenuItem(menuItem)
         }
@@ -373,6 +422,7 @@ struct TaskRichText: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
+            guard allowsPointerInput else { return }
             if !isEditable, let coordinator, let click = coordinator.parent.onClickText {
                 let point = convert(event.locationInWindow, from: nil)
                 let index = characterIndexForInsertion(at: point)
@@ -391,6 +441,84 @@ struct TaskRichText: NSViewRepresentable {
     }
 }
 
+
+private struct TaskRichTextOwner: View {
+    @Environment(\.nativeSessionInputScope) private var scope
+    let parent: TaskRichText
+    var body: some View { TaskRichTextHost(parent: parent).id(scope?.identity) }
+}
+
+private struct TaskRichTextHost: NSViewRepresentable {
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeSessionInputScope) private var scope
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.taskFileDoor) private var fileDoor
+    let parent: TaskRichText
+
+    func makeCoordinator() -> TaskRichText.Coordinator { .init(parent) }
+
+    func makeNSView(context: Context) -> TaskRichText.RichTextView {
+        let view = TaskRichText.RichTextView()
+        view.coordinator = context.coordinator
+        view.delegate = context.coordinator
+        view.inputRule.owner = view
+        view.observeFocusEvents()
+        view.isRichText = false
+        view.importsGraphics = false
+        view.allowsUndo = true
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.onWindowAttachment = { [weak view, weak coordinator = context.coordinator] in
+            guard let view else { return }
+            coordinator?.focusIfNeeded(view)
+        }
+        view.onInputAvailabilityChanged = { [weak view, weak coordinator = context.coordinator] in
+            guard let view else { return }
+            coordinator?.focusIfNeeded(view)
+        }
+        updateNSView(view, context: context)
+        DispatchQueue.main.async { [weak view, weak coordinator = context.coordinator] in
+            guard let view else { return }
+            coordinator?.focusIfNeeded(view)
+        }
+        return view
+    }
+
+    func updateNSView(_ view: TaskRichText.RichTextView, context: Context) {
+        context.coordinator.update(parent)
+        view.fileDoor = fileDoor
+        view.editingAllowed = parent.editable
+        view.inputRule.bind(to: scope)
+        view.updateInput(active: scope == nil ? active : true, enabled: enabled)
+        view.isSelectable = true
+        context.coordinator.render(view, force: false)
+        if let insertion = parent.insertion {
+            context.coordinator.insert(insertion, into: view)
+            DispatchQueue.main.async { if parent.insertion == insertion { parent.insertion = nil } }
+        }
+        context.coordinator.focusIfNeeded(view)
+    }
+
+    static func dismantleNSView(_ view: TaskRichText.RichTextView, coordinator: TaskRichText.Coordinator) {
+        view.updateInput(active: false, enabled: false)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TaskRichText.RichTextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? 400
+        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        let line = parent.font.ascender - parent.font.descender + parent.font.leading
+        return CGSize(width: width, height: max(ceil(used.height), ceil(line)))
+    }
+}
+
 enum TaskTextInsertion: Equatable {
     case mention(start: Int, name: String)
     case file(String)
@@ -398,6 +526,9 @@ enum TaskTextInsertion: Equatable {
 
 /// An editor with its "@" list: the rich text, and under it the people who match.
 struct TaskTextEditor: View {
+    @Environment(\.nativeScreenActive) private var screenActive
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @State private var inputRule = NativeSessionInputRule()
     @Binding var text: String
     let team: [CrmPerson]
     var placeholder = ""
@@ -421,7 +552,9 @@ struct TaskTextEditor: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
+        return ZStack(alignment: .topLeading) {
             TaskRichText(text: $text, editable: true, font: font, placeholder: placeholder, fileOf: fileOf,
                          onMentionTrigger: { t in
                              trigger = t.map { ($0.0, $0.1) }
@@ -444,7 +577,7 @@ struct TaskTextEditor: View {
                     Text("No one matches “\(trigger?.query ?? "")”.").font(.caption).foregroundStyle(.secondary).padding(10)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, p in
-                    Button { pick(p) } label: {
+                    NativeSessionButton { pick(p) } label: {
                         HStack(spacing: 8) {
                             PersonAvatar(person: p)
                             Text(p.name).lineLimit(1)
@@ -455,7 +588,7 @@ struct TaskTextEditor: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .onHover { if $0 { active = i } }
+                    .onHover { if $0 && inputRule.acceptsFocus { active = i } }
                 }
             }
             .padding(.vertical, 4)
@@ -465,7 +598,7 @@ struct TaskTextEditor: View {
     }
 
     private func handleKey(_ key: String) -> Bool {
-        guard trigger != nil else { return false }
+        guard inputRule.acceptsFocus, trigger != nil else { return false }
         switch key {
         case "down":
             if !results.isEmpty { active = (active + 1) % results.count }
@@ -487,7 +620,7 @@ struct TaskTextEditor: View {
     }
 
     private func pick(_ p: CrmPerson) {
-        guard let t = trigger else { return }
+        guard inputRule.acceptsFocus, let t = trigger else { return }
         insertion = .mention(start: t.start, name: p.name)
         trigger = nil
         onMention(p)

@@ -52,6 +52,12 @@
 	<string>A Terminal Deck session controls another app only when you approve that action.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Terminal Deck uses the microphone when you start voice input, record a phone screen with "Talk while recording" on, or allow a website in its browser to use it.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>A Terminal Deck session opens files in your Desktop folder when you or its AI work there.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>A Terminal Deck session opens files in your Documents folder when you or its AI work there.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>A Terminal Deck session opens files in your Downloads folder when you or its AI work there.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Terminal Deck turns what you say while recording a phone screen into text on this Mac, so your words can be sent with each screen.</string>
 	<key>NSPrincipalClass</key>

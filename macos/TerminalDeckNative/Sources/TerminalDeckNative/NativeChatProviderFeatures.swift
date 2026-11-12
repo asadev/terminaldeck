@@ -31,7 +31,7 @@ struct NativeChatProviderFeaturesView: View {
     @State private var claudePolicy = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Provider features").font(.headline); Spacer(); Button("Done") { dismiss() } }
+            HStack { Text("Provider features").font(.headline); Spacer(); NativeSessionButton("Done") { dismiss() } }
             Text(capabilities["provider"].string?.capitalized ?? "Loading provider…").font(.subheadline)
             Text(capabilities["reason"].string ?? "Checking this session's helper…").font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
@@ -40,42 +40,42 @@ struct NativeChatProviderFeaturesView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     GroupBox("Saved provider conversations") {
                         VStack(alignment: .leading) {
-                            HStack { TextField("Search conversations", text: $query); Button("Search") { run("catalogue/list", fields: [.init("query", .string(query))]) } }
+                            HStack { NativeSessionTextField("Search conversations", text: $query); NativeSessionButton("Search") { run("catalogue/list", fields: [.init("query", .string(query))]) } }
                             ForEach(Array(conversations.enumerated()), id: \.offset) { _, row in
                                 HStack(alignment: .top) {
                                     Text(row["preview"].string ?? row["title"].string ?? row["conversationId"].string ?? "Conversation").lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
-                                    Button("Preview") { preview(row) }
-                                    if sessionID != "hoot" { Button("Resume") { resume(row) } }
+                                    NativeSessionButton("Preview") { preview(row) }
+                                    if sessionID != "hoot" { NativeSessionButton("Resume") { resume(row) } }
                                 }.font(.caption)
                             }
-                            if let next = catalogueCursor { Button("Next page") { run("catalogue/list", fields: [.init("query", .string(query)), .init("cursor", .string(next))]) } }
+                            if let next = catalogueCursor { NativeSessionButton("Next page") { run("catalogue/list", fields: [.init("query", .string(query)), .init("cursor", .string(next))]) } }
                         }.padding(4)
                     }
-                    HStack { Button("Enabled skills") { run("skills/list") }; Button("Instruction sources") { run("instructions/read") } }
+                    HStack { NativeSessionButton("Enabled skills") { run("skills/list") }; NativeSessionButton("Instruction sources") { run("instructions/read") } }
                     providerBoundaries
                     GroupBox("Provider goal") {
                         VStack {
-                            TextField("Objective", text: $objective, axis: .vertical).lineLimit(2...4)
-                            HStack { TextField("Token budget (optional)", text: $budget); Button("Save") {
+                            NativeSessionTextField("Objective", text: $objective, axis: .vertical).lineLimit(2...4)
+                            HStack { NativeSessionTextField("Token budget (optional)", text: $budget); NativeSessionButton("Save") {
                                 var fields = [NativeRPCValue.Field("objective", .string(objective))]
                                 if !budget.isEmpty { guard let number = Double(budget), number.isFinite, number > 0, number.rounded() == number else { error = "Enter a positive whole token budget."; return }; fields.append(.init("tokenBudget", .number(number))) }
                                 run("goals/set", fields: fields)
                             }.disabled(objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                            HStack { Button("Read") { run("goals/read") }; Button("Pause") { run("goals/pause") }; Button("Resume") { run("goals/resume") }; Button("Clear") { run("goals/clear") }; Spacer() }
+                            HStack { NativeSessionButton("Read") { run("goals/read") }; NativeSessionButton("Pause") { run("goals/pause") }; NativeSessionButton("Resume") { run("goals/resume") }; NativeSessionButton("Clear") { run("goals/clear") }; Spacer() }
                         }.padding(4)
                     }
                     GroupBox("Side question") {
                         VStack(alignment: .leading) {
                             Text("Separate, temporary, read-only provider fork. Its transcript is removed on close.").font(.caption).foregroundStyle(.secondary)
-                            HStack { Button("Open") { run("side/open") }; Button("Read reply") { run("side/read") }; Button("Close") { run("side/close") } }
-                            HStack { TextField("Question", text: $question, axis: .vertical); Button("Send") { run("side/send", fields: [.init("text", .string(question))]) } }.disabled(question.isEmpty)
+                            HStack { NativeSessionButton("Open") { run("side/open") }; NativeSessionButton("Read reply") { run("side/read") }; NativeSessionButton("Close") { run("side/close") } }
+                            HStack { NativeSessionTextField("Question", text: $question, axis: .vertical); NativeSessionButton("Send") { run("side/send", fields: [.init("text", .string(question))]) } }.disabled(question.isEmpty)
                         }.padding(4)
                     }
                     GroupBox("Review") {
                         VStack {
                             Picker("Scope", selection: $target) { Text("Uncommitted").tag("uncommitted"); Text("Base branch").tag("baseBranch"); Text("Commit").tag("commit"); Text("Custom").tag("custom") }.pickerStyle(.segmented)
-                            if target != "uncommitted" { TextField(target == "baseBranch" ? "Base branch" : target == "commit" ? "Commit hash" : "Review instructions", text: $reference) }
-                            Button("Start provider review") { run("review/start", fields: [.init("target", .string(target)), .init(target == "baseBranch" ? "branch" : target == "commit" ? "sha" : "instructions", .string(reference))]) }
+                            if target != "uncommitted" { NativeSessionTextField(target == "baseBranch" ? "Base branch" : target == "commit" ? "Commit hash" : "Review instructions", text: $reference) }
+                            NativeSessionButton("Start provider review") { run("review/start", fields: [.init("target", .string(target)), .init(target == "baseBranch" ? "branch" : target == "commit" ? "sha" : "instructions", .string(reference))]) }
                         }.padding(4)
                     }
                     // Provider connections and provider voice live under Connections and Voice in the chat's ⋯ menu (17 Oct 2026).
@@ -97,20 +97,20 @@ struct NativeChatProviderFeaturesView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Recorded thread-owned commands only. Creating, writing, resizing and bringing a terminal to the foreground need a scoped provider transport that is not currently available.").font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button("Read terminal capabilities") { run("terminals/capabilities") }
-                    Button("List owned terminals") { terminal("list") }
-                    Button("Clean thread terminals") { terminal("clean") }
+                    NativeSessionButton("Read terminal capabilities") { run("terminals/capabilities") }
+                    NativeSessionButton("List owned terminals") { terminal("list") }
+                    NativeSessionButton("Clean thread terminals") { terminal("clean") }
                 }
                 ForEach(Array(terminals.enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row["command"].string ?? row["itemId"].string ?? "Owned terminal").font(.callout).textSelection(.enabled)
                         HStack {
-                            Button("Read output") { terminal("read", row: row) }
-                            Button("Stop this terminal") { terminal("stop", row: row) }
+                            NativeSessionButton("Read output") { terminal("read", row: row) }
+                            NativeSessionButton("Stop this terminal") { terminal("stop", row: row) }
                         }
                     }
                 }
-                if let cursor = terminalCursor { Button("Next terminals") { terminal("list", cursor: cursor) } }
+                if let cursor = terminalCursor { NativeSessionButton("Next terminals") { terminal("list", cursor: cursor) } }
             }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -132,11 +132,11 @@ struct NativeChatProviderFeaturesView: View {
         GroupBox("Provider boundaries") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Only provider-reported fields count as confirmed. The app's permissions stay separate. Changes affect the current provider session; saved app choices can apply again after reconnect.").font(.caption).foregroundStyle(.secondary)
-                Button("Read effective provider policy") { run("policy/read") }
+                NativeSessionButton("Read effective provider policy") { run("policy/read") }
                 if capabilities["provider"].string == "codex" {
                     Picker("Sandbox", selection: $policySandbox) { Text("Keep current").tag(""); Text("Read only").tag("read-only"); Text("Workspace write").tag("workspace-write"); Text("Full access").tag("danger-full-access") }
                     Picker("Approval", selection: $policyApproval) { Text("Keep current").tag(""); Text("Untrusted").tag("untrusted"); Text("On request").tag("on-request"); Text("Never ask").tag("never") }
-                    Button("Apply provider boundary change") {
+                    NativeSessionButton("Apply provider boundary change") {
                         var fields: [NativeRPCValue.Field] = []
                         if !policySandbox.isEmpty { fields.append(.init("sandbox", .string(policySandbox))) }
                         if !policyApproval.isEmpty { fields.append(.init("approvalPolicy", .string(policyApproval))) }
@@ -144,7 +144,7 @@ struct NativeChatProviderFeaturesView: View {
                     }.disabled(policySandbox.isEmpty && policyApproval.isEmpty)
                 } else if capabilities["provider"].string == "claude" {
                     Picker("Provider permission mode", selection: $claudePolicy) { Text("Keep current").tag(""); Text("Default").tag("default"); Text("Accept edits").tag("acceptEdits"); Text("Plan").tag("plan"); Text("Bypass permissions").tag("bypassPermissions") }
-                    Button("Apply provider permission mode") { run("policy/change", fields: [.init("mode", .string(claudePolicy))]) }.disabled(claudePolicy.isEmpty)
+                    NativeSessionButton("Apply provider permission mode") { run("policy/change", fields: [.init("mode", .string(claudePolicy))]) }.disabled(claudePolicy.isEmpty)
                 }
             }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -152,19 +152,19 @@ struct NativeChatProviderFeaturesView: View {
     private var childConversations: some View {
         GroupBox("Provider child conversations") {
             VStack(alignment: .leading, spacing: 8) {
-                Button("Read child tasks") { child("list") }
+                NativeSessionButton("Read child tasks") { child("list") }
                 ForEach(Array(children.enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row["title"].string ?? row["name"].string ?? row["description"].string ?? row["id"].string ?? "Child task").font(.callout)
                         Text(row["status"].string ?? "Status not reported").font(.caption).foregroundStyle(.secondary)
                         HStack {
-                            Button("Read conversation") { child("read", task: row["id"].string ?? row["taskId"].string) }
-                            if sessionID != "hoot" { Button("Resume in Chat") { child("resume", task: row["id"].string ?? row["taskId"].string) }.disabled(row["canResume"].bool != true) }
+                            NativeSessionButton("Read conversation") { child("read", task: row["id"].string ?? row["taskId"].string) }
+                            if sessionID != "hoot" { NativeSessionButton("Resume in Chat") { child("resume", task: row["id"].string ?? row["taskId"].string) }.disabled(row["canResume"].bool != true) }
                         }
                     }
                 }
-                if let cursor = childListCursor { Button("Next child tasks") { child("list", cursor: cursor) } }
-                if let cursor = childCursor, let selectedChild { Button("Next child messages") { child("read", task: selectedChild, cursor: cursor) } }
+                if let cursor = childListCursor { NativeSessionButton("Next child tasks") { child("list", cursor: cursor) } }
+                if let cursor = childCursor, let selectedChild { NativeSessionButton("Next child messages") { child("read", task: selectedChild, cursor: cursor) } }
             }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -195,12 +195,12 @@ struct NativeChatProviderFeaturesView: View {
         GroupBox("Conditional file changes") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Uses exact recorded text versions. Finish the turn and background writers before Apply or Reject. Other edits are kept.").font(.caption).foregroundStyle(.secondary)
-                Button("Read recorded changes") { diff("list") }
+                NativeSessionButton("Read recorded changes") { diff("list") }
                 ForEach(Array(diffProposals.enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row["path"].string ?? "Recorded change").font(.callout).textSelection(.enabled)
                         Text(row["state"].string ?? "Versioned proposal").font(.caption).foregroundStyle(.secondary)
-                        HStack { Button("Preview change") { diff("preview", id: row["id"].string) }; Button("Apply") { diff("apply", id: row["id"].string) }.disabled(row["canApply"].bool != true); Button("Reject") { diff("reject", id: row["id"].string) }.disabled(row["canReject"].bool != true) }
+                        HStack { NativeSessionButton("Preview change") { diff("preview", id: row["id"].string) }; NativeSessionButton("Apply") { diff("apply", id: row["id"].string) }.disabled(row["canApply"].bool != true); NativeSessionButton("Reject") { diff("reject", id: row["id"].string) }.disabled(row["canReject"].bool != true) }
                     }
                 }
             }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
@@ -273,14 +273,14 @@ struct NativeChatProviderConnectionsView: View {
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if busy { ProgressView("Waiting for the provider…").controlSize(.small) }
             VStack(alignment: .leading) {
-                HStack { Button("Plugins") { run("connections/plugins") }; Button("Apps") { run("connections/apps") }; Button("Installed plugins") { run("connections/installedPlugins") } }
-                TextField("Exact ID from provider inventory", text: $connectionID)
-                HStack { Button("Enable plugin") { enable(plugin: true, enabled: true) }; Button("Disable plugin") { enable(plugin: true, enabled: false) }; Button("Enable app") { enable(plugin: false, enabled: true) }; Button("Disable app") { enable(plugin: false, enabled: false) } }.disabled(connectionID.isEmpty)
-                HStack { TextField("Marketplace path from plugin inventory", text: $marketplace); TextField("Plugin name", text: $pluginName) }
-                HStack { Button("Read plugin") { plugin("connections/plugin") }; Button("Install plugin") { plugin("connections/installPlugin") }; Button("Uninstall plugin") { run("connections/uninstallPlugin", fields: [.init("id", .string(connectionID))]) }.disabled(connectionID.isEmpty) }
-                TextField("MCP server name", text: $server)
-                HStack { Button("Provider MCP status") { run("mcp/status") }; Button("Connection details") { mcp("mcp/details") }.disabled(server.isEmpty); Button("Provider sign-in") { mcp("mcp/auth") }.disabled(server.isEmpty); Button("Reconnect") { mcp("mcp/reconnect") }.disabled(server.isEmpty) }
-                Button("Reload provider MCP configuration") { mcp("mcp/reconnect", reload: true) }.disabled(server.isEmpty)
+                HStack { NativeSessionButton("Plugins") { run("connections/plugins") }; NativeSessionButton("Apps") { run("connections/apps") }; NativeSessionButton("Installed plugins") { run("connections/installedPlugins") } }
+                NativeSessionTextField("Exact ID from provider inventory", text: $connectionID)
+                HStack { NativeSessionButton("Enable plugin") { enable(plugin: true, enabled: true) }; NativeSessionButton("Disable plugin") { enable(plugin: true, enabled: false) }; NativeSessionButton("Enable app") { enable(plugin: false, enabled: true) }; NativeSessionButton("Disable app") { enable(plugin: false, enabled: false) } }.disabled(connectionID.isEmpty)
+                HStack { NativeSessionTextField("Marketplace path from plugin inventory", text: $marketplace); NativeSessionTextField("Plugin name", text: $pluginName) }
+                HStack { NativeSessionButton("Read plugin") { plugin("connections/plugin") }; NativeSessionButton("Install plugin") { plugin("connections/installPlugin") }; NativeSessionButton("Uninstall plugin") { run("connections/uninstallPlugin", fields: [.init("id", .string(connectionID))]) }.disabled(connectionID.isEmpty) }
+                NativeSessionTextField("MCP server name", text: $server)
+                HStack { NativeSessionButton("Provider MCP status") { run("mcp/status") }; NativeSessionButton("Connection details") { mcp("mcp/details") }.disabled(server.isEmpty); NativeSessionButton("Provider sign-in") { mcp("mcp/auth") }.disabled(server.isEmpty); NativeSessionButton("Reconnect") { mcp("mcp/reconnect") }.disabled(server.isEmpty) }
+                NativeSessionButton("Reload provider MCP configuration") { mcp("mcp/reconnect", reload: true) }.disabled(server.isEmpty)
                 if let address = result["authorizationUrl"].string ?? result["authUrl"].string, let url = URL(string: address), ["https", "http"].contains(url.scheme), url.user == nil, url.password == nil { Link("Continue provider sign-in", destination: url) }
             }.disabled(busy || capabilities.isNullish)
             if !result.isNullish { ScrollView { NativeChatProviderResult(value: result).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 240) }

@@ -14,13 +14,13 @@ struct NativeBrowserCustomSizeBar: View {
     var body: some View {
         HStack(spacing: 6) {
             Text("W").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            TextField("", text: $tab.customWidth)
+            NativeSessionTextField("", text: $tab.customWidth)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .accessibilityLabel("Custom width in pixels")
             Text("x").foregroundStyle(.secondary)
             Text("H").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            TextField("", text: $tab.customHeight)
+            NativeSessionTextField("", text: $tab.customHeight)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .accessibilityLabel("Custom height in pixels")
@@ -78,9 +78,9 @@ struct NativeBrowserHistorySheet: View {
             HStack {
                 Text(BRHistory.title(profileName: profileName)).font(.headline)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                NativeSessionButton("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            TextField("Search history", text: $query)
+            NativeSessionTextField("Search history", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Search history")
             ScrollView {
@@ -99,10 +99,10 @@ struct NativeBrowserHistorySheet: View {
             }
             HStack {
                 if arming {
-                    Button(BRHistory.clearConfirm(searching: searching), role: .destructive) { Task { await clear() } }
-                    Button("Cancel") { arming = false }
+                    NativeSessionButton(BRHistory.clearConfirm(searching: searching), role: .destructive) { Task { await clear() } }
+                    NativeSessionButton("Cancel") { arming = false }
                 } else {
-                    Button(BRHistory.clearLabel(searching: searching)) { arming = true }
+                    NativeSessionButton(BRHistory.clearLabel(searching: searching)) { arming = true }
                         .disabled(visits.isEmpty)
                 }
                 Spacer()
@@ -131,7 +131,7 @@ struct NativeBrowserHistorySheet: View {
             Text(Self.time.string(from: Date(timeIntervalSince1970: entry.visitedAt / 1000)))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Button("Forget") { Task { await forget(entry) } }
+            NativeSessionButton("Forget") { Task { await forget(entry) } }
                 .buttonStyle(.link)
                 .accessibilityLabel("Forget \(entry.label)")
         }

@@ -193,6 +193,59 @@ enum HootStep {
     }
 }
 
+/// Decker, 8 Nov (D1, all four apps): a failed step is always its own card, never inside the fold; a failure must
+/// stand out. A job's steps, in order: folds of the other steps, split by each failed step.
+enum HootStepPart: Identifiable {
+    case fold(index: Int, rows: [HootChatRow])
+    case failed(HootChatRow)
+    var id: String {
+        switch self {
+        case .fold(let index, let rows): return "fold:" + String(index) + ":" + (rows.first?.id ?? "")
+        case .failed(let row): return "failed:" + row.id
+        }
+    }
+    static func parts(_ steps: [HootChatRow]) -> [HootStepPart] {
+        var parts: [HootStepPart] = [], run: [HootChatRow] = []
+        func close() { if !run.isEmpty { parts.append(.fold(index: parts.count, rows: run)); run = [] } }
+        for row in steps {
+            if row.kind == .toolCall, HootFlow.failed(row) { close(); parts.append(.failed(row)) } else { run.append(row) }
+        }
+        close()
+        return parts
+    }
+}
+
+/// The failed step's own card: its plain-words line in the caution colour; it opens to what it was given and said.
+struct HootFailedStepCard: View {
+    let row: HootChatRow
+    @State private var open = false
+    var body: some View {
+        let title = HootStep.title(row, live: false)
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation(.snappy(duration: 0.18)) { open.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                    Text(title).foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                    Text("Failed").foregroundStyle(.orange)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
+                .font(.system(size: 12.5)).contentShape(.rect)
+            }
+            .buttonStyle(.plain).accessibilityLabel(title + ", failed" + (open ? ", expanded" : ", collapsed"))
+            if open {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(row.value["input"].compact).font(.caption.monospaced()).textSelection(.enabled).lineLimit(12)
+                    if row.value.has("output") { NativeChatToolResultContent(output: row.value["output"]).environment(\.nativeChatToolRowID, row.id) }
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(Color.orange.opacity(0.10), in: .rect(cornerRadius: 8))
+        .accessibilityIdentifier("chat.failedStep." + row.id)
+    }
+}
+
 struct HootStepsView: View {
     let rows: [HootChatRow]
     /// Hoot is working on this job now: a live list, row by row.

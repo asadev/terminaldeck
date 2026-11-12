@@ -26,12 +26,12 @@ struct NativeTerminalColours: View {
         let disabled = store.loading
         VStack(alignment: .leading, spacing: 10) {
             NativeSettingRow(label: "Terminal colours", help: TerminalColours.rowHelp(active: active), more: TerminalColours.more) {
-                Button(importing ? "Cancel" : "Paste a scheme") { importing.toggle() }
+                NativeSessionButton(importing ? "Cancel" : "Paste a scheme") { importing.toggle() }
                     .disabled(disabled)
             }
             if importing {
                 VStack(alignment: .leading, spacing: 6) {
-                    TextEditor(text: $pasted)
+                    NativeSessionTextEditor(text: $pasted)
                         .font(.system(.caption, design: .monospaced))
                         .frame(minHeight: 90)
                         .overlay(alignment: .topLeading) {
@@ -47,10 +47,10 @@ struct NativeTerminalColours: View {
                         .accessibilityLabel("Scheme JSON")
                     Text(TerminalColours.pasteHelp).font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Button("Add scheme") { paste(customs: customs, full: full) }
+                        NativeSessionButton("Add scheme") { paste(customs: customs, full: full) }
                             .buttonStyle(.borderedProminent)
                             .disabled(disabled || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button("Cancel") {
+                        NativeSessionButton("Cancel") {
                             importing = false
                             problem = nil
                         }
@@ -70,33 +70,33 @@ struct NativeTerminalColours: View {
             }
             if let active {
                 HStack(spacing: 8) {
-                    Button(editing ? "Done editing" : "Edit colours") {
+                    NativeSessionButton(editing ? "Done editing" : "Edit colours") {
                         if editing { NativeTerminalSettings.shared.preview(nil) }
                         editing.toggle()
                     }
                     .disabled(disabled)
-                    Button("Copy as JSON") { copyJSON(active) }.disabled(disabled)
-                    Button("Duplicate") { duplicate(active, customs: customs) }
+                    NativeSessionButton("Copy as JSON") { copyJSON(active) }.disabled(disabled)
+                    NativeSessionButton("Duplicate") { duplicate(active, customs: customs) }
                         .disabled(disabled || full)
                         .help(full ? TerminalColours.fullShort : "")
                     if !TerminalColours.isBuiltin(active.id) {
-                        Button("Rename") { renaming = active.name }.disabled(disabled)
-                        Button("Delete", role: .destructive) { remove(active) }.disabled(disabled)
+                        NativeSessionButton("Rename") { renaming = active.name }.disabled(disabled)
+                        NativeSessionButton("Delete", role: .destructive) { remove(active) }.disabled(disabled)
                     }
                 }
                 if let draft = renaming {
                     HStack(spacing: 8) {
-                        TextField("", text: Binding(get: { draft }, set: { renaming = String($0.prefix(TerminalColours.maxName)) }))
+                        NativeSessionTextField("", text: Binding(get: { draft }, set: { renaming = String($0.prefix(TerminalColours.maxName)) }))
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 260)
                             .accessibilityLabel("Scheme name")
-                        Button("Save name") {
+                        NativeSessionButton("Save name") {
                             rename(active, to: draft)
                             renaming = nil
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(TerminalColours.cleanName(draft).isEmpty)
-                        Button("Cancel") { renaming = nil }
+                        NativeSessionButton("Cancel") { renaming = nil }
                     }
                 }
                 if editing {
@@ -198,7 +198,7 @@ private struct FollowCard: View {
     let pick: () -> Void
 
     var body: some View {
-        Button(action: pick) {
+        NativeSessionButton(action: pick) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Follow the app").font(.callout.weight(.semibold))
                 Text(TerminalColours.followNote)
@@ -221,7 +221,7 @@ private struct SchemeCard: View {
     let pick: () -> Void
 
     var body: some View {
-        Button(action: pick) {
+        NativeSessionButton(action: pick) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(scheme.name).font(.callout.weight(.semibold)).lineLimit(1)
@@ -344,17 +344,17 @@ private struct ColourRow: View {
                 }
             }), supportsOpacity: false)
             .labelsHidden()
-            TextField("", text: $text)
+            NativeSessionTextField("", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 96)
-                .focused($editingHex)
+                .sessionFocused($editingHex)
                 .foregroundStyle(TerminalColour.normalise(text) == nil ? Color.red : Color.primary)
                 .accessibilityLabel("\(label) hex")
                 .onChange(of: text) { _, typed in
                     if editingHex, let colour = TerminalColour.normalise(typed) { live(slot, colour) }
                 }
-                .onSubmit { settle() }
+                .sessionOnSubmit { settle() }
                 .onChange(of: editingHex) { _, now in if !now { settle() } }
         }
         .onAppear { text = value }

@@ -182,6 +182,18 @@ final class AppModel {
     @ObservationIgnored var isTerminating = false
     private static let openScreensKey = "openScreenWindows"
 
+    #if DEBUG
+    /// Inert AppModel for selection regressions: no installed-app discovery, OS bridge, browser hooks or appearance writes.
+    init(restartFixture engine: EngineController, buttons: NativeButtonActions) {
+        self.engine = engine
+        screensToRestore = []
+        web = WebBridge(log: engine.log)
+        settingsWeb = WebBridge(log: engine.log, revealOnLoad: true)
+        buttonActions = buttons
+        web.onMessage = { [weak self] message in self?.handleMainPage(message) }
+    }
+    #endif
+
     private init() {
         #if DEBUG
         let fixture = Self.uiTestConfiguration
@@ -837,6 +849,7 @@ final class AppModel {
             if let responder = window.firstResponder as? NSView, responder === webView || responder.isDescendant(of: webView) {
                 window.makeFirstResponder(nil)
             }
+            DeckTerminalSlot.restoreFocus(in: window)
         } else if pageReady {
             page.focus()
         }
@@ -970,6 +983,7 @@ final class AppModel {
     func newSession(in projectPath: String) { send(.newSessionIn(projectPath)) }
     func closeProject(_ projectPath: String) { send(.closeProject(projectPath)) }
     func selectTab(_ id: String) {
+        if id.hasPrefix("held:") { runButton(.select(id)); return }
         if let tab = tabs?.tabs.first(where: { $0.id == id }), let page = NativePageWindows.page(kind: tab.kind, id: tab.id), NativePageWindows.shared.contains(page) { movePageToWindow(page); return }
         pageAfterMove = nil
         if NativeFIXESDeviceTabs.shared.has(id) { // #108 device tab
@@ -991,6 +1005,7 @@ final class AppModel {
     }
 
     private func selectTabLocally(_ id: String) {
+        guard !id.hasPrefix("held:") else { return }
         // The session comes to this Mac when he chose it in the session list, tab strip or with ⌘-number (28 Oct).
         NativeTerminalSessions.shared.chosenHere(id)
         guard var state = tabs else { sidebarSelection = id; return }
@@ -1073,6 +1088,8 @@ final class AppModel {
     }
 
     func select(_ id: String?) {
+        // Held rows request Retry; they never become the active screen or a synthetic tab.
+        if let id, id.hasPrefix("held:") { runButton(.select(id)); return }
         if let id, let page = NativePageWindows.page(kind: "panel", id: id), NativePageWindows.shared.contains(page) {
             movePageToWindow(page); return
         }

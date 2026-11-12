@@ -117,7 +117,9 @@ private struct NativeSplitScreen: View {
         if let hostTab, model.paneHoldsBrowser(hostTab) {
             if !model.stripBrowserTabs.contains(where: { $0.id == hostTab }) { switchBar }
         } else if let hostTab, SessionTarget(tabId: hostTab) != nil {
-            NativeSessionHeader(session: NativeTerminalSessions.shared.session(for: hostTab))
+            NativeSplitSessionHeader(sessionID: hostTab) {
+                NativeSessionHeader(session: NativeTerminalSessions.shared.session(for: hostTab))
+            }
         } else {
             switchBar
         }
@@ -130,6 +132,17 @@ private struct NativeSplitScreen: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 38)
+    }
+}
+
+/// The split's top bar is outside the pane body. Its owner boundary must travel with
+/// the header itself, so an open rename client can never be rebound to another session.
+struct NativeSplitSessionHeader<Header: View>: View {
+    let sessionID: String
+    @ViewBuilder var header: Header
+
+    var body: some View {
+        header.id(sessionID).nativeSessionInputScope(ownerID: sessionID)
     }
 }
 
@@ -291,6 +304,7 @@ private struct PaneLeafView: View {
                             .nativePaneDrag(.pane(tabId: tabId), title: tab?.title ?? "")
                     }
                 }
+                .environment(\.nativeTerminalSelected, focused)
             } else if let tabId, tab?.kind == "browser" {
                 VStack(spacing: 0) {
                     if !primary {
@@ -507,6 +521,7 @@ private struct NativeSwarmScreen: View {
             .help(row.title)
             .accessibilityAddTraits(focused ? .isSelected : [])
         }
+        .environment(\.nativeTerminalSelected, focused)
         .clipShape(.rect(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(focused ? NativeSessionChrome.focusEdge : NativeSessionChrome.edge,
                                                                lineWidth: 1))

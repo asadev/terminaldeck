@@ -29,7 +29,7 @@ struct StoreFilterBarView: View {
                     if search {
                         HStack(spacing: 5) {
                             Text("Search").font(.caption).foregroundStyle(.secondary)
-                            TextField(placeholder, text: $filter.query)
+                            NativeSessionTextField(placeholder, text: $filter.query)
                                 .textFieldStyle(.roundedBorder)
                                 .autocorrectionDisabled()
                                 .frame(maxWidth: 320)
@@ -38,7 +38,7 @@ struct StoreFilterBarView: View {
                     Spacer(minLength: 0)
                     if active {
                         Text("\(showing) of \(total)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                        Button("Clear") { filter = .none }.buttonStyle(.link)
+                        NativeSessionButton("Clear") { filter = .none }.buttonStyle(.link)
                     }
                 }
                 ForEach(controls) { control in
@@ -73,7 +73,7 @@ struct StoreChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             HStack(spacing: 5) {
                 Text(title)
                 Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
@@ -146,7 +146,7 @@ struct StoreRowNameView: View {
 
     var body: some View {
         if let onOpen {
-            Button(action: onOpen) { Text(name).font(font) }
+            NativeSessionButton(action: onOpen) { Text(name).font(font) }
                 .buttonStyle(.plain)
                 .help("Open \(name) on its own")
                 .nativeHoverCursor(.pointingHand)
@@ -198,7 +198,7 @@ struct StoreDetailView<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button(action: onBack) {
+            NativeSessionButton(action: onBack) {
                 Label("Back to \(backTo)", systemImage: "chevron.left")
             }
             .buttonStyle(.link)
@@ -215,7 +215,7 @@ struct StoreLinkOutView: View {
 
     var body: some View {
         if let target = URL(string: url), let scheme = target.scheme?.lowercased(), scheme == "http" || scheme == "https" {
-            Button(label) { NSWorkspace.shared.open(target) }
+            NativeSessionButton(label) { NSWorkspace.shared.open(target) }
                 .buttonStyle(.link)
                 .help(url)
                 .accessibilityLabel("\(label) — \(describes)")

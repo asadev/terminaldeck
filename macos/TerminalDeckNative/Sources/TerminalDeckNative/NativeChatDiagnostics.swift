@@ -48,11 +48,11 @@ struct NativeChatDiagnosticsPanel: View {
         let state = try? model.diagnosticTool("read", request: nil, query: query)
         VStack(alignment: .leading, spacing: 12) {
             Text("This chat's diagnostics").font(.headline)
-            TextField("Filter reported warnings and errors", text: $query)
+            NativeSessionTextField("Filter reported warnings and errors", text: $query)
             HStack {
-                Button("Advanced & log folder") { open("advanced") }
-                Button("Account status") { open("account") }
-                Button("MCP connections") { do { try NativeChatConnections.open("mcp"); model.chatDiagnosticsVisible = false } catch { outcome = error.localizedDescription } }
+                NativeSessionButton("Advanced & log folder") { open("advanced") }
+                NativeSessionButton("Account status") { open("account") }
+                NativeSessionButton("MCP connections") { do { try NativeChatConnections.open("mcp"); model.chatDiagnosticsVisible = false } catch { outcome = error.localizedDescription } }
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -65,7 +65,7 @@ struct NativeChatDiagnosticsPanel: View {
                     if state?["records"].elements?.isEmpty == true { Text("No matching warnings or errors reported.").foregroundStyle(.secondary) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 300)
-            Button("Copy diagnostic brief for feedback") { do { _ = try model.diagnosticTool("copy", request: nil, query: query); outcome = "Chat diagnostic brief copied." } catch { outcome = error.localizedDescription } }
+            NativeSessionButton("Copy diagnostic brief for feedback") { do { _ = try model.diagnosticTool("copy", request: nil, query: query); outcome = "Chat diagnostic brief copied." } catch { outcome = error.localizedDescription } }
             Text("The brief contains this chat's reported items and identity. Advanced owns app logs and support-bundle collection.").font(.caption).foregroundStyle(.secondary)
             if let outcome { Text(outcome).font(.caption) }
         }.padding(16).frame(width: 560)

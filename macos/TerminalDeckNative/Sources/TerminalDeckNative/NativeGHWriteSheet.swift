@@ -79,12 +79,12 @@ struct NativeGHWriteSheet: View {
                 }
             }
             HStack(spacing: 8) {
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+                NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
                 Spacer()
                 if reviewing, !draft.fields.isEmpty {
-                    Button("Edit") { reviewing = false; error = nil }.disabled(busy)
+                    NativeSessionButton("Edit") { reviewing = false; error = nil }.disabled(busy)
                 }
-                Button(reviewing ? draft.action : "Review change") {
+                NativeSessionButton(reviewing ? draft.action : "Review change") {
                     if reviewing { Task { await submit() } } else { reviewing = true }
                 }
                 .disabled(!valid || busy)
@@ -102,7 +102,7 @@ struct NativeGHWriteSheet: View {
                 Text(field.label).font(.callout.weight(.medium))
                 switch field.kind {
                 case .body:
-                    TextEditor(text: binding(field.key))
+                    NativeSessionTextEditor(text: binding(field.key))
                         .font(.body)
                         .frame(minHeight: 112)
                         .padding(6)
@@ -115,13 +115,13 @@ struct NativeGHWriteSheet: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                 case .text, .list:
-                    TextField(field.hint.isEmpty ? field.label : field.hint, text: binding(field.key))
+                    NativeSessionTextField(field.hint.isEmpty ? field.label : field.hint, text: binding(field.key))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel(field.label)
                 }
                 if !field.hint.isEmpty { Text(field.hint).font(.caption).foregroundStyle(.secondary) }
                 if field.key == "parentPath" {
-                    Button("Choose folder…") { chooseFolder() }
+                    NativeSessionButton("Choose folder…") { chooseFolder() }
                         .buttonStyle(.bordered)
                 }
             }
@@ -227,7 +227,7 @@ struct NativeGHErrorNote: View {
             Image(systemName: "exclamationmark.circle").foregroundStyle(.secondary)
             Text(message).font(.callout).textSelection(.enabled)
             Spacer(minLength: 4)
-            if let retry { Button("Try again", action: retry).controlSize(.small) }
+            if let retry { NativeSessionButton("Try again", action: retry).controlSize(.small) }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

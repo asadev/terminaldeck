@@ -336,7 +336,14 @@ public actor BackendAccountProfileStore {
             backupBeforeWrite = false
         }
         let encodedProfiles = try profiles.map { try NativeRPCValue.parseJSON(JSONEncoder().encode($0)) }
-        let next = raw.setting("version", .number(1)).setting("profiles", .array(encodedProfiles))
+        // 10 Nov (Asad: "deleted accounts disappear everywhere"): a remembered last account that is no longer an
+        // account is not written back (the levels below already keep only existing accounts).
+        let existing = Set(profiles.map(\.id))
+        var remembered = raw["lastClaudeAccounts"]
+        if let fields = remembered.fields { remembered = .object(fields.filter { $0.value.string.map(existing.contains) == true }) }
+        var next = raw.setting("version", .number(1)).setting("profiles", .array(encodedProfiles))
+        if remembered.fields != nil { next = next.setting("lastClaudeAccounts", remembered) }
+        next = next
             .setting("defaultProfileId", defaultID.map(NativeRPCValue.string) ?? .null)
             .setting("projectDefaults", .object(projectDefaults.sorted { $0.key < $1.key }.map { .init($0.key, .string($0.value)) }))
             .setting("providerDefaults", levels.wire["app"]).setting("projectAccounts", levels.wire["projects"]).setting("seatAccounts", levels.wire["seats"])

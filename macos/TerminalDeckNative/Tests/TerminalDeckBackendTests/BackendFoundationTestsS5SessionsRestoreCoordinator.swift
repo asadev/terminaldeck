@@ -104,6 +104,7 @@ struct BackendFoundationTestsS5SessionsRestoreDriver {
         try await BackendFoundationTestsS5SessionsWithWorld { world in
             let cwd = try world.folder("crash-unrecorded")
             let kept = try world.tab(cwd, "check-crash-kept", conversation: BackendFoundationTestsS5SessionsWorld.uuid1)
+            try await world.transcript(for: kept)
             let run = try await BackendFoundationTestsS5SessionsCoordinatorWorld(world, sessions: [kept])
             try await run.store.ledgerDropPending()
             try await run.store.ledgerNote("check-crash-kept-id", saved: kept.raw)

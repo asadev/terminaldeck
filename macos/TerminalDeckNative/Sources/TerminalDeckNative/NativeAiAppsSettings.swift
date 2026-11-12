@@ -63,7 +63,7 @@ struct NativeAiAppsSettings: View {
                     } else if model.making {
                         AiNewKeyForm(folders: state.folders, model: model)
                     } else {
-                        Button("New key") { model.making = true }
+                        NativeSessionButton("New key") { model.making = true }
                             .buttonStyle(.borderedProminent)
                             .disabled(model.busy)
                     }
@@ -133,7 +133,7 @@ private struct AiCopyButton: View {
     @State private var copied: String?
 
     var body: some View {
-        Button(copied == id ? "Copied" : copied == "\(id):failed" ? "Select and copy it by hand" : "Copy") {
+        NativeSessionButton(copied == id ? "Copied" : copied == "\(id):failed" ? "Select and copy it by hand" : "Copy") {
             let board = NSPasteboard.general
             board.clearContents()
             copied = board.setString(value, forType: .string) ? id : "\(id):failed"
@@ -155,7 +155,7 @@ private struct AiKeyRow: View {
     @State private var revoking = false
 
     var body: some View {
-        Button { open = true } label: {
+        NativeSessionButton { open = true } label: {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -173,8 +173,8 @@ private struct AiKeyRow: View {
         .buttonStyle(.plain)
         .disabled(model.busy)
         .contextMenu {
-            Button("Change…") { open = true }
-            Button("Revoke…", role: .destructive) { revoking = true; open = true }
+            NativeSessionButton("Change…") { open = true }
+            NativeSessionButton("Revoke…", role: .destructive) { revoking = true; open = true }
         }
         .sheet(isPresented: $open) {
             NativeAIKeySettingsEditor(key: key, state: state, model: model, initiallyRevoking: revoking) {
@@ -217,7 +217,7 @@ struct NativeAIKeySettingsEditor: View {
                 HStack {
                     Text(key.name).font(.headline)
                     Spacer()
-                    Button("Done", action: done).buttonStyle(.bordered)
+                    NativeSessionButton("Done", action: done).buttonStyle(.bordered)
                 }.padding(16)
                 Divider()
                 ScrollView {
@@ -228,11 +228,11 @@ struct NativeAIKeySettingsEditor: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Name").font(.callout)
                         HStack {
-                            TextField("Name", text: $name)
+                            NativeSessionTextField("Name", text: $name)
                                 .labelsHidden()
                                 .disabled(model.busy)
                                 .onChange(of: name) { _, value in if value.count > 60 { name = String(value.prefix(60)) } }
-                            Button("Rename") { model.rename(key.id, name.trimmingCharacters(in: .whitespaces)) }
+                            NativeSessionButton("Rename") { model.rename(key.id, name.trimmingCharacters(in: .whitespaces)) }
                                 .disabled(model.busy || name.trimmingCharacters(in: .whitespaces).isEmpty
                                           || name.trimmingCharacters(in: .whitespaces) == key.name)
                         }
@@ -260,7 +260,7 @@ struct NativeAIKeySettingsEditor: View {
                                         .font(.caption).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 8)
-                                    Button("Stop") { model.stopPush(key.id, sub.id) }.disabled(model.busy)
+                                    NativeSessionButton("Stop") { model.stopPush(key.id, sub.id) }.disabled(model.busy)
                                 }
                             }
                         }
@@ -270,13 +270,13 @@ struct NativeAIKeySettingsEditor: View {
                         HStack {
                             Text("Revoke “\(key.name)”? The app stops working right away.")
                             Spacer(minLength: 8)
-                            Button("Revoke", role: .destructive) { model.revoke(key.id) }.disabled(model.busy)
-                            Button("Keep it") { revoking = false }
+                            NativeSessionButton("Revoke", role: .destructive) { model.revoke(key.id) }.disabled(model.busy)
+                            NativeSessionButton("Keep it") { revoking = false }
                         }
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("Revoke \(key.name)")
                     } else {
-                        Button("Revoke…", role: .destructive) { revoking = true }.disabled(model.busy)
+                        NativeSessionButton("Revoke…", role: .destructive) { revoking = true }.disabled(model.busy)
                     }
                 }
                 .padding(16)
@@ -331,7 +331,7 @@ private struct AiFolderPicker: View {
                 HStack {
                     Text(AiAppsLines.folders(chosen)).font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Button("Choose…") {
+                    NativeSessionButton("Choose…") {
                         picked = Set(chosen ?? [])
                         editing = true
                     }
@@ -350,13 +350,13 @@ private struct AiFolderPicker: View {
                     .disabled(busy)
                 }
                 HStack {
-                    Button("Save") {
+                    NativeSessionButton("Save") {
                         onSave(picked.isEmpty ? nil : all.filter(picked.contains))
                         editing = false
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy)
-                    Button("Cancel") { editing = false }
+                    NativeSessionButton("Cancel") { editing = false }
                 }
             }
         }
@@ -388,15 +388,15 @@ private struct AiNotifyBlock: View {
 
             if mode == .webhook {
                 HStack {
-                    TextField("https://…", text: $url)
+                    NativeSessionTextField("https://…", text: $url)
                         .labelsHidden()
                         .accessibilityLabel("Notify this app")
                         .disabled(model.busy)
-                    Button("Save") { save() }
+                    NativeSessionButton("Save") { save() }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.busy || url.trimmingCharacters(in: .whitespaces).isEmpty
                                   || url.trimmingCharacters(in: .whitespaces) == key.notifyURL)
-                    Button(testing ? "Testing…" : "Test") { test() }
+                    NativeSessionButton(testing ? "Testing…" : "Test") { test() }
                         .disabled(model.busy || testing || key.notifyURL == nil || key.notifyMode != .webhook)
                         .help(key.notifyURL == nil ? "Save an address first" : "Send one signed test notification now")
                 }
@@ -414,7 +414,7 @@ private struct AiNotifyBlock: View {
                     HStack {
                         Text("Posts are signed (Standard Webhooks).").font(.caption).foregroundStyle(.secondary)
                         Spacer(minLength: 8)
-                        Button("New secret") {
+                        NativeSessionButton("New secret") {
                             model.newSecret(key.id) { if let shown = $0 { secret = shown } }
                         }
                         .disabled(model.busy)
@@ -468,10 +468,10 @@ private struct AiNewKeyForm: View {
             Text("New key").font(.headline)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Name").font(.callout)
-                TextField("Which app is this for?", text: $name)
+                NativeSessionTextField("Which app is this for?", text: $name)
                     .labelsHidden()
-                    .focused($focused)
-                    .onSubmit(make)
+                    .sessionFocused($focused)
+                    .sessionOnSubmit(make)
                     .onChange(of: name) { _, value in if value.count > 60 { name = String(value.prefix(60)) } }
             }
             AiLevelPicker(level: $level, disabled: false)
@@ -480,10 +480,10 @@ private struct AiNewKeyForm: View {
             }
             AiFolderPicker(available: folders, chosen: limit, busy: model.busy) { limit = $0 }
             HStack {
-                Button("Make key", action: make)
+                NativeSessionButton("Make key", action: make)
                     .buttonStyle(.borderedProminent)
                     .disabled(model.busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("Cancel") { model.making = false }
+                NativeSessionButton("Cancel") { model.making = false }
             }
         }
         .padding(10)
@@ -540,7 +540,7 @@ private struct AiNewKeyMade: View {
                 HStack {
                     Text("This needs internet reach, which is off.")
                     Spacer(minLength: 8)
-                    Button("Turn it on") { model.setInternet(true) }
+                    NativeSessionButton("Turn it on") { model.setInternet(true) }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.busy)
                 }
@@ -580,7 +580,7 @@ private struct AiNewKeyMade: View {
                 }
             }
 
-            Button("I’ve copied the key") { model.made = nil }
+            NativeSessionButton("I’ve copied the key") { model.made = nil }
         }
         .padding(10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))

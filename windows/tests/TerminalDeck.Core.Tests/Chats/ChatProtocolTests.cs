@@ -53,7 +53,9 @@ public sealed class ChatProtocolTests
   [Fact] public async Task ReusedExecItemIdsRemainSeparateAcrossTurns()
   {
     await using var f = new ChatFixture(); await f.InitializeAsync(); var file = Path.Combine(f.Root.DirectoryPath, "exec-fixture.py");
-    File.WriteAllText(file, "import sys,json\ntext=sys.stdin.read()\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','id':'item_0','text':text}}),flush=True)\nprint(json.dumps({'type':'turn.completed'}),flush=True)\n");
+    // The fake answers with the person's words only: the prompt's last part (8 Nov, S3: the first turn
+    // also carries the app's one-time drawing instruction before them).
+    File.WriteAllText(file, "import sys,json\ntext=sys.stdin.read().split('\\n\\n')[-1]\nprint(json.dumps({'type':'item.completed','item':{'type':'agent_message','id':'item_0','text':text}}),flush=True)\nprint(json.dumps({'type':'turn.completed'}),flush=True)\n");
     var chat = f.Chat with { Definition = f.Chat.Definition with { Provider = "codex" } }; var events = new List<ChatEvent>();
     foreach (var text in new[] { "first", "second" })
     {
@@ -64,6 +66,16 @@ public sealed class ChatProtocolTests
       foreach (var signal in signals) events.Add(new(events.Count + 1, signal.Kind, signal.Id, signal.Text, signal.ClientId));
     }
     var rows = ChatProjection.Rows(chat with { Events = events.ToArray() }); Assert.Equal(new[] { "first", "second" }, rows.Where(r => r.Kind == "assistant").Select(r => r.Text));
+  }
+  // 9 Nov (Mac: "Working · 1 running" for two days in an idle chat). Windows records no background tasks at all, so a
+  // task the AI never reports finished cannot keep a chat working: the turn's own result ends Busy.
+  [Fact] public async Task ABackgroundTaskWithoutAFinishNeverKeepsTheChatWorking()
+  {
+    await using var f = new ChatFixture(); await f.InitializeAsync(); var protocol = new ChatLineProtocol(f.Chat, f.History);
+    Assert.DoesNotContain(protocol.Receive("""{"type":"system","subtype":"task_started","task_id":"bg-1","tool_use_id":"tool-bg","description":"sleep","task_type":"local_bash"}""").Signals,
+      s => s.Kind is not "conversation");
+    Assert.DoesNotContain(protocol.Receive("""{"type":"system","subtype":"task_progress","task_id":"bg-1","description":"sleep"}""").Signals, s => s.Kind is not "conversation");
+    Assert.Contains(protocol.Receive("""{"type":"result","subtype":"success","is_error":false}""").Signals, s => s.Kind == "complete");
   }
   [Fact] public async Task GeminiResumeDoesNotReplayOldTextOrApproveBeforeItIsReady()
   {

@@ -113,7 +113,7 @@ struct NativeTasksAllList: View {
     private func sectionHeading(_ section: TaskListSection, label: String) -> some View {
         let key = "section:\(section.key)"
         let open = !model.isFolded(key, startsFolded: false)
-        return Button { model.toggleFold(key, startsFolded: false) } label: {
+        return NativeSessionButton { model.toggleFold(key, startsFolded: false) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -186,7 +186,7 @@ struct TasksListGroupHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button(action: onFold) {
+            NativeSessionButton(action: onFold) {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.bold))
@@ -209,7 +209,7 @@ struct TasksListGroupHeader: View {
             .accessibilityLabel("\(group.label), \(group.items.count) tasks")
             .accessibilityValue(open ? "expanded" : "collapsed")
             if adding {
-                Button { openTaskCreate?.open(.addTaskRow(group.defaults)) } label: {
+                NativeSessionButton { openTaskCreate?.open(.addTaskRow(group.defaults)) } label: {
                     Image(systemName: "plus").font(.caption.weight(.semibold)).frame(width: 22, height: 22).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -313,8 +313,8 @@ struct TasksListRow: View {
             return true
         } isTargeted: { dropTarget = orderable && $0 }
         .contextMenu {
-            Button("Rename") { beginRename() }
-            Button("Edit tags") { beginTags() }
+            NativeSessionButton("Rename") { beginRename() }
+            NativeSessionButton("Edit tags") { beginTags() }
             TKMoveToProjectMenu(task: task, projects: projects)
         }
         .popover(isPresented: $renaming) { editTitle }
@@ -336,7 +336,7 @@ struct TasksListRow: View {
 
     @ViewBuilder private var disclosure: some View {
         if line.childCount > 0 {
-            Button(action: onToggleChildren) {
+            NativeSessionButton(action: onToggleChildren) {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.bold))
                     .rotationEffect(.degrees(line.open ? 90 : 0))
@@ -367,7 +367,7 @@ struct TasksListRow: View {
         let compact = columns.nameWidth < 360
         let tags = Array(task.labels.prefix(compact ? 0 : columns.nameWidth < 500 ? 1 : 2))
         return HStack(spacing: 6) {
-            Button(action: onOpen) {
+            NativeSessionButton(action: onOpen) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(task.title)
                         .lineLimit(1).truncationMode(.tail).strikethrough(done)
@@ -383,7 +383,7 @@ struct TasksListRow: View {
             .accessibilityHint("Opens the task")
             .layoutPriority(1)
             if line.childCount > 0 {
-                Button(action: onToggleChildren) {
+                NativeSessionButton(action: onToggleChildren) {
                     Label("\(line.childCount)", systemImage: "arrow.turn.down.right")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -405,9 +405,9 @@ struct TasksListRow: View {
             }
             Spacer(minLength: 8)
             if hovering {
-                Button { beginTags() } label: { Image(systemName: "tag").frame(width: 20, height: 24) }
+                NativeSessionButton { beginTags() } label: { Image(systemName: "tag").frame(width: 20, height: 24) }
                     .buttonStyle(.plain).disabled(busy).help("Edit tags").accessibilityLabel("Edit tags for \(task.title)")
-                Button { beginRename() } label: { Image(systemName: "pencil").frame(width: 20, height: 24) }
+                NativeSessionButton { beginRename() } label: { Image(systemName: "pencil").frame(width: 20, height: 24) }
                     .buttonStyle(.plain).disabled(busy).help("Rename").accessibilityLabel("Rename \(task.title)")
             }
         }
@@ -419,8 +419,8 @@ struct TasksListRow: View {
     private var editTitle: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Rename task").font(.headline)
-            TextField("Task name", text: $titleDraft).textFieldStyle(.roundedBorder).onSubmit { saveTitle() }
-            HStack { Button("Cancel") { renaming = false }; Spacer(); Button("Save") { saveTitle() }
+            NativeSessionTextField("Task name", text: $titleDraft).textFieldStyle(.roundedBorder).sessionOnSubmit { saveTitle() }
+            HStack { NativeSessionButton("Cancel") { renaming = false }; Spacer(); NativeSessionButton("Save") { saveTitle() }
                     .disabled(busy || titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(16).frame(width: 320)
     }
@@ -432,9 +432,9 @@ struct TasksListRow: View {
     private var editTags: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Edit tags").font(.headline)
-            TextField("Tags, separated by commas", text: $tagsDraft).textFieldStyle(.roundedBorder).onSubmit { saveTags() }
+            NativeSessionTextField("Tags, separated by commas", text: $tagsDraft).textFieldStyle(.roundedBorder).sessionOnSubmit { saveTags() }
             Text("Separate tags with commas. Clear the box to remove them.").font(.caption).foregroundStyle(.secondary)
-            HStack { Button("Cancel") { editingTags = false }; Spacer(); Button("Save") { saveTags() }.disabled(busy) }
+            HStack { NativeSessionButton("Cancel") { editingTags = false }; Spacer(); NativeSessionButton("Save") { saveTags() }.disabled(busy) }
         }.padding(16).frame(width: 320)
     }
     private func saveTags() {
@@ -510,7 +510,7 @@ struct TasksListRow: View {
         let name = MyWorkModel.name(of: task.assignee, in: state)
         return Menu {
             ForEach(choices, id: \.id) { choice in
-                Button { update(["assignee": choice.id]) } label: {
+                NativeSessionButton { update(["assignee": choice.id]) } label: {
                     DeckRowLabel(choice.label, image: DeckRowIcon.assignee(choice.id))
                 }
             }
@@ -535,10 +535,10 @@ struct TasksListRow: View {
     private var priorityCell: some View {
         Menu {
             ForEach(TaskList.priorities, id: \.self) { priority in
-                Button { update(["priority": priority]) } label: { Label(priority, systemImage: "flag.fill") }
+                NativeSessionButton { update(["priority": priority]) } label: { Label(priority, systemImage: "flag.fill") }
             }
             Divider()
-            Button("No priority") { update(["priority": NSNull()]) }
+            NativeSessionButton("No priority") { update(["priority": NSNull()]) }
         } label: {
             if let priority = task.priority {
                 HStack(spacing: 5) {
@@ -559,7 +559,7 @@ struct TasksListRow: View {
         Menu {
             if !TaskList.statusOrder.contains(task.crmStatus) { Text(task.crmStatus) }
             ForEach(TaskList.statusOrder, id: \.self) { status in
-                Button(status) { update(["status": status]) }
+                NativeSessionButton(status) { update(["status": status]) }
             }
         } label: {
             TasksStatusPill(status: task.crmStatus)
@@ -573,9 +573,9 @@ struct TasksListRow: View {
         let choices = Goals.options(state.goals)
         let current = choices.first { $0.id == task.goalId }?.label
         return Menu {
-            Button("No goal") { update(["goalId": NSNull()]) }
+            NativeSessionButton("No goal") { update(["goalId": NSNull()]) }
             Divider()
-            ForEach(choices, id: \.id) { goal in Button(goal.label) { update(["goalId": goal.id]) } }
+            ForEach(choices, id: \.id) { goal in NativeSessionButton(goal.label) { update(["goalId": goal.id]) } }
         } label: {
             if let current {
                 Text(current).font(.callout).lineLimit(1)
@@ -593,12 +593,12 @@ struct TasksListRow: View {
     private var moreMenu: some View {
         let next = TaskList.nextStatus(task.crmStatus)
         return Menu {
-            Button("Open task") { onOpen() }
-            if let next { Button("Move to \(next)") { update(["status": next]) } }
-            Button(done ? "Reopen" : "Mark done") { update(["status": done ? "To-Do" : "Done"]) }
+            NativeSessionButton("Open task") { onOpen() }
+            if let next { NativeSessionButton("Move to \(next)") { update(["status": next]) } }
+            NativeSessionButton(done ? "Reopen" : "Mark done") { update(["status": done ? "To-Do" : "Done"]) }
             TKMoveToProjectMenu(task: task, projects: projects)
             Divider()
-            Button("Delete", role: .destructive) { Task { await store.run { await store.remove(task.id) } } }
+            NativeSessionButton("Delete", role: .destructive) { Task { await store.run { await store.remove(task.id) } } }
         } label: {
             Image(systemName: "ellipsis")
                 .foregroundStyle(.secondary)
@@ -645,7 +645,7 @@ struct TasksListDueCell: View {
     var body: some View {
         let due = TaskList.relativeDue(task.dueDate, today: today)
         let overdue = TaskList.isOverdue(task, today: today, nowHm: nowHm)
-        Button { picking = true } label: {
+        NativeSessionButton { picking = true } label: {
             if due.isEmpty {
                 Image(systemName: "calendar").foregroundStyle(.tertiary).opacity(hovering ? 1 : 0.5)
             } else {
@@ -676,7 +676,7 @@ struct TasksListAddRow: View {
     @Environment(\.openTaskCreate) private var openTaskCreate
 
     var body: some View {
-        Button { openTaskCreate?.open(.addTaskRow(defaults)) } label: {
+        NativeSessionButton { openTaskCreate?.open(.addTaskRow(defaults)) } label: {
             HStack(spacing: 6) {
                 Image(systemName: "plus").font(.caption.weight(.semibold))
                 Text("Add Task").font(.callout)

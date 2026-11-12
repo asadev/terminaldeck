@@ -162,7 +162,7 @@ private struct ScreenDetailView: View {
         let native = engineDown || !model.engineIsUp ? nil : (SHELLRoutes.detail(kind: kind, id: ref.id) ?? NativeScreens.detail(kind: kind, id: ref.id))
         ZStack {
             let pageInFront = showsPage && (native == nil || screen.modalOpen)
-            WebViewContainer(webView: screen.web.webView)
+            WebViewContainer(webView: screen.web.webView, visible: pageInFront)
                 .opacity(pageInFront ? 1 : 0)
                 .accessibilityHidden(!pageInFront)
                 .allowsHitTesting(pageInFront)
@@ -170,6 +170,8 @@ private struct ScreenDetailView: View {
 
             if let native {
                 native
+                    .nativeSessionInputScope(ownerID: "screen/" + kind + "/" + ref.id)
+                    .environment(\.nativeScreenActive, !screen.modalOpen)
                     .id("\(kind)/\(ref.id)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .modifier(ScreenFullBleed(enabled: ref.kind == .panel && NativeFIXESDeviceTabs.deviceID(ref.id) != nil))

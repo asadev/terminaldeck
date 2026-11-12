@@ -30,21 +30,21 @@ struct FieldTextCell: View {
                         if (focused ? draft : value).isEmpty {
                             Text(readOnly ? "—" : "Write something…").foregroundStyle(.tertiary).padding(.leading, 5).padding(.top, 1)
                         }
-                        TextEditor(text: Binding(get: { focused ? draft : value }, set: { draft = $0 }))
+                        NativeSessionTextEditor(text: Binding(get: { focused ? draft : value }, set: { draft = $0 }))
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 22, maxHeight: 160)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    TextField(readOnly ? "—" : placeholder, text: Binding(get: { focused ? draft : (display ?? value) }, set: { draft = $0 }))
+                    NativeSessionTextField(readOnly ? "—" : placeholder, text: Binding(get: { focused ? draft : (display ?? value) }, set: { draft = $0 }))
                         .textFieldStyle(.plain)
-                        .onSubmit { focused = false }
+                        .sessionOnSubmit { focused = false }
                 }
             }
             .font(.system(size: 13))
-            .focused($focused)
+            .sessionFocused($focused)
             .disabled(readOnly)
-            .onExitCommand {
+            .sessionOnExitCommand {
                 cancel = true
                 focused = false
             }

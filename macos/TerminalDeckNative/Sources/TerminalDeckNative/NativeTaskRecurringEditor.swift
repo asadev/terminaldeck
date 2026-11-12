@@ -65,8 +65,8 @@ struct RoutinePanel: View {
                         if let rule, model.routine?.canEdit == true {
                             Menu {
                                 if rule.stoppedAt == nil {
-                                    Button(rule.pausedAt != nil ? "Resume" : "Pause") { model.pauseRoutine(rule.pausedAt == nil) }
-                                    Button("Stop recurring", role: .destructive) {
+                                    NativeSessionButton(rule.pausedAt != nil ? "Resume" : "Pause") { model.pauseRoutine(rule.pausedAt == nil) }
+                                    NativeSessionButton("Stop recurring", role: .destructive) {
                                         model.stopRoutine()
                                         preview = nil
                                         onBack()
@@ -123,7 +123,7 @@ struct RoutinePanel: View {
                             HStack(spacing: 6) {
                                 Text(stuck).foregroundStyle(TaskTone.waiting)
                                 if model.routine?.canRestart == true {
-                                    Button("Restart") {
+                                    NativeSessionButton("Restart") {
                                         model.restartRoutine()
                                         preview = nil
                                         onBack()
@@ -160,12 +160,12 @@ struct RoutinePanel: View {
                 }
                 HStack {
                     Spacer()
-                    Button("Cancel") {
+                    NativeSessionButton("Cancel") {
                         preview = nil
                         onBack()
                     }
                     .buttonStyle(.borderless)
-                    Button(model.routineBusy ? "Saving…" : "Save") {
+                    NativeSessionButton(model.routineBusy ? "Saving…" : "Save") {
                         model.saveRoutine(Routine.serialize(r), legacy: Routine.legacy(r))
                         preview = nil
                         onBack()
@@ -180,7 +180,7 @@ struct RoutinePanel: View {
     }
 
     private func presetChip(_ label: String, _ patch: @escaping (inout RoutineRule) -> Void) -> some View {
-        Button(label) { set(patch) }
+        NativeSessionButton(label) { set(patch) }
             .buttonStyle(.plain)
             .font(.caption2)
             .padding(.horizontal, 8)
@@ -189,8 +189,7 @@ struct RoutinePanel: View {
     }
 
     private func number(_ value: Int, range: ClosedRange<Int>, label: String, set apply: @escaping (Int) -> Void) -> some View {
-        TextField(label, value: Binding(get: { value }, set: { apply(min(range.upperBound, max(range.lowerBound, $0))) }),
-                  format: .number)
+        NativeSessionNumberField(label, value: Binding(get: { value }, set: { apply(min(range.upperBound, max(range.lowerBound, $0))) }))
             .textFieldStyle(.roundedBorder)
             .frame(width: 56)
             .accessibilityLabel(label)
@@ -226,7 +225,7 @@ struct RoutinePanel: View {
                 HStack(spacing: 4) {
                     ForEach(0..<7, id: \.self) { d in
                         let on = r.weekdays.contains(d)
-                        Button(letters[d]) {
+                        NativeSessionButton(letters[d]) {
                             set { x in x.weekdays = on ? x.weekdays.filter { $0 != d } : (x.weekdays + [d]).sorted() }
                         }
                         .buttonStyle(.plain)
@@ -256,14 +255,14 @@ struct RoutinePanel: View {
         let wd: Int = { if case .nth(_, let w)? = r.monthly { return w } else { return Routine.weekday(from) } }()
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button { set { $0.monthly = .day(day) } } label: {
+                NativeSessionButton{ set { $0.monthly = .day(day) } } label: {
                     Label("On day", systemImage: isNth ? "circle" : "largecircle.fill.circle")
                         .frame(minHeight: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 number(day, range: 1...31, label: "Day of the month") { v in set { $0.monthly = .day(v) } }
             }
             HStack(spacing: 8) {
-                Button { set { $0.monthly = .nth(min(4, Int((Double(anchorDay) / 7).rounded(.up))), weekday: Routine.weekday(from)) } } label: {
+                NativeSessionButton{ set { $0.monthly = .nth(min(4, Int((Double(anchorDay) / 7).rounded(.up))), weekday: Routine.weekday(from)) } } label: {
                     Label("On the", systemImage: isNth ? "largecircle.fill.circle" : "circle")
                         .frame(minHeight: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -299,7 +298,7 @@ struct RoutinePanel: View {
             } else {
                 HStack(spacing: 8) {
                     Text("Created at")
-                    DatePicker("Time of day", selection: Binding(get: { DateBoxTime.date(r.timeOfDay) }, set: { d in
+                    NativeSessionDatePicker("Time of day", selection: Binding(get: { DateBoxTime.date(r.timeOfDay) }, set: { d in
                         set { $0.timeOfDay = TaskList.hmOf(d.timeIntervalSince1970 * 1000) }
                     }), displayedComponents: .hourAndMinute)
                     .labelsHidden()
@@ -319,18 +318,18 @@ struct RoutinePanel: View {
                     let until: String? = { if case .until(let u) = r.ends { return u } else { return nil } }()
                     let count: Int? = { if case .count(let c) = r.ends { return c } else { return nil } }()
                     HStack(spacing: 8) {
-                        Button { set { $0.ends = .until(untilDefault) } } label: {
+                        NativeSessionButton{ set { $0.ends = .until(untilDefault) } } label: {
                             Label("Until", systemImage: until != nil ? "largecircle.fill.circle" : "circle")
                                 .frame(minHeight: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain)
-                        DatePicker("Recur until", selection: Binding(get: { DayPicker.date(until ?? untilDefault) ?? Date() }, set: { d in
+                        NativeSessionDatePicker("Recur until", selection: Binding(get: { DayPicker.date(until ?? untilDefault) ?? Date() }, set: { d in
                             set { $0.ends = .until(TaskList.ymdOf(d.timeIntervalSince1970 * 1000)) }
                         }), displayedComponents: .date)
                         .labelsHidden()
                         .disabled(until == nil)
                     }
                     HStack(spacing: 8) {
-                        Button { set { $0.ends = .count(10) } } label: {
+                        NativeSessionButton{ set { $0.ends = .count(10) } } label: {
                             Label("After", systemImage: count != nil ? "largecircle.fill.circle" : "circle")
                                 .frame(minHeight: 28).contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(!ready)

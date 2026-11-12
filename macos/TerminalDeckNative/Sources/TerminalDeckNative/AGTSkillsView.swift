@@ -94,7 +94,7 @@ struct AGTSkillsView: View {
             }.pickerStyle(.segmented).labelsHidden().frame(width: 200)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
-                TextField("Find a skill", text: $model.query).textFieldStyle(.plain).focused($searchFocused)
+                NativeSessionTextField("Find a skill", text: $model.query).textFieldStyle(.plain).sessionFocused($searchFocused)
             }.padding(.horizontal, 12).frame(minWidth: 170, maxWidth: 280, minHeight: 28)
                 .background(ROUTINESKit.selection, in: Capsule())
         }
@@ -114,7 +114,7 @@ struct AGTSkillsView: View {
         let users = model.users(row)
         return ROUTINESCard {
             VStack(alignment: .leading, spacing: 0) {
-            Button { Task { await model.open(row) } } label: {
+            NativeSessionButton { Task { await model.open(row) } } label: {
                 VStack(alignment: .leading, spacing: 12) {
                     cardHeading(name: row.name, source: row.source, category: row.category)
                     Text(row.summary).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .topLeading)
@@ -135,7 +135,7 @@ struct AGTSkillsView: View {
                     .padding(.horizontal, 16).padding(.bottom, 12)
             }
             HStack { Spacer()
-            Button { assignment = row.id } label: { Label("Assign skill", systemImage: "person.2") }
+            NativeSessionButton { assignment = row.id } label: { Label("Assign skill", systemImage: "person.2") }
                 .buttonStyle(.bordered).controlSize(.small).padding(16)
                 .popover(isPresented: Binding(get: { assignment == row.id }, set: { if !$0 { assignment = nil } }), arrowEdge: .bottom) {
                     ROUTINESSkillAssignment(row: row, model: model, done: { assignment = nil })
@@ -144,9 +144,9 @@ struct AGTSkillsView: View {
             }
         }
         .contextMenu {
-            Button("Show the skill") { Task { await model.open(row) } }
-            Button("Assign skill") { assignment = row.id }
-            Button("Show in Finder") { NSWorkspace.shared.selectFile(row.folder, inFileViewerRootedAtPath: "") }
+            NativeSessionButton("Show the skill") { Task { await model.open(row) } }
+            NativeSessionButton("Assign skill") { assignment = row.id }
+            NativeSessionButton("Show in Finder") { NSWorkspace.shared.selectFile(row.folder, inFileViewerRootedAtPath: "") }
         }
     }
     private func catalogueCard(_ item: CommunityItem) -> some View {
@@ -157,11 +157,11 @@ struct AGTSkillsView: View {
                 HStack {
                     Text(item.version).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Install") { installing = item }.buttonStyle(.bordered).controlSize(.small)
+                    NativeSessionButton("Install") { installing = item }.buttonStyle(.bordered).controlSize(.small)
                         .disabled(!CommunityRules.installable(item))
                 }.frame(height: 22)
             }.padding(16).frame(minHeight: 150)
-        }.contextMenu { Button("Install") { installing = item }.disabled(!CommunityRules.installable(item)) }
+        }.contextMenu { NativeSessionButton("Install") { installing = item }.disabled(!CommunityRules.installable(item)) }
     }
     private func cardHeading(name: String, source: String, category: String) -> some View {
         HStack(spacing: 10) {
@@ -216,7 +216,7 @@ private struct ROUTINESSkillAssignment: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Give “\(row.name)” to…").font(.headline)
-            TextField("Find an agent", text: $query).textFieldStyle(.roundedBorder)
+            NativeSessionTextField("Find an agent", text: $query).textFieldStyle(.roundedBorder)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(groups, id: \.self) { id in
@@ -248,7 +248,7 @@ private struct ROUTINESSkillAssignment: View {
             HStack {
                 Text("Named in each ticked agent's task brief from its next task (a suggestion; it does not reach sessions opened by hand).").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Done", action: done).buttonStyle(.borderedProminent).controlSize(.small)
+                NativeSessionButton("Done", action: done).buttonStyle(.borderedProminent).controlSize(.small)
             }
         }.padding(14).frame(width: 330)
     }
@@ -268,8 +268,8 @@ private struct ROUTINESSkillInstall: View {
             if let error = model.problem { Text(error).font(.callout).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
-                Button(model.pending.contains("install") ? "Installing…" : "Install") {
+                NativeSessionButton("Cancel") { dismiss() }.buttonStyle(.bordered)
+                NativeSessionButton(model.pending.contains("install") ? "Installing…" : "Install") {
                     Task { if await model.action("skills:install", args: ["id": item.id, "project": projectID as Any? ?? NSNull()], key: "install") { dismiss() } }
                 }.buttonStyle(.borderedProminent).disabled(model.pending.contains("install"))
             }
@@ -288,20 +288,20 @@ private struct ROUTINESSkillEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New skill").font(.title3.weight(.semibold))
-            TextField("Skill name, e.g. release-checks", text: $name).textFieldStyle(.roundedBorder)
-            TextField("One-line description", text: $summary).textFieldStyle(.roundedBorder)
+            NativeSessionTextField("Skill name, e.g. release-checks", text: $name).textFieldStyle(.roundedBorder)
+            NativeSessionTextField("One-line description", text: $summary).textFieldStyle(.roundedBorder)
             HStack {
                 ROUTINESSkillProjectPicker(projectID: $projectID)
                 Picker("Category", selection: $category) { ForEach(ROUTINESSkillsRules.categories.filter { $0 != "All" }, id: \.self) { Text($0).tag($0) } }
             }
             Text("Instructions").font(.headline)
-            TextEditor(text: $instructions).font(.system(size: 12, design: .monospaced)).frame(height: 200)
+            NativeSessionTextEditor(text: $instructions).font(.system(size: 12, design: .monospaced)).frame(height: 200)
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
             if let error = model.problem { Text(error).font(.callout).foregroundStyle(.red).lineLimit(2) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.buttonStyle(.bordered)
-                Button(model.pending.contains("create") ? "Creating…" : "Create skill") {
+                NativeSessionButton("Cancel") { dismiss() }.buttonStyle(.bordered)
+                NativeSessionButton(model.pending.contains("create") ? "Creating…" : "Create skill") {
                     Task { if await model.action("skills:create", args: ["name": name, "summary": summary, "category": category, "markdown": instructions, "project": projectID as Any? ?? NSNull()], key: "create") { dismiss() } }
                 }.buttonStyle(.borderedProminent).disabled(model.pending.contains("create") || !ROUTINESSkillsRules.safeName(name) || summary.isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -326,7 +326,7 @@ private struct ROUTINESSkillPreview: View {
     @State private var confirming = false
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { Text(value["name"].string ?? "Skill").font(.title3.weight(.semibold)); Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent) }
+            HStack { Text(value["name"].string ?? "Skill").font(.title3.weight(.semibold)); Spacer(); NativeSessionButton("Done") { dismiss() }.buttonStyle(.borderedProminent) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(value["markdown"].string ?? "").font(.system(size: 12, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -342,14 +342,14 @@ private struct ROUTINESSkillPreview: View {
             }.frame(height: 360).background(ROUTINESKit.card, in: RoundedRectangle(cornerRadius: 8))
             if let error = model.problem { Text(error).font(.callout).foregroundStyle(.red).lineLimit(2) }
             HStack {
-                Button("Show in Finder") { NSWorkspace.shared.selectFile(value["folder"].string, inFileViewerRootedAtPath: "") }.buttonStyle(.bordered)
+                NativeSessionButton("Show in Finder") { NSWorkspace.shared.selectFile(value["folder"].string, inFileViewerRootedAtPath: "") }.buttonStyle(.bordered)
                 Spacer()
-                if value["builtIn"].bool != true { Button("Remove skill…", role: .destructive) { confirming = true }.buttonStyle(.bordered).disabled(model.pending.contains("remove")) }
+                if value["builtIn"].bool != true { NativeSessionButton("Remove skill…", role: .destructive) { confirming = true }.buttonStyle(.bordered).disabled(model.pending.contains("remove")) }
             }
         }.padding(24).frame(width: 620)
         .alert("Remove “\(value["name"].string ?? "skill")”?", isPresented: $confirming) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove skill", role: .destructive) {
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Remove skill", role: .destructive) {
                 Task { if await model.action("skills:remove", args: ["skill": value["id"].string ?? ""], key: "remove") { dismiss(); model.preview = nil } }
             }
         } message: { Text("Its folder and all its files will be removed. Agents will keep the skill name in their settings until you remove it there.") }

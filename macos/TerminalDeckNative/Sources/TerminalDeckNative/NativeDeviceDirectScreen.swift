@@ -49,13 +49,19 @@ import TerminalDeckNativeCore
     }
 
     /// The direct path for this device, when there is one and it has not just failed.
-    static func source(for device: DeviceDetails, now: Date = Date()) -> (any DeviceDirectSource)? {
+    /// `ignoringCooldown` (9 Nov): a phone's view tries again within the two minutes too (screenshots stand in meanwhile).
+    static func source(for device: DeviceDetails, now: Date = Date(), ignoringCooldown: Bool = false) -> (any DeviceDirectSource)? {
         guard enabled, let target = DeviceDirectTarget(id: device.id, platform: device.platform, kind: device.kind) else { return nil }
-        if let failed = failures[device.id], now.timeIntervalSince(failed) < retryAfter { return nil }
+        if !ignoringCooldown, let failed = failures[device.id], now.timeIntervalSince(failed) < retryAfter { return nil }
         switch target {
         case .iosSimulator(let udid): return SimDirectSource(udid: udid)
         case .androidEmulator(let serial): return EmulatorDirectSource(serial: serial)
         }
+    }
+
+    /// Whether this device has a direct path at all (an iOS Simulator or an Android emulator, the switch on).
+    static func hasPath(for device: DeviceDetails) -> Bool {
+        enabled && DeviceDirectTarget(id: device.id, platform: device.platform, kind: device.kind) != nil
     }
 
     static func failed(_ id: String, at now: Date = Date()) { failures[id] = now }

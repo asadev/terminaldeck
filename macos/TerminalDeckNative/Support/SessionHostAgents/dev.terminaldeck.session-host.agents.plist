@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.terminaldeck.session-host.agents</string>
+  <key>BundleProgram</key><string>Contents/MacOS/TerminalDeckNative</string>
+  <key>ProgramArguments</key><array><string>TerminalDeckNative</string><string>--session-host-launch</string><string>agents</string></array>
+  <key>AssociatedBundleIdentifiers</key><array><string>dev.terminaldeck.app</string></array>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>AbandonProcessGroup</key><false/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>Umask</key><integer>63</integer>
+</dict></plist>

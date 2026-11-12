@@ -100,16 +100,16 @@ struct Routines21ReportsView: View {
             NativeRoutineFollowScroll(entries: model.entries, viewport: followViewport, loading: model.loading) { entry in bubble(entry) }
                 .overlay { if model.loading { skeleton } }
             if let id = model.reportID {
-                HStack { Text("Asking about a report").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Clear") { model.reportID = nil } }
+                HStack { Text("Asking about a report").font(.caption).foregroundStyle(.secondary); Spacer(); NativeSessionButton("Clear") { model.reportID = nil } }
                     .accessibilityValue(id)
             }
             if let problem = model.problem {
-                HStack { Text(problem).font(.caption).foregroundStyle(ROUTINESKit.bad); Spacer(); Button("Try again") { model.load() } }
+                HStack { Text(problem).font(.caption).foregroundStyle(ROUTINESKit.bad); Spacer(); NativeSessionButton("Try again") { model.load() } }
             }
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask about \(name)…", text: $model.draft, axis: .vertical).lineLimit(1...4).textFieldStyle(.plain)
-                    .onSubmit { Task { await model.send() } }
-                Button { Task { await model.send() } } label: {
+                NativeSessionTextField("Ask about \(name)…", text: $model.draft, axis: .vertical).lineLimit(1...4).textFieldStyle(.plain)
+                    .sessionOnSubmit { Task { await model.send() } }
+                NativeSessionButton { Task { await model.send() } } label: {
                     if model.sending { ProgressView().controlSize(.small).frame(width: 18, height: 18) }
                     else { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 18, height: 18) }
                 }.buttonStyle(.borderedProminent).disabled(model.sending || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -148,7 +148,7 @@ struct Routines21ReportsView: View {
                     Label((delivery["label"].text ?? "Destination") + ": " + (failed ? "not sent" : "sent") + (failed ? ", " + (delivery["message"].text ?? "try again later") : ""), systemImage: failed ? "exclamationmark.circle" : "checkmark")
                         .font(.caption).foregroundStyle(failed ? ROUTINESKit.warn : Color.secondary)
                 }
-                if entry.kind == "report" { Button("Ask about this report") { model.reportID = entry.id }.buttonStyle(.plain).font(.caption).foregroundStyle(Color.accentColor) }
+                if entry.kind == "report" { NativeSessionButton("Ask about this report") { model.reportID = entry.id }.buttonStyle(.plain).font(.caption).foregroundStyle(Color.accentColor) }
             }.padding(entry.kind == "question" ? 14 : 0)
                 .background(entry.kind == "question" ? Color.accentColor.opacity(0.12) : .clear,
                     in: UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18))

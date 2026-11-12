@@ -157,6 +157,7 @@ public enum BackendDeckToolsSessionsArea {
                 if action == "list" { return .init(object([("held", .array(rows)), ("count", .number(Double(rows.count)))]), summary: object([("action", .string(action)), ("count", .number(Double(rows.count)))])) }
                 guard rows.contains(where: { $0["key"].string == key }) else { throw bad("nothing is being held under \(key); use action \"list\" for the keys") }
                 if action == "forget" { return .init(object([("forgotten", .string(key)), ("held", .array(try await surface.forgetHeld(key: key, context: context)))]), summary: object([("action", .string(action)), ("key", .string(key))])) }
+                guard args["account"].isNullish, args["historyAccount"].isNullish else { throw bad("Retry uses the original saved account and cannot select a replacement.") }
                 let before = Set(try await runtime.sessions(context).compactMap { $0["id"].string })
                 let after = try await surface.retryHeld(key: key, context: context), back = !after.contains { $0["key"].string == key }
                 let started = try await runtime.sessions(context).filter { !before.contains($0["id"].string ?? "") }

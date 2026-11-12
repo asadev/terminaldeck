@@ -124,6 +124,27 @@ import TerminalDeckBackend
         XCTAssertFalse(stillOpen)
     }
 
+    /// Decker, 8 Nov (D1, all four apps): a failed step is its own card, never inside the fold; it splits the fold.
+    func testAFailedStepStandsOnItsOwnCardAndSplitsTheFold() {
+        let failed = HootChatRecord(.toolResult, id: "c2", value: .object([.init("output", .string("make: *** [all] Error 2")), .init("isError", .bool(true))]))
+        let rows = HootChatProjection.rows([
+            Self.event(1, turn: "t1", .text(.user, id: "u1", "Build it")),
+            Self.event(2, turn: "t1", Self.call("c1", "Bash", .object([.init("command", .string("ls"))]))), Self.event(3, turn: "t1", Self.result("c1", "ok")),
+            Self.event(4, turn: "t1", Self.call("c2", "Bash", .object([.init("command", .string("make")), .init("description", .string("Build the app"))]))), Self.event(5, turn: "t1", failed),
+            Self.event(6, turn: "t1", Self.call("c3", "Bash", .object([.init("command", .string("make test"))]))), Self.event(7, turn: "t1", Self.result("c3", "ok")),
+            Self.event(8, turn: "t1", .text(.message, id: "m1", "The build failed once."))])
+        guard case .reply(_, _, let steps, _)? = HootChatItem.items(rows).last else { return XCTFail("one reply for the job") }
+        let parts = HootStepPart.parts(steps)
+        XCTAssertEqual(parts.count, 3)
+        guard parts.count == 3, case .fold(_, let before) = parts[0], case .failed(let card) = parts[1], case .fold(_, let after) = parts[2] else {
+            return XCTFail("fold, failed card, fold")
+        }
+        XCTAssertEqual(before.map(\.id), [rows[1].id]); XCTAssertEqual(card.id, rows[2].id); XCTAssertEqual(after.map(\.id), [rows[3].id])
+        XCTAssertEqual(HootStep.title(card, live: false), "Build the app")
+        // A single good step still folds into one compact line.
+        XCTAssertEqual(HootStep.summary(before).text, "Ran a command")
+    }
+
     /// Asad: "It should instantly show Hoot's profile and then start thinking next to it". The reply is there the
     /// moment the message is sent, and it is the SAME item (same id) once steps and then the answer arrive.
     func testTheReplyIsThereAtOnceAndKeepsItsPlace() {

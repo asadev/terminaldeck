@@ -25,6 +25,13 @@ public actor BackendSessionLifecycleRPC {
                 authorizeMutation: @escaping @Sendable (NativeRPCContext) throws -> Void) {
         self.lifecycle = lifecycle; self.switches = switches; self.restore = restore; self.deferred = deferred; self.store = store; authorize = authorizeMutation
     }
+    /// Shared Retry route, also used by the native app's bridge. The caller authorizes mutations before dispatch.
+    public static func retryHeld(restore: BackendSessionRestoreCoordinator, args: [NativeRPCValue]) async throws -> NativeRPCValue {
+        guard args.count == 1 else { throw NativeRPCError.invalidArguments("Retry uses this tab's original saved account and cannot select a replacement.") }
+        let key = try args[0].requireString("held session key", nonempty: true)
+        return .array(try await restore.retryHeld(key).map(\.wireValue))
+    }
+
     public func invoke(_ channel: String, args: [NativeRPCValue], context: NativeRPCContext) async throws -> NativeRPCValue {
         guard Self.channels.contains(channel) else { throw BackendSessionFailure.unsupported("This native session orchestration channel is not registered.") }
         func value(_ index: Int) -> NativeRPCValue { args.indices.contains(index) ? args[index] : .missing }
@@ -66,7 +73,8 @@ public actor BackendSessionLifecycleRPC {
         case "session:switch-cancel": try await deferred.cancel(sessionID: try id(0)); return .null
         case "session:switch-armed": return .array(try await deferred.list().map(\.wireValue))
         case "sessions:held": return .array(try await store.heldSessions().map(\.wireValue))
-        case "session:held-retry": return .array(try await restore.retryHeld(id(0)).map(\.wireValue))
+        case "session:held-retry":
+            return try await Self.retryHeld(restore: restore, args: args)
         case "session:held-forget": return .array(try await restore.forgetHeld(id(0)).map(\.wireValue))
         case "session:account":
             // An in-place switch shows the account it handed the session at once, marked pending until proven.

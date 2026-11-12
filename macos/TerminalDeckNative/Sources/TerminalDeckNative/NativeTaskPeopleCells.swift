@@ -43,10 +43,10 @@ struct PersonSearchList<Header: View>: View {
             header
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-                TextField("Search people", text: $query)
-                    .textFieldStyle(.plain)
-                    .focused($focused)
+                NativeSessionTextField("Search people", text: $query)
+                    .sessionFocused($focused)
                     .onSubmit { if let first = rows.first { onPick(first) } }
+                    .textFieldStyle(.plain)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -60,7 +60,7 @@ struct PersonSearchList<Header: View>: View {
                     }
                     ForEach(rows) { p in
                         let picked = isPicked(p.id)
-                        Button { onPick(p) } label: {
+                        NativeSessionButton { onPick(p) } label: {
                             HStack(spacing: 8) {
                                 PersonAvatar(person: p, size: 24)
                                 Text(p.name).lineLimit(1)

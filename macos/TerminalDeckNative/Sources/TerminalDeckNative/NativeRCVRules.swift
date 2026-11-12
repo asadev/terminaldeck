@@ -41,7 +41,7 @@ struct NativeRCVRulesPage: View {
                     .lineLimit(1)
                     .frame(maxWidth: 560, alignment: .leading)
                 Spacer(minLength: 12)
-                Button("New rule") { model.openSheet(.rule(newRule(), isNew: true)) }
+                NativeSessionButton("New rule") { model.openSheet(.rule(newRule(), isNew: true)) }
             }
             NativeRCVActionLine(model: model)
             if model.visibleRules.isEmpty {
@@ -88,7 +88,7 @@ private struct NativeRCVStartingPoint: View {
     let pick: () -> Void
 
     var body: some View {
-        Button(action: pick) {
+        NativeSessionButton(action: pick) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(point.title).font(.callout)
                 Text(point.detail).font(.caption).foregroundStyle(.secondary)
@@ -112,7 +112,7 @@ private struct NativeRCVRuleRow: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Button { model.openSheet(.rule(rule, isNew: false)) } label: {
+            NativeSessionButton { model.openSheet(.rule(rule, isNew: false)) } label: {
                 HStack(spacing: 10) {
                     Spacer().frame(width: 34)
                     VStack(alignment: .leading, spacing: 3) {
@@ -129,15 +129,15 @@ private struct NativeRCVRuleRow: View {
             Toggle(rule.name, isOn: Binding(get: { rule.enabled }, set: { on in Task { await model.setEnabled(rule, on) } }))
                 .toggleStyle(.switch).controlSize(.small).labelsHidden().padding(.top, 18).padding(.leading, 12).disabled(model.busy != nil)
             HStack(spacing: 2) {
-                Button { Task { await model.moveRule(rule.id, up: true) } } label: { Image(systemName: "chevron.up").frame(width: 28, height: 28).contentShape(.rect) }
+                NativeSessionButton { Task { await model.moveRule(rule.id, up: true) } } label: { Image(systemName: "chevron.up").frame(width: 28, height: 28).contentShape(.rect) }
                     .disabled(first || model.busy != nil).help("Check it earlier").accessibilityLabel("Move up")
-                Button { Task { await model.moveRule(rule.id, up: false) } } label: { Image(systemName: "chevron.down").frame(width: 28, height: 28).contentShape(.rect) }
+                NativeSessionButton { Task { await model.moveRule(rule.id, up: false) } } label: { Image(systemName: "chevron.down").frame(width: 28, height: 28).contentShape(.rect) }
                     .disabled(last || model.busy != nil).help("Check it later").accessibilityLabel("Move down")
             }.buttonStyle(.borderless).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 8).padding(.top, 14)
         }
         .contextMenu {
-            Button("Edit rule…") { model.openSheet(.rule(rule, isNew: false)) }
-            Button(rule.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(rule, !rule.enabled) } }
+            NativeSessionButton("Edit rule…") { model.openSheet(.rule(rule, isNew: false)) }
+            NativeSessionButton(rule.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(rule, !rule.enabled) } }
         }
     }
 }
@@ -181,7 +181,7 @@ struct NativeRCVRuleEditor: View {
                 if let error = model.actionError { Section { NativeCodingAINotice(tone: .error, text: error) } }
                 Section {
                     NativeSettingRow(label: "Name", help: "Shown in Flow next to everything it sends on.") {
-                        TextField("New errors to Ada", text: $draft.name)
+                        NativeSessionTextField("New errors to Ada", text: $draft.name)
                             .labelsHidden()
                             .frame(minWidth: 220, maxWidth: 280)
                     }
@@ -220,12 +220,12 @@ struct NativeRCVRuleEditor: View {
                 }
             } trailing: {
                 if !isNew {
-                    Button("Delete…", role: .destructive) { confirmDelete = true }
+                    NativeSessionButton("Delete…", role: .destructive) { confirmDelete = true }
                         .disabled(model.busy != nil)
                 }
-                Button("Cancel") { model.openSheet(nil) }
+                NativeSessionButton("Cancel") { model.openSheet(nil) }
                     .keyboardShortcut(.cancelAction)
-                Button(isNew ? "Add rule" : "Save") { Task { await model.saveRule(draft) } }
+                NativeSessionButton(isNew ? "Add rule" : "Save") { Task { await model.saveRule(draft) } }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(problem != nil || model.busy != nil || (!isNew && draft == original))
@@ -234,7 +234,7 @@ struct NativeRCVRuleEditor: View {
         .frame(width: 720, height: 760)
         .interactiveDismissDisabled(model.busy == "save-rule")
         .confirmationDialog("Delete the rule “\(original.name)”?", isPresented: $confirmDelete) {
-            Button("Delete rule", role: .destructive) { Task { await model.deleteRule(original.id) } }
+            NativeSessionButton("Delete rule", role: .destructive) { Task { await model.deleteRule(original.id) } }
         } message: {
             Text("What it would have sent on waits in Unrouted instead.")
         }
@@ -266,7 +266,7 @@ struct NativeRCVRuleEditor: View {
                 HStack {
                     Text(RCVPresentation.sourceName(id, in: model.sources)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Remove") { draft.sourceIds.removeAll { $0 == id } }.buttonStyle(.borderless)
+                    NativeSessionButton("Remove") { draft.sourceIds.removeAll { $0 == id } }.buttonStyle(.borderless)
                 }
             }
         }
@@ -280,7 +280,7 @@ struct NativeRCVRuleEditor: View {
                     Spacer()
                     Menu("Insert") {
                         ForEach(RCVPresentation.placeholders(sources: chosenSources, events: recent), id: \.self) { placeholder in
-                            Button(placeholder) {
+                            NativeSessionButton(placeholder) {
                                 if !draft.instruction.isEmpty && !draft.instruction.hasSuffix("\n") && !draft.instruction.hasSuffix(" ") {
                                     draft.instruction += " "
                                 }
@@ -291,7 +291,7 @@ struct NativeRCVRuleEditor: View {
                     .fixedSize()
                     .help("Add a value from the event")
                 }
-                TextField("{{title}}\n{{text}}", text: $draft.instruction, axis: .vertical)
+                NativeSessionTextField("{{title}}\n{{text}}", text: $draft.instruction, axis: .vertical)
                     .lineLimit(4...12)
                     .labelsHidden()
                 Text("{{title}}, {{text}} and {{fields.…}} are filled in from the event once; anything inside a message stays plain text.")
@@ -299,11 +299,11 @@ struct NativeRCVRuleEditor: View {
             }
             NativeSettingRow(label: "Project folder", help: "Optional. The folder an agent’s task works in. Empty: the agent’s own default.") {
                 HStack(spacing: 6) {
-                    TextField("Default", text: $draft.project)
+                    NativeSessionTextField("Default", text: $draft.project)
                         .labelsHidden()
                         .truncationMode(.head)
                         .frame(minWidth: 180, maxWidth: 240)
-                    Button("Choose…", action: chooseFolder)
+                    NativeSessionButton("Choose…", action: chooseFolder)
                 }
             }
         }
@@ -367,7 +367,7 @@ struct NativeRCVRuleEditor: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Or paste a sample").font(.callout).foregroundStyle(.secondary)
-                TextField("{\"title\": \"Disk full\", \"severity\": \"error\"}", text: $sample, axis: .vertical)
+                NativeSessionTextField("{\"title\": \"Disk full\", \"severity\": \"error\"}", text: $sample, axis: .vertical)
                     .font(.system(.body, design: .monospaced))
                     .lineLimit(2...8)
                     .labelsHidden()
@@ -376,7 +376,7 @@ struct NativeRCVRuleEditor: View {
                 }
             }
             HStack {
-                Button(model.busy == "test" ? "Testing…" : "Test") {
+                NativeSessionButton(model.busy == "test" ? "Testing…" : "Test") {
                     Task {
                         let eventID = testEventID ?? recent.first?.id
                         if let result = await model.test(draft, eventID: eventID, sourceID: draft.sourceIds.first ?? recent.first?.sourceId, sample: sample),
@@ -429,14 +429,14 @@ struct NativeRCVConditionsEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(conditions.indices), id: \.self) { index in
                 HStack(spacing: 6) {
-                    TextField("fields.chat", text: text(index, \.path))
+                    NativeSessionTextField("fields.chat", text: text(index, \.path))
                         .font(.system(.body, design: .monospaced))
                         .labelsHidden()
                         .frame(minWidth: 130, maxWidth: 200)
                     if !suggestions.isEmpty {
                         Menu {
                             ForEach(suggestions, id: \.self) { path in
-                                Button(path) { text(index, \.path).wrappedValue = path }
+                                NativeSessionButton(path) { text(index, \.path).wrappedValue = path }
                             }
                         } label: {
                             Image(systemName: "list.bullet")
@@ -454,12 +454,12 @@ struct NativeRCVConditionsEditor: View {
                     .labelsHidden()
                     .fixedSize()
                     if RCVPresentation.needsValue(operation(index).wrappedValue) {
-                        TextField(prompt(operation(index).wrappedValue), text: text(index, \.value))
+                        NativeSessionTextField(prompt(operation(index).wrappedValue), text: text(index, \.value))
                             .labelsHidden()
                     } else {
                         Spacer(minLength: 0)
                     }
-                    Button {
+                    NativeSessionButton {
                         if conditions.indices.contains(index) { conditions.remove(at: index) }
                     } label: {
                         Image(systemName: "minus.circle")
@@ -470,7 +470,7 @@ struct NativeRCVConditionsEditor: View {
                     .accessibilityLabel("Remove condition")
                 }
             }
-            Button(addLabel) { conditions.append(RCVCondition(suggestions.first ?? "kind")) }
+            NativeSessionButton(addLabel) { conditions.append(RCVCondition(suggestions.first ?? "kind")) }
                 .buttonStyle(.borderless)
         }
     }

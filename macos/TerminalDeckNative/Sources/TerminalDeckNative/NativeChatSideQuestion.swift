@@ -91,23 +91,23 @@ struct NativeChatSideQuestionPopover: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.frame(maxHeight: 260)
                     }
-                    TextEditor(text: $model.chatSideQuestion).font(.body).frame(height: 80).accessibilityLabel("Side question")
+                    NativeSessionTextEditor(text: $model.chatSideQuestion).font(.body).frame(height: 80).accessibilityLabel("Side question")
                     if live {
                         HStack {
-                            Button("Ask") { ask() }.disabled(asking || answering || model.chatSideQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            if owner.opened { Button("Close side question") { closeSide() } }
+                            NativeSessionButton("Ask") { ask() }.disabled(asking || answering || model.chatSideQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            if owner.opened { NativeSessionButton("Close side question") { closeSide() } }
                         }
                     } else {
-                        Button("Prepare context brief") { run("prepare") }.disabled(model.chatSideQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        NativeSessionButton("Prepare context brief") { run("prepare") }.disabled(model.chatSideQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         if !model.chatSideBrief.isEmpty {
                             Text("Captured source IDs describe the prepared excerpt. You can edit the brief below.").font(.caption).foregroundStyle(.secondary)
-                            TextEditor(text: $model.chatSideBrief).font(.caption.monospaced()).frame(height: 230).accessibilityLabel("Editable side-question brief")
+                            NativeSessionTextEditor(text: $model.chatSideBrief).font(.caption.monospaced()).frame(height: 230).accessibilityLabel("Editable side-question brief")
                             if model.chatSideQuestion != model.chatSidePreparedQuestion { Text("Question changed; prepare its brief again.").font(.caption).foregroundStyle(.secondary) }
-                            Button("Copy context brief") { run("copy") }.disabled(model.chatSideQuestion != model.chatSidePreparedQuestion)
+                            NativeSessionButton("Copy context brief") { run("copy") }.disabled(model.chatSideQuestion != model.chatSidePreparedQuestion)
                         }
                     }
                     if let outcome { Text(outcome).font(.caption) }
-                    Button("Return to main chat") { model.chatSideVisible = false }
+                    NativeSessionButton("Return to main chat") { model.chatSideVisible = false }
                 }.padding(16).frame(width: 580)
             }
             .onChange(of: model.chatSideVisible) { _, visible in if !visible { closeSide() } }

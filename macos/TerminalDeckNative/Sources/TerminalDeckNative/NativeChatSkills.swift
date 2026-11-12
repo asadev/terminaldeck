@@ -45,8 +45,8 @@ struct NativeChatSkillsView: View {
     @State private var preview: NativeRPCValue?
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Installed skills").font(.headline); Spacer(); Button("Manage skills") { model.chatSkillsVisible = false; AppModel.shared.select("agents-skills") } }
-            TextField("Find installed skills", text: $query)
+            HStack { Text("Installed skills").font(.headline); Spacer(); NativeSessionButton("Manage skills") { model.chatSkillsVisible = false; AppModel.shared.select("agents-skills") } }
+            NativeSessionTextField("Find installed skills", text: $query)
             Text("Prepare adds the provider's advertised command to an empty text draft. Sending resolves it through that provider; installed paths are not applied-source receipts.").font(.caption).foregroundStyle(.secondary)
             if loading { ProgressView("Reading installed skills…") }
             ScrollView {
@@ -56,9 +56,9 @@ struct NativeChatSkillsView: View {
                             Text(skill.name).font(.headline); Text(skill.summary).font(.caption)
                             Text("\(skill.source) · \(skill.folder)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                             HStack {
-                                Button("Details") { Task { do { preview = try await model.skillTool("read", request: skill.id) } catch { problem = error.localizedDescription } } }
+                                NativeSessionButton("Details") { Task { do { preview = try await model.skillTool("read", request: skill.id) } catch { problem = error.localizedDescription } } }
                                 if let command = try? NativeChatSkillInvocation.command(skill, installed: installed, commands: model.catalogue.commands, current: "") {
-                                    Button("Prepare " + command.trimmingCharacters(in: .whitespaces)) { do { try model.prepareChatSkill(skill, installed: installed); problem = "Command prepared. Add instructions, then Send." } catch { problem = error.localizedDescription } }
+                                    NativeSessionButton("Prepare " + command.trimmingCharacters(in: .whitespaces)) { do { try model.prepareChatSkill(skill, installed: installed); problem = "Command prepared. Add instructions, then Send." } catch { problem = error.localizedDescription } }
                                         .disabled(!model.composerDraft.text.isEmpty || model.readOnly || model.loading)
                                 } else { Text("No unambiguous command advertised").font(.caption).foregroundStyle(.secondary) }
                             }

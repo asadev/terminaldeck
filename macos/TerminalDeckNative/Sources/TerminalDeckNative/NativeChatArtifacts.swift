@@ -57,7 +57,7 @@ struct NativeChatArtifactsView: View {
         let entries = model.chatArtifacts.filter { query.isEmpty || ($0.title + " " + $0.destination).localizedStandardContains(query) }
         VStack(alignment: .leading, spacing: 12) {
             Text("Emitted sources and files").font(.headline)
-            TextField("Filter sources and files", text: $query)
+            NativeSessionTextField("Filter sources and files", text: $query)
             Text("\(entries.count) indexed entries · Structured links and absolute file paths only. Full tool output stays in the transcript.").font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -66,8 +66,8 @@ struct NativeChatArtifactsView: View {
                             Text(entry.title).font(.callout.weight(.semibold))
                             Text(entry.destination).font(.caption.monospaced()).textSelection(.enabled).lineLimit(3)
                             HStack {
-                                Button(entry.kind == "file" ? "Reveal file" : "Open source") { do { _ = try model.artifactTool("open", request: entry.id) } catch { problem = error.localizedDescription } }
-                                Button("Recorded event") { do { _ = try model.detailTool("open", query: String(decoding: NativeRPCValue.string(entry.recordID).encodedJSON(), as: UTF8.self)); model.chatArtifactsVisible = false; model.chatSourcesVisible = false } catch { problem = error.localizedDescription } }
+                                NativeSessionButton(entry.kind == "file" ? "Reveal file" : "Open source") { do { _ = try model.artifactTool("open", request: entry.id) } catch { problem = error.localizedDescription } }
+                                NativeSessionButton("Recorded event") { do { _ = try model.detailTool("open", query: String(decoding: NativeRPCValue.string(entry.recordID).encodedJSON(), as: UTF8.self)); model.chatArtifactsVisible = false; model.chatSourcesVisible = false } catch { problem = error.localizedDescription } }
                             }
                         }
                     }

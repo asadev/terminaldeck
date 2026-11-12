@@ -55,7 +55,7 @@ struct AGTIconPicker: View {
                     ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 170)
-                TextField("Search icons", text: $query).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Search icons", text: $query).textFieldStyle(.roundedBorder)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -80,7 +80,7 @@ struct AGTIconPicker: View {
             HStack {
                 Text("\(AGTIconCatalog.all.count) icons").font(.caption).foregroundStyle(.tertiary)
                 Spacer()
-                Button("Use the default") { choose(nil) }.controlSize(.small)
+                NativeSessionButton("Use the default") { choose(nil) }.controlSize(.small)
             }
         }
         .padding(12)
@@ -96,7 +96,7 @@ struct AGTIconPicker: View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
             ForEach(choices) { choice in
                 let selected = choice.icon == current
-                Button { choose(choice.icon) } label: {
+                NativeSessionButton { choose(choice.icon) } label: {
                     Group {
                         switch choice.icon {
                         case .symbol(let name):

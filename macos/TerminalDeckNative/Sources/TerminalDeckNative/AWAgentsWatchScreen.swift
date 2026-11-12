@@ -63,8 +63,8 @@ struct AWAgentsWatchScreen: View {
     }
     private var toolbar: some View {
         @Bindable var bound = model
-        let search = TextField("Find an agent, project or app", text: $bound.search).textFieldStyle(.roundedBorder)
-            .focused($searchFocused).frame(minWidth: 110, maxWidth: 210)
+        let search = NativeSessionTextField("Find an agent, project or app", text: $bound.search).textFieldStyle(.roundedBorder)
+            .sessionFocused($searchFocused).frame(minWidth: 110, maxWidth: 210)
         let chips = FilterChips(selection: $bound.source, items: AGTWatchSource.allCases.map { source in
             AGKITFilterItem(id: source, title: source == .all ? "Everything" : source.title,
                 count: model.sourceCount(source))
@@ -111,8 +111,8 @@ struct AWAgentsWatchScreen: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.padding(.vertical, 5).tag(row.id)
                 .contextMenu {
-                    Button("Details") { model.select(row.id); model.inspectorPresented = true }
-                    if !row.isOtherApp { Button("Watch in a tab") { model.select(row.id); model.openSession() } }
+                    NativeSessionButton("Details") { model.select(row.id); model.inspectorPresented = true }
+                    if !row.isOtherApp { NativeSessionButton("Watch in a tab") { model.select(row.id); model.openSession() } }
                 }
                 .onTapGesture(count: 2) { model.select(row.id); model.inspectorPresented = true }
         }.listStyle(.inset).font(.system(size: 12))
@@ -173,11 +173,11 @@ struct AWAgentsWatchScreen: View {
         .id(hiddenColumns.sorted().joined(separator: ","))
         .onChange(of: model.metric) { _, _ in fitColumns() }
         .contextMenu(forSelectionType: String.self) { ids in
-            Button("Details") { model.select(ids.first); model.inspectorPresented = true }.disabled(ids.isEmpty)
-            if let id = ids.first, model.deviceAgent(id) == nil { Button("Watch in a tab") { model.select(id); model.openSession() } }
+            NativeSessionButton("Details") { model.select(ids.first); model.inspectorPresented = true }.disabled(ids.isEmpty)
+            if let id = ids.first, model.deviceAgent(id) == nil { NativeSessionButton("Watch in a tab") { model.select(id); model.openSession() } }
             if let id = ids.first, let other = model.deviceAgent(id) {
-                Button("Open in its app") { AGTWatchSource.bringForward(other) }
-                Button("Copy resume command") { AGTWatchSource.copyResume(other) }.disabled(other.resumeCommand == nil)
+                NativeSessionButton("Open in its app") { AGTWatchSource.bringForward(other) }
+                NativeSessionButton("Copy resume command") { AGTWatchSource.copyResume(other) }.disabled(other.resumeCommand == nil)
             }
         } primaryAction: { ids in model.select(ids.first); model.inspectorPresented = true }
         .overlay {
@@ -211,7 +211,7 @@ struct AWAgentsWatchScreen: View {
                     HStack(spacing: 6) {
                         stat("Heavy job running", model.heavyJob)
                         if model.heavyJobBusy {
-                            Button("Free") { model.freeHeavyJob() }.buttonStyle(.link).font(.system(size: 11)).disabled(model.changing)
+                            NativeSessionButton("Free") { model.freeHeavyJob() }.buttonStyle(.link).font(.system(size: 11)).disabled(model.changing)
                                 .help("Let go of the heavy job now so the next waiting agent can start. Use it when the agent holding it has stopped.")
                         }
                     }
@@ -270,12 +270,12 @@ struct AWAgentsWatchScreen: View {
     }
     @ViewBuilder private func inspectorActions(_ agent: AWWatchAgent) -> some View {
         if let other = model.deviceAgent(agent.id) {
-            Button("Open in its app") { AGTWatchSource.bringForward(other) }
-            Button("Copy resume command") { AGTWatchSource.copyResume(other) }.disabled(other.resumeCommand == nil)
+            NativeSessionButton("Open in its app") { AGTWatchSource.bringForward(other) }
+            NativeSessionButton("Copy resume command") { AGTWatchSource.copyResume(other) }.disabled(other.resumeCommand == nil)
             if other.state == .finished, other.resumeCommand != nil {
-                Button("Resume here") { model.resumeRequested = true }
+                NativeSessionButton("Resume here") { model.resumeRequested = true }
             }
-        } else { Button("Watch in a tab") { model.openSession() }.disabled(agent.sessionID == nil && agent.kind != "hoot") }
+        } else { NativeSessionButton("Watch in a tab") { model.openSession() }.disabled(agent.sessionID == nil && agent.kind != "hoot") }
     }
 }
 
@@ -283,17 +283,17 @@ struct AWAtWorkHeaderActions: View {
     @Bindable var model: AWAgentsWatchModel
     var body: some View {
         HStack(spacing: 8) {
-            Button { model.stopRequested = true } label: { Image(systemName: "stop").frame(width: 28, height: 28) }
+            NativeSessionButton { model.stopRequested = true } label: { Image(systemName: "stop").frame(width: 28, height: 28) }
                 .help("Stop the selected agent").accessibilityLabel("Stop the selected agent")
                 .disabled(model.selected == nil || model.selected?.isOtherApp == true || model.selected?.state == .finished || model.changing)
-            Button { model.inspectorPresented.toggle() } label: { Image(systemName: "info.circle").frame(width: 28, height: 28) }
+            NativeSessionButton { model.inspectorPresented.toggle() } label: { Image(systemName: "info.circle").frame(width: 28, height: 28) }
                 .help("Details").accessibilityLabel("Details").keyboardShortcut("i", modifiers: .command).disabled(model.selected == nil && !model.inspectorPresented)
         }.buttonStyle(.borderless)
         .confirmationDialog("Stop \(model.selected?.name ?? "this agent")?", isPresented: $model.stopRequested) {
-            Button("Stop agent", role: .destructive) { model.stopSelected() }
+            NativeSessionButton("Stop agent", role: .destructive) { model.stopSelected() }
         } message: { Text("Its running work will stop.") }
         .confirmationDialog("Resume this agent in Terminal Deck?", isPresented: $model.resumeRequested) {
-            Button("Resume here") { model.resumeSelected() }
+            NativeSessionButton("Resume here") { model.resumeSelected() }
         }
     }
 }

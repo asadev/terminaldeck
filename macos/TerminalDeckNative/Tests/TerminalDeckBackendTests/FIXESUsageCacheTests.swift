@@ -227,14 +227,14 @@ final class FIXESUsageCacheTests: XCTestCase, @unchecked Sendable {
         var result = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250)
         XCTAssertTrue(result.scanning); XCTAssertLessThanOrEqual(result.files.count, 128)
         for _ in 0..<20 where result.scanning {
-            result = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250)
+            result = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250, revalidate: false)
         }
         XCTAssertFalse(result.scanning); XCTAssertEqual(result.files.count, 300)
         let path = try XCTUnwrap(result.files.first?.path)
         try append(row(f, "append"), to: URL(fileURLWithPath: path))
         var updated = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250)
         for _ in 0..<20 where updated.scanning {
-            updated = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250)
+            updated = try await cache.catalogue(project: f.project.path, scope: f.scope, deadline: BackendFIXESUsageCache.budgetNow() + 250, revalidate: false)
         }
         XCTAssertGreaterThan(try XCTUnwrap(updated.files.first(where: { $0.path == path })?.bytes), try XCTUnwrap(result.files.first(where: { $0.path == path })?.bytes))
     }

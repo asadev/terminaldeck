@@ -37,9 +37,9 @@ struct NativeMemoryPlaybookPart: View {
                 if let problem { Text(problem).font(.callout).foregroundStyle(DeckTokens.warn) }
                 else if dirty { Text("Not saved yet").font(.callout).foregroundStyle(DeckTokens.warn) }
                 Spacer()
-                Button { rows.append(Row(jobKind: rows.isEmpty ? "default" : "")) } label: { Label("Add a row", systemImage: "plus") }
-                Button("Revert") { adopt(force: true) }.disabled(!dirty)
-                Button("Save playbook") {
+                NativeSessionButton { rows.append(Row(jobKind: rows.isEmpty ? "default" : "")) } label: { Label("Add a row", systemImage: "plus") }
+                NativeSessionButton("Revert") { adopt(force: true) }.disabled(!dirty)
+                NativeSessionButton("Save playbook") {
                     let next = rows.map(\.saved), owner = store.owner, note = preface
                     store.act("playbook", done: "Playbook saved") { _ = try await $0.savePlaybook(owner, rows: next, preface: note.isEmpty ? nil : note); return nil }
                 }.buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command).disabled(!dirty || problem != nil || store.busy != nil)
@@ -54,7 +54,7 @@ struct NativeMemoryPlaybookPart: View {
                     Divider().gridCellColumns(7)
                     ForEach($rows) { $row in
                         GridRow(alignment: .center) {
-                            TextField("e.g. bug fix", text: $row.jobKind).textFieldStyle(.roundedBorder).frame(width: 150)
+                            NativeSessionTextField("e.g. bug fix", text: $row.jobKind).textFieldStyle(.roundedBorder).frame(width: 150)
                             Picker("AI", selection: $row.ai) {
                                 Text("Not set").tag("")
                                 ForEach(Self.ais, id: \.0) { DeckRowLabel.provider($0.1, id: $0.0).tag($0.0) }
@@ -79,8 +79,8 @@ struct NativeMemoryPlaybookPart: View {
                                 ForEach(Self.permissions, id: \.self) { Text($0.prefix(1).uppercased() + $0.dropFirst()).tag($0) }
                                 if !row.permission.isEmpty, !Self.permissions.contains(row.permission) { Text(row.permission).tag(row.permission) }
                             }.labelsHidden().frame(width: 150)
-                            TextField("What it should always do for this kind of job", text: $row.instructions).textFieldStyle(.roundedBorder).frame(minWidth: 260, idealWidth: 340)
-                            Button { rows.removeAll { $0.id == row.id } } label: { Image(systemName: "minus.circle") }
+                            NativeSessionTextField("What it should always do for this kind of job", text: $row.instructions).textFieldStyle(.roundedBorder).frame(minWidth: 260, idealWidth: 340)
+                            NativeSessionButton { rows.removeAll { $0.id == row.id } } label: { Image(systemName: "minus.circle") }
                                 .buttonStyle(.borderless).help("Remove this row").accessibilityLabel("Remove row")
                         }
                     }
@@ -94,7 +94,7 @@ struct NativeMemoryPlaybookPart: View {
                 Text("A row called “default” is used when no other kind fits. Every agent job follows its row first: the row's AI, model, effort and permission win. What a row leaves “Not set” comes from the agent's own settings, then the app defaults.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if let path = store.playbook?.path { Button("Show its file") { NativeMemoryFolderPart.reveal(path) }.buttonStyle(.borderless) }
+                if let path = store.playbook?.path { NativeSessionButton("Show its file") { NativeMemoryFolderPart.reveal(path) }.buttonStyle(.borderless) }
             }.padding(.horizontal, 20).padding(.bottom, 12)
         }
         .onAppear { adopt(force: false); if !store.fixture { brain.load() } }

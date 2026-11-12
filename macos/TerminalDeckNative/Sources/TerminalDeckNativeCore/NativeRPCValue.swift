@@ -14,7 +14,11 @@ public indirect enum NativeRPCValue: Equatable, Sendable {
     }
 
     public subscript(_ key: String) -> NativeRPCValue {
-        fields?.last(where: { $0.key == key })?.value ?? .missing
+        guard case .object(let fields) = self else { return .missing }
+        // Search keys by index: last(where:) copies each recursive value into its predicate and back out.
+        // Large task snapshots are read repeatedly while drawing an otherwise idle overview.
+        for index in fields.indices.reversed() where fields[index].key == key { return fields[index].value }
+        return .missing
     }
     public var fields: [Field]? { if case .object(let value) = self { value } else { nil } }
     public var elements: [NativeRPCValue]? { if case .array(let value) = self { value } else { nil } }

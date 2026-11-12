@@ -112,6 +112,15 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         NativeSessionRailContinuity.shared.project(SIDEBARLayout.running(state, liveIDs: store.liveIDs ?? [],
                                                                          started: NativeSessionRailContinuity.shared.started(store.started))).filter { !NativeChatArchives.shared.contains($0.id) }
     }
+    /// These exact rows are drawn below Running; their Retry uses the same key-only action as the renderer.
+    var heldRows: [SIDEBARHeldSessionRow] {
+        SIDEBARLayout.held(state).map { item in
+            let project = SIDEBARLayout.project(for: item.id, in: state)
+            let folder = project.map { URL(fileURLWithPath: $0.id).lastPathComponent }
+            return SIDEBARHeldSessionRow(session: item, folder: folder, retry: { choose(item.id) })
+        }
+    }
+
     private func item(_ id: String) -> SidebarItem {
         let existing = state.item(id: id)
         let titles = ["hoot": "Hoot", "agents-all": "Agents", "tasks": "Tasks", "artifacts": "Artifacts", "servers": "Servers", "devices": "Devices", "simulators": "Simulators", "receiver": "Receiver", "mcp": "MCP servers", "store": "Store"]
@@ -150,6 +159,10 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                         ForEach(NativeSessionRailContinuity.shared.identified(sessions)) { row in
                             sessionRow(row.item, agents: sessionAgents)
                         }
+                    }
+                    if !heldRows.isEmpty {
+                        header("Not reopened")
+                        ForEach(heldRows) { row in row }
                     }
                 NativeChatArchivedRows(state: state, open: choose)
                 hostFailure()
@@ -267,7 +280,7 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
 
     var rowIDs: [String] {
         SIDEBARVisibleRows.ids(pages: pinnedPages.map(\.id), projects: projectFolders.map(\.id),
-                               sessions: visibleRunning.map(\.id))
+                               sessions: visibleRunning.map(\.id) + heldRows.map(\.id))
     }
     private func step(_ delta: Int) {
         let ids = rowIDs
@@ -711,6 +724,44 @@ private final class SIDEBARRenameWatch {
         let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
         guard let hit = content.hitTest(point) else { return false }
         return hit === field || hit === editor || hit.isDescendant(of: field)
+    }
+}
+
+/// A held tab has no terminal to open. Keep its reason on screen and give its one action a plain name.
+struct SIDEBARHeldSessionRow: View, Identifiable {
+    let session: SidebarItem
+    var folder: String?
+    let retry: () -> Void
+    nonisolated var id: String { session.id }
+    var title: String { folder.map { $0 + " · " + session.title } ?? session.title }
+    var statusText: String {
+        if let help = session.help {
+            let prefix = session.title + " — "
+            return help.hasPrefix(prefix) ? String(help.dropFirst(prefix.count)) : help
+        }
+        return session.subtitle ?? "Not reopened"
+    }
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: session.symbol).foregroundStyle(.secondary).frame(width: 18)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(title).fontWeight(.medium).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Button("Retry", action: retry)
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .accessibilityLabel("Retry " + title)
+                        .accessibilityIdentifier("restart-held-retry-" + id)
+                }
+                Text(statusText).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(statusText)
+                    .accessibilityIdentifier("restart-held-reason-" + id)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: DeckSidebar.rowHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
     }
 }
 

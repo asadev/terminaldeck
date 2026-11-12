@@ -17,7 +17,7 @@ struct DropdownEditor: View {
         let current = options.first { $0.id == field.value.string }
         let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
         let shown = needle.isEmpty ? options : options.filter { $0.label.lowercased().contains(needle) }
-        Button { open.toggle() } label: {
+        NativeSessionButton{ open.toggle() } label: {
             Group {
                 if let current { OptionChip(option: current) } else {
                     Text(readOnly ? "—" : "Select option").font(.system(size: 13)).foregroundStyle(.tertiary)
@@ -134,7 +134,7 @@ struct RatingEditor: View {
         let emoji = icon == .fire || icon == .thumb || icon == .smile
         HStack(spacing: 2) {
             ForEach(1...Swift.max(1, max), id: \.self) { n in
-                Button { onCommit(n == value ? .null : .number(Double(n))) } label: {
+                NativeSessionButton{ onCommit(n == value ? .null : .number(Double(n))) } label: {
                     Text(icon.glyph)
                         .font(.system(size: 15))
                         .foregroundStyle(n <= lit ? Color.orange : Color.secondary.opacity(0.35))
@@ -173,7 +173,7 @@ struct PeopleEditor: View {
                     if let p { PersonAvatar(person: p, size: 18) }
                     Text(p?.name ?? "Someone").lineLimit(1).frame(maxWidth: 110, alignment: .leading)
                     if !ctx.readOnly {
-                        Button { commit(ids.filter { $0 != id }) } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
+                        NativeSessionButton{ commit(ids.filter { $0 != id }) } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
                             .buttonStyle(.plain).foregroundStyle(.tertiary)
                             .accessibilityLabel("Remove \(p?.name ?? "person")")
                     }
@@ -341,7 +341,7 @@ struct FilesEditor: View {
             if refs.isEmpty && ctx.readOnly { Text("—").font(.system(size: 13)).foregroundStyle(.tertiary) }
             if busy { ProgressView().controlSize(.mini).accessibilityLabel("Uploading") }
             if !ctx.readOnly {
-                Button {
+                NativeSessionButton{
                     let panel = NSOpenPanel()
                     panel.allowsMultipleSelection = true
                     panel.canChooseDirectories = false
@@ -407,16 +407,16 @@ struct SignaturePad: View {
                 }.onEnded { _ in drawing = false })
                 .accessibilityLabel("Draw your signature")
             } else {
-                TextField("Type your full name", text: Binding(get: { text }, set: { text = String($0.prefix(80)) }))
+                NativeSessionTextField("Type your full name", text: Binding(get: { text }, set: { text = String($0.prefix(80)) }))
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 18, design: .serif).italic())
                     .accessibilityLabel("Type your signature")
             }
             HStack(spacing: 8) {
-                if mode == "draw" { Button("Clear") { strokes = [] }.buttonStyle(.borderless) }
+                if mode == "draw" { NativeSessionButton("Clear") { strokes = [] }.buttonStyle(.borderless) }
                 Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Sign") {
+                NativeSessionButton("Cancel", action: onCancel)
+                NativeSessionButton("Sign") {
                     if mode == "type" {
                         onSave(.object(["mode": .string("typed"), "text": .string(text.trimmingCharacters(in: .whitespacesAndNewlines))]))
                     } else if let url = Self.png(strokes, from: padSize) {
@@ -482,7 +482,7 @@ struct SignatureEditor: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
                 Spacer()
                 if !ctx.readOnly {
-                    Button { onCommit(.null) } label: { Image(systemName: "xmark").font(.system(size: 11)) }
+                    NativeSessionButton{ onCommit(.null) } label: { Image(systemName: "xmark").font(.system(size: 11)) }
                         .buttonStyle(.plain).foregroundStyle(.tertiary)
                         .accessibilityLabel("Clear \(field.label)")
                 }
@@ -491,7 +491,7 @@ struct SignatureEditor: View {
         } else if ctx.readOnly {
             Text("—").font(.system(size: 13)).foregroundStyle(.tertiary).padding(.horizontal, 8)
         } else {
-            Button { open.toggle() } label: {
+            NativeSessionButton{ open.toggle() } label: {
                 Label("Sign", systemImage: "signature").font(.system(size: 13)).padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -555,7 +555,7 @@ struct FieldDatePicker: View {
     @State private var open = false
 
     var body: some View {
-        Button { open.toggle() } label: {
+        NativeSessionButton{ open.toggle() } label: {
             Group {
                 if value.isEmpty {
                     Label("Empty", systemImage: "calendar").foregroundStyle(.tertiary)
@@ -570,7 +570,7 @@ struct FieldDatePicker: View {
         .accessibilityLabel(value.isEmpty ? label : "\(label) — \(Self.display(value))")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(spacing: 6) {
-                DatePicker("Pick a date", selection: Binding(get: { Self.date(value) ?? Date() }, set: { d in
+                NativeSessionDatePicker("Pick a date", selection: Binding(get: { Self.date(value) ?? Date() }, set: { d in
                     open = false
                     onChange(Self.ymd(d))
                 }), displayedComponents: .date)
@@ -578,16 +578,16 @@ struct FieldDatePicker: View {
                 .labelsHidden()
                 Divider()
                 HStack(spacing: 2) {
-                    Button("Clear") {
+                    NativeSessionButton("Clear") {
                         open = false
                         onChange("")
                     }
-                    Button("Today") {
+                    NativeSessionButton("Today") {
                         open = false
                         onChange(Self.ymd(Date()))
                     }
                     Spacer()
-                    Button("Cancel") { open = false }.buttonStyle(.bordered)
+                    NativeSessionButton("Cancel") { open = false }.buttonStyle(.bordered)
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -634,16 +634,16 @@ struct DateEditor: View {
                     onCommit(iso.isEmpty ? .null : .object(["date": .string(iso), "time": t.map { .string($0) } ?? .null]))
                 }
                 if field.config.includeTime == true, let date {
-                    TextField("--:--", text: $time)
+                    NativeSessionTextField("--:--", text: $time)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13).monospacedDigit())
                         .frame(width: 60)
                         .padding(.horizontal, 6).padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 6).fill(timeFocused ? Color(nsColor: .textBackgroundColor) : Color.secondary.opacity(0.08)))
-                        .focused($timeFocused)
+                        .sessionFocused($timeFocused)
                         .onAppear { time = t ?? "" }
                         .onChange(of: t) { _, now in time = now ?? "" }
-                        .onSubmit { timeFocused = false }
+                        .sessionOnSubmit { timeFocused = false }
                         .onChange(of: timeFocused) { _, now in
                             guard !now else { return }
                             let next = time.trimmingCharacters(in: .whitespaces)
@@ -652,7 +652,7 @@ struct DateEditor: View {
                         .accessibilityLabel("\(field.label) time")
                 }
                 if date != nil {
-                    Button { onCommit(.null) } label: { Image(systemName: "xmark").font(.system(size: 11)) }
+                    NativeSessionButton{ onCommit(.null) } label: { Image(systemName: "xmark").font(.system(size: 11)) }
                         .buttonStyle(.plain).foregroundStyle(.tertiary)
                         .accessibilityLabel("Clear \(field.label)")
                 }

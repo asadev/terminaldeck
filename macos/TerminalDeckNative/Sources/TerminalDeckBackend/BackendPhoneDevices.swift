@@ -160,6 +160,14 @@ public actor BackendPhoneDevices {
                                                "sims.shot", "sims.annotate", "sims.key", "sims.unlock"]
     /// Recording a simulator or emulator from the phone (round 3), offered as its own capability.
     public static let recordCapability = "sims.record"
+    /// 9 Nov: a finger on a simulator or emulator as it moves (`sims.touch`, its own capability so a phone sends it only
+    /// to a Mac that takes it): `{"t":"sims.touch","id":<device>,"phase":"down"|"move"|"up"|"cancel","x":0…1,"y":0…1,
+    /// "n":<optional move number>}`, never answered.
+    public static let touchCapability = "sims.touch"
+    public static let touchPhases = ["down", "move", "up", "cancel"]
+    /// A finger put down this close to the screen's edge and moving inward starts AT the edge (the device's own edge
+    /// gestures need it: home, notifications, Back), as the phones did for swipes.
+    static let edgeBand = 0.04
     /// The JPEG bytes Annotate's still preview may carry.
     public static let frameBudget = 60_000
     /// A video frame larger than this crosses in parts (`part`, `parts`).
@@ -203,6 +211,15 @@ public actor BackendPhoneDevices {
     /// M5: this many deltas given up on `td.rt` within `lossyWindow` ms make the watch send everything on `td.rel`.
     static let lossyAfter = 3
     static let lossyWindow = 10_000.0
+    /// 9 Nov (Asad: "streaming simulator … too slow … but mac screen streaming is good and fast"): a simulator or
+    /// emulator goes at this Mac's pace. The phones still ask 15 a second for a device (their JPEG-era default); the
+    /// video is paced by the link anyway (`room`, the pacer), so the rate is only a ceiling: a device gets at least
+    /// `devicePace` and at most `mostPace`, the same as this Mac's screen.
+    public static let devicePace = 30
+    public static let mostPace = 60
+    /// 9 Nov: a watch opens on the device row the phone's last list read (if it is this fresh, ms) instead of reading
+    /// the whole list again (16 s to open on 9 Nov, while the list took 7-13 s; this Mac's own rows are instant).
+    static let freshRow = 20_000.0
     /// At most this many devices one connection watches at once.
     public static let maxWatches = 2
     public static let maxRows = 120
@@ -259,6 +276,10 @@ public actor BackendPhoneDevices {
         public var direct: (@Sendable (UUID, Data, BackendLinkLane) async -> Bool?)? = nil
         /// M5: how the connection's link carries video now (`BackendRemoteHost.linkVideo`): nil when it has not moved.
         public var linkVideo: (@Sendable (UUID) async -> BackendLinkVideo?)? = nil
+        /// 9 Nov: one finger step (device, phase "down"/"move"/"up", x, y) straight onto the device's direct input;
+        /// false when it cannot go that way now (the gesture is then replayed as a tap or a swipe through `input`).
+        /// Without it `sims.touch` is not offered.
+        public var touch: (@Sendable (String, String, Double, Double) async -> Bool)? = nil
         public init(list: @escaping @Sendable () async -> NativeRPCValue,
                     power: @escaping @Sendable (String, Bool) async throws -> NativeRPCValue,
                     stream: @escaping @Sendable (String, NativeRPCValue) async throws -> any BackendPhoneDeviceStream,
@@ -354,14 +375,36 @@ public actor BackendPhoneDevices {
     /// display (Reviewer, 31 Oct): when its view ends for any reason, they are let go, so nothing stays pressed here.
     struct Held: Sendable { var buttons: [String: (x: Double, y: Double)] = [:]; var keys: Set<Int> = []; var at = (x: 0.5, y: 0.5) }
     private var held: [WatchKey: Held] = [:]
+    /// 9 Nov: each phone's finger on each device: the steps waiting (a move waiting behind another is replaced by the
+    /// newer one, so a slow device never falls behind the finger), and the finger now down.
+    struct TouchStep: Sendable, Equatable { var phase: String; var x: Double; var y: Double }
+    struct Finger: Sendable {
+        var direct: Bool
+        var downX: Double, downY: Double, at: Double
+        var lastX: Double, lastY: Double
+        /// Put down near an edge: sent once the first move shows which way it goes (`edgeBand`).
+        var held: Bool
+    }
+    struct TouchLane: Sendable { var queue: [TouchStep] = []; var draining = false; var finger: Finger? }
+    private var touches: [WatchKey: TouchLane] = [:]
     /// Round 3: each phone's input to this Mac, applied as it arrives (`BackendMacInputLane`).
     private var lanes: [WatchKey: BackendMacInputLane] = [:]
     /// Elements read ahead for a simulator a phone opened (round 3, #26): Pick is ready when Annotate opens.
     private var warmed: Set<String> = []
+    /// The device rows the last list read, and when (`freshRow`).
+    private var listed: (at: Double, rows: [NativeRPCValue])?
 
     public init(source: Source) { self.source = source }
 
     /// `sims.record` as its own capability (Reviewer M6): offered only when this Mac can record.
+    /// `sims.touch` as its own capability: offered only when this Mac can put a finger on its devices.
+    public func touchFeature() -> BackendRemoteHostFeature {
+        .init(capability: Self.touchCapability, messageTypes: [Self.touchCapability], policy: .ownerOnly) { [weak self] message, context in
+            guard let self else { throw NativeRPCError(code: "unavailable", message: "Devices on the phone stopped.") }
+            return try await self.handle(message, context: context)
+        }
+    }
+
     public func recordFeature() -> BackendRemoteHostFeature {
         .init(capability: Self.recordCapability, messageTypes: [Self.recordCapability], policy: .ownerOnly) { [weak self] message, context in
             guard let self else { throw NativeRPCError(code: "unavailable", message: "Devices on the phone stopped.") }
@@ -460,6 +503,9 @@ public actor BackendPhoneDevices {
         case "sims.input":
             try await input(message, context: context)
             return []
+        case "sims.touch":
+            touch(message, context: context)
+            return []
         case "sims.shot":
             let rid = try message["rid"].requireString("request", nonempty: true), id = try deviceID(message["id"])
             if Self.isMac(id), !Self.mayWatchMac(context) { throw NativeRPCError(code: "access-denied", message: Self.macWatchRefused) }
@@ -508,6 +554,7 @@ public actor BackendPhoneDevices {
     /// too, so the list matches the Mac's), running ones first.
     func rows(rid: String?, context: BackendRemoteHostContext) async throws -> BackendRemoteServerMessage {
         let value = await source.list()
+        listed = (source.clock(), value["devices"].elements ?? [])
         let watched = Set(watches.keys.filter { $0.connection == context.connectionID }.map(\.device))
         // This Mac first, as the Mac sends them (each display), then the devices.
         var mac: [NativeRPCValue] = []
@@ -559,8 +606,10 @@ public actor BackendPhoneDevices {
 
     func watch(_ message: BackendRemoteClientMessage, context: BackendRemoteHostContext) async throws -> [BackendRemoteServerMessage] {
         let id = try deviceID(message["id"])
-        // This Mac: 30 a second by default (Macky study: 15/30/60, default 30); a simulator 15.
-        let fps = Int(min(Self.isMac(id) ? 60 : 24, max(1, message["fps"].number ?? (Self.isMac(id) ? 30 : 15))))
+        // This Mac: 30 a second by default (Macky study: 15/30/60, default 30). 9 Nov: a simulator or emulator the
+        // same (at least `devicePace`, whatever older phones ask).
+        let asked = message["fps"].number ?? Double(Self.devicePace)
+        let fps = Int(min(Double(Self.mostPace), max(Self.isMac(id) ? 1 : Double(Self.devicePace), asked)))
         let key = WatchKey(connection: context.connectionID, device: id)
         if var current = watches[key] {
             // Again from the same phone: nothing restarted. Item 61: a phone asking again lost its decoder's state: a
@@ -573,7 +622,7 @@ public actor BackendPhoneDevices {
         guard watches.keys.filter({ $0.connection == context.connectionID }).count < Self.maxWatches else {
             throw NativeRPCError(code: "unavailable", message: "This phone already watches two devices. Close one first.")
         }
-        let candidates = Self.isMac(id) ? await source.macRows() : (await source.list()["devices"].elements ?? [])
+        let candidates = Self.isMac(id) ? await source.macRows() : await deviceRows(for: id)
         guard let row = candidates.first(where: { $0["id"].string == id })
                 ?? (MacDisplaySelection.isValidID(id) ? candidates.first(where: { $0["main"].bool == true }) ?? candidates.first : nil) else {
             throw NativeRPCError(code: "unavailable", message: "That device is no longer on this Mac. Pull to refresh the list.")
@@ -614,6 +663,16 @@ public actor BackendPhoneDevices {
         }
         watches[key]?.pump = pump
         return [try state(id, "opening", note: "")]
+    }
+
+    /// The rows a device watch looks in: the last list's, when it is fresh and shows the device running (the phone
+    /// opens a device from the list it just read), else the list read now.
+    private func deviceRows(for id: String) async -> [NativeRPCValue] {
+        if let listed, source.clock() - listed.at < Self.freshRow,
+           listed.rows.contains(where: { $0["id"].string == id && $0["state"].string == "ready" }) { return listed.rows }
+        let rows = await source.list()["devices"].elements ?? []
+        listed = (source.clock(), rows)
+        return rows
     }
 
     nonisolated func state(_ id: String, _ state: String, note: String) throws -> BackendRemoteServerMessage {
@@ -689,12 +748,15 @@ public actor BackendPhoneDevices {
 
     /// Every watch stops (the feature is going away).
     public func stopAll() async {
+        for key in Array(touches.keys) { liftFinger(key) }
         for key in Array(watches.keys) { await stopWatch(key) }
         for key in Array(held.keys) { releaseHeld(key) }
     }
 
     /// The connection closed: everything it watched stops.
     public func connectionClosed(_ connection: UUID) async {
+        // A finger still down on a device from this phone is lifted there.
+        for key in touches.keys where key.connection == connection { liftFinger(key) }
         for key in watches.keys where key.connection == connection { await stopWatch(key) }
         // Held without a watch (the watch ended first): let go too.
         for key in held.keys where key.connection == connection { releaseHeld(key) }
@@ -922,6 +984,9 @@ public actor BackendPhoneDevices {
         return true
     }
 
+    /// For tests: the most pictures a second a watch of `device` may send.
+    func pace(_ device: String) -> Int? { watches.first { $0.key.device == device }?.value.fps }
+
     /// For tests and the measurement: the frames every watch sent on its link and dropped there, and the pace now.
     func linkCounts() -> (sent: Int, dropped: Int, bitrate: Double, watches: Int, unacked: Int, lost: Int) {
         (watches.values.reduce(0) { $0 + $1.linkFrames }, watches.values.reduce(0) { $0 + $1.linkDropped },
@@ -1083,6 +1148,129 @@ public actor BackendPhoneDevices {
                 .init("megabitsPerSecond", .number((watch.pacer.bitrate / 100_000).rounded() / 10)),
                 .init("sharpPictures", .number(Double(watch.sharpFrames)))])
         })
+    }
+
+    // MARK: Touch (9 Nov)
+
+    /// Asad (9 Nov): "when i use it it moves slow" — a drag went to the device only when the finger lifted, and was then
+    /// replayed over its own length. `sims.touch` puts the finger on the device as it moves: down, the moves, up, each
+    /// onto the device's direct input (the helper the Mac's panel uses) the moment it comes, in order, a waiting move
+    /// replaced by the newer one. When the direct input cannot take the finger (the direct screen has not shown yet, or
+    /// the device's touchscreen does not take fingers that way), the gesture is kept and, when the finger lifts, sent
+    /// the old way: a tap (held as long as the finger was) or a swipe.
+    /// Never answered, never refused on the wire (a refusal without a request id would be taken as the answer to the
+    /// phone's oldest waiting read): what cannot be used is noted here only.
+    func touch(_ message: BackendRemoteClientMessage, context: BackendRemoteHostContext) {
+        guard let id = try? deviceID(message["id"]), !Self.isMac(id), let phase = message["phase"].string, Self.touchPhases.contains(phase),
+              let x = message["x"].number, let y = message["y"].number, x.isFinite, y.isFinite else {
+            BackendRemoteRelayClient.note("sims.touch: a finger step that cannot be used was left out")
+            return
+        }
+        let key = WatchKey(connection: context.connectionID, device: id)
+        let step = TouchStep(phase: phase == "cancel" ? "up" : phase, x: min(max(x, 0), 1), y: min(max(y, 0), 1))
+        var lane = touches[key] ?? TouchLane()
+        if step.phase == "move", lane.queue.last?.phase == "move" { lane.queue[lane.queue.count - 1] = step } else { lane.queue.append(step) }
+        let start = !lane.draining
+        lane.draining = true
+        touches[key] = lane
+        if start { Task { await self.drainTouches(key) } }
+    }
+
+    private func drainTouches(_ key: WatchKey) async {
+        while let step = touches[key]?.queue.first {
+            touches[key]?.queue.removeFirst()
+            await applyTouch(key, step)
+        }
+        touches[key]?.draining = false
+        if let lane = touches[key], lane.queue.isEmpty, lane.finger == nil { touches[key] = nil }
+    }
+
+    private func applyTouch(_ key: WatchKey, _ step: TouchStep) async {
+        let now = source.clock()
+        switch step.phase {
+        case "down":
+            // A finger already down (its up was lost) is lifted first.
+            if touches[key]?.finger != nil { await endFinger(key, at: nil) }
+            var finger = Finger(direct: false, downX: step.x, downY: step.y, at: now, lastX: step.x, lastY: step.y, held: false)
+            if Self.nearEdge(step.x, step.y) { finger.held = true } else { finger.direct = await sendTouch(key.device, "down", step.x, step.y) }
+            // The phone went while the finger went down: it is lifted again.
+            guard touches[key] != nil else { if finger.direct { _ = await sendTouch(key.device, "up", step.x, step.y) }; return }
+            touches[key]?.finger = finger
+        case "move":
+            guard var finger = touches[key]?.finger else { return }   // a move without a down: nothing to move
+            if finger.held {
+                // The first move shows the way: inward from the edge starts at the edge.
+                let (x, y) = Self.edgeSnapped(fromX: finger.downX, fromY: finger.downY, toX: step.x, toY: step.y)
+                finger.downX = x; finger.downY = y; finger.held = false
+                finger.direct = await sendTouch(key.device, "down", x, y)
+                guard touches[key] != nil else { if finger.direct { _ = await sendTouch(key.device, "up", x, y) }; return }
+            }
+            finger.lastX = step.x; finger.lastY = step.y
+            touches[key]?.finger = finger
+            if finger.direct { _ = await sendTouch(key.device, "move", step.x, step.y) }
+        default:
+            await endFinger(key, at: (step.x, step.y))
+        }
+    }
+
+    /// The finger lifts at `at` (nil: where it last was).
+    private func endFinger(_ key: WatchKey, at: (Double, Double)?) async {
+        guard var finger = touches[key]?.finger else { return }
+        touches[key]?.finger = nil
+        let (x, y) = at ?? (finger.lastX, finger.lastY)
+        if finger.held {
+            // Put down near the edge and lifted without moving: a touch where it was.
+            finger.held = false
+            finger.direct = await sendTouch(key.device, "down", finger.downX, finger.downY)
+        }
+        if finger.direct { _ = await sendTouch(key.device, "up", x, y); return }
+        let what = Self.replay(finger, upX: x, upY: y, now: source.clock())
+        let previous = inputs[key.device], source = self.source, id = key.device
+        pendingInputs[id, default: 0] += 1
+        inputs[id] = Task {
+            defer { self.pendingInputs[id, default: 1] -= 1 }
+            await previous?.value
+            do { try await BackendAppDeviceDeadline.run(within: 30, "Sending to the device") { try await source.input(id, what) } }
+            catch { BackendRemoteRelayClient.note("sims.touch: \(id) gesture not sent: \((error as? NativeRPCError)?.message ?? error.localizedDescription)") }
+        }
+    }
+
+    /// A finger still down when its phone goes (or the feature stops) is lifted on the device.
+    private func liftFinger(_ key: WatchKey) {
+        guard let finger = touches.removeValue(forKey: key)?.finger, finger.direct, !finger.held else { return }
+        let touch = source.touch, id = key.device
+        Task { _ = await touch?(id, "up", finger.lastX, finger.lastY) }
+    }
+
+    private func sendTouch(_ id: String, _ phase: String, _ x: Double, _ y: Double) async -> Bool {
+        guard let touch = source.touch else { return false }
+        return await touch(id, phase, x, y)
+    }
+
+    static func nearEdge(_ x: Double, _ y: Double) -> Bool {
+        x <= edgeBand || x >= 1 - edgeBand || y <= edgeBand || y >= 1 - edgeBand
+    }
+
+    /// Where a finger put down at (fromX, fromY) starts when it moves to (toX, toY): at the edge it is near when it
+    /// moves away from that edge.
+    static func edgeSnapped(fromX: Double, fromY: Double, toX: Double, toY: Double) -> (Double, Double) {
+        var x = fromX, y = fromY
+        if fromY >= 1 - edgeBand, toY < fromY { y = 1 }
+        if fromY <= edgeBand, toY > fromY { y = 0 }
+        if fromX <= edgeBand, toX > fromX { x = 0 }
+        if fromX >= 1 - edgeBand, toX < fromX { x = 1 }
+        return (x, y)
+    }
+
+    /// A gesture the direct input could not take, as the old inputs: a tap (held as long as the finger was, from half
+    /// a second) when it hardly moved, else a swipe over the time it took.
+    static func replay(_ finger: Finger, upX: Double, upY: Double, now: Double) -> BackendPhoneDeviceInput {
+        let held = max(0, now - finger.at)
+        if abs(upX - finger.downX) < 0.02, abs(upY - finger.downY) < 0.02 {
+            return .tap(x: finger.downX, y: finger.downY, holdMilliseconds: held >= 450 ? min(held, 3_000) : nil)
+        }
+        let (x, y) = edgeSnapped(fromX: finger.downX, fromY: finger.downY, toX: upX, toY: upY)
+        return .swipe(fromX: x, fromY: y, toX: upX, toY: upY, milliseconds: min(max(held, 120), 1_500))
     }
 
     // MARK: Input
@@ -1638,7 +1826,8 @@ extension BackendPhoneDevices {
     /// Puts `sims` on the endpoint (before any phone connects); keep what this returns.
     public static func install(on endpoint: BackendRemoteHost, source: Source, ownerID: String = "native.phone-devices") async throws -> Installation {
         let devices = BackendPhoneDevices(source: source)
-        let lease = try await endpoint.installFeatures(ownerID: ownerID, features: [await devices.feature()] + (source.record == nil ? [] : [await devices.recordFeature()]),
+        let lease = try await endpoint.installFeatures(ownerID: ownerID, features: [await devices.feature()] + (source.record == nil ? [] : [await devices.recordFeature()])
+                                                           + (source.touch == nil ? [] : [await devices.touchFeature()]),
                                                        connectionClosed: { [weak devices] id in await devices?.connectionClosed(id) })
         return Installation(devices: devices, lease: lease)
     }
@@ -1669,9 +1858,9 @@ extension BackendRemoteProtocol {
             m = m.setting("id", .string(try device()))
                 .setting("maxWidth", .number(min(2560, max(160, floor(try r.finite("maxWidth", reason: "sims.watch without a width") + 0.5)))))
                 .setting("quality", .number(min(90, max(10, floor(try r.finite("quality", reason: "sims.watch without a quality") + 0.5)))))
-            // This Mac may go to 60 a second (the phone asks 30); a simulator or emulator stays at most 24 (Reviewer, 31 Oct).
-            let mac = BackendPhoneDevices.isMac(m["id"].string ?? "")
-            try r.optional("fps", into: &m) { .number(min(mac ? 60 : 24, max(1, floor(try r.finite("fps", reason: "sims.watch with an unusable fps"))))) }
+            // At most 60 a second (the phone asks 30 for this Mac). 9 Nov: a simulator or emulator too (it was at most 24,
+            // Reviewer 31 Oct, from the JPEG pictures' time; it is hardware H.264 paced by the link now, like this Mac).
+            try r.optional("fps", into: &m) { .number(min(Double(BackendPhoneDevices.mostPace), max(1, floor(try r.finite("fps", reason: "sims.watch with an unusable fps"))))) }
             // Round 3: this phone draws the Mac's pointer itself.
             try r.optional("cursor", into: &m) { .bool(try r.boolean("cursor", reason: "sims.watch with an unusable cursor")) }
             // Item 61: the video codecs this phone plays ("h264").
@@ -1685,6 +1874,12 @@ extension BackendRemoteProtocol {
         case "sims.key": return m.setting("id", .string(try device()))   // stream step 2: a keyframe, please
         case "sims.ack":
             return m.setting("id", .string(try device())).setting("seq", .number(try r.whole("seq", 0, Double(Int32.max), reason: "sims.ack without a sequence number")))
+        case "sims.touch":
+            m = m.setting("id", .string(try device()))
+                .setting("phase", .string(try r.named("phase", allowed: BackendPhoneDevices.touchPhases, reason: "sims.touch without a usable phase")))
+                .setting("x", try unit("x")).setting("y", try unit("y"))
+            try r.optional("n", into: &m) { .number(try r.whole("n", 0, Double(Int32.max), reason: "sims.touch with an unusable number")) }
+            return m
         case "sims.input":
             m = m.setting("id", .string(try device())).setting("do", .string(try r.named("do", allowed: ["tap", "swipe", "type", "key", "button", "rotate", "scroll", "mouse", "keycode", "pointer", "click", "wheel"], reason: "sims.input without a usable kind")))
             try r.optional("rid", into: &m) { .string(try rid()) }

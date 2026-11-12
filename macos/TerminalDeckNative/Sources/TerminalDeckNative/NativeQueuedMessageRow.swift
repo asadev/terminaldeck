@@ -10,9 +10,9 @@ struct NativeQueuedMessageRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if item.editing {
-                TextField("Message", text: Binding(get: { model.queuedText(item.id) }, set: { model.setQueuedText(item.id, text: $0) }), axis: .vertical)
-                    .textFieldStyle(.plain).lineLimit(1...4)
+                NativeSessionTextField("Message", text: Binding(get: { model.queuedText(item.id) }, set: { model.setQueuedText(item.id, text: $0) }), axis: .vertical)
                     .onSubmit { model.editQueued(item.id, editing: false) }
+                    .textFieldStyle(.plain).lineLimit(1...4)
             } else {
                 Text(item.draft.plainText.isEmpty ? "\(item.draft.attachments.count) attachments" : item.draft.plainText)
                     .foregroundStyle(.secondary).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
@@ -25,19 +25,19 @@ struct NativeQueuedMessageRow: View {
                     .draggable(item.id).help("Drag to reorder queued messages").opacity(locked ? 0.3 : 1)
                 Spacer(minLength: 8)
                 if item.editing {
-                    Button { model.editQueued(item.id, editing: false) } label: { Image(systemName: "checkmark").frame(width: 22, height: 22) }
+                    NativeSessionButton { model.editQueued(item.id, editing: false) } label: { Image(systemName: "checkmark").frame(width: 22, height: 22) }
                         .help("Save queued message").accessibilityLabel("Save queued message").disabled(!item.draft.canSend)
-                    Button { model.cancelQueuedEdit(item.id) } label: { Image(systemName: "arrow.uturn.backward").frame(width: 22, height: 22) }
+                    NativeSessionButton { model.cancelQueuedEdit(item.id) } label: { Image(systemName: "arrow.uturn.backward").frame(width: 22, height: 22) }
                         .help("Cancel edit").accessibilityLabel("Cancel edit")
                 } else {
-                    Button("Send now", systemImage: "paperplane") { model.sendQueuedNow(item.id) }
+                    NativeSessionButton("Send now", systemImage: "paperplane") { model.sendQueuedNow(item.id) }
                         .help("Deliver this queued message now").fixedSize().disabled(locked || item.held || model.readOnly || !model.acceptingMessages)
-                    Button {
+                    NativeSessionButton {
                         model.editQueued(item.id, editing: true)
                     } label: { Image(systemName: "pencil").frame(width: 22, height: 22) }
                         .help("Edit queued message").accessibilityLabel("Edit queued message").disabled(locked)
                 }
-                Button { model.removeQueued(item.id) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                NativeSessionButton { model.removeQueued(item.id) } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
                     .help("Remove queued message").accessibilityLabel("Remove queued message").disabled(locked)
             }
             .buttonStyle(.borderless).controlSize(.small)

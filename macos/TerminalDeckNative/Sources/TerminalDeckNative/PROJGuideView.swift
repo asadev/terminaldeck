@@ -71,7 +71,7 @@ struct PROJGuideView: View {
                             Spacer(minLength: 8)
                             // Asad, 11 Oct: offered beside doing it yourself. Hoot walks the same steps by chat.
                             if model.step == .name {
-                                Button { model.setUpWithHoot(); if !model.fixture { close() } } label: {
+                                NativeSessionButton { model.setUpWithHoot(); if !model.fixture { close() } } label: {
                                     Label { Text("Set up with Hoot") } icon: { HootMark(size: 14) }
                                 }
                                 .help("Hoot asks what it needs and sets the project up by chat")
@@ -113,15 +113,15 @@ struct PROJGuideView: View {
                 Text(model.creating ? "Creating…" : "Saving…").foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Back") { model.back() }.disabled(model.step == .name || model.busy)
+            NativeSessionButton("Back") { model.back() }.disabled(model.step == .name || model.busy)
             if !model.step.required, model.step != .review {
-                Button("Skip") { model.skip() }.disabled(model.busy)
+                NativeSessionButton("Skip") { model.skip() }.disabled(model.busy)
             }
             if model.step == .review {
-                Button(model.creating ? "Create project" : "Save") { finish() }
+                NativeSessionButton(model.creating ? "Create project" : "Save") { finish() }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.busy)
             } else {
-                Button("Next") { model.next() }
+                NativeSessionButton("Next") { model.next() }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.busy)
             }
         }
@@ -144,7 +144,7 @@ struct PROJGuideStepBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(PROJGuideStep.allCases) { step in
-                Button { model.go(step) } label: { item(step) }
+                NativeSessionButton { model.go(step) } label: { item(step) }
                     .buttonStyle(.plain)
                     .help(step.heading)
                     .accessibilityLabel(step.heading + (model.step == step ? ", current step" : ""))
@@ -196,7 +196,7 @@ struct PROJGuideNamePage: View {
         DeckCard {
             HStack(alignment: .top, spacing: 18) {
                 VStack(spacing: 8) {
-                    Button(action: chooseLogo) { logo }.buttonStyle(.plain).help("Choose a logo").accessibilityLabel("Logo")
+                    NativeSessionButton(action: chooseLogo) { logo }.buttonStyle(.plain).help("Choose a logo").accessibilityLabel("Logo")
                         .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
                             guard let provider = providers.first else { return false }
                             _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -206,22 +206,22 @@ struct PROJGuideNamePage: View {
                             return true
                         }
                     if model.logoFile != nil || (!model.existingLogo.isEmpty && !model.removeLogo) {
-                        Button("Remove") { model.logoFile = nil; model.removeLogo = true }.buttonStyle(.link).font(DeckTokens.Typography.caption)
+                        NativeSessionButton("Remove") { model.logoFile = nil; model.removeLogo = true }.buttonStyle(.link).font(DeckTokens.Typography.caption)
                     } else {
-                        Button("Choose…", action: chooseLogo).buttonStyle(.link).font(DeckTokens.Typography.caption)
+                        NativeSessionButton("Choose…", action: chooseLogo).buttonStyle(.link).font(DeckTokens.Typography.caption)
                     }
                 }
                 VStack(alignment: .leading, spacing: 12) {
                     PROJGuideRow(label: "Name") {
-                        TextField("Name", text: $model.name).textFieldStyle(.roundedBorder).labelsHidden()
+                        NativeSessionTextField("Name", text: $model.name).textFieldStyle(.roundedBorder).labelsHidden()
                     }
                     PROJGuideRow(label: "What it is") {
-                        TextField("One line on what the project is", text: $model.about).textFieldStyle(.roundedBorder).labelsHidden()
+                        NativeSessionTextField("One line on what the project is", text: $model.about).textFieldStyle(.roundedBorder).labelsHidden()
                     }
                     PROJGuideRow(label: "Colour") {
                         HStack(spacing: 8) {
                             ForEach(PROJProjects.colours, id: \.self) { name in
-                                Button { model.colour = name } label: {
+                                NativeSessionButton { model.colour = name } label: {
                                     Circle().fill(DeckTokens.projectColour(PROJProject(id: "x", name: "", colour: name)))
                                         .frame(width: 18, height: 18)
                                         .overlay { if model.colour == name { Circle().strokeBorder(Color.primary.opacity(0.7), lineWidth: 2).padding(-3) } }
@@ -234,7 +234,7 @@ struct PROJGuideNamePage: View {
                         PROJGuideRow(label: "Found in the folder") {
                             HStack(spacing: 6) {
                                 ForEach(suggestions, id: \.self) { url in
-                                    Button { model.logoFile = url; model.removeLogo = false } label: {
+                                    NativeSessionButton { model.logoFile = url; model.removeLogo = false } label: {
                                         Group {
                                             if let image = NSImage(contentsOf: url) { Image(nsImage: image).resizable().aspectRatio(contentMode: .fit) }
                                             else { Image(systemName: "photo") }
@@ -295,8 +295,8 @@ struct PROJGuideFoldersPage: View {
                             Label(PROJPAGEStyle.shortPath(home), systemImage: "folder").font(DeckTokens.Typography.mono).lineLimit(1).truncationMode(.middle)
                         }
                         HStack(spacing: 8) {
-                            Button(model.home == nil ? "Choose a folder…" : "Change…") { choose { model.setHome($0) } }
-                            Button("New folder…") { makeFolder() }
+                            NativeSessionButton(model.home == nil ? "Choose a folder…" : "Change…") { choose { model.setHome($0) } }
+                            NativeSessionButton("New folder…") { makeFolder() }
                         }
                     }
                 }
@@ -307,11 +307,11 @@ struct PROJGuideFoldersPage: View {
                             HStack(spacing: 8) {
                                 Label(PROJPAGEStyle.shortPath(folder), systemImage: "folder").font(DeckTokens.Typography.mono).lineLimit(1).truncationMode(.middle)
                                 Spacer()
-                                Button { model.extraFolders.removeAll { $0 == folder } } label: { Image(systemName: "minus.circle") }
+                                NativeSessionButton { model.extraFolders.removeAll { $0 == folder } } label: { Image(systemName: "minus.circle") }
                                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove this folder").accessibilityLabel("Remove " + folder)
                             }
                         }
-                        Button("Add a folder…") {
+                        NativeSessionButton("Add a folder…") {
                             choose { path in
                                 let folder = PROJProjects.normalize(path)
                                 if folder != model.home, !model.extraFolders.contains(folder) { model.extraFolders.append(folder) }
@@ -381,7 +381,7 @@ struct PROJGuideLeadPage: View {
     private func choice<Extra: View>(_ value: PROJGuideModel.LeadChoice, _ title: String, _ symbol: String, @ViewBuilder extra: () -> Extra) -> some View {
         let on = isOn(value)
         return VStack(alignment: .leading, spacing: 12) {
-            Button { model.lead = value } label: {
+            NativeSessionButton { model.lead = value } label: {
                 HStack(spacing: 10) {
                     Image(systemName: on ? "largecircle.fill.circle" : "circle").foregroundStyle(on ? Color.accentColor : Color.secondary)
                     Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
@@ -406,18 +406,18 @@ struct PROJGuideNewAgentForm: View {
     @State private var picking = false
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Button { picking = true } label: { AgentAvatar(icon: agent.icon ?? .symbol("person.crop.circle"), size: compact ? 28 : 40) }
+            NativeSessionButton { picking = true } label: { AgentAvatar(icon: agent.icon ?? .symbol("person.crop.circle"), size: compact ? 28 : 40) }
                 .buttonStyle(.plain).help("Choose a picture").accessibilityLabel("Picture")
                 .popover(isPresented: $picking, arrowEdge: .bottom) {
                     AGTIconPicker(current: agent.icon ?? .symbol("person.crop.circle")) { agent.icon = $0; picking = false }
                 }
-            TextField("Agent name", text: $agent.name).textFieldStyle(.roundedBorder).frame(maxWidth: compact ? 160 : 200)
+            NativeSessionTextField("Agent name", text: $agent.name).textFieldStyle(.roundedBorder).frame(maxWidth: compact ? 160 : 200)
             Picker("Coding agent", selection: $agent.provider) {
                 Text("App default").tag("")
                 ForEach(TasksSettingsText.lookupAgents, id: \.id) { DeckRowLabel.provider($0.label, id: $0.id).tag($0.id) }
             }.labelsHidden().fixedSize()
             if !compact {
-                TextField("What it does", text: $agent.role).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("What it does", text: $agent.role).textFieldStyle(.roundedBorder)
             }
         }
     }
@@ -443,18 +443,18 @@ struct PROJGuideTeamPage: View {
                     }
                     ForEach($model.seats) { $seat in
                         HStack(spacing: 10) {
-                            TextField("Role, like iOS engineer", text: $seat.title).textFieldStyle(.roundedBorder).frame(width: 190)
+                            NativeSessionTextField("Role, like iOS engineer", text: $seat.title).textFieldStyle(.roundedBorder).frame(width: 190)
                             Picker("Agent", selection: Binding(get: { seat.existing ?? "" }, set: { seat.existing = $0.isEmpty ? nil : $0 })) {
                                 Label("New agent", systemImage: "plus").tag("")
                                 ForEach(available(for: seat)) { DeckRowLabel.agent(id: $0.id, name: $0.name, icon: $0.icon).tag($0.id) }
                             }.labelsHidden().fixedSize()
                             if seat.existing == nil { PROJGuideNewAgentForm(agent: $seat.agent, fixture: model.fixture, compact: true) }
                             Spacer(minLength: 0)
-                            Button { model.seats.removeAll { $0.id == seat.id } } label: { Image(systemName: "minus.circle") }
+                            NativeSessionButton { model.seats.removeAll { $0.id == seat.id } } label: { Image(systemName: "minus.circle") }
                                 .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove this role").accessibilityLabel("Remove role")
                         }
                     }
-                    Button { model.seats.append(.init()) } label: { Label("Add a role", systemImage: "plus") }
+                    NativeSessionButton { model.seats.append(.init()) } label: { Label("Add a role", systemImage: "plus") }
                 }
             }
             DeckCard {
@@ -463,7 +463,7 @@ struct PROJGuideTeamPage: View {
                         Text("Agent files in the folder").font(DeckTokens.Typography.section)
                         Spacer()
                         if model.scanning { ProgressView().controlSize(.small) }
-                        Button("Look in another folder…") { lookElsewhere() }.disabled(model.scanning)
+                        NativeSessionButton("Look in another folder…") { lookElsewhere() }.disabled(model.scanning)
                     }
                     if model.found.isEmpty {
                         Text(model.scanning ? "Looking…" : "None found in .claude/agents.").foregroundStyle(.secondary)
@@ -509,7 +509,7 @@ struct PROJGuideSkillsPage: View {
                     HStack {
                         Text("Add a lead or a team first.").foregroundStyle(.secondary)
                         Spacer()
-                        Button("Go to Team") { model.go(.team) }
+                        NativeSessionButton("Go to Team") { model.go(.team) }
                     }
                 }
             } else if model.skills.isEmpty {
@@ -553,7 +553,7 @@ struct PROJGuideChips: View {
         HStack(spacing: 6) {
             ForEach(agents) { agent in
                 let on = selected.contains(agent.key)
-                Button {
+                NativeSessionButton {
                     if on { selected.remove(agent.key) } else { selected.insert(agent.key) }
                 } label: {
                     HStack(spacing: 5) {
@@ -585,7 +585,7 @@ struct PROJGuideCardPage: View {
                     Spacer()
                     NativeMemoryTemplatesButton(title: "Lead template…", category: .lead)
                 }
-                TextEditor(text: Binding(get: { model.card }, set: { model.card = $0; model.cardEdited = true }))
+                NativeSessionTextEditor(text: Binding(get: { model.card }, set: { model.card = $0; model.cardEdited = true }))
                     .font(.system(size: 12.5, design: .monospaced)).scrollContentBackground(.hidden)
                     .padding(8).frame(minHeight: 260)
                     .background(DeckTokens.page, in: RoundedRectangle(cornerRadius: 8))
@@ -662,9 +662,9 @@ struct PROJGuideConnectionsPage: View {
                 PROJGuideConnectionState(text: "Connecting: enter this code on GitHub", tone: .busy)
                 HStack(spacing: 8) {
                     Text(pending.userCode).font(.system(size: 15, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-                    Button(model.github.copied ? "Copied" : "Copy code") { model.github.copyCode(pending.userCode) }
-                    Button("Open GitHub") { GitHubScreenModel.openExternally(pending.verificationUri) }
-                    Button("Cancel") { model.github.cancelConnect() }
+                    NativeSessionButton(model.github.copied ? "Copied" : "Copy code") { model.github.copyCode(pending.userCode) }
+                    NativeSessionButton("Open GitHub") { GitHubScreenModel.openExternally(pending.verificationUri) }
+                    NativeSessionButton("Cancel") { model.github.cancelConnect() }
                 }
             } else if auth?.connected == true {
                 PROJGuideConnectionState(text: "Connected" + (auth?.login.map { " as @" + $0 } ?? ""), tone: .good)
@@ -675,13 +675,13 @@ struct PROJGuideConnectionsPage: View {
                             Text(name == auth?.repo?.ref?.nameWithOwner ? name + " (this folder)" : name).tag(name)
                         }
                     }.labelsHidden().fixedSize()
-                    Button("Create on GitHub…") { createOnGitHub() }
-                    Button("Check again") { Task { await model.github.loadAuth() } }
+                    NativeSessionButton("Create on GitHub…") { createOnGitHub() }
+                    NativeSessionButton("Check again") { Task { await model.github.loadAuth() } }
                 }
             } else {
                 PROJGuideConnectionState(text: auth?.failure?.message ?? "Not connected", tone: .missing)
                 HStack(spacing: 8) {
-                    Button(model.github.authBusy ? "Connecting…" : "Connect GitHub") { model.github.connect() }.disabled(model.github.authBusy)
+                    NativeSessionButton(model.github.authBusy ? "Connecting…" : "Connect GitHub") { model.github.connect() }.disabled(model.github.authBusy)
                     if !model.repo.isEmpty { Text(model.repo).font(DeckTokens.Typography.mono).foregroundStyle(.secondary) }
                 }
             }
@@ -725,7 +725,7 @@ struct PROJGuideConnectionsPage: View {
                         }
                     }.labelsHidden().fixedSize()
                 }
-                Button(tasks.systems.isEmpty ? "Connect a task system…" : "Connect another…") {
+                NativeSessionButton(tasks.systems.isEmpty ? "Connect a task system…" : "Connect another…") {
                     taskSystemsBefore = Set(tasks.systems.map(\.id)); connectingTaskSystem = true; addingTaskSystem = true
                 }
             }
@@ -755,7 +755,7 @@ struct PROJGuideConnectionsPage: View {
                     }
                 }.toggleStyle(.checkbox)
             }
-            Button("Add a server…") { serverRoute = .add; servers.clearAddError(); addingServer = true }
+            NativeSessionButton("Add a server…") { serverRoute = .add; servers.clearAddError(); addingServer = true }
         }
     }
 }
@@ -788,7 +788,7 @@ struct PROJGuideReviewPage: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(PROJGuideStep.allCases.filter { $0 != .review }.enumerated()), id: \.element) { index, step in
                         if index > 0 { Divider().padding(.vertical, 8) }
-                        Button { model.go(step) } label: { row(step) }.buttonStyle(.plain).help("Open " + step.heading)
+                        NativeSessionButton { model.go(step) } label: { row(step) }.buttonStyle(.plain).help("Open " + step.heading)
                     }
                 }
             }

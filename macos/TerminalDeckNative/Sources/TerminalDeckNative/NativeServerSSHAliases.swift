@@ -107,7 +107,7 @@ struct NativeServerSSHAliasesSection: View {
                 Spacer(minLength: 8)
                 if let id = alias.serverId {
                     Text("Already added").font(.callout).foregroundStyle(.secondary)
-                    Button("Open") { route = .server(id) }
+                    NativeSessionButton("Open") { route = .server(id) }
                 } else if !alias.ready {
                     Text(alias.problem ?? "This one cannot be used yet.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -115,7 +115,7 @@ struct NativeServerSSHAliasesSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: 260, alignment: .trailing)
                 } else if !open {
-                    Button("Add") {
+                    NativeSessionButton("Add") {
                         model.clearAddError()
                         name = ""; lookOnly = true; confirming = alias.alias
                         // A server name means no project by itself: the person picks one (or none) below.
@@ -134,7 +134,7 @@ struct NativeServerSSHAliasesSection: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("What to call it here").font(.subheadline.weight(.semibold))
-                TextField("What to call it here", text: $name, prompt: Text(alias.alias))
+                NativeSessionTextField("What to call it here", text: $name, prompt: Text(alias.alias))
                     .textFieldStyle(.roundedBorder)
                     .labelsHidden()
                     .frame(maxWidth: 320)
@@ -151,10 +151,10 @@ struct NativeServerSSHAliasesSection: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             HStack {
-                Button(model.adding ? "Connecting…" : "Add server") { add(alias) }
+                NativeSessionButton(model.adding ? "Connecting…" : "Add server") { add(alias) }
                     .buttonStyle(NativeServersPrimaryButtonStyle())
                     .disabled(model.adding)
-                Button("Cancel") { confirming = nil }
+                NativeSessionButton("Cancel") { confirming = nil }
                     .disabled(model.adding)
             }
         }

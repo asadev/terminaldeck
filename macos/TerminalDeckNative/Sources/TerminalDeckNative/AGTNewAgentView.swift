@@ -24,7 +24,7 @@ struct AGTNewAgentView: View {
 
     var body: some View {
         DeckPage(title: "New agent", subtitle: "Pick the project and the role. An existing role brings its memory.") {
-            Button { store.openProfile = nil } label: {
+            NativeSessionButton { store.openProfile = nil } label: {
                 HStack(spacing: 3) { Image(systemName: "chevron.left"); Text("Agents") }
                     .font(.callout).foregroundStyle(.secondary).contentShape(Rectangle())
             }.buttonStyle(.plain).help("Back to Agents")
@@ -35,7 +35,7 @@ struct AGTNewAgentView: View {
         } content: {
             DeckCard {
                 HStack(alignment: .center, spacing: 14) {
-                    Button { picking = true } label: { AgentAvatar(icon: pendingIcon ?? .symbol("person.crop.circle"), size: 48) }
+                    NativeSessionButton { picking = true } label: { AgentAvatar(icon: pendingIcon ?? .symbol("person.crop.circle"), size: 48) }
                         .buttonStyle(.plain).help("Choose a picture").accessibilityLabel("Picture")
                         .popover(isPresented: $picking, arrowEdge: .bottom) {
                             AGTIconPicker(current: pendingIcon ?? .symbol("person.crop.circle")) { pendingIcon = $0; picking = false }
@@ -73,11 +73,11 @@ struct AGTNewAgentView: View {
         return DeckCard {
             VStack(alignment: .leading, spacing: 10) {
                 line("Name", "What you call it everywhere.") {
-                    TextField("Agent name", text: Binding(get: { draft.name }, set: { draft.name = String($0.prefix(60)) }))
+                    NativeSessionTextField("Agent name", text: Binding(get: { draft.name }, set: { draft.name = String($0.prefix(60)) }))
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 260)
                 }
                 line("What it does", "One line about what it does.") {
-                    TextField("What it does", text: Binding(get: { draft.role }, set: { draft.role = String($0.prefix(4000)) }))
+                    NativeSessionTextField("What it does", text: Binding(get: { draft.role }, set: { draft.role = String($0.prefix(4000)) }))
                         .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
                 }
                 line("Coding AI", "Claude Code, Codex or Gemini.") {
@@ -89,11 +89,11 @@ struct AGTNewAgentView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if let problem { NativeCodingAINotice(tone: .error, text: problem) }
                 HStack(spacing: 8) {
-                    Button("Add agent") { Task { await save(draft) } }
+                    NativeSessionButton("Add agent") { Task { await save(draft) } }
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                         .disabled(store.busy || unnamed)
                         .help(unnamed ? "Give the agent a name first" : "")
-                    Button("Cancel") { problem = nil; store.openProfile = nil }
+                    NativeSessionButton("Cancel") { problem = nil; store.openProfile = nil }
                     Spacer()
                 }
             }
@@ -125,7 +125,7 @@ struct AGTNewAgentView: View {
                         }
                     }.labelsHidden().fixedSize()
                     if seatKey.isEmpty {
-                        TextField("Role name, for example iOS engineer", text: $newRole).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                        NativeSessionTextField("Role name, for example iOS engineer", text: $newRole).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
                             .help("Leave it empty and the role is named after the agent.")
                     }
                     Spacer(minLength: 0)

@@ -57,7 +57,7 @@ private struct NativeRCVEventDetail: View {
                     .padding(.top, 6)
             }
             if let replayOf = event.replayOf, model.event(replayOf) != nil {
-                Button("Show the original") { model.select(replayOf) }
+                NativeSessionButton("Show the original") { model.select(replayOf) }
                     .buttonStyle(.link)
                     .font(.caption)
             }
@@ -68,27 +68,27 @@ private struct NativeRCVEventDetail: View {
         let busy = model.busy != nil
         return HStack(spacing: 8) {
             if actions.suggest {
-                Button(model.busy == "suggest" ? "Suggesting…" : "Suggest a rule") { Task { await model.suggest(event.id) } }
+                NativeSessionButton(model.busy == "suggest" ? "Suggesting…" : "Suggest a rule") { Task { await model.suggest(event.id) } }
                     .help("Make a rule from this event and open it to check before saving")
             }
             if actions.askHoot {
-                Button(model.busy == "ask-hoot" ? "Asking…" : "Ask Hoot") { Task { await model.askHoot(event.id) } }
+                NativeSessionButton(model.busy == "ask-hoot" ? "Asking…" : "Ask Hoot") { Task { await model.askHoot(event.id) } }
                     .help("Hoot looks at it and tells you what it is and where it should go")
             }
             if actions.retry {
-                Button(model.busy == "retry" ? "Retrying…" : "Retry") { Task { await model.retry(event.id) } }
+                NativeSessionButton(model.busy == "retry" ? "Retrying…" : "Retry") { Task { await model.retry(event.id) } }
                     .help(event.status == .held ? "Send it now instead of waiting" : "Try handing it over again")
             }
             if actions.route {
-                Button("Route to…") { model.openSheet(.route(eventID: event.id)) }
+                NativeSessionButton("Route to…") { model.openSheet(.route(eventID: event.id)) }
                     .help("Send it to an agent, a running session or Hoot by hand")
             }
             if actions.replay {
-                Button(model.busy == "replay" ? "Replaying…" : "Replay") { Task { await model.replay(event.id) } }
+                NativeSessionButton(model.busy == "replay" ? "Replaying…" : "Replay") { Task { await model.replay(event.id) } }
                     .help("Run it through the rules again as if it just arrived")
             }
             if actions.reply {
-                Button("Reply") { replying.toggle() }
+                NativeSessionButton("Reply") { replying.toggle() }
                     .help("Answer the sender through the same connection")
             }
         }
@@ -98,15 +98,15 @@ private struct NativeRCVEventDetail: View {
     private var replyComposer: some View {
         VStack(alignment: .leading, spacing: 8) {
             NativeRCVHeading("Reply to the sender")
-            TextField("Write the reply", text: $replyText, axis: .vertical)
+            NativeSessionTextField("Write the reply", text: $replyText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(3...8)
             HStack {
                 Text("It goes back through \(RCVPresentation.sourceName(event.sourceId, in: overview.sources)).")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Cancel") { replying = false; replyText = "" }
-                Button(model.busy == "reply" ? "Sending…" : "Send") {
+                NativeSessionButton("Cancel") { replying = false; replyText = "" }
+                NativeSessionButton(model.busy == "reply" ? "Sending…" : "Send") {
                     Task {
                         if await model.reply(event.id, text: replyText) { replying = false; replyText = "" }
                     }
@@ -285,7 +285,7 @@ struct NativeRCVRouteSheet: View {
                     NativeSettingRow(label: "What to do", help: "Optional. Left empty, it is sent with its title and text.") {
                         EmptyView()
                     }
-                    TextField("For example: Answer the customer and tell me what you said.", text: $instruction, axis: .vertical)
+                    NativeSessionTextField("For example: Answer the customer and tell me what you said.", text: $instruction, axis: .vertical)
                         .lineLimit(3...8)
                         .labelsHidden()
                 }
@@ -295,9 +295,9 @@ struct NativeRCVRouteSheet: View {
             NativeRCVSheetBar {
                 if model.busy == "route" { NativePageNote("Sending…", busy: true).frame(maxHeight: 24) }
             } trailing: {
-                Button("Cancel") { model.openSheet(nil) }
+                NativeSessionButton("Cancel") { model.openSheet(nil) }
                     .keyboardShortcut(.cancelAction)
-                Button("Send") { Task { await model.route(eventID, to: target, instruction: instruction) } }
+                NativeSessionButton("Send") { Task { await model.route(eventID, to: target, instruction: instruction) } }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.busy != nil || event == nil || (target.kind != .hoot && target.id.isEmpty))
@@ -348,7 +348,7 @@ struct NativeRCVTargetFields: View {
             }
             if target.kind == .agent {
                 NativeSettingRow(label: "Conversation", help: "Events with the same value here join one ongoing task, for example one chat. Empty: one task for the whole source.") {
-                    TextField("{{fields.chat}}", text: Binding(get: { target.threadKey ?? "" }, set: { target.threadKey = $0.isEmpty ? nil : $0 }))
+                    NativeSessionTextField("{{fields.chat}}", text: Binding(get: { target.threadKey ?? "" }, set: { target.threadKey = $0.isEmpty ? nil : $0 }))
                         .font(.system(.body, design: .monospaced))
                         .labelsHidden()
                         .frame(minWidth: 180, maxWidth: 240)
@@ -402,8 +402,8 @@ struct NativeRCVEventsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                TextField("Search events", text: $model.query).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
-                Button { model.statusFilter = model.statusFilter == .unrouted ? nil : .unrouted; model.search() } label: {
+                NativeSessionTextField("Search events", text: $model.query).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
+                NativeSessionButton { model.statusFilter = model.statusFilter == .unrouted ? nil : .unrouted; model.search() } label: {
                     Text("Not routed").padding(.horizontal, 10).frame(height: 28)
                         .background(model.statusFilter == .unrouted ? Color.primary.opacity(0.1) : Color.primary.opacity(0.04), in: .capsule)
                 }.buttonStyle(.plain)
@@ -445,7 +445,7 @@ struct NativeRCVFlowGraph: View {
                 ForEach(rules) { rule in
                     node(rule.name, symbol: "line.3.horizontal.decrease", detail: rule.enabled ? "On" : "Paused") { model.openSheet(.rule(rule, isNew: false)) }
                 }
-                Button("Add a rule") { model.openSheet(.rule(RCVPresentation.newRule(), isNew: true)) }.buttonStyle(.bordered)
+                NativeSessionButton("Add a rule") { model.openSheet(.rule(RCVPresentation.newRule(), isNew: true)) }.buttonStyle(.bordered)
             }
             connector
             column("Agents and sessions", count: RCVPresentation.distinctTargets(in: rules).count) {
@@ -469,14 +469,14 @@ struct NativeRCVFlowGraph: View {
         }.frame(maxWidth: .infinity, alignment: .topLeading)
     }
     private func node(_ title: String, symbol: String, detail: String, open: @escaping () -> Void) -> some View {
-        Button(action: open) {
+        NativeSessionButton(action: open) {
             HStack(spacing: 10) {
                 Image(systemName: symbol).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 4) { Text(title).fontWeight(.semibold).lineLimit(1); Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
             }.padding(12).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading).contentShape(.rect)
-        }.buttonStyle(NativeRCVRowStyle()).background(NativeRCVSurface.card, in: .rect(cornerRadius: 12)).contextMenu { Button("Open", action: open) }
+        }.buttonStyle(NativeRCVRowStyle()).background(NativeRCVSurface.card, in: .rect(cornerRadius: 12)).contextMenu { NativeSessionButton("Open", action: open) }
     }
 }
 

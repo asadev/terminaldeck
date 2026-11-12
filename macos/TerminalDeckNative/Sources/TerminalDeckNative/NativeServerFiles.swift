@@ -300,18 +300,18 @@ struct NativeServerFolderBrowser: View {
             }
         }
         .alert("Rename \(renaming?.name ?? "")", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("New name", text: $newName)
-            Button("Rename") { if let row = renaming { model.rename(row, to: newName) }; renaming = nil }
-            Button("Cancel", role: .cancel) { renaming = nil }
+            NativeSessionTextField("New name", text: $newName)
+            NativeSessionButton("Rename") { if let row = renaming { model.rename(row, to: newName) }; renaming = nil }
+            NativeSessionButton("Cancel", role: .cancel) { renaming = nil }
         } message: { Text("This renames it on \(model.serverName).") }
         .alert("Delete \(deleting?.name ?? "")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button("Delete", role: .destructive) { if let row = deleting { model.delete(row) }; deleting = nil }
-            Button("Cancel", role: .cancel) { deleting = nil }
+            NativeSessionButton("Delete", role: .destructive) { if let row = deleting { model.delete(row) }; deleting = nil }
+            NativeSessionButton("Cancel", role: .cancel) { deleting = nil }
         } message: { Text(deleting?.isFolder == true ? "Only an empty folder can be deleted. This can't be undone." : "It is removed from \(model.serverName). This can't be undone.") }
         .alert("Add \(uploads.count == 1 ? uploads[0].lastPathComponent : "\(uploads.count) files") to \(model.crumbs.last?.label ?? "this folder")?",
                isPresented: Binding(get: { !uploads.isEmpty }, set: { if !$0 { uploads = [] } })) {
-            Button("Add") { model.upload(uploads); uploads = [] }
-            Button("Cancel", role: .cancel) { uploads = [] }
+            NativeSessionButton("Add") { model.upload(uploads); uploads = [] }
+            NativeSessionButton("Cancel", role: .cancel) { uploads = [] }
         } message: { Text("They are copied onto \(model.serverName). A file with the same name is kept; the new one gets a number.") }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { uploads = urls }
@@ -320,13 +320,13 @@ struct NativeServerFolderBrowser: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Button { model.back() } label: { Image(systemName: "chevron.left").frame(width: 28, height: 28).contentShape(.rect) }
+            NativeSessionButton { model.back() } label: { Image(systemName: "chevron.left").frame(width: 28, height: 28).contentShape(.rect) }
                 .buttonStyle(.borderless).disabled(!model.canGoBack).help("Back").accessibilityLabel("Back")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(Array(model.crumbs.enumerated()), id: \.offset) { index, crumb in
                         if index > 0 { Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary) }
-                        Button { if crumb.path != model.path { model.open(crumb.path) } } label: {
+                        NativeSessionButton { if crumb.path != model.path { model.open(crumb.path) } } label: {
                             HStack(spacing: 4) {
                                 if index == 0 { Image(systemName: "house").font(.system(size: 11)) }
                                 Text(crumb.label).lineLimit(1)
@@ -338,7 +338,7 @@ struct NativeServerFolderBrowser: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 11))
-                TextField("Search this folder", text: $model.query).textFieldStyle(.plain).frame(width: 150)
+                NativeSessionTextField("Search this folder", text: $model.query).textFieldStyle(.plain).frame(width: 150)
                     .onChange(of: model.query) { _, _ in model.searchChanged() }
             }.padding(.horizontal, 8).frame(height: 26).background(DeckTokens.selection, in: RoundedRectangle(cornerRadius: 7))
             Menu {
@@ -350,10 +350,10 @@ struct NativeServerFolderBrowser: View {
             } label: { Image(systemName: "arrow.up.arrow.down").frame(width: 28, height: 28) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Sort").accessibilityLabel("Sort")
             if !model.lookOnly {
-                Button { picking = true } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(.rect) }
+                NativeSessionButton { picking = true } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(.rect) }
                     .buttonStyle(.borderless).help("Add files to this folder").accessibilityLabel("Add files to this folder")
             }
-            Button { model.reload() } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28).contentShape(.rect) }
+            NativeSessionButton { model.reload() } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28).contentShape(.rect) }
                 .buttonStyle(.borderless).help("Read this folder again").accessibilityLabel("Read this folder again")
         }.padding(.horizontal, 10).frame(height: 44)
     }
@@ -404,13 +404,13 @@ struct NativeServerFolderBrowser: View {
     }
 
     @ViewBuilder private func rowMenu(_ row: NativeServerFileRow) -> some View {
-        if row.isFolder || row.kind == "link" { Button("Open") { model.open(row.path) } }
-        if !row.isFolder { Button("Download") { model.download(row) } }
-        Button("Copy path") { model.copyPath(row) }
+        if row.isFolder || row.kind == "link" { NativeSessionButton("Open") { model.open(row.path) } }
+        if !row.isFolder { NativeSessionButton("Download") { model.download(row) } }
+        NativeSessionButton("Copy path") { model.copyPath(row) }
         if !model.lookOnly {
             Divider()
-            Button("Rename…") { newName = row.name; renaming = row }
-            Button("Delete…", role: .destructive) { deleting = row }
+            NativeSessionButton("Rename…") { newName = row.name; renaming = row }
+            NativeSessionButton("Delete…", role: .destructive) { deleting = row }
         }
     }
 
@@ -419,7 +419,7 @@ struct NativeServerFolderBrowser: View {
             if model.loading { ProgressView().controlSize(.small) }
             Text(model.rows.count < model.total ? "\(NativeServerFilesWords.count(model.rows.count)) / \(NativeServerFilesWords.count(model.total)) items" : "\(NativeServerFilesWords.count(model.total)) \(model.total == 1 ? "item" : "items")")
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            if model.more { Button("Show more") { model.loadMore() }.buttonStyle(.borderless).font(.caption) }
+            if model.more { NativeSessionButton("Show more") { model.loadMore() }.buttonStyle(.borderless).font(.caption) }
             Spacer()
             Text(model.path.isEmpty ? "" : model.path).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.head)
                 .help(model.path)

@@ -72,8 +72,8 @@ struct NativeChatReviewPanel: View {
             Text("Review changes").font(.headline)
             if available {
                 Picker("Scope", selection: $scope) { Text("Uncommitted changes").tag("uncommitted"); Text("Custom instructions").tag("custom") }
-                if scope == "custom" { TextField("What should this review examine?", text: $custom, axis: .vertical).lineLimit(3...6) }
-                Button("Prepare review command") { do { _ = try model.reviewTool("insert", request: scope, text: custom); outcome = "Review command prepared. Send it when ready." } catch { outcome = error.localizedDescription } }
+                if scope == "custom" { NativeSessionTextField("What should this review examine?", text: $custom, axis: .vertical).lineLimit(3...6) }
+                NativeSessionButton("Prepare review command") { do { _ = try model.reviewTool("insert", request: scope, text: custom); outcome = "Review command prepared. Send it when ready." } catch { outcome = error.localizedDescription } }
                     .disabled(model.composerDraft.canSend || model.busy || model.readOnly)
             } else { Text("This chat has not advertised the native Codex review operation.").font(.caption).foregroundStyle(.secondary) }
             Text("Native branch/base/commit targets and provider review-output records still need the helper connection. Only emitted structured findings are indexed below.").font(.caption).foregroundStyle(.secondary)
@@ -84,8 +84,8 @@ struct NativeChatReviewPanel: View {
                             Text(finding.title).font(.callout.weight(.semibold)); Text(finding.body).font(.caption).textSelection(.enabled)
                             if let path = finding.path { Text(path + (finding.line.map { ":\(Int($0))" } ?? "")).font(.caption.monospaced()).lineLimit(2) }
                             HStack {
-                                Button("Recorded finding") { run("open", finding.id) }
-                                if finding.path?.hasPrefix("/") == true { Button("Reveal file") { run("reveal", finding.id) } }
+                                NativeSessionButton("Recorded finding") { run("open", finding.id) }
+                                if finding.path?.hasPrefix("/") == true { NativeSessionButton("Reveal file") { run("reveal", finding.id) } }
                             }
                         }
                     }

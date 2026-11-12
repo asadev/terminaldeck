@@ -83,14 +83,14 @@ struct NativeConnectedTasksSection: View {
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
                         if index > 0 { Divider().padding(.leading, 36) }
-                        Button { store.open = (system.id, row.id) } label: {
+                        NativeSessionButton { store.open = (system.id, row.id) } label: {
                             ConnectedTaskRowView(row: row, system: system, handoff: list?.handoff(row.id), today: today)
                                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(SIDEBARRowStyle())
                         .contextMenu {
-                            Button("Open task") { store.open = (system.id, row.id) }
+                            NativeSessionButton("Open task") { store.open = (system.id, row.id) }
                         }
                     }
                 }
@@ -123,7 +123,7 @@ struct NativeConnectedTasksSection: View {
             if store.refreshing.contains(system.id) {
                 ProgressView().controlSize(.small).accessibilityLabel("Reading tasks from \(system.name)")
             }
-            Button { Task { await store.refresh(system.id) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+            NativeSessionButton { Task { await store.refresh(system.id) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 .disabled(store.refreshing.contains(system.id) || !system.enabled)
                 .help(system.enabled ? "Read the tasks from \(system.name) again" : "This connection is switched off in Settings → Tasks")
         }
@@ -144,7 +144,7 @@ struct NativeConnectedTasksSection: View {
                         if on { statuses.insert(status) } else { statuses.remove(status) }
                     }))
                 }
-                if !statuses.isEmpty { Divider(); Button("Any status") { statuses = [] } }
+                if !statuses.isEmpty { Divider(); NativeSessionButton("Any status") { statuses = [] } }
             } label: {
                 Text(statuses.isEmpty ? "Any status" : statuses.sorted().joined(separator: ", "))
             }
@@ -152,7 +152,7 @@ struct NativeConnectedTasksSection: View {
             .disabled(system.statuses.isEmpty)
             Toggle("Show done", isOn: $showDone).toggleStyle(.checkbox).disabled(!statuses.isEmpty)
             Spacer(minLength: 8)
-            TextField("Search \(system.name)", text: $search).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+            NativeSessionTextField("Search \(system.name)", text: $search).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
         }
         .controlSize(.small)
     }
@@ -237,7 +237,7 @@ struct ConnectedTaskStrip: View {
                 }
                 Menu {
                     if agents.isEmpty { Text("No task agents yet — add one in Settings → Tasks") }
-                    ForEach(agents) { agent in Button { hand(agent) } label: { DeckRowLabel(agent.name, image: DeckRowIcon.agent(id: agent.id)) } }
+                    ForEach(agents) { agent in NativeSessionButton { hand(agent) } label: { DeckRowLabel(agent.name, image: DeckRowIcon.agent(id: agent.id)) } }
                 } label: { Label("Hand to an agent", systemImage: "person.crop.circle.badge.plus") }
                 .fixedSize()
                 .disabled(busy || working || system.changes == .off)
@@ -279,10 +279,10 @@ struct ConnectedTasksAskBar: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(ask.sentence).font(.callout).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button(ask.destructive ? "Yes, do it" : "Send") { ConnectedTasksStore.shared.answer(.send) }
+                NativeSessionButton(ask.destructive ? "Yes, do it" : "Send") { ConnectedTasksStore.shared.answer(.send) }
                     .buttonStyle(.borderedProminent).tint(ask.destructive ? TaskTone.input : .accentColor).keyboardShortcut(.defaultAction)
-                if !ask.destructive { Button("Send and stop asking") { ConnectedTasksStore.shared.answer(.always) } }
-                Button("Cancel") { ConnectedTasksStore.shared.answer(.cancel) }.keyboardShortcut(.cancelAction)
+                if !ask.destructive { NativeSessionButton("Send and stop asking") { ConnectedTasksStore.shared.answer(.always) } }
+                NativeSessionButton("Cancel") { ConnectedTasksStore.shared.answer(.cancel) }.keyboardShortcut(.cancelAction)
             }
             .controlSize(.small)
         }

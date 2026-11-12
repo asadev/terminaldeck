@@ -43,20 +43,20 @@ struct MACHINESAddServerSheet: View {
             } else {
                 Form {
                     Section("Connection") {
-                        TextField("Address", text: $address, prompt: Text("server.example.com"))
-                        TextField("Sign in as", text: $username, prompt: Text("admin"))
-                        TextField("Port", text: $port, prompt: Text("22"))
-                        TextField("Name", text: $name, prompt: Text("Optional"))
+                        NativeSessionTextField("Address", text: $address, prompt: Text("server.example.com"))
+                        NativeSessionTextField("Sign in as", text: $username, prompt: Text("admin"))
+                        NativeSessionTextField("Port", text: $port, prompt: Text("22"))
+                        NativeSessionTextField("Name", text: $name, prompt: Text("Optional"))
                     }
                     Section("Sign-in") {
                         Picker("Use", selection: $method) {
                             Text("Password").tag("password")
                             Text("SSH key").tag("key")
                         }
-                        if method == "password" { SecureField("Password", text: $password) }
+                        if method == "password" { NativeSessionSecureField("Password", text: $password) }
                         else {
                             NativeServerKeyField(model: model, key: $key)
-                            if locked { SecureField("Key password", text: $passphrase) }
+                            if locked { NativeSessionSecureField("Key password", text: $passphrase) }
                         }
                         Toggle("Remember this sign-in", isOn: $remember)
                     }
@@ -65,9 +65,9 @@ struct MACHINESAddServerSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { model.clearAddError(); cancel() }.buttonStyle(.bordered).keyboardShortcut(.cancelAction).disabled(model.adding)
+                NativeSessionButton("Cancel") { model.clearAddError(); cancel() }.buttonStyle(.bordered).keyboardShortcut(.cancelAction).disabled(model.adding)
                 if mode != "Saved sign-in" {
-                    Button(model.adding ? "Connecting…" : "Add a server") {
+                    NativeSessionButton(model.adding ? "Connecting…" : "Add a server") {
                         model.submit(AddServerRules.draft(address: address, port: selectedPort.port, username: username,
                             method: method, password: password, key: key, passphrase: passphrase, locked: locked,
                             name: name, remember: remember), route: $route)

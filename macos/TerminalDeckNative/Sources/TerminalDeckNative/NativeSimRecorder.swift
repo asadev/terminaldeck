@@ -289,7 +289,7 @@ struct NativeSimRecordControls: View {
     var body: some View {
         HStack(spacing: 0) {
             // One Record icon, the same size as the bar's others; its options on a right-click (Asad 10 Oct).
-            Button { recorder.toggle() } label: { label }
+            NativeSessionButton { recorder.toggle() } label: { label }
                 .buttonStyle(.borderless)
                 .frame(minWidth: 28, minHeight: 28)
                 .contentShape(.rect)
@@ -406,16 +406,16 @@ struct NativeSimRecordingCard: View {
                             .disabled(clip.poster == nil)
                         }
                         if !cropping {
-                            Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: clip.path)]) }
+                            NativeSessionButton("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: clip.path)]) }
                                 .buttonStyle(.borderless)
                         }
                     }
                 }
-                TextField(clip.narrated != nil ? "Anything to add for the agent? (optional)" : "What should the agent look at?", text: Binding(
+                NativeSessionTextField(clip.narrated != nil ? "Anything to add for the agent? (optional)" : "What should the agent look at?", text: Binding(
                     get: { recorder.clip?.instruction ?? "" },
                     set: { recorder.clip?.instruction = $0; recorder.clip?.problem = "" }))
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await recorder.send() } }
+                    .sessionOnSubmit { Task { await recorder.send() } }
                 HStack {
                     let line = !clip.problem.isEmpty ? clip.problem : recorder.model.sessionReason
                     if !line.isEmpty {

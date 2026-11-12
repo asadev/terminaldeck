@@ -37,8 +37,8 @@ struct NativeChatElicitationCard: View {
             HStack {
                 if validating { ProgressView().controlSize(.small); Text("Checking answer…").font(.caption) }
                 Spacer()
-                Button(empty || isURL || !supported ? "Don't allow" : "Cancel") { answer(false, .object([])) }.buttonStyle(.bordered)
-                Button(isURL ? "Continue" : empty ? "Allow" : "Send answer", action: submit).buttonStyle(.borderedProminent)
+                NativeSessionButton(empty || isURL || !supported ? "Don't allow" : "Cancel") { answer(false, .object([])) }.buttonStyle(.bordered)
+                NativeSessionButton(isURL ? "Continue" : empty ? "Allow" : "Send answer", action: submit).buttonStyle(.borderedProminent)
                     .disabled(!supported || (isURL && BackendChatElicitation.authURL(request) == nil))
             }
         }.font(.system(size: 12)).padding(12)
@@ -74,15 +74,15 @@ struct NativeChatElicitationCard: View {
                     if field.schema["type"].string != "array" { selected = selected.removing(field.id) }
                 })
                 let label = field.choices.isEmpty ? field.title : "Your own answer"
-                if field.schema["secret"].bool == true { SecureField(label, text: binding).textFieldStyle(.roundedBorder) }
-                else { TextField(label, text: binding).textFieldStyle(.roundedBorder) }
+                if field.schema["secret"].bool == true { NativeSessionSecureField(label, text: binding).textFieldStyle(.roundedBorder) }
+                else { NativeSessionTextField(label, text: binding).textFieldStyle(.roundedBorder) }
             }
         }
     }
     private func choiceButton(_ field: BackendChatElicitation.Field, value: NativeRPCValue, title: String, detail: String? = nil) -> some View {
         let multiple = field.schema["type"].string == "array"
         let picked = multiple ? selected[field.id].elements?.contains(value) == true : selected[field.id] == value
-        return Button {
+        return NativeSessionButton {
             if multiple {
                 var values = selected[field.id].elements ?? []
                 values.removeAll { $0 == value }

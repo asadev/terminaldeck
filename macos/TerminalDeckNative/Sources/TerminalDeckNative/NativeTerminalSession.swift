@@ -129,7 +129,7 @@ final class NativeTerminalSession {
         terminal.host = self
         delegateProxy.owner = self
         controlsState.session = self
-        terminal.terminalDelegate = delegateProxy
+        terminal.eventDelegate = delegateProxy
         terminal.optionAsMetaKey = false       // xterm's default: ⌥ types the character the layout gives
         terminal.lineSpacing = Self.lineSpacing
         terminal.alphaValue = 0                // held until the history is in
@@ -492,14 +492,17 @@ final class NativeTerminalSession {
     }
 
     /// Give the terminal the keyboard (the web pane focuses the terminal it shows).
+    func cancelPendingFocus() { wantsFocus = false }
+
     func focus() {
+        guard terminal.inputActive else { wantsFocus = false; return }
         guard !showsMoveBack else { return }
         guard end == nil, let window = terminal.window else {
             wantsFocus = end == nil && !isChat && visibleScreens > 0
             return
         }
         wantsFocus = false
-        if window.firstResponder !== terminal { window.makeFirstResponder(terminal) }
+        if window.firstResponder !== terminal { DeckTerminalSlot.requestFocus(for: terminal) }
         refreshKeyboardPlace()
     }
 
@@ -596,7 +599,7 @@ final class NativeTerminalSession {
     /// Text as xterm's `paste()` sends it: Returns for line ends, bracketed when the program asked.
     func type(paste text: String) {
         guard end == nil, !text.isEmpty else { return }
-        terminal.send(txt: TerminalText.pasteData(text, bracketed: terminal.getTerminal().bracketedPasteMode))
+        terminal.sendExplicitText(TerminalText.pasteData(text, bracketed: terminal.getTerminal().bracketedPasteMode))
     }
 
     /// ⌘V, through the web terminal's rules: files copied in Finder are typed as

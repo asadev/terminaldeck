@@ -68,7 +68,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 NativeSettingsProse(text: notInstalled)
             } else if let problem = model.jobsProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
-                Button("Read again", action: model.load).disabled(model.busy != nil)
+                NativeSessionButton("Read again", action: model.load).disabled(model.busy != nil)
             } else {
                 NativeSettingsProse(text: "Commands that run inside \(appName) on a schedule. The server runs them, even when this Mac is off.")
                 if model.jobs.isEmpty, model.editing == nil {
@@ -84,14 +84,14 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 if model.editing != nil, model.editing?.jobID == nil {
                     editor
                 } else if model.editing == nil {
-                    Button("Add a job…", action: model.newJob).disabled(controlsDisabled)
+                    NativeSessionButton("Add a job…", action: model.newJob).disabled(controlsDisabled)
                 }
                 NativeAppsSRV2ResultLine(busy: model.busy, problem: model.problem, note: model.note, shown: model.resultPart == .jobs)
             }
         }
         .alert("Remove \(removingJob?.title ?? "this job")?", isPresented: Binding(get: { removingJob != nil }, set: { if !$0 { removingJob = nil } })) {
-            Button("Cancel", role: .cancel) { removingJob = nil }
-            Button("Remove job", role: .destructive) {
+            NativeSessionButton("Cancel", role: .cancel) { removingJob = nil }
+            NativeSessionButton("Remove job", role: .destructive) {
                 if let job = removingJob { model.removeJob(job.id, writesDisabled: writesDisabled) }
                 removingJob = nil
             }
@@ -109,9 +109,9 @@ struct NativeAppsSRV2AppServerSectionList: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                Button("Run now") { model.runJob(job.id, writesDisabled: writesDisabled) }
-                Button("Edit") { model.edit(job) }.disabled(model.editing != nil)
-                Button("Remove…", role: .destructive) { removingJob = job }
+                NativeSessionButton("Run now") { model.runJob(job.id, writesDisabled: writesDisabled) }
+                NativeSessionButton("Edit") { model.edit(job) }.disabled(model.editing != nil)
+                NativeSessionButton("Remove…", role: .destructive) { removingJob = job }
             }
             .disabled(controlsDisabled)
             Text(job.command).font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -120,9 +120,9 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 Text(lastWords(job)).font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 if model.jobLogs[job.id] == nil {
-                    Button("Show last output") { model.readJobLog(job.id) }.disabled(job.last == nil)
+                    NativeSessionButton("Show last output") { model.readJobLog(job.id) }.disabled(job.last == nil)
                 } else {
-                    Button("Hide output") { model.hideJobLog(job.id) }
+                    NativeSessionButton("Hide output") { model.hideJobLog(job.id) }
                 }
             }
             if let log = model.jobLogs[job.id] {
@@ -157,10 +157,10 @@ struct NativeAppsSRV2AppServerSectionList: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(draft.wrappedValue.jobID == nil ? "New job" : "Edit job").font(.callout.weight(.medium))
                 NativeSettingRow(label: "Name") {
-                    TextField("Name", text: draft.name, prompt: Text("Nightly report")).labelsHidden().frame(minWidth: 160, maxWidth: 260)
+                    NativeSessionTextField("Name", text: draft.name, prompt: Text("Nightly report")).textFieldStyle(.roundedBorder).labelsHidden().frame(minWidth: 160, maxWidth: 260)
                 }
                 NativeSettingRow(label: "Command", help: "Runs inside the app, on one line, for example npm run report.") {
-                    TextField("Command", text: draft.command, prompt: Text("npm run report")).labelsHidden()
+                    NativeSessionTextField("Command", text: draft.command, prompt: Text("npm run report")).textFieldStyle(.roundedBorder).labelsHidden()
                         .font(.callout.monospaced()).frame(minWidth: 160, maxWidth: 260)
                 }
                 NativeAppsSRV2ScheduleEditor(schedule: draft.schedule)
@@ -171,9 +171,9 @@ struct NativeAppsSRV2AppServerSectionList: View {
                     Toggle("Run on schedule", isOn: draft.enabled).labelsHidden().toggleStyle(.switch)
                 }
                 HStack(spacing: 8) {
-                    Button("Save job") { model.saveJob(writesDisabled: writesDisabled) }
+                    NativeSessionButton("Save job") { model.saveJob(writesDisabled: writesDisabled) }
                         .disabled(controlsDisabled)
-                    Button("Cancel") { model.editing = nil }
+                    NativeSessionButton("Cancel") { model.editing = nil }
                 }
                 if let problem = model.jobProblem(draft.wrappedValue), !draft.wrappedValue.name.isEmpty || !draft.wrappedValue.command.isEmpty {
                     Text(problem).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -193,7 +193,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 NativeSettingsProse(text: notInstalled)
             } else if let problem = model.autoDeployProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
-                Button("Read again", action: model.load).disabled(model.busy != nil)
+                NativeSessionButton("Read again", action: model.load).disabled(model.busy != nil)
             } else if let auto = model.autoDeploy {
                 if isGitHub {
                     NativeSettingRow(label: "Deploy when you push", help: "The server deploys each new commit by itself, even when this Mac is off.") {
@@ -215,8 +215,8 @@ struct NativeAppsSRV2AppServerSectionList: View {
             }
         }
         .alert("Make a new deploy link?", isPresented: $confirmingNewLink) {
-            Button("Cancel", role: .cancel) {}
-            Button("Make new link") { showLinkSecret = false; model.makeDeployLink(writesDisabled: writesDisabled) }
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Make new link") { showLinkSecret = false; model.makeDeployLink(writesDisabled: writesDisabled) }
         } message: {
             Text("The current link stops working at once. Update it wherever you use it, such as your build service.")
         }
@@ -228,7 +228,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 HStack(spacing: 8) {
                     Text(url).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled).help(url)
-                    Button("Copy") { copy(url, what: "Webhook address") }
+                    NativeSessionButton("Copy") { copy(url, what: "Webhook address") }
                 }
             }
             NativeSettingRow(label: "Webhook secret", help: "Paste it into GitHub with the address.") {
@@ -246,12 +246,12 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 HStack(spacing: 8) {
                     Text(key).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled)
-                    Button("Copy") { copy(key, what: "Deploy key") }
+                    NativeSessionButton("Copy") { copy(key, what: "Deploy key") }
                 }
             }
         } else {
             NativeSettingRow(label: "Private repository?", help: "Make a read-only deploy key so the server can fetch your code.") {
-                Button("Make a deploy key") { model.setAutoDeploy(true, deployKey: true, writesDisabled: writesDisabled) }
+                NativeSessionButton("Make a deploy key") { model.setAutoDeploy(true, deployKey: true, writesDisabled: writesDisabled) }
                     .disabled(controlsDisabled)
             }
         }
@@ -260,7 +260,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
 
     @ViewBuilder private func deployLink(_ auto: Model.AutoDeploy) -> some View {
         NativeSettingRow(label: "Deploy link", help: "Lets a build service start a deploy with a secret link.") {
-            Button(auto.hasDeployLink == true || model.newLink != nil ? "Make a new link…" : "Make a deploy link") {
+            NativeSessionButton(auto.hasDeployLink == true || model.newLink != nil ? "Make a new link…" : "Make a deploy link") {
                 if auto.hasDeployLink == true || model.newLink != nil { confirmingNewLink = true }
                 else { showLinkSecret = false; model.makeDeployLink(writesDisabled: writesDisabled) }
             }
@@ -271,7 +271,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
                 HStack(spacing: 8) {
                     Text(link.url).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled).help(link.url)
-                    Button("Copy") { copy(link.url, what: "Link address") }
+                    NativeSessionButton("Copy") { copy(link.url, what: "Link address") }
                 }
             }
             NativeSettingRow(label: "Link secret", help: "Shown only now. Keep it in your build service’s secret settings.") {
@@ -288,7 +288,7 @@ struct NativeAppsSRV2AppServerSectionList: View {
 
     @ViewBuilder private var lastDeploy: some View {
         NativeSettingRow(label: "Last deploy on the server", help: runningWords) {
-            Button("Read again", action: model.refreshDeployLog)
+            NativeSessionButton("Read again", action: model.refreshDeployLog)
         }
         if let log = model.deployLog, !log.isEmpty {
             NativeAppsSRV2LogView(text: log, label: "Last server deploy log")

@@ -258,9 +258,15 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     var desired = new List<UIElement>();
     var rows = Model.Rows;
     if (searchWindowStart is null && rows.Count > visibleMessages) desired.Add(earlierMessages ??= Button("Show earlier messages", () => { visibleMessages += 200; Render(); return Task.CompletedTask; }));
-    var visible = searchWindowStart is { } start && searchBar.Visibility == Visibility.Visible ? rows.Skip(start).Take(200) : rows.TakeLast(visibleMessages);
-    foreach (var row in visible)
+    var visible = (searchWindowStart is { } start && searchBar.Visibility == Visibility.Visible ? rows.Skip(start).Take(200) : rows.TakeLast(visibleMessages)).ToArray();
+    // Consecutive tool steps fold into one row. While Find has words, every step stands alone so a
+    // match can be scrolled to.
+    var segments = searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0
+      ? visible.Select(r => new ChatSegment<ChatRow>([r], false)).ToArray() : ChatToolRuns.Segments(visible);
+    foreach (var segment in segments)
     {
+      if (segment.IsRun) { AddToolRun(segment.Items, desired); continue; }
+      var row = segment.Items[0];
       if (row.Kind == "error" && row.Text == Model.Snapshot.Problem) continue;
       var rowKey = row.Kind + ":" + row.Id;
       var message = row.Kind == "user" ? Model.Snapshot.Messages.FirstOrDefault(m => m.ClientId == row.ClientId) : null;
@@ -282,8 +288,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       }
       if (row.Kind == "tool")
       {
-        var expander = ChatAppearance.ToolStep(row.Text, row.Details, row.Waiting, row.Status == "Failed");
-        RetainExpansion(expander, rowKey); content.Children.Add(expander); content.Children.Add(ChatToolContent.Render(Model.Snapshot, row, Model.DataDirectory, navigation?.Mcp, () => Model.Snapshot, CopyText, ShowLinkError, ShowChatDialogAsync, this)); AddRow(content); continue;
+        content.Children.Add(ToolLine(row)); content.Children.Add(ToolContent(row)); AddRow(content); continue;
       }
       if (searchBar.Visibility == Visibility.Visible && searchBox.Text.Length > 0) content.Children.Add(SearchText(row.Text));
       else if (row.Kind is "assistant" or "user")
@@ -368,6 +373,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     }
     while (messages.Children.Count > desired.Count) messages.Children.RemoveAt(messages.Children.Count - 1);
     foreach (var key in rowCache.Keys.Where(key => !messageElements.ContainsKey(key)).ToArray()) { rowCache.Remove(key); richMessages.Remove(key); }
+    foreach (var key in toolRuns.Keys.Where(key => !messageElements.ContainsKey(key)).ToArray()) toolRuns.Remove(key);
     FitRows(); RenderProblem(); UpdateControls();
     if (!nearBottom) _ = DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (thisRender != renderSerial || findNavigationPending) return; scroll.UpdateLayout(); scroll.ChangeView(null, previousOffset, null, true); });
     if (nearBottom) _ = DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -378,6 +384,26 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
       scroll.UpdateLayout(); scroll.ChangeView(null, scroll.ScrollableHeight, null, true);
     });
   }
+  private readonly Dictionary<string, ChatToolRunView> toolRuns = [];
+  // One folded row for a run of tool steps; it keeps its place and expansion while steps arrive.
+  private void AddToolRun(IReadOnlyList<ChatRow> run, List<UIElement> desired)
+  {
+    var key = "toolrun:" + run[0].Id;
+    if (!toolRuns.TryGetValue(key, out var view)) { view = new ChatToolRunView(); RetainExpansion(view.Fold, key); toolRuns[key] = view; }
+    view.Update(run, ToolLine, ToolContent);
+    desired.Add(view); messageElements[key] = view;
+    foreach (var row in run) { messageElements[row.Kind + ":" + row.Id] = view; rowCache.Remove(row.Kind + ":" + row.Id); }
+  }
+  // One compact line per step (its command, file or tool in plain words); it opens the step's detail.
+  private FrameworkElement ToolLine(ChatRow row)
+  {
+    var rowKey = row.Kind + ":" + row.Id;
+    var line = row.Kind == "reasoning" ? new Expander { Header = "Reasoning", Content = Words(row.Text, 12), HorizontalAlignment = HorizontalAlignment.Stretch }
+      : ChatAppearance.ToolStep(ChatToolRuns.Title(row, row.Waiting), ChatToolRuns.Detail(row), row.Waiting, ChatToolRuns.Failed(row));
+    RetainExpansion(line, rowKey); return line;
+  }
+  private StackPanel ToolContent(ChatRow row) =>
+    ChatToolContent.Render(Model.Snapshot, row, Model.DataDirectory, navigation?.Mcp, () => Model.Snapshot, CopyText, ShowLinkError, ShowChatDialogAsync, this);
   private void FitRows()
   {
     var width = Math.Max(0, Math.Min(688, messages.Width));

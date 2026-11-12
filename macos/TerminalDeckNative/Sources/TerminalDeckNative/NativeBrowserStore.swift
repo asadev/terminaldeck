@@ -97,7 +97,7 @@ struct NativeBrowserStoreDepartment: View {
             }
             if !model.extProblem.isEmpty {
                 Text(model.extProblem).foregroundStyle(.red)
-                Button("Try again") { Task { await model.loadExtensions() } }
+                NativeSessionButton("Try again") { Task { await model.loadExtensions() } }
             } else if model.extensionsLoading {
                 Text("Reading extensions…").redacted(reason: .placeholder)
             } else {
@@ -159,10 +159,10 @@ struct NativeBrowserStoreDepartment: View {
         section("Add your own") {
             note("An extension you have on this machine — one you are writing, or one you got somewhere this app does not know about. It is copied into \(ext.profileName.isEmpty ? "this profile" : ext.profileName) and switched on. Nothing about it was measured here, no fingerprint is checked against it, and its row says exactly that instead of borrowing the confidence of the rows above.")
             HStack {
-                Button(model.busy == "own:folder" ? "Working…" : "Add a folder…") { model.addOwn("folder") }
+                NativeSessionButton(model.busy == "own:folder" ? "Working…" : "Add a folder…") { model.addOwn("folder") }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.busy.isEmpty)
-                Button(model.busy == "own:crx" ? "Working…" : "Add a .crx or a zip…") { model.addOwn("crx") }
+                NativeSessionButton(model.busy == "own:crx" ? "Working…" : "Add a .crx or a zip…") { model.addOwn("crx") }
                     .buttonStyle(.borderless)
                     .disabled(!model.busy.isEmpty)
             }
@@ -178,7 +178,7 @@ struct NativeBrowserStoreDepartment: View {
             HStack {
                 Text(id).fontWeight(.semibold)
                 Spacer()
-                Button(model.busy == key ? "Working…" : "Remove", action: remove)
+                NativeSessionButton(model.busy == key ? "Working…" : "Remove", action: remove)
                     .buttonStyle(.borderless)
                     .disabled(model.busy == key)
             }
@@ -210,14 +210,14 @@ struct NativeBrowserExtensionRow: View {
                     if ext.sideloaded { NativeCodingAIBadge(text: "Added by you") }
                     Spacer(minLength: 8)
                     if ext.isInstalled && ext.enabled && !ext.popup.isEmpty {
-                        Button("Open panel") { model.openPopup(ext.id) }.buttonStyle(.borderless)
+                        NativeSessionButton("Open panel") { model.openPopup(ext.id) }.buttonStyle(.borderless)
                     }
                     if ext.isInstalled && ext.enabled && !ext.optionsPage.isEmpty {
-                        Button("Open settings") { model.openOptions(ext.id) }.buttonStyle(.borderless)
+                        NativeSessionButton("Open settings") { model.openOptions(ext.id) }.buttonStyle(.borderless)
                     }
                     if ext.sideloaded && ext.isInstalled && !renaming {
-                        Button("Reload") { model.reload(ext.id) }.buttonStyle(.borderless).disabled(busy)
-                        Button("Rename") { model.startRename(ext.id, name: ext.name) }.buttonStyle(.borderless).disabled(busy)
+                        NativeSessionButton("Reload") { model.reload(ext.id) }.buttonStyle(.borderless).disabled(busy)
+                        NativeSessionButton("Rename") { model.startRename(ext.id, name: ext.name) }.buttonStyle(.borderless).disabled(busy)
                     }
                     if ext.isInstalled {
                         Toggle("On", isOn: Binding(get: { ext.enabled }, set: { model.setEnabled(ext.id, $0) }))
@@ -225,20 +225,20 @@ struct NativeBrowserExtensionRow: View {
                             .disabled(busy)
                     }
                     let remove = BrowserStore.extensionVerb(ext) == "remove"
-                    Button(BrowserStore.extensionActionLabel(ext, busy: busy)) { model.actExtension(ext.id, verb: BrowserStore.extensionVerb(ext)) }
+                    NativeSessionButton(BrowserStore.extensionActionLabel(ext, busy: busy)) { model.actExtension(ext.id, verb: BrowserStore.extensionVerb(ext)) }
                         .buttonStyle(remove ? AnyButtonStyle(.borderless) : AnyButtonStyle(.borderedProminent))
                         .disabled(busy)
                 }
                 if renaming {
                     HStack {
-                        TextField(ext.name, text: Binding(get: { model.renameDraft }, set: { model.renameDraft = $0 }))
+                        NativeSessionTextField(ext.name, text: Binding(get: { model.renameDraft }, set: { model.renameDraft = $0 }))
                             .textFieldStyle(.roundedBorder)
                             .accessibilityLabel("A name for \(ext.name)")
                             .disabled(busy)
-                        Button(busy ? "Working…" : "Save") { model.rename(ext.id) }
+                        NativeSessionButton(busy ? "Working…" : "Save") { model.rename(ext.id) }
                             .buttonStyle(.borderedProminent)
                             .disabled(busy || model.renameDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                        Button("Cancel") { model.renaming = "" }.disabled(busy)
+                        NativeSessionButton("Cancel") { model.renaming = "" }.disabled(busy)
                     }
                 }
                 Text(ext.summary).fixedSize(horizontal: false, vertical: true)
@@ -309,7 +309,7 @@ struct NativeBrowserToolRow: View {
                 if installed { NativeCodingAIBadge(text: "Installed") }
                 Spacer()
                 let remove = BrowserStore.toolVerb(tool) == "remove"
-                Button(BrowserStore.toolActionLabel(tool, busy: busy)) { model.actTool(tool.id, verb: BrowserStore.toolVerb(tool)) }
+                NativeSessionButton(BrowserStore.toolActionLabel(tool, busy: busy)) { model.actTool(tool.id, verb: BrowserStore.toolVerb(tool)) }
                     .buttonStyle(remove ? AnyButtonStyle(.borderless) : AnyButtonStyle(.borderedProminent))
                     .disabled(busy)
             }

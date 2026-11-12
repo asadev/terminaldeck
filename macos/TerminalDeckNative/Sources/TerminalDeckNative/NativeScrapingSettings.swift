@@ -45,7 +45,7 @@ struct NativeBrowserCaptureSettings: View {
             } else {
                 HStack { RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 96, height: 12); Spacer() }
             }
-            Button("More…") { more = true }
+            NativeSessionButton("More…") { more = true }
                 .popover(isPresented: $more) {
                     Form {
                         if let assets = model.config?.assets {
@@ -57,11 +57,11 @@ struct NativeBrowserCaptureSettings: View {
                                 NativeCodingAIInfo(label: "Ledger", text: "Tracks each downloaded file so the next run can skip it.")
                                 if model.ledgerArming {
                                     HStack {
-                                        Button("Clear ledger", role: .destructive) { model.clearLedger() }
-                                        Button("Cancel") { model.ledgerArming = false }
+                                        NativeSessionButton("Clear ledger", role: .destructive) { model.clearLedger() }
+                                        NativeSessionButton("Cancel") { model.ledgerArming = false }
                                     }
                                 } else {
-                                    Button("Clear ledger…", role: .destructive) { model.ledgerArming = true }
+                                    NativeSessionButton("Clear ledger…", role: .destructive) { model.ledgerArming = true }
                                 }
                             }
                         }
@@ -101,13 +101,13 @@ private struct NativeScrapingLiftAsks: View {
                 if !ask.reason.isEmpty { Text(ask.reason).font(.callout).foregroundStyle(.secondary) }
                 HStack {
                     if model.approving == ask.id {
-                        Button(Scraping.liftLine(from: model.name(of: ask.fromProfileId), into: ask.intoProfileIds.map(model.name(of:))), role: .destructive) {
+                        NativeSessionButton(Scraping.liftLine(from: model.name(of: ask.fromProfileId), into: ask.intoProfileIds.map(model.name(of:))), role: .destructive) {
                             model.answer(ask, approve: true)
                         }
-                        Button("Cancel") { model.approving = "" }
+                        NativeSessionButton("Cancel") { model.approving = "" }
                     } else {
-                        Button("Approve this lift") { model.approving = ask.id }.buttonStyle(.borderedProminent)
-                        Button("Decline") { model.answer(ask, approve: false) }
+                        NativeSessionButton("Approve this lift") { model.approving = ask.id }.buttonStyle(.borderedProminent)
+                        NativeSessionButton("Decline") { model.answer(ask, approve: false) }
                     }
                 }
             }
@@ -158,7 +158,7 @@ private struct NativeScrapingChoice: View {
         HStack(spacing: 2) {
             ForEach(options, id: \.0) { option in
                 let on = value == option.0
-                Button(option.1) { onPick(option.0) }
+                NativeSessionButton(option.1) { onPick(option.0) }
                     .buttonStyle(.bordered)
                     .nativeUIGGreyControl()
                     .background(on ? Color.primary.opacity(0.12) : .clear, in: .rect(cornerRadius: 6))
@@ -201,13 +201,13 @@ private struct NativeScrapingNumber: View {
             HStack {
                 Text(label)
                 Spacer()
-                TextField("", text: $draft, prompt: Text("not set"))
+                NativeSessionTextField("", text: $draft, prompt: Text("not set"))
                     .labelsHidden()
                     .frame(width: 90)
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
-                    .focused($focused)
-                    .onSubmit(commit)
+                    .sessionFocused($focused)
+                    .sessionOnSubmit(commit)
                     .onChange(of: focused) { _, now in if !now { commit() } }
             }
             Text(hint).font(.callout).foregroundStyle(.secondary)
@@ -237,12 +237,12 @@ private struct NativeScrapingText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-            TextField("", text: $draft, prompt: Text(placeholder))
+            NativeSessionTextField("", text: $draft, prompt: Text(placeholder))
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
-                .focused($focused)
-                .onSubmit { if draft != value { onCommit(draft) } }
+                .sessionFocused($focused)
+                .sessionOnSubmit { if draft != value { onCommit(draft) } }
                 .onChange(of: focused) { _, now in if !now, draft != value { onCommit(draft) } }
         }
         .onAppear { draft = value }

@@ -29,6 +29,8 @@ struct ChatSendNowTests {
         continue
       fi
       if [ "$n" = 1 ] && [ ! -f ignore-interrupt ]; then
+        # A real background shell (9 Nov): a task with no live process is shown finished.
+        /bin/sleep 20 </dev/null >/dev/null 2>&1 &
         printf '{"type":"system","subtype":"task_started","task_id":"bg-1","description":"Running cd /tmp/ps && python3","task_type":"local_bash"}\n'
       fi
       printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer %s"}]}}\n' "$n"

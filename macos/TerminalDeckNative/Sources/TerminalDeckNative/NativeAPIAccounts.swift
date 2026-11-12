@@ -137,27 +137,27 @@ struct NativeAPIAccountEditor: View {
                 Picker("AI", selection: $draft.provider) {
                     Text("Claude").tag("claude"); Text("Codex").tag("codex"); Text("Gemini").tag("gemini")
                 }.disabled(account != nil || pendingID != nil)
-                TextField("Account name", text: $draft.name).disabled(account != nil || pendingID != nil)
+                NativeSessionTextField("Account name", text: $draft.name).disabled(account != nil || pendingID != nil)
                 if draft.provider == "codex" {
                     Toggle("OpenAI-compatible (Responses)", isOn: $draft.compatible)
                     if draft.compatible { Toggle("No key (local server)", isOn: $draft.local) }
                 }
                 if draft.kind != .compatibleLocal {
-                    SecureField(account == nil ? "API key" : "New API key", text: $draft.key)
+                    NativeSessionSecureField(account == nil ? "API key" : "New API key", text: $draft.key)
                         .textContentType(.password)
                 }
                 if draft.provider == "claude" {
                     Toggle("Gateway bearer token", isOn: $draft.bearer)
                 }
                 if draft.provider == "claude" || draft.compatible {
-                    TextField("Base URL", text: $draft.endpoint, prompt: Text(draft.provider == "claude" ? "https://api.anthropic.com" : "https://provider.example/v1"))
+                    NativeSessionTextField("Base URL", text: $draft.endpoint, prompt: Text(draft.provider == "claude" ? "https://api.anthropic.com" : "https://provider.example/v1"))
                 }
                 if draft.provider == "claude" {
-                    TextField("Workspace ID (optional)", text: $draft.workspace, prompt: Text("wrkspc_…"))
+                    NativeSessionTextField("Workspace ID (optional)", text: $draft.workspace, prompt: Text("wrkspc_…"))
                     Text("Needed for a personal or service-account key that is not scoped to one workspace. Find it on platform.claude.com/settings/workspaces (starts with wrkspc_).")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                TextField(draft.compatible ? "Default model ID" : "Default model (optional)", text: $draft.model)
+                NativeSessionTextField(draft.compatible ? "Default model ID" : "Default model (optional)", text: $draft.model)
                 if draft.provider == "gemini" {
                     Text(BackendAPIAccountRecord.geminiShellNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
@@ -166,8 +166,8 @@ struct NativeAPIAccountEditor: View {
             }.formStyle(.grouped)
             HStack {
                 Spacer()
-                Button("Cancel") { draft.key = ""; dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
-                Button(account == nil && pendingID == nil ? "Add account" : "Save") {
+                NativeSessionButton("Cancel") { draft.key = ""; dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
+                NativeSessionButton(account == nil && pendingID == nil ? "Add account" : "Save") {
                     problem = nil
                     Task { @MainActor in
                         do { try await NativeAPIAccounts.shared.save(draft, account: account, pendingID: pendingID) { if account == nil { pendingID = $0 } }; saved = true; draft.key = ""; done(); dismiss() }
@@ -190,8 +190,8 @@ struct NativeAPIAccountActions: View {
     @State private var editing = false
     var body: some View {
         HStack(spacing: 8) {
-            Button(account.apiKind == "compatibleLocal" ? "Check connection" : "Check key", systemImage: "checkmark.shield") { NativeAPIAccounts.shared.check(account.id) }
-            Button { editing = true } label: { Image(systemName: "key") }.help("Edit API connection and key")
+            NativeSessionButton(account.apiKind == "compatibleLocal" ? "Check connection" : "Check key", systemImage: "checkmark.shield") { NativeAPIAccounts.shared.check(account.id) }
+            NativeSessionButton { editing = true } label: { Image(systemName: "key") }.help("Edit API connection and key")
         }
         .disabled(NativeAPIAccounts.shared.busy.contains(account.id))
         .sheet(isPresented: $editing) { NativeAPIAccountEditor(account: account) }

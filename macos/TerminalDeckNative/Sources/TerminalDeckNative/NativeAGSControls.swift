@@ -136,7 +136,7 @@ struct NativeAGSToolsField: View {
 
     var body: some View {
         NativeAGSField(label: label, help: "One tool per line. Include the full name for tools from an MCP server.") {
-            TextEditor(text: $text)
+            NativeSessionTextEditor(text: $text)
                 .font(.system(.callout, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64, maxHeight: 120)
@@ -177,8 +177,8 @@ struct NativeAGSEnvironmentEditor: View {
                     Text(key).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
                     Text("••••••••").foregroundStyle(.secondary).accessibilityLabel("Value hidden")
                     Spacer(minLength: 8)
-                    Button("Change") { start(key) }
-                    Button("Remove", role: .destructive) {
+                    NativeSessionButton("Change") { start(key) }
+                    NativeSessionButton("Remove", role: .destructive) {
                         values.removeValue(forKey: key)
                         if originalName == key { cancel() }
                     }
@@ -186,11 +186,11 @@ struct NativeAGSEnvironmentEditor: View {
             }
             if editing {
                 NativeAGSField(label: "Variable name", help: "Up to 80 letters, numbers and underscores. Start with a letter or underscore. System and CLI settings cannot be replaced.") {
-                    TextField("e.g. PROJECT_TOKEN", text: $name).textFieldStyle(.roundedBorder)
+                    NativeSessionTextField("e.g. PROJECT_TOKEN", text: $name).textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled().accessibilityLabel("Environment variable name")
                 }
                 NativeAGSField(label: "Value") {
-                    SecureField("Value", text: $value).textFieldStyle(.roundedBorder)
+                    NativeSessionSecureField("Value", text: $value).textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Environment variable value, hidden")
                 }
                 if collision { Text("That name is already used.").font(.caption).foregroundStyle(.red) }
@@ -201,16 +201,16 @@ struct NativeAGSEnvironmentEditor: View {
                     Text("This value is too long or has an invalid character.").font(.caption).foregroundStyle(.red)
                 }
                 HStack {
-                    Button("Save variable") {
+                    NativeSessionButton("Save variable") {
                         guard valid else { return }
                         if let originalName { values.removeValue(forKey: originalName) }
                         values[trimmedName] = value
                         cancel()
                     }.disabled(!valid)
-                    Button("Cancel", action: cancel)
+                    NativeSessionButton("Cancel", action: cancel)
                 }
             } else {
-                Button("Add variable") { start(nil) }.disabled(values.count >= 100)
+                NativeSessionButton("Add variable") { start(nil) }.disabled(values.count >= 100)
                 if values.count >= 100 { Text("Up to 100 variables per agent.").font(.caption).foregroundStyle(.secondary) }
             }
         }

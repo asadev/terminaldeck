@@ -26,7 +26,7 @@ struct ROUTINESRoutineSheet: View {
             if let introduction { Text(introduction).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.bottom, 8) }
             Form {
                 Section {
-                    TextField("Name", text: $draft.name)
+                    NativeSessionTextField("Name", text: $draft.name)
                     Picker("Who does it", selection: $draft.agentID) {
                         DeckRowLabel("Hoot · Every project", image: DeckRowIcon.hoot).tag("@hoot")
                         ForEach(agentGroups, id: \.self) { id in
@@ -35,7 +35,7 @@ struct ROUTINESRoutineSheet: View {
                         if draft.agentID != "@hoot", !agents.contains(where: { $0.id == draft.agentID }) { Text("Unavailable agent").tag(draft.agentID) }
                     }
                     Picker("Project", selection: $draft.projectID) { if draft.agentID == "@hoot" { DeckRowLabel("Every project", image: DeckRowIcon.allProjects).tag("every-project") }; ForEach(projects) { project in DeckRowLabel.project(project).tag(project.id) } }
-                    if draft.projectID == PROJProjects.independentID { TextField("Folder", text: $draft.folder).help("The full folder where this routine works") }
+                    if draft.projectID == PROJProjects.independentID { NativeSessionTextField("Folder", text: $draft.folder).help("The full folder where this routine works") }
                 }
                 Section("When") {
                     Picker("Trigger", selection: $draft.whenKind) { Text("On a schedule").tag("schedule"); Text("When something happens").tag("event") }.pickerStyle(.segmented).labelsHidden()
@@ -43,10 +43,10 @@ struct ROUTINESRoutineSheet: View {
                         Picker("Repeat", selection: $draft.schedule) { Text("Every day").tag("daily"); Text("Weekdays").tag("weekdays"); Text("Every week").tag("weekly"); Text("Every N hours").tag("hours") }
                         if draft.schedule == "weekly" { Picker("Day", selection: $draft.day) { ForEach(["mon", "tue", "wed", "thu", "fri", "sat", "sun"], id: \.self) { day in Text(["mon":"Monday", "tue":"Tuesday", "wed":"Wednesday", "thu":"Thursday", "fri":"Friday", "sat":"Saturday", "sun":"Sunday"][day] ?? day).tag(day) } } }
                         if draft.schedule == "hours" { Stepper("Every \(draft.hours) hours", value: $draft.hours, in: 1...168) }
-                        else { DatePicker("Time", selection: clock, displayedComponents: .hourAndMinute) }
+                        else { LabeledContent("Time") { NativeSessionDatePicker("Time", selection: clock, displayedComponents: .hourAndMinute).labelsHidden() } }
                     } else {
                         Picker("Event", selection: $draft.event) { Text("A session fails").tag("session-failed"); Text("A session finishes").tag("session-finished"); Text("A task is created").tag("task-created"); Text("A task is finished").tag("task-finished"); Text("A file changes in…").tag("file-change"); if !["session-failed", "session-finished", "task-created", "task-finished", "file-change"].contains(draft.event) { Text(draft.event.replacingOccurrences(of: "-", with: " ")).tag(draft.event) } }
-                        if draft.event == "file-change" { TextField("File pattern", text: $draft.glob).help("For example: src/** or **/*.swift") }
+                        if draft.event == "file-change" { NativeSessionTextField("File pattern", text: $draft.glob).help("For example: src/** or **/*.swift") }
                     }
                 }
                 Section("If it fires again") {
@@ -69,14 +69,14 @@ struct ROUTINESRoutineSheet: View {
                 Section("What to do") {
                     ZStack(alignment: .topLeading) {
                         if draft.prompt.isEmpty { Text("e.g. Read last night’s sessions and tell me what needs me.").font(.callout).foregroundStyle(.tertiary).padding(.horizontal, 5).padding(.top, 7).allowsHitTesting(false) }
-                        TextEditor(text: $draft.prompt).font(.body).scrollContentBackground(.hidden).frame(height: 90).accessibilityLabel("What to do")
+                        NativeSessionTextEditor(text: $draft.prompt).font(.body).scrollContentBackground(.hidden).frame(height: 90).accessibilityLabel("What to do")
                     }
                     Toggle("On", isOn: $draft.enabled).tint(ROUTINESKit.switchOn)
                 }
                 Section { Routines21DestinationsView(model: destinations, canTest: !draft.originalText.isEmpty) }
             }.formStyle(.grouped)
             if let problem { Text(problem).font(.callout).foregroundStyle(ROUTINESKit.bad).padding(.horizontal, 20).padding(.top, 8) }
-            HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); Button(saving ? "Saving…" : "Save routine") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving) }.padding(20)
+            HStack { Spacer(); NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction); NativeSessionButton(saving ? "Saving…" : "Save routine") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving) }.padding(20)
         }.frame(width: 640, height: 740)
         .task { await destinations.load(existing: !draft.originalText.isEmpty) }
         .onChange(of: draft.agentID) { _, id in

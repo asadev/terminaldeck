@@ -51,7 +51,7 @@ struct AGTProfileBudget: View {
                 LabeledContent {
                     HStack(spacing: 6) {
                         if isAPI { Text("$").foregroundStyle(.secondary) }
-                        TextField("No budget", value: $monthlyLimit, format: .number.grouping(.never))
+                        NativeSessionNumberField("No budget", value: $monthlyLimit, format: .number.grouping(.never))
                             .textFieldStyle(.roundedBorder).labelsHidden().frame(maxWidth: 170)
                             .accessibilityLabel(isAPI ? "Monthly budget in US dollars" : "Monthly token budget")
                         if !isAPI { Text("tokens").font(.caption).foregroundStyle(.secondary) }
@@ -70,7 +70,7 @@ struct AGTProfileBudget: View {
                 } label: { label("When it runs out", detail: "Choose what happens when the budget is reached.") }
                 LabeledContent {
                     HStack(spacing: 6) {
-                        TextField("App default", value: $perTaskTokens, format: .number.grouping(.never))
+                        NativeSessionNumberField("App default", value: $perTaskTokens, format: .number.grouping(.never))
                             .textFieldStyle(.roundedBorder).labelsHidden().frame(maxWidth: 170)
                             .accessibilityLabel("Per-task token budget")
                         Text("tokens").font(.caption).foregroundStyle(.secondary)

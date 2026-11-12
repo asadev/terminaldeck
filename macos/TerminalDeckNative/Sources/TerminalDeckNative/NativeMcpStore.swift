@@ -99,7 +99,7 @@ struct NativeMcpStoreDepartment: View {
                 .fixedSize()
             }
             Spacer()
-            Button(model.loading ? "Reading…" : "Reload") { model.load(refreshEnvironment: true) }
+            NativeSessionButton(model.loading ? "Reading…" : "Reload") { model.load(refreshEnvironment: true) }
                 .disabled(model.loading)
         }
     }
@@ -143,9 +143,9 @@ struct NativeMcpStoreDepartment: View {
                                    text: "Any MCP server at all — one you are writing, one from a README, one your team runs. It is written into the same configuration the catalogue rows are, through the same command line tool. This app measures one thing about it, which is whether the command it starts is on this machine, and claims nothing else.")
                 if model.form == nil {
                     Spacer()
-                    Button("Add your own tool…") { model.addOwn() }
+                    NativeSessionButton("Add your own tool…") { model.addOwn() }
                         .buttonStyle(.borderedProminent)
-                    Button(model.busy == "own" ? "Reading…" : "Open a shared one…") { model.importOne() }
+                    NativeSessionButton(model.busy == "own" ? "Reading…" : "Open a shared one…") { model.importOne() }
                         .disabled(model.busy == "own")
                 }
             }
@@ -364,7 +364,6 @@ private struct McpStoreRowView: View {
     let onOpen: (() -> Void)?
     let onEdit: (() -> Void)?
     let onExport: (() -> Void)?
-    @FocusState private var focused: String?
 
     private var busy: Bool { model.busy == row.id }
     private var arming: Bool { model.arming == row.id }
@@ -424,21 +423,21 @@ private struct McpStoreRowView: View {
     @ViewBuilder private var controls: some View {
         HStack(spacing: 6) {
             if row.custom, !arming, let onEdit {
-                Button("Edit", action: onEdit).disabled(busy)
+                NativeSessionButton("Edit", action: onEdit).disabled(busy)
             }
             if row.custom, !arming, let onExport {
-                Button("Share", action: onExport).disabled(busy)
+                NativeSessionButton("Share", action: onExport).disabled(busy)
             }
             if row.hasAction, row.removes {
                 if arming {
-                    Button("Remove", role: .destructive) { model.act(row) }.disabled(busy)
-                    Button("Keep") { model.arming = "" }
+                    NativeSessionButton("Remove", role: .destructive) { model.act(row) }.disabled(busy)
+                    NativeSessionButton("Keep") { model.arming = "" }
                 } else {
-                    Button(row.actionLabel(busy: busy)) { model.arming = row.id }.disabled(busy)
+                    NativeSessionButton(row.actionLabel(busy: busy)) { model.arming = row.id }.disabled(busy)
                 }
             }
             if row.hasAction, !row.removes, !asking {
-                Button(row.actionLabel(busy: busy)) {
+                NativeSessionButton(row.actionLabel(busy: busy)) {
                     if row.asks { model.ask(row.id, true) } else { model.act(row) }
                 }
                 .buttonStyle(.borderedProminent)
@@ -506,31 +505,21 @@ private struct McpStoreRowView: View {
                     .foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
-                Button(busy ? "Working…" : "Install") { model.act(row) }
+                NativeSessionButton(busy ? "Working…" : "Install") { model.act(row) }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || !missing.isEmpty)
-                Button("Cancel") { model.ask(row.id, false) }
+                NativeSessionButton("Cancel") { model.ask(row.id, false) }
             }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.background.opacity(0.6)))
-        // Focus follows the press, into the first box.
-        .onAppear { focused = row.inputs.first?.key }
     }
 
     @ViewBuilder private func field(_ input: McpStoreInput) -> some View {
         let value = Binding(get: { model.values[row.id]?[input.key] ?? "" },
                             set: { model.setValue(row.id, input.key, $0) })
-        Group {
-            if input.kind == .secret {
-                SecureField("", text: value, prompt: Text(input.placeholder))
-            } else {
-                TextField("", text: value, prompt: Text(input.placeholder))
-                    .autocorrectionDisabled()
-            }
-        }
-        .textFieldStyle(.roundedBorder)
-        .focused($focused, equals: input.key)
+        NativeMcpProtectedInput(input: input, value: value, first: row.inputs.first?.key == input.key)
+
     }
 }
 
@@ -547,5 +536,28 @@ private struct McpSaid: View {
     let text: String
     var body: some View {
         Text(text).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Each protected native input uses a Boolean focus binding, while retaining the existing
+/// behavior of focusing the first requested setup value when the form opens.
+private struct NativeMcpProtectedInput: View {
+    let input: McpStoreInput
+    @Binding var value: String
+    let first: Bool
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if input.kind == .secret {
+                NativeSessionSecureField("", text: $value, prompt: Text(input.placeholder)).textFieldStyle(.roundedBorder)
+            } else {
+                NativeSessionTextField("", text: $value, prompt: Text(input.placeholder)).textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .sessionFocused($focused)
+        .onAppear { focused = first }
     }
 }

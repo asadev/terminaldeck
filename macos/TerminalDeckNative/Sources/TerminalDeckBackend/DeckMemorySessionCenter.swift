@@ -25,6 +25,8 @@ public final class DeckMemorySessionCenter: @unchecked Sendable {
     private struct Entry: Codable {
         var owner: DeckMemorySessionOwner = .plain
         var provider = ""
+        var tabKey: String?
+        var historyOwnerID: String?
         var transcriptPath: String?
         var conversationID: String?
         var lastPrompt: String?
@@ -135,6 +137,8 @@ public final class DeckMemorySessionCenter: @unchecked Sendable {
         owner = await seated(owner, session: session, taskID: input.taskID)
         var entry = load(session.id) ?? Entry()
         entry.owner = owner; entry.provider = session.provider; entry.conversationID = session.agentSessionId ?? entry.conversationID
+        entry.tabKey = session.tabKey ?? input.tabKey
+        entry.historyOwnerID = session.homeProfileId ?? session.profileId
         entry.largeWindow = (input.model ?? "").contains("[1m]")
         entry.agentProfileID = input.agentProfileID; entry.agentInstructions = input.agentInstructions; entry.claudeAgent = input.claudeAgent; entry.taskID = input.taskID
         entry.taskProject = input.taskProject; entry.projectId = input.projectId
@@ -256,6 +260,12 @@ public final class DeckMemorySessionCenter: @unchecked Sendable {
         guard let named, named.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil, named != current else { return nil }
         return named
     }
+    /// 10 Nov: whether a hook's conversation id is the one the session is in: the one already written down, or one
+    /// whose transcript (named after it) is on disk. A background session's id, with no transcript, is not.
+    public static func believed(named: String?, transcriptPath: String?, current: String?, exists: (String) -> Bool) -> Bool {
+        guard let named, !named.isEmpty else { return false }
+        return named == current || reconciledConversation(named: named, transcriptPath: transcriptPath, current: nil, exists: exists) != nil
+    }
     /// The newer conversation to write down for a running session, only when the hook's transcript of it exists.
     public static func reconciledConversation(named: String?, transcriptPath: String?, current: String?, exists: (String) -> Bool) -> String? {
         guard let id = followedConversation(named: named, current: current), let path = transcriptPath,
@@ -308,19 +318,29 @@ public final class DeckMemorySessionCenter: @unchecked Sendable {
             return
         }
         defer { try? FileManager.default.removeItem(at: file) }
+        // 10 Nov (Sessions, Asad's Decker tab was lost): a hook can name a conversation the session is NOT in — Claude
+        // Code's own background work (an idle compaction ran one a second after the real move) reports a session id
+        // that never gets a transcript. Only a conversation whose transcript is on disk is believed: written down
+        // here, and followed by the session's saved launch. A real /clear or /resume is followed at its first prompt
+        // or answer, when its transcript exists.
+        let named = event.input?.session_id.flatMap { $0.isEmpty ? nil : $0 }
+        let proven = Self.believed(named: named, transcriptPath: event.input?.transcript_path, current: session.agentSessionId,
+                                   exists: { FileManager.default.fileExists(atPath: $0) })
         var entry = update(session.id) { entry in
             if entry.provider.isEmpty { entry.provider = session.provider }
+            guard proven || entry.conversationID == nil else { return }
             if let path = event.input?.transcript_path, path.hasPrefix("/") { entry.transcriptPath = path }
-            if let id = event.input?.session_id, !id.isEmpty { entry.conversationID = id }
+            if let named { entry.conversationID = named }
+        }
+        if proven, let id = Self.followedConversation(named: named, current: session.agentSessionId) {
+            // 28 Oct (Sessions, bug A): after /clear or /resume the CLI is in another conversation; the session's
+            // saved launch follows, or a restart would resume the old one (or find nothing and wait for a click).
+            await current.conversationChanged(session.id, id)
         }
         switch event.event {
         case "session-start":
             // start.md was just printed. (After a compaction, or a clear the person typed himself, it is the fresh one.)
-            // 28 Oct (Sessions, bug A): after /clear or /resume the CLI is in another conversation; the session's
-            // saved launch follows, or a restart would resume the old one (or find nothing and wait for a click).
-            if let id = Self.followedConversation(named: event.input?.session_id, current: session.agentSessionId) {
-                await current.conversationChanged(session.id, id)
-            }
+            break
         case "prompt":
             entry = update(session.id) {
                 $0.lastPrompt = event.input?.prompt.map { String($0.prefix(20_000)) }; $0.working = true

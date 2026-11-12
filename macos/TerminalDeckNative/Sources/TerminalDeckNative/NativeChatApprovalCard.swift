@@ -49,14 +49,14 @@ struct NativeChatApprovalCard: View {
                 ScrollView { code(BackendChatApproval.codexDecision(request, allowed: true, scope: chosen).compact) }.frame(maxHeight: 100)
             }
             if BackendChatApproval.supportsComment(request) {
-                TextField("Reason if denied (optional)", text: $comment, axis: .vertical).lineLimit(1...3).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Reason if denied (optional)", text: $comment, axis: .vertical).lineLimit(1...3).textFieldStyle(.roundedBorder)
             }
             HStack {
                 Spacer()
-                Button(BackendChatApproval.codexDecision(request, allowed: false, scope: "once").string == "cancel" ? "Cancel turn" : "Deny") {
+                NativeSessionButton(BackendChatApproval.codexDecision(request, allowed: false, scope: "once").string == "cancel" ? "Cancel turn" : "Deny") {
                     answer(false, payload(allowed: false))
                 }.buttonStyle(.bordered)
-                Button(scopes.first(where: { $0.id == chosen })?.title ?? "Allow once") {
+                NativeSessionButton(scopes.first(where: { $0.id == chosen })?.title ?? "Allow once") {
                     answer(true, payload(allowed: true))
                 }.buttonStyle(.borderedProminent).disabled(!scopes.contains(where: { $0.id == chosen }))
             }

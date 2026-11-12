@@ -18,7 +18,7 @@ public enum BackendANDROIDSessionPhoneNote {
     (platform ios|android, app = bundle id/package or "settings", installPath = .app/.apk, url): it starts the \
     device headless and shows it in this session's panel. Then use the deck-control devices_* tools (screenshot, \
     tap, type, tree) to see and drive it. Never run `open -a Simulator`, `xcrun simctl boot`, or `emulator -avd` \
-    yourself: they open windows outside Terminal Deck.
+    yourself: they open windows outside Terminal Deck. \(browserLine)
     """
 
     /// Codex has no deck-control tools here (only Claude sessions get them): keep phones headless.
@@ -27,8 +27,15 @@ public enum BackendANDROIDSessionPhoneNote {
     You are running inside Terminal Deck (a Mac app) whose session has a phone panel that shows an iOS \
     Simulator or Android emulator. Keep phones headless: use `xcrun simctl` (boot/install/launch/openurl) and \
     `adb`, and start Android emulators with `-no-window`. Never run `open -a Simulator` or open an emulator \
-    window: Terminal Deck shows the device in this session's panel.
+    window: Terminal Deck shows the device in this session's panel. \(browserLine)
     """
+
+    /// APPMGMT (8 Nov): an AI that starts the installed Google Chrome makes macOS tell the person "TerminalDeckNativeHelper
+    /// was prevented from modifying apps" (Chrome hard-links its own program; macOS blames the keeper, the top of the tree).
+    /// Guidance only, for Claude, Codex and Gemini alike: no tool is blocked or hidden (Asad, 4 Nov).
+    public static let browserLine = "For web pages prefer Terminal Deck's own browser tools (deck-control browser_*) or Playwright's bundled " +
+        "Chromium; if you launch the installed Google Chrome (Playwright channel 'chrome' or executablePath /Applications/Google Chrome.app), " +
+        "pass --disable-features=MacAppCodeSignClone, or macOS blocks it and warns the person."
 
     /// The hook: reads Claude's PreToolUse JSON on stdin; denies phone-window commands with the way to do it here.
     static let script = """

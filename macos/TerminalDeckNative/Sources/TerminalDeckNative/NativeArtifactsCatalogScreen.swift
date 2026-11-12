@@ -79,11 +79,11 @@ struct NativeArtifactsCatalogScreen: View {
             }
         }
             .confirmationDialog("Delete \(model.pendingDelete?.artifact.name ?? "artifact") from the list?", isPresented: Binding(get: { model.pendingDelete != nil }, set: { if !$0 { model.pendingDelete = nil } }), titleVisibility: .visible, presenting: model.pendingDelete) { row in
-                Button("Delete from list", role: .destructive) { model.deleteFromList(row); model.pendingDelete = nil }
-                Button("Cancel", role: .cancel) { model.pendingDelete = nil }
+                NativeSessionButton("Delete from list", role: .destructive) { model.deleteFromList(row); model.pendingDelete = nil }
+                NativeSessionButton("Cancel", role: .cancel) { model.pendingDelete = nil }
             } message: { _ in Text("The file and its chat stay where they are.") }
             .alert("Couldn't complete that action", isPresented: Binding(get: { model.actionError != nil }, set: { if !$0 { model.clearError() } })) {
-                Button("OK") { model.clearError() }
+                NativeSessionButton("OK") { model.clearError() }
             } message: { Text(model.actionError ?? "") }
             .task { if !fixture { NativePROJLabels.shared.start(); model.show(roots: roots) } }
             .onChange(of: roots) { _, new in if !fixture { model.show(roots: new) } }
@@ -96,9 +96,9 @@ struct NativeUIGArtifactsCatalogSearch: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search artifacts", text: $model.search).textFieldStyle(.plain).autocorrectionDisabled()
+            NativeSessionTextField("Search artifacts", text: $model.search).textFieldStyle(.plain).autocorrectionDisabled()
             if !model.search.isEmpty {
-                Button { model.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                NativeSessionButton { model.search = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.borderless).help("Clear search").accessibilityLabel("Clear search")
             }
         }.padding(.horizontal, 12).frame(minWidth: 120, idealWidth: 200, maxWidth: 200).frame(height: 28)

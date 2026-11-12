@@ -308,14 +308,14 @@ struct DayPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            DatePicker("Due date", selection: $date, displayedComponents: .date)
+            NativeSessionDatePicker("Due date", selection: $date, displayedComponents: .date)
                 .datePickerStyle(.graphical)
                 .labelsHidden()
                 .onChange(of: date) { _, picked in onPick(TaskList.ymdOf(picked.timeIntervalSince1970 * 1000)) }
             HStack {
-                Button("Today") { onPick(TaskList.ymdOf(Date().timeIntervalSince1970 * 1000)) }
+                NativeSessionButton("Today") { onPick(TaskList.ymdOf(Date().timeIntervalSince1970 * 1000)) }
                 Spacer()
-                Button("No date") { onPick(nil) }
+                NativeSessionButton("No date") { onPick(nil) }
             }
             .controlSize(.small)
         }

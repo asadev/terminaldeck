@@ -21,9 +21,9 @@ public enum BackendPrivacyIdentity {
         .init(id: "microphone", title: "Microphone", anchor: "Privacy_Microphone"),
         .init(id: "network", title: "Local Network", anchor: "Privacy_LocalNetwork"),
     ]
-    public static let explanation = "macOS asks separately for each kind of access. Keep the current Terminal Deck entry. Your choices should survive app updates; macOS may still ask again when its own rules change."
+    public static let explanation = "Terminal Deck and the sessions it keeps running share one entry in each list: allow Terminal Deck once and every session can use it. Your choices survive app updates; macOS may still ask again when its own rules change."
     public static let cleanupSteps = [
-        "First use the updated session helper and confirm that its access appears under Terminal Deck. If it still asks for TerminalDeckNativeHelper, keep the entries and report the problem.",
+        "Entries named TerminalDeckNativeHelper came from older versions. Sessions no longer use them.",
         "Select an old TerminalDeckNativeHelper entry and click the minus (−) button. Repeat for the other old helper entries. Keep Terminal Deck and every other app.",
         "If a list has no minus button, leave the old entry switched off. This app cannot safely remove it for you."
     ]

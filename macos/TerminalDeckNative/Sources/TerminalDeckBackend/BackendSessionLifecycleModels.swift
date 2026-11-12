@@ -78,15 +78,17 @@ public struct BackendSessionRestoreDecision: Sendable {
     public let configDirectory: String?
     public let conversation: Conversation?
     public let pick: Bool
+    public let recoveryAction: String?
     public init(session: BackendSessionSaved, outcome: Outcome, reason: String, configDirectory: String? = nil,
-                conversation: Conversation? = nil, pick: Bool = false) {
-        self.session = session; self.outcome = outcome; self.reason = reason; self.configDirectory = configDirectory; self.conversation = conversation; self.pick = pick
+                conversation: Conversation? = nil, pick: Bool = false, recoveryAction: String? = nil) {
+        self.session = session; self.outcome = outcome; self.reason = reason; self.configDirectory = configDirectory; self.conversation = conversation; self.pick = pick; self.recoveryAction = recoveryAction
     }
     public var wireValue: NativeRPCValue {
         var value = NativeRPCValue.object([.init("session", session.raw), .init("outcome", .string(outcome.rawValue)), .init("reason", .string(reason))])
         if let configDirectory { value = value.setting("configDir", .string(configDirectory)) }
         if let conversation { value = value.setting("conversation", .string(conversation.rawValue)) }
         if pick { value = value.setting("pick", .bool(true)) }
+        if let recoveryAction { value = value.setting("recoveryAction", .string(recoveryAction)) }
         return value
     }
 }

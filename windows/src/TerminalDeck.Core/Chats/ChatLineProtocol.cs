@@ -36,7 +36,7 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
     clientId = message.ClientId; messageId = ""; turnId = null; approvalInputs.Clear();
     var content = new List<object>();
     var replay = chat.ReplayHistory && !contextSent && chat.ConversationId is null;
-    var text = ChatRichContent.Prompt(chat with { ReplayHistory = replay }, message.Text);
+    var text = ChatRichContent.Prompt(chat with { ReplayHistory = replay }, message.Text, drawing: !contextSent && provider != "codex");
     if (text.Length > 0) content.Add(new { type = "text", text });
     foreach (var attachment in (replay ? chat.Messages.SelectMany(m => m.Media).Concat(message.Media).DistinctBy(m => m.Id) : message.Media))
     {
@@ -245,7 +245,7 @@ public sealed class ChatLineProtocol(ChatRecord chat, IChatHistory media, bool c
         if (conversation is not null && !B(capabilities, "loadSession")) throw new IOException("This Gemini version cannot resume the saved conversation.");
       }
       object parameters = provider == "codex"
-        ? new { cwd = chat.Definition.Cwd, model = Empty(chat.Definition.Options.Model), approvalPolicy = ChatPermissionModes.CodexApproval(chat.Definition.PermissionMode), sandbox = ChatPermissionModes.CodexSandbox(chat.Definition.PermissionMode), threadId = conversation }
+        ? new { cwd = chat.Definition.Cwd, model = Empty(chat.Definition.Options.Model), approvalPolicy = ChatPermissionModes.CodexApproval(chat.Definition.PermissionMode), sandbox = ChatPermissionModes.CodexSandbox(chat.Definition.PermissionMode), threadId = conversation, developerInstructions = ChatRichContent.Instruction }
         : new { cwd = chat.Definition.Cwd, mcpServers = mcpServers ?? Array.Empty<object>(), sessionId = conversation };
       var method = provider == "codex" ? conversation is null ? "thread/start" : "thread/resume" : conversation is null ? "session/new" : "session/load";
       return new(provider == "codex" ? [Rpc("initialized"), Rpc(method, parameters, "session")] : [Rpc(method, parameters, "session")], []);

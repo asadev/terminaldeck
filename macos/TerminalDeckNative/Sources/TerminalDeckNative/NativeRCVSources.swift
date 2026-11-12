@@ -74,7 +74,7 @@ struct NativeRCVSourceCard: View {
     }
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Button { NativeRCVSourceWindows.shared.open(model: model, view: view) } label: {
+            NativeSessionButton { NativeRCVSourceWindows.shared.open(model: model, view: view) } label: {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 12) {
                         Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(.secondary)
@@ -110,9 +110,9 @@ struct NativeRCVSourceCard: View {
                 .disabled(model.busy != nil)
         }
         .contextMenu {
-            Button("Source settings…") { NativeRCVSourceWindows.shared.open(model: model, view: view) }
-            Button(view.source.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(view, !view.source.enabled) } }
-            Button("Send a test event") { Task { await model.testSource(view) } }
+            NativeSessionButton("Source settings…") { NativeRCVSourceWindows.shared.open(model: model, view: view) }
+            NativeSessionButton(view.source.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(view, !view.source.enabled) } }
+            NativeSessionButton("Send a test event") { Task { await model.testSource(view) } }
         }
     }
     private var projectColour: Color {
@@ -153,12 +153,12 @@ struct NativeRCVAddSourceSheet: View {
                 if model.busy != nil { ProgressView().controlSize(.small); Text("Working…").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 if let created {
-                    if !configured { Button("Finish setup") { configure(created) }.disabled(model.busy != nil) }
-                    Button("Done") { model.openSheet(nil) }.buttonStyle(.borderedProminent).tint(.accentColor).keyboardShortcut(.defaultAction)
+                    if !configured { NativeSessionButton("Finish setup") { configure(created) }.disabled(model.busy != nil) }
+                    NativeSessionButton("Done") { model.openSheet(nil) }.buttonStyle(.borderedProminent).tint(.accentColor).keyboardShortcut(.defaultAction)
                         .disabled(!configured || model.busy != nil)
                 } else {
-                    Button("Cancel") { model.openSheet(nil) }.keyboardShortcut(.cancelAction)
-                    Button("Add source") { create() }.buttonStyle(.borderedProminent).tint(.accentColor).keyboardShortcut(.defaultAction)
+                    NativeSessionButton("Cancel") { model.openSheet(nil) }.keyboardShortcut(.cancelAction)
+                    NativeSessionButton("Add source") { create() }.buttonStyle(.borderedProminent).tint(.accentColor).keyboardShortcut(.defaultAction)
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || target.id.isEmpty || model.busy != nil)
                 }
             }
@@ -170,7 +170,7 @@ struct NativeRCVAddSourceSheet: View {
         VStack(spacing: 14) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(NativeRCVSourceType.allCases) { choice in
-                    Button { type = choice; savedPreset = nil } label: {
+                    NativeSessionButton { type = choice; savedPreset = nil } label: {
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: choice.symbol).font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 22)
                             VStack(alignment: .leading, spacing: 3) {
@@ -187,12 +187,12 @@ struct NativeRCVAddSourceSheet: View {
             }
             if model.presets.contains(where: { !$0.builtIn }) {
                 Menu(savedPreset.map { "Preset: " + $0.name } ?? "Use a saved preset…") {
-                    Button("Use the type’s defaults") { savedPreset = nil }
-                    ForEach(model.presets.filter { !$0.builtIn }) { preset in Button(preset.name) { savedPreset = preset } }
+                    NativeSessionButton("Use the type’s defaults") { savedPreset = nil }
+                    ForEach(model.presets.filter { !$0.builtIn }) { preset in NativeSessionButton(preset.name) { savedPreset = preset } }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
-                GridRow { Text("Name"); TextField("e.g. Website alerts", text: $name).textFieldStyle(.roundedBorder) }
+                GridRow { Text("Name"); NativeSessionTextField("e.g. Website alerts", text: $name).textFieldStyle(.roundedBorder) }
                 GridRow { Text("Project"); projectPicker }
                 GridRow {
                     Text("Send to")
@@ -233,9 +233,9 @@ struct NativeRCVAddSourceSheet: View {
             HStack { Text(value).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).lineLimit(4); Spacer(); NativeRCVCopyButton(value: value) }
                 .padding(16).background(NativeRCVSurface.card, in: .rect(cornerRadius: 12))
             Text("Keep this address private. Proof and headers are in Source settings.").font(.callout).foregroundStyle(.secondary)
-            Button(model.busy == "test-source" ? "Checking…" : "Send a test event") { Task { await model.testSource(created.source) } }.disabled(model.busy != nil)
+            NativeSessionButton(model.busy == "test-source" ? "Checking…" : "Send a test event") { Task { await model.testSource(created.source) } }.disabled(model.busy != nil)
             if let note = model.actionNote { Text(note).font(.callout).foregroundStyle(.secondary) }
-            Button("Source settings…") { NativeRCVSourceWindows.shared.open(model: model, view: created.source) }
+            NativeSessionButton("Source settings…") { NativeRCVSourceWindows.shared.open(model: model, view: created.source) }
         }
     }
     private func create() {
@@ -291,7 +291,7 @@ struct NativeRCVAuthFields: View {
                                                      set: { hmac.wrappedValue.timestampHeader = $0.isEmpty ? nil : $0 }))
                 }
                 NativeSettingRow(label: "Oldest accepted", help: "In seconds. Older signed deliveries are rejected.") {
-                    TextField("300", value: hmac.toleranceSeconds, format: .number)
+                    NativeSessionNumberField("300", value: hmac.toleranceSeconds)
                         .labelsHidden().frame(width: 80)
                 }
             }
@@ -301,14 +301,14 @@ struct NativeRCVAuthFields: View {
             }
         case .basic:
             NativeSettingRow(label: "User name", help: "The password is the source’s secret.") {
-                TextField("receiver", text: Binding(get: { auth.basicUser ?? "" }, set: { auth.basicUser = $0 }))
+                NativeSessionTextField("receiver", text: Binding(get: { auth.basicUser ?? "" }, set: { auth.basicUser = $0 }))
                     .labelsHidden().frame(minWidth: 160, maxWidth: 220)
             }
         case .none:
             EmptyView()
         }
         NativeSettingRow(label: "Only from these addresses", help: "Optional. One IP address or range per line, like 203.0.113.0/24. Empty: anyone with the address.") {
-            TextField("Any address", text: $ipText, axis: .vertical)
+            NativeSessionTextField("Any address", text: $ipText, axis: .vertical)
                 .font(.system(.body, design: .monospaced))
                 .lineLimit(1...6)
                 .labelsHidden()
@@ -317,7 +317,7 @@ struct NativeRCVAuthFields: View {
     }
 
     private func monoField(_ prompt: String, _ text: Binding<String>) -> some View {
-        TextField(prompt, text: text)
+        NativeSessionTextField(prompt, text: text)
             .font(.system(.body, design: .monospaced))
             .labelsHidden()
             .frame(minWidth: 180, maxWidth: 240)
@@ -344,7 +344,7 @@ struct NativeRCVReplyFields: View {
                         ForEach(["POST", "PUT", "PATCH"], id: \.self) { Text($0).tag($0) }
                     }
                     .labelsHidden().fixedSize()
-                    TextField("https://", text: $reply.url)
+                    NativeSessionTextField("https://", text: $reply.url)
                         .font(.system(.body, design: .monospaced))
                         .labelsHidden()
                         .frame(minWidth: 220, maxWidth: 320)
@@ -358,18 +358,18 @@ struct NativeRCVReplyFields: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Body")
                 Text("{{reply}} is the agent’s text.").font(.callout).foregroundStyle(.secondary)
-                TextField("{\"text\":\"{{reply}}\"}", text: $reply.body, axis: .vertical)
+                NativeSessionTextField("{\"text\":\"{{reply}}\"}", text: $reply.body, axis: .vertical)
                     .font(.system(.body, design: .monospaced))
                     .lineLimit(2...8)
                     .labelsHidden()
             }
         case .github:
             NativeSettingRow(label: "Repository", help: "owner/name, usually {{fields.repo}}.") {
-                TextField("{{fields.repo}}", text: Binding(get: { reply.repository ?? "" }, set: { reply.repository = $0 }))
+                NativeSessionTextField("{{fields.repo}}", text: Binding(get: { reply.repository ?? "" }, set: { reply.repository = $0 }))
                     .font(.system(.body, design: .monospaced)).labelsHidden().frame(minWidth: 180, maxWidth: 240)
             }
             NativeSettingRow(label: "Issue or pull request", help: "Its number, usually {{fields.number}}.") {
-                TextField("{{fields.number}}", text: Binding(get: { reply.number ?? "" }, set: { reply.number = $0 }))
+                NativeSessionTextField("{{fields.number}}", text: Binding(get: { reply.number ?? "" }, set: { reply.number = $0 }))
                     .font(.system(.body, design: .monospaced)).labelsHidden().frame(minWidth: 180, maxWidth: 240)
             }
         }
@@ -408,7 +408,7 @@ struct NativeRCVMappingFields: View {
     private func row(_ label: String, _ prompt: String, _ text: Binding<String>) -> some View {
         GridRow {
             Text(label).foregroundStyle(.secondary)
-            TextField(prompt, text: text)
+            NativeSessionTextField(prompt, text: text)
                 .font(.system(.body, design: .monospaced))
                 .labelsHidden()
         }
@@ -426,14 +426,14 @@ struct NativeRCVPairsEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(pairs.indices), id: \.self) { index in
                 HStack(spacing: 6) {
-                    TextField(namePrompt, text: binding(index, \.name))
+                    NativeSessionTextField(namePrompt, text: binding(index, \.name))
                         .font(.system(.body, design: .monospaced))
                         .labelsHidden()
                         .frame(width: 150)
-                    TextField(valuePrompt, text: binding(index, \.value))
+                    NativeSessionTextField(valuePrompt, text: binding(index, \.value))
                         .font(.system(.body, design: .monospaced))
                         .labelsHidden()
-                    Button {
+                    NativeSessionButton {
                         if pairs.indices.contains(index) { pairs.remove(at: index) }
                     } label: {
                         Image(systemName: "minus.circle")
@@ -446,7 +446,7 @@ struct NativeRCVPairsEditor: View {
                     .accessibilityLabel("Remove")
                 }
             }
-            Button(addLabel) { pairs.append(RCVFieldMap("", "")) }
+            NativeSessionButton(addLabel) { pairs.append(RCVFieldMap("", "")) }
                 .buttonStyle(.borderless)
         }
     }

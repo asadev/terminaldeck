@@ -113,7 +113,7 @@ private struct StoreFrame: View {
             HStack(spacing: 12) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("adblock, cookies, youtube, postgres, github…",
+                    NativeSessionTextField("adblock, cookies, youtube, postgres, github…",
                               text: Binding(get: { model.query }, set: { model.search($0) }))
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
@@ -127,7 +127,7 @@ private struct StoreFrame: View {
                 .accessibilityLabel("Search the store")
                 if narrowed {
                     Text("\(StoreNav.shown(departments, model.place)) of \(stock)").font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                    Button("Show everything", action: model.clear)
+                    NativeSessionButton("Show everything", action: model.clear)
                 }
                 Spacer(minLength: 0)
             }
@@ -156,6 +156,7 @@ private struct StoreFrame: View {
 /// stays loaded, hidden when the place or a detail page leaves it out, as on the page:
 /// they report their rows for the rail's counts whether they are shown or not.
 private struct StoreContent: View {
+    @Environment(\.nativeScreenActive) private var screenActive
     let model: StorePageModel
     let wired: [StoreDepartmentInput]
     let nav: [StoreNavDepartment]
@@ -169,6 +170,8 @@ private struct StoreContent: View {
             ForEach(wired.map(\.id), id: \.self) { id in
                 let gone = hidden(id)
                 DepartmentSection(model: model, input: wired.first { $0.id == id }!, count: count(id), narrowed: narrowed)
+                    .nativeSessionInputScope(ownerID: "store-department/" + id.rawValue)
+                    .environment(\.nativeScreenActive, screenActive && !gone)
                     .padding(.bottom, gone ? 0 : 28)
                     .frame(height: gone ? 0 : nil, alignment: .top)
                     .clipped()
@@ -273,7 +276,7 @@ private struct RailButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(.callout).foregroundStyle(on ? Color.primary : Color.secondary) // grey rail, no blue (Asad, 2026-10-07)
                     .multilineTextAlignment(.leading)

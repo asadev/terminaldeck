@@ -65,9 +65,16 @@ public sealed class W7IntegrationTests
       protocol.Receive(provider == "codex" ? "{\"id\":\"hello\",\"result\":{}}" : "{\"id\":\"hello\",\"result\":{\"protocolVersion\":1}}");
       protocol.Receive(provider == "codex" ? "{\"id\":\"session\",\"result\":{\"thread\":{\"id\":\"saved-thread\"}}}" : "{\"id\":\"session\",\"result\":{\"sessionId\":\"saved-thread\"}}");
     }
-    using var line = JsonDocument.Parse(protocol.User(new(Guid.NewGuid().ToString(), "Do this job.", [])));
-    var content = provider == "claude" ? line.RootElement.GetProperty("message").GetProperty("content") : line.RootElement.GetProperty("params").GetProperty(provider == "codex" ? "input" : "prompt");
-    Assert.Equal("Keep this role brief.\n\nDo this job.", content[0].GetProperty("text").GetString());
+    string Sent(string text)
+    {
+      using var line = JsonDocument.Parse(protocol.User(new(Guid.NewGuid().ToString(), text, [])));
+      var content = provider == "claude" ? line.RootElement.GetProperty("message").GetProperty("content") : line.RootElement.GetProperty("params").GetProperty(provider == "codex" ? "input" : "prompt");
+      return content[0].GetProperty("text").GetString()!;
+    }
+    // The drawing instruction goes once per session (8 Nov, D3): Codex has it in its thread's developer
+    // instructions; Claude and Gemini with the connection's first message only.
+    Assert.Equal("Keep this role brief.\n\n" + (provider == "codex" ? "" : ChatRichContent.Instruction + "\n\n") + "Do this job.", Sent("Do this job."));
+    Assert.Equal("Keep this role brief.\n\nAnd the next one.", Sent("And the next one."));
   }
   [Fact] public async Task CodexPersistentResumeKeepsThreadAndInteractiveApprovalPolicy()
   {
@@ -77,6 +84,7 @@ public sealed class W7IntegrationTests
     using var resume = JsonDocument.Parse(hello.Writes.Single(s => s.Contains("thread/resume", StringComparison.Ordinal)));
     Assert.Equal("exact-thread", resume.RootElement.GetProperty("params").GetProperty("threadId").GetString());
     Assert.Equal("on-request", resume.RootElement.GetProperty("params").GetProperty("approvalPolicy").GetString());
+    Assert.Equal(ChatRichContent.Instruction, resume.RootElement.GetProperty("params").GetProperty("developerInstructions").GetString());
   }
   [Fact] public async Task SignedOutNoAgentChatStartsWithoutBorrowingProjectLead()
   {

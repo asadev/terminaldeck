@@ -328,6 +328,8 @@ public actor BackendSessionChats {
     private let diary: @Sendable (BackendTeamChatRecord, NativeRPCValue) async throws -> Void
     private let usageReport: @Sendable (String) async throws -> NativeRPCValue
     private let processStarted: @Sendable (String, Int32) async throws -> Void
+    /// The helper watches each chat's processes (its descendant watch) and calls `processesChanged`.
+    private let hostProcessEvents: Bool
     private let modelCatalogue: @Sendable () async -> NativeRPCValue
 
     /// `directory`: where each tab's conversation is kept (`<data>/session-chats/<tab>/`). `publish`:
@@ -337,9 +339,11 @@ public actor BackendSessionChats {
                 diary: @escaping @Sendable (BackendTeamChatRecord, NativeRPCValue) async throws -> Void = { _, _ in },
                 usageReport: @escaping @Sendable (String) async throws -> NativeRPCValue = { _ in .null },
                 processStarted: @escaping @Sendable (String, Int32) async throws -> Void = { _, _ in },
+                hostProcessEvents: Bool = false,
                 modelCatalogue: @escaping @Sendable () async -> NativeRPCValue = { await BackendHootModelSource.liveCatalogue() }) {
         self.manager = manager; self.directory = directory; self.publishOut = publish; self.noteConversation = noteConversation; self.diary = diary
         self.usageReport = usageReport; self.modelCatalogue = modelCatalogue; self.processStarted = processStarted
+        self.hostProcessEvents = hostProcessEvents
     }
 
     // MARK: Starting
@@ -446,6 +450,7 @@ public actor BackendSessionChats {
         let recipe = Recipe(provider: item.recipe.provider, executable: item.recipe.executable,
                             arguments: arguments,
                             environment: item.recipe.environment, cwd: item.recipe.cwd, conversation: item.recipe.conversation, sessionTools: item.recipe.sessionTools)
+        if hostProcessEvents { await item.store.useHostProcessEvents() }
         if item.recipe.preparedChat {
             guard !again else { throw BackendSessionFailure.unsupported("Restart this task as a new job to change its launch settings.") }
             try await item.store.attach(.init(command: item.recipe.executable, arguments: item.recipe.wrapper + item.recipe.arguments, cwd: item.recipe.cwd,
@@ -463,6 +468,9 @@ public actor BackendSessionChats {
         }
         do { try await item.store.initialize() } catch { await item.store.stop(); throw error }
     }
+
+    /// 9 Nov: something started or ended under this chat's AI process (the helper's descendant watch).
+    public func processesChanged(_ id: String) async { await live[id]?.store.processesChanged() }
 
     /// Its AI is running (started again, in the same conversation, after it ended or the app restarted it).
     public func ensure(_ id: String) async throws {

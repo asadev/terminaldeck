@@ -32,8 +32,8 @@ struct NativeMemoryCardPart: View {
             HStack(spacing: 12) {
                 meter
                 Spacer(minLength: 8)
-                Button("Revert") { text = saved }.disabled(!dirty)
-                Button("Save card") { let body = text; store.act("card", done: "Card saved") { _ = try await $0.saveCard(store.owner, text: body); return nil } }
+                NativeSessionButton("Revert") { text = saved }.disabled(!dirty)
+                NativeSessionButton("Save card") { let body = text; store.act("card", done: "Card saved") { _ = try await $0.saveCard(store.owner, text: body); return nil } }
                     .buttonStyle(.borderedProminent).keyboardShortcut("s", modifiers: .command).disabled(!dirty || store.busy != nil)
             }
             if let category {
@@ -58,7 +58,7 @@ struct NativeMemoryCardPart: View {
                     Text("Only this seat. It stays with the seat when the agent in it changes.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            TextEditor(text: $text)
+            NativeSessionTextEditor(text: $text)
                 .font(.system(size: 12.5, design: .monospaced)).scrollContentBackground(.hidden)
                 .padding(10).background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(over > 0 ? DeckTokens.bad.opacity(0.5) : DeckTokens.hairline))
@@ -111,7 +111,7 @@ struct NativeMemoryRuleList: View {
                 Text("Top rules").font(.callout.weight(.semibold)).padding(.bottom, 4)
                 ForEach(rules, id: \.self) { rule in
                     let open = opened.contains(rule)
-                    Button {
+                    NativeSessionButton {
                         withAnimation(.snappy(duration: 0.16)) { if open { opened.remove(rule) } else { opened.insert(rule) } }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
@@ -183,7 +183,7 @@ struct NativeMemoryNotesPart: View {
                 }
                 Picker("Show", selection: $archived) { Text("Current").tag(false); Text("Archived").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
-                Button { sheet = .init(id: "new", value: nil) } label: { Label("New note", systemImage: "plus") }.buttonStyle(.borderedProminent)
+                NativeSessionButton { sheet = .init(id: "new", value: nil) } label: { Label("New note", systemImage: "plus") }.buttonStyle(.borderedProminent)
             }.padding(.horizontal, 20)
             if shown.isEmpty {
                 DeckEmpty(title: archived ? "Nothing archived" : "No notes yet",
@@ -194,15 +194,15 @@ struct NativeMemoryNotesPart: View {
                     DeckCard(padding: 6) {
                         VStack(spacing: 0) {
                             ForEach(shown) { note in
-                                Button {
+                                NativeSessionButton {
                                     withAnimation(.snappy(duration: 0.16)) { if opened.contains(note.id) { opened.remove(note.id) } else { opened.insert(note.id) } }
                                 } label: { row(note) }.buttonStyle(DeckRowStyle())
                                     .accessibilityLabel(note.listTitle + (opened.contains(note.id) ? ", shown whole" : ""))
                                     .contextMenu {
-                                        Button("Open") { sheet = .init(id: note.id, value: note) }
-                                        if note.isArchived { Button("Restore") { store.act("restore", done: "Note restored") { _ = try await $0.restoreNote(id: note.id); return nil } } }
-                                        else { Button("Archive") { store.act("archive", done: "Note archived") { _ = try await $0.archiveNote(id: note.id, reason: "archived by you", replacedBy: nil); return nil } } }
-                                        Button("Show in Finder") { NativeMemoryFolderPart.reveal(note.path) }
+                                        NativeSessionButton("Open") { sheet = .init(id: note.id, value: note) }
+                                        if note.isArchived { NativeSessionButton("Restore") { store.act("restore", done: "Note restored") { _ = try await $0.restoreNote(id: note.id); return nil } } }
+                                        else { NativeSessionButton("Archive") { store.act("archive", done: "Note archived") { _ = try await $0.archiveNote(id: note.id, reason: "archived by you", replacedBy: nil); return nil } } }
+                                        NativeSessionButton("Show in Finder") { NativeMemoryFolderPart.reveal(note.path) }
                                     }
                                 if opened.contains(note.id) { whole(note) }
                             }
@@ -221,13 +221,13 @@ struct NativeMemoryNotesPart: View {
             }
             HStack {
                 Spacer()
-                Button("Edit") { sheet = .init(id: note.id, value: note) }.controlSize(.small)
+                NativeSessionButton("Edit") { sheet = .init(id: note.id, value: note) }.controlSize(.small)
             }
         }
         .padding(.leading, 114).padding(.trailing, 10).padding(.bottom, 8)
     }
     private func chip(_ title: String, _ count: Int, _ on: Bool, _ pick: @escaping () -> Void) -> some View {
-        Button(action: pick) {
+        NativeSessionButton(action: pick) {
             HStack(spacing: 5) { Text(title); Text("\(count)").foregroundStyle(.secondary).monospacedDigit() }
                 .font(.callout).padding(.horizontal, 10).frame(height: 26)
                 .background(on ? DeckTokens.selection : .clear, in: Capsule())
@@ -278,13 +278,13 @@ struct NativeMemoryNoteSheet: View {
                 }
             }
             HStack(spacing: 10) {
-                TextField("Title", text: $title).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Title", text: $title).textFieldStyle(.roundedBorder)
                 Picker("Type", selection: $type) {
                     ForEach(DeckMemoryNoteType.standard, id: \.self) { Text($0.title).tag($0) }
                     if !DeckMemoryNoteType.standard.contains(type) { Text(type.title).tag(type) }
                 }.labelsHidden().fixedSize()
             }
-            TextEditor(text: $text).font(.system(size: 12.5, design: .monospaced))
+            NativeSessionTextEditor(text: $text).font(.system(size: 12.5, design: .monospaced))
                 .padding(6).background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DeckTokens.hairline))
                 .frame(minHeight: 200)
@@ -292,7 +292,7 @@ struct NativeMemoryNoteSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Replaced these older notes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     ForEach(history) { old in
-                        Button { viewing = old } label: {
+                        NativeSessionButton { viewing = old } label: {
                             HStack { Text(NativeMemoryStore.day(old.labels.date)).foregroundStyle(.secondary); Text(old.title).lineLimit(1); Spacer(); Image(systemName: "chevron.right").font(.caption2) }
                                 .font(.callout).contentShape(Rectangle())
                         }.buttonStyle(.plain)
@@ -302,18 +302,18 @@ struct NativeMemoryNoteSheet: View {
             HStack {
                 if let note {
                     if note.isArchived {
-                        Button("Restore") { if store.act("restore", done: "Note restored", { _ = try await $0.restoreNote(id: note.id); return nil }) { dismiss() } }
+                        NativeSessionButton("Restore") { if store.act("restore", done: "Note restored", { _ = try await $0.restoreNote(id: note.id); return nil }) { dismiss() } }
                             .disabled(store.busy != nil)
                     } else {
-                        Button("Archive") { if store.act("archive", done: "Note archived", { _ = try await $0.archiveNote(id: note.id, reason: "archived by you", replacedBy: nil); return nil }) { dismiss() } }
+                        NativeSessionButton("Archive") { if store.act("archive", done: "Note archived", { _ = try await $0.archiveNote(id: note.id, reason: "archived by you", replacedBy: nil); return nil }) { dismiss() } }
                             .disabled(store.busy != nil)
                     }
-                    Button("Show in Finder") { NativeMemoryFolderPart.reveal(note.path) }
+                    NativeSessionButton("Show in Finder") { NativeMemoryFolderPart.reveal(note.path) }
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 // Another memory change still running: Save waits (it would be refused and the text lost).
-                Button(note == nil ? "Add note" : "Save") { if save() { dismiss() } }
+                NativeSessionButton(note == nil ? "Add note" : "Save") { if save() { dismiss() } }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || note?.isArchived == true || store.busy != nil)
             }
@@ -330,7 +330,7 @@ struct NativeMemoryNoteSheet: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(old.title).font(.headline)
                     ScrollView { Text(old.body).font(.system(size: 12.5, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                    HStack { Spacer(); Button("Done") { viewing = nil }.keyboardShortcut(.defaultAction) }
+                    HStack { Spacer(); NativeSessionButton("Done") { viewing = nil }.keyboardShortcut(.defaultAction) }
                 }.padding(20).background(DeckTokens.page)
             }
         }
@@ -368,7 +368,7 @@ struct NativeMemoryTopicsPart: View {
             HStack {
                 Text("\(store.topics.filter(\.open).count) open").font(.callout).foregroundStyle(.secondary)
                 Spacer()
-                Button { sheet = .init(id: "new", value: nil) } label: { Label("New topic", systemImage: "plus") }.buttonStyle(.borderedProminent)
+                NativeSessionButton { sheet = .init(id: "new", value: nil) } label: { Label("New topic", systemImage: "plus") }.buttonStyle(.borderedProminent)
             }.padding(.horizontal, 20)
             if store.topics.isEmpty {
                 DeckEmpty(title: "No topics yet", message: "A topic is the running “where we are” note for something still open.", symbol: "mappin.and.ellipse")
@@ -387,7 +387,7 @@ struct NativeMemoryTopicsPart: View {
                                     Toggle("Open", isOn: Binding(get: { topic.open }, set: { open in
                                         store.act("topic", done: open ? "Topic reopened" : "Topic closed") { _ = try await $0.setTopic(store.owner, id: topic.id, open: open); return nil }
                                     })).toggleStyle(.switch).labelsHidden().help(topic.open ? "Open: it goes on every clean desk" : "Closed: kept, not sent")
-                                    Button("Edit") { sheet = .init(id: topic.id, value: topic) }
+                                    NativeSessionButton("Edit") { sheet = .init(id: topic.id, value: topic) }
                                 }
                                 Text(topic.body).font(.callout).foregroundStyle(.secondary).lineLimit(5).frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -410,15 +410,15 @@ struct NativeMemoryTopicSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(topic == nil ? "New topic" : "Where we are").font(.headline)
-            TextField("Topic", text: $title).textFieldStyle(.roundedBorder).disabled(topic != nil)
-            TextEditor(text: $text).font(.system(size: 12.5, design: .monospaced))
+            NativeSessionTextField("Topic", text: $title).textFieldStyle(.roundedBorder).disabled(topic != nil)
+            NativeSessionTextEditor(text: $text).font(.system(size: 12.5, design: .monospaced))
                 .padding(6).background(DeckTokens.card, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(DeckTokens.hairline))
             HStack {
-                if let topic { Button("Show in Finder") { NativeMemoryFolderPart.reveal(topic.path) } }
+                if let topic { NativeSessionButton("Show in Finder") { NativeMemoryFolderPart.reveal(topic.path) } }
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save") {
+                NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                NativeSessionButton("Save") {
                     let t = title, b = text, owner = store.owner
                     if store.act("topic", done: "Topic saved", { _ = try await $0.updateTopic(owner, title: t, body: b, stamp: .init(owner: owner, project: owner.projectID)); return nil }) {
                         dismiss()

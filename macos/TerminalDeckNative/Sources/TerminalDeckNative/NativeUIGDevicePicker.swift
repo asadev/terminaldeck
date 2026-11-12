@@ -11,7 +11,7 @@ struct NativeUIGDevicePicker: View {
     /// Markers not yet sent: switching asks first (the panel's alert).
     var confirmSwitch: (DeviceEntry) -> Void
     var body: some View {
-        Button { entry.pickerShown.toggle() } label: {
+        NativeSessionButton { entry.pickerShown.toggle() } label: {
             HStack(spacing: 3) {
                 Text(entry.selected.map { Self.label($0) } ?? "Choose a device").lineLimit(1).truncationMode(.middle)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
@@ -45,12 +45,12 @@ struct NativeUIGDeviceList: View {
         return VStack(spacing: 0) {
             if all.count > 8 {
                 // Same side insets as the rows (6 + 6), never wider than the panel.
-                TextField("Search devices", text: $search).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Search devices", text: $search).textFieldStyle(.roundedBorder)
                     .frame(minWidth: 0, maxWidth: .infinity)
                     .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
             }
             if entry.ticket?.deviceID != nil {
-                Button { Task { await entry.detach() }; chosen?() } label: { Label("Detach device", systemImage: "eject") }
+                NativeSessionButton { Task { await entry.detach() }; chosen?() } label: { Label("Detach device", systemImage: "eject") }
                     .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
                 Divider()
             }
@@ -64,7 +64,7 @@ struct NativeUIGDeviceList: View {
             }
             .frame(maxHeight: fills ? .infinity : 360)
             Divider()
-            Button { Task { await entry.model.refresh() } } label: { Label("Refresh devices", systemImage: "arrow.clockwise") }
+            NativeSessionButton { Task { await entry.model.refresh() } } label: { Label("Refresh devices", systemImage: "arrow.clockwise") }
                 .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 8)
         }
         .frame(minWidth: 0, maxWidth: .infinity)
@@ -86,7 +86,7 @@ struct NativeUIGDeviceList: View {
             if current {
                 Image(systemName: "checkmark").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
             } else {
-                Button(device.available ? "Open" : "Start") { choose(device) }
+                NativeSessionButton(device.available ? "Open" : "Start") { choose(device) }
                     .controlSize(.small)
                     .disabled(working || (!device.available && !device.canBoot))
                     .help(device.available ? "Show \(device.name) in this panel" : "Start \(device.name) and show it in this panel")

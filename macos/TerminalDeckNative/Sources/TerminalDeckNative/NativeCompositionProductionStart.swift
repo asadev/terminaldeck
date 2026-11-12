@@ -225,6 +225,9 @@ extension NativeCompositionProduction {
                     #else
                     let result = try await sessions.restoreSavedSessions()
                     #endif
+                    for line in result.notes { report(line) }
+                    if let copy = result.cleanUpCopy { report("restore: one-time clean-up of the saved tabs; the old list is kept at " + copy) }
+                    for line in result.dropped { report("restore left out " + line) }
                     for decision in result.decisions where decision.outcome == .skip || decision.outcome == .failed {
                         report("restore held a " + decision.session.provider + " tab: " + decision.reason)
                     }

@@ -60,7 +60,7 @@ struct AGFRAMEAgentCard: View {
     @State private var pendingOpen: Task<Void, Never>?
     @State private var doubleClicking = false
     var body: some View {
-        Button {
+        NativeSessionButton {
             guard !doubleClicking else { return }
             pendingOpen?.cancel()
             pendingOpen = Task { @MainActor in
@@ -177,7 +177,7 @@ struct AGFRAMEAllAgentsContent: View {
     private var searchField: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find an agent, role or model", text: $search).textFieldStyle(.plain).focused($searchFocused)
+            NativeSessionTextField("Find an agent, role or model", text: $search).textFieldStyle(.plain).sessionFocused($searchFocused)
         }.font(.system(size: 12)).padding(.horizontal, 12).frame(minWidth: 220, idealWidth: 260, maxWidth: 280).frame(height: 30)
             .background(Color.primary.opacity(0.055), in: Capsule())
     }
@@ -193,7 +193,7 @@ struct AGFRAMEAllAgentsContent: View {
         HStack(spacing: 8) {
             // The three category templates (L5's one editor; Hoot's profile opens the same sheet).
             NativeMemoryTemplatesButton().buttonStyle(.bordered).controlSize(.small)
-            Button(action: onImport) { Label("Import…", systemImage: "square.and.arrow.down") }.buttonStyle(.bordered).controlSize(.small)
+            NativeSessionButton(action: onImport) { Label("Import…", systemImage: "square.and.arrow.down") }.buttonStyle(.bordered).controlSize(.small)
             Picker("Layout", selection: Binding(get: { bound.layout }, set: { bound.layout = $0 })) {
                 Image(systemName: "square.grid.2x2").tag(AGTAgentsStore.Layout.cards).help("Cards")
                 Image(systemName: "list.bullet").tag(AGTAgentsStore.Layout.list).help("List")
@@ -235,7 +235,7 @@ struct AGFRAMEAllAgentsContent: View {
             Image(systemName: "person.3").font(.system(size: 32)).foregroundStyle(.tertiary)
             Text(title).font(.headline)
             Text(detail).font(.callout).foregroundStyle(.secondary)
-            if canImport { Button("Import agents…", action: onImport).buttonStyle(.borderedProminent) }
+            if canImport { NativeSessionButton("Import agents…", action: onImport).buttonStyle(.borderedProminent) }
         }.frame(maxWidth: .infinity).padding(.vertical, 48)
     }
 }

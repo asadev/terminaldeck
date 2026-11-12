@@ -57,8 +57,8 @@ struct NativeSFXPage: View {
         .background(.background)
         .tint(.secondary)
         .confirmationDialog("Accept these differences as the new good build?", isPresented: $confirmDifferences, titleVisibility: .visible) {
-            Button("Accept differences and mark as good", role: .destructive) { Task { await model.markGood(anyway: true) } }
-            Button("Cancel", role: .cancel) {}
+            NativeSessionButton("Accept differences and mark as good", role: .destructive) { Task { await model.markGood(anyway: true) } }
+            NativeSessionButton("Cancel", role: .cancel) {}
         } message: {
             Text("Future checks will compare against this build. Only continue if you have reviewed every difference and want to keep it.")
         }
@@ -89,7 +89,7 @@ struct NativeSFXPage: View {
             }
             Spacer(minLength: 12)
             if model.status?.setUp == true {
-                Button { Task { await model.load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                NativeSessionButton { Task { await model.load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(model.loading || model.busy != nil)
                     .accessibilityIdentifier("sfx.refresh")
             }
@@ -100,12 +100,12 @@ struct NativeSFXPage: View {
         NativeSFXSteps(current: model.setupStep, titles: ["Choose checks", "Review setup", "First check"])
         if !status.git {
             NativeSFXNotice("\(model.projectName) needs source control before a check can run.", next: "Open Source control and create a Git repository. Then come back and refresh the preview.")
-            Button("Open Source control", action: sourceControl).accessibilityIdentifier("sfx.source-control")
+            NativeSessionButton("Open Source control", action: sourceControl).accessibilityIdentifier("sfx.source-control")
         }
         if model.busy == .preview || model.busy == .prepare || model.preview == nil {
             NativeSFXSkeleton(label: model.busy == .prepare ? "Preparing the bundled checker…" : "Finding sensible checks for \(model.projectName)…")
             if model.busy == nil {
-                Button("Try preview again") { Task { await model.loadPreview() } }
+                NativeSessionButton("Try preview again") { Task { await model.loadPreview() } }
             }
         } else if let preview = model.preview {
             if preview.prepareNeeded {
@@ -114,7 +114,7 @@ struct NativeSFXPage: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Text("Your project stays unchanged until you review and save setup.")
                         .font(.callout).foregroundStyle(.secondary)
-                    Button("Prepare Stays Fixed") { Task { await model.loadPreview(prepare: true) } }
+                    NativeSessionButton("Prepare Stays Fixed") { Task { await model.loadPreview(prepare: true) } }
                         .disabled(model.busy != nil).accessibilityIdentifier("sfx.prepare")
                 }
             } else if model.setupStep == 1 {
@@ -143,14 +143,14 @@ struct NativeSFXPage: View {
                     Text("Command to check").font(.callout.weight(.medium))
                     Text("Choose a local test or help command for \(model.projectName). Use a command that needs no live account or production data.")
                         .font(.callout).foregroundStyle(.secondary)
-                    TextField("For example: swift run MyApp --help", text: $model.commandDraft)
+                    NativeSessionTextField("For example: swift run MyApp --help", text: $model.commandDraft)
                         .textFieldStyle(.roundedBorder).font(.callout.monospaced())
                         .accessibilityIdentifier("sfx.check-command")
                         .disabled(model.busy != nil)
                     if !preview.commandExplanation.isEmpty {
                         Text(preview.commandExplanation).font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Preview this command") { Task { await model.loadPreview() } }
+                    NativeSessionButton("Preview this command") { Task { await model.loadPreview() } }
                         .disabled(model.busy != nil || model.commandDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("sfx.preview-command")
                     if model.commandNeedsPreview { Text("Preview this command before continuing.").font(.caption).foregroundStyle(.secondary) }
@@ -158,10 +158,10 @@ struct NativeSFXPage: View {
                 .padding(.vertical, 4)
             }
             HStack(spacing: 10) {
-                Button("Continue") { model.setupStep = 2 }
+                NativeSessionButton("Continue") { model.setupStep = 2 }
                     .disabled(!model.canApplyPreview || model.status?.git != true)
                     .accessibilityIdentifier("sfx.continue")
-                Button("Refresh preview") { Task { await model.loadPreview() } }.disabled(model.busy != nil)
+                NativeSessionButton("Refresh preview") { Task { await model.loadPreview() } }.disabled(model.busy != nil)
             }
         }
     }
@@ -185,10 +185,10 @@ struct NativeSFXPage: View {
             }
             NativeSFXRow(symbol: "person.2", title: "Available to your AI sessions", detail: "New sessions in \(model.projectName) can check their own work. You can turn this off later.")
             HStack(spacing: 10) {
-                Button(model.busy == .setup ? "Saving setup…" : "Set up \(model.projectName)") { Task { await model.applySetup() } }
+                NativeSessionButton(model.busy == .setup ? "Saving setup…" : "Set up \(model.projectName)") { Task { await model.applySetup() } }
                     .disabled(!model.canApplyPreview || model.status?.git != true)
                     .accessibilityIdentifier("sfx.apply-setup")
-                Button("Back") { model.setupStep = 1 }.disabled(model.busy != nil)
+                NativeSessionButton("Back") { model.setupStep = 1 }.disabled(model.busy != nil)
                 if model.busy == .setup { ProgressView().controlSize(.small) }
             }
         }
@@ -203,9 +203,9 @@ struct NativeSFXPage: View {
                     ForEach(preview.files) { file in NativeSFXRow(symbol: "doc.text", title: file.path, detail: file.summary) }
                 }
                 HStack(spacing: 10) {
-                    Button(model.busy == .setup ? "Finishing setup…" : "Finish setup") { Task { await model.applySetup() } }
+                    NativeSessionButton(model.busy == .setup ? "Finishing setup…" : "Finish setup") { Task { await model.applySetup() } }
                         .disabled(!model.canFinishSetup).accessibilityIdentifier("sfx.finish-setup")
-                    Button("Refresh setup review") { Task { await model.loadPreview() } }.disabled(model.busy != nil)
+                    NativeSessionButton("Refresh setup review") { Task { await model.loadPreview() } }.disabled(model.busy != nil)
                 }
             }
         }
@@ -224,7 +224,7 @@ struct NativeSFXPage: View {
                         }
                     }
                     Spacer()
-                    Button(model.stopping ? "Stopping…" : "Stop") { Task { await model.stop() } }
+                    NativeSessionButton(model.stopping ? "Stopping…" : "Stop") { Task { await model.stop() } }
                         .disabled(model.stopping).accessibilityIdentifier("sfx.stop")
                 }
                 NativeSFXSkeleton(label: "Your result will appear here.", showSpinner: false)
@@ -235,20 +235,20 @@ struct NativeSFXPage: View {
                 }
                 if !status.git {
                     NativeSFXNotice("This folder has no Git repository, so the check cannot run.", next: "Open Source control and create one, then re-check.")
-                    Button("Open Source control", action: sourceControl)
+                    NativeSessionButton("Open Source control", action: sourceControl)
                 }
                 HStack(spacing: 10) {
-                    Button(checkLabel(status)) { Task { await model.runCheck() } }
+                    NativeSessionButton(checkLabel(status)) { Task { await model.runCheck() } }
                         .disabled(!model.canCheck).accessibilityIdentifier("sfx.run-check")
                     if status.last != nil && status.last?.verdict != .couldNotRun && !StaysFixedRules.markedSinceLastCheck(status) {
-                        Button(model.busy == .mark ? "Saving good build…" : "Mark this build as good") {
+                        NativeSessionButton(model.busy == .mark ? "Saving good build…" : "Mark this build as good") {
                             if status.last?.verdict == .differences && !StaysFixedRules.markedSinceLastCheck(status) { confirmDifferences = true }
                             else { Task { await model.markGood() } }
                         }
                         .disabled(!model.canMark).accessibilityIdentifier("sfx.mark-good")
                     }
                     if status.last != nil {
-                        Button("Full report") { Task { await model.readReport() } }
+                        NativeSessionButton("Full report") { Task { await model.readReport() } }
                             .disabled(model.busy != nil).accessibilityIdentifier("sfx.full-report")
                     }
                 }
@@ -256,7 +256,7 @@ struct NativeSFXPage: View {
                     result(last, all: false)
                     if (last.verdict == .differences || last.verdict == .couldNotRun) && !StaysFixedRules.markedSinceLastCheck(status) {
                         HStack(spacing: 10) {
-                            Button("Ask an AI to fix it") { openFix(model.fixPrompt()) }
+                            NativeSessionButton("Ask an AI to fix it") { openFix(model.fixPrompt()) }
                                 .disabled(model.busy != nil).accessibilityIdentifier("sfx.ask-fix")
                             Text("After the fix, choose Re-check.").font(.caption).foregroundStyle(.secondary)
                         }
@@ -268,7 +268,7 @@ struct NativeSFXPage: View {
             NativeSFXNotice("Run a check before saving the first good build.", next: "Choose Run first check above.")
         }
         if model.mark?.refusedFor == .differences {
-            Button("Review and accept differences") { confirmDifferences = true }.disabled(!model.canMark)
+            NativeSessionButton("Review and accept differences") { confirmDifferences = true }.disabled(!model.canMark)
         }
         NativeSFXSection(title: "AI sessions") {
             HStack(alignment: .center, spacing: 16) {
@@ -288,7 +288,7 @@ struct NativeSFXPage: View {
                 if let problem = status.guardProblem { NativeSFXNotice(problem, error: true, next: "Ask an AI to repair this rule, then re-check.") }
                 if status.guards.isEmpty { Text("No saved rules yet. Ask an AI to add a small check for a bug you already fixed.").font(.callout).foregroundStyle(.secondary) }
                 ForEach(status.guards, id: \.name) { item in NativeSFXRow(symbol: "checkmark.shield", title: item.name, detail: item.because) }
-                Button("Ask an AI to add a rule") {
+                NativeSessionButton("Ask an AI to add a rule") {
                     openFix("In \(model.projectName), ask me which previously fixed bug should stay fixed. Add one small Stays Fixed guard for that bug using the project's current configuration, without changing unrelated files or the good reference. Run a check and report what it covers.")
                 }.disabled(model.busy != nil || model.checking)
             }.padding(.top, 8)
@@ -300,7 +300,7 @@ struct NativeSFXPage: View {
                     coverage(ready: readiness.ready, gaps: readiness.gaps, notHere: readiness.notHere, showFixes: true)
                 }
                 if let error = model.readinessError { NativeSFXNotice(error, error: true, next: "Try Refresh coverage. If the checker still needs preparation, reopen \(model.projectName).") }
-                Button("Refresh coverage") { Task { await model.readReadiness(refresh: true) } }
+                NativeSessionButton("Refresh coverage") { Task { await model.readReadiness(refresh: true) } }
                     .disabled(model.readingReadiness || model.busy != nil || model.checking)
             }.padding(.top, 8)
         }
@@ -348,7 +348,7 @@ struct NativeSFXPage: View {
                 NativeSFXRow(symbol: "exclamationmark.circle", title: gap.what.isEmpty ? gap.name : gap.what, detail: gap.why)
                 if !gap.fix.isEmpty { Text("Next: " + gap.fix).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
                 if !gap.unlocks.isEmpty { Text("This enables " + gap.unlocks).font(.caption).foregroundStyle(.secondary) }
-                if showFixes { Button("Ask an AI to help") { openFix(model.fixPrompt(gap: gap)) }.disabled(model.busy != nil || model.checking) }
+                if showFixes { NativeSessionButton("Ask an AI to help") { openFix(model.fixPrompt(gap: gap)) }.disabled(model.busy != nil || model.checking) }
             }
         }
         if !notHere.isEmpty { Text("Not checked here: " + StaysFixedRules.listWords(notHere) + ".").font(.caption).foregroundStyle(.secondary) }
@@ -373,7 +373,7 @@ struct NativeSFXPage: View {
 
     private func fullReport(_ report: FixedResults) -> some View {
         NativeSFXSection(title: "Full report") {
-            Button("Back to checks") { model.closeReport() }
+            NativeSessionButton("Back to checks") { model.closeReport() }
             Text(report.headline).font(.callout.weight(.medium)).textSelection(.enabled)
             result(report, all: true)
             if !report.detail.isEmpty {
@@ -390,15 +390,15 @@ struct NativeSFXPage: View {
             Text("Ask an AI to help").font(.title3.weight(.semibold))
             Text("Review this request. It will be copied, and a new AI session will open in \(model.projectName) using your normal agent and login. Paste and send the request there. Come back to re-check after the fix.")
                 .font(.callout).foregroundStyle(.secondary)
-            TextEditor(text: $fixPrompt).font(.callout.monospaced())
+            NativeSessionTextEditor(text: $fixPrompt).font(.callout.monospaced())
                 .frame(minHeight: 220).padding(6)
                 .background(.quaternary, in: .rect(cornerRadius: 6))
                 .accessibilityIdentifier("sfx.fix-prompt")
             HStack {
-                Button(copiedPrompt ? "Copied" : "Copy prompt") { copy(fixPrompt); copiedPrompt = true }
+                NativeSessionButton(copiedPrompt ? "Copied" : "Copy prompt") { copy(fixPrompt); copiedPrompt = true }
                 Spacer()
-                Button("Cancel") { showFix = false }.keyboardShortcut(.cancelAction)
-                Button("Copy request and open AI session") {
+                NativeSessionButton("Cancel") { showFix = false }.keyboardShortcut(.cancelAction)
+                NativeSessionButton("Copy request and open AI session") {
                     let prompt = fixPrompt
                     showFix = false
                     Task { await model.startFix(prompt: prompt) }
@@ -522,7 +522,7 @@ private struct NativeSFXDifference: View {
                 }
             }
             if !all, difference.more > 0 { Text("\(difference.more) more changes are in the full report.").font(.caption).foregroundStyle(.secondary) }
-            Button("Ask an AI to fix this", action: fix)
+            NativeSessionButton("Ask an AI to fix this", action: fix)
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))

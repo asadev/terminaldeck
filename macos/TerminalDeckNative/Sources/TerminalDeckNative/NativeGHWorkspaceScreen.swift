@@ -43,7 +43,7 @@ struct NativeGHWorkspaceScreen: View {
                     Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                     Text(notice).font(.callout).foregroundStyle(.secondary)
                     Spacer()
-                    Button { model.notice = nil } label: { Image(systemName: "xmark") }
+                    NativeSessionButton { model.notice = nil } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless).help("Dismiss message")
                 }
             }
@@ -52,7 +52,7 @@ struct NativeGHWorkspaceScreen: View {
                 if geometry.size.width < 760 {
                     if let item = model.selection {
                         VStack(alignment: .leading, spacing: 8) {
-                            Button { model.selection = nil } label: { Label("Back to \(model.area.title.lowercased())", systemImage: "chevron.left") }
+                            NativeSessionButton { model.selection = nil } label: { Label("Back to \(model.area.title.lowercased())", systemImage: "chevron.left") }
                                 .buttonStyle(.borderless)
                             detail(item)
                         }
@@ -110,35 +110,35 @@ struct NativeGHWorkspaceScreen: View {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
                 Menu {
                     ForEach(model.repositories) { repo in
-                        Button(repo.title) { model.chooseRepo(repo.repo) }
+                        NativeSessionButton(repo.title) { model.chooseRepo(repo.repo) }
                     }
                     Divider()
-                    Button("Enter another repository…") { enteringRepo = true }
+                    NativeSessionButton("Enter another repository…") { enteringRepo = true }
                 } label: { Text(model.repo.isEmpty ? "Choose repository" : model.repo).lineLimit(1).truncationMode(.middle) }
                 .menuStyle(.borderlessButton)
                 .frame(maxWidth: 300, alignment: .leading)
                 .popover(isPresented: $enteringRepo) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Choose repository").font(.callout.weight(.semibold))
-                        TextField("owner/repository", text: $repoEntry).textFieldStyle(.roundedBorder)
-                        Button("Use repository") { model.chooseRepo(repoEntry); enteringRepo = false }
+                        NativeSessionTextField("owner/repository", text: $repoEntry).textFieldStyle(.roundedBorder)
+                        NativeSessionButton("Use repository") { model.chooseRepo(repoEntry); enteringRepo = false }
                             .disabled(!repoEntry.contains("/") || repoEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     .padding(16).frame(width: 280).tint(.secondary)
                 }
             } else {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(.secondary)
-                TextField("owner/repository", text: $repoEntry)
+                NativeSessionTextField("owner/repository", text: $repoEntry)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.chooseRepo(repoEntry) }
+                    .sessionOnSubmit { model.chooseRepo(repoEntry) }
                     .frame(maxWidth: 300)
                     .accessibilityLabel("Repository")
-                Button("Use repository") { model.chooseRepo(repoEntry) }
+                NativeSessionButton("Use repository") { model.chooseRepo(repoEntry) }
                     .disabled(!repoEntry.contains("/") || repoEntry == model.repo)
             }
             if model.area != .inbox && !model.branch.isEmpty { Text(model.branch).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             Spacer(minLength: 0)
-            Button { Task { await model.reload() } } label: { Image(systemName: "arrow.clockwise") }
+            NativeSessionButton { Task { await model.reload() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless)
                 .help("Refresh GitHub data")
                 .disabled(model.loading || model.loadingMore)
@@ -175,26 +175,26 @@ struct NativeGHWorkspaceScreen: View {
                 .onChange(of: model.state) { _, _ in Task { await model.reload() } }
             }
             if model.area == .issues {
-                Button("Filters\(model.label.isEmpty && model.assignee.isEmpty ? "" : " •")") { showingIssueFilters = true }
+                NativeSessionButton("Filters\(model.label.isEmpty && model.assignee.isEmpty ? "" : " •")") { showingIssueFilters = true }
                     .popover(isPresented: $showingIssueFilters) {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Filter issues").font(.callout.weight(.semibold))
-                            TextField("Label", text: $model.label).textFieldStyle(.roundedBorder)
-                            TextField("Assigned GitHub name", text: $model.assignee).textFieldStyle(.roundedBorder)
+                            NativeSessionTextField("Label", text: $model.label).textFieldStyle(.roundedBorder)
+                            NativeSessionTextField("Assigned GitHub name", text: $model.assignee).textFieldStyle(.roundedBorder)
                             HStack {
-                                Button("Clear") { model.label = ""; model.assignee = "" }
+                                NativeSessionButton("Clear") { model.label = ""; model.assignee = "" }
                                 Spacer()
-                                Button("Apply") { showingIssueFilters = false; model.selection = nil; Task { await model.reload() } }
+                                NativeSessionButton("Apply") { showingIssueFilters = false; model.selection = nil; Task { await model.reload() } }
                             }
                         }
                         .padding(16).frame(width: 260).tint(.secondary)
                     }
             }
-            TextField("Search loaded \(model.area.title.lowercased())", text: $model.query)
+            NativeSessionTextField("Search loaded \(model.area.title.lowercased())", text: $model.query)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Search loaded \(model.area.title.lowercased())")
             if model.area == .pulls || model.area == .issues {
-                Button(model.area == .pulls ? "New pull request" : "New issue") { model.create() }.disabled(model.repo.isEmpty)
+                NativeSessionButton(model.area == .pulls ? "New pull request" : "New issue") { model.create() }.disabled(model.repo.isEmpty)
             }
         }
         .controlSize(.small)
@@ -212,13 +212,13 @@ struct NativeGHWorkspaceScreen: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if model.loading { NativePageNote("Refreshing…", busy: true).padding(8) }
                     ForEach(model.shownItems) { item in
-                        Button { model.selection = item } label: {
+                        NativeSessionButton { model.selection = item } label: {
                             NativeGHListRow(item: item, selected: model.selection?.id == item.id)
                         }
                         .buttonStyle(.plain)
                     }
                     if model.hasMore {
-                        Button {
+                        NativeSessionButton {
                             Task { await model.reload(more: true) }
                         } label: {
                             HStack(spacing: 8) {
@@ -266,7 +266,7 @@ struct NativeGHTabButton: View {
     let selected: Bool
     let action: () -> Void
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Text(title).font(.callout.weight(selected ? .medium : .regular))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .padding(.horizontal, 10).padding(.vertical, 6)

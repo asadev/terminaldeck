@@ -252,7 +252,8 @@ extension PageDetailView {
                         .background(NativeChrome.page(entry.isLayout ? active : entry.screen), ignoresSafeAreaEdges: [.horizontal, .bottom])
                         .opacity(shown ? 1 : 0)
                         .accessibilityHidden(!shown)
-                        .environment(\.nativeScreenActive, shown)
+                        .nativeSessionInputScope(ownerID: entry.id)
+                        .environment(\.nativeScreenActive, shown && !model.pageModalOpen)
                         .allowsHitTesting(shown)
                         .zIndex(shown ? 1 : 0)
                 }

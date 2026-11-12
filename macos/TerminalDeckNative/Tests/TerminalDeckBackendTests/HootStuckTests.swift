@@ -5,7 +5,7 @@ import TerminalDeckNativeCore
 
 final class HootStuckTests: XCTestCase, @unchecked Sendable {
     private static let provider = #"""
-import json,sys,os,queue,threading
+import json,sys,os,queue,threading,subprocess
 lines=queue.Queue()
 def read():
  for line in sys.stdin: lines.put(line)
@@ -38,6 +38,8 @@ while True:
  out({'type':'system','subtype':'init','session_id':'scratch-hoot'})
  out({'type':'system','subtype':'session_state_changed','state':'running'})
  if n==1:
+  # A real background watcher process (9 Nov): a task with no live process is shown finished.
+  subprocess.Popen(['/bin/sleep','20'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   out({'type':'system','subtype':'task_started','task_id':'disk-watch','description':'Scratch background watcher','task_type':'local_bash'})
  if n==1 and not os.path.exists('release'): waiting=True
  else: finish()

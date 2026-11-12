@@ -163,6 +163,7 @@ struct HootComposerDraft: Equatable, Sendable, Codable {
 struct HootComposer: View {
     @Binding var draft: HootComposerDraft
     var ownerID: String? = nil
+    var focusWhenShown = false
     var catalogue = HootComposerCatalogue()
     var showMeta = true
     /// Which part to draw. A chat can float `.box` over its scroll area (so messages slide
@@ -209,6 +210,10 @@ struct HootComposer: View {
     var status: AnyView? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.agkitOffscreenSolid) private var offscreenSolid
+    @Environment(\.nativeScreenActive) private var screenActive
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeTerminalSelected) private var layoutSelected
+    @State private var inputRule = NativeSessionInputRule()
     @State private var localVoice = HootComposerVoice()
     private var voice: HootComposerVoice { dictationOwner ?? localVoice }
     @State private var editor = HootComposerEditorHandle()
@@ -228,7 +233,19 @@ struct HootComposer: View {
     private var hasMicrophone: Bool { microphoneAvailable ?? voice.available }
     private var selectedModel: String { catalogue.models.first(where: { $0.id == draft.modelID })?.title ?? "Choose Coding AI and model" }
     var body: some View {
-        VStack(spacing: 8) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: enabled)
+        let voiceOwner = voice
+        let sendAfterVoiceBinding = $sendAfterVoice
+        inputRule.onScopeWillDeactivate = { [weak voiceOwner] in
+            // The epoch changes synchronously; discard the voice continuation even if
+            // the same screen returns before the asynchronous stop has completed.
+            Task {
+                sendAfterVoiceBinding.wrappedValue = false
+                if let voiceOwner, voiceOwner.recording || voiceOwner.starting { await voiceOwner.stop() }
+            }
+        }
+        return VStack(spacing: 8) {
             if part == .box, let line = notice ?? voice.problem {
                 Text(line).font(.system(size: 12)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityAddTraits(.updatesFrequently)
@@ -247,12 +264,15 @@ struct HootComposer: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Large prompt · \(draft.text.utf8.count) / 262144 UTF-8 bytes").font(.caption).foregroundStyle(.secondary)
                                 Text(String(draft.plainText.prefix(240))).font(.callout).lineLimit(3)
-                                Button("Edit full prompt", action: onExpandLongPrompt)
+                                NativeSessionButton("Edit full prompt", action: onExpandLongPrompt)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         } else {
-                        HootComposerEditor(draft: $draft, ownerID: ownerID, handle: editor, onReturn: returnPressed,
+                        HootComposerEditor(draft: $draft, ownerID: ownerID, focusWhenShown: focusWhenShown,
+                                           selected: layoutSelected ?? true, handle: editor, onReturn: returnPressed,
                                            onFiles: addFiles, onMentionQuery: { mentionQuery = $0 },
                                            mentionNames: { DeckMentionRows.names(for: catalogue.mentions) }, onRecall: onRecall)
+                            .id(ownerID)
+                            .id(inputScope?.identity)
                             .frame(height: editor.height)
                         }
                         if draft.text.isEmpty && !voice.recording {
@@ -269,7 +289,7 @@ struct HootComposer: View {
                             Text(voice.finishing ? "Finishing dictation…" : "Getting dictation ready…")
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
-                        Button { toggleVoice() } label: {
+                        NativeSessionButton { toggleVoice() } label: {
                             Image(systemName: voice.recording ? "waveform" : "mic")
                                 .foregroundStyle(voice.recording ? Color.red : Color.secondary)
                                 .frame(width: 32, height: 32)
@@ -295,7 +315,7 @@ struct HootComposer: View {
         }
         .frame(maxWidth: 720)
         .onDrop(of: [.fileURL], isTargeted: $dragging) { providers in
-            guard enabled else { return false }
+            guard inputRule.acceptsFocus else { return false }
             Task { for provider in providers {
                 if let data = try? await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data,
                    let url = URL(dataRepresentation: data, relativeTo: nil) { addFiles([url]) }
@@ -303,8 +323,22 @@ struct HootComposer: View {
             } }
             return true
         }
-        .onAppear { voice.viewAppeared() }
-        .onDisappear { if voice.viewDisappeared() { Task { await voice.stop() } } }
+        .onAppear {
+            inputRule.update(active: inputScope == nil ? screenActive : true, enabled: enabled)
+            voice.viewAppeared()
+        }
+        .onChange(of: screenActive) { _, shown in
+            if !shown {
+                sendAfterVoice = false
+                mentionQuery = nil
+                if voice.recording || voice.starting { Task { await voice.stop() } }
+            }
+        }
+        .onDisappear {
+            inputRule.update(active: false, enabled: false)
+            sendAfterVoice = false
+            if voice.viewDisappeared() { Task { await voice.stop() } }
+        }
         .onChange(of: mentionRequest) { _, _ in if enabled { editor.typeMentionSign() } }
         .onChange(of: mentionQuery) { _, query in onReferenceQuery?(query) }
         // The panel's "Mention": the @ list opens on the box, so the panel closes first.
@@ -321,10 +355,10 @@ struct HootComposer: View {
             }
         }
         .confirmationDialog(riskyMode == .bypass ? "Let \(agentName) work without asking?" : "Allow changes without asking in this chat?", isPresented: $confirmChanges) {
-            Button(riskyMode == .bypass ? "Use Bypass permissions" : "Allow changes", role: riskyMode == .bypass ? .destructive : nil) { setPermission(riskyMode) }
+            NativeSessionButton(riskyMode == .bypass ? "Use Bypass permissions" : "Allow changes", role: riskyMode == .bypass ? .destructive : nil) { setPermission(riskyMode) }
         } message: { Text(riskyMode.hint) }
         .confirmationDialog("Change this chat's connected tool?", isPresented: Binding(get: { proposedTool != nil }, set: { if !$0 { proposedTool = nil } })) {
-            if let tool = proposedTool { Button(tool.enabled ? "Turn off \(tool.name)" : "Turn on \(tool.name)") { onToolChange?(tool.id, !tool.enabled); proposedTool = nil } }
+            if let tool = proposedTool { NativeSessionButton(tool.enabled ? "Turn off \(tool.name)" : "Turn on \(tool.name)") { onToolChange?(tool.id, !tool.enabled); proposedTool = nil } }
         } message: { Text("This changes which tools Hoot can use for this chat.") }
     }
     private var attachments: some View {
@@ -337,7 +371,7 @@ struct HootComposer: View {
                             Text(attachment.name).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
                             if !attachment.source.isEmpty { Text(attachment.source).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
                         }
-                        Button { draft.attachments.removeAll { $0.id == attachment.id }; HootPastedFiles.discard([attachment.url]) } label: { Image(systemName: "xmark.circle.fill").frame(width: 28, height: 28) }
+                        NativeSessionButton { draft.attachments.removeAll { $0.id == attachment.id }; HootPastedFiles.discard([attachment.url]) } label: { Image(systemName: "xmark.circle.fill").frame(width: 28, height: 28) }
                             .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove \(attachment.name)").accessibilityLabel("Remove \(attachment.name)")
                     }.padding(.leading, 12).padding(.vertical, 6).frame(maxWidth: 280)
                         .background(AGKITStyle.card, in: .rect(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(AGKITStyle.hairline))
@@ -347,7 +381,7 @@ struct HootComposer: View {
     }
     @ViewBuilder private var addMenu: some View {
         if let addPanel {
-            Button { addPanelOpen.toggle() } label: {
+            NativeSessionButton { addPanelOpen.toggle() } label: {
                 Image(systemName: "plus").font(.system(size: 16))
                     .frame(width: 32, height: 32).background(AGKITStyle.selection, in: .circle).contentShape(.circle)
             }
@@ -363,9 +397,9 @@ struct HootComposer: View {
     }
     private var menuForAdding: some View {
         Menu {
-            Button("Add files…", systemImage: NativeAttachMenu.symbol(.file)) { browse(images: false) }.keyboardShortcut("o")
-            Button("Add photos…", systemImage: NativeAttachMenu.symbol(.image)) { browse(images: true) }
-            if let onScreenshot { Button("Take a screenshot", systemImage: "camera.viewfinder", action: onScreenshot) }
+            NativeSessionButton("Add files…", systemImage: NativeAttachMenu.symbol(.file)) { browse(images: false) }.keyboardShortcut("o")
+            NativeSessionButton("Add photos…", systemImage: NativeAttachMenu.symbol(.image)) { browse(images: true) }
+            if let onScreenshot { NativeSessionButton("Take a screenshot", systemImage: "camera.viewfinder", action: onScreenshot) }
             Divider()
             Section("Mention") {
                 ForEach(HootMention.Kind.allCases, id: \.self) { kind in
@@ -380,7 +414,7 @@ struct HootComposer: View {
                         ForEach(groups, id: \.self) { group in
                             Section(group) {
                                 ForEach(candidates.filter { mentionGroup($0) == group }, id: \.marker) { mention in
-                                    Button { insert(mention) } label: {
+                                    NativeSessionButton { insert(mention) } label: {
                                         Label(mention.name + (mention.project.isEmpty ? "" : " · " + mention.project), systemImage: mention.symbol)
                                     }
                                 }
@@ -393,7 +427,7 @@ struct HootComposer: View {
             // manage tools stays, and only where it works.
             if let onManageTools {
                 Divider()
-                Button("Manage tools in MCP servers…", systemImage: "puzzlepiece.extension") { onManageTools() }
+                NativeSessionButton("Manage tools in MCP servers…", systemImage: "puzzlepiece.extension") { onManageTools() }
             }
         } label: { Image(systemName: "plus").font(.system(size: 16)) }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)
@@ -405,7 +439,7 @@ struct HootComposer: View {
         HStack {
             Menu {
                 ForEach(HootPermissionMode.allCases, id: \.self) { mode in
-                    Button { if mode.risky { riskyMode = mode; confirmChanges = true } else { setPermission(mode) } } label: {
+                    NativeSessionButton { if mode.risky { riskyMode = mode; confirmChanges = true } else { setPermission(mode) } } label: {
                         choice(mode.short, draft.permissionMode == mode)
                     }.help(mode.hint)
                 }
@@ -439,7 +473,7 @@ struct HootComposer: View {
                 .frame(minHeight: 28).contentShape(.rect)
             }
             if !catalogue.efforts.isEmpty, !draft.effort.isEmpty {
-                Button { showEffort.toggle() } label: {
+                NativeSessionButton { showEffort.toggle() } label: {
                     HStack(spacing: 3) {
                         // As wide as the widest level, so the popover never moves while dragging.
                         ZStack(alignment: .leading) {
@@ -459,7 +493,7 @@ struct HootComposer: View {
         }.font(.system(size: 12)).foregroundStyle(.secondary).menuStyle(.button).buttonStyle(.plain).padding(.horizontal, 12).disabled(!enabled)
     }
     private func modelButton(_ model: HootComposerModel) -> some View {
-        Button { draft.modelID = model.id; onModelChange?(model.id) } label: {
+        NativeSessionButton { draft.modelID = model.id; onModelChange?(model.id) } label: {
             choice(model.name, catalogue.isChosen(model, savedID: draft.modelID))
         }
     }
@@ -503,6 +537,7 @@ struct HootComposer: View {
         return effort == "xhigh" ? "Extra high" : HootComposerModel.effortName(effort)
     }
     private func insert(_ mention: HootMention, replaceQuery: Bool = false) {
+        guard inputRule.acceptsFocus else { return }
         editor.insert(mention, draft: $draft, replaceQuery: replaceQuery); mentionQuery = nil
     }
     private func browse(images: Bool) {
@@ -517,6 +552,7 @@ struct HootComposer: View {
         panel.begin { result in if result == .OK { addFiles(panel.urls) } }
     }
     private func addFiles(_ urls: [URL]) {
+        guard inputRule.acceptsFocus else { return }
         guard let attachmentLimits else { draft.add(urls); return }
         var proposed = draft.attachments
         for url in urls where !proposed.contains(where: { $0.url == url }) { proposed.append(.init(url: url)) }
@@ -529,9 +565,18 @@ struct HootComposer: View {
         onDictationStart?()
         sendAfterVoice = NSEvent.modifierFlags.contains(.option)
         let dictation = HootDictationSplice()
-        Task { await voice.start { heard in draft.text = dictation.write(heard, into: draft.text) } }
+        let epoch = inputRule.epoch
+        Task { await voice.start { heard in
+            guard inputRule.acceptsFocus, inputRule.epoch == epoch else { return }
+            draft.text = dictation.write(heard, into: draft.text)
+        } }
     }
-    private func finishVoice() async { await voice.stop(); if sendAfterVoice { sendAfterVoice = false; sendDraft() } }
+    private func finishVoice() async {
+        let epoch = inputRule.epoch
+        await voice.stop()
+        guard inputRule.acceptsFocus, inputRule.epoch == epoch else { sendAfterVoice = false; return }
+        if sendAfterVoice { sendAfterVoice = false; sendDraft() }
+    }
     /// The "/" menu while one slash word is typed and the AI offers commands that match it.
     private var slashShown: [HootSlashCommand]? {
         guard enabled, !catalogue.commands.isEmpty, let query = HootSlashCommand.query(draft.text), slashClosedOn != draft.text else { return nil }
@@ -542,7 +587,7 @@ struct HootComposer: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(Array(commands.prefix(40).enumerated()), id: \.element.id) { index, command in
-                    Button { pickSlash(command) } label: {
+                    NativeSessionButton { pickSlash(command) } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text("/" + command.name).font(.system(size: 13, weight: .semibold, design: .monospaced))
                             if !command.argumentHint.isEmpty {
@@ -611,7 +656,7 @@ struct HootComposer: View {
         return (busy && !allowsSteering) || voice.starting || voice.finishing || (!draft.canSend && !voice.recording)
     }
     private var primaryControl: some View {
-        Button { if primaryAction == .stop { onStop() } else { submit() } } label: {
+        NativeSessionButton { if primaryAction == .stop { onStop() } else { submit() } } label: {
             Group {
                 if stopping { ProgressView().controlSize(.small).tint(.white) }
                 else { Image(systemName: primaryAction == .stop ? "stop.fill" : "arrow.up").font(.system(size: 14, weight: .semibold)) }
@@ -624,12 +669,12 @@ struct HootComposer: View {
         .accessibilityLabel(primaryAction.label).accessibilityIdentifier("composer.primary")
         .contextMenu {
             if primaryAction == .queue && canStop {
-                Button("Stop current answer", systemImage: "stop.fill", action: onStop).disabled(!enabled || !canStop)
+                NativeSessionButton("Stop current answer", systemImage: "stop.fill", action: onStop).disabled(!enabled || !canStop)
             }
         }
     }
     private func sendDraft() {
-        guard enabled, draft.canSend, (!busy || allowsSteering), !voice.starting, !voice.finishing else { return }
+        guard inputRule.acceptsFocus, draft.canSend, (!busy || allowsSteering), !voice.starting, !voice.finishing else { return }
         do { try attachmentLimits?.validateFiles(draft.attachments.map(\.url)); onSend(draft) }
         catch { notice = error.localizedDescription }
     }
@@ -672,7 +717,10 @@ extension EnvironmentValues {
     /// the box's own change notice runs and the @ list opens there (a space first when the "@"
     /// would otherwise stick to the word before it).
     func typeMentionSign() {
-        guard let textView else { return }
+        guard let textView = textView as? NativeSessionTextView,
+              textView.inputRule.acceptsFocus, let window = textView.window,
+              window.isKeyWindow, window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
+        window.makeFirstResponder(textView)
         let text = textView.string as NSString
         var range = textView.selectedRange()
         range.location = min(range.location, text.length); range.length = min(range.length, text.length - range.location)
@@ -687,7 +735,10 @@ extension EnvironmentValues {
     /// new text into the draft while this runs; an `inout` copy taken before that was then written
     /// back over it with the OLD text, so the box was redrawn from "@…" and the mention was gone.
     func insert(_ mention: HootMention, draft: Binding<HootComposerDraft>, replaceQuery: Bool) {
-        guard let textView, let storage = textView.textStorage else { draft.wrappedValue.insert(mention); return }
+        guard let textView = textView as? NativeSessionTextView, textView.inputRule.acceptsFocus,
+              let window = textView.window, window.isKeyWindow, window.attachedSheet == nil,
+              NSApp.modalWindow == nil, let storage = textView.textStorage else { return }
+        window.makeFirstResponder(textView)
         var range = textView.selectedRange()
         range.location = min(range.location, storage.length); range.length = min(range.length, storage.length - range.location)
         if replaceQuery {
@@ -734,8 +785,11 @@ private struct HootComposerEditor: NSViewRepresentable {
     /// from stays mounted, transparent, so the switch back is instant. Its box must let go of the keyboard then, or
     /// typing and Paste land in a box nobody can see.
     @Environment(\.nativeScreenActive) private var onShow
+    @Environment(\.nativeSessionInputScope) private var inputScope
     @Binding var draft: HootComposerDraft
     let ownerID: String?
+    let focusWhenShown: Bool
+    let selected: Bool
     let handle: HootComposerEditorHandle
     let onReturn: () -> Void
     let onFiles: ([URL]) -> Void
@@ -763,6 +817,9 @@ private struct HootComposerEditor: NSViewRepresentable {
         text.isVerticallyResizable = true; text.isHorizontallyResizable = false; text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true; text.textContainer?.lineFragmentPadding = 0
         text.delegate = context.coordinator; text.onFiles = onFiles
+        context.coordinator.text = text
+        text.onWindowAttachment = { [weak coordinator = context.coordinator] in coordinator?.updateFocus() }
+        text.onInputAvailabilityChanged = { [weak coordinator = context.coordinator] in coordinator?.updateFocus() }
         scroll.documentView = text; handle.textView = text
         text.setAccessibilityLabel("Message to Hoot")
         updateNSView(scroll, context: context)
@@ -776,14 +833,16 @@ private struct HootComposerEditor: NSViewRepresentable {
         if ownerChanged {
             // AppKit undo and marked text belong to the old owner too.
             text.undoManager?.removeAllActions()
-            text.unmarkText()
+            text.discardComposition()
         }
         context.coordinator.parent = self
-        text.isEditable = isEnabled && onShow
+        text.inputRule.bind(to: inputScope)
+        text.updateInput(active: inputScope == nil ? onShow : true, enabled: isEnabled)
         text.onFiles = isEnabled ? onFiles : nil
         text.onShow = onShow
-        if !onShow, let window = text.window, window.firstResponder === text { window.makeFirstResponder(nil) }
-        if context.coordinator.raw(text) != draft.text {
+        let composingCurrentDraft = text.hasMarkedText() && !ownerChanged
+            && context.coordinator.lastRenderedDraft == draft.text
+        if !composingCurrentDraft && context.coordinator.raw(text) != draft.text {
             let attributed = NSMutableAttributedString(string: "")
             var remaining = draft.text[...]
             while !remaining.isEmpty {
@@ -796,17 +855,93 @@ private struct HootComposerEditor: NSViewRepresentable {
             }
             attributed.addAttributes([.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor], range: NSRange(location: 0, length: attributed.length))
             let caret = min(text.selectedRange().location, attributed.length)
-            text.textStorage?.setAttributedString(attributed); text.setSelectedRange(NSRange(location: caret, length: 0))
+            text.discardComposition()
+            text.inputRule.withExplicitUpdate {
+                text.textStorage?.setAttributedString(attributed)
+                text.setSelectedRange(NSRange(location: caret, length: 0))
+            }
         }
+        context.coordinator.lastRenderedDraft = draft.text
         context.coordinator.resize(text)
+        context.coordinator.updateFocus()
     }
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HootComposerEditor
         var updating = false
-        init(_ parent: HootComposerEditor) { self.parent = parent }
+        var lastRenderedDraft: String?
+        weak var text: HootComposerTextView?
+        private var wasAvailable = false
+        private var pendingFocus = false
+        private var focusTask: DispatchWorkItem?
+        private var observers: [NSObjectProtocol] = []
+
+        init(_ parent: HootComposerEditor) {
+            self.parent = parent
+            super.init()
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didEndSheetNotification,
+                         NSApplication.didBecomeActiveNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let notifiedWindow = (note.object as? NSWindow).map(ObjectIdentifier.init)
+                    let notificationName = note.name
+                    MainActor.assumeIsolated {
+                        guard let self, let text = self.text, let window = text.window,
+                              notifiedWindow == ObjectIdentifier(window) || notificationName == NSApplication.didBecomeActiveNotification else { return }
+                        if self.parent.focusWhenShown && self.parent.selected && text.inputRule.acceptsFocus {
+                            self.pendingFocus = true
+                            self.restoreFocus()
+                        }
+                    }
+                })
+            }
+        }
+
+        isolated deinit {
+            focusTask?.cancel()
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        }
+
+        func updateFocus() {
+            guard let text else { return }
+            let available = parent.focusWhenShown && parent.selected && text.inputRule.acceptsFocus
+            if !available {
+                let previouslyAvailable = wasAvailable
+                wasAvailable = false
+                pendingFocus = false
+                focusTask?.cancel()
+                if previouslyAvailable, text.window?.firstResponder === text {
+                    let window = text.window
+                    window?.makeFirstResponder(nil)
+                    if let window { DeckTerminalSlot.restoreFocus(in: window, request: false) }
+                }
+                return
+            }
+            if !wasAvailable { pendingFocus = true }
+            wasAvailable = true
+            restoreFocus()
+            guard pendingFocus else { return }
+            focusTask?.cancel()
+            let task = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.restoreFocus() } }
+            focusTask = task
+            DispatchQueue.main.async(execute: task)
+        }
+
+        private func restoreFocus() {
+            guard pendingFocus, parent.focusWhenShown, parent.selected, let text,
+                  text.inputRule.acceptsFocus, let window = text.window, window.isKeyWindow,
+                  window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
+            if window.firstResponder === text { pendingFocus = false; return }
+            if let current = window.firstResponder as? NSView {
+                let hidden = nativeSessionInputRule(for: current).map { !$0.acceptsFocus } ?? false
+                if current.window !== window || current.isHiddenOrHasHiddenAncestor || hidden {
+                    window.makeFirstResponder(nil)
+                } else if NativeKeyboardFocus.isTyping(current) { return }
+            }
+            if window.makeFirstResponder(text) { pendingFocus = false }
+        }
         func raw(_ text: NSTextView) -> String { HootComposerEditor.raw(text) }
         func textDidChange(_ notification: Notification) {
-            guard !updating, parent.onShow, let text = notification.object as? NSTextView, text === parent.handle.textView else { return }
+            guard !updating, let text = notification.object as? NativeSessionTextView,
+                  text.allowsUserInput, !text.hasMarkedText(), text === parent.handle.textView else { return }
             parent.draft.text = raw(text); parent.draft.mentions = parent.draft.activeMentions
             let prefix = (text.string as NSString).substring(to: min(text.selectedRange().location, (text.string as NSString).length))
             // FORK-L1: the picker says what still counts as asking for the @ list (a name can have spaces).
@@ -821,6 +956,7 @@ private struct HootComposerEditor: NSViewRepresentable {
             if parent.handle.height != wanted { Task { @MainActor in parent.handle.height = wanted } }
         }
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard let guarded = textView as? NativeSessionTextView, guarded.allowsUserInput else { return true }
             let previous = selector == #selector(NSResponder.moveUp(_:))
             let next = selector == #selector(NSResponder.moveDown(_:))
             let modifiers = NSEvent.modifierFlags.intersection([.shift, .control, .option, .command])
@@ -838,22 +974,19 @@ private struct HootComposerEditor: NSViewRepresentable {
         }
     }
 }
-final class HootComposerTextView: NSTextView {
+final class HootComposerTextView: NativeSessionTextView {
     var onFiles: (([URL]) -> Void)?
     /// False while its chat is hidden: it takes no keyboard focus and no typed or pasted text (see `onShow` above).
-    var onShow = true
-    override var acceptsFirstResponder: Bool { onShow && super.acceptsFirstResponder }
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        guard onShow else { return }
-        super.insertText(string, replacementRange: replacementRange)
+    var onShow = true {
+        didSet { updateInput(active: inputRule.hasScope ? true : onShow, enabled: inputRule.enabled) }
     }
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(paste(_:)), onShow, isEditable,
+        if menuItem.action == #selector(paste(_:)), allowsUserInput,
            NSPasteboard.general.canReadObject(forClasses: [NSURL.self, NSImage.self], options: nil) { return true }
         return super.validateMenuItem(menuItem)
     }
     override func paste(_ sender: Any?) {
-        guard onShow, isEditable else { return }
+        guard allowsUserInput else { return }
         guard let onFiles else { super.paste(sender); return }
         let board = NSPasteboard.general
         let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
@@ -960,7 +1093,7 @@ struct HootEffortSlider: View {
                     Text(HootComposerModel.effortName(selected)).foregroundStyle(Color.accentColor)
                 }
                 Spacer()
-                Button { showInfo.toggle() } label: { Image(systemName: "info.circle") }
+                NativeSessionButton { showInfo.toggle() } label: { Image(systemName: "info.circle") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help(Self.info).accessibilityLabel("About effort")
             }.font(.system(size: 13, weight: .semibold))

@@ -178,7 +178,7 @@ struct NativeMemoryHelperPart: View {
                     if let run = NativeMemoryActions.runHelper {
                         Divider()
                         NativeMemoryRow(label: "Run now", help: "Read what is new and write the notes now.") {
-                            Button(store.busy == "run-helper" ? "Running…" : "Run now") {
+                            NativeSessionButton(store.busy == "run-helper" ? "Running…" : "Run now") {
                                 let key = store.owner.key
                                 store.act("run-helper") { _ in try await run(key) }
                             }.buttonStyle(.borderedProminent).disabled(store.busy != nil)
@@ -204,9 +204,9 @@ struct NativeMemoryHelperPart: View {
                     Divider()
                     Text("\(store.owner == .hoot ? "Hoot" : "It") should have noted this").font(.subheadline.weight(.medium))
                     HStack(spacing: 8) {
-                        TextField("For example: note it whenever I pick between two designs", text: $correction)
+                        NativeSessionTextField("For example: note it whenever I pick between two designs", text: $correction)
                             .textFieldStyle(.roundedBorder).onSubmit { sendCorrection() }
-                        Button("Add to checklist") { sendCorrection() }
+                        NativeSessionButton("Add to checklist") { sendCorrection() }
                             .disabled(correction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.fixture)
                     }
                     Text("Added to the checklist above, so the helper looks for it from now on.").font(.caption).foregroundStyle(.secondary)
@@ -242,7 +242,7 @@ struct NativeMemoryTidyPart: View {
                     if let run = NativeMemoryActions.runTidy {
                         Divider()
                         NativeMemoryRow(label: "Run now", help: "Merge today's duplicates, settle contradictions and keep the card short.") {
-                            Button(store.busy == "run-tidy" ? "Tidying…" : "Run now") {
+                            NativeSessionButton(store.busy == "run-tidy" ? "Tidying…" : "Run now") {
                                 let key = store.owner.key
                                 store.act("run-tidy") { _ in try await run(key) }
                             }.buttonStyle(.borderedProminent).disabled(store.busy != nil)
@@ -267,13 +267,13 @@ struct NativeMemoryTidyPart: View {
                         if !question.context.isEmpty { Text(question.context).font(.callout).foregroundStyle(.secondary).lineLimit(4) }
                         HStack(spacing: 8) {
                             ForEach(Self.quickAnswers(question), id: \.self) { quick in
-                                Button(quick) { answer(question, quick) }
+                                NativeSessionButton(quick) { answer(question, quick) }
                             }
-                            TextField("Or say it your way", text: Binding(get: { answers[question.id] ?? "" }, set: { answers[question.id] = $0 }))
+                            NativeSessionTextField("Or say it your way", text: Binding(get: { answers[question.id] ?? "" }, set: { answers[question.id] = $0 }))
                                 .textFieldStyle(.roundedBorder).onSubmit { answer(question, answers[question.id] ?? "") }
-                            Button("Answer") { answer(question, answers[question.id] ?? "") }
+                            NativeSessionButton("Answer") { answer(question, answers[question.id] ?? "") }
                                 .buttonStyle(.borderedProminent).disabled((answers[question.id] ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
-                            Button("Dismiss") {
+                            NativeSessionButton("Dismiss") {
                                 store.act("dismiss", done: "Dismissed. It will not be asked again.") { _ = try await $0.dismissQuestion(id: question.id); return nil }
                             }.help("Wave this question away. It is kept under Dismissed and never asked again for this seat.").disabled(store.busy != nil)
                         }
@@ -301,7 +301,7 @@ struct NativeMemoryTidyPart: View {
                                 if let at = question.dismissedAt { Text("Dismissed " + NativeMemoryStore.when(at)).font(.caption).foregroundStyle(.tertiary) }
                             }
                             Spacer(minLength: 8)
-                            Button("Ask again") {
+                            NativeSessionButton("Ask again") {
                                 store.act("reopen", done: "Back in Questions for you") { _ = try await $0.reopenQuestion(id: question.id); return nil }
                             }.disabled(store.busy != nil)
                         }
@@ -346,13 +346,13 @@ struct NativeMemoryFolderPart: View {
                 VStack(spacing: 0) {
                     NativeMemoryRow(label: "Where the memory lives", help: root.path) {
                         HStack {
-                            Button("Show in Finder") { if !store.fixture { NSWorkspace.shared.activateFileViewerSelecting([root]) } }
-                            Button("Move…") { move() }.disabled(store.busy != nil)
+                            NativeSessionButton("Show in Finder") { if !store.fixture { NSWorkspace.shared.activateFileViewerSelecting([root]) } }
+                            NativeSessionButton("Move…") { move() }.disabled(store.busy != nil)
                         }
                     }
                     Divider()
                     NativeMemoryRow(label: "This owner's part", help: store.owner.folder + "/  ·  plain text files you can open in any editor") {
-                        Button("Show in Finder") { if !store.fixture { NSWorkspace.shared.activateFileViewerSelecting([root.appendingPathComponent(store.owner.folder)]) } }
+                        NativeSessionButton("Show in Finder") { if !store.fixture { NSWorkspace.shared.activateFileViewerSelecting([root.appendingPathComponent(store.owner.folder)]) } }
                     }
                     Divider()
                     NativeMemoryRow(label: "Import", help: "Copy a Claude Code or Codex memory folder into this owner's notes. The original is never changed.") {
@@ -361,8 +361,8 @@ struct NativeMemoryFolderPart: View {
                     Divider()
                     NativeMemoryRow(label: "Search index", help: "Rebuilt from the files. Use it after editing many files by hand.") {
                         HStack {
-                            Button("Rebuild") { store.act("reindex") { let r = try await $0.reindex(); return "Read \(r.scanned) files: \(r.added) new, \(r.changed) changed." } }
-                            Button("Back up now") { store.act("backup") { "Backup saved: " + (try await $0.backup()).lastPathComponent } }
+                            NativeSessionButton("Rebuild") { store.act("reindex") { let r = try await $0.reindex(); return "Read \(r.scanned) files: \(r.added) new, \(r.changed) changed." } }
+                            NativeSessionButton("Back up now") { store.act("backup") { "Backup saved: " + (try await $0.backup()).lastPathComponent } }
                         }.disabled(store.busy != nil)
                     }
                 }
@@ -373,7 +373,7 @@ struct NativeMemoryFolderPart: View {
                         Text("Earlier places").font(.headline)
                         Text("Kept as they were when the memory moved.").font(.caption).foregroundStyle(.secondary)
                         ForEach(previous, id: \.self) { url in
-                            HStack { Text(url.path).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle); Spacer(); Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([url]) }.buttonStyle(.borderless) }
+                            HStack { Text(url.path).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle); Spacer(); NativeSessionButton("Show") { NSWorkspace.shared.activateFileViewerSelecting([url]) }.buttonStyle(.borderless) }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -408,10 +408,10 @@ struct NativeMemoryImportButton: View {
             Menu(busy ? "Importing…" : "Import…") {
                 if spaces.isEmpty { Text("No Claude Code or Codex memory found on this Mac") }
                 ForEach(Array(spaces.enumerated()), id: \.offset) { _, space in
-                    Button(space.label) { run(URL(fileURLWithPath: space.root), label: space.label) }
+                    NativeSessionButton(space.label) { run(URL(fileURLWithPath: space.root), label: space.label) }
                 }
                 Divider()
-                Button("Choose a folder…") { choose() }
+                NativeSessionButton("Choose a folder…") { choose() }
             }.fixedSize().disabled(busy)
         }
         .task {

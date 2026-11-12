@@ -53,6 +53,10 @@ public partial class App : Application
       }
       Stage("live-tool-expansion");
       backend.Record = backend.Record with { Busy = true, Events = [.. backend.Record.Events, new(207, "toolCall", "live-step", "Read sample file", Data: JsonSerializer.SerializeToElement(new { path = "sample.cs" }))] }; backend.Updates.Writer.TryWrite(backend.Record); await Task.Delay(200);
+      // The recorded change, reasoning and this step fold into one row; open it to reach the step.
+      var runs = Tree(page).OfType<TerminalDeck.App.Views.Chat.ChatToolRunView>().ToArray();
+      Check("consecutive tool steps fold into one row", runs.Length == 1);
+      foreach (var run in runs) run.Fold.IsExpanded = true; page.UpdateLayout(); await Task.Delay(150);
       var step = Tree(page).OfType<Expander>().Single(e => AutomationProperties.GetName(e).StartsWith("Read sample file", StringComparison.Ordinal)); step.IsExpanded = true;
       backend.Record = backend.Record with { Events = [.. backend.Record.Events, new(208, "toolInputDelta", "live-step", "{\"path\":\"sample.cs\",\"limit\":100}")] }; backend.Updates.Writer.TryWrite(backend.Record); await Task.Delay(150);
       Check("live tool stays expanded while its recorded input updates", Tree(page).OfType<Expander>().Single(e => AutomationProperties.GetName(e).StartsWith("Read sample file", StringComparison.Ordinal)).IsExpanded);

@@ -448,14 +448,14 @@ struct NativeAccountLevelsSection: View {
                 .pickerStyle(.segmented).labelsHidden()
             }
             if rows.count > 8 || !model.search.isEmpty {
-                TextField("Find a project or role", text: $model.search).textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Find a project or role", text: $model.search).textFieldStyle(.roundedBorder)
             }
             ForEach(rows) { row in rowView(row, rows: rows) }
         } header: {
             HStack {
                 Text("Who uses what")
                 Spacer()
-                Button("Switch everything now") {
+                NativeSessionButton("Switch everything now") {
                     if let app = rows.first(where: { $0.kind == .app }) { model.planSwitch(app, rows: rows, names: names) }
                 }
                 .controlSize(.small)
@@ -485,7 +485,7 @@ struct NativeAccountLevelsSection: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if signedOut.contains(effective.id), let account = accounts.first(where: { $0.id == effective.id }) {
                     // Signing in again keeps everything assigned to this account as it is.
-                    Button("\(account.system ? CodingAIAccountLabels.ownLoginLabel(account.provider) : account.name) is signed out. Sign in again") {
+                    NativeSessionButton("\(account.system ? CodingAIAccountLabels.ownLoginLabel(account.provider) : account.name) is signed out. Sign in again") {
                         NativeAccountSignInModel.shared.open(account)
                     }
                     .buttonStyle(.link).font(.caption)
@@ -505,7 +505,7 @@ struct NativeAccountLevelsSection: View {
             }
             .labelsHidden().fixedSize()
             .disabled(model.olderHelper)
-            Button("Switch now") { model.planSwitch(row, rows: rows, names: names) }
+            NativeSessionButton("Switch now") { model.planSwitch(row, rows: rows, names: names) }
                 .controlSize(.small)
                 .disabled(model.olderHelper)
                 .help("Also move the sessions already running under \(row.title)")
@@ -567,10 +567,10 @@ struct NativeAccountSwitchSheet: View {
                 HStack {
                     Spacer()
                     if plan.finished || plan.moves.isEmpty {
-                        Button("Done") { model.plan = nil; dismiss() }.keyboardShortcut(.defaultAction)
+                        NativeSessionButton("Done") { model.plan = nil; dismiss() }.keyboardShortcut(.defaultAction)
                     } else {
-                        Button("Cancel") { model.plan = nil; dismiss() }.disabled(plan.running)
-                        Button(plan.running ? "Switching…" : "Switch now") { model.runPlan() }
+                        NativeSessionButton("Cancel") { model.plan = nil; dismiss() }.disabled(plan.running)
+                        NativeSessionButton(plan.running ? "Switching…" : "Switch now") { model.runPlan() }
                             .buttonStyle(.borderedProminent).disabled(plan.running || plan.toMove.isEmpty)
                     }
                 }

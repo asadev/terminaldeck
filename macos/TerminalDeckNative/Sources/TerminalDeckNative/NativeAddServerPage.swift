@@ -42,7 +42,7 @@ struct NativeAddServerPage: View {
             && (method == "password" ? !password.isEmpty : !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Button("Back to machines") { cancel() }
+                NativeSessionButton("Back to machines") { cancel() }
                     .disabled(model.adding)
                 Text("Add a server").font(.title3.weight(.semibold))
                 if let error = model.addError {
@@ -62,14 +62,14 @@ struct NativeAddServerPage: View {
                     .foregroundStyle(.secondary)
 
                 field("Address", help: "Where the server is. A name like example.com, or a set of numbers like 203.0.113.10.") {
-                    TextField("Address", text: $address)
+                    NativeSessionTextField("Address", text: $address)
                 }
                 field("Port", help: chosenPort.ok ? AddServerRules.portHelp : (chosenPort.sentence ?? ""), warn: !chosenPort.ok) {
-                    TextField("Port", text: $port, prompt: Text("22"))
+                    NativeSessionTextField("Port", text: $port, prompt: Text("22"))
                         .frame(width: 110)
                 }
                 field("The name you sign in with", help: "Whoever set the server up chose this. It is often a word like admin, or your own name.") {
-                    TextField("The name you sign in with", text: $username)
+                    NativeSessionTextField("The name you sign in with", text: $username)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -83,19 +83,19 @@ struct NativeAddServerPage: View {
                 }
                 if method == "password" {
                     field("Password", help: nil) {
-                        SecureField("Password", text: $password)
+                        NativeSessionSecureField("Password", text: $password)
                     }
                 } else {
                     NativeServerKeyField(model: model, key: $key)
                 }
                 if method == "key" && locked {
                     field("The password that opens the key", help: "Keys are often locked with one. It is not the same as the password for the server.") {
-                        SecureField("The password that opens the key", text: $passphrase)
+                        NativeSessionSecureField("The password that opens the key", text: $passphrase)
                     }
                 }
 
                 field("What to call it here", help: "Optional. Leave it empty and the address is used.") {
-                    TextField("What to call it here", text: $name)
+                    NativeSessionTextField("What to call it here", text: $name)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -108,13 +108,13 @@ struct NativeAddServerPage: View {
                 }
 
                 HStack {
-                    Button(model.adding ? "Connecting…" : "Add server") {
+                    NativeSessionButton(model.adding ? "Connecting…" : "Add server") {
                         submit(locked: locked, port: chosenPort.port)
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!filled || model.adding || !projectsReady)
-                    Button("Cancel") { cancel() }
+                    NativeSessionButton("Cancel") { cancel() }
                         .disabled(model.adding)
                 }
             }
@@ -192,7 +192,7 @@ struct NativeServerKeyField: View {
             if routes.list {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(found) { offer in
-                        Button { use(offer) } label: {
+                        NativeSessionButton { use(offer) } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: chosen?.path == offer.path ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(chosen?.path == offer.path ? Color.accentColor : Color.secondary)
@@ -206,9 +206,9 @@ struct NativeServerKeyField: View {
             }
             if routes.panel {
                 HStack {
-                    Button("Choose a file…", action: browse)
+                    NativeSessionButton("Choose a file…", action: browse)
                     if routes.offerPaste {
-                        Button("Paste it instead") {
+                        NativeSessionButton("Paste it instead") {
                             key = AddServerRules.pasteBoxText(fromFile: chosen != nil, typed: key)
                             chosen = nil
                             pasting = true
@@ -225,7 +225,7 @@ struct NativeServerKeyField: View {
                 Text(routes.list ? "Or paste it, including the first and last lines." : "Paste the whole file, including the first and last lines.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                TextEditor(text: Binding(get: { key }, set: { key = $0; chosen = nil }))
+                NativeSessionTextEditor(text: Binding(get: { key }, set: { key = $0; chosen = nil }))
                     .font(.callout.monospaced())
                     .frame(height: 110)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.3)))

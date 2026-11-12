@@ -474,7 +474,7 @@ public enum AiAppsSetup {
                         "claude mcp add --scope user \(AiAppsCopy.channelServer) \\",
                         "  -e NOTIFY_URL=\(url) \\",
                         "  -e NOTIFY_KEY=\(key) \\",
-                        bridge.hasSuffix("/TerminalDeckNativeHelper")
+                        bridge.hasSuffix("/TerminalDeckNativeHelper") || bridge.hasSuffix("/Terminal Deck")
                             ? "  -- \"\(bridge)\" --notify-channel"
                             : "  -- node \"\(bridge)\"",
                         "claude --dangerously-load-development-channels server:\(AiAppsCopy.channelServer)",

@@ -20,8 +20,8 @@ struct ROUTINESSkillVersionsView: View {
                 Text(state["dirty"].bool == false ? "Working files match the adopted version." : "Working files have edits or no adopted baseline.").font(.caption).foregroundStyle(.secondary)
                 Text("Saving keeps every file. Adoption changes files for future runs; it does not change an AI already running.").font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    TextField("Version name", text: $label)
-                    Button("Save version") { perform("skills:version_save", extra: ["label": label, "expectedDigest": state["currentDigest"].string ?? ""]) }.disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pending)
+                    NativeSessionTextField("Version name", text: $label)
+                    NativeSessionButton("Save version") { perform("skills:version_save", extra: ["label": label, "expectedDigest": state["currentDigest"].string ?? ""]) }.disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pending)
                 }
                 let versions = state["versions"].elements ?? []
                 if versions.isEmpty { Text("No saved versions yet.").font(.callout).foregroundStyle(.secondary) }
@@ -44,8 +44,8 @@ struct ROUTINESSkillVersionsView: View {
                             }.frame(maxHeight: 120)
                         }
                         HStack {
-                            Button("Package check") { perform("skills:version_check", extra: ["version": selected]) }
-                            Button("Use this version") { perform("skills:version_adopt", extra: ["version": selected, "expectedDigest": state["currentDigest"].string ?? ""]) }
+                            NativeSessionButton("Package check") { perform("skills:version_check", extra: ["version": selected]) }
+                            NativeSessionButton("Use this version") { perform("skills:version_adopt", extra: ["version": selected, "expectedDigest": state["currentDigest"].string ?? ""]) }
                         }.disabled(pending)
                         let checks = (state["checks"].elements ?? []).filter { $0["version"].string == selected }
                         if let check = checks.first {
@@ -56,7 +56,7 @@ struct ROUTINESSkillVersionsView: View {
                     }
                 }
                 if state["recoveryPending"].bool == true { Text("An interrupted adoption needs recovery. Refresh, then use a version to recover the old files first; refresh again if its digest changed.").font(.caption).foregroundStyle(.orange) }
-                HStack { Button("Refresh") { Task { await refresh() } }.disabled(pending); if pending { ProgressView().controlSize(.small); Text("Saving…").font(.caption) } }
+                HStack { NativeSessionButton("Refresh") { Task { await refresh() } }.disabled(pending); if pending { ProgressView().controlSize(.small); Text("Saving…").font(.caption) } }
             }
             if let problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             if let message { Text(message).font(.caption).foregroundStyle(.secondary) }

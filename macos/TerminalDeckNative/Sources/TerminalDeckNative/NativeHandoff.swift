@@ -279,7 +279,7 @@ struct NativeHandoffButton: View {
     init(owner: DeckMemoryOwner, disabled: Bool = false) { model = .of(owner); self.disabled = disabled }
     init(ownerKey: String, disabled: Bool = false) { self.init(owner: DeckMemoryOwner(key: ownerKey) ?? .hoot, disabled: disabled) }
     var body: some View {
-        Button { model.toggle() } label: {
+        NativeSessionButton { model.toggle() } label: {
             Image(systemName: "doc.text").symbolVariant(model.isOpen ? .fill : .none)
                 .frame(width: 28, height: 28).contentShape(.rect)
         }
@@ -330,7 +330,7 @@ struct NativeHandoffPanel: View {
                 Image(systemName: "doc.text").foregroundStyle(.secondary)
                 Text("Context handoff").font(.headline)
                 Spacer()
-                Button { model.isOpen = false } label: { Image(systemName: "xmark").frame(width: 24, height: 24).contentShape(.rect) }
+                NativeSessionButton { model.isOpen = false } label: { Image(systemName: "xmark").frame(width: 24, height: 24).contentShape(.rect) }
                     .buttonStyle(.borderless).help("Close").accessibilityLabel("Close the handoff")
             }
             HStack(spacing: 8) {
@@ -346,7 +346,7 @@ struct NativeHandoffPanel: View {
                 if !model.earlier.isEmpty {
                     Menu("Earlier (\(model.earlier.count))") {
                         ForEach(model.earlier) { old in
-                            Button(NativeMemoryStore.when(old.createdAt) + (old.id == model.doc?.id ? "  ✓" : "")) { model.show(old) }
+                            NativeSessionButton(NativeMemoryStore.when(old.createdAt) + (old.id == model.doc?.id ? "  ✓" : "")) { model.show(old) }
                         }
                     }.fixedSize().help("Handoffs written earlier for this topic")
                 }
@@ -362,7 +362,7 @@ struct NativeHandoffPanel: View {
                 ProgressView().controlSize(.regular)
                 Text(line).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Text("About: " + model.topicTitle).font(.caption).foregroundStyle(.tertiary)
-                Button("Stop") { model.stop() }.help("Stop writing this handoff")
+                NativeSessionButton("Stop") { model.stop() }.help("Stop writing this handoff")
             }.padding(24)
         case .failed(let why):
             VStack(spacing: 12) {
@@ -370,23 +370,23 @@ struct NativeHandoffPanel: View {
                 Text(why).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 // A plain button: the shared "Try again" presses itself 0.6 s after it appears, which re-asked Hoot right
                 // after a Stop (M25, 11 Oct). A handoff costs an AI turn; it is only written again when the person asks.
-                Button("Try again") { model.generate() }.buttonStyle(.borderedProminent)
+                NativeSessionButton("Try again") { model.generate() }.buttonStyle(.borderedProminent)
             }.padding(24)
         case .idle:
             VStack(spacing: 12) {
                 Image(systemName: "doc.text").font(.title2).foregroundStyle(.secondary)
                 Text("A handoff is a written summary of where this topic stands, ready to give to another AI or person.")
                     .foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                Button("Ask \(model.who) for a handoff") { model.generate() }.buttonStyle(.borderedProminent)
+                NativeSessionButton("Ask \(model.who) for a handoff") { model.generate() }.buttonStyle(.borderedProminent)
             }.padding(24)
         case .ready:
             if model.editing {
-                TextEditor(text: $model.text).font(.system(.body, design: .monospaced))
+                NativeSessionTextEditor(text: $model.text).font(.system(.body, design: .monospaced))
                     .scrollContentBackground(.hidden).padding(10)
             } else if model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 VStack(spacing: 12) {
                     Text("The handoff came back empty.").foregroundStyle(.secondary)
-                    Button("Try again") { model.generate() }.buttonStyle(.borderedProminent)
+                    NativeSessionButton("Try again") { model.generate() }.buttonStyle(.borderedProminent)
                 }.padding(24)
             } else {
                 ScrollView {
@@ -402,18 +402,18 @@ struct NativeHandoffPanel: View {
         let ready = model.phase == .ready && !model.text.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Button { model.copy() } label: {
+                NativeSessionButton { model.copy() } label: {
                     Label(model.copied ? "Copied" : "Copy", systemImage: model.copied ? "checkmark" : "doc.on.doc")
                 }.buttonStyle(.borderedProminent).disabled(!ready)
                     .help("Copy the whole document as Markdown")
-                Button("Save as file…") { model.saveAsFile() }.disabled(!ready)
+                NativeSessionButton("Save as file…") { model.saveAsFile() }.disabled(!ready)
                 if model.editing {
-                    Button("Done") { if model.edited { model.keepEdit() } else { model.editing = false } }.disabled(!ready)
+                    NativeSessionButton("Done") { if model.edited { model.keepEdit() } else { model.editing = false } }.disabled(!ready)
                 } else {
-                    Button("Edit") { model.editing = true }.disabled(!ready).help("Change the text before copying or saving")
+                    NativeSessionButton("Edit") { model.editing = true }.disabled(!ready).help("Change the text before copying or saving")
                 }
                 Spacer(minLength: 0)
-                Button { model.generate() } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
+                NativeSessionButton { model.generate() } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
                     .disabled(model.isWriting).help("Ask \(model.who) to write it again from the conversation as it is now")
             }
             if let note = model.note, model.phase == .ready {

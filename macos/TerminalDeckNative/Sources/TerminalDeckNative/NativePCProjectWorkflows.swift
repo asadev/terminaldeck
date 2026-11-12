@@ -30,12 +30,12 @@ private struct PCProjectWorkflowEditor: View {
                     Text(policy["name"].string ?? "Workflow").tag(policy["id"].string ?? "")
                 }
             }
-            TextField("Workflow name", text: $name)
+            NativeSessionTextField("Workflow name", text: $name)
             Picker("Requirement", selection: $mode) {
                 Text("Off").tag("off")
                 Text("Owner before start").tag("owner-before-start")
             }
-            Button(selected.isEmpty ? "Create workflow" : "Save workflow") { Task { await call(save: true) } }
+            NativeSessionButton(selected.isEmpty ? "Create workflow" : "Save workflow") { Task { await call(save: true) } }
                 .disabled(pending || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if pending { ProgressView().controlSize(.small) }
             if let problem { Text(problem).foregroundStyle(.red) }

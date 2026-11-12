@@ -47,6 +47,9 @@ export interface HeldSessionView {
   reason: string
   /** Opening it shows Claude Code's conversation list, because no exact conversation could be continued. */
   pick: boolean
+  recoveryAction?: string
+  profileId?: string
+  homeProfileId?: string
   /** The tab it was, so the session it opens as can be brought to the front. */
   tabKey?: string
   /** When the last attempt failed. Epoch ms. */
@@ -107,6 +110,9 @@ export function readHeldSessions(raw: unknown): HeldSessionView[] {
       reason,
       provider: typeof entry.provider === 'string' ? entry.provider : 'shell',
       pick: entry.pick === true,
+      ...(typeof entry.recoveryAction === 'string' ? { recoveryAction: entry.recoveryAction } : {}),
+      ...(typeof entry.profileId === 'string' ? { profileId: entry.profileId } : {}),
+      ...(typeof entry.homeProfileId === 'string' ? { homeProfileId: entry.homeProfileId } : {}),
       ...(typeof entry.tabKey === 'string' && entry.tabKey !== '' ? { tabKey: entry.tabKey } : {}),
       at: typeof entry.at === 'number' ? entry.at : 0,
     })

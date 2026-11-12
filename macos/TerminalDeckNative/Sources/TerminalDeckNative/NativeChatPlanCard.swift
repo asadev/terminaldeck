@@ -15,17 +15,17 @@ struct NativeChatPlanCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 240)
             if revising {
-                TextField("What should change?", text: $feedback, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...4)
+                NativeSessionTextField("What should change?", text: $feedback, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...4)
             }
             HStack {
-                Button("Keep planning") { answer("continue", "") }.buttonStyle(.bordered)
+                NativeSessionButton("Keep planning") { answer("continue", "") }.buttonStyle(.bordered)
                 Spacer(minLength: 4)
                 if revising {
-                    Button("Send feedback") { answer("revise", feedback) }.buttonStyle(.borderedProminent)
+                    NativeSessionButton("Send feedback") { answer("revise", feedback) }.buttonStyle(.borderedProminent)
                         .disabled(feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } else {
-                    Button("Revise") { revising = true }.buttonStyle(.bordered)
-                    Button("Approve") { answer("approve", "") }.buttonStyle(.borderedProminent).disabled(plan.isEmpty)
+                    NativeSessionButton("Revise") { revising = true }.buttonStyle(.bordered)
+                    NativeSessionButton("Approve") { answer("approve", "") }.buttonStyle(.borderedProminent).disabled(plan.isEmpty)
                 }
             }
         }.font(.system(size: 12)).padding(12)

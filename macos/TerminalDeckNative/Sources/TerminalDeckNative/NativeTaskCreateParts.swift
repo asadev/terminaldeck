@@ -9,7 +9,7 @@ extension NativeTaskCreatePopup {
         HStack(spacing: 8) {
             Text("Task").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            Button(action: onClose) {
+            NativeSessionButton(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 26, height: 26)
@@ -45,12 +45,12 @@ extension NativeTaskCreatePopup {
             .help(draft.project.isEmpty ? (agentFolder ?? "") : draft.project)
             .accessibilityLabel("Project")
             if typingFolder {
-                TextField("Full folder path", text: $draft.project)
+                NativeSessionTextField("Full folder path", text: $draft.project)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
-                    .focused($focus, equals: .folder)
-                    .onSubmit(save)
-                    .onExitCommand(perform: onClose)
+                    .sessionFocused($focus, equals: .folder)
+                    .sessionOnSubmit(save)
+                    .sessionOnExitCommand(onClose)
                     .frame(maxWidth: 360)
                     .accessibilityLabel("Project folder")
             }
@@ -60,28 +60,28 @@ extension NativeTaskCreatePopup {
     }
 
     var nameField: some View {
-        TextField("Task name", text: Binding(get: { draft.title }, set: { draft.title = String($0.prefix(300)) }))
+        NativeSessionTextField("Task name", text: Binding(get: { draft.title }, set: { draft.title = String($0.prefix(300)) }))
             .textFieldStyle(.plain)
             .font(.title2.weight(.semibold))
-            .focused($focus, equals: .name)
-            .onSubmit(save)
-            .onExitCommand(perform: onClose)
+            .sessionFocused($focus, equals: .name)
+            .sessionOnSubmit(save)
+            .sessionOnExitCommand(onClose)
             .accessibilityLabel("Task name")
     }
 
     @ViewBuilder var descriptionArea: some View {
         if describing || !draft.instructions.isEmpty {
-            TextEditor(text: $draft.instructions)
+            NativeSessionTextEditor(text: $draft.instructions)
                 .font(.body)
                 .scrollContentBackground(.hidden)
-                .focused($focus, equals: .description)
+                .sessionFocused($focus, equals: .description)
                 .padding(4)
                 .frame(minHeight: 84, maxHeight: 200)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
                 .accessibilityLabel("Description")
         } else {
-            Button {
+            NativeSessionButton {
                 describing = true
                 Task { @MainActor in focus = .description }
             } label: {
@@ -151,7 +151,7 @@ extension NativeTaskCreatePopup {
                     .accessibilityAddTraits(.updatesFrequently)
             }
             Spacer(minLength: 8)
-            Button(saving ? "Creating…" : "Create task", action: save)
+            NativeSessionButton(saving ? "Creating…" : "Create task", action: save)
                 .buttonStyle(.borderedProminent)
                 .disabled(saving || !hasTitle)
                 .accessibilityLabel("Create task")

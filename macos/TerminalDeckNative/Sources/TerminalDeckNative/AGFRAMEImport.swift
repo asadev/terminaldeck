@@ -171,7 +171,7 @@ struct AGFRAMEImportSheet: View {
                     Text("Pick which project each folder's agents belong to.").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Cancel import").disabled(model.busy)
+                NativeSessionButton { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Cancel import").disabled(model.busy)
             }.padding(20)
             Divider()
             ScrollView {
@@ -195,7 +195,7 @@ struct AGFRAMEImportSheet: View {
                         Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
                         DeckRetryButton { Task { await model.retryScan() } }.disabled(model.busy)
                     }
-                    Button("Add another folder…", action: model.addFolder).buttonStyle(.link).disabled(model.busy)
+                    NativeSessionButton("Add another folder…", action: model.addFolder).buttonStyle(.link).disabled(model.busy)
                 }.padding(20)
             }.frame(minHeight: 0, maxHeight: 460)
             Divider()
@@ -205,8 +205,8 @@ struct AGFRAMEImportSheet: View {
                     Text("Their files stay where they are; changes you make here are written back.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.busy)
-                Button {
+                NativeSessionButton("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.busy)
+                NativeSessionButton {
                     Task {
                         if await model.importSelected() {
                             onImported(model.outcome ?? "Imported agents.", model.firstImportedProjectID)
@@ -225,8 +225,8 @@ struct AGFRAMEImportSheet: View {
             .sheet(isPresented: Binding(get: { newProjectFolder != nil }, set: { if !$0 { newProjectFolder = nil } })) {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("New project").font(.headline)
-                    TextField("Project name", text: $newProjectName)
-                    HStack { Spacer(); Button("Cancel") { newProjectFolder = nil }; Button("Create project") {
+                    NativeSessionTextField("Project name", text: $newProjectName)
+                    HStack { Spacer(); NativeSessionButton("Cancel") { newProjectFolder = nil }; NativeSessionButton("Create project") {
                         guard let folder = newProjectFolder else { return }
                         Task { if await model.createProject(name: newProjectName, folder: folder) != nil { newProjectFolder = nil; newProjectName = "" } }
                     }.buttonStyle(.borderedProminent).disabled(newProjectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy) }
@@ -246,14 +246,14 @@ struct AGFRAMEImportSheet: View {
                 Text("Project").font(.system(size: 11)).foregroundStyle(.secondary)
                 Menu {
                     ForEach(NativePROJLabels.shared.projects.filter { $0.id != PROJProjects.independentID }) { project in
-                        Button { model.assign(folder: folder.id, projectID: project.id) } label: { DeckRowLabel.project(project) }
+                        NativeSessionButton { model.assign(folder: folder.id, projectID: project.id) } label: { DeckRowLabel.project(project) }
                     }
                     Divider()
-                    Button { model.assign(folder: folder.id, projectID: PROJProjects.independentID) } label: {
+                    NativeSessionButton { model.assign(folder: folder.id, projectID: PROJProjects.independentID) } label: {
                         DeckRowLabel("Independent (no project)", image: DeckRowIcon.independent)
                     }
                     Divider()
-                    Button("New project…") { newProjectFolder = folder.id }
+                    NativeSessionButton("New project…") { newProjectFolder = folder.id }
                 } label: {
                     let project = NativePROJLabels.shared.projects.first { $0.id == folder.projectID }
                     HStack(spacing: 6) {
@@ -273,7 +273,7 @@ struct AGFRAMEImportSheet: View {
                 }
             }
             if folder.candidates.count > 9 {
-                Button(model.expanded.contains(folder.id) ? "Show less" : "+ \(folder.candidates.count - 9) more · Show all") {
+                NativeSessionButton(model.expanded.contains(folder.id) ? "Show less" : "+ \(folder.candidates.count - 9) more · Show all") {
                     if model.expanded.contains(folder.id) { model.expanded.remove(folder.id) } else { model.expanded.insert(folder.id) }
                 }.buttonStyle(.link).font(.system(size: 11))
             }

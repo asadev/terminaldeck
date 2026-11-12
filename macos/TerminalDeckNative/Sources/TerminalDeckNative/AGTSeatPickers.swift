@@ -68,7 +68,7 @@ struct AGTRolePicker: View {
                     }
                 }
                 Divider()
-                Button { newRole = ""; naming = true } label: { Label("New role…", systemImage: "plus") }
+                NativeSessionButton { newRole = ""; naming = true } label: { Label("New role…", systemImage: "plus") }
             } label: {
                 Text(current.map { AGTSeatsStore.shared.title(for: $0) ?? AGTSeats.title(forRole: $0.role ?? agent.id) } ?? "Choose a role")
             }
@@ -79,12 +79,12 @@ struct AGTRolePicker: View {
         }
         .onAppear { if store.fixture == nil { AGTSeatsStore.shared.start() } }
         .alert("New role", isPresented: $naming) {
-            TextField("For example iOS engineer", text: $newRole)
-            Button("Move here") {
+            NativeSessionTextField("For example iOS engineer", text: $newRole)
+            NativeSessionButton("Move here") {
                 let slug = AGTSeats.slug(newRole)
                 if !slug.isEmpty { move(to: slug, title: newRole.trimmingCharacters(in: .whitespacesAndNewlines)) }
             }
-            Button("Cancel", role: .cancel) {}
+            NativeSessionButton("Cancel", role: .cancel) {}
         } message: {
             Text("\(agent.name) moves into the new role and starts its memory. The role it leaves keeps its memory.")
         }

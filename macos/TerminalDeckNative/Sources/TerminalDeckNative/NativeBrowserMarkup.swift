@@ -11,6 +11,9 @@ import TerminalDeckNativeCore
 // MARK: - Annotate
 
 struct NativeBrowserAnnotateView: View {
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeScreenActive) private var screenActive
+    @State private var inputRule = NativeSessionInputRule()
     let tab: NativeBrowserTab
     let shot: NativeBrowserShot
 
@@ -26,7 +29,9 @@ struct NativeBrowserAnnotateView: View {
     /// The web's "over" layout: the frozen picture is the page's own rectangle,
     /// opaque, with the notes card floating over its right-hand edge.
     var body: some View {
-        GeometryReader { geometry in
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
+        return GeometryReader { geometry in
             let fit = NativeBrowserFit.size(shot.image.size, into: geometry.size)
             ZStack(alignment: .topLeading) {
                 Image(nsImage: shot.image)
@@ -55,7 +60,7 @@ struct NativeBrowserAnnotateView: View {
         .overlay(alignment: .bottom) {
             sendBar.frame(maxWidth: 960).padding(.horizontal, 24).padding(.bottom, 20)
         }
-        .onExitCommand(perform: leave)
+        .onExitCommand { if inputRule.acceptsFocus { leave() } }
         .onAppear {
             // Opened by a click on the live page (Annotate's picker): that element is marker 1.
             guard annotations.isEmpty, let first = tab.takeAnnotateStart() else { return }
@@ -73,14 +78,14 @@ struct NativeBrowserAnnotateView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button("Done", action: leave)
+                NativeSessionButton("Done", action: leave)
             }
             if confirming {
                 HStack {
                     Text("Discard \(annotations.count) marker\(annotations.count == 1 ? "" : "s")?")
                     Spacer()
-                    Button("Keep") { confirming = false }
-                    Button("Discard", role: .destructive) { tab.markup = nil }
+                    NativeSessionButton("Keep") { confirming = false }
+                    NativeSessionButton("Discard", role: .destructive) { tab.markup = nil }
                 }
                 .font(.callout)
                 .padding(8)
@@ -239,6 +244,9 @@ struct NativeBrowserBadge: View {
 // MARK: - Draw
 
 struct NativeBrowserDrawView: View {
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @Environment(\.nativeScreenActive) private var screenActive
+    @State private var inputRule = NativeSessionInputRule()
     let tab: NativeBrowserTab
     let shot: NativeBrowserShot
 
@@ -258,7 +266,9 @@ struct NativeBrowserDrawView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
+        return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Picker("Tool", selection: $tool) {
                     ForEach(Self.tools, id: \.0) { entry in
@@ -272,17 +282,17 @@ struct NativeBrowserDrawView: View {
                     Text("Nothing marked yet.").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Undo") { _ = marks.popLast() }.disabled(marks.isEmpty)
-                Button("Clear") { marks = [] }.disabled(marks.isEmpty)
-                Button("Done") {
+                NativeSessionButton("Undo") { _ = marks.popLast() }.disabled(marks.isEmpty)
+                NativeSessionButton("Clear") { marks = [] }.disabled(marks.isEmpty)
+                NativeSessionButton("Done") {
                     commitText()
                     if marks.isEmpty { tab.markup = nil } else { confirming = true }
                 }
                 .confirmationDialog("Discard \(marks.count) marks?", isPresented: $confirming) {
-                    Button("Discard", role: .destructive) { tab.markup = nil }
-                    Button("Keep", role: .cancel) {}
+                    NativeSessionButton("Discard", role: .destructive) { tab.markup = nil }
+                    NativeSessionButton("Keep", role: .cancel) {}
                 }
-                Button("Send…", action: finish)
+                NativeSessionButton("Send…", action: finish)
                     .buttonStyle(.borderedProminent)
                     .disabled(marks.isEmpty)
                     .help(marks.isEmpty ? "Mark something on the page first." : "Save the marked page, then copy it or choose a session to send it to.")
@@ -304,12 +314,12 @@ struct NativeBrowserDrawView: View {
                     }
                     .frame(width: fit.width, height: fit.height)
                     if let textAt {
-                        TextField("Text", text: $typing)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
-                            .focused($textFocused)
+                        NativeSessionTextField("Text", text: $typing)
+                            .sessionFocused($textFocused)
                             .onSubmit(commitText)
                             .onExitCommand { self.textAt = nil; typing = "" }
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
                             .offset(x: min(textAt.x * fit.width, fit.width - 200), y: textAt.y * fit.height - 12)
                     }
                 }
@@ -317,11 +327,12 @@ struct NativeBrowserDrawView: View {
                 .contentShape(.rect)
                 .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
                     .onChanged { value in
-                        guard tool != .text else { return }
+                        guard inputRule.acceptsFocus, tool != .text else { return }
                         let point = BrowserPoint(x: value.location.x / fit.width, y: value.location.y / fit.height)
                         live = live.map { BrowserMarks.extend($0, to: point) } ?? BrowserMarks.begin(tool, at: point)
                     }
                     .onEnded { value in
+                        guard inputRule.acceptsFocus else { return }
                         let point = BrowserPoint(x: value.location.x / fit.width, y: value.location.y / fit.height)
                         if tool == .text {
                             commitText()
@@ -343,7 +354,7 @@ struct NativeBrowserDrawView: View {
     }
 
     private func commitText() {
-        guard let at = textAt else { return }
+        guard inputRule.acceptsFocus, let at = textAt else { return }
         let mark = BrowserMarks.begin(.text, at: at, text: typing.trimmingCharacters(in: .whitespacesAndNewlines))
         if BrowserMarks.isDrawn(mark) { marks.append(mark) }
         textAt = nil
@@ -351,6 +362,7 @@ struct NativeBrowserDrawView: View {
     }
 
     private func finish() {
+        guard inputRule.acceptsFocus else { return }
         commitText()
         guard let drawn = NativeBrowserRender.marked(shot.cgImage, marks) else { return }
         tab.finishDrawing(NSImage(cgImage: drawn, size: shot.image.size), cgImage: drawn, marks: marks.count, from: shot)
@@ -383,10 +395,10 @@ struct NativeBrowserRecordPanel: View {
                 }
                 Spacer()
                 if tab.recording {
-                    Button("Stop") { tab.toggleRecording() }
+                    NativeSessionButton("Stop") { tab.toggleRecording() }
                 }
-                Button("Copy") { tab.copyFlow() }.disabled(tab.steps.isEmpty)
-                Button("Clear") { tab.clearRecording() }.disabled(tab.steps.isEmpty)
+                NativeSessionButton("Copy") { tab.copyFlow() }.disabled(tab.steps.isEmpty)
+                NativeSessionButton("Clear") { tab.clearRecording() }.disabled(tab.steps.isEmpty)
                 if !tab.recording {
                     // Put away; ⋮ ▸ Recorded flow brings it back (lane BR, the web's flow popup).
                     Button { tab.flowHidden = true } label: { Image(systemName: "xmark") }

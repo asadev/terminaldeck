@@ -18,7 +18,14 @@
   document.documentElement.style.setProperty('--max-visual-height', config.maxVisualHeight + 'px')
   theme(config.theme)
   const resize = () => send({ type: 'size', height: Math.ceil(root.getBoundingClientRect().height) })
+  // Measured on DOM changes and timers too: a page that is not on screen (a hidden window, a background
+  // check) paints no frame, so a ResizeObserver alone can leave the box at its starting height.
+  let resizing = 0
+  const soon = () => { if (!resizing) resizing = setTimeout(() => { resizing = 0; resize() }, 30) }
   new ResizeObserver(resize).observe(root)
+  new MutationObserver(soon).observe(root, { subtree: true, childList: true, attributes: true, characterData: true })
+  window.addEventListener('load', soon)
+  if (document.fonts) document.fonts.ready.then(soon)
   window.chrome.webview.addEventListener('message', event => {
     const value = event.data
     if (value.type === 'theme') theme(value.theme)
@@ -36,7 +43,9 @@
     // Only the native host can authorize a call; the app never chooses its server.
     send({ type: 'app-rpc', frame: state.id, request: event.data })
   })
-  const bootstrap = `<script>new ResizeObserver(()=>parent.postMessage({deckSize:document.documentElement.scrollHeight},'*')).observe(document.documentElement);document.addEventListener('click',e=>{const a=e.target.closest('a');if(a){e.preventDefault();parent.postMessage({jsonrpc:'2.0',id:'link-'+Date.now(),method:'ui/open-link',params:{url:a.href}},'*')}});addEventListener('message',e=>{if(e.source!==parent)return;const p=e.data;if(p.method==='ui/notifications/host-context-changed'){for(const [k,v]of Object.entries(p.params.styles.variables))document.documentElement.style.setProperty(k.startsWith('--')?k:'--'+k,v);document.documentElement.style.colorScheme=p.params.theme}});</script>`
+  // The drawing reports its height on resize, DOM changes, load, fonts and a few timers, so it is measured
+  // whether or not the window is on screen. The host still caps it at the visual maximum.
+  const bootstrap = `<script>(()=>{let p=0,l=-1;const m=()=>{p=0;const h=document.documentElement.scrollHeight;if(h!==l){l=h;parent.postMessage({deckSize:h},'*')}};const s=()=>{if(!p)p=setTimeout(m,30)};new ResizeObserver(s).observe(document.documentElement);new MutationObserver(s).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});addEventListener('load',s);document.addEventListener('load',s,true);if(document.fonts)document.fonts.ready.then(s);for(const d of [0,150,500,1200,2500,5000])setTimeout(s,d)})();document.addEventListener('click',e=>{const a=e.target.closest('a');if(a){e.preventDefault();parent.postMessage({jsonrpc:'2.0',id:'link-'+Date.now(),method:'ui/open-link',params:{url:a.href}},'*')}});addEventListener('message',e=>{if(e.source!==parent)return;const p=e.data;if(p.method==='ui/notifications/host-context-changed'){for(const [k,v]of Object.entries(p.params.styles.variables))document.documentElement.style.setProperty(k.startsWith('--')?k:'--'+k,v);document.documentElement.style.colorScheme=p.params.theme}});</script>`
   function drawing(host, source, app = null) {
     const id = crypto.randomUUID()
     const frame = document.createElement('iframe')
@@ -49,7 +58,8 @@
     const cdns = app ? ['https://cdnjs.cloudflare.com', 'https://cdn.jsdelivr.net'].filter(url => requested.includes(url)).join(' ') : 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net'
     const csp = `default-src 'none'; script-src 'unsafe-inline' ${cdns}; style-src 'unsafe-inline' ${cdns}; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`
     const colors = Object.entries(config.theme.colors).map(([k,v]) => '--' + k + ':' + v).join(';')
-    frame.srcdoc = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><style>:root{${colors};color-scheme:${config.theme.dark ? 'dark' : 'light'};color:var(--ink);background:transparent}body{margin:0}img,svg{max-width:100%}</style>${bootstrap}${source}`
+    // Theme variables the drawing instruction names (--text, --muted, --accent, --background).
+    frame.srcdoc = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><style>:root{${colors};--text:var(--ink);color-scheme:${config.theme.dark ? 'dark' : 'light'};color:var(--ink);background:transparent}body{margin:0}img,svg{max-width:100%}</style>${bootstrap}${source}`
     frames.set(frame, { id, app })
     if (app) send({ type: 'app-frame', frame: id })
     host.append(frame)
@@ -105,6 +115,7 @@
       }
     }
     resize()
+    for (const delay of [150, 500, 1200, 2500]) setTimeout(soon, delay)
   }
   if (config.app) drawing(root, config.app.html, config.app)
   else await renderMessage()

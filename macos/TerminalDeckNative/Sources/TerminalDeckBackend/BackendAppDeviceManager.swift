@@ -59,7 +59,72 @@ public actor BackendAppDeviceManager {
         if let inventory { return inventory }; let made = BackendAppDeviceInventory(sources: sources ?? platform.sources(engine: engine), clock: clock); inventory = made; return made
     }
     public func registerInterest(_ viewer: BackendAppDeviceViewer) { windows[viewer.id] = viewer }
+    // 9 Nov (Asad's phone: the device list took 7-13 s, seven asked at once, each running adb, ps and the emulator
+    // tool again): ONE listing at a time for every caller (the panel, the phone, the AI tools), kept `listFresh` seconds
+    // and dropped at once when this Mac's devices change — this app boots, shuts down or manages one, a device's screen
+    // closes, or CoreSimulator's device folders, the AVD folder or the emulators' running folder change
+    // (`BackendAppDeviceListWatch`). A change also reads the list again ahead of the next ask (when anyone asked lately).
+    public static let listFresh: TimeInterval = 5
+    /// After a change, the list is read ahead after this quiet spell (a booting device writes several times).
+    static let readAheadAfterMilliseconds = 700
+    private var listGeneration = 0
+    private var listing: (generation: Int, task: Task<NativeRPCValue, Never>)?
+    private var listed: (generation: Int, at: Date, value: NativeRPCValue)?
+    private var lastAsked: Date?
+    private var readAhead: Task<Void, Never>?
+    private var listWatch: BackendAppDeviceListWatch?
+    private var listWatchTried = false
+
     public func list() async -> NativeRPCValue {
+        startListWatch()
+        lastAsked = clock.now()
+        if let listed, listed.generation == listGeneration, clock.now().timeIntervalSince(listed.at) < Self.listFresh { return listed.value }
+        return await readList()
+    }
+
+    /// The list read now, or the read under way since the last change joined.
+    private func readList() async -> NativeRPCValue {
+        if let listing, listing.generation == listGeneration { return await listing.task.value }
+        let generation = listGeneration
+        let task = Task { await self.listNow() }
+        listing = (generation, task)
+        let value = await task.value
+        if listing?.task == task { listing = nil }
+        if generation == listGeneration { listed = (generation, clock.now(), value) }
+        return value
+    }
+
+    /// This Mac's devices changed: the next ask reads them again, and when someone asked in the last minute the list
+    /// is read ahead (once things are quiet), so that ask is answered at once.
+    public func devicesChanged() {
+        listGeneration += 1
+        listed = nil
+        guard let lastAsked, clock.now().timeIntervalSince(lastAsked) < 60 else { return }
+        readAhead?.cancel()
+        let clock = self.clock
+        readAhead = Task { [weak self] in
+            do { try await clock.sleep(milliseconds: Self.readAheadAfterMilliseconds) } catch { return }
+            guard !Task.isCancelled else { return }
+            await self?.readAheadNow()
+        }
+    }
+
+    /// Read ahead unless an ask since the change already read it.
+    private func readAheadNow() async {
+        if let listed, listed.generation == listGeneration { return }
+        _ = await readList()
+    }
+
+    /// The real Mac's folders are watched (not a test's own device sources).
+    private func startListWatch() {
+        guard !listWatchTried, sources == nil else { return }
+        listWatchTried = true
+        listWatch = BackendAppDeviceListWatch(home: platform.home) { [weak self] in
+            Task { await self?.devicesChanged() }
+        }
+    }
+
+    private func listNow() async -> NativeRPCValue {
         switch engine() {
         case .unavailable(let reason): return BackendAppDeviceParsing.object([("available", .bool(false)), ("reason", .string(reason)), ("devices", .array([]))])
         case .available(let engine):
@@ -85,10 +150,11 @@ public actor BackendAppDeviceManager {
         return await platform.diagnosis(engineAnswered: await inventory.engineAnswered).sentence(home: platform.home)
     }
     public func boot(_ id: String) async throws -> NativeRPCValue {
-        let engine = try requireEngine(), result = await platform.boot(id); await inventoryFor(engine).forgetPending(); return result
+        let engine = try requireEngine(), result = await platform.boot(id); await inventoryFor(engine).forgetPending(); devicesChanged(); return result
     }
     public func shutDown(_ id: String) async throws -> NativeRPCValue {
         let engine = try requireEngine(); await closeSession(id); let result = await platform.shutDown(id); await inventoryFor(engine).forgetPending()
+        devicesChanged()
         if result["ok"].bool == true { await BackendAppDeviceLifecycle.shared.exited([id]) }
         return result
     }
@@ -108,6 +174,7 @@ public actor BackendAppDeviceManager {
         if action != .rename { await closeSession(id) }
         let answer = try await BackendFIXESDeviceManagement(platform: platform).perform(action, id: id, name: name, confirmed: confirmed, rows: rows)
         await inventoryFor(engine).forgetPending()
+        devicesChanged()
         if action == .delete, answer["ok"].bool == true { await BackendAppDeviceLifecycle.shared.exited([id]) }
         return answer
     }
@@ -150,6 +217,7 @@ public actor BackendAppDeviceManager {
             // A picture stream ending is not itself a device exit.
             if case .available(let engine) = engine() {
                 let inventory = inventoryFor(engine); await inventory.forgetPending()
+                devicesChanged()
                 let row = await inventory.list().first { $0["id"].string == id }
                 if row == nil || row?["state"].string == "shutdown" { await BackendAppDeviceLifecycle.shared.exited([id]) }
             }

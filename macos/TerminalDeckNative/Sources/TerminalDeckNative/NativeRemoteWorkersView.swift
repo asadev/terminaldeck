@@ -79,9 +79,9 @@ struct NativeRemoteWorkersView: View {
             if model.connections.isEmpty { Text("No remote workers yet.").font(.callout).foregroundStyle(.secondary) }
             GroupBox("Add a worker") {
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("Name", text: $model.newName)
-                    TextField("https://worker.example.com", text: $model.newURL)
-                    Button("Add worker") { Task { await model.addConnection() } }.disabled(model.newName.isEmpty || model.newURL.isEmpty)
+                    NativeSessionTextField("Name", text: $model.newName)
+                    NativeSessionTextField("https://worker.example.com", text: $model.newURL)
+                    NativeSessionButton("Add worker") { Task { await model.addConnection() } }.disabled(model.newName.isEmpty || model.newURL.isEmpty)
                 }.padding(4)
             }
             if let problem = model.problem { Text(problem).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
@@ -107,17 +107,17 @@ struct NativeRemoteWorkersView: View {
                 } else if let error = check["error"].string { Text(error).font(.caption).foregroundStyle(.red) }
                 else { Text("Not checked yet.").font(.caption).foregroundStyle(.secondary) }
                 HStack {
-                    Button("Check connection") { Task { await model.perform("check", [.init("connection", .string(id))]) } }
-                    Button("Remove") { Task { await model.perform("connection_remove", [.init("connection", .string(id))]) } }
+                    NativeSessionButton("Check connection") { Task { await model.perform("check", [.init("connection", .string(id))]) } }
+                    NativeSessionButton("Remove") { Task { await model.perform("connection_remove", [.init("connection", .string(id))]) } }
                 }
                 HStack {
-                    SecureField("Access token (write-only)", text: Binding(get: { model.tokens[id] ?? "" }, set: { model.tokens[id] = $0 }))
-                    Button("Save token") { Task { await model.saveToken(id) } }.disabled((model.tokens[id] ?? "").isEmpty)
-                    if item["credential"].string == "saved" { Button("Remove token") { Task { await model.perform("credential_remove", [.init("connection", .string(id))]) } } }
+                    NativeSessionSecureField("Access token (write-only)", text: Binding(get: { model.tokens[id] ?? "" }, set: { model.tokens[id] = $0 }))
+                    NativeSessionButton("Save token") { Task { await model.saveToken(id) } }.disabled((model.tokens[id] ?? "").isEmpty)
+                    if item["credential"].string == "saved" { NativeSessionButton("Remove token") { Task { await model.perform("credential_remove", [.init("connection", .string(id))]) } } }
                 }
                 HStack {
-                    TextField("What should it do?", text: Binding(get: { model.prompts[id] ?? "" }, set: { model.prompts[id] = $0 }))
-                    Button("Start") { Task { await model.start(id) } }.disabled((model.prompts[id] ?? "").isEmpty || check["ok"].bool != true)
+                    NativeSessionTextField("What should it do?", text: Binding(get: { model.prompts[id] ?? "" }, set: { model.prompts[id] = $0 }))
+                    NativeSessionButton("Start") { Task { await model.start(id) } }.disabled((model.prompts[id] ?? "").isEmpty || check["ok"].bool != true)
                 }
                 ForEach(model.runs(for: id).prefix(5).indices, id: \.self) { run(model.runs(for: id)[$0]) }
             }.padding(4)
@@ -133,17 +133,17 @@ struct NativeRemoteWorkersView: View {
             if let error = item["error"].string { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
             if let result = item["result"].string { Text(String(result.prefix(1200))).font(.caption).textSelection(.enabled) }
             HStack {
-                if item["canRefresh"].bool == true { Button("Refresh") { Task { await model.perform("refresh", [.init("run", .string(id))]) } } }
-                if item["canStop"].bool == true { Button("Stop") { Task { await model.perform("stop", [.init("run", .string(id))]) } } }
+                if item["canRefresh"].bool == true { NativeSessionButton("Refresh") { Task { await model.perform("refresh", [.init("run", .string(id))]) } } }
+                if item["canStop"].bool == true { NativeSessionButton("Stop") { Task { await model.perform("stop", [.init("run", .string(id))]) } } }
                 if item["canAbandon"].bool == true {
-                    Button("Abandon") { Task { await model.perform("abandon", [.init("run", .string(id))]) } }
+                    NativeSessionButton("Abandon") { Task { await model.perform("abandon", [.init("run", .string(id))]) } }
                         .help("End this run here only when it can no longer be stopped or refreshed. Nothing is sent; the worker may still run it.")
                 }
             }
             if item["canResume"].bool == true {
                 HStack {
-                    TextField("Continue with…", text: Binding(get: { model.messages[id] ?? "" }, set: { model.messages[id] = $0 }))
-                    Button("Resume") { Task { await model.resume(id) } }.disabled((model.messages[id] ?? "").isEmpty)
+                    NativeSessionTextField("Continue with…", text: Binding(get: { model.messages[id] ?? "" }, set: { model.messages[id] = $0 }))
+                    NativeSessionButton("Resume") { Task { await model.resume(id) } }.disabled((model.messages[id] ?? "").isEmpty)
                 }
             }
         }.padding(.vertical, 2)

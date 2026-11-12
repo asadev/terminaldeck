@@ -111,11 +111,11 @@ struct SearchField: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-            TextField(placeholder, text: $text)
+            NativeSessionTextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
-                .focused($focused)
+                .sessionFocused($focused)
                 .onAppear { focused = true }
-                .onExitCommand { onEscape?() }
+                .sessionOnExitCommand { onEscape?() }
                 .accessibilityLabel(placeholder)
             if busy { ProgressView().controlSize(.mini) }
         }

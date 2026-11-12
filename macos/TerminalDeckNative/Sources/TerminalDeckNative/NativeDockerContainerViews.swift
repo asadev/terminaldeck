@@ -52,13 +52,13 @@ struct NativeDockerContainerHeader: View {
     }
 
     @ViewBuilder private var lifecycleButtons: some View {
-        Button(action: onStart) { Label("Start", systemImage: "play") }
+        NativeSessionButton(action: onStart) { Label("Start", systemImage: "play") }
             .disabled(lookOnly || busy || item.running != false || mayStopOrRestart)
             .help(lookOnly ? NativeServerLookOnlyBanner.reason : "Start \(item.name)")
-        Button(action: onStop) { Label("Stop", systemImage: "stop") }
+        NativeSessionButton(action: onStop) { Label("Stop", systemImage: "stop") }
             .disabled(lookOnly || busy || !mayStopOrRestart)
             .help(lookOnly ? NativeServerLookOnlyBanner.reason : "Stop \(item.name)")
-        Button(action: onRestart) { Label("Restart", systemImage: "arrow.clockwise") }
+        NativeSessionButton(action: onRestart) { Label("Restart", systemImage: "arrow.clockwise") }
             .disabled(lookOnly || busy || !mayStopOrRestart)
             .help(lookOnly ? NativeServerLookOnlyBanner.reason : "Restart \(item.name)")
     }
@@ -70,7 +70,7 @@ struct NativeDockerContainerHeader: View {
     }
 
     private var removeButton: some View {
-        Button(role: .destructive, action: onRemove) {
+        NativeSessionButton(role: .destructive, action: onRemove) {
             Label("Remove…", systemImage: "trash")
         }
         .disabled(lookOnly || busy || item.running != false || mayStopOrRestart)
@@ -215,11 +215,11 @@ struct NativeDockerLogsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search logs", text: $search)
+                NativeSessionTextField("Search logs", text: $search)
                     .textFieldStyle(.plain)
                     .accessibilityLabel("Search container logs")
                 if !search.isEmpty {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    NativeSessionButton { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .help("Clear log search")
@@ -239,7 +239,7 @@ struct NativeDockerLogsView: View {
                 Spacer(minLength: 8)
                 Toggle("Follow tail", isOn: $followTail).toggleStyle(.checkbox)
                     .help("Keep the newest matching log line in view")
-                Button("Clear", action: onClear)
+                NativeSessionButton("Clear", action: onClear)
                     .disabled(lines.isEmpty)
                     .help("Clear the displayed log buffer")
             }

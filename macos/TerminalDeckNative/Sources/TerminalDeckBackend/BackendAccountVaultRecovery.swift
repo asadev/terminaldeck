@@ -19,7 +19,7 @@ public struct BackendAccountVaultRecovery: Sendable {
         // contacted, stopped or restarted; trust uses their code requirements.
         let root = configuration.dataDirectory.appendingPathComponent("host/agents")
         for child in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
-            paths.append(child.appendingPathComponent("TerminalDeckNativeHelper").path)
+            paths.append(BackendHOSTLaunchAgent.keeperExecutable(in: child).path)
         }
         return Array(Set(paths.compactMap { $0 }.filter { FileManager.default.fileExists(atPath: $0) })).sorted()
     }

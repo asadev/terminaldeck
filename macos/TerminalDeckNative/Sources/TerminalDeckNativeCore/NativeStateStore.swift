@@ -158,9 +158,50 @@ public actor NativeStateStore {
     public func startSessionLedger() throws {
         try writable()
         guard ledger == nil else { return }
-        let next = try NativeOpenSessionLedger(saved: getOpenSessions())
-        try commit(state.setting("openSessions", .array(next.snapshot())))
+        let stamps = state[Self.openTabsKey].fields.map { fields in
+            Dictionary(fields.compactMap { field in field.value.number.map { (field.key, $0) } }, uniquingKeysWith: { first, _ in first })
+        }
+        let next = try NativeOpenSessionLedger(saved: getOpenSessions(), openStamps: stamps)
+        try commit(ledgerState(next))
         ledger = next
+    }
+    /// 10 Nov: state.json's map of saved tab → when it was last open (see NativeOpenSessionLedger.openStamps).
+    public static let openTabsKey = "openTabs"
+    /// The openSessions list and, once the stamps are ready, the openTabs map, written together in one save.
+    private func ledgerState(_ ledger: NativeOpenSessionLedger) -> NativeRPCValue {
+        var next = state.setting("openSessions", .array(ledger.snapshot()))
+        if let stamps = ledger.openStamps(now: clock()) {
+            next = next.setting(Self.openTabsKey, .object(stamps.sorted { $0.key < $1.key }.map { .init($0.key, .number($0.value)) }))
+        }
+        return next
+    }
+    /// The previous run's stamps (nil: a state.json from before the rule, so the one-time clean-up must run).
+    public func ledgerPreviousOpenStamps() throws -> [String: Double]? { guard let ledger else { throw ledgerUnavailable() }; return ledger.previousOpenStamps }
+    public func ledgerOpenStamp(_ saved: NativeRPCValue) throws -> Double? { guard let ledger else { throw ledgerUnavailable() }; return ledger.openStamp(saved) }
+    public func ledgerLiveKeys() throws -> Set<String> { guard let ledger else { throw ledgerUnavailable() }; return ledger.liveKeys() }
+    public func ledgerStampsReady() throws -> Bool { guard let ledger else { throw ledgerUnavailable() }; return ledger.stampsReady }
+    /// The one-time clean-up: keeps `kept` with the given stamps, removes every other pending tab, and from now on
+    /// writes the stamps. One save.
+    public func ledgerCleanUp(keep stamps: [String: Double], discard: Set<String>) throws {
+        try writable()
+        guard var next = ledger else { throw ledgerUnavailable() }
+        for row in getOpenSessions() { if let at = stamps[NativeOpenSessionLedger.stampKey(row)] { next.assignOpenStamp(row, at: at) } }
+        next.discardPending(discard); next.markStampsReady()
+        ledger = next
+        if !next.isFrozen { try commit(ledgerState(next)) }
+    }
+    /// Removes pending tabs the restore found closed, stale or never open (they are not held: they do not come back).
+    public func ledgerDiscardPending(_ keys: Set<String>) throws {
+        guard !keys.isEmpty else { return }
+        try changeLedger { $0.discardPending(keys) }
+    }
+    /// A copy of state.json next to it (`state.json.<suffix>`), kept before the one-time clean-up rewrites the list.
+    /// nil when there is no file (memory store) or the copy failed; an existing copy is never overwritten.
+    public func keepCopyOfStateFile(suffix: String) -> String? {
+        guard let file, ownership == .exclusive, FileManager.default.fileExists(atPath: file.path) else { return nil }
+        let copy = file.path + "." + suffix
+        if FileManager.default.fileExists(atPath: copy) { return copy }
+        do { try FileManager.default.copyItem(atPath: file.path, toPath: copy); return copy } catch { return nil }
     }
     public func ledgerNote(_ id: String, saved: NativeRPCValue) throws { try changeLedger { try $0.note(id, saved: saved) } }
     public func ledgerUpdate(_ id: String, patch: NativeRPCValue) throws { try changeLedger { try $0.update(id, patch: patch) } }
@@ -179,26 +220,28 @@ public actor NativeStateStore {
         let now = clock()
         guard !next.isFrozen, now - ledgerActivityWrittenAt >= 60_000 else { return }
         ledgerActivityWrittenAt = now
-        try commit(state.setting("openSessions", .array(next.snapshot())))
+        try commit(ledgerState(next))
     }
     private var ledgerActivityWrittenAt: Double = 0
     public func ledgerGet(_ id: String) throws -> NativeRPCValue { guard let ledger else { throw ledgerUnavailable() }; return ledger.get(id) ?? .null }
     public func ledgerEntries() throws -> [NativeOpenSessionLedger.Entry] { guard let ledger else { throw ledgerUnavailable() }; return ledger.entries() }
     public func ledgerFlush() throws {
         guard let ledger else { throw ledgerUnavailable() }
-        if !ledger.isFrozen { try commit(state.setting("openSessions", .array(ledger.snapshot()))) }
+        if !ledger.isFrozen { try commit(ledgerState(ledger)) }
     }
     public func ledgerFreeze() throws { guard var next = ledger else { throw ledgerUnavailable() }; next.freeze(); ledger = next }
     public func heldSessions() throws -> [NativeHeldSession] { guard let ledger else { throw ledgerUnavailable() }; return ledger.heldSessions() }
     @discardableResult
-    public func holdSession(_ saved: NativeRPCValue, reason: String, pick: Bool = false) throws -> NativeHeldSession {
+    public func holdSession(_ saved: NativeRPCValue, reason: String, pick: Bool = false, recoveryAction: String? = nil) throws -> NativeHeldSession {
         var result: NativeHeldSession?
         let at = clock()
-        try changeLedger { result = try $0.hold(saved, reason: reason, pick: pick, at: at) }
+        try changeLedger { result = try $0.hold(saved, reason: reason, pick: pick, at: at, recoveryAction: recoveryAction) }
         guard let result else { throw ledgerUnavailable() }
         return result
     }
-    public func failHeldSession(_ key: String, reason: String) throws { let at = clock(); try changeLedger { $0.failHeld(key, reason: reason, at: at) } }
+    public func failHeldSession(_ key: String, reason: String, pick: Bool? = nil, recoveryAction: String? = nil) throws {
+        let at = clock(); try changeLedger { $0.failHeld(key, reason: reason, at: at, pick: pick, recoveryAction: recoveryAction) }
+    }
     @discardableResult
     public func releaseHeldSession(_ key: String) throws -> Bool {
         var released = false
@@ -212,7 +255,7 @@ public actor NativeStateStore {
         try change(&next)
         let snapshot = next.snapshot()
         guard snapshot != previous || next.heldSessions() != previousHeld else { return }
-        if !next.isFrozen { try commit(state.setting("openSessions", .array(snapshot))) }
+        if !next.isFrozen { try commit(ledgerState(next)) }
         ledger = next
     }
     private func ledgerUnavailable() -> NativeRPCError { .init(code: "ledger-uninitialized", message: "Start the native session ledger before changing recovery records") }

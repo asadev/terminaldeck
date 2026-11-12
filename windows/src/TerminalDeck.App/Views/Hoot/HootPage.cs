@@ -218,7 +218,7 @@ public sealed partial class HootPage : Grid, IDisposable
       return;
     }
     var state = Model.State; var sequence = state.Lines.LastOrDefault()?.Sequence ?? 0;
-    var changes = string.Join('|', state.Lines.TakeLast(30).Select(l => l.Id + l.Text + l.Waiting)) + string.Join('|', state.Turns.TakeLast(30).Select(t => t.State + t.Answer)) + state.Waiting + state.Busy;
+    var changes = string.Join('|', state.Lines.TakeLast(30).Select(l => l.Id + l.Text + l.Waiting + l.Revision)) + string.Join('|', state.Turns.TakeLast(30).Select(t => t.State + t.Answer)) + state.Waiting + state.Busy;
     if (renderedSequence == sequence && renderedChanges == changes) return;
     var nearBottom = history.ScrollableHeight - history.VerticalOffset < 80; renderedSequence = sequence; renderedChanges = changes; var desired = new List<UIElement>();
     if (state.Lines.Length == 0)
@@ -245,8 +245,12 @@ public sealed partial class HootPage : Grid, IDisposable
     }
     if (state.Lines.Length > visibleMessages) desired.Add(ActionButton("Earlier messages", () =>
     { visibleMessages += 300; renderedSequence = -1; Render(); return Task.CompletedTask; }));
-    foreach (var line in state.Lines.TakeLast(visibleMessages))
+    // Consecutive tool steps of one turn fold into one row, like the chat page; a failed step stands alone.
+    var shownLines = state.Lines.TakeLast(visibleMessages).ToArray(); var steps = new HootSteps(this, state);
+    foreach (var segment in ChatToolRuns.Segments(shownLines, l => l.Kind, (a, b) => a.TurnId == b.TurnId, l => l.Kind == "tool" && steps.Row(l).Row is { } stepRow && ChatToolRuns.Failed(stepRow)))
     {
+      if (segment.IsRun) { AddToolRun(segment.Items, steps, desired); continue; }
+      var line = segment.Items[0];
       var turnState = state.Turns.FirstOrDefault(t => t.Id == line.TurnId) is { } currentTurn ? currentTurn.State + currentTurn.Answer : "";
       if (messageCache.TryGetValue(line.Id, out var cached))
       {
@@ -290,16 +294,12 @@ public sealed partial class HootPage : Grid, IDisposable
       }
       else if (line.Kind == "tool")
       {
-        var tools = new StackPanel { Spacing = 8 }; tools.Children.Add(ChatAppearance.ToolStep(line.Text, line.Details, line.Waiting));
-        var sourceId = state.Turns.FirstOrDefault(t => t.Id == line.TurnId)?.ChatId;
-        var record = Chats?.List().FirstOrDefault(c => c.Definition.Id == sourceId);
-        if (record is not null)
-        {
-          var prefix = record.Definition.Id + ":" + line.TurnId + ":";
-          var nativeId = line.Id.StartsWith(prefix, StringComparison.Ordinal) ? line.Id[prefix.Length..] : line.Id;
-          if (ChatProjection.Rows(record).FirstOrDefault(r => r.Kind == "tool" && r.Id == nativeId) is { } toolRow)
-            tools.Children.Add(ChatToolContent.Render(record, toolRow, DataDirectory ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview"), McpNavigation?.Invoke(record.Definition.Id), () => Chats!.Get(record.Definition.Id), CopyMessage, ShowMessageError, async dialog => await dialog.ShowAsync(), this));
-        }
+        // A step that stands alone (a failed one): its own card, in the same words as the folded lines.
+        var (toolRow, record) = steps.Row(line); var tools = new StackPanel { Spacing = 8 };
+        tools.Children.Add(toolRow is null ? ChatAppearance.ToolStep(line.Text, line.Details, line.Waiting)
+          : ChatAppearance.ToolStep(ChatToolRuns.Title(toolRow, toolRow.Waiting), ChatToolRuns.Detail(toolRow), toolRow.Waiting, ChatToolRuns.Failed(toolRow)));
+        if (toolRow is not null && record is not null)
+          tools.Children.Add(ChatToolContent.Render(record, toolRow, DataDirectory ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview"), McpNavigation?.Invoke(record.Definition.Id), () => Chats!.Get(record.Definition.Id), CopyMessage, ShowMessageError, async dialog => await dialog.ShowAsync(), this));
         row = tools;
       }
       else if (line.Kind == "background")
@@ -335,7 +335,53 @@ public sealed partial class HootPage : Grid, IDisposable
     }
     var visibleIds = state.Lines.TakeLast(visibleMessages).Select(l => l.Id).ToHashSet();
     foreach (var id in messageCache.Keys.Where(id => !visibleIds.Contains(id)).ToArray()) { messageCache.Remove(id); richMessages.Remove(id); }
+    foreach (var id in toolRuns.Keys.Where(id => !visibleIds.Contains(id[8..]) || !desired.Contains(toolRuns[id])).ToArray()) toolRuns.Remove(id);
+    foreach (var id in sourceRows.Keys.Where(id => !steps.Used.Contains(id)).ToArray()) sourceRows.Remove(id);
     if (nearBottom) DispatcherQueue.TryEnqueueHandled(() => history.ChangeView(null, history.ScrollableHeight, null, true));
+  }
+  private readonly Dictionary<string, ChatToolRunView> toolRuns = [];
+  // S2 (review, 8 Nov): the page redraws on every word Hoot writes. A source chat's rows are built once
+  // and kept until that chat changes (its events), and the chat list is read once per redraw.
+  private readonly Dictionary<string, (ChatEvent[] Events, int Count, long Last, IReadOnlyList<ChatRow> Rows)> sourceRows = [];
+  private IReadOnlyList<ChatRow> SourceRows(ChatRecord record)
+  {
+    var events = record.Events; var last = events.Length == 0 ? 0 : events[^1].Sequence;
+    if (sourceRows.TryGetValue(record.Definition.Id, out var kept) && (ReferenceEquals(kept.Events, events) || kept.Count == events.Length && kept.Last == last)) return kept.Rows;
+    var rows = ChatProjection.Rows(record); sourceRows[record.Definition.Id] = (events, events.Length, last, rows); return rows;
+  }
+  // One redraw's view of the source chats behind Hoot's tool lines.
+  private sealed class HootSteps(HootPage page, HootState state)
+  {
+    private Dictionary<string, ChatRecord>? chats;
+    public HashSet<string> Used { get; } = [];
+    public (ChatRow? Row, ChatRecord? Record) Row(HootLine line)
+    {
+      var sourceId = state.Turns.FirstOrDefault(t => t.Id == line.TurnId)?.ChatId;
+      if (sourceId is null) return (null, null);
+      if (chats is null) { chats = []; foreach (var chat in page.Chats?.List() ?? []) chats.TryAdd(chat.Definition.Id, chat); }
+      if (!chats.TryGetValue(sourceId, out var record)) return (null, null);
+      Used.Add(sourceId);
+      var prefix = record.Definition.Id + ":" + line.TurnId + ":";
+      var nativeId = line.Id.StartsWith(prefix, StringComparison.Ordinal) ? line.Id[prefix.Length..] : line.Id;
+      return (page.SourceRows(record).FirstOrDefault(r => r.Kind == "tool" && r.Id == nativeId), record);
+    }
+  }
+  // A turn's tool steps as one folded row. Each line keeps the source chat's step (its status, input
+  // and output) so the row names the running step; MCP Apps stay under it.
+  private void AddToolRun(IReadOnlyList<HootLine> lines, HootSteps steps, List<UIElement> desired)
+  {
+    var sources = new Dictionary<string, ChatRecord>(); var rows = new List<ChatRow>();
+    foreach (var line in lines)
+    {
+      var (found, record) = steps.Row(line);
+      if (found is not null && record is not null) sources[found.Id] = record;
+      rows.Add(found ?? new ChatRow("tool", line.Id, line.Text, line.Details, line.Waiting));
+    }
+    var key = "toolrun:" + lines[0].Id;
+    if (!toolRuns.TryGetValue(key, out var view)) toolRuns[key] = view = new ChatToolRunView { MaxWidth = 760 };
+    view.Update(rows, row => ChatAppearance.ToolStep(ChatToolRuns.Title(row, row.Waiting), ChatToolRuns.Detail(row), row.Waiting, ChatToolRuns.Failed(row)),
+      row => sources.TryGetValue(row.Id, out var record) ? ChatToolContent.Render(record, row, DataDirectory ?? Path.Combine(Path.GetTempPath(), "deck-chat-preview"), McpNavigation?.Invoke(record.Definition.Id), () => Chats!.Get(record.Definition.Id), CopyMessage, ShowMessageError, async dialog => await dialog.ShowAsync(), this) : null);
+    desired.Add(view);
   }
   private static string TurnWords(HootTurnState state) => state switch
   { HootTurnState.Queued => "Waiting", HootTurnState.Finished => "Done", HootTurnState.Stopped => "Stopped", HootTurnState.Failed => "Needs attention", HootTurnState.Uncertain => "Delivery unconfirmed", _ => "Working" };

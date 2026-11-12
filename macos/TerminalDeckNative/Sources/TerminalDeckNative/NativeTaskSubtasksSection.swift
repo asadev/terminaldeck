@@ -67,7 +67,7 @@ struct SubtasksTable: View {
         let withMeta = model.extras != nil
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Button { collapsed.toggle() } label: {
+                NativeSessionButton{ collapsed.toggle() } label: {
                     HStack(spacing: 8) {
                 Image(systemName: "chevron.down").rotationEffect(.degrees(collapsed ? -90 : 0)).foregroundStyle(.secondary)
                 Text("Subtasks").font(.callout.weight(.semibold))
@@ -83,7 +83,7 @@ struct SubtasksTable: View {
                     }.frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(SIDEBARRowStyle())
                     .accessibilityLabel(collapsed ? "Expand subtasks" : "Collapse subtasks")
-                Button { sortOpen.toggle() } label: {
+                NativeSessionButton{ sortOpen.toggle() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.up.arrow.down")
                         if sort != "manual" { Text(sorts.first { $0.0 == sort }?.1 ?? "") }
@@ -95,7 +95,7 @@ struct SubtasksTable: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Sort by").font(.caption2.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.top, 6)
                         ForEach(sorts.filter { withMeta || !$0.2 }, id: \.0) { key, label, _ in
-                            Button {
+                            NativeSessionButton{
                                 sort = key
                                 sortOpen = false
                             } label: {
@@ -107,7 +107,7 @@ struct SubtasksTable: View {
                     }
                     .padding(.bottom, 6).frame(width: 180)
                 }
-                Button { adding = true } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }
+                NativeSessionButton{ adding = true } label: { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Add subtask").accessibilityLabel("New subtask")
             }
             .font(.callout)
@@ -129,7 +129,7 @@ struct SubtasksTable: View {
                     if adding {
                         AddSubtaskRow(onAdd: { model.addSubtask($0) }, onCancel: { adding = false })
                     } else {
-                        Button { adding = true } label: {
+                        NativeSessionButton{ adding = true } label: {
                             Label("Add Task", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 35, alignment: .leading).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 8)
@@ -157,7 +157,7 @@ struct SubtaskLine: View {
         let meta = model.extras?.subtaskMeta[row.id]
         HStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button { model.setSubtaskDone(row, !row.done) } label: {
+                NativeSessionButton{ model.setSubtaskDone(row, !row.done) } label: {
                     if row.done {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(TaskTone.completed)
                     } else {
@@ -175,7 +175,7 @@ struct SubtaskLine: View {
             }
             .frame(width: 96, alignment: .leading)
             if withMeta {
-                Button { priorityOpen.toggle() } label: {
+                NativeSessionButton{ priorityOpen.toggle() } label: {
                     Image(systemName: meta?.priority != nil ? "flag.fill" : "flag")
                         .foregroundStyle(meta?.priority != nil ? CrmColor.flag(meta?.priority) : Color(nsColor: .tertiaryLabelColor))
                 }
@@ -185,7 +185,7 @@ struct SubtaskLine: View {
                 .popover(isPresented: $priorityOpen, arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(["Critical", "High", "Medium", "Low"], id: \.self) { p in
-                            Button {
+                            NativeSessionButton{
                                 priorityOpen = false
                                 model.changeSubtaskMeta(row.id, priority: .some(p))
                             } label: {
@@ -196,7 +196,7 @@ struct SubtaskLine: View {
                         }
                         if meta?.priority != nil {
                             Divider()
-                            Button {
+                            NativeSessionButton{
                                 priorityOpen = false
                                 model.changeSubtaskMeta(row.id, priority: .some(nil))
                             } label: {
@@ -208,7 +208,7 @@ struct SubtaskLine: View {
                     }
                     .padding(.vertical, 4).frame(width: 180)
                 }
-                Button { dueOpen.toggle() } label: {
+                NativeSessionButton{ dueOpen.toggle() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "calendar")
                         if let due = meta?.dueDate { Text(relativeDay(due)) }
@@ -226,7 +226,7 @@ struct SubtaskLine: View {
                     }
                 }
             }
-            Button { model.deleteSubtask(row) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
+            NativeSessionButton{ model.deleteSubtask(row) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(.tertiary).opacity(hovering ? 1 : 0)
                 .frame(width: 28, alignment: .trailing)
                 .accessibilityLabel("Remove subtask \"\(row.title)\"")
@@ -248,15 +248,15 @@ struct AddSubtaskRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "circle.dashed").foregroundStyle(.quaternary)
-            TextField("Task Name or type '/' for commands", text: Binding(get: { text }, set: { text = String($0.prefix(300)) }))
+            NativeSessionTextField("Task Name or type '/' for commands", text: Binding(get: { text }, set: { text = String($0.prefix(300)) }))
                 .textFieldStyle(.plain)
-                .focused($focused)
+                .sessionFocused($focused)
                 .onAppear { focused = true }
-                .onSubmit(save)
-                .onExitCommand(perform: onCancel)
+                .sessionOnSubmit(save)
+                .sessionOnExitCommand(onCancel)
                 .accessibilityLabel("Add subtask")
-            Button("Cancel", action: onCancel).controlSize(.small)
-            Button("Save ↵", action: save).buttonStyle(.borderedProminent).tint(TaskTone.accent).controlSize(.small)
+            NativeSessionButton("Cancel", action: onCancel).controlSize(.small)
+            NativeSessionButton("Save ↵", action: save).buttonStyle(.borderedProminent).tint(TaskTone.accent).controlSize(.small)
                 .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 8)

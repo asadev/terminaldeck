@@ -64,7 +64,35 @@ public actor BackendNativeLedger: BackendSessionLedger {
         if let noSkills = input.noSkills { fields.append(.init("noSkills", .bool(noSkills))) }
         append("confineDeviceId", deviceKey)
         if input.chat == true { fields.append(.init("chat", .bool(true))) }   // a restart brings it back as a chat
+        // 10 Nov (Asad: Commander came back without its seat): the project the tab was opened for and its effort come
+        // back with it (before, a restart started it with no project and lost what its seat is resolved from).
+        append("projectId", input.projectId ?? session.projectId)
+        append("effort", input.effort)
+        // 10 Nov: who opened the tab, and when this process started (what tells an unused tab from a used one).
+        append(NativeOpenSessionLedger.openedByKey, openedBy(input))
+        fields.append(.init(NativeOpenSessionLedger.startedAtKey, .number(session.createdAt)))
         return .object(fields)
+    }
+    /// Who opened a tab: "restore" (a restart or a keeper restart brought it back), "hoot", "agent" (an AI app, a
+    /// session AI's tool, a task or a routine) or "person".
+    public static func openedBy(_ input: BackendCreateSessionInput, restoring: Bool = BackendAGSLaunchScope.restoring) -> String {
+        if restoring { return "restore" }
+        if input.taskID != nil || input.taskProject != nil || input.originRoutineId != nil || input.originApp != nil || input.origin == .app { return "agent" }
+        if input.origin == .copilot { return "hoot" }
+        return "person"
+    }
+    /// 10 Nov (Asad: the label and the restart must be the account the session really runs on): a session that
+    /// changed account while it ran (an in-place switch, also one the keeper applied while the app was closed) is
+    /// written down with that account and the folder it runs in, so a restart starts it on the same account.
+    public func followAccount(_ session: BackendSessionMeta) async {
+        guard session.exitCode == nil, let saved = try? await store.ledgerGet(session.id), saved.fields != nil else { return }
+        let profile = session.profileId.map(NativeRPCValue.string) ?? .null
+        let home = session.homeProfileId.map(NativeRPCValue.string) ?? .missing
+        let savedHome = saved["homeProfileId"].string.map(NativeRPCValue.string) ?? .missing
+        guard saved["profileId"] != profile || savedHome != home else { return }
+        var next = saved.setting("profileId", profile)
+        next = session.homeProfileId == nil ? next.removing("homeProfileId") : next.setting("homeProfileId", home)
+        do { try await store.ledgerNote(session.id, saved: next) } catch { errors.append(error.localizedDescription) }
     }
 
     public func removed(sessionID: String, reason: BackendRemovalReason) async {

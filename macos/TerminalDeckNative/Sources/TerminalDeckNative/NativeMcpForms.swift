@@ -279,7 +279,7 @@ struct McpPrimitiveControl: View {
             .fixedSize()
             .disabled(disabled)
         case .number, .integer:
-            TextField("", text: Binding(
+            NativeSessionTextField("", text: Binding(
                 get: { typed ?? (value?.number.map(OrderedJSON.jsNumber) ?? "") },
                 set: { text in
                     typed = text
@@ -294,7 +294,7 @@ struct McpPrimitiveControl: View {
                 if let typed, McpSchema.number(typed, integer: kind == .integer) != next { self.typed = nil }
             }
         default:
-            TextField("", text: Binding(
+            NativeSessionTextField("", text: Binding(
                 get: { value.map(mcpPlainString) ?? "" },
                 set: { onValue($0.isEmpty ? nil : .string($0)) }
             ))
@@ -337,7 +337,7 @@ struct McpArrayControl: View {
                         copy[index] = next ?? .null
                         onValue(.array(copy))
                     }
-                    Button {
+                    NativeSessionButton {
                         var copy = items
                         copy.remove(at: index)
                         rowIDs.remove(at: index)
@@ -349,7 +349,7 @@ struct McpArrayControl: View {
                     .accessibilityLabel("Remove item \(index + 1)")
                 }
             }
-            Button("Add item") {
+            NativeSessionButton("Add item") {
                 rowIDs.append(UUID())
                 onValue(.array(items + [kind == .boolean ? .bool(false) : kind == .string ? .string("") : .null]))
             }
@@ -409,7 +409,7 @@ struct McpAddFormView: View {
     let projectPath: String?
     let mode: Mode
     let start: McpFormStart?
-    let onSubmit: @MainActor ([String: Any]) async throws -> McpAddResult
+    private let submitRequest: @MainActor ([String: Any]) async throws -> McpAddResult
     let onAdded: @MainActor (String) -> Void
     let onCancel: @MainActor () -> Void
     private let lifecycleEnabled: Bool
@@ -428,7 +428,7 @@ struct McpAddFormView: View {
         self.projectPath = projectPath
         self.mode = mode
         self.start = start
-        self.onSubmit = onSubmit
+        self.submitRequest = onSubmit
         self.onAdded = onAdded
         self.onCancel = onCancel
         self.lifecycleEnabled = lifecycleEnabled
@@ -470,19 +470,19 @@ struct McpAddFormView: View {
                 }
                 GridRow {
                     caption("Name")
-                    TextField("", text: $draft.name, prompt: Text("filesystem"))
+                    NativeSessionTextField("", text: $draft.name, prompt: Text("filesystem"))
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
-                        .onSubmit(submit)
+                        .sessionOnSubmit(submit)
                 }
                 GridRow {
                     caption(stdio ? "Command" : "Address")
-                    TextField("", text: stdio ? $draft.command : $draft.url,
+                    NativeSessionTextField("", text: stdio ? $draft.command : $draft.url,
                               prompt: Text(stdio ? "npx -y @modelcontextprotocol/server-filesystem ~/Documents" : "https://example.com/mcp"))
                         .textFieldStyle(.roundedBorder)
                         .font(.callout.monospaced())
                         .autocorrectionDisabled()
-                        .onSubmit(submit)
+                        .sessionOnSubmit(submit)
                 }
                 GridRow(alignment: .top) {
                     HStack(spacing: 4) {
@@ -518,8 +518,8 @@ struct McpAddFormView: View {
 
             HStack(spacing: 8) {
                 Spacer()
-                Button("Cancel") { onCancel() }.disabled(busy)
-                Button(busy ? (editing ? "Saving…" : "Adding…") : editing ? "Save changes" : "Add server", action: submit)
+                NativeSessionButton("Cancel") { onCancel() }.disabled(busy)
+                NativeSessionButton(busy ? (editing ? "Saving…" : "Adding…") : editing ? "Save changes" : "Add server", action: submit)
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || missing != nil)
                     .help(missing ?? "")
@@ -548,7 +548,7 @@ struct McpAddFormView: View {
         let request = draft.request(projectPath: selectedPath.isEmpty ? nil : selectedPath)
         Task { @MainActor in
             do {
-                let result = try await onSubmit(request)
+                let result = try await submitRequest(request)
                 busy = false
                 if result.ok {
                     if !editing { draft = McpAddDraft() }

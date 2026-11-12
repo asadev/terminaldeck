@@ -126,7 +126,7 @@ public actor BackendRemoteHost {
     /// lane of its own. Inputs keep their order among themselves, but never wait behind another frame (a watch, a still,
     /// a list) and never hold the connection's reading: the next frame is opened at once, so a run of pointer moves is
     /// never queued behind one slow answer.
-    public static let inputLane: Set<String> = ["sims.input"]
+    public static let inputLane: Set<String> = ["sims.input", "sims.touch"]
     /// m5-direct-only (Asad, 3 Nov: "it takes so long to appear … when I type something, it sometimes feels like it has
     /// some kind of load"): opening a session and typing into it run in their own lane. They keep their order among
     /// themselves (an attach, then its keys) but never wait behind another frame (measured on the phones: an attach
@@ -1395,6 +1395,8 @@ public actor BackendRemoteHost {
         // Round 3 (Reviewer M6): a phone shows Record only to a Mac that offers it (an older Mac would close the
         // connection on the unknown message).
         "sims.record": ["sims.record"],
+        // 9 Nov: a finger on a simulator or emulator as it moves (an older Mac would refuse the unknown message).
+        "sims.touch": ["sims.touch"],
         "localhost": ["ports", "tunnel.open", "tunnel.close", "net.open", "net.data", "net.ack", "net.close"],
         "upload": ["upload.begin", "upload.data", "upload.end", "upload.cancel"], "credential": ["credential.ack", "credential.answer", "credential.deny"],
         "github": ["github.read", "github.connect", "github.cancel", "github.disconnect"], "host.control": ["host.status", "host.restart", "host.stop"],

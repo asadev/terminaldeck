@@ -140,7 +140,7 @@ public enum BackendHOSTResourceFactory {
     }
 
     private static func validatePinnedHelper(_ helper: URL, paths: BackendHOSTPaths, version: String) throws {
-        let expected = paths.directory.appendingPathComponent(version, isDirectory: true).appendingPathComponent("TerminalDeckNativeHelper")
+        let expected = BackendHOSTLaunchAgent.keeperExecutable(in: paths.directory.appendingPathComponent(version, isDirectory: true))
         guard helper.resolvingSymlinksInPath().path == expected.resolvingSymlinksInPath().path else {
             throw BackendHOSTFailure.invalid("The account helper was not pinned to the running host version.")
         }

@@ -97,7 +97,7 @@ struct TasksLinkButton: View {
     }
 
     var body: some View {
-        Button(title, action: action)
+        NativeSessionButton(title, action: action)
             .buttonStyle(.link)
             .help(help ?? "")
     }
@@ -129,7 +129,7 @@ struct TasksTextArea: View {
     var minHeight: CGFloat = 64
 
     var body: some View {
-        TextEditor(text: Binding(get: { text }, set: { text = String($0.prefix(limit)) }))
+        NativeSessionTextEditor(text: Binding(get: { text }, set: { text = String($0.prefix(limit)) }))
             .font(.body)
             .scrollContentBackground(.hidden)
             .padding(4)
@@ -203,9 +203,9 @@ struct GoalForm: View {
         let parents = Goals.options(Goals.parentChoices(goals, id: goal?.id))
         TasksFormBox {
             TasksField("Goal") {
-                TextField("What the work is for", text: Binding(get: { draft.title }, set: { draft.title = String($0.prefix(200)) }))
+                NativeSessionTextField("What the work is for", text: Binding(get: { draft.title }, set: { draft.title = String($0.prefix(200)) }))
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(save)
+                    .sessionOnSubmit(save)
             }
             TasksField("Description") {
                 TasksTextArea(text: $draft.description,
@@ -228,10 +228,10 @@ struct GoalForm: View {
                 }
             }
             HStack(spacing: 8) {
-                Button(goal == nil ? "Add goal" : "Save", action: save)
+                NativeSessionButton(goal == nil ? "Add goal" : "Save", action: save)
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("Cancel", action: onCancel)
+                NativeSessionButton("Cancel", action: onCancel)
                     .buttonStyle(.bordered)
                     .disabled(busy)
                     .keyboardShortcut(.cancelAction)
@@ -293,7 +293,7 @@ struct CrmTasksBodyView: View {
         let minutes = TasksRules.keptOpenMinutes(task.keepOpenUntil, now: now)
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Button { TasksStore.shared.openTask(task.id) } label: {
+                NativeSessionButton { TasksStore.shared.openTask(task.id) } label: {
                     VStack(alignment: .leading, spacing: 3) {
                     Text(task.title).font(.body.weight(.medium)).multilineTextAlignment(.leading)
                     Text(task.createdAt > 0 ? "Created " + TaskList.createdLabel(task.createdAt, today: TaskList.ymdOf(now)) : "Creation date unavailable")
@@ -332,7 +332,7 @@ struct CrmTasksBodyView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if minutes != nil || task.keepAliveUntilClose == true, let onCloseSession {
-                Button("Close session") { onCloseSession(task.id) }
+                NativeSessionButton("Close session") { onCloseSession(task.id) }
                     .buttonStyle(.bordered)
                     .disabled(busy)
                     .help("Close the finished session now. Its conversation can still be resumed.")
@@ -341,9 +341,9 @@ struct CrmTasksBodyView: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
         .contextMenu {
-            Button("Open task") { TasksStore.shared.openTask(task.id) }
+            NativeSessionButton("Open task") { TasksStore.shared.openTask(task.id) }
             if minutes != nil || task.keepAliveUntilClose == true, let onCloseSession {
-                Button("Close session") { onCloseSession(task.id) }.disabled(busy)
+                NativeSessionButton("Close session") { onCloseSession(task.id) }.disabled(busy)
             }
         }
     }

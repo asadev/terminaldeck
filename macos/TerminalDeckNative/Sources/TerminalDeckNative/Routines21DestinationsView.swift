@@ -133,10 +133,10 @@ struct Routines21DestinationsView: View {
                 Text("Send results to").font(.headline)
                 Spacer()
                 Menu("Add destination") {
-                    Button("Webhook") { model.add("webhook") }
-                    if model.connections.contains(where: { $0.kind == "whatsapp" }) { Button("WhatsApp") { model.add("whatsapp") } }
+                    NativeSessionButton("Webhook") { model.add("webhook") }
+                    if model.connections.contains(where: { $0.kind == "whatsapp" }) { NativeSessionButton("WhatsApp") { model.add("whatsapp") } }
                     // Telegram is always offered: with no connection yet, its row carries the form that adds one.
-                    Button("Telegram") { model.add("telegram") }
+                    NativeSessionButton("Telegram") { model.add("telegram") }
                 }.controlSize(.small)
             }
             Text("Every run stays in its report chat. Choose any extra places to send it.").font(.callout).foregroundStyle(.secondary)
@@ -155,22 +155,22 @@ struct Routines21DestinationsView: View {
             HStack {
                 Text(Routines21Destination.title(destination.kind)).font(.callout.weight(.semibold))
                 Spacer()
-                Button { model.destinations.removeAll { $0.id == destination.id } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Remove destination").accessibilityLabel("Remove \(destination.label)")
+                NativeSessionButton { model.destinations.removeAll { $0.id == destination.id } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Remove destination").accessibilityLabel("Remove \(destination.label)")
             }
-            TextField("Destination name", text: binding.label).textFieldStyle(.roundedBorder)
+            NativeSessionTextField("Destination name", text: binding.label).textFieldStyle(.roundedBorder)
             if destination.kind == "webhook" {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Webhook address").font(.caption).foregroundStyle(.secondary)
-                    TextField("https://…", text: binding.url).textFieldStyle(.roundedBorder)
+                    NativeSessionTextField("https://…", text: binding.url).textFieldStyle(.roundedBorder)
                 }
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Secret header name").font(.caption).foregroundStyle(.secondary)
-                        TextField("Authorization", text: binding.secretHeader).textFieldStyle(.roundedBorder)
+                        NativeSessionTextField("Authorization", text: binding.secretHeader).textFieldStyle(.roundedBorder)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Secret (optional)").font(.caption).foregroundStyle(.secondary)
-                        SecureField(destination.hasSecret ? "Saved · enter to replace" : "Enter secret", text: binding.replacementSecret).textFieldStyle(.roundedBorder)
+                        NativeSessionSecureField(destination.hasSecret ? "Saved · enter to replace" : "Enter secret", text: binding.replacementSecret).textFieldStyle(.roundedBorder)
                     }
                 }
                 if destination.hasSecret { Text("Secret saved · ••••••••").font(.caption).foregroundStyle(.secondary) }
@@ -191,7 +191,7 @@ struct Routines21DestinationsView: View {
                 }
             }
             if canTest {
-                HStack { Button(model.testing == destination.id ? "Sending…" : "Send test message") { Task { await model.test(destination) } }.disabled(model.testing != nil); if let status = model.testStatus[destination.id] { Text(status).font(.caption).foregroundStyle(.secondary) } }
+                HStack { NativeSessionButton(model.testing == destination.id ? "Sending…" : "Send test message") { Task { await model.test(destination) } }.disabled(model.testing != nil); if let status = model.testStatus[destination.id] { Text(status).font(.caption).foregroundStyle(.secondary) } }
                 Text("Sending a test also saves these result destinations.").font(.caption).foregroundStyle(.secondary)
             } else { Text("Save the routine before sending a test message.").font(.caption).foregroundStyle(.secondary) }
         }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
@@ -199,10 +199,10 @@ struct Routines21DestinationsView: View {
     private var telegramConnectionForm: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Add a Telegram connection").font(.caption.weight(.semibold))
-            TextField("Connection name", text: $model.newLabel).textFieldStyle(.roundedBorder)
-            SecureField("Bot token (from @BotFather)", text: $model.newToken).textFieldStyle(.roundedBorder)
-            TextField("Telegram chat ID", text: $model.newChatID).textFieldStyle(.roundedBorder)
-            Button(model.adding ? "Adding…" : "Add connection") { Task { await model.addTelegram() } }
+            NativeSessionTextField("Connection name", text: $model.newLabel).textFieldStyle(.roundedBorder)
+            NativeSessionSecureField("Bot token (from @BotFather)", text: $model.newToken).textFieldStyle(.roundedBorder)
+            NativeSessionTextField("Telegram chat ID", text: $model.newChatID).textFieldStyle(.roundedBorder)
+            NativeSessionButton(model.adding ? "Adding…" : "Add connection") { Task { await model.addTelegram() } }
                 .controlSize(.small).disabled(model.adding || model.newToken.isEmpty || model.newChatID.isEmpty)
         }
     }
@@ -216,7 +216,7 @@ struct Routines21DestinationsView: View {
             }
         }
         if chats.isEmpty || !chats.contains(where: { $0.id == destination.chatID }) {
-            TextField(destination.kind == "whatsapp" ? "Chat or group ID" : "Telegram chat ID", text: binding.chatID)
+            NativeSessionTextField(destination.kind == "whatsapp" ? "Chat or group ID" : "Telegram chat ID", text: binding.chatID)
         }
     }
 }

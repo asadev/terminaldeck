@@ -64,7 +64,9 @@ public enum BackendINT2PhoneAccessLevel: String, CaseIterable, Sendable {
         // A chat's model and effort; its permission mode is Full control (BackendPhoneChats checks it).
         "chats.set",
         // 31 Oct: driving a simulator or emulator, starting or stopping it, and sending an annotated still.
-        "sims.input", "sims.power", "sims.annotate", "sims.record"]
+        "sims.input", "sims.power", "sims.annotate", "sims.record",
+        // 9 Nov: a finger on a simulator or emulator as it moves.
+        "sims.touch"]
     /// Hoot only: the Hoot conversation's reads and its say/start/stop, never files, memory or answers.
     public static let hootMessages: Set<String> = ["chats.app.read", "chats.app.bridge", "hello", "ping", "hoot.hello", "hoot.attach", "hoot.detach", "hoot.older",
         "hoot.bye", "hoot.state", "hoot.sessions", "hoot.log", "hoot.pending",

@@ -9,7 +9,7 @@ struct NativeAppsDetailTabButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Text(title)
                 .font(.callout)
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
@@ -100,11 +100,11 @@ struct NativeAppsEnvironmentRow: View {
                 : "Set when this database was created.") {
                 if editable {
                     HStack(spacing: 8) {
-                        Button(editing ? "Cancel" : "Replace value") {
+                        NativeSessionButton(editing ? "Cancel" : "Replace value") {
                             value = ""
                             editing.toggle()
                         }
-                        Button("Remove…", role: .destructive) { removing = true }
+                        NativeSessionButton("Remove…", role: .destructive) { removing = true }
                     }
                     .disabled(busy)
                 } else {
@@ -113,9 +113,9 @@ struct NativeAppsEnvironmentRow: View {
             }
             if editing && editable {
                 HStack(spacing: 8) {
-                    SecureField("Replacement value", text: $value)
+                    NativeSessionSecureField("Replacement value", text: $value).textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Replacement value for \(key.key)")
-                    Button("Save replacement") {
+                    NativeSessionButton("Save replacement") {
                         let replacement = value
                         value = ""
                         editing = false
@@ -127,8 +127,8 @@ struct NativeAppsEnvironmentRow: View {
         }
         .padding(.vertical, 4)
         .alert("Remove \(key.key) from \(appName)?", isPresented: $removing) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove setting", role: .destructive, action: onRemove)
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Remove setting", role: .destructive, action: onRemove)
                 .disabled(busy || !editable)
         } message: {
             Text("The app will no longer receive this setting. You can add it again with a new value.")
@@ -155,22 +155,22 @@ struct NativeAppsNewEnvironmentRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Add a setting").font(.callout.weight(.medium))
             NativeSettingRow(label: "Name", help: "Use letters, numbers and underscores, such as API_KEY.") {
-                TextField("API_KEY", text: $key).frame(minWidth: 160, maxWidth: 260)
+                NativeSessionTextField("API_KEY", text: $key).textFieldStyle(.roundedBorder).frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("New setting name")
             }
             NativeSettingRow(label: "Value") {
-                SecureField("New value", text: $value).frame(minWidth: 160, maxWidth: 260)
+                NativeSessionSecureField("New value", text: $value).textFieldStyle(.roundedBorder).frame(minWidth: 160, maxWidth: 260)
                     .accessibilityLabel("New setting value")
             }
             if protectedKey {
                 NativeSettingsProse(text: "This setting controls the database’s saved login. This editor cannot change that login.")
                     .font(.callout)
-                Button("Clear name") { key = ""; value = "" }
+                NativeSessionButton("Clear name") { key = ""; value = "" }
             } else if existingKeys.contains(key) {
                 NativeSettingsProse(text: "This setting already exists. Choose Replace value above to change it.")
                     .font(.callout)
             }
-            Button("Add setting") {
+            NativeSessionButton("Add setting") {
                 let name = key
                 let replacement = value
                 value = ""
@@ -231,7 +231,7 @@ struct NativeAppsBackupScheduleEditor: View {
             }
             if enabled {
                 NativeSettingRow(label: "Daily at", help: "Use the server’s time, in 24-hour form: 03:00 means 3 am.") {
-                    TextField("03:00", text: $time).frame(width: 90)
+                    NativeSessionTextField("03:00", text: $time).textFieldStyle(.roundedBorder).frame(width: 90)
                         .accessibilityLabel("Daily backup time on the server")
                 }
                 NativeSettingRow(label: "Keep latest") {
@@ -242,7 +242,7 @@ struct NativeAppsBackupScheduleEditor: View {
                     NativeCodingAINotice(tone: .warn, text: "Enter a time from 00:00 to 23:59.")
                 }
             }
-            Button(saveTitle) {
+            NativeSessionButton(saveTitle) {
                 onSave(NativeAppsBackupSchedule(enabled: enabled, time: time, retentionCount: retentionCount))
             }
             .disabled(busy || (enabled && !validTime))
@@ -324,15 +324,15 @@ struct NativeAppsDetailConfirmationSheet: View {
             NativeSettingsProse(text: request.message(appName: appName))
             if request.needsName {
                 Text("Type \(appName) to confirm.").font(.callout)
-                TextField("App name", text: $typedName)
+                NativeSessionTextField("App name", text: $typedName)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .accessibilityLabel("Type \(appName) to confirm")
             }
             HStack(spacing: 8) {
                 Spacer()
-                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
-                Button(request.buttonTitle, role: .destructive) { onConfirm(typedName) }
+                NativeSessionButton("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                NativeSessionButton(request.buttonTitle, role: .destructive) { onConfirm(typedName) }
                     .disabled(busy || (request.needsName && !NativeAppsRules.matchesConfirmation(typed: typedName, name: appName)))
             }
         }

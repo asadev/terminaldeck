@@ -146,6 +146,7 @@ struct NativeHootScreen: View {
         }
         .opacity(profile ? 0 : 1).allowsHitTesting(!profile).accessibilityHidden(profile)
         // Hidden under the profile, the chat's box lets go of the keyboard (its draft stays).
+        .nativeSessionInputScope(ownerID: "hoot/" + chosenMachine + (remote == nil ? "/" + chat.conversationID : ""))
         .environment(\.nativeScreenActive, screenActive && !profile)
         // Hoot's profile takes the whole page under the tab strip (it draws its own header).
         if profile { HootProfileView(onBack: { HootProfileRoute.close() }) }

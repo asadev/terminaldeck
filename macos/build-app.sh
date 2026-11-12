@@ -247,6 +247,12 @@ done
 if [ "${TD_NATIVE_STANDALONE:-0}" = "1" ]; then
   mkdir -p "$APP/Contents/Library/LaunchDaemons"
   cp "$PKG/Support/MacReach/dev.terminaldeck.app.mac-reach.plist" "$APP/Contents/Library/LaunchDaemons/"
+  # One app to macOS (9 Nov): the session keepers are Terminal Deck's own background items (SMAppService). launchd starts
+  # the app's own program, which hands over to the copied-out keeper, so Login Items and privacy name only Terminal Deck.
+  # Only the installed release app registers them; a test copy's items name its own bundle and are never registered.
+  source "$HERE/../scripts/mac-keeper-items.sh"
+  td_install_keeper_items "$PKG/Support/SessionHostAgents" "$APP" "${TD_BUNDLE_ID:-dev.terminaldeck.app}"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")" = "$EXE" ] || { echo 'error: the keeper items start Contents/MacOS/TerminalDeckNative; the app program name changed' >&2; exit 1; }
 fi
 
 # Siri / Shortcuts (lane R): App Intents metadata, which swift build never makes. Before signing.

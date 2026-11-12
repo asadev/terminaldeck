@@ -27,6 +27,8 @@ actor BackendFIXESUsageCache {
         var enumerator: FileManager.DirectoryEnumerator?
         var files: [CatalogFile] = []
         var validationCursor = 0
+        var validated = false
+        var validationOwed = false
         var progress = 0
         var retainedBytes = 0
         var limited = false
@@ -83,14 +85,21 @@ actor BackendFIXESUsageCache {
 
     /// Directory discovery also has a cursor: even a large folder can return
     /// a useful partial answer without a synchronous all-files stat pass.
-    func catalogue(project: String, scope: NativeTranscriptScope, deadline: Double) throws -> CatalogueRead {
+    func catalogue(project: String, scope: NativeTranscriptScope, deadline: Double, revalidate: Bool = true) throws -> CatalogueRead {
         let directories = try NativeTranscriptPaths.projectDirectories(project, scope: scope)
         let key = NativeTranscriptPaths.resolved(project) + "\n" + directories.joined(separator: "\n") + "\n" + (scope.projectFolders ?? []).joined(separator: "\n") + "\n" + String(scope.maximumDirectoryEntries)
         let signature = directories.map { directory -> String in
             let date = try? URL(fileURLWithPath: directory).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             return directory + "=" + String(date?.timeIntervalSince1970 ?? 0)
         }.joined(separator: "\n")
-        var catalogue = catalogues[key].flatMap { $0.signature == signature ? $0 : nil } ?? Catalogue(signature: signature)
+        let cached = catalogues[key].flatMap { $0.signature == signature ? $0 : nil }
+        var catalogue = cached ?? Catalogue(signature: signature)
+        // A new read checks appends again. Continuations of that same read must not restart a completed stat
+        // walk while they are still parsing a large transcript; otherwise each chunk rechecks the same files.
+        if revalidate, cached != nil {
+            if catalogue.validated { catalogue.validationCursor = 0; catalogue.validated = false }
+            else { catalogue.validationOwed = true }
+        }
         var visited = 0
         while catalogue.directory < directories.count, visited < 128, Self.budgetNow() < deadline {
             try Task.checkCancellation()
@@ -121,7 +130,7 @@ actor BackendFIXESUsageCache {
             }
         }
         var scanning = catalogue.directory < directories.count
-        if !scanning {
+        if !scanning, !catalogue.validated {
             // Appends do not change a directory's date. Recheck file metadata
             // with its own cursor so warm reads notice changes without polling.
             var checked = 0
@@ -136,7 +145,12 @@ actor BackendFIXESUsageCache {
                 catalogue.progress += 1
             }
             scanning = catalogue.validationCursor < catalogue.files.count
-            if !scanning { catalogue.validationCursor = 0 }
+            if !scanning {
+                if catalogue.validationOwed {
+                    // A later read may have arrived after a file in the checked prefix was appended.
+                    catalogue.validationOwed = false; catalogue.validationCursor = 0; scanning = true
+                } else { catalogue.validated = true }
+            }
         }
         catalogues[key] = catalogue
         if catalogues.count > 12 { for old in Array(catalogues.keys) where old != key { catalogues[old] = nil; break } }

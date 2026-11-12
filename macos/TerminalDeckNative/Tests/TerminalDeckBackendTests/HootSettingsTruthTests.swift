@@ -45,7 +45,7 @@ final class HootSettingsTruthTests: XCTestCase, @unchecked Sendable {
             let plan = try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: nil, extra: flags)
             let session = try XCTUnwrap(plan.setup?.session)
             if mode == "default" {
-                XCTAssertTrue(session["approvalPolicy"].isNullish, mode)
+                XCTAssertEqual(session["approvalPolicy"].string, "on-request", mode)
             } else {
                 XCTAssertEqual(session["sandbox"].string, mode)
                 XCTAssertEqual(session["approvalPolicy"].string, mode == "danger-full-access" ? "never" : "on-request", // R39/R73: full bypass never asks.
@@ -221,6 +221,6 @@ final class HootSettingsTruthTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(none.setup?.session["developerInstructions"].string, ChatMarkdown.instruction, "No file, nothing of the folder's added")
         let noneGemini = try BackendHootChatLaunchPlan(provider: .gemini, cwd: empty.path, sessionID: nil, extra: [])
         XCTAssertEqual(noneGemini.setup?.instructions, "")
-        XCTAssertEqual(noneGemini.setup?.optionalInstructions, ChatMarkdown.instruction)
+        XCTAssertEqual(noneGemini.setup?.optionalInstructions, ChatMarkdown.instruction + "\n\n" + BackendANDROIDSessionPhoneNote.browserLine)
     }
 }

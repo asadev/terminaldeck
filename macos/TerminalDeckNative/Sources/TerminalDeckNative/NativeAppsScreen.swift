@@ -30,6 +30,8 @@ struct NativeAppsScreen: View {
                 .onAppear { model.backToList() }
             } else if let app = model.selectedApp, model.selectedID != nil {
                 NativeAppsDetailView(model: model, app: app, onBack: model.backToList)
+                    .id(app.id)
+                    .nativeSessionInputScope(ownerID: "server-app/" + serverID + "/" + app.id)
             } else if showingServer {
                 NativeAppsSRV2ServerPage(serverID: serverID, serverName: serverName,
                     writesDisabled: model.busy != nil || !model.canChange, onBack: { showingServer = false })
@@ -66,11 +68,11 @@ struct NativeAppsScreen: View {
             HStack(alignment: .top, spacing: 12) {
                 NativeSettingsHead(title: "Apps", blurb: "Sites, tools and databases running on this server.")
                 Spacer(minLength: 12)
-                Button { showingServer = true } label: { Label("Server", systemImage: "server.rack") }
+                NativeSessionButton { showingServer = true } label: { Label("Server", systemImage: "server.rack") }
                     .disabled(model.busy != nil)
-                Button { model.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                NativeSessionButton { model.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(model.loading || model.busy != nil)
-                Button { model.newApp() } label: { Label("New app", systemImage: "plus") }
+                NativeSessionButton { model.newApp() } label: { Label("New app", systemImage: "plus") }
                     .disabled(model.busy != nil || !model.canChange)
                     .help(model.writesUnavailableReason ?? "Create an app on this server.")
             }
@@ -80,13 +82,13 @@ struct NativeAppsScreen: View {
                 NativePageNote("Checking server support…", busy: true).frame(height: 28)
             } else if let reason = model.writesUnavailableReason {
                 NativeSettingsProse(text: reason).font(.callout)
-                Button("Check again", action: model.refreshCapabilities)
+                NativeSessionButton("Check again", action: model.refreshCapabilities)
                     .disabled(model.busy != nil)
             }
             if let problem = model.displayProblem {
                 NativeCodingAINotice(tone: .error, text: problem)
                 if !model.loading, problem != model.writesUnavailableReason {
-                    Button("Read again", action: model.refresh).disabled(model.busy != nil)
+                    NativeSessionButton("Read again", action: model.refresh).disabled(model.busy != nil)
                 }
             }
             if let notice = model.notice, notice != model.displayProblem { NativeSettingsProse(text: notice).font(.callout) }
@@ -100,7 +102,7 @@ struct NativeAppsScreen: View {
                     Text("Deploy a GitHub repository, start from a template, or create a database.")
                 }
             } else if !model.apps.isEmpty {
-                TextField("Search apps or addresses", text: $model.search)
+                NativeSessionTextField("Search apps or addresses", text: $model.search)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Search apps or addresses")
                 if model.filteredApps.isEmpty {
@@ -137,7 +139,7 @@ private struct NativeAppsListRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: onOpen) {
+            NativeSessionButton(action: onOpen) {
                 HStack(spacing: 12) {
                     Image(systemName: app.kind == "app" ? "app.dashed" : "externaldrive")
                         .font(.body).foregroundStyle(.secondary).frame(width: 22)
@@ -164,7 +166,7 @@ private struct NativeAppsListRow: View {
                 Text(app.kind == "app" ? "No address yet" : "Database")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button(action: onOpen) {
+            NativeSessionButton(action: onOpen) {
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)

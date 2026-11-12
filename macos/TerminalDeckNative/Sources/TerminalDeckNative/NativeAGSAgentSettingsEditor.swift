@@ -44,9 +44,9 @@ struct NativeAGSAgentSettingsEditor: View {
             }
             NativeAGSField(label: "Working folder", help: "Used when a task or session has no folder of its own.") {
                 HStack(spacing: 6) {
-                    TextField("Optional full folder path", text: Binding(get: { settings.workingFolder ?? "" }, set: { settings.workingFolder = $0.isEmpty ? nil : $0 }))
+                    NativeSessionTextField("Optional full folder path", text: Binding(get: { settings.workingFolder ?? "" }, set: { settings.workingFolder = $0.isEmpty ? nil : $0 }))
                         .textFieldStyle(.roundedBorder).accessibilityLabel("Agent working folder")
-                    Button("Choose…", action: chooseFolder)
+                    NativeSessionButton("Choose…", action: chooseFolder)
                 }
             }
             if showsKeepOpen {
@@ -79,14 +79,14 @@ struct NativeAGSAgentSettingsEditor: View {
                             Text("Off").tag("off")
                         }.labelsHidden()
                         if !availableMCPServers.contains(name) {
-                            Button("Remove", role: .destructive) { settings.mcpServers.removeValue(forKey: name) }
+                            NativeSessionButton("Remove", role: .destructive) { settings.mcpServers.removeValue(forKey: name) }
                         }
                     }
                 }
                 HStack {
-                    TextField("Configured server name", text: $serverName).textFieldStyle(.roundedBorder)
+                    NativeSessionTextField("Configured server name", text: $serverName).textFieldStyle(.roundedBorder)
                         .accessibilityLabel("MCP server name")
-                    Button("Add server") {
+                    NativeSessionButton("Add server") {
                         guard let name = NativeAGSWords.optional(serverName) else { return }
                         // A new named override starts off until the person chooses On.
                         if settings.mcpServers[name] == nil { settings.mcpServers[name] = false }
@@ -133,8 +133,8 @@ struct NativeAGSHooksEditor: View {
                     Text(events.contains(hook.event) ? "Command hidden" : "Event unavailable")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    Button("Change") { editingHook = hook }
-                    Button("Remove", role: .destructive) {
+                    NativeSessionButton("Change") { editingHook = hook }
+                    NativeSessionButton("Remove", role: .destructive) {
                         settings.hooks.removeAll { $0.id == hook.id }
                         if editingHook?.id == hook.id { editingHook = nil }
                     }
@@ -147,7 +147,7 @@ struct NativeAGSHooksEditor: View {
                     editingHook = nil
                 }, cancel: { editingHook = nil }).id(hook.id)
             } else if let first = events.first {
-                Button("Add hook") { editingHook = AGSCLIHook(event: first, command: "") }.disabled(settings.hooks.count >= 50)
+                NativeSessionButton("Add hook") { editingHook = AGSCLIHook(event: first, command: "") }.disabled(settings.hooks.count >= 50)
                 if settings.hooks.count >= 50 { Text("Up to 50 agent hooks.").font(.caption).foregroundStyle(.secondary) }
             }
         }
@@ -163,7 +163,7 @@ struct NativeAGSModelControls: View {
 
     var body: some View {
         NativeSettingRow(label: "Model", help: "Use a model name supported by \(NativeAGSWords.provider(settings.provider)).") {
-            TextField(defaultLabel, text: Binding(get: { settings.model ?? "" }, set: { settings.model = NativeAGSWords.optional($0) }))
+            NativeSessionTextField(defaultLabel, text: Binding(get: { settings.model ?? "" }, set: { settings.model = NativeAGSWords.optional($0) }))
                 .textFieldStyle(.roundedBorder).frame(minWidth: 160, maxWidth: 260)
                 .accessibilityLabel("Agent model")
         }
@@ -212,11 +212,11 @@ private struct NativeAGSCLIHookEditor: View {
                 }.labelsHidden()
             }
             NativeAGSField(label: "Match", help: "Optional filter supported by this hook event.") {
-                SecureField("Optional match", text: Binding(get: { draft.matcher ?? "" }, set: { draft.matcher = $0.isEmpty ? nil : $0 }))
+                NativeSessionSecureField("Optional match", text: Binding(get: { draft.matcher ?? "" }, set: { draft.matcher = $0.isEmpty ? nil : $0 }))
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Hook match, hidden")
             }
             NativeAGSField(label: "Command") {
-                SecureField("Command to run", text: $draft.command).textFieldStyle(.roundedBorder)
+                NativeSessionSecureField("Command to run", text: $draft.command).textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Agent hook command, hidden")
             }
             NativeSettingRow(label: "Time limit") {
@@ -226,9 +226,9 @@ private struct NativeAGSCLIHookEditor: View {
             if draft.command.utf8.count > 8_000 { Text("Keep commands within 8,000 bytes.").font(.caption).foregroundStyle(.red) }
             Toggle("Enabled", isOn: $draft.enabled)
             HStack {
-                Button("Save hook") { save(draft) }
+                NativeSessionButton("Save hook") { save(draft) }
                     .disabled(!valid)
-                Button("Cancel", action: cancel)
+                NativeSessionButton("Cancel", action: cancel)
             }
         }
         .padding(10)

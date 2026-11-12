@@ -138,4 +138,29 @@ final class ChatSealedDocumentTests: XCTestCase {
         XCTAssertTrue(child.contains("--accent:rgb(1,2,3)"))
         XCTAssertTrue(child.contains("--color-background-primary:var(--background)"))
     }
+
+    // Release check, 6 Nov: a chart box kept its starting height in a background window, because the size was only
+    // reported on a painted frame. It is measured with timers and DOM changes now.
+    func testSizeIsMeasuredWithoutWaitingForAPaintedFrame() {
+        let child = NativeChatSealedDocument.childDocument(source: "<canvas></canvas>", kind: "visual", colors: colors)
+        XCTAssertFalse(child.contains("requestAnimationFrame"), "an off-screen view paints no frame, so a frame-timed report never comes")
+        XCTAssertTrue(child.contains("new MutationObserver(size)"))
+        XCTAssertTrue(child.contains("window.addEventListener('load',size)"))
+        XCTAssertTrue(child.contains("setTimeout(size,delay)"))
+    }
+
+    // Release check, 6 Nov: Claude drew chart text in dark grey on the dark card. The drawing gets the theme as
+    // variables, its colour scheme matches the app, and the instruction tells the AI to use them.
+    func testDrawingsGetTheThemeVariablesTheInstructionNames() {
+        let dark = NativeChatSealedDocument.Colors(background: "rgb(30,30,30)", foreground: "rgb(240,240,240)", accent: "rgb(1,2,3)",
+                                                   secondary: "rgb(150,150,150)", surface: "rgb(40,40,40)", dark: true)
+        let child = NativeChatSealedDocument.childDocument(source: "", kind: "visual", colors: dark)
+        for token in ["--text:rgb(240,240,240)", "--muted:rgb(150,150,150)", "--accent:rgb(1,2,3)", "--background:rgb(30,30,30)", "color-scheme:dark"] {
+            XCTAssertTrue(child.contains(token), token)
+        }
+        XCTAssertTrue(NativeChatSealedDocument.document(source: "", kind: "visual", colors: dark, bridge: false).contains(":root{color-scheme:dark}"))
+        for name in ["var(--text)", "var(--muted)", "var(--accent)", "var(--background)", "currentColor"] {
+            XCTAssertTrue(ChatMarkdown.instruction.contains(name), name)
+        }
+    }
 }

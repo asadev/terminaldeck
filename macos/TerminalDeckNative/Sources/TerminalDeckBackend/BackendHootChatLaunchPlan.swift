@@ -128,9 +128,10 @@ public struct BackendHootChatLaunchPlan: Sendable {
         arguments = cli
         // The rich-chat drawing instruction goes to every AI, but on Gemini as an optional extra: a CLI that cannot take
         // prompt context still starts, without it (6 Nov). Codex has it in its developer instructions above.
+        // APPMGMT (8 Nov): Gemini's form of the session note's browser line (Claude and Codex carry it in their note).
         setup = .init(cwd: cwd, session: session, expectedTools: required,
             instructions: provider == .gemini ? [profileInstructions, instructions].filter { !$0.isEmpty }.joined(separator: "\n\n") : "",
-            optionalInstructions: provider == .gemini ? ChatMarkdown.instruction : "")
+            optionalInstructions: provider == .gemini ? ChatMarkdown.instruction + "\n\n" + BackendANDROIDSessionPhoneNote.browserLine : "")
     }
 }
 

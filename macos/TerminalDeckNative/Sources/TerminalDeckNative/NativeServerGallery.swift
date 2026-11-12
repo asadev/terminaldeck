@@ -214,7 +214,7 @@ struct NativeServerGalleryView: View {
             Spacer(minLength: 8)
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 11))
-                TextField("Search \(noun)", text: $model.query).textFieldStyle(.plain).frame(width: 130)
+                NativeSessionTextField("Search \(noun)", text: $model.query).textFieldStyle(.plain).frame(width: 130)
                     .onChange(of: model.query) { _, _ in model.reloadSoon() }
             }.padding(.horizontal, 8).frame(height: 26).background(DeckTokens.selection, in: RoundedRectangle(cornerRadius: 7))
             Menu {
@@ -226,7 +226,7 @@ struct NativeServerGalleryView: View {
                 }.pickerStyle(.inline)
             } label: { Image(systemName: "line.3.horizontal.decrease.circle").frame(width: 28, height: 28) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Sort and group").accessibilityLabel("Sort and group")
-            Button { model.scan() } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28).contentShape(.rect) }
+            NativeSessionButton { model.scan() } label: { Image(systemName: "arrow.clockwise").frame(width: 28, height: 28).contentShape(.rect) }
                 .buttonStyle(.borderless).disabled(model.scanning || !model.live && !model.scanned)
                 .help("Search the allowed folders again").accessibilityLabel("Search the allowed folders again")
         }.padding(.horizontal, 12).frame(height: 44)
@@ -257,7 +257,7 @@ struct NativeServerGalleryView: View {
                         }
                     }
                     if model.more {
-                        Button("Show more") { model.loadMore() }.buttonStyle(.borderless).padding(14)
+                        NativeSessionButton("Show more") { model.loadMore() }.buttonStyle(.borderless).padding(14)
                             .onAppear { model.loadMore() }
                     }
                 }.padding(.bottom, 10)
@@ -275,7 +275,7 @@ struct NativeServerGalleryView: View {
             if let button {
                 // "Try Again" reads again by itself first (DeckReconnect); any other button is the person's.
                 Group {
-                    if DeckRetryRules.isRetryLabel(button) { DeckRetryButton(button, action: action) } else { Button(button, action: action) }
+                    if DeckRetryRules.isRetryLabel(button) { DeckRetryButton(button, action: action) } else { NativeSessionButton(button, action: action) }
                 }.padding(.top, 4).disabled(!model.live)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.bottom, 40)
@@ -302,7 +302,7 @@ struct NativeServerGalleryView: View {
     private func grid(_ rows: [NativeServerFileRow]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 128, maximum: 180), spacing: 10)], spacing: 10) {
             ForEach(rows) { row in
-                Button { model.selection = row.id } label: {
+                NativeSessionButton { model.selection = row.id } label: {
                     NativeServerThumbTile(serverID: model.serverID, row: row, live: model.live, fixture: fixtureImages[row.path],
                                           selected: model.selection == row.id)
                 }.buttonStyle(.plain)
@@ -315,7 +315,7 @@ struct NativeServerGalleryView: View {
     private func list(_ rows: [NativeServerFileRow]) -> some View {
         VStack(spacing: 0) {
             ForEach(rows) { row in
-                Button { model.selection = row.id } label: {
+                NativeSessionButton { model.selection = row.id } label: {
                     NativeServerGalleryRow(serverID: model.serverID, row: row, live: model.live)
                         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading).contentShape(.rect)
                         .background(model.selection == row.id ? DeckTokens.selection : Color.clear, in: RoundedRectangle(cornerRadius: 8))
@@ -326,10 +326,10 @@ struct NativeServerGalleryView: View {
     }
 
     @ViewBuilder private func menu(_ row: NativeServerFileRow) -> some View {
-        Button("Preview") { model.selection = row.id }
-        Button("Show in folder") { showInFolder(row) }
-        Button("Download") { model.download(row) }
-        Button("Copy path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(row.path, forType: .string) }
+        NativeSessionButton("Preview") { model.selection = row.id }
+        NativeSessionButton("Show in folder") { showInFolder(row) }
+        NativeSessionButton("Download") { model.download(row) }
+        NativeSessionButton("Copy path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(row.path, forType: .string) }
     }
 }
 

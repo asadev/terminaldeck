@@ -51,7 +51,7 @@ struct NativeAppsDetailView: View {
                         } else {
                             NativeSettingsProse(text: model.writesUnavailableReason
                                 ?? "This version cannot safely undo an interrupted server change.")
-                            Button("Check again", action: model.refreshCapabilities).disabled(busy)
+                            NativeSessionButton("Check again", action: model.refreshCapabilities).disabled(busy)
                         }
                     }
                 }
@@ -65,7 +65,7 @@ struct NativeAppsDetailView: View {
                     Section {
                         NativeCodingAINotice(tone: .error, text: problem)
                         if problem != model.sectionProblem {
-                            Button("Read again", action: model.refreshDetail).disabled(busy || model.detailLoading)
+                            NativeSessionButton("Read again", action: model.refreshDetail).disabled(busy || model.detailLoading)
                         }
                     }
                 }
@@ -77,7 +77,7 @@ struct NativeAppsDetailView: View {
                         if problem != model.displayProblem {
                             NativeCodingAINotice(tone: .error, text: problem)
                         }
-                        Button("Read again") { model.showTab(model.activeTab) }
+                        NativeSessionButton("Read again") { model.showTab(model.activeTab) }
                             .disabled(busy || model.sectionLoading || model.detailLoading)
                     }
                 }
@@ -137,9 +137,9 @@ struct NativeAppsDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Button("Back to apps", action: onBack)
+                NativeSessionButton("Back to apps", action: onBack)
                 Spacer(minLength: 12)
-                Button {
+                NativeSessionButton {
                     model.refreshDetail()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -229,13 +229,13 @@ struct NativeAppsDetailView: View {
         }
         Section {
             HStack(spacing: 8) {
-                Button("Restart app") { model.restartApp() }
+                NativeSessionButton("Restart app") { model.restartApp() }
                     .disabled(writeControlsDisabled)
                 if !isDatabase && detail.canDeploy {
-                    Button("Deploy now") { model.deployApp() }
+                    NativeSessionButton("Deploy now") { model.deployApp() }
                         .disabled(writeControlsDisabled)
                 }
-                Button("View logs") { model.showTab(.logs) }
+                NativeSessionButton("View logs") { model.showTab(.logs) }
                     .disabled(model.detailLoading)
             }
         }
@@ -248,7 +248,7 @@ struct NativeAppsDetailView: View {
                     HStack {
                         NativeSettingsProse(text: "Deploy the latest version from your saved source.")
                         Spacer(minLength: 12)
-                        Button("Deploy now") { model.deployApp() }.disabled(writeControlsDisabled)
+                        NativeSessionButton("Deploy now") { model.deployApp() }.disabled(writeControlsDisabled)
                     }
                 } else {
                     NativeSettingsProse(text: NativeAppsDetail.templateUpdatesUnavailable)
@@ -275,7 +275,7 @@ struct NativeAppsDetailView: View {
                             Text(NativeAppsRules.friendlyStatus(deployment.status))
                                 .font(.callout).foregroundStyle(.secondary)
                             if deployment.canRollback && detail.canRollBack {
-                                Button("Roll back") { model.rollback(deployment.id) }
+                                NativeSessionButton("Roll back") { model.rollback(deployment.id) }
                                     .disabled(writeControlsDisabled)
                                     .help("Use this saved deploy after the change is approved.")
                                     .accessibilityLabel("Roll back to \(deployment.title)")
@@ -294,7 +294,7 @@ struct NativeAppsDetailView: View {
                 Label(model.logsLive ? "Live logs" : "Recent logs", systemImage: "text.alignleft")
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
-                Button("Read again") { model.showTab(.logs) }
+                NativeSessionButton("Read again") { model.showTab(.logs) }
                     .disabled(model.sectionLoading || model.detailLoading)
             }
             if model.logs.isEmpty {
@@ -328,7 +328,7 @@ struct NativeAppsDetailView: View {
         } else {
             Section("Settings and secrets") {
                 NativeSettingsProse(text: "These values created the database’s login. This editor cannot change its saved login.")
-                Button("View connection") { model.showTab(.overview) }
+                NativeSessionButton("View connection") { model.showTab(.overview) }
 
                 if detail.environment.isEmpty {
                     NativePageNote("No setup settings were returned.").frame(height: 28)
@@ -347,7 +347,7 @@ struct NativeAppsDetailView: View {
             NativeSettingsProse(text: isDatabase
                 ? "Before removing \(currentApp.name), make sure you have any database backups you need."
                 : "Remove \(currentApp.name) from this server. Its address will stop serving this app.")
-            Button("Remove app…", role: .destructive) { confirmation = .removeApp }
+            NativeSessionButton("Remove app…", role: .destructive) { confirmation = .removeApp }
                 .disabled(writeControlsDisabled)
         }
     }
@@ -435,9 +435,9 @@ struct NativeAppsDetailView: View {
             if let url = NativeAppsDetailWords.secureURL(address.hostname) {
                 Link("Open", destination: url).buttonStyle(.bordered)
             }
-            Button("Check") { model.checkAddress(address.hostname) }.disabled(busy)
+            NativeSessionButton("Check") { model.checkAddress(address.hostname) }.disabled(busy)
             if !address.isDefault {
-                Button("Remove…", role: .destructive) { confirmation = .removeAddress(address.hostname) }
+                NativeSessionButton("Remove…", role: .destructive) { confirmation = .removeAddress(address.hostname) }
                     .disabled(writeControlsDisabled)
             }
         }
@@ -445,16 +445,16 @@ struct NativeAppsDetailView: View {
     }
 
     private var addressDraftField: some View {
-        TextField("app.example.com", text: $hostname)
+        NativeSessionTextField("app.example.com", text: $hostname).textFieldStyle(.roundedBorder)
             .accessibilityLabel("New web address")
     }
 
     private var addressDraftActions: some View {
         HStack(spacing: 8) {
-            Button("Check DNS") {
+            NativeSessionButton("Check DNS") {
                 model.checkAddress(hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
             }
-            Button("Add address") {
+            NativeSessionButton("Add address") {
                 model.addAddress(hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
             }
             .disabled(!model.canChange)
@@ -486,7 +486,7 @@ struct NativeAppsDetailView: View {
                 HStack {
                     NativeSettingsProse(text: "Backups are stored on the server.")
                     Spacer(minLength: 12)
-                    Button("Back up now") { model.backupNow() }.disabled(writeControlsDisabled)
+                    NativeSessionButton("Back up now") { model.backupNow() }.disabled(writeControlsDisabled)
                 }
                 if detail.backups.isEmpty {
                     NativePageEmpty(symbol: "externaldrive", title: "No backups yet") {
@@ -502,7 +502,7 @@ struct NativeAppsDetailView: View {
                                 }
                             }
                             Spacer(minLength: 12)
-                            Button("Restore…") {
+                            NativeSessionButton("Restore…") {
                                 confirmation = .restore(backup.id, backup.createdAt ?? "this saved backup")
                             }
                             .disabled(writeControlsDisabled)

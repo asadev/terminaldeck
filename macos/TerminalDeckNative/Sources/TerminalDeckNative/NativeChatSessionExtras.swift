@@ -31,12 +31,12 @@ struct NativeChatSessionExtrasView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Put back the files this chat changed since one of your messages. Your conversation is not rewound, and Git is not used.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Read checkpoints") { load { try await checkpointsRead() } }
+                    NativeSessionButton("Read checkpoints") { load { try await checkpointsRead() } }
                     if !checkpointNote.isEmpty { Text(checkpointNote).font(.caption).foregroundStyle(.secondary) }
                     ForEach(Array(checkpoints.enumerated()), id: \.offset) { _, row in
                         HStack(alignment: .top) {
                             Text(row["text"].string ?? "Message").lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Preview") { load { try await previewCheckpoint(row["turnId"].string) } }
+                            NativeSessionButton("Preview") { load { try await previewCheckpoint(row["turnId"].string) } }
                         }.font(.caption)
                     }
                     if previewTurn != nil, !preview.isNullish {
@@ -44,7 +44,7 @@ struct NativeChatSessionExtrasView: View {
                             if preview["canRewind"].bool == true {
                                 Text("\(Int(preview["fileCount"].number ?? 0)) file(s), +\(Int(preview["insertions"].number ?? 0)) / -\(Int(preview["deletions"].number ?? 0)) lines would be restored").font(.callout)
                                 ForEach(preview["files"].elements?.compactMap(\.string) ?? [], id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) }
-                                Button("Restore these files…") { confirmRestore = true }
+                                NativeSessionButton("Restore these files…") { confirmRestore = true }
                             } else {
                                 Text(preview["error"].string ?? "The provider has no checkpoint for that message.").font(.callout).foregroundStyle(.secondary)
                             }
@@ -53,12 +53,12 @@ struct NativeChatSessionExtrasView: View {
                 }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
             }
             .alert("Restore files?", isPresented: $confirmRestore) {
-                Button("Restore", role: .destructive) { load { try await restoreCheckpoint() } }
-                Button("Cancel", role: .cancel) {}
+                NativeSessionButton("Restore", role: .destructive) { load { try await restoreCheckpoint() } }
+                NativeSessionButton("Cancel", role: .cancel) {}
             } message: { Text("The files listed in the preview go back to how they were before that message. The conversation stays as it is.") }
             GroupBox("Background task history") {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack { Button("Read tasks") { load { try await readTasks() } }; Button("Move foreground tasks to background") { load { try await taskAction("background/detach", [.init("all", .bool(true))]) } } }
+                    HStack { NativeSessionButton("Read tasks") { load { try await readTasks() } }; NativeSessionButton("Move foreground tasks to background") { load { try await taskAction("background/detach", [.init("all", .bool(true))]) } } }
                     if !taskNote.isEmpty { Text(taskNote).font(.caption).foregroundStyle(.secondary) }
                     Text("Running tasks and their Stop controls are above the message box.").font(.caption).foregroundStyle(.secondary)
                     ForEach(Array(tasks.filter { $0["running"].bool != true }.enumerated()), id: \.offset) { _, row in
@@ -67,7 +67,7 @@ struct NativeChatSessionExtrasView: View {
                                 Text(row["title"].string ?? row["id"].string ?? "Task").lineLimit(2)
                                 Text((row["kind"].string ?? "task") + " · " + (row["status"].string ?? "unknown")).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Output") { load { try await readOutput(row["id"].string) } }
+                            NativeSessionButton("Output") { load { try await readOutput(row["id"].string) } }
                         }.font(.caption)
                     }
                     if let outputTask, !taskOutput.isEmpty {
@@ -80,14 +80,14 @@ struct NativeChatSessionExtrasView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("A worktree is a separate checkout of the project, so chats can work in separate folders.")
                         .font(.caption).foregroundStyle(.secondary)
-                    TextField("Name for the new work (optional)", text: $title)
+                    NativeSessionTextField("Name for the new work (optional)", text: $title)
                     HStack {
-                        Button("New Chat in a worktree") { load { try await forkAction("worktree-chat", [.init("title", .string(title))]) } }
+                        NativeSessionButton("New Chat in a worktree") { load { try await forkAction("worktree-chat", [.init("title", .string(title))]) } }
                     }
                     HStack {
-                        Button("Worktree status") { load { worktree = try await forkAction("worktree-status", [], open: false) } }
-                        Button("Remove worktree…") { confirmRemoveWorktree = true }
-                        Button("Where does this run?") { load { location = try await forkAction("location", [], open: false) } }
+                        NativeSessionButton("Worktree status") { load { worktree = try await forkAction("worktree-status", [], open: false) } }
+                        NativeSessionButton("Remove worktree…") { confirmRemoveWorktree = true }
+                        NativeSessionButton("Where does this run?") { load { location = try await forkAction("location", [], open: false) } }
                     }
                     if !worktree.isNullish { NativeChatProviderResult(value: worktree) }
                     if !location.isNullish { NativeChatProviderResult(value: location) }
@@ -95,8 +95,8 @@ struct NativeChatSessionExtrasView: View {
             }
             // #548: removing the checkout asks first, like restoring files does.
             .alert("Remove this chat's worktree?", isPresented: $confirmRemoveWorktree) {
-                Button("Remove", role: .destructive) { load { worktree = try await forkAction("worktree-remove", [], open: false) } }
-                Button("Cancel", role: .cancel) {}
+                NativeSessionButton("Remove", role: .destructive) { load { worktree = try await forkAction("worktree-remove", [], open: false) } }
+                NativeSessionButton("Cancel", role: .cancel) {}
             } message: { Text("The separate checkout folder is deleted, including ignored files such as local settings. Its branch stays.") }
         }
     }

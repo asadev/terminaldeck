@@ -135,11 +135,12 @@ final class NativeButtonActions {
 
     func ingest(_ state: TabsState) {
         let before = tabs
-        for tab in state.tabs { knownTabs[tab.id] = tab }
-        tabs = state
-        tabs.tabs = state.tabs.filter { !closed.contains($0.id) && !folded.contains($0.id) }.map(renamed)
+        for tab in state.tabs where !tab.id.hasPrefix("held:") { knownTabs[tab.id] = tab }
+        var incoming = state
+        incoming.tabs = state.tabs.filter { !$0.id.hasPrefix("held:") && !closed.contains($0.id) && !folded.contains($0.id) }.map(renamed)
+        tabs = incoming
         for tab in added where !closed.contains(tab.id) && !folded.contains(tab.id) && !tabs.tabs.contains(where: { $0.id == tab.id }) { tabs.tabs.append(renamed(tab)) }
-        if selectionOwned { tabs.tabs = tabs.tabs.map { $0.with(active: $0.id == before.activeID) } }
+        if selectionOwned || state.activeID?.hasPrefix("held:") == true { tabs.tabs = tabs.tabs.map { $0.with(active: $0.id == before.activeID) } }
         if layoutOwned, let saved = before.layout {
             tabs.layout = WindowLayout(mode: saved.mode, swarm: saved.swarm, root: saved.root, focusedPaneId: saved.focusedPaneId,
                 primaryPaneId: saved.primaryPaneId, modeSwitch: saved.modeSwitch, splitOffer: saved.splitOffer,
@@ -152,6 +153,11 @@ final class NativeButtonActions {
         let task = enqueue(command, presentErrors: true)
         return Task { await task.value.succeeded }
     }
+    #if DEBUG
+    /// Await the production action queue from an inert selection regression, without issuing another command.
+    func waitForRestartFixture() async { _ = await chain?.value }
+    #endif
+
     /// Tool errors belong to that request's reply, never the native alert binding.
     func runForTool(_ command: PageCommand) -> Task<Outcome, Never> {
         enqueue(command, presentErrors: false)
@@ -320,7 +326,22 @@ final class NativeButtonActions {
             showPanel(id, focus: nil); return
         }
         if id.hasPrefix("held:") {
-            _ = try await call("session:held-retry", [String(id.dropFirst(5))], failure: "That saved session could not be reopened."); return
+            let key = String(id.dropFirst(5))
+            let held = try await call("sessions:held", [], failure: "The saved sessions could not be read.") as? [[String: Any]] ?? []
+            guard let saved = held.first(where: { $0["key"] as? String == key }) else { return }
+            let reply = try await call("session:held-retry", [key], failure: "That saved session could not be reopened.")
+            guard let remaining = reply as? [[String: Any]] else { try refuse("The saved session's result could not be read.") }
+            guard !remaining.contains(where: { $0["key"] as? String == key }) else { return }
+            // Match the restored tab's recorded identity, never an unrelated newly created session.
+            guard let tabKey = saved["tabKey"] as? String, !tabKey.isEmpty else { return }
+            let live = try await call("session:list", [], failure: "The restored session could not be read.") as? [[String: Any]] ?? []
+            let matching = live.filter { $0["tabKey"] as? String == tabKey && ($0["exitCode"] == nil || $0["exitCode"] is NSNull) }
+            guard matching.count == 1, let restored = matching.first,
+                  let realID = restored["id"] as? String, UUID(uuidString: realID) != nil else { return }
+            created(restored)
+            guard selectionRevision == selectionAtStart else { return }
+            try await select(realID)
+            return
         }
         if case .machine(let machine, let session) = SessionTarget(tabId: id) {
             let snapshot = MachinesSnapshot.decode(try await call("machines:list", [], failure: "The other Mac is not answering."))
@@ -345,7 +366,7 @@ final class NativeButtonActions {
 
     /// A session row the bar does not show (folded back, or never opened here) comes back onto it.
     private func bringToBar(_ id: String) {
-        guard !tabs.tabs.contains(where: { $0.id == id }), let row = sidebar.item(id: id), row.kind == .session else { return }
+        guard !id.hasPrefix("held:"), !tabs.tabs.contains(where: { $0.id == id }), let row = sidebar.item(id: id), row.kind == .session else { return }
         folded.remove(id)
         let tab = knownTabs[id] ?? TabItem(id: id, title: row.title, kind: "session", status: row.status, closable: true)
         if !added.contains(where: { $0.id == id }) { added.append(tab) }
@@ -358,6 +379,7 @@ final class NativeButtonActions {
     private(set) var selectionRevision = 0
     var ownsSelection: Bool { selectionOwned }
     func followNativeSelection(_ id: String) {
+        guard !id.hasPrefix("held:") else { return }
         nativeSelectionRevision += 1
         if tabs.tabs.contains(where: { $0.id == id }) { activate(id) } else { showPanel(id, focus: nil) }
     }

@@ -275,7 +275,7 @@ final class BackendHootChatRPCTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(gemini.arguments, ["--acp", "--approval-mode", "plan"])
         // 6 Nov: on Gemini the drawing instruction is an optional extra, so a CLI without prompt context still starts.
         XCTAssertEqual(gemini.setup?.instructions, "Gemini profile\n\nHoot contract")
-        XCTAssertEqual(gemini.setup?.optionalInstructions, ChatMarkdown.instruction)
+        XCTAssertEqual(gemini.setup?.optionalInstructions, ChatMarkdown.instruction + "\n\n" + BackendANDROIDSessionPhoneNote.browserLine)
         XCTAssertEqual(gemini.setup?.session["mcpServers"].elements?.first?["headers"].elements?.first?["value"].string, "scratch-only")
         XCTAssertThrowsError(try BackendHootChatLaunchPlan(provider: .codex, cwd: root.path, sessionID: nil, extra: ["--disallowedTools", "Write"]))
         let claude = try BackendHootChatLaunchPlan(provider: .claude, cwd: root.path, sessionID: nil,

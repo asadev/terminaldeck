@@ -16,7 +16,7 @@ struct ChecklistsBlock: View {
         let open = items.filter { !$0.done }.count
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Button { collapsed.toggle() } label: {
+                NativeSessionButton{ collapsed.toggle() } label: {
                     HStack(spacing: 8) {
                 Image(systemName: "chevron.down").rotationEffect(.degrees(collapsed ? -90 : 0)).foregroundStyle(.secondary)
                 Text("Checklists").font(.callout.weight(.semibold))
@@ -28,7 +28,7 @@ struct ChecklistsBlock: View {
                     }.frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(SIDEBARRowStyle())
                     .accessibilityLabel(collapsed ? "Expand checklists" : "Collapse checklists")
-                Button(action: addList) { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }
+                NativeSessionButton(action: addList) { Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Add checklist").accessibilityLabel("New checklist")
             }
             .font(.callout)
@@ -38,7 +38,7 @@ struct ChecklistsBlock: View {
                     ForEach(Array(lists.enumerated()), id: \.element.id) { li, list in
                         ChecklistCard(model: model, list: list, people: people, autoOpen: justAdded && li == 0 && list.items.isEmpty)
                     }
-                    Button(action: addList) { Label("Add checklist", systemImage: "plus").font(.caption) }
+                    NativeSessionButton(action: addList) { Label("Add checklist", systemImage: "plus").font(.caption) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
             }
@@ -63,17 +63,17 @@ struct ChecklistCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
-                TextField("", text: Binding(get: { list.title }, set: { model.renameChecklist(list.id, String($0.prefix(120))) }))
+                NativeSessionTextField("", text: Binding(get: { list.title }, set: { model.renameChecklist(list.id, String($0.prefix(120))) }))
                     .textFieldStyle(.plain)
                     .font(.callout.weight(.semibold))
                     .accessibilityLabel("Checklist name")
-                Button { model.deleteChecklist(list) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                NativeSessionButton{ model.deleteChecklist(list) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(.plain).foregroundStyle(.tertiary).accessibilityLabel("Remove checklist \"\(list.title)\"")
             }
             .frame(height: 28)
             ForEach(list.items) { item in
                 HStack(spacing: 10) {
-                    Button { model.setItemDone(item, !item.done) } label: {
+                    NativeSessionButton{ model.setItemDone(item, !item.done) } label: {
                         Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(item.done ? TaskTone.completed : Color.secondary)
                     }
@@ -85,7 +85,7 @@ struct ChecklistCard: View {
                     RowAssignButton(value: item.assigneeUserId, people: people, team: model.team, what: "item \"\(item.title)\"") {
                         model.setItemAssignee(item, $0)
                     }
-                    Button { model.deleteItem(item) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                    NativeSessionButton{ model.deleteItem(item) } label: { Image(systemName: "xmark").font(.caption2).frame(width: 28, height: 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).foregroundStyle(.tertiary).opacity(hovered == item.id ? 1 : 0)
                         .accessibilityLabel("Remove item \"\(item.title)\"")
                 }
@@ -116,22 +116,22 @@ struct InlineAdd: View {
     var body: some View {
         Group {
             if editing || autoOpen && text.isEmpty && !dismissed {
-                TextField(placeholder, text: $text)
+                NativeSessionTextField(placeholder, text: $text)
                     .textFieldStyle(.roundedBorder)
-                    .focused($focused)
+                    .sessionFocused($focused)
                     .onAppear { focused = true }
-                    .onSubmit {
+                    .sessionOnSubmit {
                         let t = text.trimmingCharacters(in: .whitespaces)
                         guard !t.isEmpty else { return }
                         onAdd(t)
                         text = ""
                     }
-                    .onExitCommand {
+                    .sessionOnExitCommand {
                         editing = false
                         dismissed = true
                     }
             } else {
-                Button {
+                NativeSessionButton{
                     editing = true
                 } label: { Label(label, systemImage: "plus").font(.caption) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)

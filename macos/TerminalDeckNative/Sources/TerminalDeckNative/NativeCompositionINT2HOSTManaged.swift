@@ -125,7 +125,7 @@ final class NativeCompositionINT2HOSTManaged {
             throw BackendHOSTFailure.remote("Existing in-app sessions still require their original account owner.")
         }
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/TerminalDeckSessionHostHelper")
-        let marketing = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.20.2") + "-host3"
+        let marketing = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.20.2") + BackendHOSTLaunchAgent.hostGeneration
         // One folder per helper build (QUIT); the 77 MB hash runs off the main thread.
         let version = try await Task.detached(priority: .userInitiated) { try BackendHOSTLaunchAgent.buildVersion(marketing: marketing, helper: helper) }.value
         let directory = owner.configuration.homeDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)

@@ -16,20 +16,20 @@ struct ProjectCell: View {
         let project = model.row.project
         HStack(spacing: 8) {
             if editing {
-                TextField("/Users/you/Projects/app", text: $draft)
+                NativeSessionTextField("/Users/you/Projects/app", text: $draft)
                     .textFieldStyle(.roundedBorder)
-                    .focused($focused)
+                    .sessionFocused($focused)
                     .autocorrectionDisabled()
                     .onAppear { focused = true }
-                    .onSubmit(save)
+                    .sessionOnSubmit(save)
                     .onChange(of: focused) { _, now in if !now { save() } }
-                    .onExitCommand {
+                    .sessionOnExitCommand {
                         draft = project
                         editing = false
                     }
                     .accessibilityLabel("Project folder")
             } else {
-                Button {
+                NativeSessionButton{
                     draft = project
                     editing = true
                 } label: {
@@ -42,7 +42,7 @@ struct ProjectCell: View {
                 .buttonStyle(.plain)
                 .help(project.isEmpty ? "Needed before Hoot or an agent can work on it" : project)
             }
-            Button("Choose…") {
+            NativeSessionButton("Choose…") {
                 Task {
                     let result = await model.chooseProject()
                     if let chosen = result.project {
@@ -116,8 +116,8 @@ struct WorkspaceField: View {
                     Text(w.state == "active" ? "Active" : w.state == "kept" ? "Kept" : "Removed")
                         .font(.caption).foregroundStyle(w.state == "kept" ? TaskTone.waiting : Color.secondary)
                     if there {
-                        Button("Open folder") { model.openWorkspace() }.controlSize(.small)
-                        Button(model.workspaceBusy ? "Removing…" : "Remove when clean") { model.removeWorkspace() }
+                        NativeSessionButton("Open folder") { model.openWorkspace() }.controlSize(.small)
+                        NativeSessionButton(model.workspaceBusy ? "Removing…" : "Remove when clean") { model.removeWorkspace() }
                             .controlSize(.small)
                             .disabled(model.workspaceBusy)
                             .help("Removes the folder only if it has no uncommitted changes and nothing is running in it. The branch stays.")

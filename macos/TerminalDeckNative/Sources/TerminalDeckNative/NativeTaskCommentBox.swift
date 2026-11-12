@@ -5,11 +5,46 @@ import TerminalDeckNativeCore
 
 // MARK: - The comment box
 
+/// Inert UI fixture: the real composer/panels can be mounted without opening popovers,
+/// and the exact UI callbacks can be retained to exercise late deliveries after hiding.
+@MainActor
+final class NativeTaskCommentFixture {
+    let initialDraft: HootComposerDraft
+    let panelsInline: Bool
+    var schedule: ((Date) -> Void)?
+    var send: ((HootComposerDraft) -> Void)?
+    var inputScope: NativeSessionInputScope?
+
+    init(draft: HootComposerDraft = .init(), panelsInline: Bool = true) {
+        initialDraft = draft
+        self.panelsInline = panelsInline
+    }
+}
+
 struct Composer: View {
     let model: TaskDetailModel
     let commands: [SlashCommand]
     let onAttach: ([URL]) async -> [TaskAttachment]
     var fixtureMode = false
+    var fixture: NativeTaskCommentFixture? = nil
+
+    var body: some View {
+        NativeTaskCommentComposerContent(model: model, commands: commands, onAttach: onAttach,
+                                         fixtureMode: fixtureMode, fixture: fixture)
+            .id(model.taskId)
+            .nativeSessionInputScope(ownerID: "task-comment/" + model.taskId)
+    }
+}
+
+private struct NativeTaskCommentComposerContent: View {
+    let model: TaskDetailModel
+    let commands: [SlashCommand]
+    let onAttach: ([URL]) async -> [TaskAttachment]
+    var fixtureMode = false
+    var fixture: NativeTaskCommentFixture? = nil
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeSessionInputScope) private var scope
+    @State private var inputRule = NativeSessionInputRule()
     @State private var sharedDraft = HootComposerDraft()
     private var value: String {
         get { sharedDraft.text }
@@ -22,9 +57,22 @@ struct Composer: View {
     @State private var recorder: NativeChild?
     @State private var recordingFile: URL?
 
+    init(model: TaskDetailModel, commands: [SlashCommand], onAttach: @escaping ([URL]) async -> [TaskAttachment],
+         fixtureMode: Bool, fixture: NativeTaskCommentFixture?) {
+        self.model = model
+        self.commands = commands
+        self.onAttach = onAttach
+        self.fixtureMode = fixtureMode
+        self.fixture = fixture
+        _sharedDraft = State(initialValue: fixture?.initialDraft ?? .init())
+    }
+
     var body: some View {
-        let rich = model.commentExtras != nil
-        VStack(alignment: .leading, spacing: 0) {
+        inputRule.bind(to: scope)
+        inputRule.update(active: scope == nil ? active : true, enabled: !posting && !uploading)
+        fixture?.inputScope = scope
+        fixture?.send = { send(nil, snapshot: $0) }
+        return VStack(alignment: .leading, spacing: 0) {
             // Asad, 12 Oct: everything the comment box offers sits behind its one + (no separate ⋯), drawn as
             // the ⋯ popover was, in sections, so adding to the comment never reads like acting on the task.
             HootComposer(draft: $sharedDraft, catalogue: model.commentComposerCatalogue,
@@ -32,23 +80,18 @@ struct Composer: View {
                          placeholder: placeholder, microphoneAvailable: fixtureMode ? false : nil,
                          onSend: { send(nil, snapshot: $0) }, onStop: {},
                          onScreenshot: fixtureMode ? nil : { screenshot() },
-                         addPanel: { panel in
-                             AnyView(CommentAddPanel(
-                                panel: panel, commands: commands, team: model.team, rich: rich, fixtureMode: fixtureMode,
-                                recording: recorder != nil, canSchedule: sharedDraft.canSend && !posting,
-                                assignee: $assignee,
-                                onFiles: { pickFiles(images: false) }, onPhotos: { pickFiles(images: true) },
-                                onScreenshot: { screenshot() }, onRecord: { toggleRecording() },
-                                onEmoji: { value += $0 }, onSchedule: { at in send(CrmTime.iso(at.timeIntervalSince1970 * 1000)) }))
-                         },
+                         addPanel: { panel in AnyView(commentPanel(panel)) },
                          addPanelLabel: "Add to the comment, or act on the task")
                 .padding(.horizontal, 12).padding(.top, 8)
                 .accessibilityLabel("Write a comment")
+            if fixture?.panelsInline == true {
+                commentPanel(HootComposerAddPanel(close: {}, mention: {}))
+            }
             if let assignee {
                 HStack(spacing: 6) {
                     PersonAvatar(person: assignee)
                     Text("Assign to \(assignee.name)")
-                    Button { self.assignee = nil } label: { Image(systemName: "xmark").font(.system(size: 9)) }
+                    NativeSessionButton { self.assignee = nil } label: { Image(systemName: "xmark").font(.system(size: 9)) }
                         .buttonStyle(.plain).accessibilityLabel("Don't assign this comment")
                 }
                 .font(.caption).foregroundStyle(TaskTone.accent)
@@ -79,6 +122,20 @@ struct Composer: View {
         .onDisappear { stopRecording() }
     }
 
+    private func commentPanel(_ panel: HootComposerAddPanel) -> some View {
+        CommentAddPanel(panel: panel, commands: commands, team: model.team,
+                        rich: model.commentExtras != nil || fixture != nil, fixtureMode: fixtureMode,
+                        recording: recorder != nil, canSchedule: sharedDraft.canSend && !posting && !uploading,
+                        assignee: $assignee,
+                        onFiles: { pickFiles(images: false) }, onPhotos: { pickFiles(images: true) },
+                        onScreenshot: { screenshot() }, onRecord: { toggleRecording() },
+                        onEmoji: { emoji in
+                            guard inputRule.acceptsFocus else { return }
+                            value += emoji
+                        },
+                        onSchedule: { at in send(CrmTime.iso(at.timeIntervalSince1970 * 1000)) }, fixture: fixture)
+    }
+
     private var placeholder: String {
         if model.commentThreadUIReady, let name = model.task.assignee?.name, !name.isEmpty {
             return "Comment — \(name) answers here." + (model.commentCapabilities["mentions"] == true ? " Type @ to ask another agent." : "")
@@ -88,7 +145,9 @@ struct Composer: View {
 
     private func send(_ scheduledFor: String?, snapshot supplied: HootComposerDraft? = nil) {
         let snapshot = supplied ?? sharedDraft
-        guard snapshot.canSend, !posting, !uploading else { return }
+        // This is the UI boundary only. Once accepted, upload/post work keeps its captured
+        // task and draft and may complete while the user looks at another screen.
+        guard inputRule.acceptsFocus, snapshot.canSend, !posting, !uploading else { return }
         posting = true
         let who = assignee?.id
         Task {
@@ -115,12 +174,12 @@ struct Composer: View {
 
     /// Files (or only pictures) from the Mac's chooser go onto the task and into the comment.
     private func pickFiles(images: Bool) {
-        guard !fixtureMode, NativeFront.personActing else { return }
+        guard inputRule.acceptsFocus, !fixtureMode, NativeFront.personActing else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         if images { panel.allowedContentTypes = ChatAttach.imageExtensions.compactMap { UTType(filenameExtension: $0) } }
-        guard panel.runModal() == .OK else { return } // front-ok: guarded by NativeFront.personActing
+        guard panel.runModal() == .OK, inputRule.acceptsFocus else { return } // front-ok: guarded by NativeFront.personActing
         attach(panel.urls)
     }
 
@@ -147,7 +206,7 @@ struct Composer: View {
 
     /// The Mac's own screenshot: pick an area or a window; the picture is attached.
     private func screenshot() {
-        guard !fixtureMode, NativeFront.personActing else { return }
+        guard inputRule.acceptsFocus, !fixtureMode, NativeFront.personActing else { return }
         guard let folder = captureFolder() else { return }
         let file = folder.appendingPathComponent(Self.captureName(Date(), "png"))
         let child = try? NativeChild.start(.init("/usr/sbin/screencapture", ["-i", "-x", file.path], output: .discard, errors: .discard), exit: { _ in
@@ -161,7 +220,7 @@ struct Composer: View {
 
     /// A screen recording: started here, stopped here; the clip is attached.
     private func toggleRecording() {
-        guard !fixtureMode, NativeFront.personActing else { return }
+        guard inputRule.acceptsFocus, !fixtureMode, NativeFront.personActing else { return }
         if let recorder {
             // SIGINT: screencapture finishes the clip; ended outright if it has not within 10 s.
             recorder.stop(first: SIGINT, grace: .seconds(10))
@@ -217,6 +276,10 @@ struct CommentAddPanel: View {
     let onRecord: () -> Void
     let onEmoji: (String) -> Void
     let onSchedule: (Date) -> Void
+    var fixture: NativeTaskCommentFixture? = nil
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeSessionInputScope) private var scope
+    @State private var inputRule = NativeSessionInputRule()
     @State private var emojiOpen = false
     @State private var assignOpen = false
     @State private var laterOpen = false
@@ -225,7 +288,9 @@ struct CommentAddPanel: View {
                         "🚀", "📌", "📎", "📅", "⏰", "🏠", "🔑", "💰", "📞", "✉️", "🤝", "💪"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        inputRule.bind(to: scope)
+        inputRule.update(active: scope == nil ? active : true, enabled: true)
+        return VStack(alignment: .leading, spacing: 4) {
             heading("ADD TO THE COMMENT")
             HStack(spacing: 2) {
                 // The chooser, the area picker and the recorder need the screen: the panel closes first.
@@ -239,7 +304,7 @@ struct CommentAddPanel: View {
                     .popover(isPresented: $emojiOpen, arrowEdge: .top) {
                         LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 2), count: 8), spacing: 2) {
                             ForEach(Self.emoji, id: \.self) { e in
-                                Button {
+                                NativeSessionButton {
                                     emojiOpen = false
                                     onEmoji(e)
                                 } label: { Text(e).font(.title3).frame(width: 28, height: 28) }
@@ -256,6 +321,7 @@ struct CommentAddPanel: View {
                     tool(assignee == nil ? "person" : "person.fill", "Assign this comment to someone") { assignOpen.toggle() }
                         .popover(isPresented: $assignOpen, arrowEdge: .top) {
                             PersonSearchList(team: team, isPicked: { $0 == assignee?.id }, onPick: { p in
+                                guard inputRule.acceptsFocus else { return }
                                 assignee = p.id == assignee?.id ? nil : p
                                 assignOpen = false
                             })
@@ -264,13 +330,12 @@ struct CommentAddPanel: View {
                     tool("calendar.badge.clock", canSchedule ? "Send later" : "Send later (write the comment first)") { laterOpen.toggle() }
                         .disabled(!canSchedule)
                         .popover(isPresented: $laterOpen, arrowEdge: .top) {
-                            SchedulePanel { at in
-                                laterOpen = false
-                                panel.close()
-                                onSchedule(at)
-                            }
+                            schedulePanel
                         }
                 }
+            }
+            if fixture?.panelsInline == true {
+                schedulePanel.disabled(!canSchedule)
             }
             if !commands.isEmpty {
                 Divider().padding(.vertical, 4)
@@ -284,6 +349,15 @@ struct CommentAddPanel: View {
         .accessibilityLabel("Add to the comment, or act on the task")
     }
 
+    private var schedulePanel: some View {
+        SchedulePanel(fixture: fixture) { at in
+            guard inputRule.acceptsFocus, canSchedule else { return }
+            laterOpen = false
+            panel.close()
+            onSchedule(at)
+        }
+    }
+
     private func heading(_ text: String) -> some View {
         Text(text).font(.caption2.weight(.medium)).tracking(0.5).foregroundStyle(.tertiary)
             .padding(.horizontal, 6).padding(.top, 4)
@@ -291,7 +365,7 @@ struct CommentAddPanel: View {
     }
 
     private func tool(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: icon).font(.system(size: 13)).frame(width: 30, height: 28).contentShape(Rectangle()) }
+        NativeSessionButton(action: action) { Image(systemName: icon).font(.system(size: 13)).frame(width: 30, height: 28).contentShape(Rectangle()) }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help(label)
@@ -317,10 +391,10 @@ struct SlashPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let sub {
-                    Button { self.sub = nil } label: { Label(sub.label, systemImage: "chevron.left").font(.caption.weight(.medium)) }
+                    NativeSessionButton { self.sub = nil } label: { Label(sub.label, systemImage: "chevron.left").font(.caption.weight(.medium)) }
                         .buttonStyle(.plain).foregroundStyle(.secondary).padding(.bottom, 4)
                     ForEach(sub.options) { o in
-                        Button {
+                        NativeSessionButton {
                             o.run()
                             onDone()
                         } label: {
@@ -336,9 +410,9 @@ struct SlashPanel: View {
                 } else {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-                        TextField("Search", text: $query).textFieldStyle(.plain).accessibilityLabel("Search commands")
+                        NativeSessionTextField("Search", text: $query).textFieldStyle(.plain).accessibilityLabel("Search commands")
                         if !query.isEmpty {
-                            Button { query = "" } label: { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.plain)
+                            NativeSessionButton { query = "" } label: { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.plain)
                                 .accessibilityLabel("Clear search")
                         }
                     }
@@ -353,7 +427,7 @@ struct SlashPanel: View {
                                     .foregroundStyle(.tertiary).padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 2)
                             }
                             ForEach(items) { c in
-                                Button {
+                                NativeSessionButton {
                                     if !c.options.isEmpty { sub = c }
                                     else {
                                         c.run?()
@@ -385,20 +459,41 @@ struct SlashPanel: View {
 /// "Send later": a time of your own, or the quick choices.
 struct SchedulePanel: View {
     let onPick: (Date) -> Void
+    var fixture: NativeTaskCommentFixture? = nil
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeSessionInputScope) private var scope
+    @Environment(\.isEnabled) private var enabled
+    @State private var inputRule = NativeSessionInputRule()
     @State private var custom = Date().addingTimeInterval(3600)
 
+    init(fixture: NativeTaskCommentFixture? = nil, onPick: @escaping (Date) -> Void) {
+        self.fixture = fixture
+        self.onPick = onPick
+    }
+
+    private func pick(_ at: Date) {
+        guard inputRule.acceptsFocus, at > Date() else { return }
+        onPick(at)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        inputRule.bind(to: scope)
+        inputRule.update(active: scope == nil ? active : true, enabled: enabled)
+        fixture?.schedule = { pick($0) }
+        return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                DatePicker("Pick a time", selection: $custom, displayedComponents: [.date, .hourAndMinute]).labelsHidden()
+                NativeSessionDatePicker(selection: Binding(get: { custom }, set: {
+                    guard inputRule.acceptsFocus else { return }
+                    custom = $0
+                }))
                     .help("Your computer's time")
                 Text("Local").font(.caption).foregroundStyle(.secondary)
-                Button("Schedule") { onPick(custom) }.buttonStyle(.borderedProminent).tint(TaskTone.accent).controlSize(.small)
+                NativeSessionButton("Schedule") { pick(custom) }.buttonStyle(.borderedProminent).tint(TaskTone.accent).controlSize(.small)
                     .disabled(custom <= Date())
             }
             .padding(.bottom, 4)
             ForEach(CrmComments.schedulePresets(), id: \.key) { p in
-                Button { onPick(p.at) } label: {
+                NativeSessionButton { pick(p.at) } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "calendar.badge.clock").font(.caption).foregroundStyle(.tertiary)
                         Text(p.label)

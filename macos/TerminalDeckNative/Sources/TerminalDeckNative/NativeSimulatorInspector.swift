@@ -18,9 +18,9 @@ struct InspectPanel: View {
                 HStack(spacing: 8) {
                     Text("Discard \(model.markers.count) marker\(model.markers.count == 1 ? "" : "s")?")
                     Spacer(minLength: 4)
-                    Button("Keep") { model.confirmingDiscard = false }
+                    NativeSessionButton("Keep") { model.confirmingDiscard = false }
                         .buttonStyle(.borderless)
-                    Button("Discard", role: .destructive) { model.stopInspecting() }
+                    NativeSessionButton("Discard", role: .destructive) { model.stopInspecting() }
                 }
                 .font(.callout)
                 .accessibilityAddTraits(.isModal)
@@ -79,7 +79,7 @@ struct InspectPanel: View {
             if model.reading {
                 ProgressView().controlSize(.small)
             }
-            Button {
+            NativeSessionButton {
                 model.readAgain()
             } label: {
                 Label("Read again", systemImage: "arrow.clockwise")
@@ -97,7 +97,7 @@ struct InspectPanel: View {
                     .toggleStyle(.switch).controlSize(.mini).font(.caption).fixedSize()
                     .help("Off: a small popup at the marker instead of this panel")
             }
-            Button("Done") { model.leaveInspect() }
+            NativeSessionButton("Done") { model.leaveInspect() }
         }
     }
 }
@@ -122,7 +122,7 @@ private struct MarkerList: View {
                         let on = ref != nil && ref == model.focusRef
                         let away = !drawn.contains(marker.id)
                         HStack(spacing: 0) {
-                        Button {
+                        NativeSessionButton {
                             if let ref { model.focus(ref, reveal: true) }
                         } label: {
                         HStack(spacing: 8) {
@@ -142,7 +142,7 @@ private struct MarkerList: View {
                         .contentShape(.rect)
                         }
                         .buttonStyle(SIDEBARRowStyle())
-                            Button {
+                            NativeSessionButton {
                                 model.unmark(entry.id)
                             } label: {
                                 Label("Delete marker \(entry.n)", systemImage: "trash")
@@ -162,8 +162,8 @@ private struct MarkerList: View {
                         .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                         .contentShape(.rect)
                         .contextMenu {
-                            if let ref { Button("Reveal") { model.focus(ref, reveal: true) } }
-                            Button("Delete marker", role: .destructive) { model.unmark(entry.id) }
+                            if let ref { NativeSessionButton("Reveal") { model.focus(ref, reveal: true) } }
+                            NativeSessionButton("Delete marker", role: .destructive) { model.unmark(entry.id) }
                         }
                     }
                 }
@@ -267,7 +267,7 @@ private struct ElementDetails: View {
 
         HStack {
             let marked = model.marker(for: node.ref)
-            Button(marked == nil ? "Mark" : "Unmark #\(marked!.n)") { model.toggleMark(node.ref) }
+            NativeSessionButton(marked == nil ? "Mark" : "Unmark #\(marked!.n)") { model.toggleMark(node.ref) }
         }
         .controlSize(.small)
     }
@@ -349,7 +349,7 @@ private struct OutlineRowView: View {
         HStack(spacing: 4) {
             Color.clear.frame(width: CGFloat(min(row.depth, 24)) * 12, height: 1)
             if row.hasChildren {
-                Button {
+                NativeSessionButton {
                     if open { model.expanded.remove(node.ref) } else { model.expanded.insert(node.ref) }
                 } label: {
                     Image(systemName: "chevron.right")
@@ -389,7 +389,7 @@ private struct OutlineRowView: View {
             if inside { model.listHoverRef = node.ref } else if model.listHoverRef == node.ref { model.listHoverRef = nil }
         }
         .contextMenu {
-            Button(model.marker(for: node.ref) == nil ? "Mark" : "Unmark") { model.toggleMark(node.ref) }
+            NativeSessionButton(model.marker(for: node.ref) == nil ? "Mark" : "Unmark") { model.toggleMark(node.ref) }
         }
     }
 }
@@ -417,7 +417,7 @@ private struct ChecksList: View {
                     }
                 }
                 ForEach(model.findings) { finding in
-                    Button {
+                    NativeSessionButton {
                         model.focus(finding.ref, reveal: true)
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -433,8 +433,8 @@ private struct ChecksList: View {
                     }
                     .buttonStyle(SIDEBARRowStyle())
                     .contextMenu {
-                        Button("Reveal") { model.focus(finding.ref, reveal: true) }
-                        Button(model.marker(for: finding.ref) == nil ? "Mark" : "Unmark") { model.toggleMark(finding.ref) }
+                        NativeSessionButton("Reveal") { model.focus(finding.ref, reveal: true) }
+                        NativeSessionButton(model.marker(for: finding.ref) == nil ? "Mark" : "Unmark") { model.toggleMark(finding.ref) }
                     }
                     .listRowBackground(model.focusRef == finding.ref ? Color.primary.opacity(0.07) : Color.clear)
                     .onHover { inside in
@@ -470,7 +470,7 @@ private struct SendBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("What should change?", text: $model.note, axis: .vertical)
+            NativeSessionTextField("What should change?", text: $model.note, axis: .vertical)
                 .lineLimit(2...6)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Message for the agent")
@@ -554,14 +554,14 @@ struct ShotPopover: View {
                         .truncationMode(.middle)
                         .help(state.shot.path)
                     Spacer()
-                    Button("Reveal") { model.revealShot() }
+                    NativeSessionButton("Reveal") { model.revealShot() }
                         .buttonStyle(.borderless)
                 }
-                    TextField("What should the agent look at?", text: Binding(
+                    NativeSessionTextField("What should the agent look at?", text: Binding(
                     get: { model.shot?.instruction ?? "" },
                     set: { model.shot?.instruction = $0; model.shot?.problem = "" }))
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await model.sendShot() } }
+                    .sessionOnSubmit { Task { await model.sendShot() } }
                 HStack {
                     let line = !state.problem.isEmpty ? state.problem : model.sessionReason
                     if !line.isEmpty {

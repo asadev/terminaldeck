@@ -31,13 +31,21 @@ internal static class ChatAppearance
   {
     var row = new Expander
     {
-      Header = new TextBlock { Text = (working ? "◌  " : failed ? "!  " : "✓  ") + text, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis },
+      Header = FailedTint(new TextBlock { Text = (working ? "◌  " : failed ? "!  " : "✓  ") + text, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis }, failed && !working),
       Content = new TextBlock { Text = details, FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontFamily = TerminalDeck.App.Views.DeckFonts.Mono },
       HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
       Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), MinHeight = 28
     };
     AutomationProperties.SetName(row, text + (working ? ", Working…" : failed ? ", Failed" : ", Done"));
     return row;
+  }
+  // A failed step stands on its own (Decker, 8 Nov D1) and is marked in the caution colour, as the folded row's "· 1 failed" was.
+  private static TextBlock FailedTint(TextBlock text, bool failed)
+  {
+    if (!failed) return text;
+    try { if (Application.Current.Resources["SystemFillColorCautionBrush"] is Brush color) text.Foreground = color; }
+    catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or KeyNotFoundException) { }
+    return text;
   }
   public static Grid Reply(FrameworkElement content, string provider)
   {

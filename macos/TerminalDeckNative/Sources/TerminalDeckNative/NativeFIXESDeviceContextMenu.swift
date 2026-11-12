@@ -248,9 +248,9 @@ struct NativeFIXESDeviceContextMenu: ViewModifier {
             .padding(.trailing, 6)
         }
         .alert(alertTitle, isPresented: Binding(get: { pending != nil }, set: { if !$0 { interaction.cancel() } })) {
-            if pending == .rename { TextField("Device name", text: $interaction.name) }
-            Button("Cancel", role: .cancel) { interaction.cancel() }
-            Button(confirmTitle, role: pending?.destructive == true ? .destructive : nil) {
+            if pending == .rename { NativeSessionTextField("Device name", text: $interaction.name) }
+            NativeSessionButton("Cancel", role: .cancel) { interaction.cancel() }
+            NativeSessionButton(confirmTitle, role: pending?.destructive == true ? .destructive : nil) {
                 if let command = interaction.confirm() { execute(command.action, deviceID: command.deviceID, name: command.name) }
             }
             .disabled(pending == .rename && interaction.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -281,13 +281,13 @@ struct NativeFIXESDeviceContextMenu: ViewModifier {
                     Menu {
                         ForEach(sessionGroups, id: \.name) { group in
                             Section(group.name) {
-                                ForEach(group.rows) { row in Button(row.label) { showBeside(row) } }
+                                ForEach(group.rows) { row in NativeSessionButton(row.label) { showBeside(row) } }
                             }
                         }
                     } label: { Label(action.title, systemImage: action.symbol) }
                     .disabled(sessionGroups.isEmpty || !action.available(for: entry, working: busy))
                 } else {
-                    Button(role: action == .delete ? .destructive : nil) { choose(action) } label: {
+                    NativeSessionButton(role: action == .delete ? .destructive : nil) { choose(action) } label: {
                         if action == .sendToHoot, let owl = NativeFIXESDeviceContextMenu.hootImage {
                             Label { Text(action.title) } icon: { Image(nsImage: owl) } // Hoot keeps his coloured owl
                         } else {
@@ -437,7 +437,7 @@ struct NativeFIXESDeviceSendButton: View {
     @State private var sending = false
     @State private var sent = false
     var body: some View {
-        Button {
+        NativeSessionButton {
             guard let id = model.device?.id, let send = NativeFIXESDeviceMenuServices.sendScreenToHoot else { return }
             sending = true
             Task { @MainActor in

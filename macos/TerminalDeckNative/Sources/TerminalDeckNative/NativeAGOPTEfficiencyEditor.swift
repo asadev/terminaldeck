@@ -33,7 +33,7 @@ struct NativeAGOPTEfficiencyEditor: View {
             }
             NativeSettingRow(label: "Monthly API budget", help: "Money in USD for API accounts. Plan accounts use tokens. Leave blank to inherit; 0 means no budget.") {
                 HStack(spacing: 6) {
-                    TextField(defaultLabel, value: field(\.monthlyBudgetUSD), format: .number.grouping(.never))
+                    NativeSessionNumberField(defaultLabel, value: field(\.monthlyBudgetUSD), format: .number.grouping(.never))
                         .textFieldStyle(.roundedBorder).frame(width: 160)
                         .accessibilityLabel("Monthly API budget in USD")
                     Text("USD").foregroundStyle(.secondary)
@@ -55,7 +55,7 @@ struct NativeAGOPTEfficiencyEditor: View {
             }
             NativeSettingRow(label: "Warn at", help: "Percentage of the token budget, from 1 to 100. The app default is 80%.") {
                 HStack(spacing: 6) {
-                    TextField(defaultLabel, value: field(\.warningPercent), format: .number.grouping(.never))
+                    NativeSessionNumberField(defaultLabel, value: field(\.warningPercent), format: .number.grouping(.never))
                         .textFieldStyle(.roundedBorder).frame(width: 120).accessibilityLabel("Budget warning percentage")
                     Text("%").foregroundStyle(.secondary)
                 }
@@ -87,7 +87,7 @@ struct NativeAGOPTEfficiencyEditor: View {
     }
 
     private func tokenField(_ label: String, value: Binding<Int?>) -> some View {
-        TextField(defaultLabel, value: value, format: .number.grouping(.never))
+        NativeSessionNumberField(defaultLabel, value: value, format: .number.grouping(.never))
             .textFieldStyle(.roundedBorder).frame(minWidth: 160, maxWidth: 260)
             .accessibilityLabel(label)
     }

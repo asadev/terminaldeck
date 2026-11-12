@@ -24,8 +24,8 @@ extension NativeCompositionProduction {
             power: { id, on in on ? try await manager.boot(id) : try await manager.shutDown(id) },
             stream: { id, row in
                 if id.hasPrefix("mac:") { return NativeMacReachSwitchingStream(display: id) }
-                if let direct = await NativePhoneDeviceScreens.shared.stream(row) { return direct }
-                return BackendPhoneDeviceStillStream { try await manager.capture(id).png }
+                // 9 Nov: the direct screen, with screenshots standing in only until it shows (never for the whole watch).
+                return await NativePhoneDeviceScreens.shared.phoneStream(row) { try await manager.capture(id).png }
             },
             input: { id, input in
                 if id.hasPrefix("mac:") {
@@ -97,6 +97,8 @@ extension NativeCompositionProduction {
         source.macAllowed = { NativeMacScreenSetting.allowed }
         source.macRefusal = NativeMacScreenSetting.refusal
         source.record = { step in try await NativePhoneDeviceRecording.run(step) }
+        // 9 Nov: a phone's finger on a simulator or emulator as it moves, straight onto its direct input.
+        source.touch = { id, phase, x, y in await NativePhoneDeviceScreens.shared.touch(id, phase: phase, x: x, y: y) }
         // stream step 2 (2 Nov): the screen's video goes on the connection's link once it has moved there (same network,
         // internet peer-to-peer, Cloudflare TURN), the relay otherwise. Nothing to set.
         source.direct = { [endpoint] id, data, lane in await endpoint.sendDirect(id, data: data, lane: lane) }
@@ -289,15 +291,30 @@ extension NativeCompositionProduction {
     /// Shared and safe across threads (CIContext is).
     nonisolated(unsafe) static let context = CIContext(options: [.useSoftwareRenderer: false, .cacheIntermediates: false])
 
+    /// 9 Nov (Asad: "streaming simulator from ios app is too slow … blurry … moves slow", while this Mac's screen is
+    /// fast): a phone's view of a simulator or emulator. Before, a direct screen that showed nothing within
+    /// `firstPictureWithin` (seen on 9 Nov while the Mac was busy: the device list took 7-13 s) was replaced by
+    /// `simctl`/`adb` screenshots for the WHOLE watch (a few pictures a second, each sent as a new moving picture, so
+    /// blurry), silently, and taps then went the slow tool way. Now screenshots only stand in until the direct screen
+    /// shows; it keeps being tried and takes over the moment it does (input with it).
+    func phoneStream(_ row: NativeRPCValue, capture: @escaping @Sendable () async throws -> Data) async -> any BackendPhoneDeviceStream {
+        let still = BackendPhoneDeviceStillStream(capture: capture)
+        guard let id = row["id"].string,
+              DeviceDirect.hasPath(for: DeviceDetails(id: id, name: row["name"].string ?? id, platform: row["platform"].string ?? "ios",
+                                                      kind: row["kind"].string ?? "simulator")) else { return still }
+        return NativePhoneSwitchingStream(id: id, row: row, screens: self, still: still)
+    }
+
     /// A stream from the device's direct screen, or nil when it has none (the caller uses screenshots).
-    func stream(_ row: NativeRPCValue) async -> NativePhoneDirectStream? {
+    /// `ignoringCooldown`: a phone's view tries again even within the panel's two minutes after a failure.
+    func stream(_ row: NativeRPCValue, ignoringCooldown: Bool = false) async -> NativePhoneDirectStream? {
         guard let id = row["id"].string else { return nil }
         if let screen = screens[id], screen.ended == nil {
             screen.users += 1
             return NativePhoneDirectStream(screen: screen, owner: self)
         }
         let details = DeviceDetails(id: id, name: row["name"].string ?? id, platform: row["platform"].string ?? "ios", kind: row["kind"].string ?? "simulator")
-        guard let source = DeviceDirect.source(for: details) else { return nil }
+        guard let source = DeviceDirect.source(for: details, ignoringCooldown: ignoringCooldown) else { return nil }
         let screen = Screen(id: id, source: source)
         source.onSurface = { [weak screen] surface in
             guard let screen else { return }
@@ -320,6 +337,9 @@ extension NativeCompositionProduction {
             await wait(screen, after: screen.generation, within: max(0.05, deadline.timeIntervalSinceNow))
         }
         guard screen.surface != nil, screen.ended == nil else {
+            // Said in the log (9 Nov: this was silent, so a phone's slow screenshot view left no trace).
+            let why = screen.ended ?? "nothing within \(Int(Self.firstPictureWithin)) s"
+            NativeCompositionRoot.note("phone devices: \(id) direct screen did not show (\(why))")
             if screens[id] === screen { screens[id] = nil }
             source.stop()
             DeviceDirect.failed(id)
@@ -356,6 +376,17 @@ extension NativeCompositionProduction {
         screen.source.stop()
     }
 
+    /// 9 Nov: one finger step (down, move, up) from a phone straight onto a watched device's direct input; false when
+    /// it cannot take a finger there now (the caller replays the gesture as a tap or a swipe). A finger that went down
+    /// this way keeps going this way until it lifts (the direct sources keep a gesture on one touchscreen).
+    nonisolated func touch(_ id: String, phase: String, x: Double, y: Double) async -> Bool {
+        await MainActor.run {
+            guard let screen = screens[id], screen.ended == nil, screen.source.inputReady else { return false }
+            if phase == "down", !screen.source.canTouch { return false }
+            return screen.source.send(.touch(phase: phase, x: x, y: y))
+        }
+    }
+
     /// Input through a watched device's own direct path; false when it cannot take it there.
     nonisolated func send(_ id: String, _ input: BackendPhoneDeviceInput) async -> Bool {
         await MainActor.run {
@@ -373,13 +404,36 @@ extension NativeCompositionProduction {
     nonisolated static func pixels(_ box: DirectSurfaceBox) -> BackendPhoneDevicePixels? {
         let image = CIImage(ioSurface: box.surface)
         let width = Int(image.extent.width) / 2 * 2, height = Int(image.extent.height) / 2 * 2
-        guard width >= 2, height >= 2 else { return nil }
-        var made: CVPixelBuffer?
-        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
-        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &made) == kCVReturnSuccess,
-              let made else { return nil }
+        guard width >= 2, height >= 2, let made = pooledBuffer(width: width, height: height) else { return nil }
         context.render(image, to: made, bounds: CGRect(x: 0, y: 0, width: width, height: height), colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
         return BackendPhoneDevicePixels(made, capturedAt: 0)
+    }
+
+    /// 9 Nov: the copies come from a pool per size (a simulator's 1206 × 2622 is 12.6 MB: a new IOSurface for every
+    /// picture at 30 a second was a fresh allocation each time, where this Mac's screen arrives in ScreenCaptureKit's
+    /// own recycled buffers). A buffer goes back to the pool once the encoder and the last-picture keeper let it go.
+    nonisolated private static let poolLock = NSLock()
+    nonisolated(unsafe) private static var pools: [String: CVPixelBufferPool] = [:]
+
+    nonisolated static func pooledBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        let key = "\(width)x\(height)"
+        let pool = poolLock.withLock { () -> CVPixelBufferPool? in
+            if let pool = pools[key] { return pool }
+            let attributes: [CFString: Any] = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey: width,
+                                               kCVPixelBufferHeightKey: height, kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+            var made: CVPixelBufferPool?
+            guard CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &made) == kCVReturnSuccess, let made else { return nil }
+            // A few sizes at most (two devices a phone, a turn of each); an old size's pool goes.
+            if pools.count >= 4 { pools.removeAll() }
+            pools[key] = made
+            return made
+        }
+        var buffer: CVPixelBuffer?
+        if let pool, CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer { return buffer }
+        // No pool: a buffer of its own, as before.
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer) == kCVReturnSuccess else { return nil }
+        return buffer
     }
 
 }
@@ -417,6 +471,154 @@ extension NativeCompositionProduction {
         guard !stopped else { return }
         stopped = true
         owner?.release(screen)
+    }
+}
+
+/// 9 Nov: one phone viewer's video of a simulator or emulator that has a direct path — the direct screen (the same
+/// zero-copy surface the Mac's panel shows), and screenshots only until it shows. The first `standInAfter` seconds wait
+/// for the direct screen alone (it normally shows within a second; a screenshot would only be a slow, blurry first
+/// picture). After that screenshots stand in while the direct screen is tried again (`retries`), and it takes over the
+/// moment it shows; input follows it (`NativePhoneDeviceScreens.send`). A direct screen that ends under the view (its
+/// helper died) hands back to screenshots and is tried again.
+@MainActor final class NativePhoneSwitchingStream: BackendPhoneDeviceStream {
+    /// Seconds before each next try of the direct screen while screenshots stand in: soon, then less often.
+    static let retries: [Double] = [3, 10, 30, 60]
+    /// The first seconds wait for the direct screen only.
+    static let standInAfter: Double = 2
+    /// The pause after an unchanged screenshot before the next (one screenshot takes about as long as a slice, so the
+    /// still stream's own pause never came and the Mac took screenshots back to back on a still screen).
+    static let stillPause: Double = 0.2
+
+    private let id: String
+    private let row: NativeRPCValue
+    private weak var screens: NativePhoneDeviceScreens?
+    private let still: BackendPhoneDeviceStillStream
+    private var direct: NativePhoneDirectStream?
+    private var attempt: Task<Void, Never>?
+    private var trying = false
+    private var tries = 0
+    private var stoodIn = false
+    private var quietUntil = Date.distantPast
+    private var stopped = false
+    private let opened = Date()
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    init(id: String, row: NativeRPCValue, screens: NativePhoneDeviceScreens, still: BackendPhoneDeviceStillStream) {
+        self.id = id; self.row = row; self.screens = screens; self.still = still
+        tryDirect(after: 0)
+    }
+
+    func pixels(within seconds: Double) async -> BackendPhoneDevicePixelsAnswer {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !stopped, !Task.isCancelled {
+            if let direct {
+                let answer = await direct.pixels(within: max(0, deadline.timeIntervalSinceNow))
+                guard case .ended = answer, !stopped else { return answer }
+                // The direct screen ended under this view: screenshots stand in, and it is tried again.
+                if self.direct === direct { self.direct = nil }
+                NativeCompositionRoot.note("phone devices: \(id) direct screen ended (\(direct.endReason())); screenshots stand in")
+                direct.stop()
+                tryDirect(after: Self.retries[0])
+                continue
+            }
+            let left = deadline.timeIntervalSinceNow
+            let grace = opened.addingTimeInterval(Self.standInAfter).timeIntervalSinceNow
+            if trying, grace > 0 {
+                if left <= 0 { return .unchanged }
+                await waitForDirect(within: min(grace, left))
+                continue
+            }
+            if !stoodIn {
+                stoodIn = true
+                NativeCompositionRoot.note("phone devices: \(id) screenshots stand in until the direct screen shows")
+            }
+            // After an unchanged screenshot, a pause (a direct screen that shows meanwhile still takes over at once).
+            let pause = quietUntil.timeIntervalSinceNow
+            if pause > 0 {
+                if left <= 0 { return .unchanged }
+                await waitForDirect(within: min(pause, left))
+                continue
+            }
+            // A screenshot, in short steps, so a direct screen that shows meanwhile takes over at once.
+            let answer = await still.pixels(within: min(max(0, left), 0.25))
+            if case .unchanged = answer { quietUntil = Date().addingTimeInterval(Self.stillPause) }
+            if case .unchanged = answer, deadline.timeIntervalSinceNow > 0 { continue }
+            if case .ended = answer, direct != nil { continue }
+            return answer
+        }
+        return .ended
+    }
+
+    func endReason() async -> String {
+        if let direct { return direct.endReason() }
+        return await still.endReason()
+    }
+
+    func stop() async {
+        guard !stopped else { return }
+        stopped = true
+        attempt?.cancel(); attempt = nil
+        direct?.stop(); direct = nil
+        wakeAll()
+        await still.stop()
+    }
+
+    // MARK: Inside
+
+    private func tryDirect(after delay: Double) {
+        attempt?.cancel()
+        attempt = Task { [weak self] in
+            var wait = delay
+            while !Task.isCancelled {
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                guard !Task.isCancelled, let self, let next = await self.directOnce() else { return }
+                wait = next
+            }
+        }
+    }
+
+    /// One try of the direct screen: nil when there is nothing more to try (it took over, or this view ended), else
+    /// the seconds until the next try.
+    private func directOnce() async -> Double? {
+        guard !stopped, direct == nil, let screens else { return nil }
+        trying = true
+        let found = await screens.stream(row, ignoringCooldown: true)
+        trying = false
+        defer { wakeAll() }
+        guard let found else {
+            if stopped { return nil }
+            let wait = Self.retries[min(tries, Self.retries.count - 1)]
+            tries += 1
+            return wait
+        }
+        guard !stopped, direct == nil else { found.stop(); return nil }
+        direct = found
+        if stoodIn { NativeCompositionRoot.note("phone devices: \(id) direct screen took over from screenshots") }
+        return nil
+    }
+
+    /// Until the direct screen shows or its try fails (or `seconds`); a cancelled caller stops waiting at once.
+    private func waitForDirect(within seconds: Double) async {
+        let key = UUID()
+        let timer = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+            self?.waiters.removeValue(forKey: key)?.resume()
+        }
+        defer { timer.cancel() }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (resume: CheckedContinuation<Void, Never>) in
+                if Task.isCancelled || stopped { resume.resume(); return }
+                waiters[key] = resume
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.waiters.removeValue(forKey: key)?.resume() }
+        }
+    }
+
+    private func wakeAll() {
+        let waiting = waiters
+        waiters.removeAll()
+        for waiter in waiting.values { waiter.resume() }
     }
 }
 

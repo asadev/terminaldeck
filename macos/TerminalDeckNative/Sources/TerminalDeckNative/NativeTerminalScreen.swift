@@ -52,7 +52,7 @@ struct NativeSessionBody<Bar: View>: View {
                 NativePoppedOutCard(sessionId: session.sessionId)
             } else {
                 VStack(spacing: 0) {
-                    bar()
+                    bar().id(session.sessionId)
                     // A refusal gets its own row, including in split panes whose header has a fixed height.
                     if case .local = session.target, session.info?.provider == "claude" {
                         NativeDefaultClaudeRefusal(sessionId: session.sessionId, cwd: session.info?.cwd,
@@ -98,6 +98,7 @@ struct NativeSessionBody<Bar: View>: View {
                 .onDisappear { session.screenDisappeared() }
             }
         }
+        .nativeSessionInputScope(ownerID: session.sessionId + (session.isChat ? "/" + session.chatModel().conversationID : ""))
         .background(NativeWindowReader { now in
             if let old = window, old !== now { NativePoppedSessions.shared.gone(session.sessionId, from: old) }
             window = now

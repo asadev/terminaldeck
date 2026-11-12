@@ -41,6 +41,8 @@ struct NativeOverviewScreen: View {
     var project: PROJProject?
     var folder: String?
     @ObservationIgnored private var subscriptions: [() -> Void] = []
+    @ObservationIgnored private var eventStatuses: [String: String] = [:]
+    @ObservationIgnored private var removedSessions = Set<String>()
     private var generation = 0
     private var usageVersion = 0
     private var watchedFolder: String?
@@ -139,8 +141,19 @@ struct NativeOverviewScreen: View {
                 guard let raw = args.first, let value = try? NativeRPCValue.fromFoundation(raw) else { return }
                 self?.acceptUsage(value)
             })
-            for (event, key) in [("session:status", "sessions"), ("session:created", "sessions"),
-                ("session:removed", "sessions"), ("tasks:changed", "tasks"),
+            subscriptions.append(observe("session:status") { [weak self] args in self?.acceptSessionStatus(args) })
+            subscriptions.append(observe("session:removed") { [weak self] args in
+                guard let self, let id = args.first as? String else { return }
+                self.acceptSessionRemoval(id)
+                Task { await self.reload("sessions") }
+            })
+            subscriptions.append(observe("session:created") { [weak self] args in
+                guard let self else { return }
+                if let row = args.first as? [String: Any], let id = row["id"] as? String { self.removedSessions.remove(id) }
+                Task { await self.reload("sessions") }
+            })
+            for (event, key) in [("session:renamed", "sessions"),
+                ("session:switched", "sessions"), ("session:exit", "sessions"), ("tasks:changed", "tasks"),
                 ("receiver:changed", "receiver"), ("git:status-changed", "git")] {
                 subscriptions.append(observe(event) { [weak self] _ in Task { await self?.reload(key) } })
             }
@@ -169,9 +182,32 @@ struct NativeOverviewScreen: View {
               NativeTranscriptPaths.resolved(folder) == NativeTranscriptPaths.resolved(cwd) else { return }
         usageVersion += 1
         if value["ok"].bool == false || value["error"].string != nil {
-            cards["usage"] = nil
-            failures["usage"] = value["error"].string ?? value["message"].string ?? "Usage could not be read."
-        } else { cards["usage"] = value; failures["usage"] = nil }
+            if cards["usage"] != nil { cards["usage"] = nil }
+            let message = value["error"].string ?? value["message"].string ?? "Usage could not be read."
+            if failures["usage"] != message { failures["usage"] = message }
+        } else {
+            if cards["usage"] != value { cards["usage"] = value }
+            if failures["usage"] != nil { failures["usage"] = nil }
+        }
+    }
+    // Status events already carry the changed row's status. Re-reading every session on each event both
+    // redraws all overview cards and repeats the filesystem work needed to assemble the session list.
+    func acceptSessionStatus(_ args: [Any]) {
+        guard active, args.count > 1, let id = args[0] as? String, !id.isEmpty, let status = args[1] as? String,
+              !removedSessions.contains(id) else { return }
+        eventStatuses[id] = status
+        guard var rows = cards["sessions"]?.elements,
+              let index = rows.firstIndex(where: { $0["id"].string == id }), rows[index]["status"].string != status else { return }
+        rows[index] = rows[index].setting("status", .string(status))
+        cards["sessions"] = .array(rows)
+    }
+    func acceptSessionRemoval(_ id: String) {
+        eventStatuses[id] = nil
+        removedSessions.insert(id)
+        if let rows = cards["sessions"]?.elements {
+            let kept = rows.filter { $0["id"].string != id }
+            if kept.count != rows.count { cards["sessions"] = .array(kept) }
+        }
     }
     func reload(_ key: String) async {
         guard active, let folder else { return }; let mine = generation, usageAtStart = usageVersion
@@ -197,19 +233,24 @@ struct NativeOverviewScreen: View {
                 throw NativeRPCError(code: "unavailable", message: value["message"].string ?? value["error"].string ?? "The reader returned no data.")
             }
             if key == "sessions", let rows = value.elements {
-                let statuses = sessionStatuses()
-                value = .array(rows.map { row in statuses[row["id"].string ?? ""].map { row.setting("status", .string($0)) } ?? row })
+                // Read the event cache after the await: the sidebar can still be one publication behind.
+                let statuses = sessionStatuses().merging(eventStatuses) { _, event in event }
+                value = .array(rows.filter { !removedSessions.contains($0["id"].string ?? "") }.map { row in
+                    statuses[row["id"].string ?? ""].map { row.setting("status", .string($0)) } ?? row
+                })
             }
-            cards[key] = value; failures[key] = nil
+            if cards[key] != value { cards[key] = value }
+            if failures[key] != nil { failures[key] = nil }
         } catch {
             guard generation == mine, active else { return }
             if key == "usage", usageVersion != usageAtStart { return }
-            failures[key] = error.localizedDescription
+            if failures[key] != error.localizedDescription { failures[key] = error.localizedDescription }
         }
     }
     func stop() {
         generation += 1; usageVersion += 1; active = false
         subscriptions.forEach { $0() }; subscriptions = []
+        eventStatuses = [:]; removedSessions = []
         if let watchedFolder { releaseWatch(watchedFolder) }; watchedFolder = nil
     }
     func belongs(_ row: NativeRPCValue) -> Bool {

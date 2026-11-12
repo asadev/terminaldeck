@@ -37,12 +37,12 @@ struct NativeCodingAIAccountRow: View {
                         }
                     }
                     Spacer(minLength: 8)
-                    Button(model.removeClosesSessions ? "Close them and remove" : "Remove", role: .destructive) {
+                    NativeSessionButton(model.removeClosesSessions ? "Close them and remove" : "Remove", role: .destructive) {
                         removing = nil
                         store.remove(account, closingSessions: model.removeClosesSessions)
                     }
                     .disabled(store.busy)
-                    Button("Keep it") { removing = nil }
+                    NativeSessionButton("Keep it") { removing = nil }
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
@@ -94,11 +94,11 @@ struct NativeCodingAIAccountRow: View {
                     if !keepCopy {
                         HStack(spacing: 10) {
                             ForEach(store.copies(of: account)) { copy in
-                                Button("Remove copy") { store.removeCopy(copy) }
+                                NativeSessionButton("Remove copy") { store.removeCopy(copy) }
                                     .disabled(store.busy)
                                     .help("Remove the saved login and move its folder to a backup. All history is kept.")
                             }
-                            Button("Keep") { keepCopy = true }
+                            NativeSessionButton("Keep") { keepCopy = true }
                         }.font(.callout)
                     }
                 }
@@ -134,7 +134,7 @@ struct NativeCodingAIAccountRow: View {
             if !account.isAPIKey, model.offersSignIn {
                 // Claude and Codex: the app runs the sign-in and the browser opens (no terminal).
                 // The same button is "Sign in again" for an account that was signed out or expired.
-                Button(account.lastUsedAt == nil ? "Sign in" : "Sign in again") {
+                NativeSessionButton(account.lastUsedAt == nil ? "Sign in" : "Sign in again") {
                     NativeAccountSignInModel.shared.open(account, store: store)
                 }
                     .disabled(store.busy)
@@ -142,11 +142,11 @@ struct NativeCodingAIAccountRow: View {
             if !account.isAPIKey, model.offersSignOut {
                 // This Mac's own login is not the app's: signing it out signs the AI out for the Terminal
                 // and every other app too, and the AI starts on its first-run screen again. Never one click.
-                Button("Sign out") { if account.system { confirmMacSignOut = true } else { store.signOut(account) } }
+                NativeSessionButton("Sign out") { if account.system { confirmMacSignOut = true } else { store.signOut(account) } }
                     .disabled(store.busy)
                     .confirmationDialog("Sign \(CodingAICatalog.label(account.provider ?? "claude")) out on this Mac?", isPresented: $confirmMacSignOut) {
-                        Button("Sign Out on This Mac", role: .destructive) { store.signOut(account) }
-                        Button("Cancel", role: .cancel) {}
+                        NativeSessionButton("Sign Out on This Mac", role: .destructive) { store.signOut(account) }
+                        NativeSessionButton("Cancel", role: .cancel) {}
                     } message: {
                         Text("This is the Mac’s own login, not one Terminal Deck keeps. Your Terminal and every app that uses \(CodingAICatalog.label(account.provider ?? "claude")) on this Mac are signed out too, and it starts with its first-run screen next time.")
                     }
@@ -157,14 +157,14 @@ struct NativeCodingAIAccountRow: View {
                     // Who uses what (same value); that row is the one place now.
                     // Every account renames here, this Mac's own login too (no longer on the session's menu).
                     if model.offersRename {
-                        Button("Rename") {
+                        NativeSessionButton("Rename") {
                             renameText = account.name
                             renamingId = account.id
                         }
                     }
                     if model.offersRenameRemove {
                         Divider()
-                        Button("Remove", role: .destructive) { removing = account }
+                        NativeSessionButton("Remove", role: .destructive) { removing = account }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -181,19 +181,19 @@ struct NativeCodingAIAccountRow: View {
 
     private var renameForm: some View {
         HStack(spacing: 6) {
-            TextField("Name", text: $renameText)
+            NativeSessionTextField("Name", text: $renameText)
                 .textFieldStyle(.roundedBorder)
-                .focused($nameFocused)
+                .sessionFocused($nameFocused)
                 .accessibilityLabel("New name for \(model.label)")
                 .onChange(of: renameText) { _, text in
                     if text.count > CodingAILogins.maxNameLength { renameText = String(text.prefix(CodingAILogins.maxNameLength)) }
                 }
-                .onSubmit(save)
-                .onExitCommand { renamingId = nil }
-            Button("Save", action: save)
+                .sessionOnSubmit(save)
+                .sessionOnExitCommand { renamingId = nil }
+            NativeSessionButton("Save", action: save)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-            Button("Cancel") { renamingId = nil }
+            NativeSessionButton("Cancel") { renamingId = nil }
         }
         .onAppear { nameFocused = true }
     }
@@ -214,7 +214,7 @@ struct NativeCodingAIAddAccountsButton: View {
 
     var body: some View {
         HStack {
-            Button {
+            NativeSessionButton {
                 shown.toggle()
             } label: {
                 Label("Add accounts", systemImage: "plus")
@@ -271,12 +271,12 @@ struct NativeCodingAIAddAccountsButton: View {
             Spacer(minLength: 8)
             switch row.action {
             case .addAccount:
-                Button("Add account") {
+                NativeSessionButton("Add account") {
                     shown = false
                     store.askForAddAccount(row.id)
                 }
             case .signIn:
-                Button("Sign in") {
+                NativeSessionButton("Sign in") {
                     shown = false
                     store.signInInstall(row.id)
                 }
@@ -337,9 +337,9 @@ struct NativeCodingAIStaleAgents: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 6) {
-                    Button(working ? "Upgrading…" : "Upgrade it") { store.upgrade(row) }
+                    NativeSessionButton(working ? "Upgrading…" : "Upgrade it") { store.upgrade(row) }
                         .disabled(working)
-                    Button("Dismiss") { store.dismiss(row) }
+                    NativeSessionButton("Dismiss") { store.dismiss(row) }
                         .buttonStyle(.borderless)
                 }
             }
@@ -348,7 +348,7 @@ struct NativeCodingAIStaleAgents: View {
             HStack(spacing: 6) {
                 Text(ReadinessDismissed.hiddenLine(hidden))
                     .foregroundStyle(.secondary)
-                Button("Show it again") { store.bringBackDismissed() }
+                NativeSessionButton("Show it again") { store.bringBackDismissed() }
                     .buttonStyle(.link)
             }
             .font(.caption)

@@ -25,7 +25,7 @@ public actor BackendHOSTChats {
         let task = Task { [manager, directory, modelCatalogue] in
             let chats = BackendSessionChats(manager: manager, directory: directory,
                 publish: { [weak self] id, snapshot in await self?.changed(id, snapshot) },
-                processStarted: { [weak self] id, pid in try await self?.processStarted(id, pid) }, modelCatalogue: modelCatalogue)
+                processStarted: { [weak self] id, pid in try await self?.processStarted(id, pid) }, hostProcessEvents: true, modelCatalogue: modelCatalogue)
             try await chats.restoreJobHistory()
             return chats
         }
@@ -33,6 +33,8 @@ public actor BackendHOSTChats {
         defer { opening = nil }
         let chats = try await task.value; engine = chats; return chats
     }
+    /// A process under this chat's AI started or ended (the helper's descendant watch).
+    public func processesChanged(_ id: String) async { await engine?.processesChanged(id) }
     private func changed(_ id: String, _ snapshot: NativeRPCValue) async {
         let job = await engine?.conversation(id)
         let value = NativeRPCValue.object([.init("id", .string(id)), .init("snapshot", snapshot),

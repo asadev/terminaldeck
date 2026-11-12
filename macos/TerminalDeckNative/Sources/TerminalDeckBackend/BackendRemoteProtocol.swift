@@ -27,7 +27,7 @@ public enum BackendRemoteProtocol {
         "devserver", "hoot", "routines", "hoot.files", "web", "controls", "usage", "send", "account", "logins", "devices",
         "settings", "windows", "hostwindows", "watch", "folders.pick", "files", "git", "panels", "browser.profiles", "browser.control",
         "device.access", "hoot.events", "chats", "terminal.picture", "browser.thumbs", "terminal.handoff", "pictures", "chats.files", "chats.history", "chats.apps", "chats.rich", "git.write",
-        "push", "activity", "widgets", "sims", "sims.record"] + panels.map { "panels." + $0 }
+        "push", "activity", "widgets", "sims", "sims.record", "sims.touch"] + panels.map { "panels." + $0 }
     public static let closeCodes = ["normal": 1000, "goingAway": 1001, "protocolError": 1002, "unsupportedData": 1003,
         "policyViolation": 1008, "messageTooBig": 1009, "internalError": 1011, "tryAgainLater": 1013]
     public static let errorCodes: Set<String> = ["bad-message", "unauthenticated", "unauthorized", "unknown-session", "too-large", "unavailable", "version"]

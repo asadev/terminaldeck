@@ -26,6 +26,14 @@ struct PhoneDevicesHostTests {
         var macViewers: [[BackendPhoneMacViewer]] = []
         var inputIDs: [String] = []
         var wakePermissions: [Bool] = []
+        var lists = 0
+        func listed() { lists += 1 }
+        struct Touch: Equatable, Sendable { var id: String; var phase: String; var x: Double; var y: Double }
+        var touches: [Touch] = []
+        var directTouch = true
+        func touched(_ id: String, _ phase: String, _ x: Double, _ y: Double) -> Bool { touches.append(.init(id: id, phase: phase, x: x, y: y)); return directTouch }
+        func clearTouches() { touches = [] }
+        func setDirect(_ on: Bool) { directTouch = on }
         func captureRequest() { wakePermissions.append(MacScreenAvailability.mayWake) }
         func viewers(_ value: [BackendPhoneMacViewer]) { macViewers.append(value) }
         func inputTo(_ id: String, _ value: BackendPhoneDeviceInput) { inputIDs.append(id); inputs.append(value) }
@@ -114,7 +122,7 @@ struct PhoneDevicesHostTests {
         let engine = Engine(), wire = Wire()
         let shotPNG = Self.png(Self.picture(shade: 3, width: 1170, height: 2532))
         var source = BackendPhoneDevices.Source(
-            list: { Self.rows },
+            list: { await engine.listed(); return Self.rows },
             power: { id, on in await engine.power(id, on); return .object([.init("ok", .bool(true)), .init("id", .string("android:emulator-5560"))]) },
             stream: { id, _ in
                 if id.hasPrefix("mac:") {
@@ -135,6 +143,7 @@ struct PhoneDevicesHostTests {
             inspect: { _ in Self.inspection },
             attachedSessions: { [Self.iphone: ["s-chat-1", "s-not-this-phones"]] })
         if linked { PhoneScreenFixtures.link(&source) { value in await wire.linked(value) } }
+        source.touch = { id, phase, x, y in await engine.touched(id, phase, x, y) }
         let installation = try await BackendPhoneDevices.install(on: host, source: source)
         // The lease is kept for the test's life: a dropped lease takes its features away again.
         if !extra.isEmpty { Self.leases.append(try await host.installFeatures(ownerID: "fixture.extra", features: extra, connectionClosed: { _ in })) }
@@ -283,6 +292,63 @@ struct PhoneDevicesHostTests {
         await host.receive(id, text: #"{"t":"sims.unwatch","id":"\#(Self.iphone)"}"#)
         try await waitFor { await engine.streamsStopped == 1 }
         #expect(await installation.devices.watching().elements?.isEmpty == true)
+    }
+
+    /// 9 Nov (Asad: "streaming simulator from ios app is too slow … but mac screen streaming is good and fast"): a
+    /// simulator goes at this Mac's pace (the phones still ask 15 a second, at most 24 before), up to the Mac's 60, and a
+    /// watch opens on the row the phone's list just read instead of reading the whole list again (16 s on 9 Nov).
+    @Test func aSimulatorGoesAtTheMacsPaceAndOpensOnTheListedRow() async throws {
+        let (host, installation, wire, engine, id, trust, dir) = try await connect(level: .full)
+        defer { Task { await installation.stop(); await host.stop(); await trust.close(); try? FileManager.default.removeItem(at: dir) } }
+        await host.receive(id, text: #"{"t":"sims.list","rid":"l1"}"#)
+        try await waitFor { await !wire.rows("sims.rows").isEmpty }
+        let lists = await engine.lists
+        await host.receive(id, text: #"{"t":"sims.watch","rid":"w1","id":"\#(Self.iphone)","maxWidth":1080,"quality":60,"fps":15,"video":["h264"]}"#)
+        try await waitFor { await !wire.rows("sims.video").isEmpty }
+        #expect(await engine.lists == lists, "the watch opened on the row the list had just read")
+        #expect(await installation.devices.pace(Self.iphone) == BackendPhoneDevices.devicePace)
+        await host.receive(id, text: #"{"t":"sims.watch","rid":"w2","id":"\#(Self.iphone)","maxWidth":1080,"quality":60,"fps":60,"video":["h264"]}"#)
+        try await waitFor { await installation.devices.pace(Self.iphone) == 60 }
+        guard case .message(let watch) = BackendRemoteProtocol.parseClientMessage(#"{"t":"sims.watch","id":"ios:A","maxWidth":1080,"quality":60,"fps":45,"video":["h264"]}"#),
+              case .message(let fast) = BackendRemoteProtocol.parseClientMessage(#"{"t":"sims.watch","id":"ios:A","maxWidth":1080,"quality":60,"fps":500,"video":["h264"]}"#) else {
+            Issue.record("refused"); return
+        }
+        #expect(watch["fps"].number == 45 && fast["fps"].number == 60, "a device is no longer held at 24; 60 at most")
+    }
+
+    /// 9 Nov (Asad: "when i use it it moves slow"): a finger on a simulator as it moves (`sims.touch`, offered in the
+    /// welcome): down, the moves and up reach the device's direct input in order; a finger put down at the edge starts
+    /// AT the edge once it moves inward; a gesture the direct input cannot take goes as a swipe or a tap on lifting.
+    @Test func aFingerOnASimulatorGoesAsItMoves() async throws {
+        let (host, installation, wire, engine, id, trust, dir) = try await connect(level: .full)
+        defer { Task { await installation.stop(); await host.stop(); await trust.close(); try? FileManager.default.removeItem(at: dir) } }
+        let offered = await wire.rows("welcome").first?["capabilities"].elements ?? []
+        #expect(offered.contains(.string("sims.touch")), "the Mac offers a finger on its devices")
+        func touch(_ phase: String, _ x: Double, _ y: Double) async {
+            await host.receive(id, text: #"{"t":"sims.touch","id":"\#(Self.iphone)","phase":"\#(phase)","x":\#(x),"y":\#(y)}"#)
+        }
+        await touch("down", 0.5, 0.5); await touch("move", 0.5, 0.45); await touch("move", 0.5, 0.4); await touch("up", 0.5, 0.4)
+        try await waitFor { await engine.touches.last?.phase == "up" }
+        let steps = await engine.touches
+        #expect(steps.first == .init(id: Self.iphone, phase: "down", x: 0.5, y: 0.5))
+        #expect(steps.last(where: { $0.phase == "move" })?.y == 0.4, "the newest move is never left out")
+        #expect(steps.last == .init(id: Self.iphone, phase: "up", x: 0.5, y: 0.4))
+        #expect(await engine.inputs.isEmpty, "nothing went the slow way")
+
+        await engine.clearTouches()
+        await touch("down", 0.5, 0.985); await touch("move", 0.5, 0.8); await touch("up", 0.5, 0.6)
+        try await waitFor { await engine.touches.last?.phase == "up" }
+        #expect(await engine.touches.first == .init(id: Self.iphone, phase: "down", x: 0.5, y: 1), "put down at the bottom edge, moving up: starts AT the edge")
+
+        await engine.setDirect(false)
+        await touch("down", 0.2, 0.2); await touch("move", 0.2, 0.4); await touch("up", 0.2, 0.6)
+        try await waitFor { await !engine.inputs.isEmpty }
+        let swipe = await engine.inputs.last
+        guard case let .swipe(fromX, fromY, toX, toY, ms)? = swipe else { Issue.record("not a swipe: \(String(describing: swipe))"); return }
+        #expect(fromX == 0.2 && fromY == 0.2 && toX == 0.2 && toY == 0.6 && ms >= 120)
+        await touch("down", 0.3, 0.3); await touch("up", 0.3, 0.3)
+        try await waitFor { await engine.inputs.count == 2 }
+        #expect(await engine.inputs.last == .tap(x: 0.3, y: 0.3, holdMilliseconds: nil))
     }
 
     /// Reviewer, 31 Oct: a real Mac said push and activity in no welcome (they were missing from the host's table of

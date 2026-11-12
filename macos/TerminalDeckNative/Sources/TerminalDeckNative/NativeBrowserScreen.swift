@@ -39,6 +39,7 @@ struct NativeBrowserScreen: View {
 }
 
 struct NativeBrowserTabView: View {
+    @Environment(\.nativeTerminalSelected) private var layoutSelected
     let store: NativeBrowserTabs
     let tab: NativeBrowserTab
     var keyboard = true
@@ -88,6 +89,7 @@ struct NativeBrowserTabView: View {
             ZStack {
                 // Parked while the page is frozen for Annotate or Draw, as the web browser parks its view.
                 NativeBrowserContent(tab: tab)
+                    .modifier(NativeBrowserPageVisibility(covered: tab.markup != nil, selected: layoutSelected ?? keyboard))
                     .opacity(tab.markup == nil ? 1 : 0)
                     .allowsHitTesting(tab.markup == nil)
                 switch tab.markup {
@@ -119,6 +121,9 @@ struct NativeBrowserTabView: View {
 // MARK: - Toolbar row (the web browser's, in its order)
 
 struct NativeBrowserToolbarRow: View {
+    @Environment(\.nativeScreenActive) private var screenActive
+    @Environment(\.nativeSessionInputScope) private var inputScope
+    @State private var inputRule = NativeSessionInputRule()
     let store: NativeBrowserTabs
     @Bindable var tab: NativeBrowserTab
     var modeSwitch = false
@@ -140,7 +145,9 @@ struct NativeBrowserToolbarRow: View {
     private var isDrawing: Bool { if case .draw = tab.markup { true } else { false } }
 
     var body: some View {
-        HStack(spacing: 4) {
+        inputRule.bind(to: inputScope)
+        inputRule.update(active: inputScope == nil ? screenActive : true, enabled: true)
+        return HStack(spacing: 4) {
             navigation
             // Which session this window is attached to — between Home and the address,
             // where the web browser draws it (lane BR: NativeBrowserBRBinding.swift).
@@ -215,18 +222,18 @@ struct NativeBrowserToolbarRow: View {
     private var addressField: some View {
         HStack(spacing: 6) {
             NativeBrowserServedMark(tab: tab) // lane BR: which machine serves this page (served-mark.ts)
-            TextField("Enter a URL, or search", text: $address, selection: $selection)
-                .textFieldStyle(.plain)
-                .focused($addressFocused)
-                .autocorrectionDisabled()
+            NativeSessionTextField("Enter a URL, or search", text: $address, selection: $selection)
+                .sessionFocused($addressFocused)
                 .onSubmit(go)
-                .onChange(of: address) { _, now in edited(now) }
                 .onExitCommand {
                     address = BrowserAddress.display(tab.url)
                     addressFocused = false
                 }
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .onChange(of: address) { _, now in edited(now) }
             if tab.zoom != 1 {
-                Button(BrowserZoom.percent(tab.zoom)) { tab.resetZoom() }
+                NativeSessionButton(BrowserZoom.percent(tab.zoom)) { tab.resetZoom() }
                     .font(.caption.monospacedDigit())
                     .help("Reset zoom")
             }
@@ -305,6 +312,7 @@ struct NativeBrowserToolbarRow: View {
     /// finishes what was typed and the added part is selected, so the next key
     /// replaces it. Never on a deletion — Backspace must be able to delete.
     private func edited(_ now: String) {
+        guard inputRule.acceptsFocus else { return }
         if applyingCompletion {
             applyingCompletion = false
             return
@@ -319,7 +327,7 @@ struct NativeBrowserToolbarRow: View {
     }
 
     private func applyCompletion() {
-        guard addressFocused, let now = completionInput, address == now, typedByHand == now,
+        guard inputRule.acceptsFocus, addressFocused, let now = completionInput, address == now, typedByHand == now,
               let top = tab.suggestions.first,
               let filled = BrowserHistory.completion(typed: now, url: top.url) else { return }
         completionInput = nil
@@ -331,6 +339,7 @@ struct NativeBrowserToolbarRow: View {
     }
 
     private func open(_ suggested: String) {
+        guard inputRule.acceptsFocus else { return }
         tab.dismissSuggestions()
         load(visited: suggested)
     }
@@ -351,6 +360,7 @@ struct NativeBrowserToolbarRow: View {
     }
 
     private func go() {
+        guard inputRule.acceptsFocus else { return }
         if tab.suggestionCursor >= 0, tab.suggestionCursor < tab.suggestions.count {
             let chosen = tab.suggestions[tab.suggestionCursor].url
             tab.dismissSuggestions()
@@ -370,7 +380,7 @@ struct NativeBrowserToolbarRow: View {
 
     @ViewBuilder private func historyMenu(_ items: [WKBackForwardListItem]) -> some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-            Button(item.title?.isEmpty == false ? item.title! : item.url.absoluteString) { tab.go(to: item) }
+            NativeSessionButton(item.title?.isEmpty == false ? item.title! : item.url.absoluteString) { tab.go(to: item) }
         }
     }
 }
@@ -395,7 +405,7 @@ struct NativeBrowserIcon: View {
     }
 
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Label(label, systemImage: symbol)
                 .font(.system(size: 13, weight: .regular))
                 .frame(width: 26, height: 26)
@@ -462,35 +472,35 @@ struct NativeBrowserMenuActions: View {
 
     var body: some View {
         Group {
-            Button("New Tab") { store.create(after: tab.id) }
-            Button("New Isolated Tab") { store.create(after: tab.id, isolated: true, profile: tab.profile) }
+            NativeSessionButton("New Tab") { store.create(after: tab.id) }
+            NativeSessionButton("New Isolated Tab") { store.create(after: tab.id, isolated: true, profile: tab.profile) }
             Divider()
-            Button("Store") { AppModel.shared.select("store") } // lane BR: the Store page (App.tsx showPanel('store'))
-            Button("Set as Start Page") { tab.setAsStartPage() }
+            NativeSessionButton("Store") { AppModel.shared.select("store") } // lane BR: the Store page (App.tsx showPanel('store'))
+            NativeSessionButton("Set as Start Page") { tab.setAsStartPage() }
                 .disabled(tab.url == nil)
-            Button("Open in Your Browser") { tab.openInDefaultBrowser() }
+            NativeSessionButton("Open in Your Browser") { tab.openInDefaultBrowser() }
                 .disabled(tab.url == nil)
-            Button("Copy Address") { tab.copyAddress() }
+            NativeSessionButton("Copy Address") { tab.copyAddress() }
                 .disabled(tab.url == nil)
             Divider()
-            Button("Zoom Out") { tab.zoom(by: -1) }.disabled(tab.url == nil)
-            Button("Actual Size (\(BrowserZoom.percent(tab.zoom)))") { tab.resetZoom() }.disabled(tab.url == nil)
-            Button("Zoom In") { tab.zoom(by: 1) }.disabled(tab.url == nil)
+            NativeSessionButton("Zoom Out") { tab.zoom(by: -1) }.disabled(tab.url == nil)
+            NativeSessionButton("Actual Size (\(BrowserZoom.percent(tab.zoom)))") { tab.resetZoom() }.disabled(tab.url == nil)
+            NativeSessionButton("Zoom In") { tab.zoom(by: 1) }.disabled(tab.url == nil)
             Divider()
-            Button("Find in Page") { tab.showFind() }.disabled(tab.url == nil || tab.showsStartView)
-            Button("Print…") { tab.printPage() }.disabled(tab.url == nil || tab.showsStartView)
+            NativeSessionButton("Find in Page") { tab.showFind() }.disabled(tab.url == nil || tab.showsStartView)
+            NativeSessionButton("Print…") { tab.printPage() }.disabled(tab.url == nil || tab.showsStartView)
             // Lane BR: the rest of the web browser's ⋮ (BrowserMenu.tsx). History and
             // Passwords belong to the tab's profile, which an Isolated tab does not save to.
             Divider()
             if !tab.isolated {
-                Button("History") { tab.historyShown = true }
-                Button("Passwords") { NativeBRSettingsLink.open("browser", passwords: true) }
+                NativeSessionButton("History") { tab.historyShown = true }
+                NativeSessionButton("Passwords") { NativeBRSettingsLink.open("browser", passwords: true) }
             }
             if !tab.steps.isEmpty && !tab.recording {
-                Button("Recorded flow") { tab.flowHidden = false }
+                NativeSessionButton("Recorded flow") { tab.flowHidden = false }
             }
-            Button("Scraping") { NativeBRSettingsLink.open("scraping") }
-            Button("Settings") { NativeBRSettingsLink.open("browser") }
+            NativeSessionButton("Scraping") { NativeBRSettingsLink.open("scraping") }
+            NativeSessionButton("Settings") { NativeBRSettingsLink.open("browser") }
         }
     }
 }
@@ -528,10 +538,10 @@ struct NativeBrowserHandoverBar: View {
             }
             .font(.callout)
             Spacer()
-            Button(BRHandoverWords.carryOn) { tab.endHandover("resumed") }
+            NativeSessionButton(BRHandoverWords.carryOn) { tab.endHandover("resumed") }
                 .buttonStyle(.borderedProminent)
                 .help("Give the page back to the agent")
-            Button(BRHandoverWords.stop) { tab.endHandover("stopped") }
+            NativeSessionButton(BRHandoverWords.stop) { tab.endHandover("stopped") }
                 .help("Tell the agent not to carry on")
         }
         .padding(.horizontal, 12)
@@ -549,12 +559,12 @@ struct NativeBrowserFindBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in page", text: $tab.findText)
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .frame(maxWidth: 280)
+            NativeSessionTextField("Find in page", text: $tab.findText)
+                .sessionFocused($focused)
                 .onSubmit { tab.findAgain(backwards: NSEvent.modifierFlags.contains(.shift)) }
                 .onExitCommand { tab.hideFind() }
+                .textFieldStyle(.plain)
+                .frame(maxWidth: 280)
                 .onChange(of: tab.findText) { tab.findFromStart() }
             if tab.findMissed && !tab.findText.isEmpty {
                 Text("Not found").font(.caption).foregroundStyle(.secondary)
@@ -566,7 +576,7 @@ struct NativeBrowserFindBar: View {
             Button { tab.findAgain(backwards: false) } label: { Image(systemName: "chevron.down") }
                 .help("Next (⌘G)")
                 .disabled(tab.findText.isEmpty)
-            Button("Done") { tab.hideFind() }
+            NativeSessionButton("Done") { tab.hideFind() }
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 12)
@@ -580,6 +590,7 @@ struct NativeBrowserFindBar: View {
 // MARK: - The page
 
 struct NativeBrowserContent: View {
+    @Environment(\.nativeTerminalSelected) private var selected
     let tab: NativeBrowserTab
 
     var body: some View {
@@ -606,6 +617,7 @@ struct NativeBrowserContent: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             }
+            .modifier(NativeBrowserPageVisibility(covered: tab.showsStartView, selected: selected ?? true))
             .opacity(tab.showsStartView ? 0 : 1)
             .allowsHitTesting(!tab.showsStartView)
 
@@ -622,14 +634,142 @@ struct NativeBrowserContent: View {
 }
 
 /// Holds the tab's web view; the page is never reloaded by being shown again.
+/// Native overlays close only the page subtree's gate; their own editors stay live.
+struct NativeBrowserPageVisibility: ViewModifier {
+    @Environment(\.nativeScreenActive) private var active
+    let covered: Bool
+    let selected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.nativeScreenActive, active && !covered)
+            .environment(\.nativeTerminalSelected, selected)
+    }
+}
+
 struct NativeBrowserPageHost: NSViewRepresentable {
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeTerminalSelected) private var selected
+    @Environment(\.nativeSessionInputScope) private var scope
     let webView: WKWebView?
 
     // L1-SHELL: glass (not white) until the page first paints, then a 0.15 s fade in.
-    func makeNSView(context: Context) -> DeckWebPaintHost { DeckWebPaintHost(frame: .zero) }
+    func makeNSView(context: Context) -> NativeBrowserPageSlot { NativeBrowserPageSlot(frame: .zero) }
 
-    func updateNSView(_ container: DeckWebPaintHost, context: Context) {
-        container.show(webView)
+    func updateNSView(_ container: NativeBrowserPageSlot, context: Context) {
+        container.show(webView, active: active, selected: selected ?? true, scope: scope)
+    }
+
+    static func dismantleNSView(_ container: NativeBrowserPageSlot, coordinator: ()) {
+        container.show(nil, active: false)
+    }
+}
+
+/// Opacity does not remove WKWebView's private text client from the responder
+/// chain. Detach the cached page while hidden, preserving its navigation/process.
+@MainActor
+final class NativeBrowserPageSlot: NSView, NativeSessionInputProtected {
+    let inputRule = NativeSessionInputRule()
+    private let paint = DeckWebPaintHost(frame: .zero)
+    private weak var page: WKWebView?
+    private var active = false
+    private var selected = true
+    private weak var scope: NativeSessionInputScope?
+    private static let slots = NSHashTable<NativeBrowserPageSlot>.weakObjects()
+    private var keyObserver: NSObjectProtocol?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        paint.frame = bounds
+        paint.autoresizingMask = [.width, .height]
+        addSubview(paint)
+        Self.slots.add(self)
+        inputRule.owner = self
+        inputRule.onScopeWillDeactivate = { [weak self] in
+            guard let self else { return }
+            if !self.active || self.scope?.active == false || !self.inputRule.active { self.releasePage() }
+            else { self.releaseKeyboard() }
+        }
+        inputRule.onScopeChanged = { [weak self] in self?.refreshAttachment() }
+        keyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                                            object: nil, queue: .main) { [weak self] note in
+            let notifiedWindow = (note.object as? NSWindow).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, self.window.map(ObjectIdentifier.init) == notifiedWindow else { return }
+                self.refreshAttachment()
+            }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+    isolated deinit {
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+    }
+
+    func show(_ next: WKWebView?, active: Bool, selected: Bool = true, scope: NativeSessionInputScope? = nil) {
+        if page !== next { releasePage() }
+        page = next
+        self.active = active
+        self.selected = selected
+        self.scope = scope
+        inputRule.bind(to: scope)
+        // Local covers must close this subtree even while their outer browser
+        // scope remains active for the annotation or address editor.
+        inputRule.update(active: active, enabled: selected)
+        refreshAttachment()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { releasePage() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshAttachment()
+    }
+
+    private func refreshAttachment() {
+        guard active, scope?.active != false, window != nil else { releasePage(); return }
+        if !selected { releaseKeyboard() }
+        attach()
+    }
+
+    private func attach() {
+        guard active, scope?.active != false, let page, let window else { return }
+        if let owner = Self.slots.allObjects.first(where: { $0 !== self && page.superview === $0.paint }), owner.active {
+            if owner.selected && !selected { return }
+            if owner.window?.isKeyWindow == true && !window.isKeyWindow { return }
+        }
+        // show never asks for focus. Returning a background browser cannot take
+        // the person's keyboard from the visible session or another field.
+        paint.show(page)
+    }
+
+    private func releaseKeyboard() {
+        guard let page, page.superview === paint else { return }
+        let oldWindow = window ?? page.window
+        if let responder = oldWindow?.firstResponder as? NSView,
+           responder === page || responder.isDescendant(of: page) {
+            responder.inputContext?.discardMarkedText()
+            oldWindow?.makeFirstResponder(nil)
+        }
+        if let oldWindow { DeckTerminalSlot.restoreFocus(in: oldWindow, request: false) }
+    }
+
+    private func releasePage() {
+        guard let page, page.superview === paint else { return }
+        let oldWindow = window ?? page.window
+        releaseKeyboard()
+        paint.show(nil)
+        // A pop-out or split can retain another visible host of this same page.
+        let survivor = Self.slots.allObjects.first {
+            $0 !== self && $0.active && $0.scope?.active != false && $0.page === page && $0.window?.isKeyWindow == true
+        } ?? Self.slots.allObjects.first {
+            $0 !== self && $0.active && $0.scope?.active != false && $0.page === page && $0.window != nil
+        }
+        survivor?.attach()
+        if let oldWindow { DeckTerminalSlot.restoreFocus(in: oldWindow, request: false) }
     }
 }
 
@@ -638,16 +778,17 @@ struct NativeBrowserPageHost: NSViewRepresentable {
 /// Browser shortcuts while this screen is in the key window — ahead of the app's
 /// menu, so ⌘T is a new browser tab here rather than a new session.
 struct NativeBrowserKeyCatcher: NSViewRepresentable {
+    @Environment(\.nativeScreenActive) private var active
     let handle: (NSEvent) -> Bool
 
     func makeNSView(context: Context) -> KeyCatcherView {
         let view = KeyCatcherView()
-        view.handle = handle
+        view.handle = active ? handle : nil
         return view
     }
 
     func updateNSView(_ view: KeyCatcherView, context: Context) {
-        view.handle = handle
+        view.handle = active ? handle : nil
     }
 
     static func dismantleNSView(_ view: KeyCatcherView, coordinator: ()) { view.stopMonitoring() }

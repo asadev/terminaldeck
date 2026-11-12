@@ -23,6 +23,12 @@ public enum SIDEBARLayout {
         }
     }
 
+    /// Held tabs are not running, but remain visible regardless of the keeper's live-session list.
+    public static func held(_ state: SidebarState) -> [SidebarItem] {
+        var seen = Set<String>()
+        return state.allItems.filter { $0.isHeld && seen.insert($0.id).inserted }
+    }
+
     public static func project(for session: String, in state: SidebarState) -> SidebarProject? {
         state.projects.first { $0.id.hasPrefix("/") && $0.sessions.contains { $0.id == session } }
     }

@@ -49,7 +49,7 @@ struct NativeCopilotMachines: View {
                 HStack(spacing: 6) {
                     ForEach(model.machines) { machine in
                         let on = machine.id == chosen
-                        Button {
+                        NativeSessionButton {
                             chosen = machine.id
                         } label: {
                             HStack(spacing: 5) {
@@ -154,15 +154,16 @@ struct NativeRemoteCopilot: View {
                     .accessibilityAddTraits(.updatesFrequently)
             }
             HStack(spacing: 8) {
-                TextField("Ask Hoot on \(machine.name)", text: $model.typed)
-                    .textFieldStyle(.roundedBorder)
+                NativeSessionTextField("Ask Hoot on \(machine.name)", text: $model.typed)
                     .onSubmit { model.say(machine) }
+                    .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Ask Hoot on \(machine.name)")
-                Button("Send") { model.say(machine) }
+                NativeSessionButton("Send") { model.say(machine) }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.busy || model.typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(16)
+            .id(machine.id) // A retained text client/action belongs to one remote Hoot only.
         }
     }
 
@@ -185,6 +186,15 @@ final class NativeRemoteCopilotModel {
     private(set) var problem = ""
     private(set) var busy = false
     @ObservationIgnored private var machineId = ""
+    @ObservationIgnored private var drafts: [String: String] = [:]
+
+    /// A machine switch changes the draft owner as well as the transcript owner.
+    func selectDraft(for id: String) {
+        guard id != machineId else { return }
+        if !machineId.isEmpty { drafts[machineId] = typed }
+        typed = drafts[id] ?? ""
+        machineId = id
+    }
     @ObservationIgnored private var subscriptions: [EngineSubscription] = []
     /// The machine that was asked to send its Hoot here, until it is told to stop.
     @ObservationIgnored private var following: String?
@@ -207,7 +217,7 @@ final class NativeRemoteCopilotModel {
     /// Follow that machine's Hoot: its state and its conversation, once the link is open.
     func attach(_ machine: CopilotMachineRow) {
         detach(keeping: machine.open ? machine.id : nil)
-        machineId = machine.id
+        selectDraft(for: machine.id)
         report = nil
         bubbles = []
         problem = ""
@@ -256,14 +266,16 @@ final class NativeRemoteCopilotModel {
     }
 
     func say(_ machine: CopilotMachineRow) {
-        let line = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let original = typed
+        let line = original.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty, !busy else { return }
         busy = true
         problem = ""
         Task {
             let answer = await call("machines:hoot:say", [machine.id, line])
             if answer?.ok == true {
-                typed = ""
+                if machineId == machine.id, typed == original { typed = "" }
+                else if drafts[machine.id] == original { drafts[machine.id] = "" }
             } else if let answer {
                 problem = answer.message.isEmpty ? "\(machine.name) refused it." : answer.message
             } else {

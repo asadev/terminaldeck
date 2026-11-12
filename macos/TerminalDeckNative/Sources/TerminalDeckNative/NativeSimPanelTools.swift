@@ -103,12 +103,12 @@ struct NativeSimSnipPopup: View {
                         .frame(maxWidth: .infinity)
                         .accessibilityLabel("The snipped part of the screen, \(state.shot.width) by \(state.shot.height) pixels")
                 }
-                TextField("What should the agent look at?", text: Binding(
+                NativeSessionTextField("What should the agent look at?", text: Binding(
                     get: { model.shot?.instruction ?? "" },
                     set: { model.shot?.instruction = $0; model.shot?.problem = "" }), axis: .vertical)
                     .lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await model.sendShot() } }
+                    .sessionOnSubmit { Task { await model.sendShot() } }
                 HStack {
                     let line = !state.problem.isEmpty ? state.problem : model.sessionReason
                     if !line.isEmpty {
@@ -144,7 +144,7 @@ struct NativeSimAnnotatePopup: View {
                     .toggleStyle(.switch).controlSize(.mini).font(.caption).fixedSize()
                     .help("Show the full panel (Element, Outline, Checks) beside the phone; the session makes room for it")
             }
-            TextField("What should change?", text: $model.note, axis: .vertical)
+            NativeSessionTextField("What should change?", text: $model.note, axis: .vertical)
                 .lineLimit(2...5)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Message for the agent")

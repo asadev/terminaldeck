@@ -20,7 +20,9 @@ internal static class ChatToolContent
     try { objects.AddRange(ChatMcpApps.Objects(JsonSerializer.Deserialize<JsonElement>(result.Text))); } catch (JsonException) { }
     foreach (var value in objects)
     {
-      if (ChatLineProtocol.S(value, "type") == "text" && ChatLineProtocol.S(value, "text") is { Length: > 0 } text) parts.Add(text);
+      // Plain text results live in the step's detail (Asad, 6 Nov: no tool output as a message);
+      // pictures, links, drawings and MCP Apps are still drawn here.
+      if (ChatLineProtocol.S(value, "type") == "text" && ChatLineProtocol.S(value, "text") is { Length: > 0 } text && ChatToolRuns.Drawable(text)) parts.Add(text);
       if (ChatLineProtocol.S(value, "mimeType").StartsWith("image/", StringComparison.Ordinal) && ChatLineProtocol.S(value, "mediaFile") is { Length: > 0 } media)
       {
         var directory = Path.Combine(dataDirectory, "chats", Guid.Parse(record.Definition.Id).ToString("N"));
@@ -29,7 +31,7 @@ internal static class ChatToolContent
       }
       if (ChatLineProtocol.S(value, "type") == "resource_link" && ChatLineProtocol.S(value, "uri") is { Length: > 0 } link && ChatMarkdown.CanOpenLink(link)) parts.Add("<" + link + ">");
     }
-    if (parts.Count == 0 && !row.Output.TrimStart().StartsWith('{') && !row.Output.TrimStart().StartsWith('[') && row.Output.Length > 0) parts.Add(row.Output);
+    if (parts.Count == 0 && !row.Output.TrimStart().StartsWith('{') && !row.Output.TrimStart().StartsWith('[') && row.Output.Length > 0 && ChatToolRuns.Drawable(row.Output)) parts.Add(row.Output);
     if (parts.Count > 0) content.Children.Add(ChatMarkdownView.Render(string.Join("\n\n", parts.Distinct()), copy, error, record.Definition.Cwd, dataDirectory));
     if (mcp is null) return content;
     var host = new StackPanel(); content.Children.Add(host);

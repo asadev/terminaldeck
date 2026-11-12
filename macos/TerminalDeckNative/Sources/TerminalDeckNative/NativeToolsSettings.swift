@@ -25,7 +25,7 @@ struct NativeVoiceKeyRow: View {
                 NativeSettingRow(label: VoiceWords.storedLabel,
                                  help: VoiceWords.storedHelp(model.providers.first { $0.id == status.provider }),
                                  more: VoiceWords.storedMore) {
-                    Button(VoiceWords.remove, role: .destructive) { model.forget() }
+                    NativeSessionButton(VoiceWords.remove, role: .destructive) { model.forget() }
                         .disabled(model.working)
                 }
             } else {
@@ -39,12 +39,12 @@ struct NativeVoiceKeyRow: View {
                 if let provider = model.provider {
                     NativeSettingRow(label: "Key", more: VoiceWords.keyMore) {
                         HStack(spacing: 6) {
-                            SecureField("", text: $model.key, prompt: Text(VoiceWords.keyPlaceholder))
+                            NativeSessionSecureField("", text: $model.key, prompt: Text(VoiceWords.keyPlaceholder))
                                 .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.leading)
                                 .frame(width: 200)
-                                .onSubmit { if !model.blank { model.save() } }
-                            Button(model.working ? "Checking…" : "Check") { model.save() }
+                                .sessionOnSubmit { if !model.blank { model.save() } }
+                            NativeSessionButton(model.working ? "Checking…" : "Check") { model.save() }
                                 .buttonStyle(.bordered)
                                 .disabled(model.working || model.blank)
                                 .help(VoiceWords.saveHelp(key: model.key))

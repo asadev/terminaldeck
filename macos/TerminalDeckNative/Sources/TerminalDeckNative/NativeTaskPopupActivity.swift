@@ -59,9 +59,9 @@ struct TaskActivityPane: View {
             if searchOpen {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.tertiary)
-                    TextField("Search activity", text: $query)
+                    NativeSessionTextField("Search activity", text: $query)
                         .textFieldStyle(.plain)
-                        .onExitCommand {
+                        .sessionOnExitCommand {
                             searchOpen = false
                             query = ""
                         }
@@ -122,7 +122,7 @@ struct TaskActivityPane: View {
     }
 
     private func iconButton(_ icon: String, _ label: String, on: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             Image(systemName: icon).font(.system(size: 13)).frame(width: 28, height: 28).contentShape(Rectangle())
         }
         .buttonStyle(.plain)

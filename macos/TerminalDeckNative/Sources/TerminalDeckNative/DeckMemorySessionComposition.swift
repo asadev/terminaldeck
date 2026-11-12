@@ -34,6 +34,9 @@ extension NativeCompositionProduction {
             DeckMemorySessionFeeds.keep(try await root.registry.subscribe("session:status", ownerID: owner) { event in
                 guard event.arguments.count >= 2, let id = event.arguments[0].string, let status = event.arguments[1].string else { return }
                 await center.statusChanged(sessionID: id, status: status)
+                // 10 Nov (Sessions): a session that changed account while it ran (also a switch the keeper applied)
+                // is written down with the account it runs on now, so a restart starts it on that account.
+                if let meta = manager.list().first(where: { $0.id == id }) { await ledger.followAccount(meta) }
             })
             for channel in ["session:exit", "session:removed"] {
                 DeckMemorySessionFeeds.keep(try await root.registry.subscribe(channel, ownerID: owner) { event in

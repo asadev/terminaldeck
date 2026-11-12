@@ -11,6 +11,10 @@ import TerminalDeckNativeCore
 /// 2. After sending, the chat did not move up: it scrolled once before the sent message existed and never followed
 ///    the answer as it streamed in.
 @MainActor final class ChatFocusAndFollowTests: XCTestCase {
+    // Exercise keyboard ownership without ordering or activating a window on screen.
+    final class KeyboardWindow: NSWindow {
+        override var isKeyWindow: Bool { true }
+    }
     @Observable final class TwoChats {
         var hoot = HootComposerDraft(text: "hoot draft")
         var session = HootComposerDraft(text: "session draft")
@@ -38,7 +42,7 @@ import TerminalDeckNativeCore
     func testAHiddenChatsBoxLetsGoOfTheKeyboardAndTakesNoPastedText() throws {
         let chats = TwoChats()
         let host = NSHostingView(rootView: Stack(chats: chats))
-        let window = NSWindow(contentRect: .init(x: -30000, y: -30000, width: 640, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = KeyboardWindow(contentRect: .init(x: -30000, y: -30000, width: 640, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host
         defer { window.contentView = nil; window.close() }
         settle(host)

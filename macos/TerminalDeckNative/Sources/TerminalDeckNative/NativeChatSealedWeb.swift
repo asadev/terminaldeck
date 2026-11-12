@@ -19,6 +19,7 @@ struct NativeChatSealedWeb: View {
     let kind: String
     var bridge: ((NativeRPCValue) async -> NativeRPCValue)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.nativeScreenActive) private var screenActive
     @Environment(\.nativeChatVisualMaximumHeight) private var chatMaximumHeight
     @State private var showCode = false
     @State private var height: CGFloat = 160
@@ -35,10 +36,10 @@ struct NativeChatSealedWeb: View {
             HStack(spacing: 10) {
                 Text((kind == "mcp-app" || kind == "mcpApp") ? "App" : (kind == "math-inline" || kind == "math") ? "Math" : kind == "mermaid" ? "Diagram" : kind == "svg" ? "Drawing" : "Visual").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button(showCode ? "Preview" : "Code") { showCode.toggle() }
+                NativeSessionButton(showCode ? "Preview" : "Code") { showCode.toggle() }
                     .buttonStyle(.borderless).font(.caption)
                     .accessibilityLabel(showCode ? "Show rendered content" : "Show content source")
-                Button(copied ? "Copied" : "Copy") {
+                NativeSessionButton(copied ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents()
                     copied = NSPasteboard.general.setString(source, forType: .string)
                 }
@@ -52,6 +53,8 @@ struct NativeChatSealedWeb: View {
                 ZStack(alignment: .topLeading) {
                     NativeChatSealedBrowser(source: source, kind: kind, dark: colorScheme == .dark,
                                             bridge: bridge, height: $height, loading: $loading, failed: $failed)
+                        .nativeSessionInputScope(ownerID: "sealed-preview")
+                        .environment(\.nativeScreenActive, screenActive && !showCode)
                         .frame(height: min(maximumHeight, max(44, height)))
                         .opacity(showCode ? 0 : 1)
                         .accessibilityHidden(showCode)
@@ -85,7 +88,7 @@ struct NativeChatSealedWeb: View {
 }
 
 @MainActor
-private struct NativeChatSealedBrowser: NSViewRepresentable {
+struct NativeChatSealedBrowser: NSViewRepresentable {
     let source: String
     let kind: String
     let dark: Bool
@@ -93,10 +96,29 @@ private struct NativeChatSealedBrowser: NSViewRepresentable {
     @Binding var height: CGFloat
     @Binding var loading: Bool
     @Binding var failed: Bool
+    /// Inert UI checks retain an unloaded document without compiling rule lists or reading bundles.
+    var fixtureMode = false
+    @Environment(\.nativeScreenActive) private var active
+    @Environment(\.nativeSessionInputScope) private var scope
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.nativeTerminalSelected) private var selected
+
+    init(source: String, kind: String, dark: Bool,
+         bridge: ((NativeRPCValue) async -> NativeRPCValue)? = nil,
+         height: Binding<CGFloat>, loading: Binding<Bool>, failed: Binding<Bool>, fixtureMode: Bool = false) {
+        self.source = source
+        self.kind = kind
+        self.dark = dark
+        self.bridge = bridge
+        _height = height
+        _loading = loading
+        _failed = failed
+        self.fixtureMode = fixtureMode
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> NativeSessionWebSlot {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -110,19 +132,28 @@ private struct NativeChatSealedBrowser: NSViewRepresentable {
         view.allowsBackForwardNavigationGestures = false
         view.allowsLinkPreview = false
         view.isInspectable = false
+        // prefers-color-scheme inside the drawing follows the app's theme, not the system's.
+        view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         context.coordinator.webView = view
-        context.coordinator.begin()
-        return view
+        let slot = NativeSessionWebSlot(frame: .zero)
+        slot.show(view, active: active, enabled: enabled, selected: selected ?? true, scope: scope)
+        if !fixtureMode { context.coordinator.begin() }
+        return slot
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {
+    func updateNSView(_ slot: NativeSessionWebSlot, context: Context) {
+        guard let view = slot.page else { return }
         let changed = source != context.coordinator.parent.source || kind != context.coordinator.parent.kind
             || dark != context.coordinator.parent.dark || (bridge == nil) != (context.coordinator.parent.bridge == nil)
         context.coordinator.parent = self
-        if changed { context.coordinator.begin() }
+        view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        slot.show(view, active: active, enabled: enabled, selected: selected ?? true, scope: scope)
+        if changed && !fixtureMode { context.coordinator.begin() }
     }
 
-    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ slot: NativeSessionWebSlot, coordinator: Coordinator) {
+        slot.deactivate()
+        guard let view = slot.page else { return }
         coordinator.cancel()
         view.stopLoading()
         view.configuration.userContentController.removeScriptMessageHandler(forName: "sealedChat")

@@ -77,15 +77,15 @@ struct NativeAppsNewAppView: View {
                 }
                 Section {
                     NativeSettingRow(label: "App name", help: "What to call it in your app list.") {
-                        TextField("My app", text: Binding(get: { draft.name }, set: { updateName($0) }))
+                        NativeSessionTextField("My app", text: Binding(get: { draft.name }, set: { updateName($0) })).textFieldStyle(.roundedBorder)
                             .labelsHidden()
                             .frame(minWidth: 200, maxWidth: 260)
                     }
                     NativeSettingRow(label: "Address name", help: "Part of its web address. Start with a lowercase letter and end with a letter or number.") {
-                        TextField("my-app", text: Binding(get: { draft.appID }, set: {
+                        NativeSessionTextField("my-app", text: Binding(get: { draft.appID }, set: {
                             addressNameEdited = true
                             draft.appID = $0
-                        }), prompt: Text(draft.suggestedAppID.isEmpty ? "my-app" : draft.suggestedAppID))
+                        }), prompt: Text(draft.suggestedAppID.isEmpty ? "my-app" : draft.suggestedAppID)).textFieldStyle(.roundedBorder)
                         .labelsHidden()
                         .frame(minWidth: 200, maxWidth: 260)
                     }
@@ -105,7 +105,7 @@ struct NativeAppsNewAppView: View {
             .textFieldStyle(.roundedBorder)
             .autocorrectionDisabled()
             .disabled(pending)
-            .onSubmit(create)
+            .sessionOnSubmit(create)
 
             HStack(spacing: 8) {
                 if pending {
@@ -119,11 +119,11 @@ struct NativeAppsNewAppView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Button(canChange && problem == nil ? "Cancel" : "Back to apps", action: onCancel)
+                NativeSessionButton(canChange && problem == nil ? "Cancel" : "Back to apps", action: onCancel)
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
                     .disabled(pending)
-                Button(pending ? "Creating…" : "Create app", action: create)
+                NativeSessionButton(pending ? "Creating…" : "Create app", action: create)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(pending || !canChange || formProblem != nil)
@@ -150,24 +150,24 @@ struct NativeAppsNewAppView: View {
                         if !repositories.isEmpty {
                             Menu("Your repositories") {
                                 ForEach(repositories, id: \.id) { repository in
-                                    Button(repository.name) { use(repository) }
+                                    NativeSessionButton(repository.name) { use(repository) }
                                 }
                             }
                             .fixedSize()
                             .disabled(catalogLoading)
                         }
-                        TextField("owner/repository", text: $draft.repository)
+                        NativeSessionTextField("owner/repository", text: $draft.repository).textFieldStyle(.roundedBorder)
                             .labelsHidden()
                             .frame(minWidth: 200, maxWidth: 300)
                     }
                 }
                 NativeSettingRow(label: "Branch", help: "Usually main. Choose another branch if needed.") {
-                    TextField("main", text: $draft.branch)
+                    NativeSessionTextField("main", text: $draft.branch).textFieldStyle(.roundedBorder)
                         .labelsHidden()
                         .frame(minWidth: 200, maxWidth: 260)
                 }
                 NativeSettingRow(label: "App port", help: "The port your app listens on, often 3000.") {
-                    TextField("3000", text: $portText)
+                    NativeSessionTextField("3000", text: $portText).textFieldStyle(.roundedBorder)
                         .labelsHidden()
                         .multilineTextAlignment(.trailing)
                         .frame(width: 64)
@@ -250,7 +250,7 @@ struct NativeAppsNewAppView: View {
         }
         if let catalogProblem, !catalogProblem.isEmpty {
             NativeCodingAINotice(tone: .warn, text: catalogProblem)
-            Button("Check again", action: onReloadCatalog)
+            NativeSessionButton("Check again", action: onReloadCatalog)
                 .disabled(catalogLoading)
         }
     }
@@ -307,7 +307,7 @@ private struct NativeAppsSourceChoice: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        NativeSessionButton(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: symbol).foregroundStyle(.secondary)
                 Text(title)

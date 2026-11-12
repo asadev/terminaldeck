@@ -37,8 +37,8 @@ struct NativeAppsDataBackupUploadEditor: View {
                 if editing {
                     fields
                     HStack(spacing: 8) {
-                        Button("Cancel") { cancelEditing() }
-                        Button("Save backup storage") {
+                        NativeSessionButton("Cancel") { cancelEditing() }
+                        NativeSessionButton("Save backup storage") {
                             let submitted = draft
                             cancelEditing()
                             onSave(.replace(submitted))
@@ -51,13 +51,13 @@ struct NativeAppsDataBackupUploadEditor: View {
                     }
                 } else {
                     HStack(spacing: 8) {
-                        Button(settings.upload == nil ? "Add backup storage…" : "Change backup storage…") {
+                        NativeSessionButton(settings.upload == nil ? "Add backup storage…" : "Change backup storage…") {
                             draft = .init(destination: settings.upload)
                             editing = true
                         }
                         .disabled(busy)
                         if settings.upload != nil {
-                            Button("Stop uploading…") { removing = true }
+                            NativeSessionButton("Stop uploading…") { removing = true }
                                 .disabled(busy)
                         }
                     }
@@ -73,8 +73,8 @@ struct NativeAppsDataBackupUploadEditor: View {
         }
         .disabled(busy)
         .alert("Stop uploading future backups?", isPresented: $removing) {
-            Button("Cancel", role: .cancel) {}
-            Button("Stop uploading") { onSave(.remove) }
+            NativeSessionButton("Cancel", role: .cancel) {}
+            NativeSessionButton("Stop uploading") { onSave(.remove) }
         } message: {
             Text("Future backups stay on this server. Copies already in your storage stay there.")
         }
@@ -85,23 +85,23 @@ struct NativeAppsDataBackupUploadEditor: View {
     private var fields: some View {
         VStack(alignment: .leading, spacing: 8) {
             NativeSettingRow(label: "Endpoint", help: "The secure web address your storage provider gives you.") {
-                TextField("https://storage.example.com", text: $draft.endpoint).frame(minWidth: 200, maxWidth: 300)
+                NativeSessionTextField("https://storage.example.com", text: $draft.endpoint).textFieldStyle(.roundedBorder).frame(minWidth: 200, maxWidth: 300)
                     .accessibilityLabel("Backup storage endpoint")
             }
             NativeSettingRow(label: "Bucket", help: "An existing storage bucket. Terminal Deck does not create it.") {
-                TextField("my-backups", text: $draft.bucket).frame(minWidth: 200, maxWidth: 300)
+                NativeSessionTextField("my-backups", text: $draft.bucket).textFieldStyle(.roundedBorder).frame(minWidth: 200, maxWidth: 300)
                     .accessibilityLabel("Backup storage bucket")
             }
             NativeSettingRow(label: "Folder", help: "Optional folder inside the bucket.") {
-                TextField("terminaldeck", text: $draft.prefix).frame(minWidth: 200, maxWidth: 300)
+                NativeSessionTextField("terminaldeck", text: $draft.prefix).textFieldStyle(.roundedBorder).frame(minWidth: 200, maxWidth: 300)
                     .accessibilityLabel("Backup storage folder")
             }
             NativeSettingRow(label: "Access key") {
-                SecureField("New access key", text: $draft.accessKey).frame(minWidth: 200, maxWidth: 300)
+                NativeSessionSecureField("New access key", text: $draft.accessKey).textFieldStyle(.roundedBorder).frame(minWidth: 200, maxWidth: 300)
                     .accessibilityLabel("New backup storage access key")
             }
             NativeSettingRow(label: "Secret key") {
-                SecureField("New secret key", text: $draft.secretKey).frame(minWidth: 200, maxWidth: 300)
+                NativeSessionSecureField("New secret key", text: $draft.secretKey).textFieldStyle(.roundedBorder).frame(minWidth: 200, maxWidth: 300)
                     .accessibilityLabel("New backup storage secret key")
             }
             NativeSettingsProse(text: "Leave both keys blank to keep saved keys for the same destination. Changing the destination needs both new keys. You’ll review the server change before it runs.")

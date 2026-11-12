@@ -95,7 +95,7 @@ private struct LinesBox: View {
             if text.isEmpty && !placeholder.isEmpty {
                 Text(placeholder).foregroundStyle(.tertiary).padding(.horizontal, 5).padding(.vertical, 8)
             }
-            TextEditor(text: $text)
+            NativeSessionTextEditor(text: $text)
                 .font(mono ? .system(.body, design: .monospaced) : .body)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64, maxHeight: 160)
@@ -114,7 +114,7 @@ private struct TasksCopyButton: View {
     @State private var copied = false
 
     var body: some View {
-        Button(copied ? "Copied" : "Copy") {
+        NativeSessionButton(copied ? "Copied" : "Copy") {
             let board = NSPasteboard.general
             board.clearContents()
             copied = board.setString(value, forType: .string)
@@ -139,7 +139,7 @@ private struct OnceSecret: View {
                 Text(value).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(2)
                 Spacer()
                 TasksCopyButton(value: value)
-                Button("I’ve copied it", action: onSeen)
+                NativeSessionButton("I’ve copied it", action: onSeen)
             }
         }
     }
@@ -181,7 +181,7 @@ private struct TaskAgentsGroup: View {
                                 }
                             }
                             Spacer()
-                            Button("Restore") { Task { await lifecycle(agent.id, .restore) } }.disabled(busy)
+                            NativeSessionButton("Restore") { Task { await lifecycle(agent.id, .restore) } }.disabled(busy)
                         }
                     }
                 }
@@ -190,9 +190,9 @@ private struct TaskAgentsGroup: View {
             }
             HStack {
                 // U114 (#190): one create page (Agents › New agent) and one editor (the agent's own settings window).
-                Button("Add agent") { reset(); AGTAgentsStore.shared.openProfile = "new"; AppModel.shared.select(NativeINT2Navigation.allID) }
+                NativeSessionButton("Add agent") { reset(); AGTAgentsStore.shared.openProfile = "new"; AppModel.shared.select(NativeINT2Navigation.allID) }
                     .buttonStyle(.borderedProminent).disabled(busy)
-                Button("Import from .claude/agents/…", action: importAgents).disabled(busy)
+                NativeSessionButton("Import from .claude/agents/…", action: importAgents).disabled(busy)
                 Spacer()
                 Text(state.agents.count == 1 ? "1 agent" : "\(state.agents.count) agents").font(.caption).foregroundStyle(.secondary)
             }
@@ -228,17 +228,17 @@ private struct TaskAgentsGroup: View {
                 }
                 Spacer()
                 // U114 (#190): every setting is changed in the agent's own settings window, never in a form here.
-                Button("Settings…") { reset(); AGTAgentSettingsWindow.open(agent.id) }.disabled(busy)
+                NativeSessionButton("Settings…") { reset(); AGTAgentSettingsWindow.open(agent.id) }.disabled(busy)
                     .help("Open \(agent.name)'s settings")
                 Menu {
                     if agent.status == .paused {
-                        Button("Resume") { Task { await lifecycle(agent.id, .resume) } }.help("Takes new work again")
+                        NativeSessionButton("Resume") { Task { await lifecycle(agent.id, .resume) } }.help("Takes new work again")
                     } else {
-                        Button("Pause") { Task { await lifecycle(agent.id, .pause) } }.help("Takes no new work; what it is running carries on")
+                        NativeSessionButton("Pause") { Task { await lifecycle(agent.id, .pause) } }.help("Takes no new work; what it is running carries on")
                     }
-                    Button("Archive") { Task { await lifecycle(agent.id, .archive) } }.help("Kept, and offered nowhere until restored")
+                    NativeSessionButton("Archive") { Task { await lifecycle(agent.id, .archive) } }.help("Kept, and offered nowhere until restored")
                     Divider()
-                    Button("Remove…", role: .destructive) { reset(); removing = agent.id }
+                    NativeSessionButton("Remove…", role: .destructive) { reset(); removing = agent.id }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -249,8 +249,8 @@ private struct TaskAgentsGroup: View {
                 HStack(spacing: 8) {
                     Text("Remove “\(agent.name)”? CRM identities that point at it are cleared too.").font(.callout)
                     Spacer()
-                    Button("Remove", role: .destructive) { Task { await remove(agent.id) } }.disabled(busy)
-                    Button("Keep it") { removing = nil }
+                    NativeSessionButton("Remove", role: .destructive) { Task { await remove(agent.id) } }.disabled(busy)
+                    NativeSessionButton("Keep it") { removing = nil }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Remove \(agent.name)")
@@ -319,7 +319,7 @@ private struct CrmConnectionsGroup: View {
                 Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
                     GridRow {
                         TaskSettingField(label: "CRM name", help: "Your own name for it, shown here and on its tasks.") {
-                            TextField("CRM name", text: Binding(get: { crmName }, set: {
+                            NativeSessionTextField("CRM name", text: Binding(get: { crmName }, set: {
                                 confirming = false
                                 crmName = String($0.prefix(50))
                             }), prompt: Text("e.g. Sales CRM"))
@@ -342,21 +342,21 @@ private struct CrmConnectionsGroup: View {
                         Text("Make a new access key named “\(name) (CRM)”? It is shown once, it can only send tasks, and it can be taken back in Settings → Outside AI apps.")
                             .font(.callout)
                         HStack(spacing: 8) {
-                            Button("Make the key and connect") { Task { await connectWithNewKey(state: state) } }
+                            NativeSessionButton("Make the key and connect") { Task { await connectWithNewKey(state: state) } }
                                 .buttonStyle(.borderedProminent).disabled(busy)
-                            Button("Cancel") { confirming = false }
+                            NativeSessionButton("Cancel") { confirming = false }
                         }
                     }
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Make a key for this CRM")
                 } else {
                     HStack(spacing: 8) {
-                        Button("Connect a CRM") { Task { await connect(chosen) } }
+                        NativeSessionButton("Connect a CRM") { Task { await connect(chosen) } }
                             .buttonStyle(.borderedProminent)
                             .disabled(busy || name.isEmpty)
                             .help(name.isEmpty ? "Give the CRM a name first" : "")
                         if state.keys.isEmpty {
-                            Button("Open Outside AI apps") { AppModel.shared.selectSettingsSection("ai-apps") }
+                            NativeSessionButton("Open Outside AI apps") { AppModel.shared.selectSettingsSection("ai-apps") }
                         }
                     }
                 }
@@ -380,7 +380,7 @@ private struct CrmConnectionsGroup: View {
                     Text(TasksSettingsText.keyLine(key, name: key?.name ?? "a removed key")).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(open == connection.keyId ? "Close" : "Change") { toggle(open == connection.keyId ? nil : connection.keyId) }.disabled(busy)
+                NativeSessionButton(open == connection.keyId ? "Close" : "Change") { toggle(open == connection.keyId ? nil : connection.keyId) }.disabled(busy)
             }
             if open == connection.keyId {
                 if let madeKey, madeKey.keyId == connection.keyId {
@@ -500,19 +500,19 @@ private struct ConnectionEditorView: View {
                     HStack(spacing: 8) {
                         Text("Make a new secret? The old one stops working right away.").font(.callout)
                         Spacer()
-                        Button("Make a new secret", role: .destructive) {
+                        NativeSessionButton("Make a new secret", role: .destructive) {
                             rotating = false
                             Task { _ = await onSave(["rotateSecret": true]) }
                         }
                         .disabled(busy)
-                        Button("Keep the old one") { rotating = false }
+                        NativeSessionButton("Keep the old one") { rotating = false }
                     }
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Make a new secret")
                 } else {
                     HStack(spacing: 8) {
                         Text(connection.hasEventsSecret ? "Secret set." : "No secret yet.").font(.caption).foregroundStyle(.secondary)
-                        Button("Make a new secret") {
+                        NativeSessionButton("Make a new secret") {
                             if connection.hasEventsSecret { rotating = true } else { Task { _ = await onSave(["rotateSecret": true]) } }
                         }
                         .disabled(busy)
@@ -538,7 +538,7 @@ private struct ConnectionEditorView: View {
                 } else {
                     ForEach(Array(draft.identities.enumerated()), id: \.offset) { index, row in
                         HStack(spacing: 8) {
-                            TextField("CRM identity id", text: Binding(get: { row.identity }, set: { setIdentity(index, identity: $0) }), prompt: Text("CRM identity id"))
+                            NativeSessionTextField("CRM identity id", text: Binding(get: { row.identity }, set: { setIdentity(index, identity: $0) }), prompt: Text("CRM identity id"))
                                 .font(.system(.body, design: .monospaced))
                                 .textFieldStyle(.roundedBorder).labelsHidden().multilineTextAlignment(.leading).disabled(busy)
                                 .accessibilityLabel("CRM identity id")
@@ -552,14 +552,14 @@ private struct ConnectionEditorView: View {
                             }
                             .labelsHidden().disabled(busy)
                             .accessibilityLabel("Agent")
-                            Button("Remove") {
+                            NativeSessionButton("Remove") {
                                 saved = false
                                 draft.identities.remove(at: index)
                             }
                             .disabled(busy)
                         }
                     }
-                    Button("Add an identity") {
+                    NativeSessionButton("Add an identity") {
                         saved = false
                         draft.identities.append(ConnectionDraft.Identity(identity: "", agentId: ""))
                     }
@@ -591,7 +591,7 @@ private struct ConnectionEditorView: View {
             }
             if let line = unfinished ?? problem { NativeCodingAINotice(tone: .error, text: line) }
             HStack(spacing: 8) {
-                Button("Save") {
+                NativeSessionButton("Save") {
                     switch ConnectionForm.patch(draft) {
                     case .failure(let p):
                         unfinished = p.message
@@ -604,14 +604,14 @@ private struct ConnectionEditorView: View {
                 .disabled(busy)
                 if saved { Text("Saved.").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
-                if !removing { Button("Remove…", role: .destructive) { removing = true }.disabled(busy) }
+                if !removing { NativeSessionButton("Remove…", role: .destructive) { removing = true }.disabled(busy) }
             }
             if removing {
                 HStack(spacing: 8) {
                     Text("Remove this connection? The CRM can no longer send work here.").font(.callout)
                     Spacer()
-                    Button("Remove", role: .destructive, action: onRemove).disabled(busy)
-                    Button("Keep it") { removing = false }
+                    NativeSessionButton("Remove", role: .destructive, action: onRemove).disabled(busy)
+                    NativeSessionButton("Keep it") { removing = false }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Remove this connection")
@@ -628,7 +628,7 @@ private struct ConnectionEditorView: View {
     }
 
     private func text(_ placeholder: String, _ key: WritableKeyPath<ConnectionDraft, String>, max: Int, mono: Bool = false, label: String) -> some View {
-        TextField(label, text: Binding(get: { draft[keyPath: key] }, set: {
+        NativeSessionTextField(label, text: Binding(get: { draft[keyPath: key] }, set: {
             saved = false
             draft[keyPath: key] = String($0.prefix(max))
         }), prompt: Text(placeholder))

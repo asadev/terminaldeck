@@ -34,9 +34,9 @@ struct NativeChatLibraryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let prompts { NativeChatPromptSearchView(model: prompts); Divider() }
-            HStack { Text("Past conversations").font(.headline); Spacer(); Button("Search text…") { searching = true }.disabled(cwd.isEmpty) }
-            TextField("Project folder", text: $cwd).onSubmit { load() }.disabled(working)
-            HStack { TextField("Conversation ID or path", text: $query); Button("Load") { load() }.disabled(cwd.isEmpty || loading) }
+            HStack { Text("Past conversations").font(.headline); Spacer(); NativeSessionButton("Search text…") { searching = true }.disabled(cwd.isEmpty) }
+            NativeSessionTextField("Project folder", text: $cwd).onSubmit { load() }.disabled(working)
+            HStack { NativeSessionTextField("Conversation ID or path", text: $query); NativeSessionButton("Load") { load() }.disabled(cwd.isEmpty || loading) }
             Text("Claude project transcripts")
                 .font(.caption).foregroundStyle(.secondary)
             if loading { ProgressView("Loading conversations…") }
@@ -47,8 +47,8 @@ struct NativeChatLibraryView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row["sessionId"].string ?? "Conversation").font(.callout.monospaced()).textSelection(.enabled)
                             HStack {
-                                Button("Preview") { perform { let raw = try await EngineBridge.shared.invoke("chat:load", [["transcriptPath": row["path"].string ?? ""]]); let update = ChatUpdate.decode(raw); preview = (update?.startedMidFile == true ? "Recent excerpt (earlier messages omitted)\n\n" : "Read-only transcript\n\n") + (update?.messages.map { "\($0.role == .you ? "You" : "Assistant")\n\($0.text)" }.joined(separator: "\n\n") ?? "Transcript unavailable") } }
-                                Button("Resume Claude chat") { perform {
+                                NativeSessionButton("Preview") { perform { let raw = try await EngineBridge.shared.invoke("chat:load", [["transcriptPath": row["path"].string ?? ""]]); let update = ChatUpdate.decode(raw); preview = (update?.startedMidFile == true ? "Recent excerpt (earlier messages omitted)\n\n" : "Read-only transcript\n\n") + (update?.messages.map { "\($0.role == .you ? "You" : "Assistant")\n\($0.text)" }.joined(separator: "\n\n") ?? "Transcript unavailable") } }
+                                NativeSessionButton("Resume Claude chat") { perform {
                                     let input = try NativeChatLibrary.resumeInput(row, cwd: cwd)
                                     guard let result = try await EngineBridge.shared.invoke("session:create", [input.foundation]) as? [String: Any], result["resumed"] as? Bool == true else {
                                         throw NativeRPCError(code: "resume-unconfirmed", message: "The provider did not confirm a resumed conversation. Check the newly opened session before sending.")
@@ -65,7 +65,7 @@ struct NativeChatLibraryView: View {
             if !preview.isEmpty { ScrollView { Text(preview).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(height: 160) }
         }.padding(16).frame(width: 560)
             .onChange(of: cwd) { _, folder in guard folder != loadedFolder else { return }; rows = []; preview = ""; loading = false }
-            .sheet(isPresented: $searching) { VStack { NativeChatPastSearchView(initialProject: cwd); Button("Done") { searching = false }.padding(.bottom) } }
+            .sheet(isPresented: $searching) { VStack { NativeChatPastSearchView(initialProject: cwd); NativeSessionButton("Done") { searching = false }.padding(.bottom) } }
             .task {
                 if let sessionID, let sessions = try? await EngineBridge.shared.invoke("session:list") as? [[String: Any]], let row = sessions.first(where: { $0["id"] as? String == sessionID }) { cwd = row["cwd"] as? String ?? "" }
                 else { cwd = DeckProject.current ?? "" }

@@ -27,20 +27,20 @@ struct OptionsEditor: View {
             ForEach(Array(options.enumerated()), id: \.element.id) { i, o in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
-                        Button { palette = palette == o.id ? nil : o.id } label: { Circle().fill(FieldPaint.hex(o.color)).frame(width: 16, height: 16) }
+                        NativeSessionButton{ palette = palette == o.id ? nil : o.id } label: { Circle().fill(FieldPaint.hex(o.color)).frame(width: 16, height: 16) }
                             .buttonStyle(.plain).accessibilityLabel("Colour of \(o.label)")
-                        TextField("", text: Binding(get: { o.label }, set: { new in
+                        NativeSessionTextField("", text: Binding(get: { o.label }, set: { new in
                             options = options.map { $0.id == o.id ? FieldOption(id: $0.id, label: String(new.prefix(60)), color: $0.color) : $0 }
                         }))
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("\(noun) \(i + 1)")
-                        Button { options.removeAll { $0.id == o.id } } label: { Image(systemName: "xmark").font(.system(size: 11)) }
+                        NativeSessionButton{ options.removeAll { $0.id == o.id } } label: { Image(systemName: "xmark").font(.system(size: 11)) }
                             .buttonStyle(.plain).foregroundStyle(.tertiary).accessibilityLabel("Remove \(o.label)")
                     }
                     if palette == o.id {
                         HStack(spacing: 4) {
                             ForEach(TaskFields.colors, id: \.self) { c in
-                                Button {
+                                NativeSessionButton{
                                     options = options.map { $0.id == o.id ? FieldOption(id: $0.id, label: $0.label, color: c) : $0 }
                                     palette = nil
                                 } label: {
@@ -59,9 +59,9 @@ struct OptionsEditor: View {
             }
             HStack(spacing: 6) {
                 Circle().fill(FieldPaint.hex(TaskFields.colors[options.count % TaskFields.colors.count])).opacity(0.5).frame(width: 16, height: 16)
-                TextField("Add \(noun)…", text: Binding(get: { adding }, set: { adding = String($0.prefix(60)) }))
+                NativeSessionTextField("Add \(noun)…", text: Binding(get: { adding }, set: { adding = String($0.prefix(60)) }))
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(add)
+                    .sessionOnSubmit(add)
                     .accessibilityLabel("New \(noun)")
             }
         }
@@ -125,7 +125,7 @@ struct FieldConfigForm: View {
                     HStack(spacing: 4) {
                         ForEach(RatingIcon.allCases, id: \.self) { r in
                             let on = (config.icon ?? .star) == r
-                            Button { config.icon = r } label: {
+                            NativeSessionButton{ config.icon = r } label: {
                                 Text(r.glyph).foregroundStyle(Color.orange).frame(width: 32, height: 32)
                                     .background(RoundedRectangle(cornerRadius: 6).fill(on ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1)))
                             }
@@ -180,7 +180,7 @@ struct FieldConfigForm: View {
     private func numberBox(_ label: String, _ value: Binding<Double>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             FieldCaption(text: label)
-            TextField(label, value: value, format: .number).textFieldStyle(.roundedBorder).accessibilityLabel(label)
+            NativeSessionNumberField(label, value: value).textFieldStyle(.roundedBorder).accessibilityLabel(label)
         }
     }
 }
@@ -198,7 +198,7 @@ struct FormulaSettings: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 FieldCaption(text: "Formula")
-                TextField("{Price} * {Quantity}", text: Binding(get: { expression }, set: { config.expression = String($0.prefix(500)) }), axis: .vertical)
+                NativeSessionTextField("{Price} * {Quantity}", text: Binding(get: { expression }, set: { config.expression = String($0.prefix(500)) }), axis: .vertical)
                     .lineLimit(2...4)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12, design: .monospaced))
@@ -207,7 +207,7 @@ struct FormulaSettings: View {
                 if !numeric.isEmpty {
                     TasksFlow(spacing: 4, lineSpacing: 4) {
                         ForEach(numeric) { s in
-                            Button {
+                            NativeSessionButton{
                                 let base = expression.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
                                 let next = "\(base) {\(s.label)}"
                                 config.expression = next.replacingOccurrences(of: "^\\s+", with: "", options: .regularExpression)
@@ -261,14 +261,14 @@ struct ButtonSettings: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 FieldCaption(text: "Button label")
-                TextField("Mark done", text: Binding(get: { config.label ?? "" }, set: { config.label = String($0.prefix(40)) }))
+                NativeSessionTextField("Mark done", text: Binding(get: { config.label ?? "" }, set: { config.label = String($0.prefix(40)) }))
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Button label")
             }
             VStack(alignment: .leading, spacing: 4) {
                 FieldCaption(text: "Colour")
                 HStack(spacing: 4) {
                     ForEach(TaskFields.colors, id: \.self) { c in
-                        Button { config.color = c } label: {
+                        NativeSessionButton{ config.color = c } label: {
                             Circle().fill(FieldPaint.hex(c)).frame(width: 20, height: 20)
                                 .overlay { if config.color == c { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white) } }
                         }
@@ -301,7 +301,7 @@ struct ButtonSettings: View {
                 }
                 .labelsHidden()
             case .comment(let body):
-                TextField("Comment to add…", text: Binding(get: { body }, set: { config.action = .comment(String($0.prefix(2000))) }), axis: .vertical)
+                NativeSessionTextField("Comment to add…", text: Binding(get: { body }, set: { config.action = .comment(String($0.prefix(2000))) }), axis: .vertical)
                     .lineLimit(2...4)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Comment the button adds")
