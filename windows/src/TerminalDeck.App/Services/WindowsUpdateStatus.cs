@@ -105,7 +105,7 @@ internal static class WindowsUpdateStatus
     {
       using var client = GitHubReleaseChannel.NewClient();
       using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-      var release = await GitHubReleaseChannel.FetchAsync(client, deadline.Token);
+      var release = await WindowsReleaseFeed.FetchAsync(client, deadline.Token);
       var v = package.Id.Version;
       Available = GitHubReleaseChannel.IsNewer(release.Version, new System.Version(v.Major, v.Minor, v.Build, v.Revision));
       Offered = Available ? release : null;

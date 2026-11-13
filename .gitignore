@@ -2,6 +2,8 @@
 node_modules
 out/
 dist/
+# The Windows chat page's vendored libraries (DOMPurify, KaTeX, Mermaid) are source, not build output.
+!windows/src/TerminalDeck.App/Assets/chat/*/dist/
 coverage/
 *.tsbuildinfo
 *.log
