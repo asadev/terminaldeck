@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using TerminalDeck.App.Shell;
 using TerminalDeck.App.Views.Chat;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Chats;
@@ -68,7 +69,7 @@ internal sealed class NewSessionPage : Grid
     choices = NewSessionPresets.Resolve(memory.Last(), services.World(), projectId);
     AutomationProperties.SetAutomationId(this, "newSession.page");
     RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
-    SetResourceReference(BackgroundProperty, "DeckCanvasBrush");
+    this.SetResourceReference(BackgroundProperty, "DeckCanvasBrush");
 
     // The bar: "New session" where the chat's title is; the project (and agent) where the chat's
     // folder is, then the dot and the same account chip.
