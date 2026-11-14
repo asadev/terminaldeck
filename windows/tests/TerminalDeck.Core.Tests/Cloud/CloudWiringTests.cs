@@ -62,8 +62,9 @@ public sealed class CloudWiringTests : IDisposable
   public void CloudIsSecondAfterGeneral()
   {
     var list = SettingsNavigation.Categories;
-    Assert.Equal(["general", "cloud", "appearance"], list.Take(3).Select(c => c.Id));
-    Assert.Equal("Cloud", list[1].Title);
+    // Mac, 14 Nov: Profile and Devices first, then General and Cloud.
+    Assert.Equal(["profile", "devices", "general", "cloud", "appearance"], list.Take(5).Select(c => c.Id));
+    Assert.Equal("Cloud", list[3].Title);
     // Same group as General: no divider between them.
     Assert.Equal(list[0].Group, list[1].Group);
     Assert.Contains(SettingsNavigation.Matching("account"), c => c.Id == "cloud");
