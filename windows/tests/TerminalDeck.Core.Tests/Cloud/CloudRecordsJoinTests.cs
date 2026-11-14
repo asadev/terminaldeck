@@ -154,6 +154,9 @@ public sealed class CloudRecordsJoinTests : IDisposable
   public async Task A_PC_with_its_own_older_project_never_overwrites_the_Macs_and_its_folder_is_never_moved_or_sent()
   {
     var (a, b) = await TwoMacs();
+    // The PC joins later than the Macs made their first copies (the clock moves on; two first copies made in the same
+    // millisecond would be decided by their ids, as on the Mac).
+    service.Now += 60_000;
     var macA = Projects(a); var macB = Projects(b);
     // Before joining, the PC already had "deck" under an old name, in its own folder, and a project of its own.
     var before = Make(Pc);
