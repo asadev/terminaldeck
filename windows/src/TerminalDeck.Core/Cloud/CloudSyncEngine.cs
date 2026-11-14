@@ -49,6 +49,8 @@ public sealed record CloudSyncState(CloudSyncPhase Phase, int Sending, int Recei
 public sealed class CloudSyncEngine
 {
   public const string FirstUploadPassedOver = "first-upload-passed-over";
+  /// Sync-store key prefix of an incoming record its owner refused for good (value: the refusal code).
+  public const string RefusedRecordPrefix = "refusedRecord.";
   public const int MaximumPackOps = 256, MaximumPackPlainBytes = 180_000;
   private readonly string subject, deviceId;
   private readonly CloudFeedClient client;
@@ -317,7 +319,15 @@ public sealed class CloudSyncEngine
     foreach (var op in operations)
     {
       if (store.IsApplied(op.OpId)) continue;
-      await adapters[op.Domain].ApplyAsync(op, origin, ct);
+      // Mac X1(b), 13 Nov: a record its owner refuses for good (an id already used for other content, a record that
+      // does not hold together) is noted and passed over; the rest of the pack applies and the feed moves on. The same
+      // content arriving again is not a refusal: the owner takes it as already present.
+      try { await adapters[op.Domain].ApplyAsync(op, origin, ct); }
+      catch (CloudFailure refused) when (refused.Code is "id_reused" or "invalid_request")
+      {
+        store.Set(RefusedRecordPrefix + op.OpId, refused.Code);
+        log("cloud sync: a record was refused: " + refused.Code);
+      }
       done.Add(op.OpId);
     }
     store.MarkApplied(done);

@@ -99,6 +99,7 @@ public sealed class CloudSyncWiringW3Tests
     public required CloudMemorySlot State, Ledger;
     public required QuietSockets Sockets;
     public required CloudSyncBridge Bridge;
+    public required TaskCompletionSource Halted;
     public int StoresMade, HttpMade;
   }
   private static World Make(CloudFakeService service, params ICloudSyncAdapter[] owners)
@@ -110,8 +111,15 @@ public sealed class CloudSyncWiringW3Tests
     World? world = null;
     var platform = new CloudSyncPlatform(subject => { world!.StoresMade++; return new CloudSyncStore(state, ledger, subject); },
       () => { world!.HttpMade++; return service; }, sockets, new CloudSyncEndpoint(CloudFakeService.Base, test: true), () => owners, () => service.Now);
-    var bridge = new CloudSyncBridge(account, platform, null, (_, ct) => Task.Delay(Timeout.Infinite, ct));
-    world = new World { Service = service, Account = account, Trust = trust, State = state, Ledger = ledger, Sockets = sockets, Bridge = bridge };
+    var halted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Every wait of the bridge comes from here: the round timer and socket waits never end by themselves; the short
+    // grace before a stopped engine drops its keys ends at once and is reported.
+    var bridge = new CloudSyncBridge(account, platform, null, (span, ct) =>
+    {
+      if (span == CloudSyncBridge.HaltGrace) { halted.TrySetResult(); return Task.CompletedTask; }
+      return Task.Delay(Timeout.Infinite, ct);
+    });
+    world = new World { Service = service, Account = account, Trust = trust, State = state, Ledger = ledger, Sockets = sockets, Bridge = bridge, Halted = halted };
     return world;
   }
   private static CloudDeviceRow Row(string deviceId, CloudTrustStanding standing) =>
@@ -145,7 +153,7 @@ public sealed class CloudSyncWiringW3Tests
     Assert.Equal(CloudSyncPhase.Idle, (await w.Bridge.SyncNowAsync())!.Phase);
     // Trusting a device changes nothing either.
     w.Account.Set(CloudPhase.SignedIn, on: true, Row(DeviceB, CloudTrustStanding.Trusted));
-    await Task.Delay(50);
+    // No record kind: OnAccount schedules nothing in the background, so there is nothing to wait for.
     Assert.Equal((0, 0, 0), (w.HttpMade, w.Service.Requests, w.Sockets.Connects));
     Assert.Null(w.State.Bytes); Assert.Null(w.Ledger.Bytes);
     // Cloud off: the engine is dropped and the line goes.
@@ -172,6 +180,8 @@ public sealed class CloudSyncWiringW3Tests
     Assert.Equal(1, w.HttpMade);
     w.Account.Set(CloudPhase.SignedOut, on: false);
     Assert.Null(w.Bridge.Status);
+    // Signing out stops the engine; its grace wait goes through the injected wait, not a real two-second sleep.
+    await w.Halted.Task.WaitAsync(TimeSpan.FromSeconds(30));
     w.Bridge.Dispose();
   }
 
@@ -200,7 +210,7 @@ public sealed class CloudSyncWiringW3Tests
 
     w.Trust.Trusted[DeviceB] = bDevice.Jwk;
     w.Account.Set(CloudPhase.SignedIn, on: true, Row(DeviceB, CloudTrustStanding.Trusted));
-    for (var i = 0; i < 200 && adapter.Applied.Count == 0; i++) await Task.Delay(25);
+    await adapter.FirstApplied.Task.WaitAsync(TimeSpan.FromSeconds(30));
     var applied = Assert.Single(adapter.Applied);
     Assert.Equal(("from-b", DeviceB, true), (applied.Text, applied.Origin.DeviceId, applied.Origin.Late));
     Assert.Empty(w.Bridge.Engine!.Ledger.Held);

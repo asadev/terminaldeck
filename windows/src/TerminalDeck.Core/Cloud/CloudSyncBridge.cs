@@ -16,6 +16,7 @@ public sealed class CloudSyncBridge : IDisposable
 {
   public static readonly TimeSpan RoundEvery = TimeSpan.FromMinutes(5);
   public static readonly TimeSpan AccountEvery = TimeSpan.FromMinutes(15);
+  public static readonly TimeSpan HaltGrace = TimeSpan.FromSeconds(2);
 
   private sealed class Running(string subject, string deviceId, CloudSyncEngine engine, CloudFeedClient client, LazySyncHttp http, CancellationTokenSource stop)
   {
@@ -182,13 +183,14 @@ public sealed class CloudSyncBridge : IDisposable
 
   /// Signed out, Cloud turned off, or the app closing: the loop and the event connection end, the memory keys held in
   /// memory are forgotten, and the HTTP client (if one was ever made) is closed. Nothing is deleted.
-  private static void Halt(Running r)
+  private void Halt(Running r)
   {
     r.Stop.Cancel();
     _ = Task.Run(async () =>
     {
-      // Give a round in flight a moment to see the cancellation before its keys are dropped.
-      try { await Task.Delay(TimeSpan.FromSeconds(2)); } catch (Exception) { }
+      // Give a round in flight a moment to see the cancellation before its keys are dropped. The wait is the
+      // bridge's own injectable one, so tests never sleep through it.
+      try { await delay(HaltGrace, CancellationToken.None); } catch (Exception) { }
       r.Engine.Forget(); r.Http.Dispose();
     });
   }

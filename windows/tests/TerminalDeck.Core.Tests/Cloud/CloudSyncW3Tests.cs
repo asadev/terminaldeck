@@ -342,4 +342,66 @@ public sealed class CloudSyncW3Tests
     Assert.Equal(CloudSyncPhase.Waiting, a.Engine.State().Phase);
     Assert.Null(a.Client.Backoff.Blocked);
   }
+
+  // ---- Mac lessons of 13 Nov, carried to Windows ----
+
+  [Fact]
+  public async Task A_429_is_a_short_wait_never_a_stop_and_sending_resumes_by_itself()
+  {
+    var service = new CloudFakeService { RateLimitNext = 1, RateLimitRetryAfterSeconds = 5 };
+    var a = Make(service, DeviceA);
+    a.Adapter.Add("one");
+    await a.Engine.SyncAsync(default);
+    Assert.Equal("rate", a.Client.Backoff.Blocked);
+    Assert.Equal(service.Now + 5000, a.Client.Backoff.RetryAt);
+    Assert.False(a.Client.Backoff.MaySend);
+    Assert.Equal(0, service.Segments);
+    // A 429 without Retry-After, whatever its code, is one minute, never the daily stop.
+    var other = new CloudSyncBackoff(new CloudSyncStore(new CloudMemorySlot(), new CloudMemorySlot(), Subject), () => service.Now);
+    other.Failed(new CloudFailure("sql_quota_exceeded", 429, true));
+    Assert.Equal(("rate", service.Now + 60_000), (other.Blocked, other.RetryAt));
+    // The wait passes on the injected clock (no sleep): the next round sends without anyone pressing anything.
+    service.Now += 5000;
+    var state = await a.Engine.SyncAsync(default);
+    Assert.Equal(1, service.Segments);
+    Assert.Null(a.Client.Backoff.Blocked);
+    Assert.Equal(CloudSyncPhase.Level, state.Phase);
+  }
+
+  [Fact]
+  public async Task A_pack_cut_again_smaller_gets_a_fresh_id_and_its_records_all_arrive()
+  {
+    var service = new CloudFakeService { RefuseNextCommits = 1 };
+    var a = Make(service, DeviceA);
+    await Send(a, "one", "two");
+    var refused = Assert.Single(service.RefusedSegmentIds);
+    Assert.Equal(2, service.Segments);
+    Assert.DoesNotContain(refused, service.SegmentIds);
+    Assert.Equal(2, service.SegmentIds.Distinct().Count());
+    Assert.Equal(0, a.Store.QueuedCount);
+    Assert.Empty(a.Store.Parked);
+  }
+
+  [Fact]
+  public async Task A_record_its_owner_refuses_is_passed_over_and_the_feed_moves_on()
+  {
+    var service = new CloudFakeService();
+    var a = Make(service, DeviceA);
+    await Send(a, "one", "echo", "three");
+    await Send(a, "four");
+    string? refusedOp = null;
+    var adapter = new CloudTestAdapter(DeviceB) { RefuseOn = op => ((CloudJson.Object)op.Payload)["text"]!.AsString == "echo" && (refusedOp = op.OpId) is not null };
+    var b = Make(service, DeviceB, adapter: adapter);
+    b.Trust.Trusted[DeviceA] = a.Device.Jwk;
+    await b.Engine.PullAsync(default);
+    Assert.Equal(["one", "three", "four"], adapter.Applied.Select(x => x.Text));
+    Assert.Equal(2UL, b.Engine.Ledger.Cursor);
+    Assert.Equal("id_reused", b.Store.Get(CloudSyncEngine.RefusedRecordPrefix + refusedOp));
+    Assert.Equal(CloudSyncPhase.Level, b.Engine.State().Phase);
+    // The same pack arriving again (a re-read after a restart) is a duplicate: nothing is applied twice, nothing fails.
+    adapter.RefuseOn = null;
+    var again = Make(service, DeviceB, b.Device, b.State, new CloudMemorySlot(), b.Trust, adapter);
+    await again.Engine.PullAsync(default);
+    Assert.Equal(["one", "three", "four"], adapter.Applied.Select(x => x.Text));
+  }
 }

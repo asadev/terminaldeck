@@ -17,8 +17,12 @@ internal sealed class CloudFakeService : ICloudSyncHttp
   public static readonly byte[] BrainKey = Convert.FromHexString("4bdff7222adbea4e528a32a74da613179cfccb4e75125cc398de22fb1a5ed75c");
   public long Now = 1_763_000_000_000;
   public int FailNext;
+  /// The next requests answer 429 with this `Retry-After` (seconds), as the service's slow-down does.
+  public int RateLimitNext; public long RateLimitRetryAfterSeconds = 5;
   public bool LoseNextCommitAnswer;
   public string? RefuseCommitsWith;
+  /// The next commits are refused as too large (422 payload_too_large); the refused pack ids are kept here.
+  public int RefuseNextCommits; public readonly List<string> RefusedSegmentIds = [];
   public int Requests;
   public readonly List<string> Log = [];
   public readonly Dictionary<string, ECDsa> Devices = new(StringComparer.Ordinal);
@@ -32,6 +36,7 @@ internal sealed class CloudFakeService : ICloudSyncHttp
   private readonly HashSet<string> transferIds = [];
   public ulong Head => segments.Count == 0 ? FirstSeq - 1 : segments[^1].Seq;
   public int Segments => segments.Count;
+  public IReadOnlyList<string> SegmentIds => segments.Select(s => s.Descriptor["segmentId"]!.AsString!).ToArray();
   public (string Device, ulong Applied) LastApplied;
 
   public void Register(string deviceId, ECDsa key, string token) { Devices[deviceId] = key; Tokens[deviceId] = token; }
@@ -42,6 +47,7 @@ internal sealed class CloudFakeService : ICloudSyncHttp
     Requests++;
     Log.Add(request.Method + " " + request.Url.PathAndQuery);
     if (FailNext > 0) { FailNext--; return Task.FromResult(Error(503, "temporarily_unavailable", true)); }
+    if (RateLimitNext > 0) { RateLimitNext--; return Task.FromResult(Error(429, "rate_limited", true) with { RetryAfterSeconds = RateLimitRetryAfterSeconds }); }
     try { return Task.FromResult(Handle(request)); }
     catch (Fault fault) { return Task.FromResult(Error(fault.Status, fault.Code, fault.Retryable, fault.ServerTime)); }
   }
@@ -110,6 +116,7 @@ internal sealed class CloudFakeService : ICloudSyncHttp
   {
     if (RefuseCommitsWith is { } code) throw new Fault(422, code);
     var d = value["descriptor"] as CloudJson.Object ?? throw new Fault(400, "invalid_request");
+    if (RefuseNextCommits > 0) { RefuseNextCommits--; RefusedSegmentIds.Add(d["segmentId"]!.AsString!); throw new Fault(422, "payload_too_large"); }
     Check(d["requestId"]?.AsString == requestId);
     Check(d["format"]?.AsString == "td-ops-1", "unsupported_format", 422);
     var ciphertext = CloudBytes.Unbase64(value["ciphertext"]?.AsString ?? "");
@@ -209,6 +216,10 @@ internal sealed class CloudTestAdapter(string deviceId, string domain = "brain/t
   public readonly List<(string Text, CloudImportOrigin Origin)> Applied = [];
   private readonly HashSet<string> held = new(StringComparer.Ordinal);
   public Func<CloudOperation, bool>? CrashOn;
+  /// A record this owner refuses for good (Mac X1(b)): the engine passes it over and the feed moves on.
+  public Func<CloudOperation, bool>? RefuseOn;
+  /// Completes when the first record is applied, so a test awaits it instead of sleeping.
+  public readonly TaskCompletionSource FirstApplied = new(TaskCreationOptions.RunContinuationsAsynchronously);
   public IReadOnlyCollection<string> Domains => [domain];
   public void Add(string text) => queued.Add(CloudOperation.Create(deviceId, domain, "entity-" + text, [], "put", new("test", text), 1_763_000_000_000, CloudJson.Obj(("text", CloudJson.From(text)))));
   public Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
@@ -219,7 +230,8 @@ internal sealed class CloudTestAdapter(string deviceId, string domain = "brain/t
   public Task ApplyAsync(CloudOperation operation, CloudImportOrigin origin, CancellationToken ct)
   {
     if (CrashOn?.Invoke(operation) == true) throw new InvalidOperationException("the app stopped here");
-    if (held.Add(operation.OpId)) Applied.Add(((operation.Payload as CloudJson.Object)!["text"]!.AsString!, origin));
+    if (RefuseOn?.Invoke(operation) == true) throw new CloudFailure("id_reused");
+    if (held.Add(operation.OpId)) { Applied.Add(((operation.Payload as CloudJson.Object)!["text"]!.AsString!, origin)); FirstApplied.TrySetResult(); }
     return Task.CompletedTask;
   }
 }
