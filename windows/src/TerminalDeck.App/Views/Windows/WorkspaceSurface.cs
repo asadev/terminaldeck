@@ -518,7 +518,7 @@ internal sealed partial class WorkspaceSurface : Grid
         if (tab.Kind == "chat" && session(tab) is { } chatSession && chatSession.HasAgent)
         {
           var agent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-          agent.Children.Add(new SessionPicture { Session = chatSession, Width = 28, Height = 28 });
+          agent.Children.Add(new Views.SessionPicture { Session = chatSession, Width = 28, Height = 28 });
           agent.Children.Add(new TextBlock { Text = chatSession.AgentName, FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
           identity.Children.Add(agent);
         }
