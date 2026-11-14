@@ -100,7 +100,6 @@ public sealed partial class CloudAccountClient : IDisposable
   public static string Kind(Exception error) => error switch
   {
     CloudFailure f => "service " + new string(f.Code.Where(c => char.IsAsciiLetterOrDigit(c) || c == '_').Take(60).ToArray()),
-    CloudTrustRefusal r => "trust " + r.Kind,
     HttpRequestException => "network",
     OperationCanceledException => "cancelled",
     JsonException => "invalid answer",
