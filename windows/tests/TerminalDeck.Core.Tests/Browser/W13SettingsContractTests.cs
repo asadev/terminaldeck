@@ -7,8 +7,8 @@ public sealed class W13SettingsContractTests
   [Fact]
   public void CategoriesFollowMacGroupsWithoutUnsupportedPages()
   {
-    Assert.Equal(new[] { "general", "appearance", "notifications", "coding-ais", "outside-ai-apps", "agent-defaults", "browser", "tasks", "advanced", "about" }, SettingsNavigation.Categories.Select(c => c.Id));
-    Assert.Equal(new[] { 0, 0, 0, 1, 1, 1, 2, 2, 3, 3 }, SettingsNavigation.Categories.Select(c => c.Group));
+    Assert.Equal(new[] { "general", "cloud", "appearance", "notifications", "coding-ais", "outside-ai-apps", "agent-defaults", "browser", "tasks", "advanced", "about" }, SettingsNavigation.Categories.Select(c => c.Id));
+    Assert.Equal(new[] { 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 3 }, SettingsNavigation.Categories.Select(c => c.Group));
   }
   [Theory]
   [InlineData("accounts", "coding-ais")]
