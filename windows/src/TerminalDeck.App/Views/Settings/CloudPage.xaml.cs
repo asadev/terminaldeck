@@ -112,10 +112,19 @@ public sealed partial class CloudPage : UserControl
     {
       if (label == CloudPageText.SignIn) await account.BeginSignInAsync();
       else if (label == CloudPageText.Cancel) account.CancelSignIn();
-      else if (label == CloudPageText.SignOut) await account.SignOutAsync();
+      else if (label == CloudPageText.SignOut && await ConfirmSignOutAsync()) await account.SignOutAsync();
     }
     catch (Exception ex) when (ex is not OutOfMemoryException) { }
     finally { working = false; Render(); }
+  }
+
+  /// One confirmation: "Sign out" or "Cancel". Signing out removes this PC from the account and drops its key.
+  private async Task<bool> ConfirmSignOutAsync()
+  {
+    var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = CloudPageText.SignOutTitle,
+      Content = new TextBlock { Text = CloudPageText.SignOutText, TextWrapping = TextWrapping.Wrap },
+      PrimaryButtonText = CloudPageText.SignOut, CloseButtonText = CloudPageText.Cancel, DefaultButton = ContentDialogButton.Close };
+    return await dialog.ShowAsync() == ContentDialogResult.Primary;
   }
 
   private async void UseCloudSwitch_Toggled(object sender, RoutedEventArgs e)

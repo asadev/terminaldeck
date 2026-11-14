@@ -21,6 +21,9 @@ public sealed record AccountSummaryModel(string Line, string? Button, string? Na
 public static class CloudPageText
 {
   public const string SignIn = "Sign in", SignOut = "Sign out", Cancel = "Cancel";
+  /// The one confirmation of Sign out (owner, 13 Nov).
+  public const string SignOutTitle = "Sign out of Cloud on this PC?";
+  public const string SignOutText = "Your work stays on this PC. It stops syncing with your other devices until you sign in again.";
   public const string SignedOutLine = $"Sign in with your {Brand.Name} account to keep your work on all your devices.";
   public const string SigningInLine = "Finish signing in in your browser, then come back here.";
   /// Owner, 13 Nov: joining is automatic; one switch, on after sign-in, for a person who wants Cloud off on this PC.

@@ -310,14 +310,6 @@ public sealed partial class CloudAccountClient : IDisposable
   public static bool SessionRefused(CloudFailure failure) => !failure.Retryable && failure.Code is "session_not_found" or "refresh_token_not_found" or "user_not_found"
     or "invalid_grant" or "session_revoked" or "session_invalid" or "invalid_session" or "device_revoked" or "user_banned";
 
-  /// The person's Sign out press. Local only plus one logout request; never removes anything but Cloud's own record.
-  public async Task SignOutAsync(CancellationToken ct = default)
-  {
-    await work.WaitAsync(ct);
-    try { Interlocked.Increment(ref generation); await ClearSignInAsync(); }
-    finally { work.Release(); }
-  }
-
   private async Task ClearSignInAsync()
   {
     var session = saved?.Session;

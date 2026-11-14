@@ -119,7 +119,8 @@ public sealed class CloudAccountTrustTests : IDisposable
     Assert.Equal(CloudTrustMode.Ask, page.TrustMode); Assert.Empty(page.Notices!);
     var mac = c.Http.Others[0].Device;
     Assert.True(page.Devices.Single(d => d.DeviceId == mac.DeviceId).CanTrust);
-    Assert.False(page.Devices.Single(d => d.DeviceId == c.Http.Others[2].Device.DeviceId).CanTrust);
+    Assert.DoesNotContain(page.Devices, d => d.DeviceId == c.Http.Others[2].Device.DeviceId);
+    Assert.Null(c.Account.CaptureForDialog(c.Http.Others[2].Device.DeviceId));
     // The compare dialog shows the code of exactly the key a press stores.
     var captured = c.Account.CaptureForDialog(mac.DeviceId)!;
     Assert.Equal(CloudDeviceCode.Code(mac.DeviceId, mac.SignPublicJwk), captured.Code);

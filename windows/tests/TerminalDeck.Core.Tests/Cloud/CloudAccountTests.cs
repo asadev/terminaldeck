@@ -199,8 +199,16 @@ public sealed class CloudAccountTests : IDisposable
   {
     var c = Make();
     await SignInAsync(c);
+    var device = c.Account.Snapshot.ThisDeviceId!;
+    var before = c.Http.Requests.Count;
     await c.Account.SignOutAsync();
     Assert.Equal(CloudPhase.SignedOut, c.Account.Snapshot.Phase); Assert.False(File.Exists(c.Path));
+    // This PC is removed from the account at the service, then the session ends; its keys are gone with the record.
+    Assert.Equal(["/v1/state", "/v1/devices/remove", "/auth/v1/logout"], c.Http.Requests.Skip(before).Select(r => r.Url.AbsolutePath));
+    Assert.Equal([device], c.Http.Removed);
+    Assert.Equal("cloud sign-out: remove this PC ok", c.Log[^1]);
+    Assert.Equal("Sign out of Cloud on this PC?", CloudPageText.SignOutTitle);
+    Assert.Equal("Your work stays on this PC. It stops syncing with your other devices until you sign in again.", CloudPageText.SignOutText);
     var logout = c.Http.Requests.Last();
     Assert.EndsWith("/auth/v1/logout", logout.Url.AbsolutePath); Assert.StartsWith("Bearer ", logout.Headers["Authorization"]);
     Assert.Equal("Sign in", CloudPageText.For(c.Account.Snapshot).Button);
