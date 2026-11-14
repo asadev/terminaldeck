@@ -372,9 +372,7 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
       if (byHash.TryGetValue(g.LastHash, out var there)) movedTo = state.FileOrigins.GetValueOrDefault(there) is { } o ? o.Key[5..] : there;
       var removal = new CloudMemoryRemoval(now, deviceId.ToLowerInvariant(), movedTo, Confirmed: confirmed);
       var name = g.Path.Split('/')[^1] is var last && last.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? last[..^3] : g.Path.Split('/')[^1];
-      var bytes = removal.Text(CloudMemoryRemoval.NoteId(now, g.StoreId + "
-" + g.Key + "
-" + g.Head.Version), name);
+      var bytes = removal.Text(CloudMemoryRemoval.NoteId(now, g.StoreId + "\n" + g.Key + "\n" + g.Head.Version), name);
       var hash = CloudMemoryFormat.Hash(bytes);
       operations.AddRange(Export(new Resource(g.Row, g.StoreId, g.Key, bytes, hash, g.Origin?.Version, null, g.Path), stampNow));
       state.Removals[hash] = new Removed { Path = g.Path, At = now, By = removal.By, MovedTo = movedTo };
