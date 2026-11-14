@@ -1,0 +1,281 @@
+# Windows release: builds, tests, signs and publishes the Windows app on GitHub's own Windows machines, with no
+# Mac and no private PC. Started by hand (Actions > Windows release > Run workflow) by anyone with write access.
+# Runbook: docs/WINDOWS-RELEASE.md.
+#
+# What it publishes, and what it never touches:
+#   - a release "windows-v<version>" (NEVER marked latest; the Mac app, install.sh and the website read "latest")
+#     with the signed MSIX, TerminalDeck-Stable.cer, SHA256SUMS-windows.txt and that version's signed
+#     windows-update.json (+ .sig);
+#   - then the fixed release "windows-stable" (a pre-release, never latest) gets that windows-update.json (+ .sig):
+#     installed Windows apps read it (WindowsReleaseFeed.cs) and offer the update.
+#   Mac releases (v<x.y.z>), their files and the shared release-manifest.json are never read for writing, moved or
+#   changed. If GitHub's "latest" moved anyway, the last step puts it back on the release it was on.
+#
+# Secrets (set once by the repository owner; nobody can read them back):
+#   WINDOWS_SIGNING_PFX_BASE64    the Terminal Deck Stable code-signing certificate (.pfx), base64
+#   WINDOWS_SIGNING_PFX_PASSWORD  its password
+#   WINDOWS_UPDATE_ED25519_KEY    the Windows-only update key (PEM) that signs windows-update.json
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "release = build, test, sign and publish. dry-run = build and test only, nothing published. point-back = make installed apps stop being offered the newest version and offer the version below instead."
+        type: choice
+        options: [release, dry-run, point-back]
+        default: release
+      version:
+        description: "Windows version, four numbers (e.g. 0.21.5.0). Leave empty for the next one. For point-back: the earlier version to offer again."
+        required: false
+        default: ""
+      notes:
+        description: "What changed, in one or two lines (shown on the release page and in the app's update notice)."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  CHANNEL_TAG: windows-stable
+
+jobs:
+  plan:
+    name: Pick and check the version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - name: Releases are made from main only
+        if: inputs.mode != 'dry-run' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this workflow on the main branch (the branch picker above the Run button). Use dry-run to try another branch."
+          exit 1
+      - name: Newest Windows version already out, and the one to make
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.version }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          # What installed apps are offered today: the Windows channel's file, else the shared manifest.
+          feed="$(curl -fsSL "https://github.com/$repo/releases/download/$CHANNEL_TAG/windows-update.json" 2>/dev/null | jq -r '.windows.version // empty' || true)"
+          shared="$(curl -fsSL "https://github.com/$repo/releases/latest/download/release-manifest.json" 2>/dev/null | jq -r '.windows.version // empty' || true)"
+          current="$(printf '%s\n%s\n0.0.0.0\n' "$feed" "$shared" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
+          echo "Offered now: Windows channel ${feed:-none}, shared manifest ${shared:-none}; newest $current"
+          if [ "$MODE" = point-back ]; then
+            echo "$WANT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::point-back needs the earlier version, e.g. 0.21.5.0"; exit 1; }
+            gh release view "windows-v$WANT" -R "$repo" >/dev/null || { echo "::error::There is no release windows-v$WANT to point back to."; exit 1; }
+            echo "version=$WANT" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$WANT" ]; then
+            IFS=. read -r a b c d <<< "$current"
+            WANT="$a.$b.$((c + 1)).0"
+            echo "No version given: using $WANT"
+          fi
+          echo "$WANT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::The version must be four numbers, e.g. 0.21.5.0"; exit 1; }
+          newest="$(printf '%s\n%s\n' "$current" "$WANT" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
+          if [ "$WANT" = "$current" ] || [ "$newest" != "$WANT" ]; then
+            echo "::error::$WANT is not newer than $current, which installed apps already have. Pick a higher number."; exit 1
+          fi
+          if [ "$MODE" = release ] && gh release view "windows-v$WANT" -R "$repo" >/dev/null 2>&1; then
+            echo "::error::windows-v$WANT already exists. Pick the next number."; exit 1
+          fi
+          echo "version=$WANT" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, test and sign on Windows
+    needs: plan
+    if: inputs.mode != 'point-back'
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: windows/global.json
+
+      - name: NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/Directory.Build.props', 'windows/global.json') }}
+
+      - name: Build every project and run every test project
+        shell: pwsh
+        run: ./windows/scripts/windows/build-and-test.ps1 -Configuration Release -Platform x64
+
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-check
+          path: windows/.artifacts/windows-check/
+          retention-days: 14
+
+      - name: Direct-link engine (tdlink.dll + libwebrtc.dll, pinned by SHA-256)
+        shell: pwsh
+        run: ./windows/src/TerminalDeck.Link.Native/build.ps1 -Out "$env:RUNNER_TEMP\link-native"
+
+      - name: Package and sign the MSIX
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'windows-release'
+          $pfx = Join-Path $env:RUNNER_TEMP 'stable.pfx'
+          try {
+            if ($env:MODE -eq 'release') {
+              if (!$env:PFX_BASE64 -or !$env:WINDOWS_SIGNING_PFX_PASSWORD) { throw 'The signing secrets WINDOWS_SIGNING_PFX_BASE64 / WINDOWS_SIGNING_PFX_PASSWORD are not set (the repository owner adds them once).' }
+              [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+              ./windows/scripts/windows/package-msix.ps1 -Version $env:VERSION -Out $out -PfxPath $pfx -LinkNative "$env:RUNNER_TEMP\link-native"
+            } else {
+              ./windows/scripts/windows/package-msix.ps1 -Version $env:VERSION -Out $out -LinkNative "$env:RUNNER_TEMP\link-native"
+            }
+          } finally { Remove-Item $pfx -Force -ErrorAction SilentlyContinue }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\upload" | Out-Null
+          Move-Item "$out\TerminalDeck-$env:VERSION-x64.msix" "$env:RUNNER_TEMP\upload\"
+          if (Test-Path "$out\TerminalDeck-Stable.cer") { Move-Item "$out\TerminalDeck-Stable.cer" "$env:RUNNER_TEMP\upload\" }
+
+      - name: Hand the package to the publish step
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: ${{ runner.temp }}/upload/
+          retention-days: ${{ inputs.mode == 'release' && 7 || 2 }}
+          compression-level: 0
+
+  publish:
+    name: Publish the Windows release (never "latest")
+    needs: [plan, build]
+    if: inputs.mode == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            windows/scripts/windows
+            windows/src/TerminalDeck.Core/Platform
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-package
+          path: package
+
+      - name: Sign the Windows update file with the Windows-only key
+        env:
+          WINDOWS_UPDATE_ED25519_KEY: ${{ secrets.WINDOWS_UPDATE_ED25519_KEY }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          [ -n "$WINDOWS_UPDATE_ED25519_KEY" ] || { echo "::error::The secret WINDOWS_UPDATE_ED25519_KEY is not set (the repository owner adds it once)."; exit 1; }
+          printf '%s\n' "${NOTES:-Terminal Deck for Windows $VERSION.}" > notes.md
+          node windows/scripts/windows/make-windows-update.mjs --msix "package/TerminalDeck-$VERSION-x64.msix" \
+            --version "$VERSION" --tag "windows-v$VERSION" --commit "$GITHUB_SHA" --notes notes.md --out feed
+          cp feed/windows-update.json feed/windows-update.json.sig package/
+          (cd package && sha256sum "TerminalDeck-$VERSION-x64.msix" TerminalDeck-Stable.cer windows-update.json windows-update.json.sig > SHA256SUMS-windows.txt)
+          cat package/SHA256SUMS-windows.txt
+
+      - name: Create windows-v${{ needs.plan.outputs.version }} (not latest)
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          gh api "repos/$repo/releases/latest" --jq .tag_name > latest-before.txt || echo none > latest-before.txt
+          echo "latest before: $(cat latest-before.txt)"
+          {
+            cat notes.md
+            printf '\n## Install (Windows 10/11, x64)\n\n'
+            printf '1. First time only: download `TerminalDeck-Stable.cer`, double-click it, Install Certificate, Local Machine, "Trusted People".\n'
+            printf '2. Download `TerminalDeck-%s-x64.msix` and double-click it.\n\n' "$VERSION"
+            printf '**Already installed?** Terminal Deck shows this update in its side panel, just above Settings: Restart to update. Your sessions keep running.\n'
+            printf '\nWindows-only release, made by the Windows release workflow from commit %s. The Mac app has its own releases.\n' "$GITHUB_SHA"
+          } > release-notes.md
+          gh release create "windows-v$VERSION" -R "$repo" --target "$GITHUB_SHA" --latest=false \
+            --title "Terminal Deck for Windows $VERSION" --notes-file release-notes.md \
+            "package/TerminalDeck-$VERSION-x64.msix" package/TerminalDeck-Stable.cer package/SHA256SUMS-windows.txt \
+            package/windows-update.json package/windows-update.json.sig
+
+      - name: Check the uploaded files byte for byte
+        run: |
+          set -euo pipefail
+          mkdir back
+          gh release download "windows-v$VERSION" -R "$GITHUB_REPOSITORY" -D back
+          (cd back && sha256sum -c ../package/SHA256SUMS-windows.txt)
+
+      - name: Offer it to installed apps (the windows-stable channel)
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if ! gh release view "$CHANNEL_TAG" -R "$repo" >/dev/null 2>&1; then
+            gh release create "$CHANNEL_TAG" -R "$repo" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Windows update channel" \
+              --notes "Installed Windows apps read windows-update.json here to find their newest version. The installers are on the windows-v releases. Do not delete this release."
+          fi
+          # The signature first, then the file: a PC that reads in between is refused once and checks again later.
+          gh release upload "$CHANNEL_TAG" -R "$repo" --clobber package/windows-update.json.sig
+          gh release upload "$CHANNEL_TAG" -R "$repo" --clobber package/windows-update.json
+
+      - name: Read the live channel back; keep "latest" where it was
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          sleep 5
+          curl -fsSL "https://github.com/$repo/releases/download/$CHANNEL_TAG/windows-update.json" -o live.json
+          curl -fsSL "https://github.com/$repo/releases/download/$CHANNEL_TAG/windows-update.json.sig" -o live.json.sig
+          cmp live.json package/windows-update.json && cmp live.json.sig package/windows-update.json.sig
+          echo "Live: installed apps are now offered $(jq -r .windows.version live.json)"
+          before="$(cat latest-before.txt)"
+          after="$(gh api "repos/$repo/releases/latest" --jq .tag_name || echo none)"
+          if [ "$before" != none ] && [ "$after" != "$before" ]; then
+            echo "::warning::GitHub moved latest from $before to $after; putting it back."
+            gh release edit "$before" -R "$repo" --latest
+          fi
+          echo "latest: $(gh api "repos/$repo/releases/latest" --jq .tag_name)"
+
+  point-back:
+    name: Offer an earlier Windows version again
+    needs: plan
+    if: inputs.mode == 'point-back'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - name: Put that version's own signed update file back on the channel
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          mkdir old
+          gh release download "windows-v$VERSION" -R "$repo" -D old -p windows-update.json -p windows-update.json.sig
+          [ "$(jq -r .windows.version old/windows-update.json)" = "$VERSION" ] || { echo "::error::windows-v$VERSION holds another version's file"; exit 1; }
+          # Already signed when it was released: nothing is re-signed. Apps already on a newer version stay on it
+          # until a newer fixed version is released; this only stops the newer one from being offered.
+          gh release upload "$CHANNEL_TAG" -R "$repo" --clobber old/windows-update.json.sig
+          gh release upload "$CHANNEL_TAG" -R "$repo" --clobber old/windows-update.json
+          echo "Installed apps below $VERSION are offered $VERSION; nobody is offered anything newer."
