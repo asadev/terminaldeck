@@ -103,6 +103,8 @@ public sealed class CloudFeedLedger
     else refused.Add(new(seq, deviceId, reason, now(), 1));
     Move(cursor); Save();
   }
+  /// A position that is not this loop's to judge (the other storage class): only the position moves, nothing is recorded.
+  public void Pass(ulong seq) { Move(seq); Save(); }
   public void MarkApplied(CloudSegmentDescriptor descriptor, ulong seq, ulong? cursor)
   {
     if (!IsApplied(descriptor.SegmentId, seq, descriptor.Sha256)) applied.Add(new(descriptor.SegmentId, seq, descriptor.Sha256));
@@ -150,6 +152,8 @@ public sealed class CloudFeedLedger
 public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudFeed feed, ICloudPackSink sink, ICloudDeviceTrust trust, CloudFeedLedger ledger)
 {
   public const int PageLimit = 100;
+  /// The feed's other storage class (saved passwords), read by its own position.
+  private string OtherClass => storageClass == "brain" ? "secrets" : "brain";
   public CloudFeedLedger Ledger { get; } = ledger;
 
   /// Judged before anything of the pack is downloaded. The device the service names selects the stored key; the
@@ -184,6 +188,8 @@ public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudF
       foreach (var entry in page)
       {
         if (entry.Seq != Ledger.Cursor + 1) throw new CloudFailure("invalid_request");
+        // Saved passwords share the feed but are not this loop's to judge: passed over without a record.
+        if (entry.StorageClass == OtherClass) { Ledger.Pass(entry.Seq); continue; }
         if (entry.StorageClass != storageClass) { Ledger.Refuse(entry.Seq, entry.DeviceId, CloudPackVerdict.Malformed, entry.Seq); continue; }
         await ReceiveAsync(entry, ct);
       }

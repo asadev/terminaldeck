@@ -38,14 +38,21 @@ public sealed class CloudDeviceKeys
   private static CloudPublicJwk Jwk(ECPoint q) => new("EC", "P-256", CloudWire.Base64Url(q.X), CloudWire.Base64Url(q.Y));
 
   /// The service's device proof (user.ts): `TD-CLOUD-1\n{method}\n{path and query}\n{time ms}\n{request id}\n{sha256 hex of
-  /// the body}`, ECDSA P-256 / SHA-256, the 64-byte r||s form, base64url.
+  /// the body}`, ECDSA P-256 / SHA-256, the 64-byte r||s form, base64url. PUT is a file upload to its granted transfer link.
   public IReadOnlyDictionary<string, string> Proof(string method, string pathAndQuery, byte[] body, long timeMs, string requestId)
   {
-    if (method is not ("GET" or "POST") || !pathAndQuery.StartsWith("/v1/", StringComparison.Ordinal) || pathAndQuery.Contains('\n') || pathAndQuery.Contains('\r'))
+    if (method is not ("GET" or "POST" or "PUT") || !pathAndQuery.StartsWith("/v1/", StringComparison.Ordinal) || pathAndQuery.Contains('\n') || pathAndQuery.Contains('\r'))
       throw new CloudFailure("invalid_request");
     var message = Encoding.UTF8.GetBytes($"TD-CLOUD-1\n{method}\n{pathAndQuery}\n{timeMs}\n{requestId}\n{CloudWire.Sha256Hex(body)}");
     using var sign = ECDsa.Create(); sign.ImportPkcs8PrivateKey(signing, out _);
     var signature = sign.SignData(message, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     return new Dictionary<string, string> { ["X-TD-Device"] = DeviceId, ["X-TD-Time"] = timeMs.ToString(System.Globalization.CultureInfo.InvariantCulture), ["X-TD-Request"] = requestId, ["X-TD-Signature"] = CloudWire.Base64Url(signature) };
+  }
+
+  /// This device's ES256 signature (raw r||s, 64 bytes) over `bytes`: the signed pack descriptor of the sync engine.
+  public byte[] Sign(byte[] bytes)
+  {
+    using var sign = ECDsa.Create(); sign.ImportPkcs8PrivateKey(signing, out _);
+    return sign.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
   }
 }
