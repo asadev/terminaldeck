@@ -31,7 +31,9 @@ public sealed partial class AppRuntime
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
       subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
-      (subject, deviceId) => [CloudMemoryAdapter.ForAccount(CloudAccountFolder(subject), deviceId)]), WriteCloudLog);
+      (subject, deviceId) => [CloudMemoryAdapter.ForAccount(CloudAccountFolder(subject), deviceId),
+        // 7C-3: AI instruction files, after memory (AppRuntime.CloudBootFiles.cs).
+        CloudBootFilesOwner(subject, deviceId)]), WriteCloudLog);
     CloudSync.Start();
   }
 
