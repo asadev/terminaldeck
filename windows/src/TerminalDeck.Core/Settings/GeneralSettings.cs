@@ -6,7 +6,8 @@ using TerminalDeck.Core.Storage;
 namespace TerminalDeck.Core.Settings;
 
 public sealed record GeneralPreferences(bool AutoNameSessions = true, bool CopyOnSelect = false, bool KeepAwake = false, AiPermissionMode? DefaultPermission = null,
-  LaunchModelChoice[]? LaunchModels = null, string DefaultProvider = "claude", bool RestoreSessions = true, bool DebugSettings = false, string? TerminalShell = null);
+  LaunchModelChoice[]? LaunchModels = null, string DefaultProvider = "claude", bool RestoreSessions = true, bool DebugSettings = false, string? TerminalShell = null,
+  string WhenOpens = "new-session");
 // The app-wide model and effort every new session starts with (Settings → Coding AIs).
 public sealed record LaunchModelChoice(string Provider, string Model, string? Effort);
 
@@ -34,6 +35,12 @@ public sealed class GeneralSettings(IStateStore<GeneralPreferences> store)
       {
         if (field.Value.ValueKind != JsonValueKind.String || field.Value.GetString() is not ("claude" or "codex" or "gemini" or "shell")) throw new ArgumentException("Choose an offered default coding AI.");
         next = next with { DefaultProvider = field.Value.GetString()! }; continue;
+      }
+      // "When Terminal Deck opens": the New session page (default) or where he left off.
+      if (field.Name == "whenOpens")
+      {
+        if (field.Value.ValueKind != JsonValueKind.String || field.Value.GetString() is not { } opens || !Sessions.OpensOn.OnWindows.Contains(opens)) throw new ArgumentException("Choose New session or Where I left off.");
+        next = next with { WhenOpens = opens }; continue;
       }
       if (field.Name == "defaultPermission")
       {

@@ -478,11 +478,11 @@ internal sealed partial class WorkspaceSurface : Grid
       var splitPane = layout.Root?.Tab is null;
       if (splitPane || tab.Kind != "browser")
       {
-        var bar = new Grid { MinHeight = splitPane ? 34 : 48, Padding = splitPane ? new(10, 0, 10, 0) : new(16, 6, 16, 6), ColumnSpacing = 8 };
+        // The bar's parts are shared with the New session page (Views.Chat.ChatBar).
+        var bar = Views.Chat.ChatBar.Frame(splitPane);
         bar.SetResourceReference(BackgroundProperty, WorkspacePaper.For(tab, session(tab)));
-        bar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); bar.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        var identity = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
-        var title = new TextBlock { Text = tab.Title, FontSize = splitPane ? 13 : 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, MaxLines = 1, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        var identity = Views.Chat.ChatBar.Identity();
+        var title = Views.Chat.ChatBar.Title(tab.Title, splitPane);
         var titleHost = new ContentControl { Content = title, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         void EditTitle()
         {
@@ -580,14 +580,13 @@ internal sealed partial class WorkspaceSurface : Grid
         pane.Children.Add(preview);
         bar.Children.Add(identity);
         var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-        var location = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+        var location = Views.Chat.ChatBar.Line();
         identity.SizeChanged += (_, _) => identity.Clip = new RectangleGeometry { Rect = new(0, 0, identity.ActualWidth, identity.ActualHeight) };
         Button? folderChip = null;
         var folderName = folder(tab);
         if (!string.IsNullOrWhiteSpace(folderName))
         {
-          folderChip = new Button { Content = new TextBlock { Text = folderName.TrimEnd('\\', '/').Split('\\', '/').LastOrDefault(), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 180 }, Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"], FontSize = 11, MinHeight = 20, Height = 20, Width = double.NaN, MinWidth = 0, HorizontalAlignment = HorizontalAlignment.Left, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(0) };
-          folderChip.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
+          folderChip = Views.Chat.ChatBar.ProjectChip(folderName.TrimEnd('\\', '/').Split('\\', '/').LastOrDefault() ?? "");
           ToolTipService.SetToolTip(folderChip, folderName); AutomationProperties.SetName(folderChip, "Project folder: " + folderName);
           folderChip.Click += (_, _) => ShowInfo(folderChip); location.Children.Add(folderChip);
           identity.SizeChanged += (_, _) => folderChip.MaxWidth = Math.Max(24, Math.Min(180, identity.ActualWidth));
@@ -596,19 +595,15 @@ internal sealed partial class WorkspaceSurface : Grid
         if (tab.Kind != "browser")
         {
           var accountName = accountLabel(tab);
-          var chip = new Button { Content = accountName, FontSize = 11, MaxWidth = 150, MinWidth = 0, Height = 24, MinHeight = 24, Padding = new(6, 0, 6, 0) };
+          var chip = Views.Chat.ChatBar.AccountChip(accountName);
           ToolTipService.SetToolTip(chip, accountName); AutomationProperties.SetName(chip, "Account for " + tab.Title + ": " + accountName);
           chip.Click += (_, _) => Guard(() => account(tab, chip));
-          // Mac uses no account chip when no AI/default run command is available.
-          chip.Style = (Style)Application.Current.Resources["DeckToolbarButtonStyle"];
-          chip.Width = double.NaN; chip.HorizontalAlignment = HorizontalAlignment.Left;
-          chip.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
           accountButtons[tab.Id] = chip;
           if (!string.IsNullOrEmpty(accountName))
           {
             if (location.Children.Count > 0)
             {
-              location.Children.Add(new TextBlock { Text = "·", VerticalAlignment = VerticalAlignment.Center });
+              location.Children.Add(Views.Chat.ChatBar.Dot());
             }
             location.Children.Add(chip);
           }
