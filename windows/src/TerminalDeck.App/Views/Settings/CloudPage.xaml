@@ -34,11 +34,7 @@
       <TextBlock x:Name="UseCloudState" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource DeckSecondaryInkBrush}"/>
      </StackPanel>
     </Border>
-    <!-- "<device> joined your account…" (Remove) and a device whose key changed (Trust it again). No codes. -->
-    <StackPanel x:Name="NoticeList" Spacing="8"/>
-    <TextBlock x:Name="DevicesHeading" Text="Devices" FontSize="13" FontWeight="SemiBold" Margin="8,8,0,0"/>
-    <StackPanel x:Name="DeviceList" Spacing="8"/>
-    <Button x:Name="ThisPcCodeButton" Content="Show this PC's code…" MinHeight="28" Padding="12,3" FontSize="13" Visibility="Collapsed" Click="ThisPcCodeButton_Click"/>
+    <!-- The account's devices, their notices and the compare dialog are on Settings > Devices (14 Nov, as on the Mac). -->
     <!-- How this PC trusts your other devices (owner, 13 Nov). Default: automatically, with my account. -->
     <Border x:Name="TrustModeCard" Background="{ThemeResource DeckCardBrush}" CornerRadius="10" Padding="12,10" Visibility="Collapsed">
      <StackPanel Spacing="3">

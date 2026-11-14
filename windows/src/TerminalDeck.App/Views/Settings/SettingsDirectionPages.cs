@@ -20,8 +20,12 @@ public sealed partial class SettingsPane
   public Action<bool>? SaveCloseConfirmation { get; set; }
   private Notices.CompactNotice directionStatus = new();
 
+  // Settings > Devices > "Paired with a code" opens the paired devices' own window.
+  public Func<bool>? OpenPairedDevices { get; set; }
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
+    "profile" => new ProfilePage(runtime.Cloud),
+    "devices" => new DevicesPage(runtime.Cloud, () => runtime.Remote.Trust.List().Count, OpenPairedDevices),
     "cloud" => new CloudPage(runtime.Cloud),
     "general" => GeneralSettings(),
     "notifications" => NotificationSettings(),
