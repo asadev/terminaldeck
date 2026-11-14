@@ -13,8 +13,8 @@ public sealed partial class AppRuntime
   private readonly object cloudLogGate = new();
   public CloudAccountClient Cloud { get; private set; } = null!;
   /// The bridge from the account to the sync engine. Builds nothing while signed out or while "Use Cloud on this PC" is
-  /// off. This Windows version has no Deck Memory store, so NO record kind is registered: the engine stays idle and
-  /// silent and the page says nothing on this PC syncs yet (the memory adapter waits in Core for that store).
+  /// off. 7C-1: Deck Memory syncs; this PC keeps its copy per account in `cloud\accounts\<account>\memory` (nothing
+  /// on Windows reads it yet). Removals do not travel to or from Windows yet and sync never deletes anything here.
   public CloudSyncBridge? CloudSync { get; private set; }
 
   private void InitializeCloud()
@@ -29,11 +29,13 @@ public sealed partial class AppRuntime
     Cloud.StageLog = WriteCloudLog;
     CloudTools.Register(Cloud, Door);
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
-      subject => CloudSyncStore.InFolder(Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject), subject),
+      subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
-      () => []), WriteCloudLog);
+      (subject, deviceId) => [CloudMemoryAdapter.ForAccount(CloudAccountFolder(subject), deviceId)]), WriteCloudLog);
     CloudSync.Start();
   }
+
+  private string CloudAccountFolder(string subject) => Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject);
 
   /// One plain line per sign-in stage, in `logs\cloud.log` of this copy's own data folder. The lines never carry a token,
   /// code, key, e-mail or name (CloudAccountClient writes only stage names and error kinds).

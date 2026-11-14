@@ -110,7 +110,7 @@ public sealed class CloudSyncWiringW3Tests
     var state = new CloudMemorySlot(); var ledger = new CloudMemorySlot(); var sockets = new QuietSockets();
     World? world = null;
     var platform = new CloudSyncPlatform(subject => { world!.StoresMade++; return new CloudSyncStore(state, ledger, subject); },
-      () => { world!.HttpMade++; return service; }, sockets, new CloudSyncEndpoint(CloudFakeService.Base, test: true), () => owners, () => service.Now);
+      () => { world!.HttpMade++; return service; }, sockets, new CloudSyncEndpoint(CloudFakeService.Base, test: true), (_, _) => owners, () => service.Now);
     var halted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     // Every wait of the bridge comes from here: the round timer and socket waits never end by themselves; the short
     // grace before a stopped engine drops its keys ends at once and is reported.

@@ -533,7 +533,9 @@ public sealed class CloudFeedClient
             if (frame == "td-pong") continue;
             if (Encoding.UTF8.GetByteCount(frame) > MaximumControlBytes) throw new CloudFailure("invalid_request");
             var o = CloudJson.Parse(frame) as CloudJson.Object ?? throw new CloudFailure("invalid_request");
-            if (o.Members.Any(m => m.Key is not ("v" or "type" or "id" or "payload")) || o["v"]?.AsInteger != 1) throw new CloudFailure("unsupported_format");
+            // Unknown members are ignored (the Mac's lesson, 14 Nov: a decoder that refuses new fields drops the socket
+            // for good once the service adds one); only the version must be the one this PC reads.
+            if (o["v"]?.AsInteger != 1) throw new CloudFailure("unsupported_format");
             var evt = new CloudSyncEvent(Text(o, "type"), Text(o, "id"), o["payload"] ?? CloudJson.Obj());
             if (evt.Type == "gate") { await onEvent(evt); Backoff.Failed(new CloudFailure("gate_closed", 403)); return; }
             if (evt.Type == "error")

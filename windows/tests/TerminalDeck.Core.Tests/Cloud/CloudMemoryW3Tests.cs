@@ -7,7 +7,8 @@ namespace TerminalDeck.Core.Tests.Cloud;
 // W3 memory: record shapes byte-compared with vectors made by the Mac's own CloudBrainMemory.swift structs encoded the
 // way CloudWire.canonical encodes them (Fixtures/cloud-memory-vectors-swift.json; its generator sits beside it), and
 // the merge cases mirrored from the Mac: a value changed on two devices, first sign-in (the Cloud's record wins and the
-// joiner's value is listed), a removed setting, and machine-local settings never travelling.
+// joiner's value is listed), a removed setting (never sent from Windows, never applied as a removal here), and
+// machine-local settings never travelling.
 public sealed class CloudMemoryW3Tests
 {
   private const string Store = "2b7e1516-28ae-4d2a-a6d2-abf7158809cf", StoreB = "9c1d2e3f-4a5b-4c6d-9e7f-8a9b0c1d2e3f";
@@ -73,6 +74,8 @@ public sealed class CloudMemoryW3Tests
     var memory = new InMemoryDeckMemoryStore(Store);
     memory.PutRow(Setting("hoot", "tidy.on", "1", 1763000000.123), null);
     var adapter = new CloudMemoryAdapter(memory, new CloudMemorySlot(), DeviceA, localNow: () => 1);
+    Assert.Empty((await adapter.CaptureAsync(() => 1763000000400, default)).Operations); // nothing before the feed was read once
+    Assert.True(adapter.FeedRead());
     var capture = await adapter.CaptureAsync(() => 1763000000500, default);
     SameRecord("setting", Assert.Single(capture.Operations));
     capture.Commit();
@@ -80,7 +83,13 @@ public sealed class CloudMemoryW3Tests
   }
 
   private sealed record Device(InMemoryDeckMemoryStore Memory, CloudMemoryAdapter Adapter, string Id);
-  private static Device Make(string store, string device) { var m = new InMemoryDeckMemoryStore(store); return new(m, new CloudMemoryAdapter(m, new CloudMemorySlot(), device), device); }
+  private static Device Make(string store, string device)
+  {
+    var m = new InMemoryDeckMemoryStore(store);
+    var adapter = new CloudMemoryAdapter(m, new CloudMemorySlot(), device);
+    adapter.FeedRead();
+    return new(m, adapter, device);
+  }
   private static async Task<IReadOnlyList<CloudOperation>> Capture(Device d, long stamp)
   {
     var capture = await d.Adapter.CaptureAsync(() => stamp, default);
@@ -138,7 +147,7 @@ public sealed class CloudMemoryW3Tests
   }
 
   [Fact]
-  public async Task Machine_local_settings_and_meta_never_travel_and_a_removed_shared_setting_does()
+  public async Task Machine_local_settings_and_meta_never_travel_and_a_removal_neither_travels_nor_deletes()
   {
     var a = Make(Store, DeviceA); var b = Make(StoreB, DeviceB);
     a.Memory.PutRow(Setting("hoot", "helper.last-run", "123", 1), null);
@@ -152,11 +161,18 @@ public sealed class CloudMemoryW3Tests
     await Deliver(ops, b, DeviceA);
     Assert.Equal("1", Value(b, "tidy.on"));
 
+    // Removed here: nothing is sent (removals do not travel from Windows yet).
     a.Memory.RemoveRow("settings", [DeckMemoryCell.Text("hoot"), DeckMemoryCell.Text("tidy.on")]);
-    var removal = await Capture(a, 2000);
-    Assert.Single(removal);
-    await Deliver(removal, b, DeviceA, 2);
-    Assert.Null(Value(b, "tidy.on"));
+    Assert.Empty(await Capture(a, 2000));
+    // A Mac's removal (the same row with value null, made on top of the version B holds) arriving: B keeps its value.
+    var parent = ((CloudJson.Object)only.Payload)["version"]!.AsString!;
+    var gone = CloudMemoryFormat.RowBody(Settings, Setting("hoot", "tidy.on", null, 2).Cells);
+    var goneHash = CloudMemoryFormat.Hash(gone);
+    var goneVersion = CloudMemoryFormat.Uuid(parent + "\n" + goneHash);
+    await Deliver([CloudMemoryFormat.Operation(new(Store, "I05", only.Source.RecordId, goneVersion, goneHash, gone.Length, 0, 1, [parent], Convert.ToBase64String(gone), 2500, false),
+      DeviceA, [only.OpId], 2)], b, DeviceA, 2);
+    Assert.Equal("1", Value(b, "tidy.on"));
+    Assert.Equal(CloudMemoryAdapter.KeptRemovalWhy, Assert.Single(b.Adapter.OtherVersions).Why);
     Assert.Empty(await Capture(b, 3000));
 
     // An incoming machine-local setting (an older device's bookkeeping) is kept as history only, never placed.

@@ -22,6 +22,13 @@ public interface ICloudSyncAdapter
   /// Applies one incoming record. Must be a no-op for a record it already holds (same op id): a crash between apply and
   /// the engine's record applies it again.
   Task ApplyAsync(CloudOperation operation, CloudImportOrigin origin, CancellationToken ct);
+  /// Called once a pack's records were applied and before the engine records them as applied: the owner makes what it
+  /// wrote durable here (once per pack, not once per record). A crash before it applies the pack again.
+  Task SettleAsync(CancellationToken ct) => Task.CompletedTask;
+  /// The engine read the whole feed (a pull ended without a failure). An owner that holds its first copy back until it
+  /// has taken in what the devices it trusts already saved (the Mac's rule, hand-back 4) answers true the first time;
+  /// the engine then captures and sends again in the same round.
+  bool FeedRead() => false;
 }
 /// A capture: its records, and `Commit` that the engine calls once they are durably queued.
 public sealed record CloudCapture(IReadOnlyList<CloudOperation> Operations, Action Commit)
@@ -102,7 +109,12 @@ public sealed class CloudSyncEngine
       if (!client.Backoff.MaySend) return State();
       if (!await StepAsync("capture", () => CaptureAsync(ct), ct)) return State();
       await StepAsync("send", () => FlushAsync(ct), ct);
-      if (client.Backoff.MaySend) await StepAsync("fetch", () => PullAsync(ct), ct);
+      if (client.Backoff.MaySend && await StepAsync("fetch", () => PullAsync(ct), ct))
+      {
+        var ready = false;
+        foreach (var owner in owners) ready |= owner.FeedRead();
+        if (ready && await StepAsync("capture", () => CaptureAsync(ct), ct)) await StepAsync("send", () => FlushAsync(ct), ct);
+      }
       return State();
     }
     finally { busy.Release(); }
@@ -316,13 +328,16 @@ public sealed class CloudSyncEngine
       || operations.Any(o => !adapters.ContainsKey(o.Domain))) throw new CloudFailure("checksum_mismatch");
     var origin = new CloudImportOrigin(signer, entry.Seq, entry.CreatedAt, late);
     var done = new List<string>();
+    var touched = new List<ICloudSyncAdapter>();
     foreach (var op in operations)
     {
       if (store.IsApplied(op.OpId)) continue;
       // Mac X1(b), 13 Nov: a record its owner refuses for good (an id already used for other content, a record that
       // does not hold together) is noted and passed over; the rest of the pack applies and the feed moves on. The same
       // content arriving again is not a refusal: the owner takes it as already present.
-      try { await adapters[op.Domain].ApplyAsync(op, origin, ct); }
+      var owner = adapters[op.Domain];
+      if (!touched.Contains(owner)) touched.Add(owner);
+      try { await owner.ApplyAsync(op, origin, ct); }
       catch (CloudFailure refused) when (refused.Code is "id_reused" or "invalid_request")
       {
         store.Set(RefusedRecordPrefix + op.OpId, refused.Code);
@@ -330,6 +345,7 @@ public sealed class CloudSyncEngine
       }
       done.Add(op.OpId);
     }
+    foreach (var owner in touched) await owner.SettleAsync(ct);
     store.MarkApplied(done);
   }
 

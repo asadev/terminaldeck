@@ -73,13 +73,17 @@ public static class DeckMemoryCloudSchema
   ];
   /// M3: ONLY these shared memory settings travel; every other setting and the whole `meta` table stay on this PC.
   public static readonly IReadOnlyList<string> SharedSettingKeys = ["card.limit", "seat.title", "seat.parent", "seat.folded-into",
-    "helper.ai", "helper.model", "helper.on", "helper.parallel", "helper.pause-seconds", "tidy.hour", "tidy.on"];
+    "helper.ai", "helper.model", "helper.on", "helper.parallel", "helper.pause-seconds", "tidy.hour", "tidy.on",
+    // The Mac's one rule: "Clean up now" and "Empty Bin" times. Windows keeps them as values and acts on neither.
+    "cleanup.versions-before", "cleanup.bin-before"];
+  /// One shared key per device: "this device understands removal records". Windows never writes one of its own.
+  public const string SharedSettingPrefix = "onerule.understands.";
   /// Natural-key rows where the newest value wins (the loser is kept and listed); every other table keeps both.
   public static readonly IReadOnlySet<string> LastWriterTables = new HashSet<string> { "settings", "meta", "topics", "files", "notes", "handoffs" };
   public static readonly IReadOnlySet<string> AppHelpFiles = new HashSet<string> { "START-HERE.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md" };
 
   public static DeckMemoryTable Table(string name) => Tables.FirstOrDefault(t => t.Name == name) ?? throw new CloudFailure("unsupported_format");
-  public static bool IsMachineLocalSetting(string key) => !SharedSettingKeys.Contains(key);
+  public static bool IsMachineLocalSetting(string key) => !SharedSettingKeys.Contains(key) && !key.StartsWith(SharedSettingPrefix, StringComparison.Ordinal);
   public static bool IsMachineLocal(DeckMemoryTable t, IReadOnlyList<DeckMemoryCell> cells) =>
     t.Name == "meta" || t.Name == "settings" && cells[t.Index("key")] is { Type: "text", Value: var key } && IsMachineLocalSetting(key!);
   /// A removed shared setting travels as the same row with `value` null; `updated` carries the removal time.
@@ -126,6 +130,32 @@ public static class CloudMemoryFormat
   public static readonly IReadOnlyList<string> InventoryRows = ["I01", "I02", "I03", "I04", "I05", "I06"];
   public static string Domain(string row) => InventoryRows.Contains(row) ? "brain/memory/" + row.ToLowerInvariant() : throw new CloudFailure("invalid_request");
   public static string? RowOfDomain(string domain) => InventoryRows.FirstOrDefault(r => Domain(r) == domain);
+
+  /// DeckMemoryRemoval.parse (the Mac's one rule): a removal travels as a version of the file whose text is a small
+  /// front-matter block with `td_removed: <ms>`. Windows never places one over a file and never sends one.
+  public const int RemovalMarkerLimit = 16_384;
+  public static bool IsRemovalMarker(byte[] bytes)
+  {
+    if (bytes.Length >= RemovalMarkerLimit || bytes.Length < 3 || bytes[0] != (byte)'-' || bytes[1] != (byte)'-' || bytes[2] != (byte)'-') return false;
+    string text;
+    try { text = new UTF8Encoding(false, true).GetString(bytes); } catch (DecoderFallbackException) { return false; }
+    var lines = text.Split('\n');
+    if (lines[0].Trim() != "---") return false;
+    for (var i = 1; i < lines.Length; i++)
+    {
+      var line = lines[i];
+      if (line.Trim() == "---") return false;
+      var colon = line.IndexOf(':');
+      if (colon <= 0 || line[0] is ' ' or '\t' || line[..colon].Trim() != "td_removed") continue;
+      var value = line[(colon + 1)..].Trim();
+      if (value.Length >= 2 && (value[0] == '"' && value[^1] == '"' || value[0] == '\'' && value[^1] == '\'')) value = value[1..^1];
+      // The Mac reads only the first `td_removed` line, and only inside a closed front-matter block.
+      if (!long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _)) return false;
+      for (var j = i + 1; j < lines.Length; j++) if (lines[j].Trim() == "---") return true;
+      return false;
+    }
+    return false;
+  }
 
   /// BackendCloudBrainMemoryHash.uuid: the first 16 bytes of SHA-256(text) in the version-5 layout (entities, versions).
   public static string Uuid(string text) => Shaped(text, 0x50);

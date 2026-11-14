@@ -4,13 +4,13 @@ namespace TerminalDeck.Core.Cloud;
 // signed in with "Use Cloud on this PC" on (the account's SyncIdentity), and drops it the moment either ends. While it
 // runs: a round now, then one every few minutes, plus a round on each hint of the live event connection; the account is
 // asked again now and then (in automatic trust mode new devices join this PC's list there); a device this PC newly
-// trusts has what waited from it released at once. With no record kind registered (this Windows version has no Deck
-// Memory store) the engine is built but stays idle: no timer, no event connection, no request, no file written.
+// trusts has what waited from it released at once. With no record kind registered the engine is built but stays idle:
+// no timer, no event connection, no request, no file written. 7C-1 registers Deck Memory.
 
 /// What the bridge takes from the platform. `Store(subject)`: the account's own sync folder. `Http` is called only when
-/// a round actually sends. `Owners`: the record kinds this PC syncs (none on Windows today).
+/// a round actually sends. `Owners(subject, deviceId)`: the record kinds this PC syncs for that account (Deck Memory).
 public sealed record CloudSyncPlatform(Func<string, CloudSyncStore> Store, Func<ICloudSyncHttp> Http, ICloudSyncSocketFactory Sockets, CloudSyncEndpoint Endpoint,
-  Func<IReadOnlyList<ICloudSyncAdapter>> Owners, Func<long>? Clock = null);
+  Func<string, string, IReadOnlyList<ICloudSyncAdapter>> Owners, Func<long>? Clock = null);
 
 public sealed class CloudSyncBridge : IDisposable
 {
@@ -95,7 +95,7 @@ public sealed class CloudSyncBridge : IDisposable
       var store = platform.Store(subject);
       var http = new LazySyncHttp(platform.Http);
       var client = new CloudFeedClient(platform.Endpoint, subject, account, http, store, platform.Clock);
-      var engine = new CloudSyncEngine(subject, deviceId, client, store, account.SyncTrust, account.SignPack, platform.Owners(), log, platform.Clock);
+      var engine = new CloudSyncEngine(subject, deviceId, client, store, account.SyncTrust, account.SignPack, platform.Owners(subject, deviceId), log, platform.Clock);
       // The account was just asked (that is what started this); the next ask is due a while from now.
       return new(subject, deviceId, engine, client, http, new CancellationTokenSource()) { AccountAskedAt = now() };
     }
