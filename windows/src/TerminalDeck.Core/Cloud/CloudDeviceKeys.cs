@@ -49,26 +49,3 @@ public sealed class CloudDeviceKeys
     return new Dictionary<string, string> { ["X-TD-Device"] = DeviceId, ["X-TD-Time"] = timeMs.ToString(System.Globalization.CultureInfo.InvariantCulture), ["X-TD-Request"] = requestId, ["X-TD-Signature"] = CloudWire.Base64Url(signature) };
   }
 }
-
-/// The 80-bit code a person compares between devices, computed as the Mac computes it (BackendCloudDeviceCode).
-public static class CloudDeviceCode
-{
-  public static bool IsDeviceId(string text) => text.Length == 36 && text.Select((c, i) => i is 8 or 13 or 18 or 23 ? c == '-' : c is >= '0' and <= '9' or >= 'a' and <= 'f').All(ok => ok);
-  /// SHA-256 hex of `{"crv":"P-256","kty":"EC","x":…,"y":…}`; null unless the key is a real P-256 point written canonically.
-  public static string? KeyId(CloudPublicJwk key)
-  {
-    if (key.Kty != "EC" || key.Crv != "P-256" || key.Y is null) return null;
-    var x = CloudWire.FromBase64Url(key.X); var y = CloudWire.FromBase64Url(key.Y);
-    if (x is not { Length: 32 } || y is not { Length: 32 } || CloudWire.Base64Url(x) != key.X || CloudWire.Base64Url(y) != key.Y) return null;
-    try { using var check = ECDsa.Create(new ECParameters { Curve = ECCurve.NamedCurves.nistP256, Q = new ECPoint { X = x, Y = y } }); check.ExportParameters(false); }
-    catch (CryptographicException) { return null; }
-    return CloudWire.Sha256Hex(Encoding.UTF8.GetBytes("{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"" + key.X + "\",\"y\":\"" + key.Y + "\"}"));
-  }
-  /// The first 80 bits of SHA-256("TD-CLOUD-DEVICE-CODE-1\n" + deviceId + "\n" + keyId) as `XXXX XXXX XXXX XXXX XXXX`.
-  public static string? Code(string deviceId, CloudPublicJwk key)
-  {
-    if (!IsDeviceId(deviceId) || KeyId(key) is not { } keyId) return null;
-    var hex = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("TD-CLOUD-DEVICE-CODE-1\n" + deviceId + "\n" + keyId)).AsSpan(0, 10));
-    return string.Join(' ', Enumerable.Range(0, 5).Select(i => hex.Substring(i * 4, 4)));
-  }
-}
