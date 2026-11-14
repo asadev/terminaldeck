@@ -161,7 +161,7 @@ public sealed class AgentTests
     using var f = await Fixture.ReadyAsync(); var a = f.Agent(); f.Agents.SaveInstructions(a.Id, "Keep the scope small.");
     var terminal = await f.Agents.StartAsync(new(a.Id, Job: "Review one change")); var chat = await f.Agents.StartAsync(new(a.Id, Mode: "chat", Job: "Discuss it"));
     Assert.Equal(2, f.Gateway.Plans.Count);
-    foreach (var plan in f.Gateway.Plans) { Assert.Equal(a.Id, plan.AgentId); Assert.Equal("codex", plan.Provider); Assert.Equal(a.Model, plan.Model); Assert.Equal(a.Effort, plan.Effort); Assert.Equal(f.Home, plan.Folder); Assert.Contains("Keep the scope small.", plan.Instructions); Assert.NotEmpty(plan.AccountId); }
+    foreach (var plan in f.Gateway.Plans) { Assert.Equal(a.Id, plan.AgentId); Assert.Equal("codex", plan.Provider); Assert.Equal(a.Model, plan.Model); Assert.Equal(a.Effort, plan.Effort); Assert.Equal(ProjectPaths.Normalize(f.Home), plan.Folder); Assert.Contains("Keep the scope small.", plan.Instructions); Assert.NotEmpty(plan.AccountId); }
     Assert.Equal("terminal", terminal.Mode); Assert.Equal("chat", chat.Mode); Assert.Equal(2, chat.HandNumber);
     Assert.Equal(a.Id, f.ReloadAgents().SessionFace(terminal.SessionId)?.Id);
   }

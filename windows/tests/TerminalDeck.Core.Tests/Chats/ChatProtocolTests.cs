@@ -41,7 +41,7 @@ public sealed class ChatProtocolTests
     for (var turn = 0; turn < 2; turn++)
     {
       var question = new TaskCompletionSource<ChatSignal>(TaskCreationOptions.RunContinuationsAsynchronously); var signals = new System.Collections.Concurrent.ConcurrentQueue<ChatSignal>();
-      var launch = new TerminalDeck.Core.Platform.ProcessLaunch("/usr/bin/python3", ["-u", file], new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin" }, f.Root.DirectoryPath);
+      var launch = new TerminalDeck.Core.Platform.ProcessLaunch(TestPython.Executable, ["-u", file], TestPython.Environment(), f.Root.DirectoryPath);
       await using var cli = new ChatCliConnection(f.Chat, f.History, launch, signal => { signals.Enqueue(signal); if (signal.Kind == "approval") question.TrySetResult(signal); return ValueTask.CompletedTask; });
       await cli.StartAsync(); await cli.SendAsync(new(Guid.NewGuid().ToString(), "approval", [])); var approval = await question.Task.WaitAsync(TimeSpan.FromSeconds(5));
       if (ids.Count > 0) await Assert.ThrowsAsync<InvalidOperationException>(async () => await cli.AnswerAsync(ids[0], true, approval.Data!.Value));
@@ -60,7 +60,7 @@ public sealed class ChatProtocolTests
     foreach (var text in new[] { "first", "second" })
     {
       var signals = new System.Collections.Concurrent.ConcurrentQueue<ChatSignal>();
-      var launch = new TerminalDeck.Core.Platform.ProcessLaunch("/usr/bin/python3", ["-u", file], new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin" }, f.Root.DirectoryPath);
+      var launch = new TerminalDeck.Core.Platform.ProcessLaunch(TestPython.Executable, ["-u", file], TestPython.Environment(), f.Root.DirectoryPath);
       await using var cli = new ChatCliConnection(chat, f.History, launch, signal => { signals.Enqueue(signal); return ValueTask.CompletedTask; });
       await cli.StartAsync(); await cli.SendExecAsync(new(Guid.NewGuid().ToString(), text, [])); await cli.Completion.WaitAsync(TimeSpan.FromSeconds(5));
       foreach (var signal in signals) events.Add(new(events.Count + 1, signal.Kind, signal.Id, signal.Text, signal.ClientId));

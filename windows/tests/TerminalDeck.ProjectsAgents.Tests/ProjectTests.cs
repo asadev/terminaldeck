@@ -100,7 +100,12 @@ public sealed class ProjectTests
   [InlineData("C:\\Work\\App", "C:/Work/Application", false)]
   [InlineData("\\\\host\\share\\App", "//HOST/share/App/child", true)]
   [InlineData("/work/app", "/work/application", false)]
-  public void FolderMatchingHasRealComponentBoundaries(string root, string path, bool expected) => Assert.Equal(expected, ProjectPaths.Contains(root, path));
+  public void FolderMatchingHasRealComponentBoundaries(string root, string path, bool expected)
+  {
+    // "/work/app" is a full path on Mac and Linux only; on Windows the same boundary is checked on a drive.
+    if (OperatingSystem.IsWindows() && root.StartsWith('/')) { root = "D:" + root; path = "D:" + path; }
+    Assert.Equal(expected, ProjectPaths.Contains(root, path));
+  }
   [Fact] public void LongestMatchingFolderWinsAndExplicitOrphanIdsSurvive()
   {
     using var f = new Fixture(); f.Projects.Save(new("sample", "Sample", [f.Home])); var child = Path.Combine(f.Home, "child"); Directory.CreateDirectory(child);

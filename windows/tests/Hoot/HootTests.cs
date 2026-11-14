@@ -244,7 +244,8 @@ public sealed class HootTests
   }
   [Fact] public void ToolContractsHaveReadOrGuardedWriteTiersAndNoApprovalBypassDoor()
   {
-    Assert.Equal(18, HootMcpTools.Specs.Count); Assert.Equal(18, HootMcpTools.Specs.Select(s => s.Wire).Distinct().Count());
+    Assert.Equal(19, HootMcpTools.Specs.Count); Assert.Equal(19, HootMcpTools.Specs.Select(s => s.Wire).Distinct().Count());
+    Assert.Equal(McpTier.Alter, HootMcpTools.Specs.Single(s => s.Id == "hoot.chat.branch").Tier);
     Assert.All(HootMcpTools.Specs.Where(s => s.Id.EndsWith(".read") || s.Id.EndsWith(".background")), s => Assert.Equal(McpTier.Read, s.Tier));
     Assert.DoesNotContain(HootMcpTools.Specs, s => s.Id.Contains("answer") || s.Id.Contains("bypass"));
     Assert.Equal(McpTier.Alter, HootMcpTools.Specs.Single(s => s.Id == "hoot.handoff").Tier);

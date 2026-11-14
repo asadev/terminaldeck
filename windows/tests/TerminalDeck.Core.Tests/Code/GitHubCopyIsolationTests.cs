@@ -6,10 +6,12 @@ public sealed class GitHubCopyIsolationTests
 {
   [Fact] public void OnlyTheStableInstallOnItsOwnRootIsTheRealCopy()
   {
-    var app = Directory.CreateTempSubdirectory().FullName; var profile = Directory.CreateTempSubdirectory().FullName;
+    // StableChannel remembers each app folder's answer, a missing marker too (a test copy can never gain access
+    // later), so the unmarked and the marked install are two different folders.
+    var test = Directory.CreateTempSubdirectory().FullName; var app = Directory.CreateTempSubdirectory().FullName; var profile = Directory.CreateTempSubdirectory().FullName;
     var stableRoot = Path.Combine(profile, "AppData", "Local", "TerminalDeckStable");
-    Assert.False(GitHubClient.IsRealCopy(stableRoot, app, profile));
     File.WriteAllText(Path.Combine(app, TerminalDeck.Core.Storage.StableChannel.Marker), "");
+    Assert.False(GitHubClient.IsRealCopy(stableRoot, test, profile));
     Assert.True(GitHubClient.IsRealCopy(stableRoot, app, profile));
     Assert.False(GitHubClient.IsRealCopy(Path.Combine(profile, "scratch"), app, profile));
   }

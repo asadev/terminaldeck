@@ -5,7 +5,7 @@ namespace TerminalDeck.Platform.Windows.Tests;
 
 public sealed class W12InstallationTests
 {
-  [Theory(Timeout = 90000)]
+  [Trait("Group", "RealPc")] [Theory(Timeout = 90000)]
   [InlineData("claude")]
   [InlineData("codex")]
   [InlineData("gemini")]

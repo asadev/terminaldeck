@@ -114,9 +114,19 @@ jobs:
           path: ~\.nuget\packages
           key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/Directory.Build.props', 'windows/global.json') }}
 
+      # The chat tests' fake coding AIs are small Python programs.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Built before the tests: the direct-link tests load it, and the package ships it.
+      - name: Direct-link engine (tdlink.dll + libwebrtc.dll, pinned by SHA-256)
+        shell: pwsh
+        run: ./windows/src/TerminalDeck.Link.Native/build.ps1 -Out "$env:RUNNER_TEMP\link-native"
+
       - name: Build every project and run every test project
         shell: pwsh
-        run: ./windows/scripts/windows/build-and-test.ps1 -Configuration Release -Platform x64
+        run: ./windows/scripts/windows/build-and-test.ps1 -Configuration Release -Platform x64 -LinkNative "$env:RUNNER_TEMP\link-native"
 
       - name: Keep the test results
         if: always()
@@ -125,10 +135,6 @@ jobs:
           name: windows-check
           path: windows/.artifacts/windows-check/
           retention-days: 14
-
-      - name: Direct-link engine (tdlink.dll + libwebrtc.dll, pinned by SHA-256)
-        shell: pwsh
-        run: ./windows/src/TerminalDeck.Link.Native/build.ps1 -Out "$env:RUNNER_TEMP\link-native"
 
       - name: Package and sign the MSIX
         shell: pwsh

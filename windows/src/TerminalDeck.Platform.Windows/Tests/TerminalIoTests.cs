@@ -9,7 +9,7 @@ public sealed class TerminalIoTests
   public async Task OutputActuallyComesThroughConPty()
   {
     var environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Where(e => !((string)e.Key).StartsWith('=')).ToDictionary(e => (string)e.Key, e => (string)e.Value!, StringComparer.OrdinalIgnoreCase);
-    await using var terminal = await new ConPtyTerminalFactory().StartAsync(new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ["/d", "/q"], environment, @"C:\TD"), new(100, 30));
+    await using var terminal = await new ConPtyTerminalFactory().StartAsync(new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ["/d", "/q"], environment, Path.GetTempPath()), new(100, 30));
     using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(12)); var output = new StringBuilder();
     var read = Task.Run(async () =>
     {

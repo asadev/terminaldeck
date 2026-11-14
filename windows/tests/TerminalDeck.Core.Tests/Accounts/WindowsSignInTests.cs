@@ -9,7 +9,7 @@ public sealed class WindowsSignInTests : IDisposable
   private readonly string folder = Path.Combine(Path.GetTempPath(), "td-signin-" + Guid.NewGuid().ToString("N"));
   private string FileAt(string relative)
   {
-    var path = Path.Combine(folder, relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, "fixture"); return path;
+    var path = Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar)); Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, "fixture"); return path;
   }
   private Dictionary<string, string> EnvironmentPaths() => new(StringComparer.OrdinalIgnoreCase)
   { ["USERPROFILE"] = folder, ["APPDATA"] = Path.Combine(folder, "roaming"), ["LOCALAPPDATA"] = Path.Combine(folder, "local"), ["ProgramFiles"] = Path.Combine(folder, "programs"), ["PATH"] = "" };

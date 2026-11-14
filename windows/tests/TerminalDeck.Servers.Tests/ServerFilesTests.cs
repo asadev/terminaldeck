@@ -54,7 +54,7 @@ public sealed class ServerFilesTests
     await Assert.ThrowsAsync<ServerRefusal>(async () => await f.Service.UploadAsync(row.Id, "/srv/test/large", new byte[ServerFilesScript.TransferLimit + 1], ServerCaller.Person));
     Assert.Empty(f.Approval.Actions); Assert.Empty(f.Runtime.Commands);
   }
-  [Fact] public async Task RemoteHelperRoundTripsFilesAndRefusesSymlinksAndOverwrite()
+  [Trait("Group", "Unix")] [Fact] public async Task RemoteHelperRoundTripsFilesAndRefusesSymlinksAndOverwrite()
   {
     using var f = new Fixture(); var row = await f.AddAsync(true);
     var allowed = Path.Combine(f.Path, "allowed"); var outside = Path.Combine(f.Path, "outside"); Directory.CreateDirectory(allowed); Directory.CreateDirectory(outside);
@@ -73,7 +73,7 @@ public sealed class ServerFilesTests
     Assert.Equal(0, (await RunPythonAsync(ServerFilesScript.Make(row, "rename", file, name: "renamed"))).ExitCode);
     Assert.Equal(0, (await RunPythonAsync(ServerFilesScript.Make(row, "delete", allowed + "/renamed"))).ExitCode); Assert.False(File.Exists(allowed + "/renamed"));
   }
-  [Fact] public async Task RemotePreviewTruncatesWhileDownloadRefusesOversizedFile()
+  [Trait("Group", "Unix")] [Fact] public async Task RemotePreviewTruncatesWhileDownloadRefusesOversizedFile()
   {
     using var f = new Fixture(); var row = await f.AddAsync(true); row = row with { Access = row.Access with { Folders = [f.Path] } };
     var file = f.Path + "/large.txt"; await File.WriteAllBytesAsync(file, new byte[ServerFilesScript.TransferLimit + 1]);
@@ -82,7 +82,7 @@ public sealed class ServerFilesTests
     Assert.Equal(262144, Convert.FromBase64String(json.RootElement.GetProperty("base64").GetString()!).Length);
     Assert.NotEqual(0, (await RunPythonAsync(ServerFilesScript.Make(row, "download", file))).ExitCode);
   }
-  [Fact] public async Task RemoteListingCanReadPastTheFirstThousandWithoutDroppingNames()
+  [Trait("Group", "Unix")] [Fact] public async Task RemoteListingCanReadPastTheFirstThousandWithoutDroppingNames()
   {
     using var f = new Fixture(); var row = await f.AddAsync(true); row = row with { Access = row.Access with { Folders = [f.Path] } };
     var folder = Path.Combine(f.Path, "many"); Directory.CreateDirectory(folder);

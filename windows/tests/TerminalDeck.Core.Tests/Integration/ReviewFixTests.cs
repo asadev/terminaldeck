@@ -81,7 +81,7 @@ public sealed class ReviewFixTests
         print(json.dumps({'type':'result','subtype':'success'}),flush=True)
       """);
     var signals = new ConcurrentQueue<ChatSignal>();
-    ProcessLaunch Launch(string kind) => new("/usr/bin/python3", ["-u", file, "saved-exact", kind], new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin" }, f.Root.DirectoryPath);
+    ProcessLaunch Launch(string kind) => new(TestPython.Executable, ["-u", file, "saved-exact", kind], TestPython.Environment(), f.Root.DirectoryPath);
     var client = Guid.NewGuid().ToString();
     await using (var failed = new ChatCliConnection(f.Chat, f.History, Launch("fail"), signal => { signals.Enqueue(signal); return ValueTask.CompletedTask; }))
     {

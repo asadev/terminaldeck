@@ -168,7 +168,7 @@ public sealed class ReviewFixWindowsTests
       emit({type:'system',subtype:'init',session_id:'review-exact'});
       rl.on('line',line=>{
         const row=JSON.parse(line);if(row.type!=='user')return;
-        if(row.message.content[0].text==='fail') { process.stdout.write('{malformed\n');return; }
+        if(row.message.content[0].text.split('\n\n').pop()==='fail') { process.stdout.write('{malformed\n');return; }
         emit({type:'assistant',message:{id:row.uuid,content:[{type:'text',text:process.argv.includes('--resume')?'exact conversation resumed':'not resumed'}]}});
         emit({type:'result',subtype:'success'});
       });

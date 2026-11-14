@@ -87,7 +87,7 @@ public sealed class PipeFakeKeeper(IChatHistory history) : IChatProcessKeeper, I
   {
     if (workers.ContainsKey(session.CreationKey)) return new(ProcessPresence.Live, session.CreationKey);
     var chat = history.Load(session.Definition.Id)!; var worker = new Worker(chat); workers[session.CreationKey] = worker;
-    var launch = new ProcessLaunch("/usr/bin/python3", ["-u", FixturePath(), chat.ConversationId ?? "synthetic-" + chat.Definition.Id], new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin", ["PYTHONIOENCODING"] = "utf-8" }, chat.Definition.Cwd);
+    var launch = new ProcessLaunch(TestPython.Executable, ["-u", FixturePath(), chat.ConversationId ?? "synthetic-" + chat.Definition.Id], TestPython.Environment(("PYTHONIOENCODING", "utf-8")), chat.Definition.Cwd);
     worker.Connection = new(chat, history, launch, signal =>
     {
       lock (worker.Gate)

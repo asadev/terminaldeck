@@ -17,7 +17,7 @@ public sealed class ChatWindowsTests
     return new(1, new(Guid.NewGuid().ToString(), provider, root.DirectoryPath, "Synthetic chat", account, account, new()), Guid.NewGuid().ToString("N"), [], []);
   }
   private static AppDataRoot Scratch() => AppDataRoot.Explicit(Path.Combine(Path.GetTempPath(), "td-w5-chat-" + Guid.NewGuid().ToString("N")));
-  [Fact] public void PlannerUsesVerifiedNativePathsPipesAndPerAccountHome()
+  [Trait("Group", "RealPc")] [Fact] public void PlannerUsesVerifiedNativePathsPipesAndPerAccountHome()
   {
     var root = Scratch(); var chat = Chat(root); var planner = new WindowsChatLaunchPlanner(root, @"C:\TD\tools\ai");
     try
@@ -63,7 +63,7 @@ public sealed class ChatWindowsTests
     }
     finally { Directory.Delete(root.DirectoryPath, true); }
   }
-  [Fact] public async Task RealSignedOutClaudePrintBecomesPlainSentenceAndSavedMediaFreeHistory()
+  [Trait("Group", "RealPc")] [Fact] public async Task RealSignedOutClaudePrintBecomesPlainSentenceAndSavedMediaFreeHistory()
   {
     var proofRoot = Environment.GetEnvironmentVariable("TD_CHAT_PROOF_ROOT") ?? throw new InvalidOperationException("Choose the isolated proof root.");
     var root = AppDataRoot.Explicit(proofRoot); var chat = Chat(root); var history = new ChatHistory(root); history.Save(chat);

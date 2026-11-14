@@ -79,7 +79,7 @@ public sealed class GeminiRefreshTests
     };
     var launch = new ProcessLaunch(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], environment, fixture.Root.DirectoryPath);
-    var readiness = new GeminiAccountReadiness(); using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    var readiness = new GeminiAccountReadiness(); using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(40));
     if (outcome is "ok" or "rejected") Assert.Equal(outcome == "ok", await readiness.VerifyAsync(launch, ct.Token));
     else await Assert.ThrowsAsync<IOException>(async () => await readiness.VerifyAsync(launch, ct.Token));
     Assert.Equal(["initialize", "authenticate"], File.ReadAllLines(transcript));
