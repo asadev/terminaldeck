@@ -7,11 +7,19 @@ namespace TerminalDeck.App.Integration;
 /// used, never the AI tools' own home folders (the Macs do not sync those either in this version).
 public sealed partial class AppRuntime
 {
-  private ICloudSyncAdapter CloudBootFilesOwner(string subject, string deviceId) =>
-    CloudBootFilesAdapter.ForAccount(CloudAccountFolder(subject), deviceId, CloudBootProjectFolders);
+  private ICloudSyncAdapter CloudBootFilesOwner(string subject, string deviceId, Func<bool> autoAccept) =>
+    CloudBootFilesAdapter.ForAccount(CloudAccountFolder(subject), deviceId, CloudBootProjectFolders, autoAccept);
 
-  /// Project id (the id every device shares) → this PC's folder for that project's instruction files. Wired from the
-  /// project list once 7C-2 (projects and agents) is in; until then no project has a folder here, so every project's
-  /// files wait (kept, nothing written, nothing sent). A folder is never guessed.
-  private IReadOnlyDictionary<string, string> CloudBootProjectFolders() => new Dictionary<string, string>();
+  /// Project id (the id every device shares) → this PC's folder for that project's instruction files. The Mac's rule
+  /// (NativeCloudBootPlaces, review S2): a project with exactly ONE folder on this PC uses that folder (also the folder
+  /// made by itself when the project arrived from Cloud, 7C-2). A project with several folders is not given one: which
+  /// folder gets the files is never guessed, so its files wait (kept, nothing written, nothing sent). Read again at
+  /// every capture, so a project that just arrived or just got its folder is picked up.
+  private IReadOnlyDictionary<string, string> CloudBootProjectFolders()
+  {
+    var found = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (var project in Projects.List())
+      if (!project.Folders.IsDefaultOrEmpty && project.Folders.Length == 1) found[project.Id] = project.Folders[0];
+    return found;
+  }
 }

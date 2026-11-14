@@ -119,6 +119,8 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     public bool Own { get; set; } public string? FirstOp { get; set; } public Dictionary<int, string> PartOps { get; set; } = []; public int Count { get; set; }
     public Dictionary<int, string> Parts { get; set; } = []; public string? Body { get; set; } public string? Projection { get; set; }
     public string? Waiting { get; set; } public bool Done { get; set; } public string Device { get; set; } = "";
+    /// 7C-2: the bytes of a file that waits for its project (base64), so it is placed once the project arrives.
+    public string? WaitingBytes { get; set; }
   }
   private sealed class Origin { public string StoreId { get; set; } = ""; public string Key { get; set; } = ""; public string Version { get; set; } = ""; public string Keys { get; set; } = ""; }
   private sealed class State
@@ -398,8 +400,8 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   {
     var logical = v.Key[5..];
     var placed = Placement(logical, v.StoreId);
-    if (placed is null) { v.Waiting = "waiting_project_not_matched"; return; }
-    v.Waiting = null;
+    if (placed is null) { v.Waiting = "waiting_project_not_matched"; v.WaitingBytes = Convert.ToBase64String(bytes); return; }
+    v.Waiting = null; v.WaitingBytes = null;
     // A name Windows cannot hold (a ':' or '?', a reserved name such as CON) is kept under the nearest allowed name;
     // the record keeps its original name, so it travels back unchanged.
     var path = FileDeckMemoryStore.WindowsName(placed);
@@ -465,6 +467,27 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     return ProjectTarget(parts[1], storeId) is { } local ? string.Join('/', new[] { "projects", local }.Concat(parts.Skip(2))) : null;
   }
   private string? ProjectTarget(string project, string storeId) => storeId == memory.StoreId ? project : projects?.Invoke(project, storeId) is { Length: > 0 } local ? local : null;
+
+  /// 7C-2: a project became known on this PC (arrived through Cloud or made here). Project memory that waited for it is
+  /// placed now under the same project id: files first, then the labels that waited for them. Saved once.
+  public void RetryProjects()
+  {
+    var placed = false;
+    foreach (var v in state.Versions.Values.Where(x => x.Waiting == "waiting_project_not_matched").OrderBy(x => x.Key, StringComparer.Ordinal).ToArray())
+    {
+      try
+      {
+        if (v.WaitingBytes is { } held) ProjectFile(v, Convert.FromBase64String(held));
+        else if (v.Body is not null) ProjectRow(v);
+        placed |= v.Waiting is null;
+      }
+      catch (CloudFailure) { }
+    }
+    if (!placed) return;
+    try { RetryWaitingRows(); } catch (CloudFailure) { }
+    memory.Flush();
+    Save();
+  }
 
   private void RetryWaitingRows()
   {

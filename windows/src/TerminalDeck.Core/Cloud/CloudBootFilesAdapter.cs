@@ -35,7 +35,7 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
   private readonly Func<long> localNow;
   private readonly Func<IReadOnlyDictionary<string, string>>? projectFolders;
   private readonly IReadOnlyList<string> guarded;
-  private readonly bool autoAccept;
+  private readonly Func<bool> autoAccept;
   private IReadOnlyDictionary<string, string>? foldersNow;
   private State state;
   private bool dirty;
@@ -44,10 +44,12 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
   /// null or missing = the project's files wait. `userProfile`: the folder whose AI homes a project folder may never be
   /// (or hold); `stateFolder`: this adapter's own folder, never inside a project folder.
   public CloudBootFilesAdapter(ICloudLedgerSlot slot, string retainedFolder, string deviceId, Func<IReadOnlyDictionary<string, string>>? projectFolders = null,
-    Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null, string? userProfile = null, string? stateFolder = null, bool autoAccept = false)
+    Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null, string? userProfile = null, string? stateFolder = null, bool autoAccept = false,
+    Func<bool>? autoAcceptNow = null)
   {
     CloudBytes.TransportId(deviceId);
-    this.slot = slot; retained = retainedFolder; this.deviceId = deviceId; this.projectFolders = projectFolders; this.autoAccept = autoAccept;
+    this.slot = slot; retained = retainedFolder; this.deviceId = deviceId; this.projectFolders = projectFolders;
+    this.autoAccept = autoAcceptNow ?? (() => autoAccept);
     this.localNow = localNow ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     this.keeper = keeper ?? new CloudMemoryKeptInMemory();
     var profile = userProfile ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -62,9 +64,12 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
 
   /// One signed-in account on this PC: `<account>\sync\bootfiles.json` (this bookkeeping), `<account>\bootfiles\retained`
   /// (the Cloud's texts by fingerprint), `<account>\kept\instructions` (texts not in use). Never inside a project folder.
-  public static CloudBootFilesAdapter ForAccount(string accountFolder, string deviceId, Func<IReadOnlyDictionary<string, string>>? projectFolders = null) =>
+  /// `autoAccept`: "Automatically, with my account" (the Mac's setAutoAccept): an arrived file that could run something is
+  /// written without a click; otherwise such a file waits for an accept.
+  public static CloudBootFilesAdapter ForAccount(string accountFolder, string deviceId, Func<IReadOnlyDictionary<string, string>>? projectFolders = null,
+    Func<bool>? autoAccept = null) =>
     new(new CloudFileSlot(Path.Combine(accountFolder, "sync", "bootfiles.json")), Path.Combine(accountFolder, "bootfiles", "retained"), deviceId, projectFolders,
-      keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "instructions")), stateFolder: accountFolder);
+      keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "instructions")), stateFolder: accountFolder, autoAcceptNow: autoAccept);
 
   public IReadOnlyCollection<string> Domains => [CloudBootFilesFormat.Domain];
 
@@ -372,7 +377,7 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     var local = found.Bytes;
     var localHash = local is null ? null : CloudMemoryFormat.Hash(local);
     if (localHash == a.Hash) { Agree(ps, a); return; }
-    var mayWrite = autoAccept || CloudBootFilesFormat.RunReasons(a.Relative, body).Count == 0;
+    var mayWrite = autoAccept() || CloudBootFilesFormat.RunReasons(a.Relative, body).Count == 0;
     var now = localNow();
     var label = a.SourceId.Replace('/', '-') + "/" + a.Relative;
     if (local is null)

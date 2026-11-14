@@ -13,7 +13,7 @@ public sealed partial class AppRuntime
   private readonly object cloudLogGate = new();
   public CloudAccountClient Cloud { get; private set; } = null!;
   /// The bridge from the account to the sync engine. Builds nothing while signed out or while "Use Cloud on this PC" is
-  /// off. 7C-1: Deck Memory syncs; this PC keeps its copy per account in `cloud\accounts\<account>\memory` (nothing
+  /// off. 7C-1: Deck Memory syncs; 7C-2: projects and agents sync first; this PC keeps its copy per account in `cloud\accounts\<account>\memory` (nothing
   /// on Windows reads it yet). Removals do not travel to or from Windows yet and sync never deletes anything here.
   public CloudSyncBridge? CloudSync { get; private set; }
 
@@ -31,13 +31,28 @@ public sealed partial class AppRuntime
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
       subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
-      (subject, deviceId) => [CloudMemoryAdapter.ForAccount(CloudAccountFolder(subject), deviceId),
-        // 7C-3: AI instruction files, after memory (AppRuntime.CloudBootFiles.cs).
-        CloudBootFilesOwner(subject, deviceId)]), WriteCloudLog);
+      CloudOwners), WriteCloudLog);
     CloudSync.Start();
   }
 
   private string CloudAccountFolder(string subject) => Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject);
+
+  /// 7C-2: projects, then agents, then memory, then (7C-3) AI instruction files (the Mac's rule G: projects and agents go before anything else queued).
+  /// A project that arrives gets its own folder by itself under `%USERPROFILE%\Terminal Deck\Projects`; project memory
+  /// is placed once its project is on this PC. Widening agent fields apply under automatic trust (the default).
+  private IReadOnlyList<ICloudSyncAdapter> CloudOwners(string subject, string deviceId)
+  {
+    var folder = CloudAccountFolder(subject);
+    CloudProjectFolders.Installed ??= new CloudProjectFolders(Path.Combine(Root.DirectoryPath, "cloud", "project-folders.json"),
+      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), [Root.DirectoryPath]);
+    var trustMode = new CloudTrustModeStore(WindowsCloudTrustStore.TrustMode(Root));
+    CloudMemoryAdapter? memory = null;
+    var records = new CloudRecordsForAccount(folder, subject, deviceId, Projects, Agents, CloudProjectFolders.Installed,
+      () => trustMode.Load() == CloudTrustMode.Account, () => memory?.RetryProjects());
+    memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject);
+    // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
+    return [.. records.Adapters, memory, CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account)];
+  }
 
   /// One plain line per sign-in stage, in `logs\cloud.log` of this copy's own data folder. The lines never carry a token,
   /// code, key, e-mail or name (CloudAccountClient writes only stage names and error kinds).
