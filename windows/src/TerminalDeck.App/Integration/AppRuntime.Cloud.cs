@@ -16,7 +16,12 @@ public sealed partial class AppRuntime
   private void InitializeCloud()
   {
     cloudHttp = new(() => new HttpClientCloudHttp());
-    Cloud = CloudComposition.Create(CloudConfiguration.Today(Environment.MachineName, PhoneAppVersion), new WindowsCloudKeyStore(Root), new WindowsCloudBrowser(), cloudHttp);
+    // Device trust: one protected list per account and the protected "How this PC trusts your other devices" choice,
+    // both DPAPI files checked by a Credential Manager key; presses refused for two seconds after this app's own remote input.
+    var trust = new CloudTrustPorts((issuer, subject) => new WindowsCloudTrustStore(Root, issuer, subject), WindowsCloudTrustStore.TrustMode(Root),
+      () => WindowsRemoteInputGuard.JustNow);
+    Cloud = CloudComposition.Create(CloudConfiguration.Today(Environment.MachineName, PhoneAppVersion), new WindowsCloudKeyStore(Root), new WindowsCloudBrowser(), cloudHttp,
+      trust: trust);
     Cloud.StageLog = WriteCloudLog;
     CloudTools.Register(Cloud, Door);
   }

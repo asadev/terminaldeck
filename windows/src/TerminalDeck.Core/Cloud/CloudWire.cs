@@ -104,11 +104,14 @@ public sealed record CloudDevice(string DeviceId, string Label, string Platform,
 public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string? ReceiverDeviceId = null);
 
 /// One row of the page's device list. Display only: nothing in slice 1 trusts a device.
-public sealed record CloudDeviceRow(string DeviceId, string Name, string Platform, bool ThisDevice, bool Removed, DateTimeOffset? Added, DateTimeOffset? LastSeen, string ShortCode);
+/// `Trust`: the device as this PC's trusted list sees it (never drawn as such). `Joined`: show "joined your account".
+public sealed record CloudDeviceRow(string DeviceId, string Name, string Platform, bool ThisDevice, bool Removed, DateTimeOffset? Added, DateTimeOffset? LastSeen, string ShortCode,
+  CloudTrustRow? Trust = null, bool Joined = false);
 
 /// What the Cloud page and `cloud.status` show. Never carries a token or a key.
 public sealed record CloudSnapshot(CloudPhase Phase, string? Email = null, string? DisplayName = null, string? ThisDeviceId = null,
-  string? ThisDeviceName = null, IReadOnlyList<CloudDeviceRow>? Devices = null, string? Problem = null, string? Provider = null)
+  string? ThisDeviceName = null, IReadOnlyList<CloudDeviceRow>? Devices = null, string? Problem = null, string? Provider = null,
+  CloudTrustMode? TrustMode = null, string? TrustNotice = null)
 {
   public static CloudSnapshot Dormant { get; } = new(CloudPhase.Dormant);
   public IReadOnlyList<CloudDeviceRow> DeviceRows => Devices ?? [];

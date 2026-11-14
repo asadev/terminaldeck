@@ -608,6 +608,7 @@ public sealed partial class WindowsScreenHost : IScreenHost
   private static string? Send(Input[] inputs)
   {
     if (inputs.Length == 0) return null;
+    WindowsRemoteInputGuard.Touch();
     var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
     return sent < inputs.Length ? Refused : null;
   }

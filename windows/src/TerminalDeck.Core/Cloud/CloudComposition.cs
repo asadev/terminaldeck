@@ -6,8 +6,8 @@ namespace TerminalDeck.Core.Cloud;
 public static class CloudComposition
 {
   public static CloudAccountClient Create(CloudConfiguration configuration, ICloudSecretStore store, ICloudBrowser browser,
-    ICloudHttp? http = null, ICloudRandom? random = null) =>
-    new(configuration, store, http ?? new LazyCloudHttp(() => new HttpClientCloudHttp()), random ?? new SystemCloudRandom(), browser);
+    ICloudHttp? http = null, ICloudRandom? random = null, CloudTrustPorts? trust = null) =>
+    new(configuration, store, http ?? new LazyCloudHttp(() => new HttpClientCloudHttp()), random ?? new SystemCloudRandom(), browser, trust: trust);
 }
 
 /// Makes the real HTTP client on its first request, never before.

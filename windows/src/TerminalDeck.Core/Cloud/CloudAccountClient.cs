@@ -61,6 +61,7 @@ public sealed partial class CloudAccountClient : IDisposable
   private readonly ICloudHttp http;
   private readonly ICloudRandom random;
   private readonly ICloudBrowser browser;
+  private readonly CloudTrustPorts? trustPorts;
   private readonly TimeProvider clock;
   private readonly SemaphoreSlim work = new(1, 1);
   private readonly object gate = new();
@@ -76,11 +77,12 @@ public sealed partial class CloudAccountClient : IDisposable
   /// name. The app appends it to its log.
   public Action<string>? StageLog { get; set; }
 
+  /// `trust` null: no trusted-device list (device rows then carry no trust standing).
   public CloudAccountClient(CloudConfiguration configuration, ICloudSecretStore store, ICloudHttp http, ICloudRandom random, ICloudBrowser browser,
-    TimeProvider? clock = null)
+    TimeProvider? clock = null, CloudTrustPorts? trust = null)
   {
     this.configuration = configuration; configuration.Endpoints.Check(); this.store = store; this.http = http; this.random = random; this.browser = browser;
-    this.clock = clock ?? TimeProvider.System;
+    this.clock = clock ?? TimeProvider.System; trustPorts = trust;
   }
 
   private long Now => clock.GetUtcNow().ToUnixTimeMilliseconds();
@@ -276,7 +278,10 @@ public sealed partial class CloudAccountClient : IDisposable
       if (firstSignIn) Stage("devices");
       var list = CloudWire.Decode<CloudDeviceList>(await SignedAsync(record, HttpMethod.Get, "/devices", [], ct));
       if (version != generation) return;
-      Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId, configuration.DeviceLabel, Rows(list, record.DeviceId)));
+      if (firstSignIn && trustPorts is not null) Stage("device trust");
+      var (trust, notice, mode) = TrustRowsLocked(record, list);
+      Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId, configuration.DeviceLabel,
+        Rows(list, record.DeviceId, trust), TrustMode: mode, TrustNotice: notice));
     }
     catch (CloudFailure failure) when (version == generation)
     {
@@ -321,7 +326,7 @@ public sealed partial class CloudAccountClient : IDisposable
     Publish(new(CloudPhase.SignedOut));
     if (session is not null) await LogoutAsync(session.AccessToken);
   }
-  private void ClearLocal() { saved = null; keys = null; store.Remove(); }
+  private void ClearLocal() { saved = null; keys = null; ForgetTrust(); store.Remove(); }
 
   private bool Load()
   {
@@ -419,11 +424,15 @@ public sealed partial class CloudAccountClient : IDisposable
   private static Dictionary<string, string> Json() => new() { ["content-type"] = "application/json" };
   private static Dictionary<string, string> Bearer(string token) => new() { ["Authorization"] = "Bearer " + token };
 
-  internal static IReadOnlyList<CloudDeviceRow> Rows(CloudDeviceList list, string thisDevice) => list.Devices
-    .Select(d => new CloudDeviceRow(d.DeviceId, OneLine(d.Label), d.Platform, d.DeviceId == thisDevice, d.Status != "active",
-      d.RegisteredAt is { } added ? DateTimeOffset.FromUnixTimeMilliseconds(added) : null,
-      d.LastSeenAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(d.LastSeenAt) : null,
-      CloudDeviceCode.Code(d.DeviceId, d.SignPublicJwk) ?? "—"))
+  internal IReadOnlyList<CloudDeviceRow> Rows(CloudDeviceList list, string thisDevice, IReadOnlyList<CloudTrustRow>? trust = null) => list.Devices
+    .Select(d =>
+    {
+      var row = trust?.FirstOrDefault(t => t.DeviceId == d.DeviceId);
+      return new CloudDeviceRow(d.DeviceId, OneLine(d.Label), d.Platform, d.DeviceId == thisDevice, d.Status != "active",
+        d.RegisteredAt is { } added ? DateTimeOffset.FromUnixTimeMilliseconds(added) : null,
+        d.LastSeenAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(d.LastSeenAt) : null,
+        CloudDeviceCode.Code(d.DeviceId, d.SignPublicJwk) ?? "—", row, row is not null && Joined(row));
+    })
     .OrderByDescending(r => r.ThisDevice).ThenBy(r => r.Removed).ThenBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
   /// A device names itself; its text is shown as one plain line and never reaches an agent raw.
   internal static string OneLine(string label)

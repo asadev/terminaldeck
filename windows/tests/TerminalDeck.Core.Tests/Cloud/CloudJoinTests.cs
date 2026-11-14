@@ -42,7 +42,7 @@ public sealed class CloudJoinTests : IDisposable
     Assert.Equal(CloudPhase.Paused, account.Snapshot.Phase); Assert.False(account.Snapshot.UseCloud);
     Assert.False(CloudPageText.For(account.Snapshot).UseCloud);
     Assert.Equal("Off on this PC", CloudPageText.Account(account.Snapshot).CloudRow);
-    Assert.Equal(CloudPageText.UseCloudState(false), "Off. Nothing of this PC is sent, and nothing from your Cloud arrives here. Nothing is deleted.");
+    Assert.Equal("Off. Nothing of this PC is sent, and nothing from your Cloud arrives here. Nothing is deleted.", CloudPageText.UseCloudState(false));
     // A new start of the app keeps the choice; the sign-in and the device stay.
     using var again = Make(http, store);
     await again.ResumeAsync();

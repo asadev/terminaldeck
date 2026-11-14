@@ -22,8 +22,15 @@ public sealed class WindowsCloudTrustStore : ICloudTrustSlot
   private readonly WindowsCredentialStore credentials;
 
   public WindowsCloudTrustStore(AppDataRoot root, string issuer, string subject)
+    : this(root, CloudBytes.Sha256Hex(Encoding.UTF8.GetBytes(issuer + "\n" + subject))[..32]) { }
+
+  /// "How this PC trusts your other devices" (owner, 13 Nov): the same protected form, its own file
+  /// `cloud\trust-mode.protected` and its own Credential Manager key, so the choice is never a plain file.
+  public static WindowsCloudTrustStore TrustMode(AppDataRoot root) => new(root, "mode");
+
+  private WindowsCloudTrustStore(AppDataRoot root, string slotName)
   {
-    accountHash = CloudBytes.Sha256Hex(Encoding.UTF8.GetBytes(issuer + "\n" + subject))[..32];
+    accountHash = slotName;
     path = Path.Combine(root.DirectoryPath, "cloud", "trust-" + accountHash + ".protected");
     keyName = $"{Brand.Name}/{root.NamespaceId}/cloud-trust/{accountHash}";
     protector = new CurrentUserDpapi(root);

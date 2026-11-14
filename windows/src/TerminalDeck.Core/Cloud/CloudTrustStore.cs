@@ -6,8 +6,10 @@ namespace TerminalDeck.Core.Cloud;
 // Device trust on this PC (the Mac's BackendCloudTrust.swift, design cloud-device-trust-design.md revision 2).
 // Every device keeps its OWN list of the device keys the person trusted ON THAT DEVICE. A pack is used only when its
 // signature checks against a key on that list: the signer decides, never a field inside the pack and never the
-// service's word. The list grows only by this PC's own sign-in (its own key, `AddSelf`) and by the person's press in
-// this PC's own window (`Trust`). Nothing here is reachable from a tool, a pipe or a settings key.
+// service's word. The list grows only by this PC's own sign-in (its own key, `AddSelf`), by the person's press in
+// this PC's own window (`Trust`) and, in "Automatically, with my account" (owner, 13 Nov), by the account's own device
+// list read at sign-in and every later check (`TrustByAccount`, CloudTrustStore.Account.cs). Nothing here is reachable
+// from a tool, a pipe or a settings key.
 
 /// The sync core's question, asked at the moment of applying each pack.
 public interface ICloudDeviceTrust
@@ -85,7 +87,7 @@ public sealed class CloudTrustRefusal(CloudTrustRefusalKind kind) : Exception("C
 }
 
 /// The one owner of this PC's trusted list for one account (BackendCloudTrustStore). Thread-safe.
-public sealed class CloudTrustStore : ICloudDeviceTrust
+public sealed partial class CloudTrustStore : ICloudDeviceTrust
 {
   public const int Limit = 256;
   public string Issuer { get; }
@@ -215,11 +217,12 @@ public sealed class CloudTrustStore : ICloudDeviceTrust
     try { return List().Devices.FirstOrDefault(d => d.DeviceId == deviceId); }
     catch (CloudTrustRefusal) { return null; }
   }
-  /// True only when a trusted entry was made by a press ("click" or "restore"); this PC's own identities never count.
+  /// True only when a trusted entry was made by a press ("click" or "restore") or, since the owner's 13 Nov choice
+  /// "Automatically, with my account", by the account ("account"); this PC's own identities never count.
   /// Null when the list cannot be read (never "not confirmed" from a passing read error).
   public bool? HasDeviceTrustedByPress()
   {
-    try { return List().Devices.Any(d => d.Trusted && d.How is "click" or "restore"); }
+    try { return List().Devices.Any(d => d.Trusted && d.How is "click" or "restore" or "account"); }
     catch (CloudTrustRefusal) { return null; }
   }
 
