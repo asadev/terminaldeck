@@ -37,7 +37,7 @@ public sealed partial class AppRuntime
 
   private string CloudAccountFolder(string subject) => Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject);
 
-  /// 7C-2: projects, then agents, then memory, then (7C-3) AI instruction files (the Mac's rule G: projects and agents go before anything else queued).
+  /// 7C-2: projects, then agents, then memory, then (7C-4) tasks and settings, then (7C-3) AI instruction files (the Mac's rule G: projects and agents go before anything else queued).
   /// A project that arrives gets its own folder by itself under `%USERPROFILE%\Terminal Deck\Projects`; project memory
   /// is placed once its project is on this PC. Widening agent fields apply under automatic trust (the default).
   private IReadOnlyList<ICloudSyncAdapter> CloudOwners(string subject, string deviceId)
@@ -50,8 +50,11 @@ public sealed partial class AppRuntime
     var records = new CloudRecordsForAccount(folder, subject, deviceId, Projects, Agents, CloudProjectFolders.Installed,
       () => trustMode.Load() == CloudTrustMode.Account, () => memory?.RetryProjects());
     memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject);
+    // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
+    var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
+      CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
-    return [.. records.Adapters, memory, CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account)];
+    return [.. records.Adapters, memory, .. kinds.Adapters, CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account)];
   }
 
   /// One plain line per sign-in stage, in `logs\cloud.log` of this copy's own data folder. The lines never carry a token,
