@@ -14,7 +14,9 @@ public sealed partial class AppRuntime
   public CloudAccountClient Cloud { get; private set; } = null!;
   /// The bridge from the account to the sync engine. Builds nothing while signed out or while "Use Cloud on this PC" is
   /// off. 7C-1: Deck Memory syncs; 7C-2: projects and agents sync first; this PC keeps its copy per account in `cloud\accounts\<account>\memory` (nothing
-  /// on Windows reads it yet). Removals do not travel to or from Windows yet and sync never deletes anything here.
+  /// on Windows reads it yet). Removals and moves of memory notes follow the Macs' one rule (CloudMemoryOneRule.cs): this PC
+  /// applies them (its safety copy and the note's text first) and sends its own once every device of the account
+  /// understands them; other kinds' removals do not travel to or from Windows yet.
   public CloudSyncBridge? CloudSync { get; private set; }
 
   private void InitializeCloud()
@@ -49,7 +51,8 @@ public sealed partial class AppRuntime
     CloudMemoryAdapter? memory = null;
     var records = new CloudRecordsForAccount(folder, subject, deviceId, Projects, Agents, CloudProjectFolders.Installed,
       () => trustMode.Load() == CloudTrustMode.Account, () => memory?.RetryProjects());
-    memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject);
+    // The one rule for memory removals and moves: the account's devices that keep memory, as the account last listed them.
+    memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject, () => Cloud.Snapshot.MemoryDevices);
     // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
     var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
       CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);

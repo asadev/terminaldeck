@@ -281,7 +281,7 @@ public sealed partial class CloudAccountClient : IDisposable
       if (firstSignIn && trustPorts is not null) Stage("device trust");
       var (trust, notice, mode) = TrustRowsLocked(record, list);
       Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId, configuration.DeviceLabel,
-        Rows(list, record.DeviceId, trust), TrustMode: mode, TrustNotice: notice));
+        Rows(list, record.DeviceId, trust), TrustMode: mode, TrustNotice: notice, MemoryDevices: CloudDevice.MemoryDevices(list)));
     }
     catch (CloudFailure failure) when (version == generation)
     {

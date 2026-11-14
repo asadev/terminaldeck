@@ -99,8 +99,18 @@ public sealed record CloudAuthSession(string AccessToken, string RefreshToken, l
 public sealed record CloudPublicJwk(string Kty, string Crv, string X, string? Y = null);
 public sealed record CloudDeviceRegistration(string DeviceId, string Label, string Platform, string AppVersion, CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk);
 public sealed record CloudDeviceRegistrationReceipt(string DeviceId, string Status, bool SecretsApproved, string? HeadSeq = null, string? VaultState = null);
+/// `Role` (service prod3): "peer" (a Mac or PC that keeps a copy) or "viewer" (a phone or browser). `SupersededBy`: the
+/// newer registration of the same machine. Both null from an older service.
 public sealed record CloudDevice(string DeviceId, string Label, string Platform, string AppVersion, string Status, bool SecretsApproved, long LastSeenAt,
-  CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null);
+  CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null, string? Role = null, string? SupersededBy = null)
+{
+  /// A phone or a browser: holds no copy of the memory (the Mac's `isViewer`).
+  [System.Text.Json.Serialization.JsonIgnore]
+  public bool IsViewer => Role == "viewer" || Platform is "ios" or "android" or "web";
+  /// The account's devices that keep memory (the Mac's `oneRuleAccountMacs`): active, not a viewer, not replaced.
+  public static IReadOnlyList<string> MemoryDevices(CloudDeviceList list) =>
+    list.Devices.Where(d => d.Status == "active" && !d.IsViewer && d.SupersededBy is null).Select(d => d.DeviceId.ToLowerInvariant()).ToArray();
+}
 public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string? ReceiverDeviceId = null);
 
 /// One row of the page's device list: what is drawn is ONLY the name, the date added and last seen, and "This PC".
@@ -115,7 +125,7 @@ public sealed record CloudDeviceRow(string DeviceId, string Name, bool ThisDevic
 /// What the Cloud page and `cloud.status` show. Never carries a token or a key.
 public sealed record CloudSnapshot(CloudPhase Phase, string? Email = null, string? DisplayName = null, string? ThisDeviceId = null,
   string? ThisDeviceName = null, IReadOnlyList<CloudDeviceRow>? Devices = null, string? Problem = null, string? Provider = null,
-  CloudTrustMode? TrustMode = null, string? TrustNotice = null)
+  CloudTrustMode? TrustMode = null, string? TrustNotice = null, IReadOnlyList<string>? MemoryDevices = null)
 {
   public static CloudSnapshot Dormant { get; } = new(CloudPhase.Dormant);
   public IReadOnlyList<CloudDeviceRow> DeviceRows => Devices ?? [];

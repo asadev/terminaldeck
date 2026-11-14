@@ -17,8 +17,12 @@ namespace TerminalDeck.Core.Cloud;
 //   A fresh PC's empty memory sends nothing at all: empty is "nothing yet", never "everything removed".
 // - Two different texts of one file: the newer revision by the Cloud's order is used; the other text is kept, outside
 //   the memory folder (it never travels), and listed. Never a second live copy beside the file.
-// - Removals do NOT travel from Windows yet, and nothing is ever deleted by sync here: a removed setting or a removal
-//   marker arriving from a Mac leaves this PC's copy in place and is listed.
+// - Removals and moves of memory FILES (the Macs' one rule, CloudMemoryOneRule.cs), only when the one rule is wired
+//   (`oneRule`; the app always wires it): this PC says it understands them (`onerule.understands.<this PC>`), applies
+//   one that arrives (the note's text goes into this PC's safety copy and its kept texts first; a note changed on this
+//   PC after the removal was made stays), and sends one made here only while every device of the account understands
+//   them, under the shared 15-minute brake. A file this PC never held is never removed anywhere. Without `oneRule`
+//   nothing is announced, applied or sent (7C-1). A removed shared SETTING still leaves this PC's value and is listed.
 
 /// One row of a memory table, cells in the table's column order (DeckMemoryCloudSchema).
 public sealed record DeckMemoryRow(string Table, IReadOnlyList<DeckMemoryCell> Cells)
@@ -29,8 +33,9 @@ public sealed record DeckMemoryRow(string Table, IReadOnlyList<DeckMemoryCell> C
 /// A file in the memory folder: '/'-separated relative path, size and last write time (ticks, any fixed origin).
 public sealed record DeckMemoryFileInfo(string Path, long Length, long ModifiedTicks);
 
-/// What a Deck Memory store gives Cloud. There is deliberately no way to remove a row or a file through it: sync on
-/// Windows never deletes. Every write here comes from Cloud's apply and is recognised as such by content.
+/// What a Deck Memory store gives Cloud. There is no way to remove a row through it; a file is removed only by the one
+/// rule's apply, only when it still holds exactly the text that was kept first. Every write here comes from Cloud's
+/// apply and is recognised as such by content.
 public interface IDeckMemoryCloudStore
 {
   /// A stable random id for this memory store (a UUID made once, kept with the memory).
@@ -50,6 +55,8 @@ public interface IDeckMemoryCloudStore
   /// The file's bytes, or null when it is not there.
   byte[]? ReadFile(string path);
   void WriteFile(string path, byte[] bytes);
+  /// Removes the file only when its bytes still hash to `expectedHash` (an edit a moment ago is never removed).
+  bool RemoveFile(string path, string expectedHash);
   /// Makes every row written so far durable (files are durable when WriteFile returns).
   void Flush();
 }
@@ -71,6 +78,13 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   /// and ignored (not placed, not kept, not waiting).
   public const string LocalOnlyRow = "I03";
   public const string KeptRemovalWhy = "removed on another device; this PC keeps its copy (removals do not travel to Windows yet)";
+  public const string RemovedWhy = "removed on another device; its last text is kept on this PC";
+  public const string EditKeptWhy = "removed or moved on another device, but this PC's text is not the one it was made from; this PC's text stays and goes back to your other devices";
+  public const string OlderThanRemovalWhy = "an older text of a note that was removed since; kept on this PC, not used";
+  private readonly CloudMemoryOneRulePorts? oneRule;
+  private Func<long>? serviceNow;
+  private bool announcedThisRun, incomingConfirmed;
+  private bool? sendingForced;
   private readonly IDeckMemoryCloudStore memory;
   private readonly ICloudLedgerSlot slot;
   private readonly ICloudMemoryKeeper keeper;
@@ -84,8 +98,9 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   /// `enabledRows`: the inventory rows switched on for this account (null: all). `projects(projectId, originStore)`:
   /// this PC's project for another device's project-scoped memory (7C-2's project list), null while not matched (waits).
   public CloudMemoryAdapter(IDeckMemoryCloudStore memory, ICloudLedgerSlot slot, string deviceId, IEnumerable<string>? enabledRows = null,
-    Func<string, string, string?>? projects = null, Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null)
+    Func<string, string, string?>? projects = null, Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null, CloudMemoryOneRulePorts? oneRule = null)
   {
+    this.oneRule = oneRule;
     CloudBytes.TransportId(deviceId);
     if (!Guid.TryParse(memory.StoreId, out _)) throw new CloudFailure("invalid_request");
     this.memory = memory; this.slot = slot; this.deviceId = deviceId; this.projects = projects;
@@ -101,13 +116,21 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   public IReadOnlyCollection<string> Domains => rows.Append(LocalOnlyRow).Distinct().Select(CloudMemoryFormat.Domain).ToArray();
   public IReadOnlyList<CloudMemoryOtherVersion> OtherVersions => state.Others.ToArray();
   public int WaitingCount => state.Versions.Values.Count(v => v.Waiting is not null);
+  /// Removals from another device held here, not applied, until the person answers (more than the brake allows).
+  public int HeldRemovals => state.Held.Count;
+  /// Notes gone from this PC's memory folder that were NOT sent as removals because too many went at once.
+  public int MissingNotSent => state.MissingWaiting;
 
   /// The memory store for one signed-in account on this PC: `<account folder>/memory` (notes and tables),
   /// `<account folder>/sync/memory.json` (this adapter's bookkeeping), `<account folder>/kept/memory` (kept texts).
   /// Per account, so signing in with another account never sends one account's memory into the other.
-  public static CloudMemoryAdapter ForAccount(string accountFolder, string deviceId, Func<string, string, string?>? projects = null) =>
+  /// The one rule (removals and moves) is on when `accountDevices` is given; its safety copies go to
+  /// `<account folder>/memory-safety/<yyyyMMdd-HHmmss>`.
+  public static CloudMemoryAdapter ForAccount(string accountFolder, string deviceId, Func<string, string, string?>? projects = null,
+    Func<IReadOnlyCollection<string>?>? accountDevices = null) =>
     new(FileDeckMemoryStore.At(Path.Combine(accountFolder, "memory")), new CloudFileSlot(Path.Combine(accountFolder, "sync", "memory.json")), deviceId,
-      projects: projects, keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "memory")));
+      projects: projects, keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "memory")),
+      oneRule: accountDevices is null ? null : new CloudMemoryOneRulePorts(accountDevices, new CloudMemorySafetyFolder(accountFolder)));
 
   // ---- Durable bookkeeping (beside the sync store, one atomic file) ----
 
@@ -137,6 +160,24 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     public List<string> Pending { get; set; } = [];
     /// The whole feed was read once: before that nothing of this PC is captured (its first copy waits for the Cloud's).
     public bool FeedRead { get; set; }
+    // ---- The one rule ----
+    /// Removal markers this PC made or received, by their text's hash.
+    public Dictionary<string, Removed> Removals { get; set; } = [];
+    /// Removals from another device held, untouched, until the person answers.
+    public List<HeldRemoval> Held { get; set; } = [];
+    /// Gone files that passed the "too many at once" check and wait for the brake (they never count as newly gone again).
+    public HashSet<string> Queued { get; set; } = [];
+    public int MissingWaiting { get; set; }
+    public bool MissingConfirmed { get; set; }
+    public long? SentAt { get; set; } public int SentCount { get; set; }
+    public long? AppliedAt { get; set; } public int AppliedCount { get; set; }
+    public string? SafetyCopy { get; set; } public long SafetyTriedAt { get; set; }
+  }
+  private sealed class Removed { public string Path { get; set; } = ""; public long At { get; set; } public string By { get; set; } = ""; public string? MovedTo { get; set; } }
+  private sealed class HeldRemoval
+  {
+    public string StoreId { get; set; } = ""; public string Key { get; set; } = ""; public string Version { get; set; } = "";
+    public string Path { get; set; } = ""; public string Device { get; set; } = ""; public string Bytes { get; set; } = "";
   }
   private void Save() { slot.Write(JsonSerializer.SerializeToUtf8Bytes(state)); dirty = false; }
   private static string V(string storeId, string key, string version) => storeId + "\n" + key + "\n" + version;
@@ -191,12 +232,14 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   private sealed record Resource(string Row, string StoreId, string Key, byte[] Data, string Hash, string? Base, DeckMemoryRow? Physical, string? Path);
 
   /// Compares what the memory holds now with what this PC last published, and makes a new version of every resource
-  /// that changed: rows of the enabled tables (shared settings only; `meta` never) and memory-folder files. Never a
-  /// removal. Stamped once, here, on the service clock. Deterministic ids: a capture repeated after a crash makes the
-  /// same records.
+  /// that changed: rows of the enabled tables (shared settings only; `meta` never) and memory-folder files; with the
+  /// one rule, also this PC's "understands" setting and the removals and moves of files this PC held (SendRemovals).
+  /// Stamped once, here, on the service clock. Deterministic ids: a capture repeated after a crash makes the same records.
   public Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
   {
     if (!state.FeedRead) return Task.FromResult(CloudCapture.None);
+    serviceNow = stampNow;
+    if (oneRule is not null) { Announce(stampNow()); PrepareSafetyCopy(stampNow()); }
     var before = JsonSerializer.SerializeToUtf8Bytes(state);
     var operations = new List<CloudOperation>();
     foreach (var pending in state.Pending) operations.Add(CloudOperation.FromJson(CloudJson.Parse(pending)));
@@ -208,20 +251,151 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
         if (DeckMemoryCloudSchema.IsMachineLocal(t, row.Cells)) continue;
         // A shared setting with no value is a removal; removals do not travel from Windows.
         if (DeckMemoryCloudSchema.IsSettingTombstone(t, row.Cells)) continue;
-        // "This device understands removal records" is never claimed by Windows.
-        if (t.Name == "settings" && row.Cells[t.Index("key")].Value is { } key && key.StartsWith(DeckMemoryCloudSchema.SharedSettingPrefix, StringComparison.Ordinal)) continue;
+        // "This device understands removal records": only this PC's own, and only while the one rule is on here.
+        if (t.Name == "settings" && row.Cells[t.Index("key")].Value is { } key && key.StartsWith(DeckMemoryCloudSchema.SharedSettingPrefix, StringComparison.Ordinal)
+          && (oneRule is null || key != CloudMemoryOneRule.UnderstandsKey(deviceId))) continue;
         operations.AddRange(Export(Logical(t, row), stampNow));
       }
+    var present = new HashSet<string>(StringComparer.Ordinal);
     foreach (var file in memory.ListFiles().OrderBy(f => f.Path, StringComparer.Ordinal))
     {
       ct.ThrowIfCancellationRequested();
+      present.Add(file.Path);
       if (FileResource(file) is { } resource) operations.AddRange(Export(resource, stampNow));
     }
+    // The Mac's capture order: new files first, then removals, so a rename's removal names where the text went.
+    if (oneRule is not null) operations.AddRange(SendRemovals(present, stampNow));
     var committed = state;
     state = JsonSerializer.Deserialize<State>(before)!;
     var staged = committed;
-    return Task.FromResult(new CloudCapture(operations, () => { state = staged; state.Pending.Clear(); Save(); }));
+    return Task.FromResult(new CloudCapture(operations, () => { state = staged; state.Pending.Clear(); memory.Flush(); Save(); }));
   }
+
+  // ---- The one rule: understanding, the switch, the brake, sending (DeckMemoryStoreOneRule.swift) ----
+
+  private long Now() => serviceNow?.Invoke() ?? localNow();
+  private static readonly DeckMemoryTable SettingsTable = DeckMemoryCloudSchema.Table("settings");
+  private string? SettingValue(string owner, string key) =>
+    memory.Find("settings", [DeckMemoryCell.Text(owner), DeckMemoryCell.Text(key)])?.Cells[SettingsTable.Index("value")].Value;
+
+  /// At the first capture of every run and every 12 hours: this PC understands removals and moves of this format, as of
+  /// now (service clock). The Mac's own record: a shared memory setting, owner "", value "v2:<ms>".
+  private void Announce(long now)
+  {
+    if (!Guid.TryParse(deviceId, out _) || now <= 0) return;
+    var key = CloudMemoryOneRule.UnderstandsKey(deviceId);
+    var held = CloudMemoryOneRule.ParseUnderstands(SettingValue("", key));
+    if (announcedThisRun && held is { } h && h.Format == CloudMemoryOneRule.Format && h.At <= now && now - h.At < CloudMemoryOneRule.RenewAfter) return;
+    var keys = new[] { DeckMemoryCell.Text(""), DeckMemoryCell.Text(key) };
+    memory.PutRow(new("settings", [.. keys, DeckMemoryCell.Text(CloudMemoryOneRule.UnderstandsValue(now)), DeckMemoryCell.Real(now / 1000.0)]),
+      memory.Find("settings", keys) is null ? null : keys);
+    announcedThisRun = true;
+  }
+
+  /// The account's list is known, holds this PC, and every device in it said it understands, within the last 3 days.
+  private bool EveryDeviceUnderstands(long now)
+  {
+    if (oneRule?.AccountDevices() is not { Count: > 0 } devices) return false;
+    var me = deviceId.ToLowerInvariant();
+    if (!devices.Any(d => d.Equals(me, StringComparison.OrdinalIgnoreCase))) return false;
+    return devices.All(id => CloudMemoryOneRule.Fresh(SettingValue("", CloudMemoryOneRule.UnderstandsKey(id)), now));
+  }
+  private bool SafetyReady() => state.SafetyCopy is { } made && oneRule!.Safety.Exists(made);
+  /// The safety copy, made as soon as every device understands (before anything is sent) and before the first removal
+  /// is applied. A copy that fails keeps sending off and removes nothing; it is tried again an hour later.
+  private bool PrepareSafetyCopy(long now, bool forApply = false)
+  {
+    if (oneRule is null) return false;
+    if (SafetyReady()) return true;
+    if (!forApply && !EveryDeviceUnderstands(now)) return false;
+    // Before sending: tried again an hour after a failure. Before applying a removal: tried every time (else held).
+    if (!forApply && state.SafetyTriedAt > 0 && now >= state.SafetyTriedAt && now - state.SafetyTriedAt < 3_600_000) return false;
+    state.SafetyTriedAt = now;
+    state.SafetyCopy = oneRule.Safety.Make(now);
+    dirty = true;
+    if (!forApply) Save();
+    return state.SafetyCopy is not null;
+  }
+  /// THE switch for sending removals and moves: every device understands and the safety copy exists.
+  private bool Sends(long now) => sendingForced ?? (EveryDeviceUnderstands(now) && SafetyReady());
+  /// Tests only: force sending on or off (null = decide by the account).
+  public void SetSendingForTests(bool? on) => sendingForced = on;
+  private int Total() => Math.Max(1, Math.Max(state.FileStamps.Count, state.FileOrigins.Count));
+
+  /// A file this PC held is gone from its memory folder: its removal (or, when the same text is now at another place,
+  /// its move) travels as a new version of the same file whose text is a removal marker. Never for a file this PC
+  /// never held, never for one whose newest version here already is a removal, never while the switch is off; at most
+  /// the brake's limit per 15 minutes, and none at all when more than that went at once (until the person confirms).
+  /// What waits keeps its "last seen" entry, so a later capture sends it.
+  private IEnumerable<CloudOperation> SendRemovals(HashSet<string> present, Func<long> stampNow)
+  {
+    var gone = new List<(string Path, string Row, string StoreId, string Key, Head Head, Origin? Origin, string LastHash)>();
+    foreach (var path in state.FileStamps.Keys.Concat(state.FileOrigins.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray())
+    {
+      if (present.Contains(path)) { state.Queued.Remove(path); continue; }
+      var origin = state.FileOrigins.GetValueOrDefault(path);
+      var storeId = origin?.StoreId ?? memory.StoreId;
+      var key = origin?.Key ?? "file/" + path;
+      var logical = key[5..];
+      // Only a file at its own record's place travels (never a second copy, never a name Windows changed for another).
+      if (!DeckMemoryCloudSchema.SafePath(logical) || DeckMemoryCloudSchema.AppHelpFiles.Contains(logical)
+        || Placement(logical, storeId) is not { } placed || FileDeckMemoryStore.WindowsName(placed) != path) { Forget(path); continue; }
+      var row = DeckMemoryCloudSchema.FileRow(logical);
+      // Nothing of it ever travelled from or to this PC: nothing to remove anywhere (a joining PC removes nothing).
+      if (row is null || !rows.Contains(row) || state.Heads.GetValueOrDefault(storeId + ":" + key) is not { } head) { Forget(path); continue; }
+      // Its newest version here is already a removal (one that arrived, or one sent before).
+      if (state.Removals.ContainsKey(head.Hash)) { Forget(path); continue; }
+      var stamp = state.FileStamps.GetValueOrDefault(path);
+      var lastHash = stamp is not null && stamp.LastIndexOf(':') is >= 0 and var c ? stamp[(c + 1)..] : head.Hash;
+      gone.Add((path, row, storeId, key, head, origin, lastHash));
+    }
+    if (gone.Count == 0) { state.MissingWaiting = 0; state.MissingConfirmed = false; return []; }
+    var now = stampNow();
+    if (!Sends(now)) return [];
+    var limit = CloudMemoryOneRule.Limit(Total());
+    var confirmed = state.MissingConfirmed;
+    var fresh = gone.Count(g => !state.Queued.Contains(g.Path));
+    if (!confirmed && fresh > limit) { state.MissingWaiting = fresh; return []; }
+    foreach (var g in gone) state.Queued.Add(g.Path);
+    var window = CloudMemoryOneRule.Current(state.SentAt, state.SentCount, now);
+    var room = confirmed ? int.MaxValue : Math.Max(0, limit - window.Count);
+    // Where a text lives on: another file here now holding exactly the same bytes.
+    var byHash = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (var (p, s) in state.FileStamps.OrderBy(x => x.Key, StringComparer.Ordinal))
+      if (present.Contains(p) && s.LastIndexOf(':') is >= 0 and var c2) byHash.TryAdd(s[(c2 + 1)..], p);
+    var operations = new List<CloudOperation>();
+    var sent = 0;
+    foreach (var g in gone)
+    {
+      if (sent >= room) break;
+      string? movedTo = null;
+      if (byHash.TryGetValue(g.LastHash, out var there)) movedTo = state.FileOrigins.GetValueOrDefault(there) is { } o ? o.Key[5..] : there;
+      var removal = new CloudMemoryRemoval(now, deviceId.ToLowerInvariant(), movedTo, Confirmed: confirmed);
+      var name = g.Path.Split('/')[^1] is var last && last.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? last[..^3] : g.Path.Split('/')[^1];
+      var bytes = removal.Text(CloudMemoryRemoval.NoteId(now, g.StoreId + "
+" + g.Key + "
+" + g.Head.Version), name);
+      var hash = CloudMemoryFormat.Hash(bytes);
+      operations.AddRange(Export(new Resource(g.Row, g.StoreId, g.Key, bytes, hash, g.Origin?.Version, null, g.Path), stampNow));
+      state.Removals[hash] = new Removed { Path = g.Path, At = now, By = removal.By, MovedTo = movedTo };
+      var made = state.Heads[g.StoreId + ":" + g.Key];
+      if (Find(g.Key, made.Version) is { } marker) marker.Projection = "";
+      state.FileOrigins[g.Path] = new Origin { StoreId = g.StoreId, Key = g.Key, Version = made.Version };
+      state.FileStamps.Remove(g.Path);
+      state.Queued.Remove(g.Path);
+      window = (window.At, window.Count + 1);
+      sent++;
+    }
+    state.SentAt = window.At; state.SentCount = window.Count;
+    state.MissingWaiting = gone.Count - sent;
+    if (state.MissingWaiting == 0) state.MissingConfirmed = false;
+    return operations;
+
+    void Forget(string path) { state.FileStamps.Remove(path); state.Queued.Remove(path); }
+  }
+
+  /// His answer "they are gone" to the notes missing on this PC that were not sent: the next capture sends them all.
+  public void ConfirmMissing() { state.MissingConfirmed = true; Save(); }
 
   /// A memory-folder file as it travels, or null when it never travels or did not change since it was last read and
   /// published. The bytes are read only when the size or time changed.
@@ -406,14 +580,21 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     // the record keeps its original name, so it travels back unchanged.
     var path = FileDeckMemoryStore.WindowsName(placed);
     var local = memory.ReadFile(path);
-    // A removal from a Mac (its one rule): this PC keeps its copy. Nothing is deleted or blanked by sync here.
+    // A removal or a move from another device (the one rule). Without the one rule this PC keeps its copy and lists it.
     if (bytes.Length < CloudMemoryFormat.RemovalMarkerLimit && CloudMemoryFormat.IsRemovalMarker(bytes))
     {
+      if (oneRule is not null && CloudMemoryRemoval.Parse(bytes) is { } removal) { ApplyRemoval(v, removal, path, local, bytes); return; }
       v.Projection = "";
       if (local is not null) List(v, "file", path, KeptRemovalWhy);
       return;
     }
-    if (local is null) { memory.WriteFile(path, bytes); Claim(path, v, onlyIfUnowned: false); return; }
+    if (local is null)
+    {
+      // Not here because it was removed: placed only when it is newer than the removal (a put back, or an edit made
+      // elsewhere that the removal was not made on top of).
+      if (oneRule is not null && !NewerThanRemoval(v, path, bytes)) return;
+      memory.WriteFile(path, bytes); Claim(path, v, onlyIfUnowned: false); return;
+    }
     var current = CloudMemoryFormat.Hash(local);
     if (current == v.Hash) { Claim(path, v, onlyIfUnowned: true); return; }
     // A causal descendant replaces its untouched predecessor (an earlier version of this very record).
@@ -424,16 +605,171 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     // file, or an edit since the last capture) becomes one now, by the ordinary capture rule: rule J makes a joiner's
     // first copy a baseline, so the Cloud's text wins and this PC's text is kept.
     var mine = LocalVersion(path, local, current);
-    if (mine is not null && (v.Parents.Contains(mine.Id) || CloudMemoryRevision.Winner(Revision(v), Revision(mine)).Version == v.Id))
+    // His own text beats an untouched app default (the Mac's default rule), only between texts neither built on the other.
+    if (mine is not null && !Related(v, mine) && CloudMemoryDefaults.Decide(placed, v.Hash, current, SeatTitle) is { } incomingWins)
     {
-      var kept = keeper.Keep(path, local, "this PC", localNow());
-      memory.WriteFile(path, bytes);
-      Claim(path, v, onlyIfUnowned: false);
-      List(mine, "file", kept, "this PC's text; the newer text from another device is in use");
+      if (incomingWins) UseIncoming(); else KeepIncoming();
       return;
     }
+    if (mine is not null && (v.Parents.Contains(mine.Id) || CloudMemoryRevision.Winner(Revision(v), Revision(mine)).Version == v.Id)) { UseIncoming(); return; }
+    KeepIncoming();
+
+    void UseIncoming()
+    {
+      var kept = keeper.Keep(path, local!, "this PC", localNow());
+      memory.WriteFile(path, bytes);
+      Claim(path, v, onlyIfUnowned: false);
+      if (mine is not null) List(mine, "file", kept, "this PC's text; the newer text from another device is in use");
+    }
+    void KeepIncoming()
+    {
+      v.Projection = "";
+      List(v, "file", keeper.Keep(path, bytes, v.Device, localNow()), "another device's text; this PC's is newer and stays in use");
+    }
+  }
+
+  private bool Related(Version a, Version b) => a.Parents.Contains(b.Id) || Revision(a).Ancestors.Contains(b.Id) || Revision(b).Ancestors.Contains(a.Id);
+  private string? SeatTitle(string owner) => SettingValue(owner, "seat.title");
+
+  // ---- The one rule: an arriving removal or move (cloudApplyRemoval, cloudAgainstRemoval, the held removals) ----
+
+  /// The version of this file whose text is exactly `hash` (the newest such), or null: an edit made here that never
+  /// became a version.
+  private Version? KnownVersion(string path, string key, string hash)
+  {
+    var keys = new List<string> { key };
+    if (state.FileOrigins.GetValueOrDefault(path) is { } origin && !keys.Contains(origin.Key)) keys.Add(origin.Key);
+    if (!keys.Contains("file/" + path)) keys.Add("file/" + path);
+    foreach (var k in keys) if (VersionsOf(k).LastOrDefault(x => x.Hash == hash && x.Done) is { } found) return found;
+    return null;
+  }
+
+  /// Decided by the Cloud's revision order, never a time stamp: a plain removal wins only over a text it was made on
+  /// top of; a move only over exactly the version it was made from. A text changed here since (a version the removal
+  /// does not descend from, or an edit that is not a version yet) stays, and goes back to the other devices.
+  private void ApplyRemoval(Version v, CloudMemoryRemoval removal, string path, byte[]? local, byte[] marker)
+  {
+    state.Removals[v.Hash] = new Removed { Path = path, At = removal.At, By = removal.By, MovedTo = removal.MovedTo };
     v.Projection = "";
-    List(v, "file", keeper.Keep(path, bytes, v.Device, localNow()), "another device's text; this PC's is newer and stays in use");
+    if (local is null) { TakeRemoval(v, path); return; }
+    var current = CloudMemoryFormat.Hash(local);
+    var mine = KnownVersion(path, v.Key, current);
+    var wins = mine is not null && (v.Parents.Contains(mine.Id) || removal.MovedTo is null && Revision(v).Ancestors.Contains(mine.Id));
+    if (!wins) { List(v, "file", path, EditKeptWhy); return; }
+    // A move whose text is already in use here at its new place is never held and never counted.
+    var identical = IdenticalInUse(removal.MovedTo, v.StoreId, local);
+    if (!identical && Hold(v, path, marker, removal)) return;
+    // Never removed without a safety copy of the whole memory and this note's last text kept first.
+    if (!PrepareSafetyCopy(Now(), forApply: true)) { HoldAnyway(v, path, marker, removal); return; }
+    var kept = keeper.Keep(path, local, string.IsNullOrEmpty(removal.By) ? v.Device : removal.By, Now());
+    if (!memory.RemoveFile(path, current)) { List(v, "file", path, EditKeptWhy); return; }
+    TakeRemoval(v, path);
+    if (!identical) List(v, "file", kept, RemovedWhy);
+  }
+  /// The removal is this file's newest version here: what arrives later is decided against it.
+  private void TakeRemoval(Version v, string path)
+  {
+    state.FileOrigins[path] = new Origin { StoreId = v.StoreId, Key = v.Key, Version = v.Id };
+    state.Heads[v.StoreId + ":" + v.Key] = new Head { Hash = v.Hash, Version = v.Id, Parents = v.Parents.ToList(), Base = v.Id };
+    state.FileStamps.Remove(path);
+    state.Queued.Remove(path);
+  }
+  /// Is the same text (bytes, or the same words under other labels) in use at the move's new place here?
+  private bool IdenticalInUse(string? movedTo, string storeId, byte[] bytes)
+  {
+    if (movedTo is null || !DeckMemoryCloudSchema.SafePath(movedTo)) return false;
+    var body = FrontMatter.Of(Encoding.UTF8.GetString(bytes)).Body;
+    foreach (var place in new[] { Placement(movedTo, storeId), movedTo }.OfType<string>().Select(FileDeckMemoryStore.WindowsName).Distinct())
+    {
+      byte[]? there;
+      try { there = memory.ReadFile(place); } catch (CloudFailure) { continue; }
+      if (there is null) continue;
+      if (there.AsSpan().SequenceEqual(bytes) || FrontMatter.Of(Encoding.UTF8.GetString(there)).Body == body) return true;
+    }
+    return false;
+  }
+  /// More removals from other devices than the brake allows in 15 minutes: this one and every later one are held,
+  /// untouched, until the person answers on this PC. True = held.
+  private bool Hold(Version v, string path, byte[] marker, CloudMemoryRemoval removal)
+  {
+    if (incomingConfirmed) return false;
+    var window = CloudMemoryOneRule.Current(state.AppliedAt, state.AppliedCount, Now());
+    if (state.Held.Count == 0 && window.Count < CloudMemoryOneRule.Limit(Total()))
+    {
+      state.AppliedAt = window.At; state.AppliedCount = window.Count + 1;
+      return false;
+    }
+    HoldAnyway(v, path, marker, removal);
+    return true;
+  }
+  private void HoldAnyway(Version v, string path, byte[] marker, CloudMemoryRemoval removal)
+  {
+    if (state.Held.Any(h => h.StoreId == v.StoreId && h.Key == v.Key && h.Version == v.Id)) return;
+    state.Held.Add(new HeldRemoval { StoreId = v.StoreId, Key = v.Key, Version = v.Id, Path = path, Device = string.IsNullOrEmpty(removal.By) ? v.Device : removal.By, Bytes = Convert.ToBase64String(marker) });
+  }
+
+  /// An arrival for a file that is not here. False = it is older history of a removal this PC holds as the file's
+  /// newest version (kept, not placed). A put back (made on top of the removal), or an edit the removal was not made on
+  /// top of, is placed.
+  private bool NewerThanRemoval(Version v, string path, byte[] bytes)
+  {
+    var heads = new List<(string StoreId, string Key)> { (v.StoreId, v.Key) };
+    if (state.FileOrigins.GetValueOrDefault(path) is { } origin && (origin.StoreId != v.StoreId || origin.Key != v.Key)) heads.Add((origin.StoreId, origin.Key));
+    foreach (var (storeId, key) in heads)
+    {
+      if (state.Heads.GetValueOrDefault(storeId + ":" + key) is not { } head || !state.Removals.ContainsKey(head.Hash) || head.Version == v.Id) continue;
+      if (v.Parents.Contains(head.Version)) return true;
+      if (Find(key, head.Version) is { } removal && Revision(removal).Ancestors.Contains(v.Id))
+      {
+        v.Projection = "";
+        List(v, "file", keeper.Keep(path, bytes, v.Device, localNow()), OlderThanRemovalWhy);
+        return false;
+      }
+      return true;
+    }
+    return true;
+  }
+
+  /// The held removals that are still the newest thing for their note (a newer arrival or a put back made them history).
+  private List<(HeldRemoval Held, Version Version)> TakeHeld()
+  {
+    var out_ = new List<(HeldRemoval, Version)>();
+    foreach (var h in state.Held)
+    {
+      if (Find(h.Key, h.Version) is not { } v) continue;
+      if (state.Heads.GetValueOrDefault(h.StoreId + ":" + h.Key) is { } head && head.Version != h.Version
+        && Find(h.Key, head.Version) is { } newer && Revision(newer).Ancestors.Contains(h.Version)) continue;
+      out_.Add((h, v));
+    }
+    state.Held.Clear();
+    return out_;
+  }
+  /// His answer "they are gone" for removals held here: each is decided now by the same rule as any arrival (a note
+  /// changed on this PC since still stays). Returns how many were looked at.
+  public int ConfirmHeldRemovals()
+  {
+    var held = TakeHeld();
+    incomingConfirmed = true;
+    try { foreach (var (h, v) in held) ProjectFile(v, Convert.FromBase64String(h.Bytes)); }
+    finally { incomingConfirmed = false; }
+    memory.Flush(); Save();
+    return held.Count;
+  }
+  /// His other answer, "keep them": each held note stays here and goes out again as a new version made on top of the
+  /// removal, so it comes back on the device that removed it too. Returns how many were kept.
+  public int KeepHeldRemovals()
+  {
+    var kept = 0;
+    foreach (var (h, v) in TakeHeld())
+    {
+      if (memory.ReadFile(h.Path) is null) continue;
+      if (CloudMemoryRemoval.Parse(Convert.FromBase64String(h.Bytes)) is { } removal)
+        state.Removals[v.Hash] = new Removed { Path = h.Path, At = removal.At, By = removal.By, MovedTo = removal.MovedTo };
+      TakeRemoval(v, h.Path);
+      kept++;
+    }
+    Save();
+    return kept;
   }
 
   /// This PC's version of the text at `path` now: the version it already published, or (when the text never became
@@ -709,5 +1045,13 @@ public sealed class InMemoryDeckMemoryStore(string storeId) : IDeckMemoryCloudSt
     if (!DeckMemoryCloudSchema.SafePath(path)) throw new CloudFailure("invalid_request");
     files[path] = bytes.ToArray(); written[path] = ++ticks;
   }
+  public bool RemoveFile(string path, string expectedHash)
+  {
+    if (!files.TryGetValue(path, out var bytes) || CloudMemoryFormat.Hash(bytes) != expectedHash) return false;
+    files.Remove(path); written.Remove(path);
+    return true;
+  }
+  /// The person's own removal or move on this device (tests).
+  public void DeleteFile(string path) { files.Remove(path); written.Remove(path); }
   public void Flush() { }
 }
