@@ -12,6 +12,10 @@ public sealed partial class AppRuntime
   private LazyCloudHttp? cloudHttp;
   private readonly object cloudLogGate = new();
   public CloudAccountClient Cloud { get; private set; } = null!;
+  /// The bridge from the account to the sync engine. Builds nothing while signed out or while "Use Cloud on this PC" is
+  /// off. This Windows version has no Deck Memory store, so NO record kind is registered: the engine stays idle and
+  /// silent and the page says nothing on this PC syncs yet (the memory adapter waits in Core for that store).
+  public CloudSyncBridge? CloudSync { get; private set; }
 
   private void InitializeCloud()
   {
@@ -24,6 +28,11 @@ public sealed partial class AppRuntime
       trust: trust);
     Cloud.StageLog = WriteCloudLog;
     CloudTools.Register(Cloud, Door);
+    CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
+      subject => CloudSyncStore.InFolder(Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject), subject),
+      () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
+      () => []), WriteCloudLog);
+    CloudSync.Start();
   }
 
   /// One plain line per sign-in stage, in `logs\cloud.log` of this copy's own data folder. The lines never carry a token,
@@ -49,5 +58,5 @@ public sealed partial class AppRuntime
     catch (Exception ex) when (ex is not OutOfMemoryException) { }
   }
 
-  private void DisposeCloud() { Cloud?.Dispose(); cloudHttp?.Dispose(); }
+  private void DisposeCloud() { CloudSync?.Dispose(); Cloud?.Dispose(); cloudHttp?.Dispose(); }
 }

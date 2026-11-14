@@ -10,19 +10,28 @@ namespace TerminalDeck.App.Views.Settings;
 public sealed partial class CloudPage : UserControl
 {
   private readonly CloudAccountClient account;
+  private readonly CloudSyncBridge? sync;
   private readonly Action<CloudSnapshot> changed;
+  private readonly Action<CloudSyncState?> syncChanged;
+  private bool syncing;
   private bool working;
   private bool drawing;
   /// The plain words of the last trust press that changed nothing (a refusal), until the next press.
   private string? pressProblem;
 
-  public CloudPage(CloudAccountClient account)
+  public CloudPage(CloudAccountClient account, CloudSyncBridge? sync = null)
   {
     this.account = account;
+    this.sync = sync;
     InitializeComponent();
     changed = _ => DispatcherQueue.TryEnqueueHandled(Render);
-    Loaded += (_, _) => { account.Changed += changed; Render(); if (account.Snapshot.Phase is CloudPhase.SignedIn or CloudPhase.Paused) _ = RefreshQuietlyAsync(); };
-    Unloaded += (_, _) => account.Changed -= changed;
+    syncChanged = _ => DispatcherQueue.TryEnqueueHandled(Render);
+    Loaded += (_, _) =>
+    {
+      account.Changed += changed; if (sync is not null) sync.StatusChanged += syncChanged; Render();
+      if (account.Snapshot.Phase is CloudPhase.SignedIn or CloudPhase.Paused) _ = RefreshQuietlyAsync();
+    };
+    Unloaded += (_, _) => { account.Changed -= changed; if (sync is not null) sync.StatusChanged -= syncChanged; };
     Render();
   }
 
@@ -49,6 +58,12 @@ public sealed partial class CloudPage : UserControl
     UseCloudSwitch.IsEnabled = !working && page.UseCloud is not null;
     drawing = false;
     Show(UseCloudState, page.UseCloud is { } on ? CloudPageText.UseCloudState(on) : null);
+    var syncState = page.UseCloud == true ? sync?.Status : null;
+    SyncLine.Text = CloudPageText.SyncLine(syncState) ?? "";
+    SyncRow.Visibility = syncState is null ? Visibility.Collapsed : Visibility.Visible;
+    SyncNowButton.Content = CloudPageText.SyncNow;
+    SyncNowButton.Visibility = CloudPageText.CanSyncNow(syncState) ? Visibility.Visible : Visibility.Collapsed;
+    SyncNowButton.IsEnabled = !working && !syncing;
     NoticeList.Children.Clear();
     foreach (var notice in page.Notices ?? []) NoticeList.Children.Add(NoticeCard(notice));
     DevicesHeading.Visibility = page.Devices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -135,6 +150,16 @@ public sealed partial class CloudPage : UserControl
     try { await account.SetUseCloudAsync(on); }
     catch (Exception ex) when (ex is not OutOfMemoryException) { }
     finally { working = false; Render(); }
+  }
+
+  /// "Sync now": one round at once; the line follows the engine's own state.
+  private async void SyncNowButton_Click(object sender, RoutedEventArgs e)
+  {
+    if (sync is null || syncing) return;
+    syncing = true; Render();
+    try { await sync.SyncNowAsync(); }
+    catch (Exception ex) when (ex is not OutOfMemoryException) { }
+    finally { syncing = false; Render(); }
   }
 
   private async void TrustModeChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -29,8 +29,9 @@ public sealed record CloudCapture(IReadOnlyList<CloudOperation> Operations, Acti
   public static CloudCapture None { get; } = new([], () => { });
 }
 
-public enum CloudSyncPhase { Level, Sending, Receiving, Waiting }
-/// What the Cloud page shows: "Level with your Cloud", "Sending n", "Receiving n", "Waiting: reason".
+public enum CloudSyncPhase { Level, Sending, Receiving, Waiting, Idle }
+/// What the Cloud page shows: "Level with your Cloud", "Sending n", "Receiving n", "Waiting: reason"; Idle when no record
+/// kind on this PC syncs (no owner registered): nothing is sent or asked.
 public sealed record CloudSyncState(CloudSyncPhase Phase, int Sending, int Receiving, string? Waiting, int HeldPacks, int HeldDevices, int RefusedPacks, int KindWaiting, int Parked)
 {
   public string Line => Phase switch
@@ -38,8 +39,11 @@ public sealed record CloudSyncState(CloudSyncPhase Phase, int Sending, int Recei
     CloudSyncPhase.Level => "Level with your Cloud",
     CloudSyncPhase.Sending => "Sending " + Sending.ToString(CultureInfo.InvariantCulture),
     CloudSyncPhase.Receiving => "Receiving " + Receiving.ToString(CultureInfo.InvariantCulture),
+    CloudSyncPhase.Idle => NothingSyncs,
     _ => "Waiting: " + Waiting
   };
+  public const string NothingSyncs = "Nothing on this PC syncs yet: this version only keeps the PC in your account.";
+  public static CloudSyncState Idle { get; } = new(CloudSyncPhase.Idle, 0, 0, null, 0, 0, 0, 0, 0);
 }
 
 public sealed class CloudSyncEngine
@@ -62,6 +66,8 @@ public sealed class CloudSyncEngine
   private string? lastFailure;
   public CloudFeedLedger Ledger { get; }
   public CloudJudgedFeed Feed { get; }
+  /// False when no record kind is registered here: every round is then a no-op that sends and asks nothing.
+  public bool HasKinds => adapters.Count > 0;
 
   /// `sign`: this device's ES256 signature (raw r||s, 64 bytes) over the given bytes. Windows: CloudDeviceKeys.
   public CloudSyncEngine(string subject, string deviceId, CloudFeedClient client, CloudSyncStore store, ICloudDeviceTrust trust,
@@ -86,6 +92,7 @@ public sealed class CloudSyncEngine
   /// goes on with the next step where that is safe.
   public async Task<CloudSyncState> SyncAsync(CancellationToken ct)
   {
+    if (!HasKinds) return CloudSyncState.Idle;
     await busy.WaitAsync(ct);
     try
     {
@@ -101,6 +108,7 @@ public sealed class CloudSyncEngine
   /// The person trusted devices in this PC's window: their waiting packs are released now, in their original order.
   public async Task ReleaseHeldAsync(IReadOnlyCollection<string> deviceIds, CancellationToken ct)
   {
+    if (!HasKinds) return;
     await busy.WaitAsync(ct);
     try { await StepAsync("release", () => Feed.ReleaseHeldAsync(deviceIds, ct), ct); }
     finally { busy.Release(); }
@@ -364,6 +372,7 @@ public sealed class CloudSyncEngine
 
   public CloudSyncState State()
   {
+    if (!HasKinds) return CloudSyncState.Idle;
     var sending = store.QueuedCount;
     var cursor = Ledger.Cursor;
     var receiving = knownHead > cursor ? (int)Math.Min(int.MaxValue, knownHead - cursor) : 0;
