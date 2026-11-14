@@ -208,7 +208,7 @@ public static class CloudBootFilesFormat
     for (var i = 0; i < text.Length; i++)
     {
       var c = text[i];
-      if (c is not ('\n' or '\r' or '\u000b' or '\u000c' or '\u0085' or ' ' or ' ')) continue;
+      if (c is not ('\n' or '\r' or '\u000b' or '\u000c' or '\u0085' or '\u2028' or '\u2029')) continue;
       lines.Add(text[start..i]);
       if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
       start = i + 1;
