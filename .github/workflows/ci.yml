@@ -42,6 +42,8 @@ jobs:
         run: dotnet build windows/TerminalDeck.Core.slnf -c Release
       - name: Update channel tests
         run: dotnet test windows/tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~GitHubReleaseChannel|FullyQualifiedName~UpdateReadiness"
+      - name: Account sign-in (Cloud) and Settings order tests
+        run: dotnet test windows/tests/TerminalDeck.Core.Tests/TerminalDeck.Core.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~TerminalDeck.Core.Tests.Cloud|FullyQualifiedName~W13SettingsContract"
 
   # Which parts changed. The Windows app job below runs only when windows/ (or this file) changed;
   # a skipped job counts as passed.
