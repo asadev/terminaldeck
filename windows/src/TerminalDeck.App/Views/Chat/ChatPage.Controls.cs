@@ -23,13 +23,13 @@ public sealed partial class ChatPage
     view.IsExpanded = expandedRows.Contains(key);
     view.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, (_, _) => { if (view.IsExpanded) expandedRows.Add(key); else expandedRows.Remove(key); });
   }
-  private readonly TextBlock controlFeedback = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
-  private readonly Button permission = new() { MaxWidth = 170 };
+  private TextBlock controlFeedback => box.Feedback;
+  private Button permission => box.Permission;
   private readonly StackPanel searchBar = new() { Orientation = Orientation.Horizontal, Spacing = 8, Visibility = Visibility.Collapsed };
   private readonly TextBox searchBox = new() { PlaceholderText = "Find in conversation", MinWidth = 160, MaxWidth = 300 };
   private readonly TextBlock searchCount = new() { VerticalAlignment = VerticalAlignment.Center };
   private readonly Button unread = new() { Content = "New messages", Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Center };
-  private readonly StackPanel promptSummary = new() { Spacing = 4, Visibility = Visibility.Collapsed };
+  private StackPanel promptSummary => box.PromptSummary;
   private readonly Dictionary<string, FrameworkElement> messageElements = [];
   private IReadOnlyList<ChatMatch> matches = [];
   private int selectedMatch = -1;

@@ -43,8 +43,14 @@ public sealed partial class SettingsPane
     var current = runtime.General.Read();
     var restore = Toggle(current.RestoreSessions, value => runtime.General.Save(runtime.General.Read() with { RestoreSessions = value }));
     ToolTipService.SetToolTip(restore, "Choose whether saved tabs and windows reopen. Running sessions stay available either way.");
+    // "When Terminal Deck opens" (Mac, 14 Nov): the New session page or where he left off. Windows has no Overview page.
+    var opens = new ComboBox { MinWidth = 220, ItemsSource = TerminalDeck.Core.Sessions.OpensOn.OnWindows.Select(TerminalDeck.Core.Sessions.OpensOn.Label).ToArray() };
+    opens.SelectedIndex = TerminalDeck.Core.Sessions.OpensOn.OnWindows.ToList().IndexOf(TerminalDeck.Core.Sessions.OpensOn.Normal(current.WhenOpens));
+    opens.SelectionChanged += async (_, _) => { if (opens.SelectedIndex >= 0) { var chosen = TerminalDeck.Core.Sessions.OpensOn.OnWindows[opens.SelectedIndex]; await DirectionRunAsync(() => { runtime.General.Save(runtime.General.Read() with { WhenOpens = chosen }); return Task.CompletedTask; }); } };
+    AutomationProperties.SetName(opens, "When Terminal Deck opens");
     var rows = new List<FrameworkElement> {
-      SettingsPanel.SettingRow("Pick up where you left off", "Reopens projects and sessions after a restart. Sessions that kept running are always kept.", restore),
+      SettingsPanel.SettingRow("When " + TerminalDeck.Core.Brand.Name + " opens", "New session opens a new chat ready for your first message. Nothing starts until you send it.", opens),
+      SettingsPanel.SettingRow("Reopen sessions after a restart", "Reopens projects and sessions after a restart. Sessions that kept running are always kept.", restore),
       SettingsPanel.SettingRow("Name sessions from the conversation", "A tab takes the conversation’s title.", Toggle(current.AutoNameSessions, value => runtime.General.Save(runtime.General.Read() with { AutoNameSessions = value })))
     };
     if (ReadCloseConfirmation is not null && SaveCloseConfirmation is not null)
