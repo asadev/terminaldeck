@@ -37,7 +37,7 @@ public sealed class V3cModelTests
         }
         """);
       var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-      using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+      using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60)); // Windows PowerShell can be slow to start on a busy machine
       var models = await WindowsModelDiscovery.DiscoverAsync(provider, new ProcessLaunch(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture, provider], new Dictionary<string, string> { ["SystemRoot"] = Environment.GetEnvironmentVariable("SystemRoot")! }, home), deadline.Token);
       Assert.Single(models);
       var methods = await File.ReadAllLinesAsync(Path.Combine(home, "requests.txt"));
@@ -100,14 +100,15 @@ public sealed class V3cModelTests
     using var document = JsonDocument.Parse(json);
     Assert.Throws<IOException>(() => WindowsModelDiscovery.Parse("codex", document.RootElement));
   }
-  // A provider child can still hold its temp folder for a moment after exit.
+  // The helper is let go gently in the background (AiHelperStop: stdin closed, up to Grace = 10 s to exit), so it can
+  // hold its temp folder for that long after the models were read. Wait out the grace plus a margin.
   private static void DeleteScratch(string path)
   {
     for (var attempt = 0; ; attempt++)
     {
       try { if (Directory.Exists(path)) Directory.Delete(path, true); return; }
-      catch (IOException) when (attempt < 20) { Thread.Sleep(250); }
-      catch (UnauthorizedAccessException) when (attempt < 20) { Thread.Sleep(250); }
+      catch (IOException) when (attempt < 80) { Thread.Sleep(250); }
+      catch (UnauthorizedAccessException) when (attempt < 80) { Thread.Sleep(250); }
     }
   }
 }

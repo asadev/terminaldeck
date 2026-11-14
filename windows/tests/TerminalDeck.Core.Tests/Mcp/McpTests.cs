@@ -218,7 +218,7 @@ public sealed class McpTests
     public bool Allowed { get; set; } = true;
     public ValueTask<bool> StillAllowedAsync(DeferredAccountSwitch change, CancellationToken ct) => ValueTask.FromResult(Allowed);
   }
-  private static McpManager Manager(MemoryState<McpManagerState> state, TestSecretStore secrets, FakeMcpFactory factory) => new(state, secrets, AppDataRoot.Explicit("/tmp/td-w2-mcp"), new FakeCommandResolver(), factory);
+  private static McpManager Manager(MemoryState<McpManagerState> state, TestSecretStore secrets, FakeMcpFactory factory) => new(state, secrets, AppDataRoot.Explicit(Path.Combine(Path.GetTempPath(), "td-w2-mcp")), new FakeCommandResolver(), factory);
   private static McpHttpRequest Request(string token, string method, object args, int? id = 1, string? origin = null, string host = "127.0.0.1:4321") => new()
   { Method = "POST", Path = "/mcp", Host = host, Origin = origin, Authorization = "Bearer " + token, Body = JsonSerializer.SerializeToUtf8Bytes(new { jsonrpc = "2.0", id, method, @params = args }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }) };
 }

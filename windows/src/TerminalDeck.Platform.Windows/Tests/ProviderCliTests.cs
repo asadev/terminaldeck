@@ -8,7 +8,7 @@ namespace TerminalDeck.Platform.Windows.Tests;
 
 public sealed class ProviderCliTests
 {
-  [Theory(Timeout = 45000)]
+  [Trait("Group", "RealPc")] [Theory(Timeout = 45000)]
   [InlineData("claude")]
   [InlineData("codex")]
   [InlineData("gemini")]
@@ -34,7 +34,7 @@ public sealed class ProviderCliTests
     var evidence = Environment.GetEnvironmentVariable("TD_EVIDENCE_DIR");
     if (evidence is not null) File.WriteAllText(Path.Combine(evidence, provider + "-conpty.json"), JsonSerializer.Serialize(new { provider, versionOutput = output.ToString(), executable = launch.Executable, accountHome = Path.Combine(root.DirectoryPath, "accounts", account, provider), signedIn = false }));
   }
-  [Fact]
+  [Trait("Group", "RealPc")] [Fact]
   public void MergedAccountUsesItsOpaqueHomeIdentityAndRefusesExternalPaths()
   {
     var root = AppDataRoot.Explicit(Path.Combine(@"C:\TD\out\w3-cli-data", Guid.NewGuid().ToString("N")));
@@ -46,7 +46,7 @@ public sealed class ProviderCliTests
     Assert.Equal(Path.Combine(root.DirectoryPath, "accounts", homeId, "codex"), planner.Plan(row, false).Environment["CODEX_HOME"]);
     Assert.Throws<ArgumentException>(() => planner.Plan(row with { Definition = definition with { AccountHome = @"C:\someone-else" } }, false));
   }
-  [Fact]
+  [Trait("Group", "RealPc")] [Fact]
   public void ProviderHomesStayUnderEachRootAndInheritedKeysAreRemoved()
   {
     var one = AppDataRoot.Explicit(Path.Combine(@"C:\TD\out\w3-cli-data", Guid.NewGuid().ToString("N")));

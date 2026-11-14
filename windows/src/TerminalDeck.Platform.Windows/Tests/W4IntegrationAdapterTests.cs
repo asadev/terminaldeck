@@ -8,7 +8,7 @@ public sealed class W4IntegrationAdapterTests : IDisposable
 {
   private readonly AppDataRoot root = AppDataRoot.Explicit(Path.Combine(Path.GetTempPath(), "td-w4-status-" + Guid.NewGuid().ToString("N")));
   public W4IntegrationAdapterTests() => Directory.CreateDirectory(root.DirectoryPath);
-  [Theory]
+  [Trait("Group", "RealPc")] [Theory]
   [InlineData("claude")]
   [InlineData("codex")]
   [InlineData("gemini")]
@@ -20,7 +20,7 @@ public sealed class W4IntegrationAdapterTests : IDisposable
     var status = await adapter.StatusAsync(new(id, provider, "W4", null, AccountAuthentication.Subscription, false, id), CancellationToken.None);
     Assert.False(status.SignedIn); Assert.Null(status.Email); Assert.False(started);
   }
-  [Fact]
+  [Trait("Group", "RealPc")] [Fact]
   public void ShellUsesPowerShellAndCodexPinsItsCredentialBackend()
   {
     var planner = new WindowsProviderLaunchPlanner(root, @"C:\TD\tools\ai");

@@ -32,8 +32,12 @@ public sealed class ChatCliConnection(ChatRecord chat, IChatHistory media, Proce
       StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false) };
     start.Environment.Clear(); foreach (var pair in launch.Environment) start.Environment[pair.Key] = pair.Value;
     foreach (var argument in launch.Arguments) start.ArgumentList.Add(argument);
-    process = new Process { StartInfo = start };
-    if (!process.Start()) throw new IOException("The coding AI could not start.");
+    // Keep the process only once it has started: a CLI that cannot be launched (moved, uninstalled) must leave this
+    // connection as "never started", so Alive and DisposeAsync report it instead of throwing "No process is associated".
+    var started = new Process { StartInfo = start };
+    try { if (!started.Start()) throw new IOException("The coding AI could not start."); }
+    catch { started.Dispose(); throw; }
+    process = started;
     diagnostics = ReadDiagnosticsAsync(); pump = PumpAsync();
     var begin = protocol.Begin();
     if (begin is null) ready.TrySetResult(); else await WriteLineAsync(begin, cancellationToken);
