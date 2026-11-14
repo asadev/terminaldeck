@@ -7,13 +7,14 @@ public sealed class W13SettingsContractTests
   [Fact]
   public void CategoriesFollowMacGroupsWithoutUnsupportedPages()
   {
-    Assert.Equal(new[] { "general", "cloud", "appearance", "notifications", "coding-ais", "outside-ai-apps", "agent-defaults", "browser", "tasks", "advanced", "about" }, SettingsNavigation.Categories.Select(c => c.Id));
-    Assert.Equal(new[] { 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 3 }, SettingsNavigation.Categories.Select(c => c.Group));
+    Assert.Equal(new[] { "profile", "devices", "general", "cloud", "appearance", "notifications", "coding-ais", "outside-ai-apps", "agent-defaults", "browser", "tasks", "advanced", "about" }, SettingsNavigation.Categories.Select(c => c.Id));
+    Assert.Equal(new[] { 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4 }, SettingsNavigation.Categories.Select(c => c.Group));
   }
   [Theory]
   [InlineData("accounts", "coding-ais")]
   [InlineData("agents", "agent-defaults")]
-  [InlineData("devices", "advanced")]
+  [InlineData("devices", "devices")]
+  [InlineData("profile", "profile")]
   [InlineData("mcp", "outside-ai-apps")]
   public void LegacyRoutesSelectTheOwningCategory(string route, string selected) => Assert.Equal(selected, SettingsNavigation.Canonical(route));
 

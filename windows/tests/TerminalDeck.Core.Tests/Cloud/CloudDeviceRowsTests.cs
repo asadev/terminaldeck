@@ -44,7 +44,7 @@ public sealed partial class CloudDeviceRowsTests : IDisposable
   }
 
   [Fact] public void CloudIsTheSecondEntryInSettings() =>
-    Assert.Equal(["general", "cloud"], TerminalDeck.App.Views.Settings.SettingsNavigation.Categories.Take(2).Select(c => c.Id));
+    Assert.Equal(["general", "cloud"], TerminalDeck.App.Views.Settings.SettingsNavigation.Categories.Skip(2).Take(2).Select(c => c.Id));
 
   private sealed class Slot : ICloudTrustSlot
   {
