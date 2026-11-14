@@ -103,10 +103,14 @@ public sealed record CloudDevice(string DeviceId, string Label, string Platform,
   CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null);
 public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string? ReceiverDeviceId = null);
 
-/// One row of the page's device list. Display only: nothing in slice 1 trusts a device.
-/// `Trust`: the device as this PC's trusted list sees it (never drawn as such). `Joined`: show "joined your account".
-public sealed record CloudDeviceRow(string DeviceId, string Name, string Platform, bool ThisDevice, bool Removed, DateTimeOffset? Added, DateTimeOffset? LastSeen, string ShortCode,
-  CloudTrustRow? Trust = null, bool Joined = false);
+/// One row of the page's device list: what is drawn is ONLY the name, the date added and last seen, and "This PC".
+/// `DeviceId` and `Trust` (the device as this PC's trusted list sees it) are for presses and are never drawn.
+/// `Joined`: show "joined your account".
+public sealed record CloudDeviceRow(string DeviceId, string Name, bool ThisDevice, DateTimeOffset? Added, DateTimeOffset? LastSeen,
+  CloudTrustRow? Trust = null, bool Joined = false)
+{
+  public override string ToString() => "<Cloud device row>";
+}
 
 /// What the Cloud page and `cloud.status` show. Never carries a token or a key.
 public sealed record CloudSnapshot(CloudPhase Phase, string? Email = null, string? DisplayName = null, string? ThisDeviceId = null,

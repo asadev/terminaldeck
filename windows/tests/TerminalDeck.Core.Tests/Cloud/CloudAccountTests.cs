@@ -148,13 +148,13 @@ public sealed class CloudAccountTests : IDisposable
     Assert.Equal(CloudPhase.SignedIn, s.Phase); Assert.Equal("someone@example.com", s.Email);
     Assert.Equal(2, s.DeviceRows.Count);
     Assert.True(s.DeviceRows[0].ThisDevice); Assert.Equal("Asad's Mac mini", s.DeviceRows[1].Name);
-    Assert.All(s.DeviceRows, d => Assert.Matches("^[0-9A-F]{4}( [0-9A-F]{4}){4}$", d.ShortCode));
     var page = CloudPageText.For(s, d => d.UtcDateTime.ToString("yyyy-MM-dd"));
     Assert.Equal("Signed in as someone@example.com.", page.Line); Assert.Equal("Sign out", page.Button); Assert.Equal("OFFICE-PC", page.ThisDevice);
-    Assert.Equal("OFFICE-PC (this PC)", page.Devices[0].Name);
+    Assert.Equal("OFFICE-PC", page.Devices[0].Name);
     var account = CloudPageText.Account(s);
     Assert.Equal(("Someone", "someone@example.com", "Signed in with Google", "On"), (account.Name, account.Email, account.Provider, account.CloudRow)); Assert.Null(account.Button);
-    Assert.Equal("Added 2025-11-13 · last seen 2025-11-13", page.Devices[0].Details);
+    Assert.Equal("This PC · Added 2025-11-13 · Last seen 2025-11-13", page.Devices[0].Details);
+    Assert.Equal("Added 2025-10-20 · Last seen 2025-11-01", page.Devices[1].Details);
     // A fresh process finds the same sign-in and device in the protected record.
     var again = new CloudAccountClient(CloudConfiguration.Today("OFFICE-PC", "0.22.0.0"), c.Store, c.Http, new CountingRandom(), new FakeBrowser());
     await again.ResumeAsync();

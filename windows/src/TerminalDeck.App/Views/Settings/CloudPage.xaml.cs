@@ -82,6 +82,7 @@ public sealed partial class CloudPage : UserControl
     return card;
   }
 
+  /// Owner, 13 Nov: name, date added, last seen, "This PC". No code, id, key or version on the page.
   private FrameworkElement DeviceCard(CloudPageDevice device)
   {
     var words = new StackPanel { Spacing = 3 };
@@ -91,9 +92,6 @@ public sealed partial class CloudPage : UserControl
     var row = new Grid { ColumnSpacing = 16 };
     row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     row.Children.Add(words);
-    var code = new TextBlock { Text = device.Code, FontSize = 12, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"), VerticalAlignment = VerticalAlignment.Center, IsTextSelectionEnabled = true };
-    Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(code, "Device code " + device.Code);
-    Grid.SetColumn(code, 1); row.Children.Add(code);
     if (device.CanTrust)
     {
       var trust = new Button { Content = CloudPageText.TrustNew, MinHeight = 28, Padding = new Thickness(12, 3, 12, 3), FontSize = 13, VerticalAlignment = VerticalAlignment.Center, IsEnabled = !working };

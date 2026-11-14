@@ -21,8 +21,8 @@ public static class CloudTools
     cloudOpen = snapshot.Phase is CloudPhase.SignedIn or CloudPhase.Paused,
     useCloud = snapshot.UseCloud,
     thisDevice = snapshot.ThisDeviceName,
-    devices = snapshot.DeviceRows.Select(d => new { name = d.Name, platform = d.Platform, thisDevice = d.ThisDevice, removed = d.Removed,
-      added = d.Added?.ToString("O"), lastSeen = d.LastSeen?.ToString("O"), code = d.ShortCode }),
+    // Owner, 13 Nov: a device is its name, when it was added and when it was last seen. No code, id, key or version.
+    devices = snapshot.DeviceRows.Select(d => new { name = d.Name, thisDevice = d.ThisDevice, added = d.Added?.ToString("O"), lastSeen = d.LastSeen?.ToString("O") }),
     problem = snapshot.Problem
   }, CloudWire.Json);
 

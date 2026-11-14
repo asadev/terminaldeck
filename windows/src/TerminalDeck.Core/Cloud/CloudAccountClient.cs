@@ -424,16 +424,19 @@ public sealed partial class CloudAccountClient : IDisposable
   private static Dictionary<string, string> Json() => new() { ["content-type"] = "application/json" };
   private static Dictionary<string, string> Bearer(string token) => new() { ["Authorization"] = "Bearer " + token };
 
+  /// Owner, 13 Nov: a device row is its name, the date it was added and when it was last seen ("This PC" marked).
+  /// Removed devices leave the list. This PC first, then the others by name.
   internal IReadOnlyList<CloudDeviceRow> Rows(CloudDeviceList list, string thisDevice, IReadOnlyList<CloudTrustRow>? trust = null) => list.Devices
+    .Where(d => d.Status == "active")
     .Select(d =>
     {
       var row = trust?.FirstOrDefault(t => t.DeviceId == d.DeviceId);
-      return new CloudDeviceRow(d.DeviceId, OneLine(d.Label), d.Platform, d.DeviceId == thisDevice, d.Status != "active",
+      return new CloudDeviceRow(d.DeviceId, OneLine(d.Label), d.DeviceId == thisDevice,
         d.RegisteredAt is { } added ? DateTimeOffset.FromUnixTimeMilliseconds(added) : null,
         d.LastSeenAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(d.LastSeenAt) : null,
-        CloudDeviceCode.Code(d.DeviceId, d.SignPublicJwk) ?? "—", row, row is not null && Joined(row));
+        row, row is not null && Joined(row));
     })
-    .OrderByDescending(r => r.ThisDevice).ThenBy(r => r.Removed).ThenBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+    .OrderByDescending(r => r.ThisDevice).ThenBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(r => r.Added).ToArray();
   /// A device names itself; its text is shown as one plain line and never reaches an agent raw.
   internal static string OneLine(string label)
   {

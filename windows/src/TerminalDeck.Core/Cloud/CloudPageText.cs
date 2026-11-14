@@ -8,8 +8,9 @@ namespace TerminalDeck.Core.Cloud;
 /// device notices, each with its one button.
 public sealed record CloudPageModel(string Title, string Line, string? Button, string? Problem, string? ThisDevice, IReadOnlyList<CloudPageDevice> Devices, bool Busy,
   bool? UseCloud = null, CloudTrustMode? TrustMode = null, IReadOnlyList<CloudPageNotice>? Notices = null);
-/// `DeviceId` is what a press names; it is never drawn. `CanTrust`: "Trust…" (Ask me mode, a new device only).
-public sealed record CloudPageDevice(string Name, string Details, string Code, bool ThisDevice, string DeviceId = "", bool CanTrust = false);
+/// Drawn: `Name` and `Details` (This PC, added, last seen). `DeviceId` is what a press names; it is never drawn.
+/// `CanTrust`: "Trust…" (Ask me mode, a new device only).
+public sealed record CloudPageDevice(string Name, string Details, bool ThisDevice, string DeviceId = "", bool CanTrust = false);
 public enum CloudNoticeAction { Remove, TrustAgain }
 public sealed record CloudPageNotice(string Text, string Button, CloudNoticeAction Action, string DeviceId);
 
@@ -37,7 +38,7 @@ public static class CloudPageText
       CloudPhase.SigningIn => new("Cloud", SigningInLine, Cancel, s.Problem, null, [], true),
       CloudPhase.NotAllowed => new("Cloud", $"You are signed in as {s.Account}. Cloud is not open for this account yet.", SignOut, s.Problem, null, [], false),
       _ => new("Cloud", $"Signed in as {s.Account}.", SignOut, s.TrustNotice is null ? s.Problem : s.Problem is null ? s.TrustNotice : s.Problem + " " + s.TrustNotice, s.ThisDeviceName,
-        s.DeviceRows.Select(d => new CloudPageDevice(d.Name + (d.ThisDevice ? " (this PC)" : ""), Details(d, date), d.ShortCode, d.ThisDevice, d.DeviceId,
+        s.DeviceRows.Select(d => new CloudPageDevice(d.Name, Details(d, date), d.ThisDevice, d.DeviceId,
           s.TrustMode == CloudTrustMode.Ask && d.Trust is { CanBeTrusted: true })).ToArray(), false,
         s.UseCloud, s.TrustMode, Notices(s))
     };
@@ -62,7 +63,7 @@ public static class CloudPageText
   private static IReadOnlyList<CloudPageNotice> Notices(CloudSnapshot s)
   {
     var notices = new List<CloudPageNotice>();
-    foreach (var d in s.DeviceRows.Where(d => d.Trust is { KeyChanged: true, Removed: false }))
+    foreach (var d in s.DeviceRows.Where(d => d.Trust is { KeyChanged: true }))
       notices.Add(new(KeyChanged(d.Name), TrustAgain, CloudNoticeAction.TrustAgain, d.DeviceId));
     if (s.TrustMode == CloudTrustMode.Account)
       foreach (var d in s.DeviceRows.Where(d => d.Joined))
@@ -83,9 +84,9 @@ public static class CloudPageText
   private static string Details(CloudDeviceRow d, Func<DateTimeOffset, string> date)
   {
     var parts = new List<string>();
-    if (d.Removed) parts.Add("Removed");
-    parts.Add(d.Added is { } added ? "Added " + date(added) : "Added date not known");
-    parts.Add(d.LastSeen is { } seen ? "last seen " + date(seen) : "not seen yet");
+    if (d.ThisDevice) parts.Add("This PC");
+    if (d.Added is { } added) parts.Add("Added " + date(added));
+    parts.Add(d.LastSeen is { } seen ? "Last seen " + date(seen) : "Not seen yet");
     return string.Join(" · ", parts);
   }
 }
