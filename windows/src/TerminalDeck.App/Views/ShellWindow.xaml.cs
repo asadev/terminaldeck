@@ -350,6 +350,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
   }
   public async void QueueReceiverActivation(Microsoft.Windows.AppLifecycle.AppActivationArguments activation)
   {
+    if (activation.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.Protocol) { QueueCloudLink(activation); return; }
     if (activation.Kind != Microsoft.Windows.AppLifecycle.ExtendedActivationKind.ShareTarget) return;
     try { await Ready; await OnUiAsync(async () => { if (await Runtime.ReceiverActivation.ActivateAsync(activation)) Model.Page = ShellPage.Receiver; }); }
     catch (Exception ex) when (ex is not OutOfMemoryException) { DispatcherQueue.TryEnqueueHandled(() => Model.Notice = "The shared item could not be saved. Open Receiver and try again."); }
