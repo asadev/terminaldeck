@@ -72,9 +72,18 @@ public sealed class CloudKindsJoinTests : IDisposable
       Labels: ["cloud"], Comments: comments, Activity: [], Connected: connected);
   }
   private static void Add(Peer peer, DeckTask task) => peer.Tasks.Change(s => (s with { Tasks = s.Tasks.Add(task) }, true));
-  private static IReadOnlyList<string> Tasks(Peer peer) => peer.Tasks.Read().Tasks.OrderBy(t => t.Id, StringComparer.Ordinal)
-    .Select(t => string.Join('|', t.Id, t.Title, t.Details, t.Status, t.Assignee, t.ProjectId, t.Priority, t.DueDate, string.Join(';', t.Labels), t.Revision, t.UpdatedAt.ToUnixTimeMilliseconds(),
-      t.DeletedAt is null, t.Connected is null, string.Join(';', t.Comments.Select(c => c.Id + "=" + c.Text)))).ToArray();
+  /// `stamps`: also the save count and the "last touched" time. A joining device's losing first copy is still part of the
+  /// record's history (rule J), so on the Macs it may move "last touched" (the Mac's own merge does the same); everything
+  /// he can see must stay exactly as it was.
+  private static IReadOnlyList<string> Tasks(Peer peer, bool stamps = true) => peer.Tasks.Read().Tasks.OrderBy(t => t.Id, StringComparer.Ordinal)
+    .Select(t => string.Join('|', t.Id, t.Title, t.Details, t.Status, t.Assignee, t.ProjectId, t.Folder, t.Priority, t.DueDate, string.Join(';', t.Labels), t.Type, t.GoalId,
+      t.CreatedAt.ToUnixTimeMilliseconds(), stamps ? t.Revision + "@" + t.UpdatedAt.ToUnixTimeMilliseconds() : "", t.Archived, t.DeletedAt is null, t.Connected is null,
+      string.Join(';', t.Comments.Select(c => c.Id + "=" + c.Text)))).ToArray();
+  private static void Same(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
+  {
+    Assert.Equal(expected.Count, actual.Count);
+    for (var i = 0; i < expected.Count; i++) Assert.Equal(expected[i], actual[i]);
+  }
   private static string Settings(Peer peer)
   {
     var g = peer.General.Read(); var a = peer.Appearance.Preferences();
@@ -134,7 +143,7 @@ public sealed class CloudKindsJoinTests : IDisposable
     // The Macs see nothing new and keep exactly what they had.
     await a.Engine.SyncAsync(default); await b.Engine.SyncAsync(default);
     Assert.Equal(sent, service.Segments);
-    Assert.Equal(tasksA, Tasks(a)); Assert.Equal(tasksB, Tasks(b));
+    Same(tasksA, Tasks(a)); Same(tasksB, Tasks(b));
     Assert.Equal(settingsA, Settings(a)); Assert.Equal(settingsB, Settings(b));
 
     // The PC restarts from its own disk: still nothing to send, nothing lost.
@@ -142,7 +151,7 @@ public sealed class CloudKindsJoinTests : IDisposable
     var again = Make(Pc);
     for (var round = 0; round < 2; round++) await again.Engine.SyncAsync(default);
     Assert.Equal(sent, service.Segments);
-    Assert.Equal(pcTasks, Tasks(again));
+    Same(pcTasks, Tasks(again));
     Assert.Equal(pcSettings, Settings(again));
   }
 
@@ -153,7 +162,7 @@ public sealed class CloudKindsJoinTests : IDisposable
     // The PC joins later than the Macs made their first copies (two first copies made in the same millisecond would be
     // decided by their ids).
     service.Now += 60_000;
-    var tasksA = Tasks(a); var tasksB = Tasks(b);
+    var tasksA = Tasks(a, stamps: false); var tasksB = Tasks(b, stamps: false);
     var before = Make(Pc);
     // Before joining, the PC already had t1 under an old title, a task of its own, and two settings it CHOSE: a font size
     // (the Macs chose 15) and a font (the Macs never chose one).
@@ -178,8 +187,8 @@ public sealed class CloudKindsJoinTests : IDisposable
 
     // The Macs keep exactly what they had, plus what was new from the PC: its own task and the font they never chose.
     for (var round = 0; round < 2; round++) { await a.Engine.SyncAsync(default); await b.Engine.SyncAsync(default); }
-    Assert.Equal(tasksA, Tasks(a).Where(t => !t.StartsWith("local:pc1|", StringComparison.Ordinal)).ToArray());
-    Assert.Equal(tasksB, Tasks(b).Where(t => !t.StartsWith("local:pc1|", StringComparison.Ordinal)).ToArray());
+    Same(tasksA, Tasks(a, stamps: false).Where(t => !t.StartsWith("local:pc1|", StringComparison.Ordinal)).ToArray());
+    Same(tasksB, Tasks(b, stamps: false).Where(t => !t.StartsWith("local:pc1|", StringComparison.Ordinal)).ToArray());
     foreach (var mac in new[] { a, b })
     {
       var mine = mac.Tasks.Read().Tasks.Single(t => t.Id == "local:pc1");
