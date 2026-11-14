@@ -13,7 +13,7 @@ namespace TerminalDeck.Core.Cloud;
 // is never counted as a failure; a success clears the back-off.
 
 /// What the transport needs from the signed-in account. Windows wiring: CloudAccountClient's saved session and
-/// CloudDeviceKeys.Proof (which must also accept PUT for blob uploads; see the W3 hand-back).
+/// CloudDeviceKeys.Proof (GET, POST, and PUT for blob uploads), through CloudAccountClient (ICloudSyncAccount).
 public sealed record CloudSyncCredentials(string UserId, string AccessToken, long ExpiresAt, string DeviceId)
 {
   public override string ToString() => "<Cloud sync credentials>";
