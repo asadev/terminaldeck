@@ -10,16 +10,11 @@
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/TerminalDeck.App/Diagnostics/*.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+    <!-- The app's own code comes from the app project (it grows; a list of linked files went stale). -->
+    <ProjectReference Include="../../src/TerminalDeck.App/TerminalDeck.App.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <ProjectReference Include="../../src/TerminalDeck.Core/TerminalDeck.Core.csproj" />
-    <Compile Include="../../src/TerminalDeck.App/Views/Tasks/**/*.cs" Link="Views/Tasks/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Compile Include="../../src/TerminalDeck.App/ViewModels/Tasks/**/*.cs" Link="ViewModels/Tasks/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Compile Include="../../src/TerminalDeck.App/Views/Projects/ProjectAgentUi.cs" Link="Views/ProjectAgentUi.cs" />
     <Page Include="../../src/TerminalDeck.App/Styles/DeckResources.xaml" Link="Styles/DeckResources.xaml" />
-    <Compile Include="../../src/TerminalDeck.App/Views/BrandIcon.cs" Link="Shared/BrandIcon.cs" />
-    <Compile Include="../../src/TerminalDeck.App/Views/Chat/ChatAppearance.cs" Link="Shared/ChatAppearance.cs" />
     <Content Include="../../src/TerminalDeck.App/Assets/icons/hoot.svg" Link="Assets/icons/hoot.svg" CopyToOutputDirectory="PreserveNewest" />
-    <Compile Include="../../src/TerminalDeck.App/Views/Windows/WorkspaceIcons.cs" Link="Shared/WorkspaceIcons.cs" />
   </ItemGroup>
 </Project>

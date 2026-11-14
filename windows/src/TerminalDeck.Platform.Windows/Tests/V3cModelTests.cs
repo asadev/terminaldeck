@@ -100,14 +100,15 @@ public sealed class V3cModelTests
     using var document = JsonDocument.Parse(json);
     Assert.Throws<IOException>(() => WindowsModelDiscovery.Parse("codex", document.RootElement));
   }
-  // A provider child can still hold its temp folder for a moment after exit.
+  // The helper is let go gently in the background (AiHelperStop: stdin closed, up to Grace = 10 s to exit), so it can
+  // hold its temp folder for that long after the models were read. Wait out the grace plus a margin.
   private static void DeleteScratch(string path)
   {
     for (var attempt = 0; ; attempt++)
     {
       try { if (Directory.Exists(path)) Directory.Delete(path, true); return; }
-      catch (IOException) when (attempt < 20) { Thread.Sleep(250); }
-      catch (UnauthorizedAccessException) when (attempt < 20) { Thread.Sleep(250); }
+      catch (IOException) when (attempt < 80) { Thread.Sleep(250); }
+      catch (UnauthorizedAccessException) when (attempt < 80) { Thread.Sleep(250); }
     }
   }
 }

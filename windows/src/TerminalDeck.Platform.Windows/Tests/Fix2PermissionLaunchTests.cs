@@ -7,7 +7,7 @@ namespace TerminalDeck.Platform.Windows.Tests;
 
 public sealed class Fix2PermissionLaunchTests
 {
-  [Theory]
+  [Trait("Group", "RealPc")] [Theory]
   [InlineData("claude", AiPermissionMode.Ask, "--permission-mode", "default")]
   [InlineData("claude", AiPermissionMode.Plan, "--permission-mode", "plan")]
   [InlineData("claude", AiPermissionMode.Auto, "--permission-mode", "auto")]
@@ -33,7 +33,7 @@ public sealed class Fix2PermissionLaunchTests
     finally { Directory.Delete(path, true); }
   }
 
-  [Fact]
+  [Trait("Group", "RealPc")] [Fact]
   public void CompatibilityExecCannotSilentlyDropBypassAndCodexAcceptEditsPreservesSandbox()
   {
     var path = Path.Combine(Path.GetTempPath(), "td-fix2-exec-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path);

@@ -34,7 +34,7 @@ public sealed class ReceiverHttpIntake : IAsyncDisposable
       {
         using var client = await listener.AcceptTcpClientAsync(lifetime.Token);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        try { await HandleAsync(client.GetStream(), timeout.Token); }
+        try { await HandleAsync(client.GetStream(), timeout.Token); await FinishAsync(client.Client, timeout.Token); }
         catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException or JsonException or ArgumentException) { }
       }
     }
@@ -76,6 +76,25 @@ public sealed class ReceiverHttpIntake : IAsyncDisposable
     }
     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException) { await Reply(stream, 400, "The shared item could not be accepted", ct); }
     catch (IOException) { await Reply(stream, 429, "The inbox is full or busy", ct); }
+  }
+  // A refusal is answered before the body is read. Closing a socket that still holds unread bytes makes Windows
+  // reset the connection, and the sender then sees "connection reset" instead of the 401/403/413 answer. So the
+  // answer is finished first, then up to 1 MiB of what is still arriving is read and dropped (never parsed) for at
+  // most one second, then the connection closes.
+  private static async Task FinishAsync(Socket socket, CancellationToken ct)
+  {
+    try
+    {
+      socket.Shutdown(SocketShutdown.Send);
+      using var drain = CancellationTokenSource.CreateLinkedTokenSource(ct); drain.CancelAfter(TimeSpan.FromSeconds(1));
+      var buffer = new byte[16384]; var total = 0;
+      while (total < 1024 * 1024)
+      {
+        var read = await socket.ReceiveAsync(buffer, SocketFlags.None, drain.Token);
+        if (read == 0) break; total += read;
+      }
+    }
+    catch (Exception ex) when (ex is SocketException or ObjectDisposedException or OperationCanceledException) { }
   }
   private static async Task Reply(Stream stream, int status, string message, CancellationToken ct)
   {

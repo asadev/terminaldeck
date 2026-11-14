@@ -16,7 +16,7 @@ public sealed class ChatStopRenewalTests
     var file = Path.Combine(f.Root.DirectoryPath, "busy-fixture.py");
     File.WriteAllText(file, "import time\nwhile True:\n  time.sleep(1)\n");
     var chat = f.Chat with { Definition = f.Chat.Definition with { Provider = "claude" } };
-    var launch = new TerminalDeck.Core.Platform.ProcessLaunch("/usr/bin/python3", ["-u", file], new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin", ["CLAUDE_CONFIG_DIR"] = config }, f.Root.DirectoryPath);
+    var launch = new TerminalDeck.Core.Platform.ProcessLaunch(TestPython.Executable, ["-u", file], TestPython.Environment(("CLAUDE_CONFIG_DIR", config)), f.Root.DirectoryPath);
     var cli = new ChatCliConnection(chat, f.History, launch, _ => ValueTask.CompletedTask);
     await cli.StartAsync();
     var stopping = cli.DisposeAsync().AsTask();

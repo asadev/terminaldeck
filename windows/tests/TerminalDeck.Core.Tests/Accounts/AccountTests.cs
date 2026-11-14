@@ -172,7 +172,7 @@ public sealed class AccountTests
 
   [Fact] public async Task CredentialBytesStayInTheInjectedRootScopedStore()
   {
-    var secrets = new FakeSecrets(); var a = new AccountCredentials(secrets, AppDataRoot.Explicit("/tmp/td-w2-vault-a")); var b = new AccountCredentials(secrets, AppDataRoot.Explicit("/tmp/td-w2-vault-b"));
+    var secrets = new FakeSecrets(); var a = new AccountCredentials(secrets, AppDataRoot.Explicit(Path.Combine(Path.GetTempPath(), "td-w2-vault-a"))); var b = new AccountCredentials(secrets, AppDataRoot.Explicit(Path.Combine(Path.GetTempPath(), "td-w2-vault-b")));
     var value = Encoding.UTF8.GetBytes("synthetic-test-credential"); var reference = await a.StoreAsync(value); Assert.Equal(value, await a.ReadAsync(reference)); Assert.Null(await b.ReadAsync(reference));
     Assert.DoesNotContain(Encoding.UTF8.GetString(value), JsonSerializer.Serialize(new { reference })); await a.DeleteAsync(reference); Assert.Null(await a.ReadAsync(reference));
   }

@@ -70,7 +70,7 @@ public sealed class WorkerTests
   public async Task JobCountsBackgroundChildAfterRootExits()
   {
     var environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Where(e => !((string)e.Key).StartsWith('=')).ToDictionary(e => (string)e.Key, e => (string)e.Value!, StringComparer.OrdinalIgnoreCase);
-    await using var terminal = (ConPtyProcess)await new ConPtyTerminalFactory().StartAsync(new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ["/d", "/q"], environment, @"C:\TD"), new(100, 30));
+    await using var terminal = (ConPtyProcess)await new ConPtyTerminalFactory().StartAsync(new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ["/d", "/q"], environment, Path.GetTempPath()), new(100, 30));
     using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(30));
     var drain = Task.Run(async () => { try { await foreach (var _ in terminal.ReadOutputAsync(ct.Token)) { } } catch (Exception ex) when (ex is OperationCanceledException or IOException) { } });
     await terminal.WriteAsync(Encoding.UTF8.GetBytes("start \"\" /b cmd.exe /d /c ping.exe -n 25 127.0.0.1\r"), ct.Token);

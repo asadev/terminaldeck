@@ -12,6 +12,8 @@ public sealed class OpenSshRuntimeTests
     public List<OpenSshInvocation> Calls { get; } = [];
     public Func<OpenSshInvocation, CancellationToken, ValueTask<ServerOutput>> Reply { get; set; } = (_, _) => ValueTask.FromResult(new ServerOutput(0, "connected"));
     public ValueTask<ServerOutput> RunAsync(OpenSshInvocation invocation, CancellationToken ct) { Calls.Add(invocation); return Reply(invocation, ct); }
+    // On Windows the key folder is first locked to this user with icacls.exe; that is not a connection.
+    public IEnumerable<OpenSshInvocation> Connections => Calls.Where(c => !Path.GetFileName(c.Executable).Equals("icacls.exe", StringComparison.OrdinalIgnoreCase));
   }
   [Fact] public async Task KeyImportOnlyReadsExplicitPickAndLeavesOriginalAlone()
   {
@@ -23,7 +25,7 @@ public sealed class OpenSshRuntimeTests
   [Fact] public async Task NoConnectionBeforeHostKeyTrustAndNoUserSshDefaults()
   {
     using var f = new Fixture(); var row = await f.AddAsync(true); var run = new Runner(); var runtime = new WindowsOpenSshRuntime(f.Root, f.Secrets, process: run);
-    await Assert.ThrowsAsync<ServerRefusal>(async () => await runtime.RunAsync(row, new("true"), default)); Assert.Empty(run.Calls);
+    await Assert.ThrowsAsync<ServerRefusal>(async () => await runtime.RunAsync(row, new("true"), default)); Assert.Empty(run.Connections);
     var args = runtime.Arguments(row, "true");
     Assert.Contains("StrictHostKeyChecking=yes", args); Assert.Contains("IdentityAgent=none", args); Assert.Contains("IdentitiesOnly=yes", args);
     Assert.Contains("ForwardAgent=no", args); Assert.Contains("ClearAllForwardings=yes", args);
@@ -59,7 +61,7 @@ public sealed class OpenSshRuntimeTests
   {
     using var f = new Fixture(); var row = await f.AddAsync(); var run = new Runner(); var runtime = new WindowsOpenSshRuntime(f.Root, f.Secrets, process: run);
     await runtime.TrustHostKeyAsync(row, "ssh-ed25519 " + Convert.ToBase64String(new byte[64]), default);
-    await Assert.ThrowsAsync<ServerRefusal>(async () => await runtime.RunAsync(row, new("true"), default)); Assert.Empty(run.Calls);
+    await Assert.ThrowsAsync<ServerRefusal>(async () => await runtime.RunAsync(row, new("true"), default)); Assert.Empty(run.Connections);
   }
   [Fact] public async Task PasswordTerminalUsesSessionOwnerAndFreshOneUsePipe()
   {
@@ -80,8 +82,12 @@ public sealed class OpenSshRuntimeTests
   [Fact] public async Task ProcessOutputLimitsAndCancellationEndOnlyOwnedProcess()
   {
     var runner = new OpenSshProcess();
-    await Assert.ThrowsAnyAsync<Exception>(async () => await runner.RunAsync(new("/bin/sh", ["-c", "yes sample"], new Dictionary<string, string>(), Limit: 32), default));
+    // The same two children on each system: endless output, and a ten-second wait.
+    var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+    var endless = OperatingSystem.IsWindows() ? new OpenSshInvocation(cmd, ["/d", "/c", "for /l %i in (0,0,1) do @echo sample"], new Dictionary<string, string>(), Limit: 32) : new("/bin/sh", ["-c", "yes sample"], new Dictionary<string, string>(), Limit: 32);
+    var slow = OperatingSystem.IsWindows() ? new OpenSshInvocation(cmd, ["/d", "/c", Path.Combine(Environment.SystemDirectory, "PING.EXE") + " -n 11 127.0.0.1"], new Dictionary<string, string>()) : new("/bin/sh", ["-c", "sleep 10"], new Dictionary<string, string>());
+    await Assert.ThrowsAnyAsync<Exception>(async () => await runner.RunAsync(endless, default));
     using var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-    await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runner.RunAsync(new("/bin/sh", ["-c", "sleep 10"], new Dictionary<string, string>()), cancelled.Token));
+    await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runner.RunAsync(slow, cancelled.Token));
   }
 }

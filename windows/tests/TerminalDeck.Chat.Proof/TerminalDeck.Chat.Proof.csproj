@@ -4,9 +4,9 @@
     <WindowsPackageType>None</WindowsPackageType><Platforms>x64</Platforms><RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/TerminalDeck.App/Diagnostics/*.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+    <!-- The app's own code comes from the app project (it grows; a list of linked files went stale). -->
+    <ProjectReference Include="../../src/TerminalDeck.App/TerminalDeck.App.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <ProjectReference Include="../../src/TerminalDeck.Platform.Windows/TerminalDeck.Platform.Windows.csproj" />
-    <Compile Include="../../src/TerminalDeck.App/Views/Chat/*.cs" Link="Chat/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

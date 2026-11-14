@@ -54,7 +54,7 @@ public sealed class W4bAccountAdapterTests
       Directory.Delete(root.DirectoryPath, true);
     }
   }
-  [Fact]
+  [Trait("Group", "RealPc")] [Fact]
   public void ExactResumeAndBriefAreArgumentsRatherThanTypedTerminalCommands()
   {
     var root = AppDataRoot.Explicit(Path.Combine(@"C:\TD\out\w4b-launch-data", Guid.NewGuid().ToString("N"))); Directory.CreateDirectory(root.DirectoryPath);
