@@ -21,6 +21,9 @@
              it fails the run only with -RealPc.
     Unix     checks the Linux server helper script with /bin/sh; runs on Mac and Linux. Listed by name here.
 
+  Proof programs (tests\*Proof*, *.Proof.csproj) are hand-run screenshot programs, not tests and not shipped. They are
+  built and each result is listed, but a proof that does not build does not fail the run.
+
   Needs: the .NET SDK named in global.json (10.0.4xx); for the WinUI projects Visual Studio 2022+ or the Build Tools
   with the "Windows application development" workload; Python 3 on PATH (the chat tests' fake CLIs are Python).
   Test scratch data goes under C:\TD\out\windows-check\<time> (some Windows tests only accept a root there).
@@ -68,14 +71,19 @@ try {
   # 2. Build. Plain .NET (net10.0) and Windows-only (net10.0-windows); WinUI ones need -p:Platform.
   $all = git ls-files '*.csproj' | ForEach-Object { $_ -replace '/', '\' }
   if ($CloudOnly) { $all = @('src\TerminalDeck.Core\TerminalDeck.Core.csproj', 'tests\TerminalDeck.Core.Tests\TerminalDeck.Core.Tests.csproj') }
-  $failedBuilds = @(); $failedTests = @()
+  $failedBuilds = @(); $failedTests = @(); $proofs = @()
 
   foreach ($project in $all) {
     $text = Get-Content $project -Raw
     $cmd = @('build', $project, '-c', $Configuration, '-nologo', '-v', 'minimal')
     if ($text -match 'UseWinUI|WindowsAppSDK|<Platforms>') { $cmd += "-p:Platform=$Platform" }
     & dotnet @cmd
-    if ($LASTEXITCODE -ne 0) { $failedBuilds += $project; Note "BUILD FAIL  $project" } else { Note "BUILD OK    $project" }
+    $isProof = $project -match 'Proof\.csproj$'
+    if ($LASTEXITCODE -ne 0) {
+      if ($isProof) { $proofs += "BUILD FAIL  $project"; Note "PROOF FAIL  $project (hand-run proof program; listed below, does not fail the run)" }
+      else { $failedBuilds += $project; Note "BUILD FAIL  $project" }
+    }
+    else { if ($isProof) { $proofs += "BUILD OK    $project" }; Note "BUILD OK    $project" }
   }
 
   # 3. What the Windows tests need on this machine: the keeper and chat worker just built, scratch roots, the
@@ -83,14 +91,26 @@ try {
   if (-not $CloudOnly) {
     $scratch = Join-Path 'C:\TD\out\windows-check' (Get-Date -Format 'yyyyMMdd-HHmmss')
     New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+    # The app's own build of a program (bin\<platform>\<configuration>) is preferred: only that keeper build carries the
+    # tools-bridge and askpass helpers next to it, as the package does.
     function Built([string] $folder, [string] $file) {
       $found = @(Get-ChildItem -Path (Join-Path $root $folder) -Recurse -Filter $file -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "\\bin\\$Configuration\\" -and $_.FullName -notmatch '\\(ref|obj)\\' } | Sort-Object LastWriteTime -Descending)
+        Where-Object { $_.FullName -match "\\bin\\($Platform\\)?$Configuration\\" -and $_.FullName -notmatch '\\(ref|obj)\\' } |
+        Sort-Object @{ Expression = { $_.FullName -match "\\bin\\$Platform\\" }; Descending = $true }, @{ Expression = { $_.LastWriteTime }; Descending = $true })
       if ($found.Count -eq 0) { throw "$file was not built under $folder." }
       $found[0].FullName
     }
     $env:TD_KEEPER_EXE = Built 'src\TerminalDeck.Keeper' 'TerminalDeck.Keeper.exe'
+    if (-not (Test-Path (Join-Path (Split-Path $env:TD_KEEPER_EXE) 'tools-bridge\TerminalDeck.ToolBridge.exe'))) {
+      & dotnet build 'src\TerminalDeck.Keeper\TerminalDeck.Keeper.csproj' -c $Configuration "-p:Platform=$Platform" -nologo -v minimal
+      $env:TD_KEEPER_EXE = Built 'src\TerminalDeck.Keeper' 'TerminalDeck.Keeper.exe'
+    }
     $env:TD_CHAT_WORKER_HOST = Built 'tests\TerminalDeck.Chat.WorkerHost' 'TerminalDeck.Chat.WorkerHost.exe'
+    $env:TD_SERVERS_ASKPASS = Built 'tests\TerminalDeck.Servers.Askpass' 'TerminalDeck.Servers.Askpass.exe'
+    # Windows PowerShell's first start on a fresh machine can take tens of seconds; several tests run small
+    # PowerShell fake AIs under a deadline, so it is started once before them.
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $windowsPowerShell) { & $windowsPowerShell -NoProfile -NonInteractive -Command 'ConvertTo-Json @{ ready = $true } | Out-Null' }
     foreach ($pair in @(@('TD_HOOT_TEST_ROOT', 'hoot'), @('TD_SERVERS_PROOF_ROOT', 'servers'), @('TD_CHAT_PROOF_ROOT', 'chat'))) {
       $folder = Join-Path $scratch $pair[1]; New-Item -ItemType Directory -Force -Path $folder | Out-Null
       Set-Item -Path "env:$($pair[0])" -Value $folder
@@ -107,7 +127,7 @@ try {
       if (-not (Test-Path (Join-Path $LinkNative $dll))) { throw "$dll is missing in $LinkNative." }
     }
     $linkTests = @(Get-ChildItem -Path (Join-Path $root 'src\TerminalDeck.Platform.Windows\Tests') -Recurse -Filter 'TerminalDeck.Windows.Tests.dll' |
-      Where-Object { $_.FullName -match "\\bin\\$Configuration\\" })
+      Where-Object { $_.FullName -match "\\bin\\($Platform\\)?$Configuration\\" })
     foreach ($dll in $linkTests) { Copy-Item (Join-Path $LinkNative 'tdlink.dll'), (Join-Path $LinkNative 'libwebrtc.dll') -Destination $dll.DirectoryName -Force }
     Note "Direct-link engine from $LinkNative copied next to $($linkTests.Count) test build(s)"
   }
@@ -121,7 +141,10 @@ try {
     if ($failedBuilds -contains $project) { Note "TEST SKIP   $project (did not build)"; continue }
     $name = [IO.Path]::GetFileNameWithoutExtension($project)
     $trx = Join-Path $out "$name.trx"; Remove-Item $trx -ErrorAction SilentlyContinue
-    & dotnet test $project -c $Configuration --no-build -nologo --filter $gate --logger "trx;LogFileName=$name.trx" --results-directory $out
+    # The Windows platform tests start real keepers, ConPTY terminals and PowerShell fake AIs; they run one class at a
+    # time so their deadlines measure the code, not a crowded machine.
+    $serial = if ($name -eq 'TerminalDeck.Windows.Tests') { @('--', 'xUnit.ParallelizeTestCollections=false') } else { @() }
+    & dotnet test $project -c $Configuration --no-build -nologo --filter $gate --logger "trx;LogFileName=$name.trx" --results-directory $out @serial
     $ran = Results $trx
     if ($LASTEXITCODE -ne 0) { $failedTests += $project; Note "TEST FAIL   $project" }
     elseif ($ran.Count -eq 0) { Note "TEST NONE   $project (no test in this group)" }
@@ -146,7 +169,12 @@ try {
     if ($LASTEXITCODE -ne 0) { $failedTests += 'golden vectors'; Note 'VECTORS FAIL' } else { Note 'VECTORS OK (43 Mac golden vectors + Swift memory records)' }
   }
 
-  # 6. The named groups, by name and count.
+  # 6. The named groups and the proof programs, by name and count.
+  if ($proofs.Count -gt 0) {
+    Note ''
+    Note ("{0} proof programs (hand-run screenshot programs, not shipped, not gating):" -f $proofs.Count)
+    foreach ($row in $proofs) { Note "  $row" }
+  }
   if (-not $CloudOnly) {
     $why = @{
       RealPc = 'need a real PC with Claude Code, Codex and Gemini installed (run them there: build-and-test.ps1 -RealPc)'

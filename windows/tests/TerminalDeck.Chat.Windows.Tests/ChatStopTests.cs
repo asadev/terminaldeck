@@ -26,7 +26,7 @@ public sealed class ChatStopTests
         if(row.type !== 'user') return
         fs.appendFileSync('writes.jsonl',JSON.stringify({id:row.uuid})+'\n')
         emit({type:'user',uuid:row.uuid,message:row.message})
-        if(row.message.content[0].text === 'hold') return
+        if(row.message.content[0].text.split('\n\n').pop() === 'hold') return // the first message also carries the drawing instruction
         emit({type:'assistant',message:{id:row.uuid,content:[{type:'text',text:'Synthetic next answer'}]}})
         emit({type:'result',subtype:'success',is_error:false})
       })

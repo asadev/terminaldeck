@@ -37,7 +37,7 @@ public sealed class V3cModelTests
         }
         """);
       var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-      using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+      using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60)); // Windows PowerShell can be slow to start on a busy machine
       var models = await WindowsModelDiscovery.DiscoverAsync(provider, new ProcessLaunch(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture, provider], new Dictionary<string, string> { ["SystemRoot"] = Environment.GetEnvironmentVariable("SystemRoot")! }, home), deadline.Token);
       Assert.Single(models);
       var methods = await File.ReadAllLinesAsync(Path.Combine(home, "requests.txt"));

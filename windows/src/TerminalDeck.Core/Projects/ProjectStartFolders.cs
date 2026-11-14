@@ -19,9 +19,7 @@ public static class ProjectStartFolders
   {
     if (project.Id == ProjectIdentity.IndependentId || project.HomeFolder is not { } home) return new(requested, [], null);
     if (ProjectPaths.Contains(home, requested) || IsTaskWorkspace(requested)) return new(requested, Others(project, requested), null);
-    // Normalize is the form used to compare folders ("C:/Work/App"). A session starts in the folder as this computer
-    // writes it ("C:\Work\App" on Windows); only a Windows path read by the Core on a Mac keeps the compare form.
-    var start = Path.IsPathFullyQualified(home) ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(home)) : ProjectPaths.Normalize(home);
+    var start = ProjectPaths.Normalize(home);
     return new(start, Others(project, start), requested);
   }
 

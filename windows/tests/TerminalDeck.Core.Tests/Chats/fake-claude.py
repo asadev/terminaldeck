@@ -33,6 +33,9 @@ for line in sys.stdin:
         active = row["uuid"]
         content = row["message"]["content"]
         text = next((item["text"] for item in content if item["type"] == "text"), "image")
+        # The first message of a connection carries the drawing instruction before the person's words
+        # (ChatRichContent.Prompt, once per session since 0.21.4); the words are the last paragraph.
+        text = text.split("\n\n")[-1]
         emit({"type": "user", "uuid": active, "message": {"content": content}})
         if text == "hold":
             continue
