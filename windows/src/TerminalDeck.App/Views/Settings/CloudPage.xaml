@@ -32,6 +32,12 @@
      <StackPanel Spacing="3">
       <ToggleSwitch x:Name="UseCloudSwitch" Header="Use Cloud on this PC" OnContent="" OffContent="" Toggled="UseCloudSwitch_Toggled"/>
       <TextBlock x:Name="UseCloudState" FontSize="12" TextWrapping="Wrap" Foreground="{ThemeResource DeckSecondaryInkBrush}"/>
+      <!-- Sync: "Level with your Cloud", "Sending n", "Receiving n", "Waiting: <reason>", and Sync now. -->
+      <Grid x:Name="SyncRow" ColumnSpacing="16" Margin="0,6,0,0" Visibility="Collapsed">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <TextBlock x:Name="SyncLine" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.AutomationId="settings.cloud.sync"/>
+       <Button x:Name="SyncNowButton" Grid.Column="1" Content="Sync now" MinHeight="28" Padding="12,3" FontSize="13" VerticalAlignment="Center" Click="SyncNowButton_Click"/>
+      </Grid>
      </StackPanel>
     </Border>
     <!-- "<device> joined your account…" (Remove) and a device whose key changed (Trust it again). No codes. -->
