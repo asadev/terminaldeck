@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Application/Extensions contribution, inserted by tools/win/release-real.ps1 beside the share target.
+     The whole terminaldeck:// scheme activates the app (App.xaml.cs keeps one running copy and redirects the activation to it):
+     - terminaldeck://cloud/return/<token>?code&state: the website's "Open Terminal Deck" after sign-in; finished by itself only
+       when it answers the sign-in this copy started (ShellWindow.Cloud.cs, CloudAccountClient.FinishAppReturnAsync).
+     - terminaldeck://cloud/signin: opens Settings > Cloud; the app asks before it starts a sign-in. -->
+<uap:Extension xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" Category="windows.protocol">
+  <uap:Protocol Name="terminaldeck">
+    <uap:DisplayName>Terminal Deck</uap:DisplayName>
+  </uap:Protocol>
+</uap:Extension>

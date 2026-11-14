@@ -1,0 +1,437 @@
+{
+  "about" : "Byte-exact vectors from the Mac's Swift Cloud core. Produced and checked by Tests/TerminalDeckBackendTests/CloudGoldenVectorsTests.swift. Bytes: hex = lower-case hex; b64u = base64url without padding. All keys here are TEST-ONLY.",
+  "accountKeyWrap" : [
+    {
+      "aad" : "{\"authorDeviceId\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"ephemeralPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"SIeRQprcSpMTwUHZVWBvbs5eeX6caHAef9p_jVwazB4\",\"y\":\"EuMlzn2dUOyqMqRse2b_RhzwtNHSuK-0F0lGfH9iLl0\"},\"epoch\":1,\"nonce\":\"kNCpwQ86sFvqyexk\",\"salt\":\"RSI4zcmfDfLOWkIyTGj9bFBCR-5Ae1m9KdqHtcJmqi0\",\"targetDeviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"v\":1}",
+      "author" : "e3c75f30-363e-4323-a592-cf07fe14c4a6",
+      "authorSignPublicJwk" : {
+        "crv" : "P-256",
+        "kty" : "EC",
+        "x" : "_UHXsk-XYXC3rbw9SqATZ2Z1DcMXXrfgUANLwUTtwcw",
+        "y" : "lW94uwycQzPKoCLqrkOXcjzhJrSqsX9lyK4qmoc9Xts"
+      },
+      "canaryHash" : "5a03fb596c27f4f429ef461770745c8ab60ae964875d2e4eaf818bf9b047d599",
+      "description" : "The per-account root key wrapped for device B by device A. ECDH(ephemeral, B's wrap key) -> HKDF-SHA256(shared, salt, info = \"TD-CLOUD-DEVICE-1\\n\" + subject + \"\\n\" + targetDeviceId + \"\\n\" + epoch) -> AES-256-GCM over canonical body, AAD = canonical(envelope without ciphertext, tag, signature). ciphertext and tag are deterministic from these inputs; signature (A's ES256 over AAD + ciphertext + tag) is verify-only.",
+      "envelope" : "{\"authorDeviceId\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"ciphertext\":\"SN-A2vDpaf8R0gWrHobVsEm2VUNnwGOxMNeauSjJEtjcUXVh1YmKsNyZ38TcH6KNMd2tYfdeLLMKfRp_5R2EZ7V8Pt4PCu4dvMdJA1_kadTmyVdVQfsWcpUFUGJ5AW_6JrN8ZlDN3cqGOZJadfUl63eGL7xDnoZzgHL-WRFp7G_0jEQa9e070l84w73W8XIx\",\"ephemeralPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"SIeRQprcSpMTwUHZVWBvbs5eeX6caHAef9p_jVwazB4\",\"y\":\"EuMlzn2dUOyqMqRse2b_RhzwtNHSuK-0F0lGfH9iLl0\"},\"epoch\":1,\"nonce\":\"kNCpwQ86sFvqyexk\",\"salt\":\"RSI4zcmfDfLOWkIyTGj9bFBCR-5Ae1m9KdqHtcJmqi0\",\"signature\":\"Vava1oJiX6dQ21UMV68lCXlxNIlxJ4JViXkoi84KeYkxcIJOrdQ6BPcQm_JppHr73FSzXPy_xqOLwm4DqEWlGA\",\"tag\":\"drjDTULmTvHA4KbyMLnSdw\",\"targetDeviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"v\":1}",
+      "epoch" : 1,
+      "function" : "CloudSecretsCrypto.wrapDevice (internal seam: fixed ephemeral key, salt, nonce, canary)",
+      "name" : "wrap-for-device-b",
+      "opensWith" : "wrapBPrivateHex",
+      "plainBody" : "{\"canary\":\"_FdWWK9nlymHX-dmzC9VEaOSgZr_24jYxWdAAM1wVvE\",\"epoch\":1,\"recoveryVersion\":\"7\",\"rootKey\":\"_ebs8kPu93IJIleMWgA_3sEbPIugbpyxDdiJsZJKbXE\"}",
+      "recoveryVersion" : "7",
+      "rootKeyHex" : "fde6ecf243eef7720922578c5a003fdec11b3c8ba06e9cb10dd889b1924a6d71",
+      "subject" : "38fdae8d-01e6-432d-b2c9-d40fe9996b5f",
+      "target" : "{\"appVersion\":\"0.0.0\",\"deviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"label\":\"Golden B\",\"platform\":\"windows\",\"signPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"rjXloPeiNMED11QkfvcJWT0l9vgOZHTE_Mft-zqWDuE\",\"y\":\"HECrwr3qmSD5BS9Flfbrb4xO1thEoeSWs6ek7Lokya0\"},\"wrapPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"aD0PZCKRJSnwyArf_MnFhozbcg185g_2FAb94LTdHuM\",\"y\":\"5-S49vxlMXjyHhoCv8aqMJ8GfvquD0EE_8tvjQWTu7I\"}}"
+    },
+    {
+      "description" : "The same envelope opened with wrongWrapPrivateHex instead of B's wrap key must fail (GCM tag).",
+      "expect" : "error",
+      "function" : "CloudSecretsCrypto.unwrapDevice",
+      "name" : "wrong-device-key"
+    },
+    {
+      "description" : "First ciphertext character replaced ('A', or 'B' if it was 'A'): the author signature check fails.",
+      "envelope" : "{\"authorDeviceId\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"ciphertext\":\"AN-A2vDpaf8R0gWrHobVsEm2VUNnwGOxMNeauSjJEtjcUXVh1YmKsNyZ38TcH6KNMd2tYfdeLLMKfRp_5R2EZ7V8Pt4PCu4dvMdJA1_kadTmyVdVQfsWcpUFUGJ5AW_6JrN8ZlDN3cqGOZJadfUl63eGL7xDnoZzgHL-WRFp7G_0jEQa9e070l84w73W8XIx\",\"ephemeralPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"SIeRQprcSpMTwUHZVWBvbs5eeX6caHAef9p_jVwazB4\",\"y\":\"EuMlzn2dUOyqMqRse2b_RhzwtNHSuK-0F0lGfH9iLl0\"},\"epoch\":1,\"nonce\":\"kNCpwQ86sFvqyexk\",\"salt\":\"RSI4zcmfDfLOWkIyTGj9bFBCR-5Ae1m9KdqHtcJmqi0\",\"signature\":\"Vava1oJiX6dQ21UMV68lCXlxNIlxJ4JViXkoi84KeYkxcIJOrdQ6BPcQm_JppHr73FSzXPy_xqOLwm4DqEWlGA\",\"tag\":\"drjDTULmTvHA4KbyMLnSdw\",\"targetDeviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"v\":1}",
+      "expect" : "error",
+      "function" : "CloudSecretsCrypto.unwrapDevice",
+      "name" : "tampered-ciphertext"
+    }
+  ],
+  "canonical" : [
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Members sort by key; nested objects sort too; arrays keep their order.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"b\":1,\"a\":2,\"c\":{\"z\":0,\"y\":[3,2,1]}}",
+      "name" : "key-order",
+      "output" : "{\"a\":2,\"b\":1,\"c\":{\"y\":[3,2,1],\"z\":0}}",
+      "outputHex" : "7b2261223a322c2262223a312c2263223a7b2279223a5b332c322c315d2c227a223a307d7d",
+      "outputSha256" : "d7a19538a748ac1ad2425cbe1f5c62fba313992c6aaf09de3b4d209bb6276b0e"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Keys sort by UTF-16 code units, not code points: the emoji key (D83D...) sorts before U+FF5E.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"\\uff5e\":1,\"\\ud83d\\ude00\":2,\"z\":3,\"\\u00e9\":4,\"A\":5,\"a\":6}",
+      "name" : "utf16-key-order",
+      "output" : "{\"A\":5,\"a\":6,\"z\":3,\"é\":4,\"😀\":2,\"～\":1}",
+      "outputHex" : "7b2241223a352c2261223a362c227a223a332c22c3a9223a342c22f09f9880223a322c22efbd9e223a317d",
+      "outputSha256" : "313dadb6556da6636dc38d1bdfe1176fd8f7d7eaa2f6606c3e17efdd35220bde"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Objects inside arrays are sorted; arrays are never sorted.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "[{\"b\":[{\"d\":4,\"c\":3}],\"a\":null},[[],[{}]]]",
+      "name" : "nested-arrays-objects",
+      "output" : "[{\"a\":null,\"b\":[{\"c\":3,\"d\":4}]},[[],[{}]]]",
+      "outputHex" : "5b7b2261223a6e756c6c2c2262223a5b7b2263223a332c2264223a347d5d7d2c5b5b5d2c5b7b7d5d5d5d",
+      "outputSha256" : "cd8159016c755a7b7408a5d061ef8d8fc4c449b57932ad7fa81cb6de13cb52a1"
+    },
+    {
+      "cloudWireCanonicalAgrees" : false,
+      "description" : "Numbers are IEEE doubles printed like ECMAScript Number.prototype.toString. -0 prints 0. Integers above 2^53 lose precision (9007199254740993 prints 9007199254740992). 1e21 and up use exponent form.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"zero\":0,\"negzero\":-0,\"neg\":-42,\"one\":1,\"max53\":9007199254740991,\"over53\":9007199254740993,\"huge\":12345678901234567890,\"e20\":100000000000000000000,\"e21\":1e21,\"tenPointZero\":10.0}",
+      "name" : "integers",
+      "output" : "{\"e20\":100000000000000000000,\"e21\":1e+21,\"huge\":12345678901234567000,\"max53\":9007199254740991,\"neg\":-42,\"negzero\":0,\"one\":1,\"over53\":9007199254740992,\"tenPointZero\":10,\"zero\":0}",
+      "outputHex" : "7b22653230223a3130303030303030303030303030303030303030302c22653231223a31652b32312c2268756765223a31323334353637383930313233343536373030302c226d61783533223a393030373139393235343734303939312c226e6567223a2d34322c226e65677a65726f223a302c226f6e65223a312c226f7665723533223a393030373139393235343734303939322c2274656e506f696e745a65726f223a31302c227a65726f223a307d",
+      "outputSha256" : "65b05c308ecd97beff849cf6f62cbb96944c3c28a3af87f6a0d24215b24c17d7"
+    },
+    {
+      "cloudWireCanonicalAgrees" : false,
+      "description" : "Fractions are allowed and print in shortest round-trip form; exponent form below 1e-6.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"half\":0.5,\"tenth\":0.1,\"third\":0.3333333333333333,\"micro\":0.000001,\"smaller\":1e-7,\"neg\":-1.5e-10,\"big\":1.5e300,\"sum\":0.30000000000000004}",
+      "name" : "fractions",
+      "output" : "{\"big\":1.5e+300,\"half\":0.5,\"micro\":0.000001,\"neg\":-1.5e-10,\"smaller\":1e-7,\"sum\":0.30000000000000004,\"tenth\":0.1,\"third\":0.3333333333333333}",
+      "outputHex" : "7b22626967223a312e35652b3330302c2268616c66223a302e352c226d6963726f223a302e3030303030312c226e6567223a2d312e35652d31302c22736d616c6c6572223a31652d372c2273756d223a302e33303030303030303030303030303030342c2274656e7468223a302e312c227468697264223a302e333333333333333333333333333333337d",
+      "outputSha256" : "e0c334a0509de8bbdbddb1ae93bdab141bcd4a9ef5655f2adebec5eacca65501"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Escapes exactly like JSON.stringify: \\\" \\\\ \\b \\f \\n \\r \\t, other controls as \\u00xx lower-case; '/' and DEL (7F) are NOT escaped.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"s\":\"quote\\\" backslash\\\\ slash/ \\b\\f\\n\\r\\t nul\\u0000 us\\u001f del\\u007f\"}",
+      "name" : "string-escapes",
+      "output" : "{\"s\":\"quote\\\" backslash\\\\ slash/ \\b\\f\\n\\r\\t nul\\u0000 us\\u001f del\"}",
+      "outputHex" : "7b2273223a2271756f74655c22206261636b736c6173685c5c20736c6173682f205c625c665c6e5c725c74206e756c5c75303030302075735c75303031662064656c7f227d",
+      "outputSha256" : "255f36715f92b85773aa5524635530600d1a7184edf32bacf756bcfd51f23a2f"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Non-ASCII is written as raw UTF-8, never \\u escaped, including U+2028 and U+2029.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"s\":\"\\u2028\\u2029 Ü ß 中文 עברית Ελληνικά\"}",
+      "name" : "non-ascii",
+      "output" : "{\"s\":\"   Ü ß 中文 עברית Ελληνικά\"}",
+      "outputHex" : "7b2273223a22e280a8e280a920c39c20c39f20e4b8ade6968720d7a2d791d7a8d799d7aa20ce95cebbcebbceb7cebdceb9cebaceac227d",
+      "outputSha256" : "2480d0716f5d6145af9818b74bc59778d6a58e8b5b6ab6b777ee799c1de7de80"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "No Unicode normalization: U+00E9 and e+U+0301 stay different bytes.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"composed\":\"\\u00e9\",\"decomposed\":\"e\\u0301\"}",
+      "name" : "composed-vs-decomposed-values",
+      "output" : "{\"composed\":\"é\",\"decomposed\":\"é\"}",
+      "outputHex" : "7b22636f6d706f736564223a22c3a9222c226465636f6d706f736564223a2265cc81227d",
+      "outputSha256" : "7f04a9b0f36600f4b530afbb2601cb43068497f57b6ac5e07b2c173534c523ab"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Key U+00E9 (composed).",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"\\u00e9\":1}",
+      "name" : "composed-key",
+      "output" : "{\"é\":1}",
+      "outputHex" : "7b22c3a9223a317d",
+      "outputSha256" : "ddcfcf4765da163969972bb20660092ca2787782d9352d1d8a38e93f70acf3bf"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Key e+U+0301 (decomposed): different bytes from composed-key.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"e\\u0301\":1}",
+      "name" : "decomposed-key",
+      "output" : "{\"é\":1}",
+      "outputHex" : "7b2265cc81223a317d",
+      "outputSha256" : "e5bb0b455cae8a4f7c6b6d839a50c4e7d0cf32dded3bcb83f6a9bd122d16c559"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Emoji, ZWJ sequence and flag pass through as raw UTF-8, in keys and values.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"\\ud83d\\udc4d\":\"\\ud83d\\udc69\\u200d\\ud83d\\udcbb \\ud83c\\uddf5\\ud83c\\uddf0 \\ud83d\\ude00\"}",
+      "name" : "emoji",
+      "output" : "{\"👍\":\"👩‍💻 🇵🇰 😀\"}",
+      "outputHex" : "7b22f09f918d223a22f09f91a9e2808df09f92bb20f09f87b5f09f87b020f09f9880227d",
+      "outputSha256" : "659b576c9540b8af8a892beb21db0b0bd347aeaf4beba091ae2e1c8521fa762f"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Empty string, array, object, null, true, false.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"emptyString\":\"\",\"emptyArray\":[],\"emptyObject\":{},\"nul\":null,\"t\":true,\"f\":false}",
+      "name" : "empty-values",
+      "output" : "{\"emptyArray\":[],\"emptyObject\":{},\"emptyString\":\"\",\"f\":false,\"nul\":null,\"t\":true}",
+      "outputHex" : "7b22656d7074794172726179223a5b5d2c22656d7074794f626a656374223a7b7d2c22656d707479537472696e67223a22222c2266223a66616c73652c226e756c223a6e756c6c2c2274223a747275657d",
+      "outputSha256" : "a4c1c50f9572ea4bb3d218a7006e7575d47eafb2af640b993ea171c4c2f3e4f9"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "A top-level array of mixed values.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "[3,\"a\",null,{},true,-1.25]",
+      "name" : "top-level-array",
+      "output" : "[3,\"a\",null,{},true,-1.25]",
+      "outputHex" : "5b332c2261222c6e756c6c2c7b7d2c747275652c2d312e32355d",
+      "outputSha256" : "c82423d39985a7d25e1f3cb1271767bf507a1bc3d635611dec0b76868706ab75"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "A top-level string.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "\"just a string\"",
+      "name" : "top-level-string",
+      "output" : "\"just a string\"",
+      "outputHex" : "226a757374206120737472696e6722",
+      "outputSha256" : "3fe01def54b1c6cd795b2ebfcbab64150f6a507bce043040c662c682eebfed1e"
+    },
+    {
+      "cloudWireCanonicalAgrees" : true,
+      "description" : "Ten levels of nesting.",
+      "function" : "CloudSyncCanonical.encode (== CloudSecretsCanonical.encode)",
+      "input" : "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":{\"f\":{\"g\":{\"h\":{\"i\":{\"j\":[1]}}}}}}}}}}",
+      "name" : "deep-nesting",
+      "output" : "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":{\"f\":{\"g\":{\"h\":{\"i\":{\"j\":[1]}}}}}}}}}}",
+      "outputHex" : "7b2261223a7b2262223a7b2263223a7b2264223a7b2265223a7b2266223a7b2267223a7b2268223a7b2269223a7b226a223a5b315d7d7d7d7d7d7d7d7d7d7d",
+      "outputSha256" : "b803b845def65a1eb8b4f947e2848a95a12682aa1c044bec203664ef4ac05d36"
+    },
+    {
+      "description" : "An object whose keys are U+00E9 and e+U+0301 side by side is REFUSED (Swift compares keys by canonical equivalence). A port must refuse it too, never emit both. Parsing such JSON text in Swift keeps only the last one.",
+      "expect" : "error",
+      "function" : "CloudSyncCanonical.encode",
+      "input" : "{\"\\u00e9\":1,\"e\\u0301\":2}",
+      "name" : "normalization-equal-sibling-keys"
+    },
+    {
+      "description" : "NaN and Infinity are refused.",
+      "expect" : "error",
+      "function" : "CloudSyncCanonical.encode",
+      "input" : "NaN / Infinity",
+      "name" : "non-finite"
+    }
+  ],
+  "derived" : [
+    {
+      "description" : "A record's payloadHash: sha256 hex of its canonical payload.",
+      "function" : "CloudSyncBytes.hash(CloudSyncCanonical.encode(payload))",
+      "name" : "record-payload-hash",
+      "output" : "4a8b704c830f67c9ec0af55e37c7950cac7d48684e543eff82965d63dc678cad",
+      "payload" : "{\"body\":\"Café ☕ é\",\"n\":3,\"tags\":[\"a\",\"b\"],\"title\":\"Golden note\"}"
+    },
+    {
+      "description" : "A whole record in canonical form and its sha256 (optional members projectId/rootId absent, not null).",
+      "function" : "CloudSyncCanonical.encode(CloudOperation)",
+      "name" : "record-canonical",
+      "output" : "{\"createdAt\":1763000000000,\"domain\":\"memory\",\"entityId\":\"note-1\",\"kind\":\"put\",\"opId\":\"dca7d011-0cd3-4477-b17d-0e8fa56ed7d6\",\"originDevice\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"parents\":[],\"payload\":{\"body\":\"Café ☕ é\",\"n\":3,\"tags\":[\"a\",\"b\"],\"title\":\"Golden note\"},\"payloadHash\":\"4a8b704c830f67c9ec0af55e37c7950cac7d48684e543eff82965d63dc678cad\",\"revision\":\"dca7d011-0cd3-4477-b17d-0e8fa56ed7d6\",\"source\":{\"recordId\":\"note-1\",\"sourceId\":\"memory-notes\"},\"v\":1}",
+      "outputSha256" : "4c220d734ca5f4ce51f8363647d4ea1cffb146f2c20a3036cead721757b32b23"
+    },
+    {
+      "description" : "The descriptor's sha256: hex of the canonical sealed envelope bytes (brain-envelope-identity).",
+      "function" : "CloudSyncBytes.hash(CloudSyncCanonical.encode(envelope))",
+      "name" : "pack-sha256",
+      "output" : "cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d"
+    },
+    {
+      "description" : "sha256 hex of canonical {signPublicJwk, wrapPublicJwk} of a registration.",
+      "function" : "CloudSecretsCrypto.keyHash",
+      "input" : "{\"appVersion\":\"0.0.0\",\"deviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"label\":\"Golden B\",\"platform\":\"windows\",\"signPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"rjXloPeiNMED11QkfvcJWT0l9vgOZHTE_Mft-zqWDuE\",\"y\":\"HECrwr3qmSD5BS9Flfbrb4xO1thEoeSWs6ek7Lokya0\"},\"wrapPublicJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"aD0PZCKRJSnwyArf_MnFhozbcg185g_2FAb94LTdHuM\",\"y\":\"5-S49vxlMXjyHhoCv8aqMJ8GfvquD0EE_8tvjQWTu7I\"}}",
+      "name" : "device-key-hash",
+      "output" : "d846e814f96ac729a1615f40793a8458ae7cd91ef243200fb96180be831ceb8e"
+    },
+    {
+      "approval" : "{\"approvalId\":\"6e8e663f-07a8-4f9e-b45b-2946cab4278a\",\"challenge\":\"golden-challenge\",\"expiresAt\":1763000600000,\"targetDeviceId\":\"8acf76f0-cb57-4f6e-b2fb-cef16fa3697e\",\"targetKeyHash\":\"d846e814f96ac729a1615f40793a8458ae7cd91ef243200fb96180be831ceb8e\"}",
+      "description" : "First 32 hex of SHA-256(\"TD-CLOUD-APPROVAL-TARGET-2\\n\" + targetDeviceId + \"\\n\" + targetKeyHash), upper case, groups of 4.",
+      "function" : "CloudSecretsCrypto.matchingCode",
+      "name" : "matching-code",
+      "output" : "7504 49CE B3F8 80A3 7AA3 CA54 1BF2 231D"
+    },
+    {
+      "description" : "First 20 hex of SHA-256(\"TD-CLOUD-APPROVAL-TRANSFER-2\\n\" + canonical binding), upper case, groups of 4. Uses wrap-for-device-b's envelope.",
+      "function" : "CloudSecretsCrypto.transferCode",
+      "issuer" : "https://api.terminaldeck.dev/auth/v1",
+      "name" : "transfer-code",
+      "output" : "0942 7170 E2E7 FF8A 1973"
+    },
+    {
+      "description" : "The sign-in callback's PKCE S256 challenge for a fixed verifier.",
+      "function" : "BackendCloudAccount.beginSignIn (inline: base64url(SHA256(verifier)))",
+      "name" : "callback-pkce-challenge",
+      "output" : "5_zsfO_g_Q_3WWcBEKwGJ0kWtdzrYmOZb0oi3mBl_Nc",
+      "verifier" : "golden-test-only-verifier-0123456789abcdefghijklmnop"
+    },
+    {
+      "description" : "opId, segmentId (pack id), requestId and blobId are fresh random v4 UUIDs in lower case, not derived from content. A port must generate them the same way: CloudSyncBytes.transportID refuses anything else.",
+      "expect" : "not-derived",
+      "function" : "UUID().uuidString.lowercased()",
+      "name" : "random-ids"
+    }
+  ],
+  "deviceCode" : [
+    {
+      "code" : "BAFA 3267 21BB 30E0 8061",
+      "description" : "keyId = sha256 hex of {\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":..,\"y\":..}; code = first 10 bytes of SHA-256(\"TD-CLOUD-DEVICE-CODE-1\\n\" + deviceId + \"\\n\" + keyId), upper-case hex in 5 groups of 4.",
+      "deviceId" : "e3c75f30-363e-4323-a592-cf07fe14c4a6",
+      "function" : "BackendCloudDeviceCode.code(deviceId:key:)",
+      "keyId" : "acd66fbc4509e281aeb6c2c58037b44bad501a67f0b7558e4e6f7e76388c55e5",
+      "name" : "device-a",
+      "signPublicJwk" : {
+        "crv" : "P-256",
+        "kty" : "EC",
+        "x" : "_UHXsk-XYXC3rbw9SqATZ2Z1DcMXXrfgUANLwUTtwcw",
+        "y" : "lW94uwycQzPKoCLqrkOXcjzhJrSqsX9lyK4qmoc9Xts"
+      }
+    },
+    {
+      "code" : "22A3 50F3 540E 3F3C F01F",
+      "description" : "keyId = sha256 hex of {\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":..,\"y\":..}; code = first 10 bytes of SHA-256(\"TD-CLOUD-DEVICE-CODE-1\\n\" + deviceId + \"\\n\" + keyId), upper-case hex in 5 groups of 4.",
+      "deviceId" : "8acf76f0-cb57-4f6e-b2fb-cef16fa3697e",
+      "function" : "BackendCloudDeviceCode.code(deviceId:key:)",
+      "keyId" : "80d7fdf2a78cf5f132f0a12629ca269a05ac73293c16c2076c9f407dbe2c48b7",
+      "name" : "device-b",
+      "signPublicJwk" : {
+        "crv" : "P-256",
+        "kty" : "EC",
+        "x" : "rjXloPeiNMED11QkfvcJWT0l9vgOZHTE_Mft-zqWDuE",
+        "y" : "HECrwr3qmSD5BS9Flfbrb4xO1thEoeSWs6ek7Lokya0"
+      }
+    },
+    {
+      "code" : "8630 03A2 F7DA EF88 F84A",
+      "description" : "keyId = sha256 hex of {\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":..,\"y\":..}; code = first 10 bytes of SHA-256(\"TD-CLOUD-DEVICE-CODE-1\\n\" + deviceId + \"\\n\" + keyId), upper-case hex in 5 groups of 4.",
+      "deviceId" : "7f306256-7209-4b63-962b-14a7b01b12ee",
+      "function" : "BackendCloudDeviceCode.code(deviceId:key:)",
+      "keyId" : "85311d00927fc46bc93e5c7418d66eb1fc76aa5641d8e1955ac458a8bc362bfb",
+      "name" : "device-c",
+      "signPublicJwk" : {
+        "crv" : "P-256",
+        "kty" : "EC",
+        "x" : "mHELWXB3dbbN4blIk992FAWuqimLK1_QbypNvKcR68g",
+        "y" : "MRoPp9K6Cy63WbaTCAAIiMhIWdSMIrpPyVsGRjapOZ8"
+      }
+    },
+    {
+      "description" : "A device id not in lower case has no code.",
+      "deviceId" : "E3C75F30-363E-4323-A592-CF07FE14C4A6",
+      "expect" : "no-code",
+      "function" : "BackendCloudDeviceCode.code(deviceId:key:)",
+      "name" : "upper-case-id-refused"
+    }
+  ],
+  "format" : "td-cloud-golden-1",
+  "packSignature" : [
+    {
+      "description" : "The td-ops-1 pack: canonical array of two records (put, then an edit with the first as parent).",
+      "function" : "CloudSyncPack.encode",
+      "name" : "pack-bytes",
+      "output" : "[{\"createdAt\":1763000000000,\"domain\":\"memory\",\"entityId\":\"note-1\",\"kind\":\"put\",\"opId\":\"dca7d011-0cd3-4477-b17d-0e8fa56ed7d6\",\"originDevice\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"parents\":[],\"payload\":{\"body\":\"Café ☕ é\",\"n\":3,\"tags\":[\"a\",\"b\"],\"title\":\"Golden note\"},\"payloadHash\":\"4a8b704c830f67c9ec0af55e37c7950cac7d48684e543eff82965d63dc678cad\",\"revision\":\"dca7d011-0cd3-4477-b17d-0e8fa56ed7d6\",\"source\":{\"recordId\":\"note-1\",\"sourceId\":\"memory-notes\"},\"v\":1},{\"createdAt\":1763000001000,\"domain\":\"memory\",\"entityId\":\"note-1\",\"kind\":\"put\",\"opId\":\"b919e08b-c7a0-4232-a95c-7ff37ab0dffe\",\"originDevice\":\"e3c75f30-363e-4323-a592-cf07fe14c4a6\",\"parents\":[\"dca7d011-0cd3-4477-b17d-0e8fa56ed7d6\"],\"payload\":{\"body\":\"edited\",\"n\":4,\"tags\":[],\"title\":\"Golden note\"},\"payloadHash\":\"15e9c0667a3c75f13e69d0e637b72b2a881e3a9855c04df9c179fc08ec984955\",\"revision\":\"b919e08b-c7a0-4232-a95c-7ff37ab0dffe\",\"source\":{\"recordId\":\"note-1\",\"sourceId\":\"memory-notes\"},\"v\":1}]",
+      "outputHex" : "5b7b22637265617465644174223a313736333030303030303030302c22646f6d61696e223a226d656d6f7279222c22656e746974794964223a226e6f74652d31222c226b696e64223a22707574222c226f704964223a2264636137643031312d306364332d343437372d623137642d306538666135366564376436222c226f726967696e446576696365223a2265336337356633302d333633652d343332332d613539322d636630376665313463346136222c22706172656e7473223a5b5d2c227061796c6f6164223a7b22626f6479223a22436166c3a920e298952065cc81222c226e223a332c2274616773223a5b2261222c2262225d2c227469746c65223a22476f6c64656e206e6f7465227d2c227061796c6f616448617368223a2234613862373034633833306636376339656330616635356533376337393530636163376434383638346535343365666638323936356436336463363738636164222c227265766973696f6e223a2264636137643031312d306364332d343437372d623137642d306538666135366564376436222c22736f75726365223a7b227265636f72644964223a226e6f74652d31222c22736f757263654964223a226d656d6f72792d6e6f746573227d2c2276223a317d2c7b22637265617465644174223a313736333030303030313030302c22646f6d61696e223a226d656d6f7279222c22656e746974794964223a226e6f74652d31222c226b696e64223a22707574222c226f704964223a2262393139653038622d633761302d343233322d613935632d376666333761623064666665222c226f726967696e446576696365223a2265336337356633302d333633652d343332332d613539322d636630376665313463346136222c22706172656e7473223a5b2264636137643031312d306364332d343437372d623137642d306538666135366564376436225d2c227061796c6f6164223a7b22626f6479223a22656469746564222c226e223a342c2274616773223a5b5d2c227469746c65223a22476f6c64656e206e6f7465227d2c227061796c6f616448617368223a2231356539633036363761336337356631336536396430653633376237326232613838316533613938353563303464663963313739666330386563393834393535222c227265766973696f6e223a2262393139653038622d633761302d343233322d613935632d376666333761623064666665222c22736f75726365223a7b227265636f72644964223a226e6f74652d31222c22736f757263654964223a226d656d6f72792d6e6f746573227d2c2276223a317d5d"
+    },
+    {
+      "blobId" : "a96ee0bd-d0f2-4504-a072-2893db4e03b9",
+      "brainRootHex" : "4bdff7222adbea4e528a32a74da613179cfccb4e75125cc398de22fb1a5ed75c",
+      "description" : "The pack sealed for the brain class with a fixed nonce, no compression. Key = HKDF-SHA256(brainRoot, salt = blobId's 16 UUID bytes, info = \"TD-CLOUD-OBJECT-1\\nbrain\\n1\"); AAD = \"TD-CLOUD-CONTENT-1\\n\" + subject + \"\\n\" + canonical(envelope without nonce, ciphertext, tag). Deterministic: a port must produce these exact bytes.",
+      "envelope" : "{\"blobId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"ciphertext\":\"9NmHxixNCwOUTLdOs6-SNbcyoOCexxbNIzTlmfM-es6bBPNel7DiduMDd5kWxb68iUtZLofktEExnS1O1o-CCDnkhbjrRV0K-Oj5n2Fhg1EGRIfvbtk1dTFK-qVRYuk_y0PAfApBQ_Zc38Vv3iBs4VXFpZ9V0RFvLgRIn2ldqj2oCsSvrAC5DBK4NxIcBkZg21oD-6zbKV9DtM-XpkybvrLnxpr9G1yu0tkbh01Fm-gpXl0otp6jgbnwEUzR7jH8gLagbzTSgUhcrbQdlz8t5yOqX-pSEU20fo_S5LdpWyde6KACrZJbOdn-Yhi2YwCN3ZQUZ99k-q8h0IrrG2b-jrHmhcawEz_mMdXR4-SJqSX8bivEpjfRZR5k46DK_iMSxGNElr1hnHRozETlyNLL6uTMTSPNzSp00Ar89sm-Z_21yER2YSlp392nKcEcxy4WwuQcT12f07UbJn1HERw9wSkhk6oMBX3nz6OS32oMRHP-XxD-tv3hxy-V9n4sIxY8dTgzc9OU54bANToVmgyBfje29GOo6X_kqeXnBiH_W31A1WKbWjYdw0ZLu7e59gpaARaJzDBMCfLxUsE6Ca4wERnuv8GAKmVC9tcdGrMsxV0xQYaWYlytCSDTIchoZeRbbEF99QjvHLUWkFzLp9LSAIfbuOGedGCbZtuVML_F-dhISP0KWS2cMCNGrRmmO3_Vlqlv0QXbHhodFYB2yU03xdOzx_5FP_NoRAnOnKiXhz7pARTrIHP3Pu5LUP_F_IerBe02PQkV3IMilt1hC_qM2-bw8WVUrSVBlYJJ49C4I93ktNjKYdHbynCp41sWYb_lorBxF5eUlmuP2CpkoPqm1OlA5a-w478s_3HsOESPhI80fdLUdtBsuFkDhm2ZhI0ac-DQ5THU0dhEZwVoFaUw7MrwtCeQ9G8i3msTKmNqdgcmZWkwix2Qhl9Z59pMjXm51LvIeUJFDQoVbK3iw6RNZ87jPcrQvm-2lLp4dFYGBhoFxjRVvDNCqFTAEUXpoE5wLVedV7W2PBl2AgfNxxFDvSTqWgGbNjK_XvhyIaZIzRraJB-PRg2rXg8GFGMuVHcuTg4MM__t-yo549NatLE7sHunVkixfhOsu9TnyvMIufO0TNDGuek51u96ppbQOjJxQhfLCioRrj63wtvz0UcUL4MPOWAGEzj7GW6or_5L0u2IxSKZuff1-yrlLOYuyZUhE7pZFZY1j8hcM_zYQ5fGfaw0yeD7lTz1A817HVWdwvpLuH-GaBEXKhftZm-Z\",\"class\":\"brain\",\"codec\":\"identity\",\"epoch\":1,\"nonce\":\"-rbXsV-N4OzBTi-y\",\"plainBytes\":957,\"purpose\":\"brain\",\"suite\":\"A256GCM-HKDF-SHA256\",\"tag\":\"q2FFgwtXxUjbKpsWRAfAZA\",\"v\":1}",
+      "envelopeBytes" : 1515,
+      "envelopeSha256" : "cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d",
+      "function" : "CloudSyncContent.seal (internal nonce seam)",
+      "name" : "brain-envelope-identity",
+      "nonceHex" : "fab6d7b15f8de0ecc14e2fb2",
+      "subject" : "38fdae8d-01e6-432d-b2c9-d40fe9996b5f"
+    },
+    {
+      "description" : "Same pack with codec gzip (what the engine sends). Must open to pack-bytes. Do not compare a port's own gzip output: deflate bytes vary by library.",
+      "envelope" : "{\"blobId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"ciphertext\":\"49hZbc933ImuDvmIZ9qbnGr_hhAU7LtCcyznzydP4rpmBzS1Bq0jVmcHgSKYBnYYGckau_PkqvhM_RkdbX9vhJXC_27PcfTf0JdH4sU4IjxcjzgfRAxH4fFAZ1XtbFeO64Eukhj6Pi-HcuCWJ6yWy-s4LarUdPwcgkhl0FYzNvq-nhrjKypfXqL8XnZ9WQ0mavZ-Sk28tywsQ_MDtXl2qCRF42zm_y_eIhjwAnJ94Ut-iYcJVmvyUTCcmXCexRRsOuFjWOfeUjv43ZAWPYzcuaTn72ftaPuvnOGSa7CYeWxT08LduunobIiUpdmSLy0Xbo4dD3Y5mAibxTG8flIxQq20af6rBjSYnvy63VxbNJNh7C2MZN2yd374Kvmr4y5YN-KNkrC0DuGOUaaHPtxc3maKrukVvaBH0wFsxJdSw9E9wDN3tObZpc9Rg6ygwb6mDqyZzlKoZ8GF1vK8392fJl_eaow0JyBuFrSpV_Z32Ny8ogLa3UvBNbpqMad-j6DvmP3XqhCy0dkg0URfPDsgX1ht9PZpj95KQ9tP__KOrJefYLolfZOsG0jnkXMj5Q\",\"class\":\"brain\",\"codec\":\"gzip\",\"epoch\":1,\"nonce\":\"qvTZcN3htVMV_zIT\",\"plainBytes\":957,\"purpose\":\"brain\",\"suite\":\"A256GCM-HKDF-SHA256\",\"tag\":\"njHW6BXCZLvmXPbdjng3Tg\",\"v\":1}",
+      "expect" : "decrypt-only",
+      "function" : "CloudSyncContent.seal / CloudSyncContent.open",
+      "name" : "brain-envelope-gzip",
+      "opensTo" : "pack-bytes"
+    },
+    {
+      "description" : "Exact bytes signed: canonical(descriptor without its signature member) + \"\\n\" + subject.",
+      "descriptorUnsigned" : "{\"bytes\":1515,\"class\":\"brain\",\"domains\":[\"memory\"],\"format\":\"td-ops-1\",\"keyEpoch\":1,\"opCount\":2,\"purpose\":\"brain\",\"requestId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"segmentId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"sha256\":\"cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d\",\"signature\":\"\"}",
+      "function" : "CloudSegmentDescriptor.syncSigningBytes(subject:)",
+      "name" : "signing-bytes",
+      "output" : "{\"bytes\":1515,\"class\":\"brain\",\"domains\":[\"memory\"],\"format\":\"td-ops-1\",\"keyEpoch\":1,\"opCount\":2,\"purpose\":\"brain\",\"requestId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"segmentId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"sha256\":\"cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d\"}\n38fdae8d-01e6-432d-b2c9-d40fe9996b5f",
+      "outputHex" : "7b226279746573223a313531352c22636c617373223a22627261696e222c22646f6d61696e73223a5b226d656d6f7279225d2c22666f726d6174223a2274642d6f70732d31222c226b657945706f6368223a312c226f70436f756e74223a322c22707572706f7365223a22627261696e222c22726571756573744964223a2230313066383731312d343933652d346664302d626338622d643065313733623935346132222c227365676d656e744964223a2261393665653062642d643066322d343530342d613037322d323839336462346530336239222c22736861323536223a2263616463343863343863333063346563666263303135353335316662346665646435653265343765393030643465643939663834636163343132363035303864227d0a33386664616538642d303165362d343332642d623263392d643430666539393936623566",
+      "subject" : "38fdae8d-01e6-432d-b2c9-d40fe9996b5f"
+    },
+    {
+      "description" : "ES256 (P-256, SHA-256) raw r||s, 64 bytes, base64url, over signing-bytes. Verify-only: CryptoKit signatures are randomized.",
+      "descriptor" : "{\"bytes\":1515,\"class\":\"brain\",\"domains\":[\"memory\"],\"format\":\"td-ops-1\",\"keyEpoch\":1,\"opCount\":2,\"purpose\":\"brain\",\"requestId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"segmentId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"sha256\":\"cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d\",\"signature\":\"v2872CvoKMr_6hxwF9zVhOocWF1hJTm4E2-BRJhCWLl_xsNhSSJZ_LJf1tlCEAQy-Il1azU2w46dGXyrsEymWA\"}",
+      "expect" : "valid",
+      "function" : "CloudSegmentDescriptor.syncSignatureCheck(key:subject:)",
+      "name" : "signature-valid",
+      "publicKey" : {
+        "crv" : "P-256",
+        "kty" : "EC",
+        "x" : "_UHXsk-XYXC3rbw9SqATZ2Z1DcMXXrfgUANLwUTtwcw",
+        "y" : "lW94uwycQzPKoCLqrkOXcjzhJrSqsX9lyK4qmoc9Xts"
+      },
+      "signatureB64u" : "v2872CvoKMr_6hxwF9zVhOocWF1hJTm4E2-BRJhCWLl_xsNhSSJZ_LJf1tlCEAQy-Il1azU2w46dGXyrsEymWA"
+    },
+    {
+      "description" : "opCount changed 2 -> 3, signature kept.",
+      "descriptor" : "{\"bytes\":1515,\"class\":\"brain\",\"domains\":[\"memory\"],\"format\":\"td-ops-1\",\"keyEpoch\":1,\"opCount\":3,\"purpose\":\"brain\",\"requestId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"segmentId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"sha256\":\"cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d\",\"signature\":\"v2872CvoKMr_6hxwF9zVhOocWF1hJTm4E2-BRJhCWLl_xsNhSSJZ_LJf1tlCEAQy-Il1azU2w46dGXyrsEymWA\"}",
+      "expect" : "bad-signature",
+      "function" : "CloudSegmentDescriptor.syncSignatureCheck(key:subject:)",
+      "name" : "tampered-opcount"
+    },
+    {
+      "description" : "One bit of the signature flipped (byte 10).",
+      "descriptor" : "{\"bytes\":1515,\"class\":\"brain\",\"domains\":[\"memory\"],\"format\":\"td-ops-1\",\"keyEpoch\":1,\"opCount\":2,\"purpose\":\"brain\",\"requestId\":\"010f8711-493e-4fd0-bc8b-d0e173b954a2\",\"segmentId\":\"a96ee0bd-d0f2-4504-a072-2893db4e03b9\",\"sha256\":\"cadc48c48c30c4ecfbc0155351fb4fedd5e2e47e900d4ed99f84cac41260508d\",\"signature\":\"v2872CvoKMr_6h1wF9zVhOocWF1hJTm4E2-BRJhCWLl_xsNhSSJZ_LJf1tlCEAQy-Il1azU2w46dGXyrsEymWA\"}",
+      "expect" : "bad-signature",
+      "function" : "CloudSegmentDescriptor.syncSignatureCheck(key:subject:)",
+      "name" : "tampered-signature"
+    },
+    {
+      "description" : "The valid descriptor checked for another account subject.",
+      "expect" : "bad-signature",
+      "function" : "CloudSegmentDescriptor.syncSignatureCheck(key:subject:)",
+      "name" : "wrong-subject",
+      "subject" : "8acf76f0-cb57-4f6e-b2fb-cef16fa3697e"
+    }
+  ],
+  "randomOutputs" : {
+    "pack.signature" : "v2872CvoKMr_6hxwF9zVhOocWF1hJTm4E2-BRJhCWLl_xsNhSSJZ_LJf1tlCEAQy-Il1azU2w46dGXyrsEymWA",
+    "wrap.signature" : "Vava1oJiX6dQ21UMV68lCXlxNIlxJ4JViXkoi84KeYkxcIJOrdQ6BPcQm_JppHr73FSzXPy_xqOLwm4DqEWlGA"
+  },
+  "savedPasswordEnvelope" : [
+    {
+      "blobId" : "fdb77519-d131-41ce-876c-af1e72318c25",
+      "description" : "A saved password sealed under the account root. Key = HKDF-SHA256(root, salt = blobId's 16 UUID bytes, info = \"TD-CLOUD-OBJECT-1\\nsecrets\\n1\"); AAD = \"TD-CLOUD-CONTENT-1\\n\" + subject + \"\\n\" + canonical(envelope without nonce, ciphertext, tag). Deterministic with this nonce and codec identity.",
+      "envelope" : "{\"blobId\":\"fdb77519-d131-41ce-876c-af1e72318c25\",\"ciphertext\":\"up1hClADC_6MTnYzZnDni_iXK_C3B5n-YF46qSM-I5J8U6RAxkGAljJ4XGO7sEIVxFmemHYifUPQKD8bfLtxo87_BG5Gsk2KRKx8WTtcTrFx5w-aGZXb\",\"class\":\"secrets\",\"codec\":\"identity\",\"epoch\":1,\"nonce\":\"tF9LpUWEaomX76Zt\",\"plainBytes\":87,\"purpose\":\"secret\",\"suite\":\"A256GCM-HKDF-SHA256\",\"tag\":\"TMnMWtkSIeib3Og7sNjHMQ\",\"v\":1}",
+      "function" : "CloudSecretsCrypto.sealContent (internal nonce seam) / openContent",
+      "name" : "seal-secret",
+      "nonceHex" : "b45f4ba545846a8997efa66d",
+      "plain" : "{\"kind\":\"password\",\"host\":\"example.test\",\"user\":\"golden\",\"password\":\"p@ss wörd \\\"1\\\"\"}",
+      "plainHex" : "7b226b696e64223a2270617373776f7264222c22686f7374223a226578616d706c652e74657374222c2275736572223a22676f6c64656e222c2270617373776f7264223a22704073732077c3b67264205c22315c22227d",
+      "rootKeyHex" : "fde6ecf243eef7720922578c5a003fdec11b3c8ba06e9cb10dd889b1924a6d71",
+      "subject" : "38fdae8d-01e6-432d-b2c9-d40fe9996b5f"
+    },
+    {
+      "description" : "First tag byte XOR 0x80.",
+      "envelope" : "{\"blobId\":\"fdb77519-d131-41ce-876c-af1e72318c25\",\"ciphertext\":\"up1hClADC_6MTnYzZnDni_iXK_C3B5n-YF46qSM-I5J8U6RAxkGAljJ4XGO7sEIVxFmemHYifUPQKD8bfLtxo87_BG5Gsk2KRKx8WTtcTrFx5w-aGZXb\",\"class\":\"secrets\",\"codec\":\"identity\",\"epoch\":1,\"nonce\":\"tF9LpUWEaomX76Zt\",\"plainBytes\":87,\"purpose\":\"secret\",\"suite\":\"A256GCM-HKDF-SHA256\",\"tag\":\"zMnMWtkSIeib3Og7sNjHMQ\",\"v\":1}",
+      "expect" : "error",
+      "function" : "CloudSecretsCrypto.openContent",
+      "name" : "tampered-tag"
+    },
+    {
+      "description" : "seal-secret opened for subject = deviceB's id (AAD differs).",
+      "expect" : "error",
+      "function" : "CloudSecretsCrypto.openContent",
+      "name" : "wrong-subject",
+      "subject" : "8acf76f0-cb57-4f6e-b2fb-cef16fa3697e"
+    }
+  ],
+  "testOnlyInputs" : {
+    "brainRootHex" : "4bdff7222adbea4e528a32a74da613179cfccb4e75125cc398de22fb1a5ed75c",
+    "canaryHex" : "fc575658af679729875fe766cc2f5511a392819affdb88d8c5674000cd7056f1",
+    "createdAt" : 1763000000000,
+    "deviceA" : "e3c75f30-363e-4323-a592-cf07fe14c4a6",
+    "deviceB" : "8acf76f0-cb57-4f6e-b2fb-cef16fa3697e",
+    "deviceC" : "7f306256-7209-4b63-962b-14a7b01b12ee",
+    "ephemeralPrivateHex" : "d1cc0552e5dde49a0db7a52657665234639696bdbb830b5ba627bd7f3829fd3a",
+    "privateKeyForm" : "P-256 private keys are the raw 32-byte scalar (CryptoKit rawRepresentation)",
+    "saltHex" : "452238cdc99f0df2ce5a42324c68fd6c504247ee407b59bd29da87b5c266aa2d",
+    "secretsRootHex" : "fde6ecf243eef7720922578c5a003fdec11b3c8ba06e9cb10dd889b1924a6d71",
+    "signAPrivateHex" : "7111ce810a88d633693a92c43ec8c87c7d5d6159d2c7a2da3ca10e7b7bf778c1",
+    "signBPrivateHex" : "e37ecad29cfda4fcf0b6252fe421aaf112e101d65147dcc69e2f8e7423058a7b",
+    "signCPrivateHex" : "8f310222e8c47399caa554f9ae9d40a95716c4080b3fa4e9d051bf730bc9b9d0",
+    "subject" : "38fdae8d-01e6-432d-b2c9-d40fe9996b5f",
+    "wrapBPrivateHex" : "e3d2c4a4c1d28eb3a800a5803ab224c30ea5d56c1baf887b1206767df7385396",
+    "wrongWrapPrivateHex" : "1096764f4ff4df344803f2d979c17068dde71e66764f9f7120f274eaa03edc6e"
+  }
+}

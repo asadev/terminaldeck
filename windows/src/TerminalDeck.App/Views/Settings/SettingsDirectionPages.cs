@@ -22,6 +22,7 @@ public sealed partial class SettingsPane
 
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
+    "cloud" => new CloudPage(runtime.Cloud),
     "general" => GeneralSettings(),
     "notifications" => NotificationSettings(),
     "advanced" => AdvancedSettings(),

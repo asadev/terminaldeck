@@ -7,6 +7,7 @@ public static class SettingsNavigation
   // Keep stable route ids and the Mac category groups. Windows has no island, voice or plugins page.
   public static IReadOnlyList<SettingsCategory> Categories { get; } = [
     new("general", "General", "\uE713", "DeckProjectGraphiteBrush", 0, "sessions restart reconnect name copy select awake sleep updates version"),
+    new("cloud", "Cloud", "\uE753", "DeckProjectBlueBrush", 0, "cloud account sign in out e-mail email devices terminal deck"),
     new("appearance", "Appearance", "\uE793", "DeckProjectGraphiteBrush", 0, "theme light dark system"),
     new("notifications", "Notifications", "\uE7F4", "SystemFillColorCriticalBrush", 0, "approvals mentions windows alerts"),
     new("coding-ais", "Coding AIs", "\uE756", "SystemFillColorAttentionBrush", 1, "accounts who uses what sign in models"),
