@@ -211,8 +211,8 @@ public sealed class CloudMemoryJoinTests : IDisposable
     var capture = await adapter.CaptureAsync(() => 1, default);
     // Only the ordinary note goes (a PC may add memory); the help files, database files, hidden folder, removal
     // marker, local settings, meta, the board and a removal never do.
-    var sent = capture.Operations.Select(o => ((CloudJson.Object)o.Payload)["key"]!.AsString).ToArray();
-    Assert.Equal(["file/hoot/notes/kept.md"], sent);
+    var sent = capture.Operations.Select(o => ((CloudJson.Object)o.Payload)["key"]!.AsString!).ToArray();
+    Assert.Equal(new[] { "file/hoot/notes/kept.md" }, sent);
   }
 
   [Fact]
