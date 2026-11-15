@@ -75,70 +75,110 @@ internal sealed class CloudScreensProofWindow : Window
     }
   }
 
+  // One page at a time: a page whose set-up or drawing fails is written into the json with its error, and the proof goes on.
+  private async Task Page(string name, Func<Task> draw)
+  {
+    try { await draw(); }
+    catch (Exception error) when (error is not OutOfMemoryException) { failed.Add(name + ": " + error); }
+  }
+
+  private ProjectService? projects;
+  private ProjectService Projects()
+  {
+    if (projects is not null) return projects;
+    var service = new ProjectService(new JsonStateStore<ProjectState>(data, "projects"), new LocalProjectFolders(data));
+    // Made-up home folders sit NEXT TO the data folder: the app refuses a home folder inside its own data folder.
+    var root = Path.Combine(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(data.DirectoryPath))!, "proof-projects");
+    foreach (var name in new[] { "Website", "Mobile app" })
+    {
+      var folder = Path.Combine(root, name); Directory.CreateDirectory(folder);
+      if (!service.List().Any(p => p.Name == name)) service.Create(name, folder);
+    }
+    return projects = service;
+  }
+
   private async Task RunAsync()
   {
     // ---- the side panel* ----
-    var projects = new ProjectService(new JsonStateStore<ProjectState>(data, "projects"), new LocalProjectFolders(data));
-    foreach (var name in new[] { "Website", "Mobile app" })
-    {
-      var folder = Path.Combine(data.DirectoryPath, "projects-made-up", name); Directory.CreateDirectory(folder);
-      if (!projects.List().Any(p => p.Name == name)) projects.Create(name, folder);
-    }
-    await Shot("side-panel", SidePanel(projects), 264, 560, dark: true);
+    await Page("side-panel", () => Shot("side-panel", SidePanel(Projects()), 264, 560, dark: true));
 
     // ---- Your Cloud* ----
-    var contents = Contents(withBin: true);
-    var cloud = new YourCloudPage(contents, () => { }, () => { }, _ => { });
-    await Shot("your-cloud-places", cloud, 1280, 760, dark: true, ready: cloud.ProofReadAsync);
-    await Shot("your-cloud-folder-selected", cloud, 1280, 760, ready: () => { cloud.ProofVisit("Memory", "Website"); cloud.ProofSelect("Plan for the launch", "Design review"); return Task.CompletedTask; });
-    await Shot("your-cloud-reading-pane", cloud, 1280, 760, settle: 2500, ready: async () => { cloud.ProofVisit("Memory", "Website"); cloud.ProofSelect("Plan for the launch"); await cloud.ProofOpenAsync("Plan for the launch"); });
-    await Shot("your-cloud-not-on-this-pc", cloud, 1280, 760, ready: () => { cloud.ProofVisit("Memory", "Website"); cloud.ProofSelect("Old pricing ideas"); return Task.CompletedTask; });
-    await Shot("your-cloud-saved-passwords", cloud, 1280, 760, ready: () => { cloud.ProofVisit("Passwords"); return Task.CompletedTask; });
-    await Shot("your-cloud-tasks", cloud, 1280, 760, ready: () => { cloud.ProofVisit("Tasks"); return Task.CompletedTask; });
+    YourCloudPage? cloud = null;
+    YourCloudPage Cloud() => cloud ??= new YourCloudPage(Contents(withBin: true), () => { }, () => { }, _ => { });
+    await Page("your-cloud-places", () => Shot("your-cloud-places", Cloud(), 1280, 760, dark: true, ready: Cloud().ProofReadAsync));
+    await Page("your-cloud-folder-selected", () => Shot("your-cloud-folder-selected", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch", "Design review"); return Task.CompletedTask; }));
+    await Page("your-cloud-reading-pane", () => Shot("your-cloud-reading-pane", Cloud(), 1280, 760, settle: 2500, ready: async () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch"); await Cloud().ProofOpenAsync("Plan for the launch"); }));
+    await Page("your-cloud-not-on-this-pc", () => Shot("your-cloud-not-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Old pricing ideas"); return Task.CompletedTask; }));
+    await Page("your-cloud-saved-passwords", () => Shot("your-cloud-saved-passwords", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Passwords"); return Task.CompletedTask; }));
+    await Page("your-cloud-tasks", () => Shot("your-cloud-tasks", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Tasks"); return Task.CompletedTask; }));
 
     // ---- the Bin* ----
-    var emptyBin = new YourCloudPage(Contents(withBin: false), () => { }, () => { }, _ => { });
-    await Shot("bin-empty", emptyBin, 1280, 560, dark: true, ready: async () => { await emptyBin.ProofReadAsync(); emptyBin.ProofVisit("Bin"); });
-    var bin = new YourCloudPage(contents, () => { }, () => { }, _ => { });
-    await Shot("bin-six-lines", bin, 1280, 560, dark: true, settle: 800, ready: async () =>
+    await Page("bin-empty", () =>
     {
-      await bin.ProofReadAsync(); bin.ProofVisit("Bin"); await Task.Delay(800);
-      if (WorkspaceVisuals.Tree(bin).OfType<CloudBinPage>().FirstOrDefault() is { } page && WorkspaceVisuals.Tree(page).OfType<ListView>().FirstOrDefault() is { Items.Count: > 1 } lines)
-        ((ListViewItem)lines.Items[1]).IsSelected = true;
+      var emptyBin = new YourCloudPage(Contents(withBin: false), () => { }, () => { }, _ => { });
+      return Shot("bin-empty", emptyBin, 1280, 560, dark: true, ready: async () => { await emptyBin.ProofReadAsync(); emptyBin.ProofVisit("Bin"); });
+    });
+    await Page("bin-six-lines", () =>
+    {
+      var bin = new YourCloudPage(Contents(withBin: true), () => { }, () => { }, _ => { });
+      return Shot("bin-six-lines", bin, 1280, 560, dark: true, settle: 800, ready: async () =>
+      {
+        await bin.ProofReadAsync(); bin.ProofVisit("Bin"); await Task.Delay(800);
+        if (WorkspaceVisuals.Tree(bin).OfType<CloudBinPage>().FirstOrDefault() is { } page && WorkspaceVisuals.Tree(page).OfType<ListView>().FirstOrDefault() is { Items.Count: > 1 } lines)
+          ((ListViewItem)lines.Items[1]).IsSelected = true;
+      });
     });
 
     // ---- an agent's menu (stand-in list beside the real page) ----
-    var agents = new AgentService(new JsonStateStore<AgentState>(data, "agents"), projects, new AgentInstructions(data));
-    var website = projects.List().First(p => p.Name == "Website");
-    if (!agents.List().Any(a => a.Id == "proof-lead")) agents.Save(new("proof-lead", "Lead", "claude", "Made-up agent for the picture.", ProjectId: website.Id, Seat: "project-lead"));
-    if (!agents.List().Any(a => a.Id == "proof-review")) agents.Save(new("proof-review", "Reviewer", "codex", "Made-up agent for the picture.", ProjectId: website.Id));
-    AgentsViewModel.BinDelete = () => (_, _) => { };
-    using (var model = new AgentsViewModel(agents, projects))
+    await Page("agent-menu", async () =>
     {
+      var projects = Projects();
+      var agents = new AgentService(new JsonStateStore<AgentState>(data, "agents"), projects, new AgentInstructions(data));
+      var website = projects.List().First(p => p.Name == "Website");
+      if (!agents.List().Any(a => a.Id == "proof-lead")) agents.Save(new("proof-lead", "Lead", "claude", "Made-up agent for the picture.", ProjectId: website.Id, Seat: "project-lead"));
+      if (!agents.List().Any(a => a.Id == "proof-review")) agents.Save(new("proof-review", "Reviewer", "codex", "Made-up agent for the picture.", ProjectId: website.Id));
+      AgentsViewModel.BinDelete = () => (_, _) => { };
+      using var model = new AgentsViewModel(agents, projects);
       var page = new AgentsPage(model, new ProofNavigation());
       var menu = page.AgentMenuForProof(agents.List().First(a => a.Id == "proof-review"));
       await Shot("agent-menu", MenuBeside(page, menu), 1280, 760);
-    }
+    });
 
     // ---- the Cloud chat page of a session on another machine (read only) ----
-    var machines = new Dictionary<string, CloudSessionsRead.Machine> { ["m-studio"] = new("m-studio", "Studio Mac", false, true, "macos"), ["m-air"] = new("m-air", "MacBook Air", true, true, "macos") };
-    var rows = SidebarCloudRows.From([
-      new("r-off", "s-off", "Fix the login page", 2, Kind: "chat", Machine: "m-studio"),
-      new("r-on", "s-on", "Write the release notes", 1, Kind: "chat", Machine: "m-air")], machines, []);
-    foreach (var row in rows)
-      await Shot(row.MachineOn ? "cloud-chat-machine-on" : "cloud-chat-machine-off", new CloudChatPage(row, () => ChatDoor), 900, 620, settle: 1200);
+    await Page("cloud-chat", async () =>
+    {
+      var machines = new Dictionary<string, CloudSessionsRead.Machine> { ["m-studio"] = new("m-studio", "Studio Mac", false, true, "macos"), ["m-air"] = new("m-air", "MacBook Air", true, true, "macos") };
+      var rows = SidebarCloudRows.From([
+        new("r-off", "s-off", "Fix the login page", 2, Kind: "chat", Machine: "m-studio"),
+        new("r-on", "s-on", "Write the release notes", 1, Kind: "chat", Machine: "m-air")], machines, []);
+      foreach (var row in rows)
+      {
+        var name = row.MachineOn ? "cloud-chat-machine-on" : "cloud-chat-machine-off";
+        await Page(name, () => Shot(name, new CloudChatPage(row, () => ChatDoor), 900, 620, settle: 1200));
+      }
+    });
 
     // ---- Settings > Profile signed in*, the Cloud page, a device's page ----
     var service = new ProofCloudService();
     using var account = new CloudAccountClient(CloudConfiguration.Today("Office PC", "0.22.0.0"),
       new ProtectedCloudSecretStore(Path.Combine(data.DirectoryPath, "cloud", "account.protected"), new ProofProtector()), service, new SystemCloudRandom(), new ProofBrowser());
-    var url = await account.BeginSignInAsync();
-    var query = url.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
-    await account.FinishAppReturnAsync(new Uri($"terminaldeck://cloud/return/{query["callback"]}?code=Q29kZUZyb21UaGVXZWJzaXRlX19fX19fX19fX19fX19&state={query["state"]}"));
-    await Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 720, dark: true, settle: 800);
-    await Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 520, settle: 800);
-    if (account.Snapshot.DeviceRows.FirstOrDefault(d => !d.ThisDevice) is { } other)
-      await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 420, settle: 600);
+    var signedIn = false;
+    await Page("made-up sign-in", async () =>
+    {
+      var url = await account.BeginSignInAsync();
+      var query = url.Query.TrimStart('?').Split('&').Select(p => p.Split('=', 2)).ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
+      await account.FinishAppReturnAsync(new Uri($"terminaldeck://cloud/return/{query["callback"]}?code=Q29kZUZyb21UaGVXZWJzaXRlX19fX19fX19fX19fX19&state={query["state"]}"));
+      signedIn = true;
+    });
+    if (!signedIn) { failed.Add("settings-profile, settings-cloud-manage-files, settings-device: skipped, the made-up sign-in failed"); return; }
+    await Page("settings-profile", () => Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 720, dark: true, settle: 800));
+    await Page("settings-cloud-manage-files", () => Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 520, settle: 800));
+    await Page("settings-device", async () =>
+    {
+      if (account.Snapshot.DeviceRows.FirstOrDefault(d => !d.ThisDevice) is { } other)
+        await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 420, settle: 600);
+      else failed.Add("settings-device: the made-up account shows no other device");
+    });
   }
 
   // ---- the stand-ins ----
