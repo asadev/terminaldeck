@@ -70,6 +70,35 @@ public sealed class RelayHostClient : IDisposable
   public IReadOnlyCollection<string> TurnHolders => ice?.Holders ?? [];
   public event Action<RelayConnectionState>? StateChanged;
 
+  // ---- reach by account (port of the Mac's BackendRemoteRelayClient reach part) ------------------------------------
+  /// The process's reach link: its door answers account channels, and while it holds a relay token this PC's room is
+  /// tied to the account (the dial carries the token). Null: today's relay, exactly.
+  public ReachRelayLink? Reach { get; init; }
+  private string? dialedWithToken;
+  private string? refusedToken;
+  private CancellationTokenSource? socketStop;
+  private volatile bool redial;
+  /// Whether the current socket was dialed tied to the account (the page's state).
+  public bool AccountTied => Volatile.Read(ref connected) != 0 && Volatile.Read(ref dialedWithToken) is not null;
+  /// The shared token changed: a socket that is not tied (and should be), or tied while it should not be, is dialed again.
+  internal void ReachTokenChanged()
+  {
+    if (Reach is null || Volatile.Read(ref running) == 0) return;
+    var wanted = Reach.Token is not null;
+    if (wanted == (Volatile.Read(ref dialedWithToken) is not null)) return;
+    Volatile.Write(ref refusedToken, null);
+    redial = true;
+    try { Volatile.Read(ref socketStop)?.Cancel(); } catch (ObjectDisposedException) { }
+  }
+  /// Ends every account channel now (paired ones stay).
+  internal Task CloseAccountChannelsAsync(IReadOnlyCollection<string>? deviceIds) => Volatile.Read(ref current)?.CloseAccountChannelsAsync(deviceIds) ?? Task.CompletedTask;
+  // The token to dial with: only one with a minute left that the relay did not refuse.
+  private string? DialToken()
+  {
+    if (Reach?.Token is not { } held || held.Token == Volatile.Read(ref refusedToken)) return null;
+    return held.ExpiresAtMs - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > 60_000 ? held.Token : null;
+  }
+
   public RelayHostClient(Uri relay, ReadOnlySpan<byte> hostSecret, NoiseIdentity identity,
     IRelayPhoneApplication application, Func<IRelaySocket>? makeSocket = null, TimeProvider? clock = null, IRelayMcpApplication? mcp = null, IRelayReceiverApplication? receiver = null,
     ILinkEngine? linkEngine = null, HttpClient? turnHttp = null, Func<ReadOnlyMemory<byte>, string?>? linkEligible = null)
@@ -102,7 +131,8 @@ public sealed class RelayHostClient : IDisposable
     var attempt = 0;
     // ONE connection for this client's whole run, across relay sockets: a link-only phone's link (and its sessions)
     // outlives a relay reset (contract §11.4); everything else ends with the socket it came on.
-    await using var connection = new RelayHostConnection(identity, application, mcp, clock, receiver, link);
+    await using var connection = new RelayHostConnection(identity, application, mcp, clock, receiver, link) { Reach = Reach };
+    Reach?.Add(this);
     void Moved(string channel) => LinkMoved?.Invoke(channel);
     connection.LinkMoved += Moved;
     Volatile.Write(ref current, connection);
@@ -111,19 +141,35 @@ public sealed class RelayHostClient : IDisposable
       while (!cancellationToken.IsCancellationRequested)
       {
         await using (var socket = makeSocket())
+        using (var thisSocket = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
+          // Reach by account: the room is tied to the account only with a token that still has a minute left.
+          var bearer = socket is IRelayReachSocket ? DialToken() : null;
+          if (socket is IRelayReachSocket reachSocket) reachSocket.Bearer = bearer;
+          Volatile.Write(ref dialedWithToken, bearer);
+          Volatile.Write(ref socketStop, thisSocket);
+          redial = false;
+          var opened = false;
           try
           {
             StateChanged?.Invoke(RelayConnectionState.Connecting);
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(thisSocket.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
             await socket.ConnectAsync(RelayEndpoint.Host(relay), hostSecret, deadline.Token).ConfigureAwait(false);
+            opened = true;
             StateChanged?.Invoke(RelayConnectionState.Connected);
             Volatile.Write(ref connected, 1);
-            try { await connection.RunAsync(socket, cancellationToken, keepLinks: true).ConfigureAwait(false); }
+            try { await connection.RunAsync(socket, thisSocket.Token, keepLinks: true).ConfigureAwait(false); }
             finally { Volatile.Write(ref connected, 0); }
           }
           catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+          catch (WebSocketException) when (!opened && bearer is not null && !redial)
+          {
+            // The relay refused the tied dial (a token it does not take): the next dial goes untied, so paired devices
+            // keep reaching this PC; presence brings a fresh token.
+            Volatile.Write(ref refusedToken, bearer);
+            System.Diagnostics.Trace.WriteLine("reach: the relay did not take this PC's account token; dialing untied.");
+          }
           catch (Exception ex) when (ex is WebSocketException or IOException or ProtocolException or OperationCanceledException)
           { /* Public status deliberately contains no transport headers or secrets. */ }
           catch (Exception ex)
@@ -132,7 +178,10 @@ public sealed class RelayHostClient : IDisposable
             System.Diagnostics.Trace.WriteLine("Relay connection ended: " + ex.GetType().Name);
           }
         }
+        Volatile.Write(ref socketStop, null);
         StateChanged?.Invoke(RelayConnectionState.Disconnected);
+        // A redial asked by reach (tie or untie) or a refused tied dial goes again at once.
+        if (redial || Volatile.Read(ref refusedToken) is not null && Volatile.Read(ref dialedWithToken) is not null) { redial = false; continue; }
         var delay = TimeSpan.FromMilliseconds(Math.Min(30000, 500 * Math.Pow(2, Math.Min(attempt++, 6))));
         await Task.Delay(delay, clock, cancellationToken).ConfigureAwait(false);
       }
@@ -141,6 +190,8 @@ public sealed class RelayHostClient : IDisposable
     finally
     {
       Volatile.Write(ref current, null);
+      Reach?.Remove(this);
+      Volatile.Write(ref dialedWithToken, null);
       connection.LinkMoved -= Moved;
       Interlocked.Exchange(ref running, 0);
       StateChanged?.Invoke(RelayConnectionState.Stopped);

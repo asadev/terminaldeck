@@ -80,7 +80,7 @@ public sealed class TaskPhoneApplication(IRelayPhoneApplication next, DeviceTrus
     {
       var reply = await next.ReceiveAsync(channel, peerKey, plaintext, ct);
       if (reply.Close) return reply;
-      var device = trust.Authenticate(Text(message, "token", 200), peerKey.Span);
+      var device = trust.AuthenticateHello(channel, Text(message, "token", 200), peerKey.Span);
       authenticated[channel] = device.Id;
       var folders = reads.ProjectFolders((project, path) => permitted(device, project, path));
       var messages = reply.Messages.Select(raw =>

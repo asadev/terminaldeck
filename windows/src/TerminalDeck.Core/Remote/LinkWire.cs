@@ -110,7 +110,9 @@ public static class LinkEligibility
   /// The devices that may hold a TURN login now (each may have a link), and every device the trust store knows
   /// (approved or pending).
   public static (IReadOnlyCollection<string> Eligible, IReadOnlyCollection<string> Known) Devices(DeviceTrust trust) =>
-    (trust.List().Where(Allows).Select(d => d.Id).ToHashSet(), trust.List().Concat(trust.Pending()).Select(d => d.Id).ToHashSet());
+    // Account devices (reach by account) hold a login only while welcomed here; cut, they leave the set at once.
+    (trust.List().Where(Allows).Select(d => d.Id).Concat(trust.ReachDeviceIds()).ToHashSet(),
+      trust.List().Concat(trust.Pending()).Select(d => d.Id).Concat(trust.ReachDeviceIds()).ToHashSet());
 }
 
 /// A phone host whose WebRTC stack is missing or broken still has a setup: every link it tries fails with the reason,

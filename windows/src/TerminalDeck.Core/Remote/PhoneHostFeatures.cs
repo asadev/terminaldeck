@@ -156,7 +156,7 @@ public sealed class PhoneHostFeatures : IRelayPhoneApplication, IW9PhonePushAppl
     var reply = await next.ReceiveAsync(channel, peerKey, plaintext, ct);
     if (reply.Close) return reply;
     if (!message.TryGetProperty("token", out var token) || token.ValueKind != JsonValueKind.String) return reply;
-    var device = trust.Authenticate(token.GetString()!, peerKey.Span);
+    var device = trust.AuthenticateHello(channel, token.GetString()!, peerKey.Span);
     var claimed = message.TryGetProperty("capabilities", out var caps) && caps.ValueKind == JsonValueKind.Array
       ? caps.EnumerateArray().Where(c => c.ValueKind == JsonValueKind.String).Select(c => c.GetString()!).ToHashSet() : [];
     var link = new Link(device.Id, peerKey.ToArray(), claimed);

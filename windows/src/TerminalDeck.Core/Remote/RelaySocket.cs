@@ -12,10 +12,18 @@ public interface IRelaySocket : IAsyncDisposable
   ValueTask<byte[]?> ReceiveAsync(CancellationToken cancellationToken);
 }
 
+/// A relay socket that can tie this PC's room to its account (reach by account): `authorization: Bearer <relay token>`
+/// on the host dial. Without one, the dial is exactly today's.
+public interface IRelayReachSocket
+{
+  string? Bearer { get; set; }
+}
+
 // No connection is made until explicitly requested by the composition root.
-public sealed class RelayWebSocket : IRelaySocket
+public sealed class RelayWebSocket : IRelaySocket, IRelayReachSocket
 {
   private readonly ClientWebSocket socket = new();
+  public string? Bearer { get; set; }
 
   public async Task ConnectAsync(Uri hostAddress, ReadOnlyMemory<byte> hostSecret, CancellationToken cancellationToken)
   {
@@ -23,6 +31,7 @@ public sealed class RelayWebSocket : IRelaySocket
     if (hostAddress.AbsolutePath != "/v1/host" || hostSecret.Length != 32)
       throw new ProtocolException("The host relay settings are unusable.");
     socket.Options.SetRequestHeader("x-deck-host-secret", Convert.ToBase64String(hostSecret.Span).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+    if (Bearer is { } bearer) socket.Options.SetRequestHeader("authorization", "Bearer " + bearer);
     socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
     socket.Options.KeepAliveTimeout = TimeSpan.FromSeconds(20);
     await socket.ConnectAsync(hostAddress, cancellationToken).ConfigureAwait(false);
@@ -79,7 +88,10 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
 {
   public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
   private readonly TimeProvider clock = time ?? TimeProvider.System;
-  private sealed record Channel(byte[] Id, DateTimeOffset Deadline, NoiseTransport? Transport = null, byte[]? Peer = null);
+  // `Account`: the device id of an account channel (reach by account, the relay's open mark); null = today's paired join.
+  private sealed record Channel(byte[] Id, DateTimeOffset Deadline, NoiseTransport? Transport = null, byte[]? Peer = null, string? Account = null);
+  /// Reach by account: the door that answers account channels (null = every account channel is closed at once).
+  public ReachRelayLink? Reach { get; set; }
   private readonly Dictionary<string, Channel> channels = [];
   private readonly SemaphoreSlim serial = new(1, 1);
   // The connection's one ordered way out: every packet to the relay socket (and, after a link's hand-over, every
@@ -237,7 +249,11 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
         case RelayKind.Open:
           if (channels.ContainsKey(id)) return [];
           if (channels.Count >= 16) return [Close(packet.Channel)];
-          channels.Add(id, new Channel(packet.Channel, clock.GetUtcNow() + HandshakeTimeout));
+          // An unmarked open is today's paired join, exactly as before; a marked one is an account channel; marked but
+          // unreadable is closed.
+          var kind = ReachWire.ReadOpen(packet.Payload);
+          if (kind.Tag == ReachWire.OpenKindTag.Invalid) return [Close(packet.Channel)];
+          channels.Add(id, new Channel(packet.Channel, clock.GetUtcNow() + HandshakeTimeout, Account: kind.DeviceId));
           return [];
         case RelayKind.Close:
           // A link-only phone's relay channel closing leaves its link and its sessions alive (§11.4).
@@ -261,7 +277,31 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
                 return [Close(packet.Channel)];
               }
               var message = RelayPacket.ReadHandshake(packet.Payload, opening: true);
-              var answer = NoiseChannel.Respond(identity, message, application.KnownPeers, application.PairingOpen);
+              NoiseResponse answer;
+              if (channel.Account is { } account)
+              {
+                // An account channel: only the reach door answers it, for a key of this account's roster that the gate
+                // admits, for the device the relay's mark names. A paired key never opens one.
+                if (Reach?.Door is not { } door) { await RemoveAsync(id).ConfigureAwait(false); return [Close(packet.Channel)]; }
+                try
+                {
+                  // The relay loop waits for this answer: a slow Cloud never holds it longer than the handshake allows.
+                  using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                  bounded.CancelAfter(TimeSpan.FromSeconds(10));
+                  ReachAccountDoor.Opened admitted;
+                  try { admitted = await door.AnswerAsync(identity, message, account, bounded.Token).ConfigureAwait(false); }
+                  catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { throw new ReachRefusedException(ReachRefusal.Unavailable); }
+                  answer = admitted.Response;
+                  Reach.Admitted?.Invoke(id, admitted.Admission);
+                }
+                catch (ReachRefusedException refused)
+                {
+                  Trace.WriteLine(Stamp() + " reach: a device of the account was refused (" + refused.Why + ")");
+                  await RemoveAsync(id).ConfigureAwait(false);
+                  return [Close(packet.Channel)];
+                }
+              }
+              else answer = NoiseChannel.Respond(identity, message, application.KnownPeers, application.PairingOpen);
               channels[id] = channel with { Transport = answer.Transport, Peer = answer.PeerPublicKey };
               var opened = await application.OpenedAsync(id, answer.PeerPublicKey, cancellationToken).ConfigureAwait(false);
               var initial = new List<byte[]> { new RelayPacket(RelayKind.Data, packet.Channel, RelayPacket.FrameHandshake(answer.Reply)).Encode() };
@@ -429,6 +469,29 @@ public sealed partial class RelayHostConnection(NoiseIdentity identity, IRelayPh
   }
 
   private static byte[] Close(byte[] channel) => new RelayPacket(RelayKind.Close, channel, []).Encode();
+
+  /// Ends every account channel of these devices now (null = all account channels); paired channels stay.
+  public async Task CloseAccountChannelsAsync(IReadOnlyCollection<string>? deviceIds)
+  {
+    var closes = new List<byte[]>();
+    await serial.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      if (disposed) return;
+      foreach (var (id, channel) in channels.ToArray())
+      {
+        if (channel.Account is not { } account || deviceIds is not null && !deviceIds.Contains(account)) continue;
+        closes.Add(Close(channel.Id));
+        await RemoveAsync(id).ConfigureAwait(false);
+      }
+    }
+    finally { serial.Release(); }
+    if (closes.Count == 0 || wire is not { } send) return;
+    await writes.WaitAsync().ConfigureAwait(false);
+    try { foreach (var close in closes) await send(close, wireLifetime).ConfigureAwait(false); }
+    catch (Exception ex) when (ex is OperationCanceledException or IOException or WebSocketException or ObjectDisposedException) { }
+    finally { writes.Release(); }
+  }
   private async ValueTask RemoveAsync(string id)
   {
     if (!channels.Remove(id, out var old)) return;
