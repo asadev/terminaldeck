@@ -270,14 +270,16 @@ public sealed partial class CloudAccountClient : IDisposable
       {
         if (firstSignIn) Stage("device registration");
         var registration = own.Registration(configuration.DeviceLabel, configuration.AppVersion, configuration.Platform);
-        var receipt = CloudWire.Decode<CloudDeviceRegistrationReceipt>(await SignedAsync(record, HttpMethod.Post, "/devices", CloudWire.Canonical(registration), ct));
+        var receipt = await RegisterAsync(record, registration, ct);
         if (receipt.DeviceId != registration.DeviceId || receipt.Status != "active") throw new CloudFailure("device_revoked");
         if (version != generation) return;
         record = record with { Registered = true }; Save(record);
       }
       if (firstSignIn) Stage("devices");
-      var list = CloudWire.Decode<CloudDeviceList>(await SignedAsync(record, HttpMethod.Get, "/devices", [], ct));
+      var listed = await SignedAsync(record, HttpMethod.Get, "/devices", [], ct);
+      var list = CloudWire.Decode<CloudDeviceList>(listed);
       if (version != generation) return;
+      await DescribeSelfOnceAsync(record, listed, ct);
       if (firstSignIn && trustPorts is not null) Stage("device trust");
       var (trust, notice, mode) = TrustRowsLocked(record, list);
       Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId, configuration.DeviceLabel,
