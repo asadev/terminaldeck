@@ -96,20 +96,30 @@ public sealed class WindowsOpenSshRuntime : IServerRuntime
   {
     ServerValidation.Id(server.Id); ServerValidation.Draft(new(server.Name, server.Host, server.Port, server.User, server.Authentication));
     var folder = Folder(server.Id);
+    // Keys travel: a server from his SSH settings with no key of its own here connects with the copy from his other
+    // device (its host, user, port, key files and known-host lines); his own key always wins.
+    var copy = Travelled(server);
+    if (copy is not null) ServerValidation.Draft(new(server.Name, copy.Hostname, copy.Port, copy.User, server.Authentication));
     var args = new List<string> { "-F", Path.Combine(folder, "config"), "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
-      "-o", "UserKnownHostsFile=" + ConfigPath(Path.Combine(folder, "known_hosts")), "-o", "GlobalKnownHostsFile=" + ConfigPath(Path.Combine(folder, "known_hosts")),
+      "-o", "UserKnownHostsFile=" + ConfigPath(Path.Combine(folder, "known_hosts")), "-o", "GlobalKnownHostsFile=" + ConfigPath(copy?.KnownHostsFile ?? Path.Combine(folder, "known_hosts")),
       "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
       "-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=2", "-o", "NumberOfPasswordPrompts=1",
-      "-o", "PreferredAuthentications=" + (server.Authentication == ServerAuthentication.Password ? "password,keyboard-interactive" : "publickey"),
-      "-i", server.Authentication == ServerAuthentication.Key ? KeyPath(server.Id) : "none",
-      terminal ? "-tt" : "-T", "-p", server.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "-l", server.User, "--", server.Host };
+      "-o", "PreferredAuthentications=" + (server.Authentication == ServerAuthentication.Password ? "password,keyboard-interactive" : "publickey") };
+    if (copy is not null) foreach (var key in copy.IdentityFiles) args.AddRange(["-i", key]);
+    else args.AddRange(["-i", server.Authentication == ServerAuthentication.Key ? KeyPath(server.Id) : "none"]);
+    args.AddRange([terminal ? "-tt" : "-T", "-p", (copy?.Port ?? server.Port).ToString(System.Globalization.CultureInfo.InvariantCulture), "-l", copy?.User ?? server.User, "--", copy?.Hostname ?? server.Host]);
     if (command is not null) args.Add(command); return args;
   }
+  /// The travelled copy this server uses (null: his own key, or none).
+  public TerminalDeck.Core.Cloud.CloudSshTravelled? Travelled(SavedServer server) =>
+    server.Authentication == ServerAuthentication.Key && server.SshAlias is not null && !File.Exists(KeyPath(server.Id))
+      ? TerminalDeck.Core.Cloud.CloudSshTravelledBox.Shared.Travelled(server.Id) : null;
+  private bool Trusted(SavedServer server) => File.Exists(Path.Combine(Folder(server.Id), "known_hosts")) || Travelled(server) is { } copy && File.Exists(copy.KnownHostsFile);
   private static string ConfigPath(string path) => "\"" + path.Replace('\\', '/').Replace("%", "%%", StringComparison.Ordinal).Replace("\"", "", StringComparison.Ordinal) + "\"";
   public async ValueTask<ServerOutput> RunAsync(SavedServer server, ServerCommand command, CancellationToken ct)
   {
     await PrepareAsync(server.Id, ct);
-    if (!File.Exists(Path.Combine(Folder(server.Id), "known_hosts"))) throw new ServerRefusal("Review and trust this server's host fingerprint before connecting.");
+    if (!Trusted(server)) throw new ServerRefusal("Review and trust this server's host fingerprint before connecting.");
     var password = await secrets.ReadAsync(credentialPrefix + server.Id, ct);
     try
     {
@@ -149,7 +159,7 @@ public sealed class WindowsOpenSshRuntime : IServerRuntime
       remoteCommand = "sh -c " + ServerValidation.Quote("cd -- " + ServerValidation.Quote(landing) + " || exit; exec \"${SHELL:-/bin/sh}\" -l");
     }
     await PrepareAsync(server.Id, ct);
-    if (!File.Exists(Path.Combine(Folder(server.Id), "known_hosts"))) throw new ServerRefusal("Trust the server host fingerprint first.");
+    if (!Trusted(server)) throw new ServerRefusal("Trust the server host fingerprint first.");
     var password = await secrets.ReadAsync(credentialPrefix + server.Id, ct);
     var env = new Dictionary<string, string> { ["SSH_ASKPASS_REQUIRE"] = "never" };
     if (password is null)
