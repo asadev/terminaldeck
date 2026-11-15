@@ -17,4 +17,8 @@
     <None Update="Fixtures/*.cjs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Lane U3: the Bin page's rules (no screen needed). -->
+    <Compile Include="../../src/TerminalDeck.App/Views/Settings/CloudBinRules.cs" Link="CloudBin/CloudBinRules.cs" />
+  </ItemGroup>
 </Project>

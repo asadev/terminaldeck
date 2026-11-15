@@ -449,7 +449,7 @@ public sealed partial class AgentsPage : Grid
       Grid.SetColumn(aboutCard, narrow ? 0 : 1); Grid.SetRow(aboutCard, narrow ? 1 : 0);
     };
     body.Children.Add(dashboard);
-    if (agent.Status == SavedAgentStatus.Archived) body.Children.Add(AsyncButton("Delete permanently…", () => DeleteAsync(agent)));
+    body.Children.Add(AsyncButton(DeleteWords(), () => DeleteAsync(agent)));
   }
   private Task TogglePause(SavedAgent agent) => Model.RunAsync(() => Model.Agents.Save(agent with
     { Status = agent.Status == SavedAgentStatus.Paused ? SavedAgentStatus.Active : SavedAgentStatus.Paused }, agent), agent.Status == SavedAgentStatus.Paused ? "Resumed. It takes new work again." : "Paused. It takes no new work; current sessions continue.");
@@ -460,10 +460,14 @@ public sealed partial class AgentsPage : Grid
     if (!await ConfirmAsync(XamlRoot, "Stop everything " + agent.Name + " is running?", $"{count} session{(count == 1 ? "" : "s")} will close. Unsent work in them is lost. Its memory and runs are kept.", "Stop everything")) return;
     await Model.RunAsync(async () => { var stopped = await Model.Agents.StopHandsAsync(agent.Id); if (stopped == 0) throw new InvalidOperationException("No session could be stopped. Close them from their tabs."); }, "Stopped.");
   }
+  // The Mac's delete rule: no "archive first". Signed in it goes to the Bin on every device with no question (Put back
+  // undoes it); signed out nothing can undo it, so it asks once. Archive stays its own action in the menu.
+  private string DeleteWords() => Model.DeletesToBin ? "Delete agent" : "Delete agent…";
   private async Task DeleteAsync(SavedAgent agent)
   {
-    if (!await ConfirmAsync(XamlRoot, "Delete " + agent.Name + " permanently?", "Its role memory and run history stay for the next hire. Current sessions must be ended first.", "Delete permanently")) return;
-    if (await Model.RunAsync(() => Model.Agents.Remove(agent.Id), "Agent deleted. Its role memory was kept.")) Model.SelectedId = null;
+    var toBin = Model.DeletesToBin;
+    if (!toBin && !await ConfirmAsync(XamlRoot, "Delete " + agent.Name + "?", "Its role memory and run history stay for the next hire. Current sessions must be ended first.", "Delete")) return;
+    if (await Model.RunAsync(() => Model.Delete(agent.Id), toBin ? "Agent deleted. It is in the Bin for 30 days." : "Agent deleted. Its role memory was kept.")) Model.SelectedId = null;
   }
   private void MemoryTab(StackPanel body, SavedAgent agent)
   {
@@ -612,7 +616,7 @@ public sealed partial class AgentsPage : Grid
     menu.Items.Add(new MenuFlyoutSeparator());
     Item(agent.Status == SavedAgentStatus.Archived ? "Restore" : "Archive", () => Model.RunAsync(() => Model.Agents.Save(agent with
       { Status = agent.Status == SavedAgentStatus.Archived ? SavedAgentStatus.Active : SavedAgentStatus.Archived }, agent), agent.Status == SavedAgentStatus.Archived ? "Agent restored." : "Agent archived. Its role memory stays."));
-    if (agent.Status == SavedAgentStatus.Archived) Item("Delete permanently…", () => DeleteAsync(agent));
+    Item(DeleteWords(), () => DeleteAsync(agent));
     return menu;
   }
   private void Hoot(StackPanel body)
