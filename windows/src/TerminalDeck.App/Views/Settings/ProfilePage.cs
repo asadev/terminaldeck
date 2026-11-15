@@ -14,15 +14,17 @@ public sealed class ProfilePage : UserControl
 {
   private readonly CloudAccountClient account;
   private readonly Action<string> open;
+  private readonly Func<string, Task>? alsoRemove;
   private readonly Action<CloudSnapshot> changed;
   private readonly StackPanel body = AccountPages.Body();
   private CloudProfile? read;
   private bool working;
   private string? pressProblem;
 
-  public ProfilePage(CloudAccountClient account, Action<string> open)
+  /// `alsoRemove`: what else a device's "Remove" ends (its reach to this PC: one Remove means one thing, as on the Mac).
+  public ProfilePage(CloudAccountClient account, Action<string> open, Func<string, Task>? alsoRemove = null)
   {
-    this.account = account; this.open = open;
+    this.account = account; this.open = open; this.alsoRemove = alsoRemove;
     AutomationProperties.SetAutomationId(this, "settings.profile");
     Content = AccountPages.Scroll(body);
     changed = _ => DispatcherQueue.TryEnqueueHandled(Render);
@@ -102,8 +104,14 @@ public sealed class ProfilePage : UserControl
   private FrameworkElement NoticeRow(CloudPageNotice notice)
   {
     var button = new Button { Content = notice.Button, IsEnabled = !working };
-    button.Click += async (_, _) => await PressAsync(() => notice.Action == CloudNoticeAction.Remove ? account.RemoveJoinedDeviceAsync(notice.DeviceId) : account.TrustAgainAsync(notice.DeviceId));
+    button.Click += async (_, _) => await PressAsync(() => notice.Action == CloudNoticeAction.Remove ? RemoveAsync(notice.DeviceId) : account.TrustAgainAsync(notice.DeviceId));
     return SettingsPanel.SettingRow(notice.Text, "", button);
+  }
+
+  private async Task RemoveAsync(string deviceId)
+  {
+    await account.RemoveJoinedDeviceAsync(deviceId);
+    if (alsoRemove is not null) await alsoRemove(deviceId);
   }
 
   private async Task PressAsync(Func<Task> press)

@@ -27,6 +27,21 @@ public sealed class AgentsViewModel : ProjectAgentViewModel, IDisposable
     (projectId is null || a.ProjectId == projectId) && (a.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || a.Description.Contains(query, StringComparison.OrdinalIgnoreCase) || a.Seat.Contains(query, StringComparison.OrdinalIgnoreCase) || a.Model.Contains(query, StringComparison.OrdinalIgnoreCase)) &&
     (role.Length == 0 || (role == "lead" ? IsLead(a) : role.StartsWith("role:", StringComparison.Ordinal) && a.Seat == role[5..] && !IsLead(a))) &&
     (state.Length == 0 || Activity(a).State.ToString() == state)).ToArray();
+  /// The Cloud's agent delete while this PC is signed in (set once by the app): returns the route that puts the agent in
+  /// the Bin on every device, or null while signed out. Null here: no Bin, the plain local delete.
+  public static Func<Action<IAgents, string>?>? BinDelete { get; set; }
+  public bool DeletesToBin => BinDelete?.Invoke() is not null;
+  /// The Delete button (the Mac's delete rule): one press deletes, with no "archive first" step. Signed in the agent goes
+  /// to the Bin on every device for 30 days; signed out the store's archive-then-remove happens in the same press.
+  public void Delete(string id)
+  {
+    if (BinDelete?.Invoke() is { } bin) { bin(Agents, id); return; }
+    var agent = Agents.List().First(a => a.Id == id);
+    if (Agents.Runs().Any(r => r.AgentId == id && r.State is AgentRunState.Starting or AgentRunState.Running or AgentRunState.Uncertain))
+      throw new ArgumentException("This agent still has a hand at work. End its session before deleting it.");
+    if (agent.Status != SavedAgentStatus.Archived) Agents.Save(agent with { Status = SavedAgentStatus.Archived }, agent);
+    Agents.Remove(id);
+  }
   public Func<IReadOnlyList<ProjectSession>>? Sessions { get; set; }
   public AgentActivity Activity(SavedAgent agent) => AgentActivity.For(agent, Agents.Runs(), Sessions?.Invoke() ?? []);
   public bool IsLead(SavedAgent agent) => Projects.List().Any(p => p.Lead == "agent:" + agent.Id);

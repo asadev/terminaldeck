@@ -33,7 +33,7 @@ public sealed partial class SettingsPane
   // "browser" is drawn for the Browser's own small settings window, never for the Settings list.
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
-    "profile" => new ProfilePage(runtime.Cloud, select),
+    "profile" => new ProfilePage(runtime.Cloud, select, async id => { if (runtime.Reach is { } reach) await reach.RemoveIfOnAsync(id); }),
     "personal" => new PersonalPage(runtime.Cloud),
     "sign-in" => new SignInPage(runtime.Cloud),
     _ when SettingsNavigation.IsDevice(id) => new DevicePage(runtime.Cloud, id[SettingsNavigation.DevicePrefix.Length..], select),
