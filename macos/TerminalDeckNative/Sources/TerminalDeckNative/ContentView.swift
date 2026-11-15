@@ -15,6 +15,7 @@ struct ContentView: View {
 
     private var launching: Bool {
         !model.pageReady && model.sidebar == nil && model.tabs == nil && model.failure == nil && !model.isUITestFixture && !model.preparingSavedData
+            && !model.landingOnScreen // the New session page waits for nothing (Owner, 14 Nov)
     }
 
     var body: some View {
@@ -66,28 +67,32 @@ struct ContentView: View {
         // are the page colour (Asad, 2026-10-08, Chrome-style). See NativeChrome.
         .modifier(NativeWindowChrome(paper: NativeChrome.paper(model.currentScreen)))
         .toolbar {
+            // Status-line lane: while the side panel is hidden its bottom bar (and the Cloud line in it) is off screen;
+            // the line's short form shows here then, and only then.
+            ToolbarItem(placement: .primaryAction) {
+                if NativeCloudStatusShort.panelHidden(columnVisibility, detailMinX: detailMinX) {
+                    NativeCloudStatusShortLive(open: { model.select(Sidebar21Pages.cloudID) })
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 if let screen = model.currentScreen,
                    let ref = NativePageWindows.page(kind: screen.kind, id: screen.id),
-                   ref.id != "tasks", ref.id != "agents-all", !ref.isHoot {
+                   ref.id != "tasks", ref.id != "agents-all", ref.id != NativeLanding.pageID, !ref.isHoot {
                     NativePagePopoutButton(ref: ref)
                 }
             }
         }
         .navigationTitle(model.windowTitle)
         .navigationSubtitle(model.windowSubtitle)
-        // The tabs name what is on show; with none (only the new-tab buttons) the title does.
-        .toolbar(removing: tabs?.tabs.isEmpty == false ? .title : nil)
+        // The strip whenever there is one, the title only without it (AppModel.windowBarShowsTitle, 15 Nov review: the
+        // title beside the strip pushed the strip into the toolbar's overflow "»"). Pages name themselves in their heading.
+        .toolbar(removing: model.windowBarShowsTitle ? nil : .title)
         .modifier(NativeButtonProblems(actions: model.buttonActions))
         .nativeAppDialogs(model) // the page's dialogs, drawn natively (lane S)
         // Settings wait for the person; screen requests choose their own focus policy.
         .onChange(of: model.settingsWindowRequest) {
             let open = openWindow
             NativeFront.whenPersonActs("settings") { open(id: SettingsWindow.sceneID) }
-        }
-        .onChange(of: model.devicesWindowRequest) {
-            let open = openWindow
-            NativeFront.whenPersonActs("devices") { open(id: DevicesWindow.sceneID) }
         }
         .onChange(of: model.screenWindowRequest) {
             NativePageWindows.shared.openPendingScreens(from: model, using: openWindow)
@@ -137,7 +142,7 @@ struct PageDetailView: View {
         let switching = requested?.kind == "session" &&
             ((tabSwitch?.state == .working && tabSwitch?.sessionId == requested?.id) ||
              (nativeWorking && nativeOwner == requested?.id))
-        let screen = model.failure == nil && model.engineIsUp && !model.preparingSavedData
+        let screen = model.failure == nil && (model.engineIsUp || model.landingOnScreen) && !model.preparingSavedData
             ? (switching ? lastScreen ?? requested : requested) : nil
         let nativeScreen = screen.flatMap { nativeDetail(for: $0) }
         let fallbackNative = nativeScreen == nil ? emptyLayout(screen: screen) ?? emptyState(screen: screen) : nil

@@ -25,7 +25,7 @@ public enum BackendDeckCoreCatalogueRules {
     /// or confinement setting that is about Hoot itself (which devices may reach it, its own box).
     public static let hootOwnPrefixes = HootOwnSettings.prefixes
     /// Hoot is the person's assistant (the app's own local caller, bound to its session): it may change every setting
-    /// except its own (Asad, 11 Oct: "yes Hoot should be able to do all of it other than its own"). Outside AI apps,
+    /// except its own (Asad, 11 Oct: "yes Hoot should be able to do all of it other than its own"). AI apps,
     /// sessions and phones keep the refusals they have.
     public static func isHoot(_ caller: BackendDeckCoreSecurityCaller?) -> Bool { caller?.kind == .local && caller?.sessionID?.isEmpty == false }
     public static func isProtectedSetting(_ key: String, for caller: BackendDeckCoreSecurityCaller?) -> Bool {

@@ -474,11 +474,11 @@ public enum RemoteRules {
     /// Why a device in the Alerts approval cannot be let in any more, or nil when it can.
     public static func goneBecause(_ device: RemoteDevice?) -> String? {
         guard let device else {
-            return "That device is not in the list any more. If it is still waiting, pair it again from Settings → Remote."
+            return "That device is not in the list any more."
         }
         switch device.state {
         case .approved: return "\(device.name) has already been let in — nothing left to do here."
-        case .revoked: return "\(device.name) was refused. A refused device cannot be let in later; pair it again if that was a slip."
+        case .revoked: return "\(device.name) was refused. A refused device cannot be let in later."
         case .pending: return nil
         }
     }
@@ -488,7 +488,7 @@ public enum RemoteRules {
         let after = RemoteRead.stateAfter(answer, id: device.id)
         if after == nil || after == .approved { return nil }
         return after == .revoked
-            ? "\(device.name) has been refused, so it cannot be let in. Pair it again if that was a slip."
+            ? "\(device.name) has been refused, so it cannot be let in."
             : "\(device.name) is still waiting, so that did not take. Try again from Settings → Remote."
     }
 
@@ -517,7 +517,7 @@ public enum RemoteRules {
         switch kind {
         case .mine: "Your device — full access, \(assistant) included."
         case .guest: "Guest — only the folders you chose. Never \(assistant)."
-        case nil: "Paired before folder approval existed, so it is treated as a guest and can open nothing. Revoke it and pair it again to choose."
+        case nil: "Connected before folder approval existed, so it is treated as a guest and can open nothing. Remove it, then sign in on it to use it again."
         }
     }
 

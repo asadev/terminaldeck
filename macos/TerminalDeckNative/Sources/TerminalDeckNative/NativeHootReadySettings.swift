@@ -19,7 +19,8 @@ struct HootBrainRows: View {
             }
             // ACCOUNTS: every signed-in account of every Coding AI in one list, like a session's account chip (Asad, 12 Oct).
             row("Account", help: "The account Hoot uses. Choosing one of another Coding AI switches Hoot to it, and the chat carries on.") {
-                HootAccountMenu(brain: brain)
+                // 15 Nov (item 18): the New session page's own account list, every account by name (API keys included).
+                HootAccountChip(brain: brain).onAppear { HootSharedLists.shared.load() }
             }
             row("Model", help: "Choose a real model from the selected Coding AI. Account lists all your Coding AI accounts.") {
                 Menu {
@@ -222,12 +223,25 @@ final class ROUTINESHootBrainModel {
     /// No model is saved for this AI: it uses its own choice (the model it picks by itself).
     var followsAIModel: Bool { model.isEmpty }
     var modelLabel: String {
-        if let id = selectedID, id != "default" { return catalogue.first { $0.id == id }?.name ?? id }
+        // 15 Nov (item 23): a name ("Fable 5.2"), never the raw id ("claude-fable-5-2").
+        if let id = selectedID, id != "default" {
+            return catalogue.first { $0.id == id }?.name ?? HootSharedLists.shared.models(chosenProvider).first { $0.id == id }?.name ?? Self.readableModel(id)
+        }
         if let value = current[chosenProvider] ?? nil, value != "default" { return value }
         return "Choose model"
     }
     var efforts: [String] { selectedModel?.efforts ?? AGSCapabilities.efforts(provider: chosenProvider) }
     var oneMillionAvailable: Bool { HootModelCatalog.supportsOneMillion(provider: chatProvider, model: model.isEmpty ? nil : model) }
+    /// "claude-fable-5-2" → "Fable 5.2", "opus[1m]" → "Opus": only when no list names the model.
+    static func readableModel(_ id: String) -> String {
+        var words = id.replacingOccurrences(of: "[1m]", with: "").split(separator: "-").map(String.init)
+        if words.first?.lowercased() == "claude" { words.removeFirst() }
+        guard let first = words.first, !first.isEmpty else { return id }
+        let numbers = words.dropFirst().prefix { Int($0) != nil }
+        let rest = words.dropFirst(1 + numbers.count).filter { Int($0) == nil || $0.count < 8 }
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + (numbers.isEmpty ? [] : [numbers.joined(separator: ".")]) + rest)
+            .joined(separator: " ")
+    }
     static func tokens(_ n: Int) -> String { n >= 1_000_000 ? "\(n / 1_000_000)M" : "\(n / 1_000)K" }
     var contextChoices: [(id: String, label: String)] {
         if chosenProvider == "claude" && oneMillionAvailable { return [("standard", "Standard"), ("1m", "1M")] }

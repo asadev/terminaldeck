@@ -24,7 +24,8 @@ struct SidebarView: View {
                      close: model.closeSession,
                      stop: { id in SIDEBARCalls.run("session:kill", [id], failure: "That session could not be stopped.") },
                      startSession: model.newSession,
-                     renameInPlace: { item, typed in NativeSessionRailContinuity.shared.renamed(item.id, title: typed); _ = names.rename(tabId: item.id, typed: typed) }) {
+                     renameInPlace: { item, typed in NativeSessionRailContinuity.shared.renamed(item.id, title: typed); _ = names.rename(tabId: item.id, typed: typed) },
+                     cloudLine: true) {
             SidebarSettingsLine(model: model)
         } hostFailure: {
             NativeHOSTNoticeSlot(model: model)
@@ -32,9 +33,14 @@ struct SidebarView: View {
         .task(id: model.visibleSidebar != nil) {
             guard let state = model.visibleSidebar else { return }
             pagePins.initialize(existingUser: Sidebar21Store.isUpgrade(defaults: .standard,
-                dataRoot: model.engine.configuration.engineDataDirectory, state: state), pages: Sidebar21Pages.catalogue(state))
+                dataRoot: model.engine.configuration.engineDataDirectory, state: state), pages: Sidebar21Pages.catalogue(state, cloud: NativeCloudDisplayGate.shared.shows))
+            if NativeCloudDisplayGate.shared.shows { pagePins.addCloudOnce() }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 264, max: 340)
+        // Cloud joins the side panel once, the first time this copy can use Cloud (a sign-in later counts too).
+        .onChange(of: NativeCloudAccount.shared.snapshot.phase) { _, _ in
+            if NativeCloudDisplayGate.shared.shows { pagePins.addCloudOnce() }
+        }
         .onChange(of: model.visibleSidebar?.projects.map(\.id)) { _, _ in if model.canRun { store.refresh() } }
         .task(id: model.canRun) {
             names.start()
@@ -79,6 +85,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     var renameInPlace: ((SidebarItem, String) -> Void)? = nil
     var sessionPins: SIDEBARPins = .shared
     var pagePins: Sidebar21Store = .shared
+    /// The one Cloud status line in the bottom bar (status-line lane, 14 Nov). Off in isolated fixtures.
+    var cloudLine = false
     @ViewBuilder let footer: () -> Footer
     @ViewBuilder let hostFailure: () -> HostFailure
     /// Blue selection while the window is in front, grey behind (Apple's sidebar).
@@ -86,7 +94,12 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     /// The session row showing its name field, if one is.
     @State private var renamingID: String?
     @State private var moreOpen = false
-    private var pages: [Sidebar21Page] { Sidebar21Pages.catalogue(state) }
+    @State private var hootLineVisible = true
+    /// A waiting page no session row and no group header shows (Hoot's, a Hoot task's, a background agent's).
+    private var hootLinePage: String? {
+        NativeWaitingPages.pageForHootLine(sessionRows: Set(running.map(\.id)).union(NativeChatArchives.shared.ids))
+    }
+    private var pages: [Sidebar21Page] { Sidebar21Pages.catalogue(state, cloud: NativeCloudDisplayGate.shared.shows) }
     private var pinnedPages: [Sidebar21Page] { pagePins.ids.compactMap { id in pages.first { $0.id == id } } }
 
     private var folderProjects: [SidebarProject] { state.projects.filter { $0.id.hasPrefix("/") } }
@@ -123,8 +136,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
 
     private func item(_ id: String) -> SidebarItem {
         let existing = state.item(id: id)
-        let titles = ["hoot": "Hoot", "agents-all": "Agents", "tasks": "Tasks", "artifacts": "Artifacts", "servers": "Servers", "devices": "Devices", "simulators": "Simulators", "receiver": "Receiver", "mcp": "MCP servers", "store": "Store"]
-        let symbols = ["agents-all": "person.3", "tasks": "list.bullet", "artifacts": "doc.richtext", "servers": "server.rack", "devices": "laptopcomputer.and.iphone", "simulators": "iphone", "receiver": "antenna.radiowaves.left.and.right", "mcp": "puzzlepiece.extension", "store": "bag"]
+        let titles = ["hoot": "Hoot", "agents-all": "Agents", "tasks": "Tasks", "artifacts": "Artifacts", "servers": "Servers", "code": "Code", "devices": "Devices", "simulators": "Simulators", "receiver": "Receiver", "mcp": "MCP servers", "store": "Store"]
+        let symbols = ["agents-all": "person.3", "tasks": "list.bullet", "artifacts": "doc.richtext", "servers": "server.rack", "code": "chevron.left.forwardslash.chevron.right", "devices": "laptopcomputer.and.iphone", "simulators": "iphone", "receiver": "antenna.radiowaves.left.and.right", "mcp": "puzzlepiece.extension", "store": "bag"]
         return .init(id: id, title: titles[id] ?? id, symbol: symbols[id] ?? existing?.symbol,
                      kind: id == "hoot" ? .hoot : .panel, unread: existing?.unread ?? false,
                      status: existing?.status, subtitle: nil, help: existing?.help)
@@ -137,6 +150,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                 VStack(alignment: .leading, spacing: 0) {
                     newSessionRow
                     row(item("hoot"))
+                        // B1: Hoot's line out of sight moves its raised hand to the line below the list.
+                        .onScrollVisibilityChange(threshold: 0.5) { hootLineVisible = $0 }
                     ForEach(pinnedPages.filter { $0.id != Sidebar21Pages.projectsID }) { page in
                         row(pageItem(page)).draggable("sidebar-page:" + page.id)
                             .dropDestination(for: String.self) { values, _ in reorder(values, to: page.id) }
@@ -154,25 +169,49 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                                 .padding(4)
                         }
                     if pinnedPages.contains(where: { $0.id == Sidebar21Pages.projectsID }) { projectsSection }
-                    if !sessions.isEmpty || hostFailed {
+                    // Sessions in the Cloud (15 Nov): his other machines' sessions sit with this Mac's own, each beside
+                    // the same project's, with one grey tag naming its machine; "Earlier chats" ends a project's run.
+                    let lines = runningLines(sessions)
+                    if !lines.isEmpty || hostFailed {
                         header("Running")
-                        ForEach(NativeSessionRailContinuity.shared.identified(sessions)) { row in
-                            sessionRow(row.item, agents: sessionAgents)
+                        ForEach(lines, id: \.id) { line in
+                            switch line.entry {
+                            case .own:
+                                if let item = line.item { sessionRow(item, agents: sessionAgents) }
+                            case .other(let row):
+                                SIDEBARCloudSessionRow(row: row, project: registry.first { $0.id == row.project?.cloudRef },
+                                                       highlighted: Sidebar21Pages.selection(selected) == line.entry.id,
+                                                       onAccent: isSelected(line.entry.id), selection: AnyView(selection(line.entry.id)),
+                                                       open: { choose(line.entry.id) })
+                            case .earlier:
+                                SIDEBAREarlierChatsRow(onAccent: isSelected(line.entry.id), selection: AnyView(selection(line.entry.id)),
+                                                       open: { choose(line.entry.id) })
+                            }
                         }
                     }
                     if !heldRows.isEmpty {
                         header("Not reopened")
                         ForEach(heldRows) { row in row }
                     }
-                NativeChatArchivedRows(state: state, open: choose)
+                NativeChatArchivedRows(state: state, open: choose,
+                                       waiting: NativeWaitingPages.page(forSessions: Set(NativeChatArchives.shared.ids)))
                 hostFailure()
                 }
                 .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
             }
             .frame(minHeight: 0)
+            if !hootLineVisible, let page = hootLinePage { SIDEBARWaitingLine(page: page) }
             DeploySidebarPill()   // DEPLOY-PIPELINE: only while something deploys
             NativeUpdateCard()    // release 27: a newer GitHub release, just above Settings; only while there is one
-            footer().frame(height: 44).padding(.horizontal, 12)
+            // The bottom bar: his profile and the gear, unchanged. Owner, 15 Nov: "I don't want to have this big sentence
+            // sitting in my side panel at all. Just keep it inside the settings": the Cloud line and its Sync now are at
+            // the top of Settings › Cloud now. What kept the line current (and the Cloud item's small mark) still runs
+            // here, drawing nothing.
+            VStack(spacing: 0) {
+                footer().frame(height: 44)
+            }
+            .background { if cloudLine { NativeCloudStatusWatch() } }
+            .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity)
                 .overlay(alignment: .top) { Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1) }
         }
@@ -215,8 +254,10 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     }
     private func pageItem(_ page: Sidebar21Page) -> SidebarItem {
         let existing = state.item(id: page.id)
+        // The Cloud item's small mark is all the side panel says about Cloud: only when something really needs him.
+        let cloudMark = cloudLine && page.id == Sidebar21Pages.cloudID ? NativeCloudStatusWatch.mark(NativeCloudStatusLineModel.shared.current()) : nil
         return .init(id: page.id, title: page.title, symbol: page.symbol, kind: .panel,
-                     unread: existing?.unread ?? false, status: existing?.status, help: existing?.help)
+                     unread: existing?.unread ?? false, status: cloudMark?.status ?? existing?.status, help: cloudMark?.help ?? existing?.help)
     }
     private func reorder(_ values: [String], to target: String) -> Bool {
         guard let value = values.first, value.hasPrefix("sidebar-page:") else { return false }
@@ -229,29 +270,42 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         let sessions = running
         return sessions.filter { pins.isPinned($0.id) } + sessions.filter { !pins.isPinned($0.id) }
     }
+    /// One line of the Running list: this Mac's own session (keeping its continuity identity, so a rename or a restart
+    /// never redraws it as a new row), another machine's, or a project's "Earlier chats".
+    struct RunningLine { let id: String; let entry: SIDEBARCloudRows.Entry; let item: SidebarItem? }
+    private func runningLines(_ sessions: [SidebarItem]) -> [RunningLine] {
+        let identified = NativeSessionRailContinuity.shared.identified(sessions)
+        let rows = Dictionary(identified.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let cloud = NativeCloudChats.shared
+        // One row per session (15 Nov): a Cloud row whose live twin is open here already is not listed again.
+        let others = NativeCloudLiveChoice.shownOthers(cloud.others, ownIDs: Set(sessions.map(\.id)), links: NativeMachineLinks.shared.snapshot)
+        let entries = SIDEBARCloudRows.merge(own: sessions.map { (id: $0.id, project: sessionProject($0.id)?.id) }, others: others,
+                                             earlier: Set(cloud.earlier.keys))
+        return entries.map { entry in
+            if case .own(let id) = entry, let row = rows[id] { return RunningLine(id: row.id, entry: entry, item: row.item) }
+            return RunningLine(id: entry.id, entry: entry, item: nil)
+        }
+    }
     /// Running sessions that are not pinned (a pinned session shows only under Pinned).
     private var unpinnedRunning: [SidebarItem] { running.filter { !pins.isPinned($0.id) } }
 
-    /// A session as the phone's side panel draws it (Asad, 29 Oct): who works in it with its project's badge, its own
-    /// name, "Agent · AI" under it; the status dot at the end, ⋯ (and right-click) for the same menu.
+    /// A session: its type icon and its own name (Asad, 15 Nov); the orange dot only while it needs him, ⋯ (and
+    /// right-click) for the same menu.
     private func sessionRow(_ session: SidebarItem, agents: [String: AGTAgent]) -> some View {
         let title = SIDEBARSessionLine.title(session, store: store)
         return SIDEBARSessionRow(session: session, title: title,
-                          provider: store.sessionProviders[session.id] ?? (session.id.hasPrefix("server ") ? "shell" : nil),
                           chat: store.sessionChats.contains(session.id),
-                          project: sessionProject(session.id),
                           highlighted: Sidebar21Pages.selection(selected) == session.id,
                           onAccent: isSelected(session.id),
                           selection: AnyView(selection(session.id)),
+                          // B2 (MAC-NEXT-13): the row opens the session as always; only the raised hand opens a waiting page.
                           open: { choose(session.id) },
                           editing: renamingID == session.id,
                           beginRename: renamesInPlace(session) ? { renamingID = session.id } : nil,
                           endRename: { typed in
                               if renamingID == session.id { renamingID = nil }
                               if let typed { renameInPlace?(session, typed) }
-                          },
-                          // Keep an assigned agent's profile icon in every Mac session list.
-                          agent: NativeSessionRowIdentity(id: session.id).agent) {
+                          }) {
             sessionMenu(session)
         }
         .driveAnchor(DriveAnchor.sessionRow(sessionId: session.id).id)
@@ -296,7 +350,8 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     }
     private func projectName(_ project: SidebarProject?) -> String {
         guard let project else { return "Independent" }
-        return project.id.hasPrefix("/") ? URL(fileURLWithPath: project.id).lastPathComponent : project.title
+        // LANDING-FIX-4: a registered project's folder is named by the project ("CRM", not "ClaudeCRM"); display only.
+        return project.id.hasPrefix("/") ? NativeProjectNames.folderRowName(project.id, registry: registry) : project.title
     }
     private func colour(_ path: String?) -> String {
         SIDEBARLayout.colour(path: path, projects: folderProjects, registry: store.projects)
@@ -318,6 +373,9 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
     }
     private func row(_ item: SidebarItem) -> some View {
         let on = isSelected(item.id)
+        // A page waiting for him that no session row shows (Hoot's, a Hoot task's, a background agent's): Hoot's line
+        // carries the raised hand, and his click on it opens exactly that page (NativeWaitingPages).
+        let waiting = item.isHoot ? hootLinePage : nil
         return Button { choose(item.id) } label: {
             HStack(spacing: 8) {
                 Group {
@@ -326,10 +384,13 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
                 }.frame(width: 18)
                 Text(item.title).lineLimit(1).foregroundStyle(on ? Color.white : Color.primary)
                 Spacer(minLength: 0)
-                if item.id == "agents-all", AGTAgentsStore.shared.counts.working > 0 {
+                if let waiting {
+                    SIDEBARWaitingHand(page: waiting)
+                } else if item.id == "agents-all", AGTAgentsStore.shared.counts.working > 0 {
                     Text("\(AGTAgentsStore.shared.counts.working) working").font(.system(size: 11)).foregroundStyle(on ? Color.white.opacity(0.85) : Color.secondary)
                 } else if item.id == "tasks", let tasks = TasksStore.shared.state?.tasks {
-                    let count = tasks.filter { $0.archivedAt == nil && $0.deletedAt == nil && $0.crmStatus != "Done" }.count
+                    // 15 Nov: the same rule the Tasks page lists by in its widest view, never a second copy.
+                    let count = TaskList.openInWidestView(tasks).count
                     if count > 0 { Text("\(count)").monospacedDigit().foregroundStyle(on ? Color.white.opacity(0.85) : Color.secondary) }
                 } else if item.unread || (item.id == "servers" && NativeServersModel.shared.states.values.contains { $0.link == .failed || NativeMACHINESServersDashboard.stopped($0) > 0 }) {
                     Circle().fill(Color.orange).frame(width: 6, height: 6).accessibilityLabel("Needs a look")
@@ -342,7 +403,6 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         .contextMenu {
             Button("Open") { choose(item.id) }
             if item.id == "servers" { Button("Add a server…") { choose("servers:add") } }
-            if item.id == "devices" { Button("Pair a device…") { choose("devices:pair") } }
         }
         .accessibilityAddTraits(Sidebar21Pages.selection(selected) == item.id ? .isSelected : [])
     }
@@ -377,6 +437,12 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
             Button("Choose logo…") { chooseLogo(registry.first { $0.id == projectID } ?? SHELLRoutes.project(forPath: project.id)) }
             Divider()
             Button("Remove from sidebar") { closeProject(project.id) }
+            // Delete rule J-4: this Mac only ("Not on this Mac", Bring back in Your Cloud). No question, no session
+            // closed, no folder touched; the same route as the New Session list (`remove-project`).
+            if projectID != PROJProjects.independentID {
+                Button("Remove from this Mac") { AppModel.shared.buttonActions.run(.removeProject(project.id)) }
+                    .help("Removed from this Mac only. Its folders and sessions are kept; Bring back is in Your Cloud.")
+            }
         }
     }
     private func newProject() { PROJGuideWindow.open() }
@@ -404,18 +470,68 @@ enum SIDEBARCalls {
     }
 }
 
+/// The side panel's bottom bar (owner, 14 Nov, his mock "A  Asad · Ultra ⌄ … ⚙"): his profile on the left (picture or
+/// initial and his name; "Name · Plan" once the account names a plan), only the gear on the right. The profile opens
+/// Settings on Profile; the gear opens Settings on General. Signed out the left says "Sign in". A narrow panel shows the
+/// picture and the gear only. No Devices button: his devices are Settings → Devices.
 struct SidebarSettingsLine: View {
     let model: AppModel
+    @State private var keys = AiAppsSettingsModel.shared
     var body: some View {
         HStack(spacing: 8) {
+            SidebarProfileButton(enabled: model.canRun) { model.openSettings(section: NativeSettingsNavigation.profileID) }
+            Spacer(minLength: 0)
+            // A key a tool made waits in Settings › AI apps (it never opens Settings by itself).
+            if keys.made != nil {
+                Image(systemName: "key.fill").font(.caption).foregroundStyle(.orange)
+                    .help("A new AI app key is waiting in Settings › AI apps").accessibilityLabel("A new key is waiting in Settings")
+            }
             Button(action: model.requestSettings) {
-                Label("Settings", systemImage: "gearshape").frame(maxWidth: .infinity, minHeight: 28, alignment: .leading).contentShape(.rect)
-            }.buttonStyle(DeckSidebarRowStyle()).help("Open Settings (⌘,)").disabled(!model.canRun)
-            // Compact, at the right end of the row where the bell was (no in-app notifications now).
-            Button { model.requestDevicesWindow() } label: {
-                Image(systemName: "laptopcomputer.and.iphone").frame(width: 28, height: 28).contentShape(.rect)
-            }.buttonStyle(DeckSidebarIconStyle()).fixedSize().help("Devices").accessibilityLabel("Devices")
+                Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(.rect)
+            }.buttonStyle(DeckSidebarIconStyle()).fixedSize().help("Settings (⌘,)").accessibilityLabel("Settings")
+                .disabled(!model.canRun)
         }.foregroundStyle(.secondary)
+    }
+}
+
+/// His picture and name; "Sign in" while nobody is signed in (absent where this copy cannot sign in at all).
+struct SidebarProfileButton: View {
+    let enabled: Bool
+    var account = NativeCloudAccount.shared
+    let openProfile: () -> Void
+    /// The plan's name once the account service sends one (not yet: the name stands alone).
+    static func label(name: String, plan: String?) -> String {
+        guard let plan, !plan.isEmpty else { return name }
+        return name + " · " + plan
+    }
+    /// "Name", "Name · Plan", "Sign in again" while the saved sign-in waits to be checked, "Sign in" signed out.
+    static func text(_ facts: NativeProfileFacts) -> String {
+        guard facts.signedIn else { return "Sign in" }
+        return facts.needsSignInAgain ? "Sign in again" : label(name: facts.name ?? "", plan: nil)
+    }
+    var body: some View {
+        let facts = NativeProfileFacts.current(account)
+        if facts.signedIn || NativeCloudDisplayGate.shared.shows {
+            Button {
+                if !facts.signedIn, case .signedOut(waiting: false) = account.signInStage { account.pressSignIn() }
+                else if facts.needsSignInAgain { account.pressCheckAgain() }
+                else { openProfile() }
+            } label: {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        NativeProfileAvatar(name: facts.name, picture: facts.picture, local: facts.localPicture, size: 22)
+                        Text(Self.text(facts))
+                            .font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1).truncationMode(.tail)
+                    }
+                    NativeProfileAvatar(name: facts.name, picture: facts.picture, local: facts.localPicture, size: 22)
+                }
+                .frame(minHeight: 28, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(DeckSidebarRowStyle())
+            .help(facts.signedIn ? "Your profile" : "Sign in")
+            .accessibilityLabel(facts.signedIn ? "Profile, \(facts.name ?? "")" : "Sign in")
+            .disabled(!enabled)
+        }
     }
 }
 
@@ -425,7 +541,7 @@ struct SidebarRow: View {
     var selected = false
     var body: some View {
         HStack(spacing: 8) {
-            if item.kind == .session { NativeSessionRowIdentity(id: item.id).picture(surface: DeckTokens.frame) }
+            if item.kind == .session { SIDEBARSessionTypeIcon(chat: SIDEBARProjectStore.shared.sessionChats.contains(item.id)) }
             else if item.isHoot { AgentAvatar(icon: .symbol("bird"), size: 18, hoot: true).frame(width: 18) }
             else { Image(systemName: SymbolName.resolve(item.symbol, fallback: item.kind.defaultSymbol)).foregroundStyle(.secondary).frame(width: 18) }
             VStack(alignment: .leading, spacing: 2) {
@@ -482,9 +598,19 @@ final class SIDEBARPins {
     private var currentSessions: [String: String] = [:]
     var ids: [String] { keys.map { currentSessions[$0] ?? $0 } }
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var arrival: NSObjectProtocol?
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         keys = defaults.stringArray(forKey: Self.stableKey) ?? defaults.stringArray(forKey: Self.key) ?? []
+        // Same everywhere (15 Nov): a session pinned on another device is pinned here too; one that is not on this
+        // device yet stays saved (as unknown old pins always did) and shows pinned as soon as it is here.
+        arrival = NotificationCenter.default.addObserver(forName: CloudSyncChoices.choicesArrived, object: nil, queue: .main) { [weak self] note in
+            let keys = note.userInfo?["keys"] as? [String] ?? []
+            MainActor.assumeIsolated {
+                guard keys.contains(SIDEBARPins.stableKey), let self, let saved = self.defaults.stringArray(forKey: Self.stableKey), saved != self.keys else { return }
+                self.keys = saved
+            }
+        }
     }
     /// tabKey survives a keeper restart. A process id does not. Unknown old pins stay saved without guessing.
     func observe(_ row: [String: Any]) {
@@ -521,15 +647,63 @@ final class SIDEBARPins {
 /// separate"): one picture (the agent, or a plain chat/shell glyph, with the project's badge on its
 /// corner), the session's own name and "Agent · AI" under it in one tight block; at the end its status dot (blue
 /// working, grey idle; orange/red keep their meaning), which gives way to ⋯ while the pointer is on the row.
+/// The quiet marks a session's tools leave on its row (NativeBackgroundToolsPolicy): a phone, a browser, a raised hand
+/// when a page waits for the person. Drawn as the row's other small marks (StatusMark): caption, secondary; the hand
+/// orange. Nothing else changes: the person opens the session himself when he wants to look.
+/// The raised hand for one waiting page: its own click target, so the row under it keeps opening what it always opens.
+struct SIDEBARWaitingHand: View {
+    let page: String
+    var body: some View {
+        Button { NativeWaitingPages.open(page) } label: {
+            Image(systemName: NativeBackgroundToolsPolicy.Mark.handover.symbol).font(.caption).foregroundStyle(.orange)
+                .frame(minWidth: 16, minHeight: 16).contentShape(.rect)
+        }
+        .buttonStyle(.plain).help(NativeWaitingPages.words).accessibilityLabel(NativeWaitingPages.words)
+    }
+}
+
+/// B1: the side panel's always-visible line for a waiting page while Hoot's line is scrolled out of sight.
+private struct SIDEBARWaitingLine: View {
+    let page: String
+    var body: some View {
+        Button { NativeWaitingPages.open(page) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: NativeBackgroundToolsPolicy.Mark.handover.symbol).font(.caption).foregroundStyle(.orange).frame(width: 18)
+                Text("A page is waiting for you").lineLimit(1)
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: DeckSidebar.rowHeight, alignment: .leading).contentShape(.rect)
+        }
+        .buttonStyle(DeckSidebarRowStyle()).help(NativeWaitingPages.words).accessibilityLabel(NativeWaitingPages.words)
+        .padding(.horizontal, 12).padding(.vertical, 4)
+    }
+}
+
+/// The page a session's browser holds for him (a hand-over waiting), if any: the row's orange dot opens it (SR-6).
+/// The simulator and browser marks themselves are gone from the row (Asad, 15 Nov: "remove ... simulator and browser
+/// icon too if they are attached").
+private struct SIDEBARSessionNeedsYou: View {
+    let sessionID: String
+    let status: String?
+    let onAccent: Bool
+    @State private var bindings = NativeBRBindings.shared
+    @State private var browser = NativeBrowserTabs.shared
+
+    var body: some View {
+        let bound = bindings.view.sessions.first { $0.sessionId == sessionID && !$0.ended }?.windows.map(\.tabId) ?? []
+        let waiting = bound.first { browser.tab($0)?.handoverPrompt != nil }
+        SIDEBARNeedsYouDot(needsYou: SIDEBARNeedsYouDot.needsYou(status: status), waitingPage: waiting, onAccent: onAccent)
+    }
+}
+
+/// A session row (Asad, 15 Nov; DESIGN-SESSION-ROWS SR-1 to SR-8): the type icon (chat or terminal) and the session's
+/// name, one line. At its end only the orange dot while it needs him, which gives way to ⋯ while the pointer is on the
+/// row. Who works in it, its project, its AI and its machine are on the session's own page when it is open.
 private struct SIDEBARSessionRow<MenuItems: View>: View {
     let session: SidebarItem
     /// The name the phones show for it (`SIDEBARSessionLine.title`).
     let title: String
-    /// The session's AI ("claude", "codex"…), for the grey line under its title.
-    var provider: String?
+    /// A chat session (bubble icon); otherwise a terminal (an AI in a terminal or a shell).
     var chat = false
-    /// The session's project: its logo is the badge on the picture's corner. Nil for Independent sessions.
-    var project: PROJProject?
     let highlighted: Bool
     let onAccent: Bool
     let selection: AnyView
@@ -540,22 +714,16 @@ private struct SIDEBARSessionRow<MenuItems: View>: View {
     var beginRename: (() -> Void)? = nil
     /// The field closed: the new name, or nil (Escape, or left untouched).
     var endRename: (String?) -> Void = { _ in }
-    /// The agent the session was started as or works as (its picture, and its name on the second line). Nil: the
-    /// AI's own session, shown with a plain chat/shell glyph and its AI's name.
-    var agent: AGTAgent? = nil
     @ViewBuilder let menu: () -> MenuItems
     @State private var hovering = false
 
-    static var pictureSize: CGFloat { 26 }
-    static var minHeight: CGFloat { 40 }
-
-    private var subtitle: String? { SIDEBARSessionLine.subtitle(agent: agent?.name, ai: SIDEBARSessionLine.aiName(provider)) }
+    static var minHeight: CGFloat { DeckSidebar.rowHeight }
 
     var body: some View {
         if editing {
-            // The picture stays, so the name does not jump sideways when the field opens.
-            HStack(spacing: 10) {
-                picture
+            // The icon stays, so the name does not jump sideways when the field opens.
+            HStack(spacing: 8) {
+                icon
                 SIDEBARRenameField(title: title, end: endRename)
             }
             .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: Self.minHeight, alignment: .leading)
@@ -564,38 +732,29 @@ private struct SIDEBARSessionRow<MenuItems: View>: View {
         }
     }
 
-    private var picture: some View {
-        SIDEBARSessionPicture(agent: agent, provider: provider, project: project, onAccent: onAccent, size: Self.pictureSize, chat: chat, mutedSelected: highlighted && !onAccent)
-    }
+    private var icon: some View { SIDEBARSessionTypeIcon(chat: chat, onAccent: onAccent) }
 
     private var row: some View {
         Button(action: open) {
-            HStack(spacing: 10) {
-                picture
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).fontWeight(.medium).lineLimit(1).truncationMode(.tail)
-                        .foregroundStyle(onAccent ? Color.white : Color.primary)
-                    if let subtitle {
-                        Text(subtitle).font(.system(size: 11)).lineLimit(1).truncationMode(.tail)
-                            .foregroundStyle(onAccent ? Color.white.opacity(0.85) : Color.secondary)
-                    }
-                }
-                .accessibilityElement(children: .combine)
+            HStack(spacing: 8) {
+                icon
+                Text(title).lineLimit(1).truncationMode(.tail)
+                    .foregroundStyle(onAccent ? Color.white : Color.primary)
                 Spacer(minLength: 4)
                 Color.clear.frame(width: 22, height: 1) // the dot, or ⋯
             }
-            .padding(.horizontal, 8).padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
+            .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, minHeight: Self.minHeight, alignment: .leading)
             .background(selection).contentShape(.rect)
         }
         .buttonStyle(DeckSidebarRowStyle())
-        .help(subtitle.map { title + " — " + $0 } ?? title)
+        .help(title)
         .overlay(alignment: .trailing) {
             ZStack {
-                // One shared dot: it pulses slowly while the session works (SessionStatusDot).
-                SessionStatusDot(status: chat && NativeHootChatModel.queueOwner(session.id)?.workingState.active == true
-                    && NativeHootChatModel.queueOwner(session.id)?.pending.isEmpty == true ? "working" : session.status, onAccent: onAccent)
+                SIDEBARSessionNeedsYou(sessionID: session.id, status: session.status, onAccent: onAccent)
                     .opacity(hovering ? 0 : 1)
+                    .allowsHitTesting(!hovering)
                 Menu { menu() } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold))
                         .frame(width: 22, height: 22).contentShape(.rect)
@@ -622,7 +781,7 @@ private struct SIDEBARSessionRow<MenuItems: View>: View {
     }
 }
 
-/// Which agent each session row names on its second line: a saved agent the session was started as (its live rows),
+/// Which agent works in each session (for the session lists that still show it; side-panel rows no longer do): a saved agent the session was started as (its live rows),
 /// or the lead a session works as (lead adoption: opened by the person in a project led by a saved agent).
 @MainActor
 enum SIDEBARSessionAgents {

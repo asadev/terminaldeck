@@ -50,6 +50,12 @@ public actor BackendRemoteHostService {
     private var generation: UUID?
     private var startFlight: (id: UUID, task: Task<BackendRemoteHostStatus, Error>)?
     private var stopFlight: (id: UUID, task: Task<Void, Never>)?
+    public typealias AIAppsLinkFactory = @Sendable (String, BackendRemoteHostIdentity, @escaping BackendRemoteRelayClient.MCPHandler) throws -> any BackendRemoteServeHostServiceRelaying
+    /// review-fixes 1 (15 Nov): the relay link that carries only AI apps while remote access is off (see keepAIAppsLink).
+    private var aiAppsLink: (id: UUID, link: any BackendRemoteServeHostServiceRelaying)?
+    private var aiAppsWanted: (@Sendable () async -> Bool)?
+    private var makeAIAppsLink: AIAppsLinkFactory?
+    private var aiAppsRefreshing = false, aiAppsRefreshAgain = false
     public init(endpoint: BackendRemoteHost, ownPorts: BackendDevOwnPorts, relayURL: String?, webRoot: URL?, tailnet: (any BackendRemoteServeHostServiceDirectAccess)?, hostName: String,
                 mcp: BackendRemoteRelayClient.MCPHandler? = nil, directPort: UInt16 = 8443, localPort: UInt16? = nil,
                 afterEndpointStart: (@Sendable () async throws -> Void)? = nil,
@@ -75,8 +81,15 @@ public actor BackendRemoteHostService {
         guard directPort > 0 else { throw NativeRPCError.invalidArguments("The direct remote host port must be between 1 and 65535") }
         let id = UUID(); generation = id
         let task = Task { try await self.startOwned(id) }; startFlight = (id, task)
-        defer { if startFlight?.id == id { startFlight = nil } }
-        return try await task.value
+        do {
+            let value = try await task.value
+            if startFlight?.id == id { startFlight = nil }
+            return value
+        } catch {
+            if startFlight?.id == id { startFlight = nil }
+            await refreshAIAppsLink()   // remote access did not start: AI apps keep their own link
+            throw error
+        }
     }
     private func requireCurrent(_ id: UUID) throws {
         try Task.checkCancellation()
@@ -88,6 +101,8 @@ public actor BackendRemoteHostService {
             // Mac's identity, and a later step that waits or fails (devices, windows, credentials, Tailscale) must not
             // keep every AI app and the CRM out. Phones reach the host once its endpoint below is up.
             var relayFailure: Error?
+            // The full link replaces the AI-apps-only one (one socket per Mac's room); it carries AI apps itself.
+            if let held = aiAppsLink { aiAppsLink = nil; await held.link.stop(); try requireCurrent(id) }
             if let relayURL {
                 step("connecting to the relay")
                 do {
@@ -187,6 +202,50 @@ public actor BackendRemoteHostService {
         stopFlight = (id, task)
         await task.value
         if stopFlight?.id == id { stopFlight = nil }
+        await refreshAIAppsLink()   // remote access off: "Let AI apps use this Mac" keeps its own link if on
+    }
+    /// review-fixes 1 (15 Nov): "Let AI apps use this Mac" makes its address work by itself. While remote access is
+    /// off and `wanted` says yes, this keeps a relay link that carries ONLY AI apps (BackendRemoteRelayClient
+    /// aiAppsOnly: no device channel, no pairing, no Receiver, no account tie); whether phones may open this Mac stays
+    /// remote access's own switch. Remote access starting replaces it with the full link; stopping brings it back.
+    /// Only the app's wiring calls this (tests and older wiring keep today's behaviour).
+    public func keepAIAppsLink(wanted: @escaping @Sendable () async -> Bool,
+                               make: @escaping AIAppsLinkFactory = { try BackendRemoteRelayClient(url: $0, identity: $1, aiAppsOnly: $2) }) async {
+        aiAppsWanted = wanted; makeAIAppsLink = make
+        await refreshAIAppsLink()
+    }
+    /// Re-reads the switch and starts or stops the AI-apps-only link (BackendRelayMCPServing's follower).
+    public func refreshAIAppsLink() async {
+        guard !aiAppsRefreshing else { aiAppsRefreshAgain = true; return }
+        aiAppsRefreshing = true
+        repeat { aiAppsRefreshAgain = false; await settleAIAppsLink() } while aiAppsRefreshAgain
+        aiAppsRefreshing = false
+    }
+    private func settleAIAppsLink() async {
+        guard let wantedNow = aiAppsWanted, let make = makeAIAppsLink, let relayURL, let mcp else { return }
+        func fullOwnsRelay() -> Bool { startFlight != nil || stopFlight != nil || relay != nil }
+        var wanted = false
+        if !fullOwnsRelay() { wanted = await wantedNow() }
+        if wanted, aiAppsLink == nil, !fullOwnsRelay() {
+            do {
+                try await endpoint.trust.open()
+                let identity = try await endpoint.trust.hostIdentity()
+                guard aiAppsLink == nil, !fullOwnsRelay() else { return }
+                let token = UUID(), link = try make(relayURL, identity, mcp)
+                aiAppsLink = (token, link); await link.start()
+                // Remote access started meanwhile and already took this link away: make sure it is down.
+                if aiAppsLink?.id != token { await link.stop() }
+                else { BackendRemoteRelayClient.note("relay: AI-apps-only link started (remote access is off).") }
+            } catch { BackendRemoteRelayClient.note("relay: AI-apps-only link could not start: \(error.localizedDescription)") }
+        } else if !wanted, let held = aiAppsLink {
+            aiAppsLink = nil; await held.link.stop()
+            BackendRemoteRelayClient.note("relay: AI-apps-only link stopped.")
+        }
+    }
+    /// The relay link AI apps use now (the full one while remote access runs, else the AI-apps-only one).
+    public func aiAppsRelayState() async -> BackendRemoteRelayState? {
+        if let relay { return await relay.state() }
+        return await aiAppsLink?.link.state()
     }
     private func withdrawDirect() async {
         let old = listener; listener = nil

@@ -27,6 +27,9 @@ final class NativeCompositionRoot {
     /// Why the first start of this run failed (shown again if a retry fails only because of leftovers).
     private var firstStartFailure: Error?
     private var assemblies: [@MainActor (BackendCompositionRoot) async throws -> Void] = []
+    private var cloudComposition: NativeCompositionCloud?
+    private var cloudActivation: (@MainActor () async -> BackendCloudAccount?)?
+    private var resumeCloud: BackendCloudAccount?
     private var production: NativeCompositionProduction?
     /// The sessions area, for keeping sessions running with no window (NativeSVResident).
     var sessionsArea: BackendCompositionSessions? { guard let production else { return nil }; return production.sessions }
@@ -36,6 +39,9 @@ final class NativeCompositionRoot {
         var environment = ProcessInfo.processInfo.environment
         var home = NSHomeDirectory()
         var fullGraph = true
+        var cloudAccount: (@MainActor (BackendCompositionRoot) async throws -> BackendCloudAccount?)?
+        /// Whether this copy can sign in at all (lists Settings → Cloud with its Sign in button); reads, never builds.
+        var cloudOffered: (@MainActor (BackendCompositionRoot) -> Bool)?
         var settingsBrowser: (any BackendAppSettingsBrowserData)? = NativeBrowserDataClear()
         var connect: @MainActor (BackendCompositionRoot) async throws -> Void = { try await EngineBridge.shared.configure(native: $0) }
         var disconnect: @MainActor () async -> Void = { await EngineBridge.shared.disconnectNative() }
@@ -116,10 +122,73 @@ final class NativeCompositionRoot {
                     report: runtime.report)
                 production = assembled
                 try await assembled.assemble()
+                if let factory = runtime.cloudAccount {
+                    NativeCloudDisplayGate.shared.offer(runtime.cloudOffered?(graph) ?? false)
+                    // AM8: with no account (or after sign-out) nothing of Cloud is constructed; only the sign-in link is armed.
+                    let joins = assembled.joins, dataRoot = graph.dataRoot
+                    // Saved passwords (lean item 3): the app's own live owners, handed over only when an account is
+                    // built with saved passwords switched on. Nothing is read or constructed here.
+                    NativeCloudApplication.liveSecrets = { [weak assembled] appName in
+                        guard let assembled else { return nil }
+                        return try NativeCloudSecretsOwners.live(appName: appName, production: assembled)
+                    }
+                    let activate: @MainActor () async -> BackendCloudAccount? = { [weak self] in
+                        guard let self else { return nil }
+                        if let existing = self.cloudComposition { return existing.service }
+                        guard let account = await NativeCompositionCloud.resolveAccount({ try await factory(graph) }) else { return nil }
+                        await account.setSessionHook { [weak self] change in
+                            NativeCloudLaunch.recordSession(change, dataRoot: dataRoot)
+                            guard change != .signedIn else { return }
+                            // Dormant or signed out: nothing of Cloud keeps running; memory capture stops on the store itself,
+                            // even when no sync engine ran this launch (finding 2, N3).
+                            await NativeCloudBrainRegistration.suspendMemory()
+                            await self?.retireCloud()
+                        }
+                        // Design B4 (a lost Mac): signed out by another of his devices. Only this Mac's Cloud keys go;
+                        // every file, note, chat, code and saved password stays, and Profile says who and when.
+                        await account.setSignedOutElsewhereHook { value in
+                            await NativeCloudSecrets.forgetKeysAfterRemoteSignOut()
+                            NativeCloudLaunch.recordSignedOutElsewhere(value.line, dataRoot: dataRoot)
+                            await MainActor.run { NativeCloudAccount.shared.signedOutElsewhere(value.line) }
+                        }
+                        // Owner, 13 Nov: no confirm sheet; the website names the account. How this Mac trusts the
+                        // account's other devices is this Mac's own setting (default: automatically, with the account).
+                        let mode = NativeCloudLaunch.trustMode(dataRoot: dataRoot)
+                        await account.setTrustMode(mode)
+                        NativeCloudAccount.shared.useTrustMode(mode) { NativeCloudLaunch.setTrustMode($0, dataRoot: dataRoot) }
+                        // 13 Nov: one plain line per stage of the sign-in's finish in the app's log (no token, code, key or e-mail).
+                        await account.setStageLog { line in await MainActor.run { NativeCloudAccount.log(line) } }
+                        // R5: the last Mac approved for saved passwords is warned in this window before it signs out.
+                        await account.setLastSignOutWarning { await NativeCloudAccount.confirmLastSignOut() }
+                        // R5: "were the recovery words confirmed?" is answered by saved passwords' own status (lane V) for the
+                        // signed-in identity. While saved passwords are not wired the answer is no, as it was before.
+                        await account.setRecoveryWordsConfirmed { try await NativeCloudSecrets.recoveryWordsConfirmed() }
+                        // Security review M3/S17: the guard applies only when THIS MAC holds a saved-passwords key.
+                        await account.setSavedPasswordsKeyHeld { await NativeCloudSecrets.keyHeld() }
+                        self.cloudComposition = NativeCompositionCloud(service: account, root: graph, joins: joins)
+                        return account
+                    }
+                    cloudActivation = activate
+                    let resumed = await NativeCloudLaunch.begin(dataRoot: dataRoot, activate: activate)
+                    if let resumed { resumeCloud = resumed }
+                    #if DEBUG
+                    // Proof P3's scratch plan only (NativeCloudScratch): with no saved account, start the sign-in as
+                    // the website's sign-in link would, once the window is up. Never compiled into a release build.
+                    if resumed == nil, NativeCloudScratch.plan(environment: ProcessInfo.processInfo.environment, dataRoot: dataRoot)?.signIn == true,
+                       let link = URL(string: "terminaldeck://cloud/signin") {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(4))
+                            _ = NativeCloudAccount.shared.handle(link)
+                        }
+                    }
+                    #endif
+                }
             }
             try Task.checkCancellation()
             // The app's pages and windows reach every area through this one graph.
             try await runtime.connect(graph)
+            // Launch never waits on a Cloud request (finding 4): the saved account resumes after the app's pages connect.
+            if let account = resumeCloud { resumeCloud = nil; Task { try? await account.resume() } }
             await runtime.appearanceReady()
             try Task.checkCancellation()
             await graph.seal()
@@ -262,6 +331,14 @@ final class NativeCompositionRoot {
         return control.feature()
     }
 
+    /// After sign-out the graph keeps no Cloud object; the next sign-in link constructs a fresh account.
+    private func retireCloud() async {
+        guard let composition = cloudComposition else { return }
+        cloudComposition = nil
+        await composition.retire()
+        if let cloudActivation { NativeCloudAccount.shared.arm(cloudActivation, dormant: backend.map { NativeCloudLaunch.isDormant(dataRoot: $0.dataRoot) } ?? false) }
+    }
+
     /// Node drains first in AppModel. Domain observers/children stop next; the
     /// shared Store transport is closed last so Node's final ledger save works.
     func stop() async throws {
@@ -272,6 +349,9 @@ final class NativeCompositionRoot {
         let trace: @Sendable (String) -> Void = { report("quit: " + $0) }
         if let production { await BackendCompositionRoot.traced("production", trace) { await production.stop() } }
         production = nil
+        cloudComposition = nil; cloudActivation = nil
+        NativeCloudAccount.shared.detach()
+        NativeCloudDisplayGate.shared.offer(false)
         if let backend { try await BackendCompositionRoot.traced("backend", trace) { try await backend.shutdown(trace: trace) } }
         backend = nil
         await BackendCompositionRoot.traced("hoot window", trace) { await runtime.stopHoot() }; hoot = nil

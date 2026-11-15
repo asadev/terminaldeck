@@ -179,7 +179,9 @@ struct NativeBrowserToolbarRow: View {
         })
         .onAppear {
             address = BrowserAddress.display(tab.url)
-            if tab.url == nil { addressFocused = true }
+            // An empty tab he opened puts his cursor in its address bar; a page's own new window (it has no address
+            // until WebKit loads it) never does (MAC-NEXT-15).
+            if tab.url == nil, !tab.openedByPage { addressFocused = true }
         }
         .onChange(of: tab.url) {
             if !addressFocused { address = BrowserAddress.display(tab.url) }
@@ -500,7 +502,7 @@ struct NativeBrowserMenuActions: View {
                 NativeSessionButton("Recorded flow") { tab.flowHidden = false }
             }
             NativeSessionButton("Scraping") { NativeBRSettingsLink.open("scraping") }
-            NativeSessionButton("Settings") { NativeBRSettingsLink.open("browser") }
+            NativeSessionButton("Browser Settings…") { NativeBrowserSettingsWindow.show() }
         }
     }
 }

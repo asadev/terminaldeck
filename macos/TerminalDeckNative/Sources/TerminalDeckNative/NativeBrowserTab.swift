@@ -64,6 +64,9 @@ final class NativeBrowserTab: Identifiable {
     private(set) var handoverPrompt: String?
     /// The agent's waiting call, answered with the handover's outcome.
     @ObservationIgnored var handoverWaiter: ((String) -> Void)?
+    /// The person has opened the page he was handed (it came into one of his windows himself): the agent's waiting
+    /// call is told at once (browser_handover answers still-waiting with opened true), and again when he finishes.
+    private(set) var handoverOpened = false
     /// Browser 27: dialog answers, waiting uploads, camera/microphone answers,
     /// network routes, console and emulation for this tab (never saved).
     @ObservationIgnored var automation = NativeBrowserAutomation()
@@ -106,6 +109,13 @@ final class NativeBrowserTab: Identifiable {
     /// Made for a page's window request: WebKit loads it, so no start view meanwhile.
     private var awaitingWebKitLoad = false
     private(set) var pageInWindow = false
+    /// The page has been in one of the person's own windows at least once (B3, MAC-NEXT-13): a page he opened or
+    /// looked at is his, and a tool touching it later never silences its sound. Only a page an AI opened in the
+    /// background, never shown to him, stays quiet while parked.
+    private(set) var shownToPerson = false
+    /// Made for a page's own window request (window.open, target=_blank): it has no address yet because WebKit loads
+    /// it, and it never puts the person's keyboard in the address bar when it appears (MAC-NEXT-15).
+    let openedByPage: Bool
     @ObservationIgnored private var delegate: NativeBrowserPageDelegate?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var faviconTask: Task<Void, Never>?
@@ -114,6 +124,7 @@ final class NativeBrowserTab: Identifiable {
 
     init(record: BrowserTabRecord, owner: NativeBrowserTabs, configuration: WKWebViewConfiguration? = nil) {
         id = record.id
+        openedByPage = configuration != nil
         isolated = record.isolated
         profile = record.profile
         title = record.title
@@ -157,6 +168,8 @@ final class NativeBrowserTab: Identifiable {
         view.navigationDelegate = delegate
         view.uiDelegate = delegate
         self.delegate = delegate
+        // His own click or key in the page: the page is his again (a tool is no longer driving it).
+        view.personActed = { [weak self] in self?.automation.personTouched() }
         view.windowChanged = { [weak self, weak view] visible in
             guard let self else { return }
             self.pageInWindow = visible
@@ -164,6 +177,16 @@ final class NativeBrowserTab: Identifiable {
             if visible, let parking = self.automation.parkingWindow, view?.window !== parking {
                 self.automation.parkingWindow = nil
                 parking.close()
+            }
+            // In one of HIS windows (not a parking or capture window): sound comes back, and a page he was handed is
+            // now open in front of him, which the waiting agent hears at once.
+            if visible, let window = view?.window, !(window is NativeBrowserCaptureWindow) {
+                self.shownToPerson = true
+                view?.setAllMediaPlaybackSuspended(false)
+                if self.handoverPrompt != nil, !self.handoverOpened {
+                    self.handoverOpened = true
+                    self.handoverWaiter?("still-waiting")
+                }
             }
         }
         webView = view
@@ -451,11 +474,14 @@ final class NativeBrowserTab: Identifiable {
     func beginHandover(_ prompt: String) {
         automation.disarmUpload()
         handoverPrompt = prompt
+        // Already in front of him (he is looking at this tab): it counts as opened.
+        handoverOpened = pageInWindow && webView?.window.map { !($0 is NativeBrowserCaptureWindow) } == true
     }
 
     /// "resumed" (Done), "stopped" (Stop) or "drive-ended" (the tab closed).
     func endHandover(_ outcome: String) {
         handoverPrompt = nil
+        handoverOpened = false
         let waiter = handoverWaiter
         handoverWaiter = nil
         waiter?(outcome)
@@ -994,6 +1020,58 @@ struct NativeBrowserShot: Identifiable, Equatable {
 /// because a new window from a page always becomes a tab here.
 final class NativeBrowserWebView: WKWebView {
     var windowChanged: ((Bool) -> Void)?
+
+    /// MAC-NEXT-14: a page never takes the keyboard by itself. Without this, any `element.focus()` in the page (the
+    /// page's own script, a site's autofocus, the browser tools' focus-and-select) makes WebKit call
+    /// `window.makeFirstResponder(webView)` on whatever window shows the page: beside his session that pulled his
+    /// keyboard out of his terminal, and his next keys went into another session's page. The page's own focus still
+    /// moves inside the page (typing at page level needs nothing more); the keyboard comes to the page only from his
+    /// own click in it (below), his Tab, or the app's own person-driven calls (address bar, opening a tab).
+    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+        super.init(frame: frame, configuration: configuration)
+        Self.keepPageFromTakingTheKeyboard(self)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        Self.keepPageFromTakingTheKeyboard(self)
+    }
+
+    static let suppressPageFocusSelector = NSSelectorFromString("_setShouldSuppressFirstResponderChanges:")
+    /// MAC-NEXT-15: checked once when the browser starts (NativeBrowserTabs.init). If a WebKit update removed the
+    /// switch, one line goes to the log for us; the person sees nothing (pages could then take the keyboard again).
+    static let checkSuppressSwitchOnce: Bool = {
+        let present = WKWebView.instancesRespond(to: suppressPageFocusSelector)
+        if !present { NSLog("Terminal Deck browser: WebKit has no _setShouldSuppressFirstResponderChanges:; a page's own focus() can take the keyboard again") }
+        return present
+    }()
+    /// WebKit's own switch for page-initiated first responder changes (it does not stop AppKit's or the app's).
+    /// The guard test fails if a WebKit update ever removes it.
+    static func keepPageFromTakingTheKeyboard(_ view: WKWebView) {
+        guard view.responds(to: suppressPageFocusSelector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(view.method(for: suppressPageFocusSelector), to: Setter.self)(view, suppressPageFocusSelector, true)
+    }
+
+    /// His own click or key in the page (MAC-NEXT-15): the page is his, not a tool's, from now on.
+    var personActed: (() -> Void)?
+
+    /// His own click (the event AppKit is delivering right now, never a tool's synthetic one) gives the page the
+    /// keyboard, whatever WebKit decides about the page's focus.
+    override func mouseDown(with event: NSEvent) { takeKeyboardOnPersonsClick(event); super.mouseDown(with: event) }
+    override func rightMouseDown(with event: NSEvent) { takeKeyboardOnPersonsClick(event); super.rightMouseDown(with: event) }
+    override func otherMouseDown(with event: NSEvent) { takeKeyboardOnPersonsClick(event); super.otherMouseDown(with: event) }
+    /// Only noticed, never sent anywhere: AppKit delivers his own key here when the page has his keyboard.
+    override func keyDown(with event: NSEvent) {
+        if NSApp.currentEvent === event { personActed?() }
+        super.keyDown(with: event)
+    }
+    private func takeKeyboardOnPersonsClick(_ event: NSEvent) {
+        guard NSApp.currentEvent === event, let window, event.window === window else { return }
+        personActed?()
+        guard window.firstResponder !== self else { return }
+        window.makeFirstResponder(self)
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         windowChanged?(window != nil && !(window is NativeBrowserCaptureWindow))
@@ -1071,6 +1149,12 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         self.openExternal = openExternal
     }
 
+    /// A tool is driving this page now (BrowserPagePersonRule); never while the page is handed over to the person.
+    private var toolDriving: Bool {
+        guard let tab, tab.handoverPrompt == nil else { return false }
+        return tab.automation.toolDriving
+    }
+
     private static let pageSchemes: Set<String> = ["http", "https", "about", "data", "blob"]
 
     // MARK: Navigation
@@ -1090,8 +1174,9 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         if navigationAction.navigationType == .linkActivated,
            flags.contains(.command) || navigationAction.buttonNumber == 2,
            Self.pageSchemes.contains(scheme), let tab, let owner = tab.owningModel {
+            // A tool's ⌘⇧-click opens it in the background too (MAC-NEXT-15): only his own brings it forward.
             owner.create(url: url, after: tab.id, isolated: tab.isolated, profile: tab.profile,
-                         show: flags.contains(.shift))
+                         show: BrowserPagePersonRule.newTabShows(personAskedToShow: flags.contains(.shift), toolDriving: toolDriving))
             return (.cancel, preferences)
         }
 
@@ -1180,6 +1265,14 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     //
     // The person answers on the tab, unless an agent set an answer for this tab
     // (browser_page dialogs). Every dialog is written down for the agent to read.
+    //
+    // MAC-NEXT-15 (Asad, 14 Nov: "things are leaking between them"): a sheet on the page's window takes that window's
+    // keyboard (a prompt catches his keys, Enter or Space answers an alert), and the window can be HIS session window
+    // with the page beside his terminal. While a tool drives the page, its dialog is answered for the tool at once
+    // (alert dismissed, confirm and prompt cancelled) and its text goes to the AI with the step's result.
+    // MAC-NEXT-15b ("regular workflow has more importance than the special cases"): his own pages behave as before.
+    // On the page, the dialog shows as it always did; away from it (another tab, his keyboard elsewhere), the dialog
+    // waits, and shows when he comes back to that page. Nothing of his is cancelled for him.
 
     /// In a window the person can see (not a capture or off-screen parking window).
     static func onScreen(_ webView: WKWebView) -> Bool {
@@ -1187,64 +1280,167 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         return !(window is NativeBrowserCaptureWindow)
     }
 
-    private func record(_ kind: String, _ message: String, frame: WKFrameInfo, answer: String, by: String) {
-        tab?.automation.note(.init(kind: kind, message: String(message.prefix(500)), site: frame.securityOrigin.host,
-                                   answer: answer, by: by, at: Date()))
+    /// He is on this page: it is in his key window and holds that window's keyboard (only his own click, Tab or
+    /// address bar puts it there; a page never takes it by itself).
+    static func personUsing(_ webView: WKWebView) -> Bool {
+        guard onScreen(webView), let window = webView.window, window.isKeyWindow else { return false }
+        guard let responder = window.firstResponder as? NSView else { return false }
+        return responder === webView || responder.isDescendant(of: webView)
+    }
+
+    /// How often a held question looks whether he is back on its page.
+    static var holdPollMilliseconds = 200
+
+    /// MAC-NEXT-15c: a page an AI opened in the background that he has never been shown. Its questions are answered
+    /// for the AI at once, never held (nobody would come back to them). Not while the page is handed over to him.
+    private var neverShown: Bool {
+        guard let tab, tab.handoverPrompt == nil else { return false }
+        return !tab.shownToPerson
+    }
+
+    /// A page's question goes to the AI instead of the person: a tool drives the page, or he has never seen it.
+    private var answeredForTool: Bool { toolDriving || neverShown }
+
+    /// Who answered, in the record the AI reads.
+    private var toolAnswerer: String { toolDriving ? Self.byTool : Self.byNeverShown }
+
+    /// How a held question ended.
+    private enum Held { case person, gone, tool }
+
+    /// Hold a question of his page until he is on it. `.gone` when the page went away meanwhile (closed or replaced):
+    /// then there is nobody left to ask. `.tool` when a tool started driving the page meanwhile (MAC-NEXT-15c): it is
+    /// answered for the tool, so the tool's step is not blocked behind it. Otherwise never times out.
+    private func waitForPerson(_ webView: WKWebView) async -> Held {
+        while !Self.personUsing(webView) {
+            guard let tab, tab.webView === webView, !Task.isCancelled else { return .gone }
+            if toolDriving { return .tool }
+            try? await Task.sleep(for: .milliseconds(Self.holdPollMilliseconds))
+        }
+        return tab?.webView === webView ? .person : .gone
+    }
+
+    private func route(_ webView: WKWebView, standing: Bool) -> BrowserPagePersonRule.DialogRoute {
+        BrowserPagePersonRule.dialogRoute(standingAnswer: standing, toolDriving: toolDriving, personOnPage: Self.personUsing(webView),
+                                          shownToPerson: !neverShown)
+    }
+
+    private func record(_ kind: String, _ message: String, frame: WKFrameInfo, answer: String, by: String, forTool: Bool = false) {
+        let entry = NativeBrowserAutomation.DialogRecord(kind: kind, message: String(message.prefix(500)), site: frame.securityOrigin.host,
+                                                         answer: answer, by: by, at: Date())
+        if forTool { tab?.automation.noteForTool(entry) } else { tab?.automation.note(entry) }
+    }
+
+    static let byTool = "the tool rule (a tool was driving this page; nothing was shown to the person)"
+    static let byNeverShown = "the tool rule (an AI's page the person has never been shown; nothing was shown to him)"
+    static let byToolLater = "the tool rule (a tool started driving this page while the question waited for the person; nothing was shown to him)"
+    static let byNobodyClosed = "nobody (the page closed before the person came back to it)"
+
+    /// How a question to the person ended.
+    private enum Asked {
+        case answered(NSApplication.ModalResponse?)
+        /// The page went away before he came back.
+        case gone
+        /// A tool started driving the page while it waited: answer it as for the tool (MAC-NEXT-15c).
+        case tool
+    }
+
+    /// His own page's question: on the page now, or held until he is (route .person or .hold).
+    private func askPerson(_ webView: WKWebView, route: BrowserPagePersonRule.DialogRoute, _ alert: NSAlert) async -> Asked {
+        if route == .hold {
+            switch await waitForPerson(webView) {
+            case .gone: return .gone
+            case .tool: return .tool
+            case .person: break
+            }
+        }
+        return .answered(await tab?.presentAlert(alert))
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async {
-        if tab?.automation.autoAnswer() != nil { record("alert", message, frame: frame, answer: "ok", by: "agent"); return }
-        let alert = Self.alert(message, frame: frame)
-        alert.addButton(withTitle: "OK")
-        let shown = Self.onScreen(webView)
-        _ = await tab?.presentAlert(alert)
-        record("alert", message, frame: frame, answer: "ok", by: shown ? "person" : "nobody (the page was not on screen)")
+        let standing = tab?.automation.autoAnswer() != nil
+        let route = route(webView, standing: standing)
+        switch route {
+        case .standing: record("alert", message, frame: frame, answer: "ok", by: "agent")
+        case .tool: record("alert", message, frame: frame, answer: "dismissed", by: toolAnswerer, forTool: true)
+        case .person, .hold:
+            let alert = Self.alert(message, frame: frame)
+            alert.addButton(withTitle: "OK")
+            switch await askPerson(webView, route: route, alert) {
+            case .answered: record("alert", message, frame: frame, answer: "ok", by: "person")
+            case .gone: record("alert", message, frame: frame, answer: "ok", by: Self.byNobodyClosed)
+            case .tool: record("alert", message, frame: frame, answer: "dismissed", by: Self.byToolLater, forTool: true)
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo) async -> Bool {
-        if let policy = tab?.automation.autoAnswer() {
+        let policy = tab?.automation.autoAnswer()
+        let route = route(webView, standing: policy != nil)
+        switch route {
+        case .standing:
             record("confirm", message, frame: frame, answer: policy == .accept ? "ok" : "cancel", by: "agent")
             return policy == .accept
+        case .tool: record("confirm", message, frame: frame, answer: "cancel", by: toolAnswerer, forTool: true); return false
+        case .person, .hold:
+            let alert = Self.alert(message, frame: frame)
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            switch await askPerson(webView, route: route, alert) {
+            case .answered(let answer):
+                let ok = answer == .alertFirstButtonReturn
+                record("confirm", message, frame: frame, answer: ok ? "ok" : "cancel", by: "person")
+                return ok
+            case .gone: record("confirm", message, frame: frame, answer: "cancel", by: Self.byNobodyClosed); return false
+            case .tool: record("confirm", message, frame: frame, answer: "cancel", by: Self.byToolLater, forTool: true); return false
+            }
         }
-        let alert = Self.alert(message, frame: frame)
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let shown = Self.onScreen(webView)
-        let ok = await tab?.presentAlert(alert) == .alertFirstButtonReturn
-        record("confirm", message, frame: frame, answer: ok ? "ok" : "cancel", by: shown ? "person" : "nobody (the page was not on screen)")
-        return ok
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
-        if let policy = tab?.automation.autoAnswer() {
+        let policy = tab?.automation.autoAnswer()
+        let route = route(webView, standing: policy != nil)
+        switch route {
+        case .standing:
             let text = policy == .accept ? (tab?.automation.promptText ?? defaultText ?? "") : nil
             record("prompt", prompt, frame: frame, answer: text.map { "ok (\($0.count) characters)" } ?? "cancel", by: "agent")
             return text
-        }
-        let alert = Self.alert(prompt, frame: frame)
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = defaultText ?? ""
-        alert.accessoryView = field
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        let shown = Self.onScreen(webView)
-        guard await tab?.presentAlert(alert) == .alertFirstButtonReturn else {
-            record("prompt", prompt, frame: frame, answer: "cancel", by: shown ? "person" : "nobody (the page was not on screen)")
+        case .tool:
+            record("prompt", prompt, frame: frame, answer: Self.promptCancelledForTool, by: toolAnswerer, forTool: true)
             return nil
+        case .person, .hold:
+            let alert = Self.alert(prompt, frame: frame)
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            field.stringValue = defaultText ?? ""
+            alert.accessoryView = field
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            switch await askPerson(webView, route: route, alert) {
+            case .answered(let answer):
+                guard answer == .alertFirstButtonReturn else {
+                    record("prompt", prompt, frame: frame, answer: "cancel", by: "person")
+                    return nil
+                }
+                record("prompt", prompt, frame: frame, answer: "ok", by: "person")
+                return field.stringValue
+            case .gone: record("prompt", prompt, frame: frame, answer: "cancel", by: Self.byNobodyClosed); return nil
+            case .tool: record("prompt", prompt, frame: frame, answer: Self.promptCancelledForTool, by: Self.byToolLater, forTool: true); return nil
+            }
         }
-        record("prompt", prompt, frame: frame, answer: "ok", by: "person")
-        return field.stringValue
     }
+
+    static let promptCancelledForTool = "cancel (set an answer with browser_page dialogs to answer it)"
 
     // MARK: Files the page asks for
 
     /// The page's file chooser. Files an agent is uploading go straight in (no
     /// panel). Otherwise the person picks, from Finder or — "Choose from Photos…"
     /// — from their Photos library, which needs no Photos permission (PHPicker).
+    /// MAC-NEXT-15: never for a page a tool drives (its click must not cover his window with the Mac's chooser; the
+    /// tool is told to use the upload step). His own page: as before.
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
         if let tab, tab.automation.uploadArmed {
@@ -1253,8 +1449,11 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
             let origin = BackendBrowserOrigin.exact("\(source.protocol)://\(source.host)\(port)")
             return tab.automation.takeUpload(multiple: parameters.allowsMultipleSelection, mainFrame: frame.isMainFrame, origin: origin)
         }
-        guard Self.onScreen(webView), let window = webView.window else {
-            return nil // no window to put the chooser on (see presentAlert)
+        let toolDriving = self.toolDriving
+        guard BrowserPagePersonRule.fileChooserOpens(toolDriving: toolDriving, onScreen: Self.onScreen(webView)),
+              let window = webView.window else {
+            if toolDriving { record("file-chooser", BrowserPagePersonRule.fileChooserRefusal, frame: frame, answer: "not opened", by: Self.byTool, forTool: true) }
+            return nil // no chooser over his window (see presentAlert)
         }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
@@ -1274,9 +1473,8 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
     // MARK: Camera and microphone
 
     /// Asked on the tab, remembered per site until the tab closes. An agent's answer
-    /// for this tab (browser_page permissions) comes first. A page nobody can see
-    /// (parked off screen for an agent) is answered no: WebKit's own prompt would sit
-    /// on a window nobody sees and the page would wait forever.
+    /// for this tab (browser_page permissions) comes first. A page a tool drives is answered no
+    /// (MAC-NEXT-15); his own page he is not on keeps the question until he comes back (MAC-NEXT-15b).
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
         guard let tab else { return .deny }
@@ -1295,10 +1493,23 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         alert.informativeText = "Only in this tab, until it closes."
         alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Don't Allow")
-        guard Self.onScreen(webView) else { return .deny }
-        let allowed = await tab.presentAlert(alert) == .alertFirstButtonReturn
-        automation.personAnswers[key] = allowed
-        return allowed ? .grant : .deny
+        // MAC-NEXT-15: a page a tool drives never puts this sheet on his window; his own page asks him as before,
+        // and away from it the question waits until he is back (MAC-NEXT-15b). An AI's page he has never been shown
+        // is answered no at once, and a held question is answered no when a tool starts driving the page (15c).
+        func deniedForTool(by: String) -> WKPermissionDecision {
+            automation.noteForTool(.init(kind: "permission", message: "The page asked for the \(what).", site: origin.host,
+                                         answer: "denied (set it with browser_page permissions)", by: by, at: Date()))
+            return .deny
+        }
+        if answeredForTool { return deniedForTool(by: toolAnswerer) }
+        switch await askPerson(webView, route: Self.personUsing(webView) ? .person : .hold, alert) {
+        case .gone: return .deny
+        case .tool: return deniedForTool(by: Self.byToolLater)
+        case .answered(let answer):
+            let allowed = answer == .alertFirstButtonReturn
+            automation.personAnswers[key] = allowed
+            return allowed ? .grant : .deny
+        }
     }
 
     // MARK: Sign-in a site asks for (HTTP Basic / Digest)
@@ -1310,13 +1521,23 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         if method == NSURLAuthenticationMethodClientCertificate, tab?.isolated == true {
             return (.cancelAuthenticationChallenge, nil)
         }
-        if [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodClientCertificate].contains(method),
-           !Self.onScreen(webView) {
+        // A site's name-and-password question on a page he is not showing waits for him (below, MAC-NEXT-15b); only a
+        // client certificate, which has no question to hold, is still declined off screen.
+        if method == NSURLAuthenticationMethodClientCertificate, !Self.onScreen(webView) {
             return (.cancelAuthenticationChallenge, nil)
         }
         guard method == NSURLAuthenticationMethodHTTPBasic || method == NSURLAuthenticationMethodHTTPDigest,
               let tab else { return (.performDefaultHandling, nil) }
         if challenge.previousFailureCount >= 3 { return (.cancelAuthenticationChallenge, nil) }
+        // MAC-NEXT-15: this sheet's name and password fields would catch keys meant for elsewhere (and send them to the
+        // site): a page a tool drives, or an AI's page he has never been shown (15c), is told to hand it over; his own
+        // page asks as before, or waits until he is on it (and is handed over the same way if a tool starts driving it).
+        func cancelledForTool(by: String) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            tab.automation.noteForTool(.init(kind: "sign-in", message: "\(challenge.protectionSpace.host) asked for a name and password.", site: challenge.protectionSpace.host,
+                                             answer: "cancelled (call browser.handover so the person signs in)", by: by, at: Date()))
+            return (.cancelAuthenticationChallenge, nil)
+        }
+        if answeredForTool { return cancelledForTool(by: toolAnswerer) }
         let space = challenge.protectionSpace
         let alert = NSAlert()
         alert.messageText = "\(space.host) wants you to sign in"
@@ -1334,8 +1555,13 @@ final class NativeBrowserPageDelegate: NSObject, WKNavigationDelegate, WKUIDeleg
         alert.addButton(withTitle: "Sign In")
         alert.addButton(withTitle: "Cancel")
         alert.window.initialFirstResponder = user.stringValue.isEmpty ? user : password
-        guard await tab.presentAlert(alert) == .alertFirstButtonReturn else { return (.cancelAuthenticationChallenge, nil) }
-        return (.useCredential, URLCredential(user: user.stringValue, password: password.stringValue, persistence: .forSession))
+        switch await askPerson(webView, route: Self.personUsing(webView) ? .person : .hold, alert) {
+        case .gone: return (.cancelAuthenticationChallenge, nil)
+        case .tool: return cancelledForTool(by: Self.byToolLater)
+        case .answered(let answer):
+            guard answer == .alertFirstButtonReturn else { return (.cancelAuthenticationChallenge, nil) }
+            return (.useCredential, URLCredential(user: user.stringValue, password: password.stringValue, persistence: .forSession))
+        }
     }
 
     private static func alert(_ message: String, frame: WKFrameInfo) -> NSAlert {

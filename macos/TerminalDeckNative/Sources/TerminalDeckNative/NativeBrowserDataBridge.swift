@@ -121,6 +121,50 @@ final class NativeBrowserDataBridge {
         return url
     }
 
+    /// Native Cloud adapter only. Persistent app profiles, never isolated tabs.
+    func cloudCookies(profileID: String) async throws -> [CloudBrowserCookie] {
+        guard BackendBrowserProfiles.validID(profileID), tabs.profile(profileID) != nil, !closed,
+              !blockedPartitions.contains(BackendBrowserProfile.partition(for: profileID)) else { throw CloudFailure.invalidRequest }
+        let store = try store(for: BackendBrowserProfile.partition(for: profileID))
+        return await allCookies(store).map { cookie in
+            CloudBrowserCookie(profileId: profileID, domain: cookie.domain, path: cookie.path, name: cookie.name,
+                value: cookie.value, hostOnly: !cookie.domain.hasPrefix("."), httpOnly: cookie.isHTTPOnly,
+                secure: cookie.isSecure, sameSite: CloudBrowserCookie.SameSite(rawValue: cookie.sameSitePolicy?.rawValue.lowercased() ?? "unspecified") ?? .unspecified,
+                expires: cookie.expiresDate?.timeIntervalSince1970, session: cookie.isSessionOnly)
+        }
+    }
+    func cloudInsertKeepingLocal(_ incoming: CloudBrowserCookie, beforeFirstNavigation: @MainActor () -> Bool) async throws -> CloudApplyStatus {
+        try incoming.validate()
+        guard BackendBrowserProfiles.validID(incoming.profileId), tabs.profile(incoming.profileId) != nil, !closed,
+              !blockedPartitions.contains(BackendBrowserProfile.partition(for: incoming.profileId)) else { throw CloudFailure.invalidRequest }
+        let store = try store(for: BackendBrowserProfile.partition(for: incoming.profileId))
+        let migration = NativeBrowserCookieMigration.shared
+        let cookie = try migration.cloudCookie(incoming)
+        let existing = try await cloudCookies(profileID: incoming.profileId)
+        if let local = existing.first(where: { $0.identity == incoming.identity }) {
+            return local.sameAttributes(as: incoming) ? .alreadyPresent : .keptBoth
+        }
+        // Navigation owner must hold its restore barrier until this await completes.
+        guard beforeFirstNavigation(), !tabs.tabs.contains(where: {
+            !$0.isolated && BackendBrowserProfiles.normalizedID($0.profile) == incoming.profileId && ($0.url != nil || $0.isLoading)
+        }) else { return .keptBoth }
+        await putCookie(cookie, store: store)
+        guard await allCookies(store).contains(where: { migration.cloudAttributesMatch($0, cookie) }) else { throw CloudFailure.checksumMismatch }
+        return .applied
+    }
+    func cloudNeedsSignIn(profileID: String) async throws -> Set<String> {
+        guard BackendBrowserProfiles.validID(profileID), tabs.profile(profileID) != nil, !closed,
+              !blockedPartitions.contains(BackendBrowserProfile.partition(for: profileID)) else { throw CloudFailure.invalidRequest }
+        let store = try store(for: BackendBrowserProfile.partition(for: profileID))
+        let records = await store.dataRecords(ofTypes: [WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeIndexedDBDatabases])
+        return Set(records.map(\.displayName))
+    }
+    func cloudCookieStore(profileID: String) throws -> WKHTTPCookieStore {
+        guard BackendBrowserProfiles.validID(profileID), tabs.profile(profileID) != nil, !closed,
+              !blockedPartitions.contains(BackendBrowserProfile.partition(for: profileID)) else { throw CloudFailure.invalidRequest }
+        return try store(for: BackendBrowserProfile.partition(for: profileID)).httpCookieStore
+    }
+
     private func allCookies(_ store: WKWebsiteDataStore) async -> [HTTPCookie] {
         await withCheckedContinuation { continuation in
             store.httpCookieStore.getAllCookies { continuation.resume(returning: $0) }

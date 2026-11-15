@@ -9,7 +9,9 @@ public enum BackendMachineRegistration {
     public static let invokeChannels = BackendMachineChannels.invokeChannels.union(["remote:tunnel:stop"])
     public static let sendChannels: Set<String> = []
     public static let requiredTransferredDomains: Set<String> = ["machines", "remote-serve"]
-    public static let eventChannels: Set<String> = ["machines:state", "machines:output", "machines:upload:progress", "machines:hoot:state", "machines:hoot:chat", "machines:github:changed"]
+    public static let eventChannels: Set<String> = ["machines:state", "machines:output", "machines:upload:progress", "machines:hoot:state", "machines:hoot:chat", "machines:github:changed",
+        // Live use from another Mac (15 Nov): a chat session's live messages on that machine.
+        "machines:chats:events"]
     public static let toolIDs: Set<String> = ["machines.look", "machines.session", "machines.copilot", "machines.ports", "machines.upload", "machines.manage"]
     /**
      * Whether the host's packet check sends this packet's `path` through the file authority. Not for a phone's

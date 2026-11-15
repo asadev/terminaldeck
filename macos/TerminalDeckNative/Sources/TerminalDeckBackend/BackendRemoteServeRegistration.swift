@@ -117,6 +117,9 @@ public enum BackendRemoteServeRegistration {
         /// TS remote:device:revoke → device-roster.ts revoke: revoke → drop → forget → announce,
         /// false for a no-op (the one cascade the wire and the desktop's Remove share).
         public func revoke(_ deviceID: String) async throws -> Bool { try await runtime.revokeDevice(deviceID) }
+        /// The 30-day clean-up's removal (14 Nov, `BackendRemoteStaleDevices`): the same cascade, only for a device
+        /// that has not been seen since `quietBefore` (checked inside the roster's own removal).
+        public func revoke(_ deviceID: String, quietBefore: Double) async throws -> Bool { try await runtime.revokeDevice(deviceID, quietBefore: quietBefore) }
         /// Re-announce the device list to the owner's own devices (TS approve's push).
         public func rosterChanged() async { await runtime.rosterChanged() }
     }
@@ -260,9 +263,9 @@ public enum BackendRemoteServeRegistration {
         }
         func retain(_ token: NativeRPCSubscription) { subscriptions.append(token) }
         func retainRoster(_ value: BackendRemoteServeRoster) { roster = value }
-        func revokeDevice(_ id: String) async throws -> Bool {
+        func revokeDevice(_ id: String, quietBefore: Double? = nil) async throws -> Bool {
             guard let roster else { throw NativeRPCError(code: "unavailable", message: "The device roster is not installed.") }
-            return try await roster.revoke(id)
+            return try await roster.revoke(id, quietBefore: quietBefore)
         }
         func ownConsumers() { ownsConsumers = true }
         func started() -> Bool { active && !stopped }

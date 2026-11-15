@@ -45,7 +45,9 @@ final class AGTAgentsStore {
     /// 1.5 s (the first change after a quiet spell at once, the rest folded into one trailing read), one read at a time.
     @ObservationIgnored private lazy var livePacer = AGTRefreshPacer { [weak self] in await self?.readLive() }
     static let events = ["session:created", "session:status", "session:exit", "session:removed", "session:renamed",
-                         "tasks:changed", "ags:changed", "machines:state", "hoot:chat:changed", "agents-watch:changed"]
+                         "tasks:changed", "ags:changed", "machines:state", "hoot:chat:changed", "agents-watch:changed",
+                         // BackendCloudLeanRecords.displayEvent: an agent arrived from Cloud; redraw only, never work.
+                         "cloud-records:shown"]
 
     private init() {
         let defaults = UserDefaults.standard
@@ -161,7 +163,7 @@ final class AGTAgentsStore {
                     return
                 }
                 Task { @MainActor in
-                    if event == "tasks:changed" || event == "ags:changed" { AGTAgentsStore.shared.modelEpoch &+= 1 }
+                    if event == "tasks:changed" || event == "ags:changed" || event == "cloud-records:shown" { AGTAgentsStore.shared.modelEpoch &+= 1 }
                     AGTAgentsStore.shared.refreshLive()
                 }
             })

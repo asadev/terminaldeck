@@ -226,6 +226,40 @@ public final class BackendServersStore: @unchecked Sendable {
             return record
         }
     }
+    /// Cloud saved passwords (lane V): the server a saved sign-in from the person's other Mac belongs to, added
+    /// under THE SAME id so the sign-in can be kept under it. Add-only: an id already here is left exactly as it
+    /// is. The fields pass the same rules as a server typed by hand. Everything that is a permission of THIS Mac
+    /// starts closed and never travels: no AI app key may use the server, and sessions there may not drive
+    /// windows here (durably denied) until the person allows it on this Mac. Look only is kept when the other
+    /// Mac had it, never lowered. Nothing calls this while Cloud is off.
+    func cloudAddIfAbsent(id: String, name: String, address: String, port: Int, username: String, projectId: String?,
+                          lookOnly: Bool, hostKey: (algorithm: String, fingerprint: String)?, sshAlias: String? = nil) throws {
+        try lock.withLock {
+            guard !id.isEmpty, id == Self.clean(id, limit: 64) else { throw NativeRPCError.invalidArguments("That server cannot be added here.") }
+            var list = try load()
+            guard !list.contains(where: { $0.id == id }) else { return }
+            // Keys travel (15 Nov): a server that signs in through his SSH settings keeps its settings name.
+            if let sshAlias {
+                guard BackendDockerMCPServerSSHConfig.validAlias(sshAlias), !list.contains(where: { $0.sshAlias == sshAlias }) else {
+                    throw NativeRPCError.invalidArguments("That server cannot be added here.")
+                }
+            }
+            let address = Self.normaliseAddress(Self.clean(address, limit: 255))
+            if let issue = Self.addressProblem(address) { throw NativeRPCError.invalidArguments(issue) }
+            let username = Self.clean(username, limit: 64)
+            guard !username.isEmpty else { throw NativeRPCError.invalidArguments("A username is needed — the name you sign in to this server with.") }
+            guard list.count < Self.maximumServers else { throw NativeRPCError.invalidArguments("This app keeps up to 64 servers. Remove one to add another.") }
+            let name = Self.clean(name, limit: 64), mark = Self.clean(hostKey?.fingerprint, limit: 128)
+            let pinned: BackendServersHostKeyRecord? = mark.hasPrefix("SHA256:")
+                ? .init(algorithm: Self.clean(hostKey?.algorithm, limit: 64), fingerprint: mark, firstSeenAt: now()) : nil
+            let record = BackendServersStoredServer(id: id, name: name.isEmpty ? address : name, address: address,
+                port: (1...65535).contains(port) ? port : Self.defaultPort, username: username, hostKey: pinned, addedAt: now(),
+                drivesWindows: false, aiKeyIDs: serverAccessEnabled ? [] : nil, sshAlias: sshAlias, lookOnly: lookOnly ? true : nil,
+                projectId: PROJProjects.resolve(projectID: projectId, folder: nil))
+            list.append(record); try persist(list)
+            if !(denies ?? []).contains(id), (denies ?? []).count < 64 { try writeDenies((denies ?? []) + [id]) }
+        }
+    }
     private func update(_ id: String, _ change: (inout BackendServersStoredServer) -> Void) throws -> Bool {
         var list = try load(); guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
         change(&list[index]); try persist(list); return true

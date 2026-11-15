@@ -14,6 +14,8 @@ final class NativeButtonActions {
     struct Effects {
         var invoke: @MainActor (String, [Any?]) async throws -> Any
         var presentSession: @MainActor (String?) throws -> Void
+        /// A tool's new-session: the person's New session page gets the folder ready, unseen, keyboard untouched.
+        var prepareSession: @MainActor (String?) -> Void = { _ in }
         var confirm: @MainActor (CloseConfirmRequest) async -> Bool
         var changed: @MainActor () -> Void = {}
         var forgotten: @MainActor (String) -> Void = { _ in }
@@ -31,6 +33,8 @@ final class NativeButtonActions {
     private(set) var tabs = TabsState(tabs: [], canNewTerminal: true, canNewBrowser: true)
     @ObservationIgnored private let effects: Effects
     @ObservationIgnored private var selectionOwned = false
+    /// The command running now came from a tool (runForTool), not from the person's own press.
+    @ObservationIgnored private var forTool = false
     @ObservationIgnored private var layoutOwned = false
     @ObservationIgnored private var expanded: [String: Bool] = [:]
     @ObservationIgnored private var added: [TabItem] = []
@@ -170,6 +174,8 @@ final class NativeButtonActions {
             if presentErrors { problem = nil }
             await initialSessions?.value
             if ["select", "select-tab"].contains(command.name), nativeSelectionRevision != selectionWhenQueued { return .completed }
+            forTool = !presentErrors
+            defer { forTool = false }
             do { try await perform(command); if let saved = memory() { effects.remember(saved) }; effects.changed(); return .completed }
             catch is ButtonCancelled { return .cancelled }
             catch {
@@ -215,13 +221,17 @@ final class NativeButtonActions {
             guard !id.isEmpty, sidebar.project != nil else { try refuse("Open a folder before opening a file.") }
             sidebar.openFile = id; showPanel("files", focus: nil)
         case "new-session", "new-terminal-tab":
+            // Owner, 14 Nov: the New session page never appears by itself and never takes his keyboard for a tool.
+            if forTool { effects.prepareSession(nil); return }
             do { try effects.presentSession(nil) } catch { try refuse("The new session form could not be opened. Open the main window and try again.") }
         case "new-session-in":
             if id.hasPrefix("machine:") {
                 do { try effects.presentSession(id) } catch { try refuse("The other Mac’s new-session form could not be opened. Please try again.") }
             }
             else if id.hasPrefix("server:") { try await openServer(String(id.dropFirst(7)), name: sidebar.projects.first { $0.id == id }?.title ?? "Server", folder: nil) }
-            else { guard sidebar.projects.contains(where: { $0.id == id }) else { try refuse("That folder is no longer open.") }; do { try effects.presentSession(id) } catch { try refuse("The new session form could not be opened. Please try again.") } }
+            else { guard sidebar.projects.contains(where: { $0.id == id }) else { try refuse("That folder is no longer open.") }
+                if forTool { effects.prepareSession(id); return }
+                do { try effects.presentSession(id) } catch { try refuse("The new session form could not be opened. Please try again.") } }
         case "close-tab":
             // The top bar is a set of views: its X folds a session back into the side panel.
             // Delete on the side panel is the separate action that ends the process.
@@ -294,7 +304,8 @@ final class NativeButtonActions {
         case "new-session-start": try await NativeNewSession.submitForTool()
         case "new-session-cancel": try NativeNewSession.cancelForTool()
         case "remove-project":
-            if hideRemovedFolder(id) { return }
+            // J-4 "Remove from this Mac": the registered entry gets the "Not on this Mac" mark and the folder leaves
+            // this Mac's list. No question, no session closed, no folder touched (the old route killed its sessions).
             let ids = try await NativeNewSessionModel.removeFolder(id, invoke: effects.invoke)
             projectRemoved(id, sessions: ids)
         case "server-renamed":
@@ -495,10 +506,16 @@ final class NativeButtonActions {
         activate(id); effects.changed()
     }
     func projectRemoved(_ path: String, sessions: [String]) {
-        SIDEBARProjectStore.shared.hideFolder(path)
         for id in sessions { remove(id); effects.forgotten(id) }
-        closedProjects.insert(path); sidebar.projects.removeAll { $0.id == path }
-        if sidebar.project == path { sidebar.project = sidebar.projects.first { $0.id.hasPrefix("/") }?.id }
+        let store = SIDEBARProjectStore.shared
+        // Hiding the open folder stays separate from removing the entry: a folder whose sessions still run stays shown.
+        let live = sidebar.projects.first { $0.id == path }?.sessions.contains { store.liveIDs?.contains($0.id) == true } ?? false
+        if !live {
+            store.hideFolder(path)
+            closedProjects.insert(path); sidebar.projects.removeAll { $0.id == path }
+            if sidebar.project == path { sidebar.project = sidebar.projects.first { $0.id.hasPrefix("/") }?.id }
+        }
+        store.refresh()
         effects.changed()
     }
     private func hideRemovedFolder(_ path: String) -> Bool {

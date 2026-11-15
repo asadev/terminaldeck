@@ -46,6 +46,10 @@ final class TasksStore {
             subscriptions.append(bridge.on("tasks:changed") { _ in
                 Task { @MainActor in TasksStore.shared.reload() }
             })
+            // Lane L3: tasks arrived from Cloud. Display only (`BackendCloudLeanRecords.displayEvent`): redraw, never work.
+            subscriptions.append(bridge.on("cloud-records:shown") { _ in
+                Task { @MainActor in TasksStore.shared.reload() }
+            })
             subscriptions.append(bridge.on("tasks:open") { args in
                 guard let id = args.first as? String, !id.isEmpty else { return }
                 Task { @MainActor in
@@ -149,6 +153,7 @@ final class TasksStore {
     }
 
     func update(_ id: String, _ patch: [String: Any]) async -> TasksResult { await call("tasks:local-update", [id, patch]) }
+    /// The backend's existing Trash is the task part of the manual Bin. No confirmation or session close here.
     func remove(_ id: String) async -> TasksResult { await call("tasks:local-delete", [id]) }
     func restore(_ id: String) async -> TasksResult { await call("tasks:local-restore", [id]) }
 

@@ -39,10 +39,38 @@ extension NativeSafariRuntime {
                                                 styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = view
-        // Not throttled like a hidden page: timers, animation frames and loads run at full speed.
+        // Not throttled like a hidden page while a tool drives it: timers, animation frames and loads at full speed.
         view.configuration.preferences.inactiveSchedulingPolicy = .none
         window.orderBack(nil)
         tab.automation.parkingWindow = window
+    }
+
+    /// How long a parked page runs at full speed after the last tool call that touched it.
+    static let parkIdleSeconds = 60
+
+    /// Every tool call on a page comes through here (settle, readyForInput, captures). A page nobody shows is parked;
+    /// one an AI opened in the background and he never had in front of him is SILENT (sound suspended until he opens
+    /// it himself), while a page he left playing in another tab keeps its sound (B3, MAC-NEXT-13); after `parkIdleSeconds` with no tool call its
+    /// parking window closes, so it is a plain hidden page again under WebKit's normal background throttling, and no
+    /// hidden windows pile up (at most one per open tab, and only while a tool works on it). The next call parks it again.
+    func parkForTool(_ id: String) {
+        // (Reads, screenshots and state queries come here too: they never make the page "driven by a tool". Only input
+        // and navigation do, through `drove(_:)`, MAC-NEXT-15b.)
+        parkIfHidden(id)
+        guard let tab = tabs.tab(id), let view = tab.webView else { return }
+        if NativeBackgroundToolsPolicy.silencesParkedPage(shownToPerson: tab.shownToPerson, inWindow: tab.pageInWindow) {
+            view.setAllMediaPlaybackSuspended(true)
+        }
+        parkIdle[id]?.cancel()
+        guard tab.automation.parkingWindow != nil else { parkIdle[id] = nil; return }
+        parkIdle[id] = Task { [weak self] in
+            guard (try? await Task.sleep(for: .seconds(Self.parkIdleSeconds))) != nil, let self else { return }
+            self.parkIdle[id] = nil
+            if let view = self.tabs.tab(id)?.webView, view.window is NativeBrowserParkingWindow {
+                self.unpark(id)
+                view.configuration.preferences.inactiveSchedulingPolicy = .throttle
+            }
+        }
     }
 
     func unpark(_ id: String) {
@@ -85,6 +113,7 @@ extension NativeSafariRuntime {
 
     private func mouse(_ id: String, cssRect: CGRect, clicks: [Int], flags: NSEvent.ModifierFlags) -> Bool {
         guard let (view, window) = screen(id) else { return false }
+        drove(id)
         let point = BrowserInputGeometry.viewPoint(cssRect: cssRect, pageZoom: view.pageZoom,
             magnification: view.magnification, viewHeight: view.bounds.height, flipped: view.isFlipped)
         let location = view.convert(point, to: nil)
@@ -108,22 +137,8 @@ extension NativeSafariRuntime {
 
     func hover(_ id: String, cssRect: CGRect) -> Bool { mouse(id, cssRect: cssRect, clicks: [], flags: []) }
 
-    func press(_ id: String, chord: BrowserKeyChord) -> Bool {
-        guard let (view, window) = screen(id), window.makeFirstResponder(view) else { return false }
-        var modifierFlags = flags(BrowserClickModifiers(shift: chord.shift, control: chord.control, alt: chord.alt, meta: chord.meta))
-        if chord.spec.characters.unicodeScalars.first.map({ (0xF700...0xF8FF).contains($0.value) }) == true { modifierFlags.insert(.function) }
-        let ignoring = chord.shift ? chord.spec.characters.lowercased() : chord.spec.characters
-        for kind in [NSEvent.EventType.keyDown, .keyUp] {
-            guard let event = NSEvent.keyEvent(with: kind, location: .zero, modifierFlags: modifierFlags,
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                characters: chord.spec.characters, charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: chord.spec.keyCode) else { continue }
-            if kind == .keyDown {
-                if chord.meta, view.performKeyEquivalent(with: event) { continue }
-                view.keyDown(with: event)
-            } else { view.keyUp(with: event) }
-        }
-        return true
-    }
+    /// Never AppKit key events (see NativeSafariRuntime.type): the driver presses at page level.
+    func press(_ id: String, chord: BrowserKeyChord) -> Bool { false }
 
     // MARK: Files for the page (Playwright's setInputFiles and file chooser)
 
@@ -150,6 +165,7 @@ extension NativeSafariRuntime {
     private func authorizedUpload(_ id: String, selector: String, files: [String], probe: [String: Any],
                                   authority: @escaping @MainActor () -> Bool, cancellation: NativeBrowserUploadCancellation) async throws -> [String: Any] {
         let tab = try requireTab(id), view = try requireView(id)
+        drove(id)
         let epoch = tab.documentEpoch, page = view.url?.absoluteString ?? ""
         guard let origin = BackendBrowserOrigin.exact(page), authority(), !cancellation.isCancelled, handoverPrompt(id) == nil else {
             throw BrowserDriverRefusal("The upload's document or permission changed.")
@@ -235,7 +251,7 @@ extension NativeSafariRuntime {
         if options.isPlain { return try await screenshot(id) }
         let view = try requireView(id)
         guard handoverPrompt(id) == nil else { throw refusal("The person has this page.") }
-        parkIfHidden(id)
+        parkForTool(id)
         let folder = RNMHootPaths(dataRoot: dataRoot).screenshots
         if let selector = options.selector {
             let shot = try await privacySnapshotPNG(id)
@@ -337,7 +353,7 @@ extension NativeSafariRuntime {
         let automation = tab.automation
         switch operation {
         case "wait": return try await waitCommand(id, tab: tab, view: view, arguments: arguments)
-        case "evaluate": return try await evaluateCommand(id, view: view, arguments: arguments)
+        case "evaluate": drove(id); return try await evaluateCommand(id, view: view, arguments: arguments)
         case "dialogs":
             if let raw = arguments["policy"].string {
                 guard let policy = NativeBrowserAutomation.DialogPolicy(rawValue: raw) else { throw refusal("policy is ask, accept or dismiss.") }
@@ -368,6 +384,8 @@ extension NativeSafariRuntime {
             return .object([.init("camera", .string(automation.camera.rawValue)), .init("microphone", .string(automation.microphone.rawValue)),
                 .init("note", .string("ask puts the question to the person on this tab. allow still needs the Mac's own permission for this app, which macOS asks the person once."))])
         case "storage": return try await storageCommand(id, view: view, arguments: arguments)
+        // MAC-NEXT-15c: collect only reads rows, so it is not "driving" by itself. Its next-page click and its scroll go
+        // through the driver's acting scripts (scriptedInput, domAction), which mark the page driven in `evaluate`.
         case "collect": return try await collectCommand(id, tab: tab, view: view, arguments: arguments)
         default: return nil
         }

@@ -94,7 +94,7 @@ public enum AppCommandCatalog {
 
         // View
         AppMenuCommand(.view, "Sessions", .page("view.terminal"), dividerBefore: true),
-        AppMenuCommand(.view, "Project Overview", .page("view.overview")),
+        // "Project Overview" removed (Owner, 15 Nov: no Overview page); a project's page is under Projects.
         AppMenuCommand(.view, "Browser", .page("view.browser")),
         AppMenuCommand(.view, "Split the Window", key: "d", .page("pane.split"), dividerBefore: true),
         AppMenuCommand(.view, "Swarm View", key: "\\", .page("view.swarm")),

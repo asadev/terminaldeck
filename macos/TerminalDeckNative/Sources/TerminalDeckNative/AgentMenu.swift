@@ -7,7 +7,7 @@ import TerminalDeckNativeCore
 @MainActor
 struct AgentMenu: View {
     enum Action: String, CaseIterable, Identifiable {
-        case wake, pause, open, watch, assign, reports, copy, duplicate, file, reset, stop, archive
+        case wake, pause, open, watch, assign, reports, copy, duplicate, file, reset, stop, archive, delete
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -23,6 +23,7 @@ struct AgentMenu: View {
             case .reset: "Reset sessions"
             case .stop: "Stop everything it is running"
             case .archive: "Archive agent…"
+            case .delete: "Delete agent"
             }
         }
         var changes: Bool { ![.open, .watch, .copy, .file].contains(self) }
@@ -96,7 +97,8 @@ struct AgentMenu: View {
         item(.reset)
         Divider()
         item(.stop, role: .destructive)
-        item(.archive, title: actions.archived ? "Delete permanently…" : nil, role: .destructive)
+        if !actions.archived { item(.archive, role: .destructive) }
+        item(.delete, role: .destructive)
     }
 
     private func item(_ action: Action, title: String? = nil, role: ButtonRole? = nil) -> some View {
@@ -215,17 +217,14 @@ private enum AgentMenuNative {
                 }
             } else {
                 value.archived = true
-                value.perform[.archive] = {
-                    confirm("Delete \(agent.name) permanently?",
-                            detail: "Its profile and its instructions are removed and cannot be restored. The memory of its role stays, so whoever is hired into that role next inherits it.",
-                            button: "Delete") {
-                        Task {
-                            guard await change("tasks:agent-remove", [profile.id]) else { return }
-                            // Gone at once: its page, its settings window and its cached profile view close now.
-                            AGOPTProfileModel.owner(profile.id).closeGone()
-                            if store.openProfile == profile.id { store.openProfile = nil }
-                        }
-                    }
+            }
+            // Delete rule: one press, no question; the agent and its instructions go to the Bin on all devices.
+            value.reasons[.delete] = "Removed from all devices, in the Bin for 30 days"
+            value.perform[.delete] = {
+                Task {
+                    guard await change("tasks:agent-remove", [profile.id]) else { return }
+                    AGOPTProfileModel.owner(profile.id).closeGone()
+                    if store.openProfile == profile.id { store.openProfile = nil }
                 }
             }
             value.perform[.duplicate] = {
@@ -262,6 +261,7 @@ private enum AgentMenuNative {
             value.reasons[.pause] = "Only saved task agents can be paused."
             value.reasons[.archive] = "Only saved task agents can be archived."
             value.reasons[.duplicate] = "Save this agent before duplicating it."
+            value.reasons[.delete] = "Only saved agents can be deleted."
             if agent.kind == .hoot {
                 value.perform[.wake] = {
                     confirm("Wake Hoot?", detail: "Starts Hoot's configured coding AI.", button: "Wake now") { NativeHootModel.shared.ensure() }

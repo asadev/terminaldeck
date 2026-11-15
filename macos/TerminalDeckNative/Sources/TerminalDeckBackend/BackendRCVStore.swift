@@ -37,8 +37,9 @@ public actor BackendRCVStore {
     public static let fileName = "receiver.json"
     public static let maxEvents = 1_000, maxRawEvents = 200, maxRawBytes = 6 * 1024 * 1024, maxPlainBytes = 16 * 1024 * 1024
 
-    private let persistence: BackendTaskPersistence?
-    private let cipher: (any BackendAccountVaultCipher)?
+    private var persistence: BackendTaskPersistence?
+    private var cipher: (any BackendAccountVaultCipher)?
+    private var cloudAwaitingRestore = false
     private var state: BackendRCVState
     /// The last state known to be on disk. A failed save puts this back, so nothing unsaved is ever acknowledged.
     private var persisted: BackendRCVState
@@ -76,6 +77,40 @@ public actor BackendRCVStore {
         started = true
     }
 
+    func cloudNeedsRecovery() throws -> Bool {
+        guard let persistence, let record = try persistence.read(Self.fileName, maximumBytes: Self.maxPlainBytes * 2) else { return false }
+        guard let blob = record["encrypted"].string.flatMap({ Data(base64Encoded: $0) }), let cipher else { return true }
+        return (try? cipher.decrypt(blob)) == nil
+    }
+    /// The caller has stopped Receiver and holds its existing inactive fence.
+    /// The original persistence object and its bytes are never rewritten.
+    func cloudAdopt(persistence replacement: BackendTaskPersistence, cipher replacementCipher: any BackendAccountVaultCipher) throws {
+        guard saving == nil, failure == nil else { throw CloudFailure.unavailable }
+        try replacement.writable()
+        let existed = try replacement.read(Self.fileName, maximumBytes: Self.maxPlainBytes * 2) != nil
+        let previous: BackendRCVState?
+        do {
+            let hadFile = try persistence?.read(Self.fileName, maximumBytes: Self.maxPlainBytes * 2) != nil
+            try start()
+            previous = hadFile ? state : nil
+        } catch { previous = nil }
+        persistence = replacement; cipher = replacementCipher
+        state = BackendRCVState(receiverKey: Curve25519.KeyAgreement.PrivateKey().rawRepresentation)
+        persisted = state; started = false; dirty = false
+        try start()
+        if !existed, let previous {
+            try write(previous); state = previous; persisted = previous
+            cloudAwaitingRestore = false
+        } else { cloudAwaitingRestore = !existed }
+    }
+    /// review-fixes 3 (15 Nov): told after a saved change to the sources, their secrets or the Receiver key, whoever
+    /// made it (a source or key arriving from another Mac through the Cloud writes here directly), so the Receiver
+    /// declares its sources to the relay again and the page reads again without being reopened.
+    private var sourcesFollower: (@Sendable () async -> Void)?
+    public func setSourcesFollower(_ follower: (@Sendable () async -> Void)?) { sourcesFollower = follower }
+    func cloudIsAwaitingRestore() -> Bool { cloudAwaitingRestore }
+    func cloudDidRestore() { cloudAwaitingRestore = false }
+
     public func read() throws -> BackendRCVState { try requireStarted(); return state }
 
     /// Add what is rebuilt on every start (Terminal Deck's own sources) without saving:
@@ -91,8 +126,10 @@ public actor BackendRCVStore {
         var next = state
         let result = try change(&next)
         Self.bound(&next, now: Date().timeIntervalSince1970 * 1000)
+        let sourcesMoved = next.sources != state.sources || next.secrets != state.secrets || next.receiverKey != state.receiverKey
         state = next
         try await save()
+        if sourcesMoved, let follower = sourcesFollower { await follower() }
         return result
     }
 

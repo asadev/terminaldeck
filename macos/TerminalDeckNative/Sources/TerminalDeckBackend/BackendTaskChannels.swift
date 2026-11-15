@@ -23,7 +23,9 @@ public struct BackendTaskStateView: Sendable {
         for goal in try await goals.all() { goalRows.append(try await goalView(goal, tasks: tasks)) }
         let keyRows = try await keys().map { row in BackendTaskValues.object([("id", row["id"]), ("name", row["name"]), ("crmOnly", row["crmOnly"]), ("lastApp", row["lastApp"])]) }
         return BackendTaskValues.object([("agents", .array(agents)), ("connections", .array(try await config.connectionViews())), ("keys", .array(keyRows)), ("tasks", .array(views)), ("trash", .array(trashed)),
-            ("outbox", BackendTaskValues.object([("pending", .number(Double(deliveries.filter { $0["state"].string == "pending" }.count))), ("undelivered", .number(Double(deliveries.filter { $0["state"].string == "undelivered" }.count)))])), ("localStatuses", .array(BackendTaskLocalService.statuses.map(NativeRPCValue.string))), ("goals", .array(goalRows))])
+            ("outbox", BackendTaskValues.object([("pending", .number(Double(deliveries.filter { $0["state"].string == "pending" }.count))), ("undelivered", .number(Double(deliveries.filter { $0["state"].string == "undelivered" }.count)))])), ("localStatuses", .array(BackendTaskLocalService.statuses.map(NativeRPCValue.string))), ("goals", .array(goalRows)),
+            // Tasks everywhere: CRM task links whose tasks go to another Mac, one plain line each (names, never ids).
+            ("elsewhere", .array(BackendCloudKindsTasks.elsewhere.lines.map(NativeRPCValue.string)))])
     }
     /// One goal as the state shows it, with its progress over `tasks`.
     public func goalView(_ goal: NativeRPCValue, tasks: [BackendTaskRecord]) async throws -> NativeRPCValue {
@@ -43,6 +45,11 @@ public struct BackendTaskStateView: Sendable {
         for key in ["keepOpenUntil", "priority", "startDate", "dueDate", "startTime", "dueTime", "board", "estimateMinutes", "archivedAt", "deletedAt", "completedAt", "position", "recurrence", "goalId", "stalled"] where value[key].isNullish { value = value.setting(key, .null) }
         value = value.setting("labels", task.value["labels"].elements.map(NativeRPCValue.array) ?? .array([])).setting("taskType", task.value["taskType"].string.map(NativeRPCValue.string) ?? .string("task")).setting("useWorkspace", .bool(task.value["useWorkspace"].bool == true))
             .setting("waitingOn", .array(task.process == "queued" ? BackendGoalStore.blockers(task, all: all).map { $0.value["title"] } : []))
+        // Tasks everywhere (folder fault): a task that came from another Mac with its project but no folder here yet
+        // is filed under the project it names, never under Independent or a project it does not belong to.
+        if value["projectId"].isNullish, let id = task.value["cloudProjectRef"]["projectId"].string, PROJProjects.isValidID(id) {
+            value = value.setting("projectId", .string(id))
+        }
         return value
     }
 }

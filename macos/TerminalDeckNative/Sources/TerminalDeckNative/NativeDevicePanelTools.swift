@@ -34,7 +34,7 @@ extension NativeCompositionProduction {
                     }
                     // The person's window moves only when the caller asks for it: an agent opening a panel for
                     // session B must not pull the person away from session A.
-                    if ["open", "pick"].contains(action), show { if id == "hoot" { HootProfileRoute.close() }; AppModel.shared.select(id) }
+                    if ["open", "pick"].contains(action), show { if id == "hoot" { HootProfileRoute.close() }; AppModel.shared.select(id) } // window-tool-ok: only the explicit show:true request; open and pick alone never move him
                     let panels = [0, 1].map { store.entry(owner, slot: $0) }
                     return NativeRPCValue.object([.init("sessionId", .string(id)), .init("maximumDevices", .number(2)), .init("panels", .array(panels.map { panel in
                         .object([.init("slot", .number(Double(panel.slot))), .init("open", .bool(panel.layout.isOpen)), .init("detached", .bool(panel.inOwnWindow)), .init("deviceId", panel.ticket?.deviceID.map(NativeRPCValue.string) ?? .null)])

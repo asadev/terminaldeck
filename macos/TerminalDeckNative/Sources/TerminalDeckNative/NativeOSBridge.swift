@@ -75,7 +75,10 @@ final class NativeOSBridge: NSObject, UNUserNotificationCenterDelegate {
         guard result == kIOReturnSuccess else { throw NativeRPCError(code: "power", message: "macOS did not release the idle assertion (\(result)).") }
         assertions[id] = nil
     }
-    private var center: UNUserNotificationCenter { .current() }
+    /// Reached lazily, and only in a real app: `UNUserNotificationCenter.current()` raises in a process without an app
+    /// bundle (a test runner). The real app can never take the nil path: it always has a bundle identifier
+    /// (CFBundleIdentifier in its Info.plist), which macOS requires before it delivers any notification anyway.
+    private var center: UNUserNotificationCenter? { Bundle.main.bundleIdentifier == nil ? nil : .current() }
 
     /// Once, at launch: the notification delegate, the theme watch and the power source.
     static func connect() { shared.start() }
@@ -83,9 +86,11 @@ final class NativeOSBridge: NSObject, UNUserNotificationCenterDelegate {
     private func start() {
         guard !started else { return }
         started = true
-        center.delegate = self
-        center.setNotificationCategories([UNNotificationCategory(identifier: NativeCompositionBanners.categoryIdentifier,
-            actions: [], intentIdentifiers: [], options: [.customDismissAction])])
+        if let center {
+            center.delegate = self
+            center.setNotificationCategories([UNNotificationCategory(identifier: NativeCompositionBanners.categoryIdentifier,
+                actions: [], intentIdentifiers: [], options: [.customDismissAction])])
+        }
         let token = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil, queue: .main
         ) { _ in

@@ -239,7 +239,7 @@ final class L6HootPolicyTests: XCTestCase {
         XCTAssertFalse(BackendDeckCoreSecurityConsentBroker.mayAnswerFor(origin: "window", by: "device:phone"))
     }
 
-    /// Asad, 11 Oct: Hoot may change every setting except its own; outside AI apps and sessions keep today's refusals.
+    /// Asad, 11 Oct: Hoot may change every setting except its own; AI apps and sessions keep today's refusals.
     func testHootMayChangeEverySettingExceptItsOwn() throws {
         let hoot = BackendDeckCoreSecurityCaller(kind: .local, tiers: [.read, .act, .alter], sessionID: "hoot-session")
         let app = BackendDeckCoreSecurityCaller(kind: .key, tiers: [.read, .act, .alter], keyID: "k")

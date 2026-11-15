@@ -47,6 +47,22 @@ public enum BackendPROJMCP {
                 if id == "project_registry.filter" {
                     guard kinds.contains(args["kind"].string ?? "") else { throw NativeRPCError.invalidArguments("Choose one supported project resource kind.") }
                 }
+                // Project folders (review 14 Nov): the same door as project_folders_use. A folder the project does not
+                // already have is judged with links resolved and saved resolved; system, ~/Library, hidden home
+                // folders and the app's data are refused before anyone is asked.
+                var savedFolders: [String]?
+                if id == "project_registry.save" {
+                    let old = try await registry.projects().first { $0.id == args["id"].string }
+                    let before = Set((old?.folders ?? []).map(PROJProjects.normalize))
+                    savedFolders = try (args["folders"].elements ?? []).compactMap(\.string).map { raw in
+                        let path = PROJProjects.normalize(raw)
+                        if before.contains(path) { return path }
+                        if let refused = BackendProjectFolders.installed?.refusal(path) ?? BackendProjectFolders.refusal(path) {
+                            throw NativeRPCError.invalidArguments(refused)
+                        }
+                        return BackendProjectFolders.resolved(path)
+                    }
+                }
                 try await authorize(caller, id, args, tier)
                 try Task.checkCancellation(); guard !caller.cancellation.isCancelled else { throw CancellationError() }
                 switch id {
@@ -73,7 +89,7 @@ public enum BackendPROJMCP {
                     var logo = oldLogo
                     if let logoSource { logo = try BackendPROJLogos.adopt(logoSource, projectID: id, directory: directory) }
                     else if args.has("logo") { logo = "" }
-                    let project = PROJProject(id: id, name: try args["name"].requireString("name", nonempty: true), folders: (args["folders"].elements ?? []).compactMap(\.string), icon: args["icon"].string ?? "folder", colour: args["colour"].string ?? "",
+                    let project = PROJProject(id: id, name: try args["name"].requireString("name", nonempty: true), folders: savedFolders ?? (args["folders"].elements ?? []).compactMap(\.string), icon: args["icon"].string ?? "folder", colour: args["colour"].string ?? "",
                                               logo: logo, lead: old?.lead ?? "", leadName: old?.leadName ?? "")
                     let saved: NativeRPCValue
                     do { saved = try await registry.save(project) }

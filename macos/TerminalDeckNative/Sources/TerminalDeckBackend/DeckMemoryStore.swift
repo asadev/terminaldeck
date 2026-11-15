@@ -7,8 +7,8 @@ final class DeckMemoryChangeHub: @unchecked Sendable {
     private var streams: [UUID: AsyncStream<DeckMemoryChange>.Continuation] = [:]
     private var forward: (@Sendable (DeckMemoryChange) -> Void)?
     func setForward(_ forward: (@Sendable (DeckMemoryChange) -> Void)?) { lock.withLock { self.forward = forward } }
-    func stream() -> AsyncStream<DeckMemoryChange> {
-        AsyncStream { continuation in
+    func stream(buffering: AsyncStream<DeckMemoryChange>.Continuation.BufferingPolicy = .unbounded) -> AsyncStream<DeckMemoryChange> {
+        AsyncStream(bufferingPolicy: buffering) { continuation in
             let id = UUID()
             lock.withLock { streams[id] = continuation }
             continuation.onTermination = { [weak self] _ in self?.lock.withLock { _ = self?.streams.removeValue(forKey: id) } }
@@ -33,12 +33,63 @@ public actor DeckMemoryStore: DeckMemoryStoring {
     let watching: Bool
     var watcher: DeckMemoryWatcher?
     var embedTask: Task<Void, Never>?
+    /// MAC-NEXT-8: a rest between batches of a long catch-up (vectors of arrived rows, the release of waiting rows), so
+    /// the app stays responsive instead of taking a full core for minutes. The app sets it; tests leave it at zero.
+    var catchUpPause: Duration = .zero
     var embeddingOff = false
     /// Texts without a vector from the current model have been queued since this opening (`queueMissingVectors`).
     var missingQueued = false
     var onRootChanged: (@Sendable (URL) -> Void)?
     var noteFiles: [String: (hash: String, file: DeckMemoryFile)] = [:]
+    /// H (13 Nov): kept versions visited again by the Cloud import's follow-up passes (label reconcile, waiting
+    /// projects). Tests read it to prove the work per arrived pack stays flat as the waiting list grows.
+    var cloudRevisits = 0
+    /// Y1 (13 Nov): one release of waiting project memory at a time; a call that lands while one runs makes it go
+    /// round once more instead of starting a second one. Parked rows are tried again once per opening.
+    var cloudReleaseRunning = false
+    var cloudReleaseAgain = false
+    /// 15 Nov: index entries of an archived project kept as history only during the running release (for its line).
+    var cloudArchivedIndexKept = 0
+    /// Review M1: (origin store, archived project id) pairs proven to be the same project (`cloudArchiveSharedWith`).
+    var cloudArchiveShared: Set<String> = []
+    /// MAC-NEXT-7 (3): set-aside rows go back to waiting at the first release of an opening, then at most every
+    /// `cloudParkedRetryGap` (the sync core's own 10-minute check of refused packs), and at once after a project or
+    /// agent record was applied (`cloudRetrySetAsideNow`). nil = due now.
+    var cloudParkedRetryAt: Date?
+    /// Release passes that found rows to place (tests: rows kept for absent projects never start one by themselves).
+    var cloudReleaseWalks = 0
     var closed = false
+    var cloudMemoryEnabled = false
+    var cloudMemorySnapshots: [String: DeckMemoryCloudSnapshot] = [:]
+    /// The enabled account's own folder (`D/cloud/<subject>/memory`); its database is attached as `cloud`. nil = Cloud off.
+    var cloudStateRoot: URL?
+    /// Open read connections to snapshot copies, one per snapshot, closed when the snapshot is finished or capture stops.
+    var cloudSnapshotReaders: [String: DeckMemoryDatabase] = [:]
+    /// How many files the last capture pass looked at (tests prove a save looks at its own folder only).
+    var cloudFilesExamined = 0
+    /// The connection's capture guard dropped the triggers after a failed memory write (M1); healed by the maintenance step.
+    var cloudCaptureLost = false
+    /// Inventory rows whose tables are captured (nil = every row, the fixture default). Set by the activation step.
+    var cloudEnabledRows: Set<String>?
+    /// The file list of the current dirty-file pass, listed once per pass and consumed from a saved position (M9).
+    var cloudReconcileList: [String]?
+    /// True while the folder watcher's own reindex runs: its paths were already captured (M9).
+    var cloudCaptureFromWatcher = false
+    /// The one rule (lane memory-one-rule): the 30-day keeper of kept texts and the Bin, this Mac's device id (set by
+    /// the activation step) and the list of second copies the one-time settling still has to look at.
+    var cloudKeeperMade: BackendCloudVersionKeeper?
+    var cloudDeviceId: String?
+    var cloudOneRuleList: [String]?
+    /// The account's Macs that keep memory (nil = not known yet) and a test override of the phase switch.
+    var cloudAccountMacs: Set<String>?
+    var cloudOneRuleSendingForced: Bool?
+    /// Phase 2 review, point 6: the newest account status wins; a list published earlier never overwrites a later one.
+    var cloudAccountMacsGeneration: UInt64 = 0
+    /// Phase 2: this run has written its "understands" setting (rewritten at every launch, then every 12 hours).
+    var cloudAnnouncedThisRun = false
+    /// Phase 2 (point 8): once per run, removal markers an older build placed as note text (a Mac rolled back to a
+    /// build before phase 1, then updated again) are looked for, and settled again when found.
+    var cloudStubsCheckedThisRun = false
     /// Lines for the app's log about what this opening did once (the board history settle), read by the app after `open`.
     var openingLines: [String] = []
 
@@ -60,6 +111,8 @@ public actor DeckMemoryStore: DeckMemoryStoring {
     }
 
     func start() throws {
+        // First, before any write: remove Cloud leftovers of earlier builds and, only for an account that left capture on, resume it.
+        cloudLaunchSweep()
         migrateAgentFolders()
         for folder in ["hoot/notes", "hoot/topics", "projects", "roles", "templates", "archive"] {
             try? FileManager.default.createDirectory(at: url(folder), withIntermediateDirectories: true)
@@ -90,6 +143,8 @@ public actor DeckMemoryStore: DeckMemoryStoring {
             guard !files.fileExists(atPath: target.path) else { continue }
             try? files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? files.moveItem(at: old.appendingPathComponent(name), to: target)
+            // Delete rule (decision 1): the app's own folder move travels as moves (only while Cloud memory is on).
+            if files.fileExists(atPath: target.path) { try? cloudRecordFolderMove(from: "agents/" + name, to: "roles/" + name) }
         }
         if ((try? files.contentsOfDirectory(atPath: old.path)) ?? ["x"]).filter({ !$0.hasPrefix(".") }).isEmpty { try? files.removeItem(at: old) }
     }
@@ -113,20 +168,35 @@ public actor DeckMemoryStore: DeckMemoryStoring {
     }
     /// Stops watching and closes the database. The files stay as they are.
     public func close() {
-        closed = true; watcher?.stop(); watcher = nil; embedTask?.cancel(); embedTask = nil; db.close(); noteFiles.removeAll(); hub.finish()
+        // R4: a normal close while capture is healthy means nothing of this run was missed (no full pass next time).
+        if cloudMemoryEnabled { cloudCleanClose() }
+        closed = true; watcher?.stop(); watcher = nil; embedTask?.cancel(); embedTask = nil; cloudCloseSnapshotReaders(); db.close(); noteFiles.removeAll(); hub.finish()
     }
     /// What this opening did once, for the app's log (empty on most openings).
     public func openingReport() -> [String] { openingLines }
     /// The app hears about a move here (so `DeckMemory.root` follows it).
     public func setOnRootChanged(_ handler: (@Sendable (URL) -> Void)?) { onRootChanged = handler }
     /// The app forwards every change to its own channel here.
+    public func setCatchUpPause(_ pause: Duration) { catchUpPause = pause }
+    /// The app's rest between catch-up batches (about a third of the time idle on a joining Mac).
+    public static let appCatchUpPause: Duration = .milliseconds(250)
+    func restBetweenBatches() async {
+        if catchUpPause > .zero { try? await Task.sleep(for: catchUpPause) } else { await Task.yield() }
+    }
     public func setChangeForward(_ forward: (@Sendable (DeckMemoryChange) -> Void)?) { hub.setForward(forward) }
     public nonisolated func changes() -> AsyncStream<DeckMemoryChange> { hub.stream() }
+    public nonisolated func cloudChanges() -> AsyncStream<DeckMemoryChange> { hub.stream(buffering: .bufferingNewest(1)) }
 
     // MARK: Small helpers
 
     func url(_ relative: String) -> URL { root.appendingPathComponent(relative) }
     func post(_ area: DeckMemoryChange.Area, _ owner: DeckMemoryOwner? = nil, _ ref: String? = nil) {
+        // M1: a write that the capture guard had to retry without Cloud is noticed here; memory itself already succeeded.
+        if cloudMemoryEnabled, db.captureLost != nil { cloudNoticeCaptureLoss() }
+        if cloudMemoryEnabled, ![DeckMemoryChange.Area.diary, .board, .questions, .settings].contains(area) {
+            // Only the changed seat's folder (or template) is looked at; anything else is left to the bounded reconcile (finding 12).
+            cloudCaptureAfterSave(area, owner, ref)
+        }
         hub.post(.init(area: area, owner: owner, ref: ref, at: now()))
     }
     func missing(_ what: String) -> DeckMemoryError { .init(.notFound, what) }

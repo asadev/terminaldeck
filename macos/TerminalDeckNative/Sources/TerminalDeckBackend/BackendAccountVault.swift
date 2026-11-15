@@ -161,9 +161,11 @@ public actor BackendAccountVault {
     public nonisolated let readiness: BackendLaunchReadiness
     public nonisolated let file: URL
     public nonisolated let directory: URL
-    private let cipher: any BackendAccountVaultCipher
+    private var cipher: any BackendAccountVaultCipher
     private let now: @Sendable () -> Double
     private let writeFile: @Sendable (Data, URL) throws -> Void
+    private var cloudFile: URL?
+    private var activeFile: URL { cloudFile ?? file }
     private var lease: BackendAccountWriterLease?
     private var loaded: [String: Entry]?
     private var lockedReason: String?
@@ -206,7 +208,7 @@ public actor BackendAccountVault {
     private func load() -> [String: Entry] {
         if let loaded { return loaded }
         var info = stat()
-        if lstat(file.path, &info) != 0, errno == ENOENT || errno == ENOTDIR {
+        if lstat(activeFile.path, &info) != 0, errno == ENOENT || errno == ENOTDIR {
             lockedReason = nil; loaded = [:]; return [:]
         }
         let plain: String
@@ -214,7 +216,7 @@ public actor BackendAccountVault {
             if (info.st_mode & S_IFMT) == S_IFREG, info.st_size > Self.maximumFile {
                 setAsideBeforeWrite = true; lockedReason = nil; loaded = [:]; return [:]
             }
-            guard let encoded = try BackendAccountFiles.boundedRead(file, maximum: Self.maximumFile) else { lockedReason = nil; loaded = [:]; return [:] }
+            guard let encoded = try BackendAccountFiles.boundedRead(activeFile, maximum: Self.maximumFile) else { lockedReason = nil; loaded = [:]; return [:] }
             let text = String(decoding: encoded, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard let blob = Data(base64Encoded: text, options: .ignoreUnknownCharacters) else { throw BackendAccountFailure("The existing account-vault blob is not valid base64.") }
             plain = try cipher.decrypt(blob)
@@ -276,17 +278,17 @@ public actor BackendAccountVault {
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let plain = try encoder.encode(Disk(version: Self.version, entries: next.values.sorted { $0.accountId < $1.accountId }))
-            blob = try cipher.encrypt(String(decoding: plain, as: UTF8.self), existingVault: FileManager.default.fileExists(atPath: file.path))
+            blob = try cipher.encrypt(String(decoding: plain, as: UTF8.self), existingVault: FileManager.default.fileExists(atPath: activeFile.path))
         } catch {
             return .refused("The login could not be encrypted: \(error.localizedDescription)")
         }
         let encoded = Data(blob.base64EncodedString().utf8)
         guard encoded.count <= Self.maximumFile else { return .refused("The login could not be saved: the encrypted account vault exceeds its file size limit.") }
         if setAsideBeforeWrite {
-            _ = Darwin.rename(file.path, file.path + ".unreadable-" + stamp())
+            _ = Darwin.rename(activeFile.path, activeFile.path + ".unreadable-" + stamp())
             setAsideBeforeWrite = false
         }
-        do { try writeFile(encoded, file) }
+        do { try writeFile(encoded, activeFile) }
         catch { return .refused("The login could not be saved: \(error.localizedDescription)") }
         loaded = next
         return .init(ok: true, changed: true, message: "")
@@ -361,6 +363,22 @@ public actor BackendAccountVault {
     /// TS `reload()`.
     public func reload() { loaded = nil; setAsideBeforeWrite = false; lockedReason = nil }
 
+    /// Cloud recovery never replaces an unreadable original. The exclusive writer
+    /// switches to a separate generation only after its fresh key was read back.
+    func cloudNeedsRecovery() -> Bool { openState() == .locked }
+    func cloudAdopt(file restored: URL, cipher replacement: any BackendAccountVaultCipher) throws {
+        guard readiness == .ready, lease != nil else { throw CloudFailure.unavailable }
+        let alreadyExists = FileManager.default.fileExists(atPath: restored.path)
+        let previous = load()
+        let readable = lockedReason == nil
+        self.cloudFile = restored; self.cipher = replacement; reload()
+        try prepareForWrites()
+        if !alreadyExists, readable, !previous.isEmpty {
+            let result = persist(previous)
+            guard result.ok else { throw CloudFailure.unavailable }
+        }
+    }
+
     // MARK: - Native throwing surface (existing callers)
 
     public func open() throws {
@@ -370,7 +388,7 @@ public actor BackendAccountVault {
     public func prepareForWrites() throws {
         guard readiness == .ready, lease != nil else { throw BackendAccountFailure("Node still owns the account vault; native writes are disabled.") }
         try open()
-        try cipher.prepareForWrites(existingVault: FileManager.default.fileExists(atPath: file.path))
+        try cipher.prepareForWrites(existingVault: FileManager.default.fileExists(atPath: activeFile.path))
     }
     public func isOpen() -> Bool { loaded != nil && lockedReason == nil }
     /// Internal agent handoff only. Never register this method as a page/MCP RPC.

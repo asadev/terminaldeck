@@ -21,26 +21,19 @@ struct NativeMacAwakeSetting: View {
         _loading = State(initialValue: fixtureState == nil)
     }
 
+    /// Owner, 15 Nov: one row, its sentence and its caution in the info button; "Changing…" and a result are states.
     var body: some View {
         Group {
             if loading || state?.supported == true {
-                VStack(alignment: .leading, spacing: 4) {
-                    NativeSettingsToggle(label: PowerWords.title,
-                                 help: nil,
-                                 more: PowerWords.caution(hasLid: state?.hasLid ?? true),
-                                 value: Binding(
-                        get: { state?.known == true && state?.on == true },
-                        set: change))
+                let info = ([PowerWords.detail, PowerWords.caution(hasLid: state?.hasLid ?? true), state?.warning].compactMap { $0 })
+                    .joined(separator: "\n\n")
+                DeckSettingsRow(PowerWords.title, info: info, state: changing ? "Changing…" : nil) {
+                    Toggle(PowerWords.title, isOn: Binding(get: { state?.known == true && state?.on == true }, set: change))
+                        .toggleStyle(.switch).controlSize(.small)
                         .disabled(loading || changing || state?.supported != true || state?.known != true)
-                    Text(PowerWords.detail).font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if changing { Text("Changing…").font(.callout).foregroundStyle(.secondary) }
-            if let result { NativeCodingAINotice(tone: result.isWarning ? .warn : .info, text: result.message) }
-            if let warning = state?.warning {
-                NativeCodingAIInfo(label: "Keep this Mac awake", text: warning)
-            }
+            if let result { DeckSettingsProblem(text: result.message, warn: result.isWarning) }
         }
         .task { if !fixture { await load() } }
         .onDisappear { subscription = nil }

@@ -11,6 +11,32 @@ public enum BackendTAGLaunchArguments {
         }
     }
 
+    /// The New session page's explicit start mode (`BackendCreateSessionInput.chosenStartPermission`), checked for
+    /// this AI; nil when none was given. A value this AI does not have throws: that start is refused, never bypassed.
+    public static func chosenStart(_ chosen: String?, provider: String) throws -> String? {
+        guard let chosen else { return nil }
+        guard newSessionPermission(provider: provider) != nil, AGSCapabilities.permissionModes(provider: provider).contains(chosen) else {
+            throw BackendSessionFailure.invalidInput("That \u{201C}Before it changes files\u{201D} choice does not fit this AI. Choose it again on the New session page.")
+        }
+        return chosen
+    }
+
+    /// A fresh start in the person's explicit mode: every inherited permission flag removed, then the mode by name,
+    /// the asking mode included (Claude Code: `--permission-mode default`, accepted by 2.1.322), so neither the AI's
+    /// own saved default nor a profile can start it in another mode. Codex's asking mode is the one the open chat
+    /// uses for it (`--ask-for-approval on-request`; Codex 0.159 has no other policy short of `never`).
+    public static func explicitStart(_ arguments: [String], provider: String, mode: String) -> [String] {
+        let result = removingPermissionOverride(arguments, provider: provider)
+        switch provider {
+        case "claude": return result + ["--permission-mode", mode]
+        case "codex":
+            return result + (mode == "default" ? ["--ask-for-approval", "on-request"]
+                : ["--sandbox", mode, "--ask-for-approval", mode == "danger-full-access" ? "never" : "on-request"])
+        case "gemini": return result + (mode == "yolo" ? ["--yolo"] : ["--approval-mode", mode])
+        default: return arguments
+        }
+    }
+
     static func bypassing(_ arguments: [String], provider: String) -> [String] {
         let result = removingPermissionOverride(arguments, provider: provider)
         switch provider {

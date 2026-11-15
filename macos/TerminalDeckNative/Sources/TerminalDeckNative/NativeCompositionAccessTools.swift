@@ -4,9 +4,9 @@ import TerminalDeckNativeCore
 
 // HOOT-TOOL-AUDIT group 2 (Asad, 11 Oct: Hoot may change everything "other than its own"): the access and
 // security settings as tools. Each runs the settings screen's own engine call, behind the same consent gate
-// (Hoot's permission mode decides asking; L6 keeps these refused for outside AI apps and agents).
+// (Hoot's permission mode decides asking; L6 keeps these refused for AI apps and agents).
 // No secret ever comes back in a result: a new key's secret is shown only on the person's screen
-// (Settings › Outside AI apps). Nothing here touches Hoot's own permission, the devices that may reach
+// (Settings › AI apps). Nothing here touches Hoot's own permission, the devices that may reach
 // Hoot, its action log or its own confinement.
 
 extension NativeCompositionProduction {
@@ -32,7 +32,7 @@ extension NativeCompositionProduction {
              schema([("id", text), ("name", text), ("level", text), ("askFirst", flag), ("tasks", flag), ("folders", nullableTexts)], required: ["id"])),
             ("ai_apps.revoke", .alter, "Revoke an outside AI app key: it stops working at once.",
              schema([("id", text)], required: ["id"])),
-            ("ai_apps.internet", .alter, "Turn the AI-app address on the internet on or off (Settings › Outside AI apps › From the internet).",
+            ("ai_apps.internet", .alter, "Turn the AI-app address on the internet on or off (Settings › AI apps › Let AI apps use this Mac).",
              schema([("on", flag)], required: ["on"])),
             ("servers.access", .alter, "A server's access settings: lookOnly (Look only / Look and change), aiKeys (outside AI app key ids allowed on it), shownApps (names, null = every app), folders (Files limits, null = only the home folder), allowMinutes (let sessions act there for that long).",
              schema([("server", text), ("lookOnly", flag), ("aiKeys", texts), ("shownApps", nullableTexts), ("folders", nullableTexts), ("allowMinutes", number)], required: ["server"])),
@@ -55,7 +55,7 @@ extension NativeCompositionProduction {
             let spec = try BackendMCPTool(id: id, wireName: id.replacingOccurrences(of: ".", with: "_"), description: description, inputSchema: input, tier: tier)
             try await mcp.registerTool(spec, ownerID: owner) { caller, args in
                 guard caller.allowedTiers.contains(tier) else { throw NativeRPCError(code: "not-granted", message: "This caller cannot change access settings.") }
-                // Hoot only (Asad: "everything other than its own"): outside AI apps, sessions and phones are refused.
+                // Hoot only (Asad: "everything other than its own"): AI apps, sessions and phones are refused.
                 guard BackendDeckCoreCatalogueRules.isHoot(try await authority.resolve(caller).caller) else {
                     throw NativeRPCError(code: "not-permitted", message: "Only Hoot may change access and security settings; the person changes them in Settings.")
                 }
@@ -76,11 +76,12 @@ extension NativeCompositionProduction {
                     let made: String? = keyID
                     await MainActor.run {
                         let model = AiAppsSettingsModel.shared
+                        // Asad 13 Nov: a tool never opens Settings. The key waits in Settings › AI apps and the
+                        // Settings line in the side panel carries a small key mark until he has copied it.
                         model.made = .init(key: key, id: keyID, name: name)
-                        AppModel.shared.requestSettings(); AppModel.shared.selectSettingsSection("ai-apps")
                     }
                     return .value(.object([.init("id", made.map(NativeRPCValue.string) ?? .null), .init("name", .string(name)),
-                                           .init("secret", .string("Shown to the person in Settings › Outside AI apps; never returned to an AI."))]))
+                                           .init("secret", .string("Waiting for the person in Settings › AI apps (a key mark on the Settings line); never returned to an AI. Tell the person to open it there."))]))
                 case "ai_apps.change":
                     let key = try args["id"].requireString("id", nonempty: true)
                     var did: [String] = []

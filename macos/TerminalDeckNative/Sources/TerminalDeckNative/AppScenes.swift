@@ -40,18 +40,13 @@ struct TerminalDeckScenes: Scene {
         Window("Settings", id: SettingsWindow.sceneID) {
             SettingsWindow(model: model).devReloadable().background(NativeMainWindowLauncher())
         }
-        .defaultSize(width: DeckTokens.Metrics.settingsSize.width, height: DeckTokens.Metrics.settingsSize.height)
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
-        .windowToolbarStyle(.unifiedCompact)
-        .commandsRemoved()
-        .restorationBehavior(.disabled)
-
-        // Exactly one Devices window, same look and size as Settings; opened or focused from the side panel.
-        Window("Devices", id: DevicesWindow.sceneID) {
-            DevicesWindow(model: model).devReloadable().background(NativeMainWindowLauncher())
+        // Owner, 14 Nov: about 1240 x 860, as large as fits on a smaller screen, his own size kept
+        // (NativeSettingsWindowFrame; the window's placer then centres it on the window he is using).
+        .defaultSize(width: NativeSettingsWindowFrame.preferred.width, height: NativeSettingsWindowFrame.preferred.height)
+        .defaultWindowPlacement { _, context in
+            WindowPlacement(size: NativeSettingsWindowFrame.size(visible: context.defaultDisplay.visibleRect,
+                                                                 saved: NativeSettingsWindowFrame.savedSize(.standard)))
         }
-        .defaultSize(width: DeckTokens.Metrics.settingsSize.width, height: DeckTokens.Metrics.settingsSize.height)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact)

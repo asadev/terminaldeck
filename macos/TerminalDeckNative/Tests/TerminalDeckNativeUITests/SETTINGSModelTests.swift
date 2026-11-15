@@ -8,24 +8,25 @@ import TerminalDeckBackend
 @MainActor
 final class SETTINGSModelTests: XCTestCase {
     func testSectionOrder() async {
-        XCTAssertEqual(NativeSettingsNavigation.items.map(\.id), ["general", "appearance", "notifications", "island", "agents", "ai-apps", "agent-defaults", "browser", "tasks", "features", "plugins", "advanced", "help"])
+        // Owner, 15 Nov: Shortcuts, Voice, Plugins and Browser left the window; AI apps sits with Coding AIs, Agents and Tasks.
+        XCTAssertEqual(NativeSettingsNavigation.items.map(\.id), ["devices", "general", "appearance", "notifications", "island", "agents", "agent-defaults", "tasks", "ai-apps", "privacy", "advanced", "help"])
     }
     func testMacHidesSeparateFoldedPages() async {
         XCTAssertTrue(NativeSettingsNavigation.items.filter { ["power", "scraping", "linux"].contains($0.id) }.isEmpty)
     }
     func testLegacyLinksReachFoldedDestination() async {
         XCTAssertEqual(NativeSettingsNavigation.canonical("power"), "general")
-        XCTAssertEqual(NativeSettingsNavigation.canonical("scraping"), "browser")
+        XCTAssertEqual(NativeSettingsNavigation.canonical("scraping"), "general") // the Browser's own window opens first (AppModel)
         XCTAssertEqual(NativeSettingsNavigation.canonical("linux"), "general")
     }
     func testRenamesKeepStableIds() async {
         XCTAssertEqual(NativeSettingsNavigation.item("agents")?.title, "Coding AIs")
-        XCTAssertEqual(NativeSettingsNavigation.item("ai-apps")?.title, "Outside AI apps")
-        XCTAssertEqual(NativeSettingsNavigation.item("features")?.title, "Voice")
+        XCTAssertEqual(NativeSettingsNavigation.item("ai-apps")?.title, "AI apps")
+        XCTAssertEqual(NativeSettingsNavigation.title("features"), "Voice")
         XCTAssertEqual(NativeSettingsNavigation.item("help")?.title, "About")
     }
     func testSearchFindsFoldedCapturePreferences() async {
-        XCTAssertEqual(NativeSettingsNavigation.matching("CAPTURE").map(\.id), ["browser"])
+        XCTAssertEqual(NativeSettingsNavigation.matching("CAPTURE").map(\.id), [], "capture is in the Browser's own settings window")
     }
     func testLiveStatusReadsProviderAndListenerStates() async throws {
         try await withFixture { _, model in

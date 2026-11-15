@@ -238,7 +238,7 @@ private final class DesktopRuntime: BackendBrowserRuntime {
     func title(_ id: String) -> String { pages[id]?["title"].string ?? "" }
     func displayTitle(_ id: String) -> String { title(id) }
     func evaluate(_ id: String, _ script: String) async throws -> Any? { throw NativeRPCError(code: "unavailable", message: "No script evaluation in this fixture") }
-    func reveal(_ id: String) async -> Bool { tabExists(id) }
+    func readyForInput(_ id: String) async -> Bool { tabExists(id) }
     func click(_ id: String, cssRect: CGRect) -> Bool { false }
     func focusForTyping(_ id: String) -> Bool { false }
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool { false }

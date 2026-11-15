@@ -1,10 +1,126 @@
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// One account: its dot, the login it is, its state with an ⓘ, and what can be done.
+/// What one account row of Settings › Coding AIs shows (owner, 15 Nov; DESIGN.md section 6): the account by its NAME,
+/// a 7 pt state dot, the plan as secondary text, and everything else (e-mail, state line, usage, sessions, notes) in
+/// the info popover. A signed-out login is said here ONCE, as this row's orange state.
+struct NativeCodingAIAccountFacts: Equatable {
+    enum Dot: Equatable { case ready, needsAction, checking }
+    var name: String
+    var plan: String?
+    var dot: Dot
+    /// The one orange word when he must act ("Needs sign-in"); nil otherwise (the plan shows instead).
+    var state: String?
+    var info: String
+
+    static let needsSignIn = "Needs sign-in"
+    static let needsAttention = "Needs attention"
+    static let keyNotWorking = "Key not working"
+
+    /// The name a row is headed with: the chosen name, else the part of the signed-in address before "@", else what
+    /// the login is ("This Mac's own Claude Code login"). The full address only in the popover.
+    static func name(_ account: CodingAIAccount, _ signIn: CodingAISignIn?) -> String {
+        if CodingAIAccountLabels.hasChosenName(account) { return account.name }
+        if account.isAPIKey { return account.name }
+        if let address = CodingAIAccountLabels.accountLabel(signIn) { return CodingAIAccountLabels.chatName(address, provider: account.provider) }
+        return CodingAIAccountLabels.rowLabel(account, signIn)
+    }
+
+    static func make(account: CodingAIAccount, signIn: CodingAISignIn?, model: CodingAIAccountRowModel,
+                     usage: String? = nil, apiStatus: String? = nil, keptCopies: Int = 0) -> NativeCodingAIAccountFacts {
+        let dot: Dot
+        var state: String?
+        if account.isAPIKey {
+            dot = account.apiCheckState == "invalid" ? .needsAction : .ready
+            if dot == .needsAction { state = keyNotWorking }
+        } else if model.state == .signedOut {
+            dot = .needsAction; state = needsSignIn
+        } else if model.problem != nil {
+            dot = .needsAction; state = needsAttention
+        } else if model.state == .signedIn {
+            dot = .ready
+        } else {
+            dot = .checking
+        }
+        let plan: String? = account.isAPIKey ? "API key" : (signIn?.state == .signedIn ? (signIn?.plan ?? "Subscription") : nil)
+        var lines: [String] = []
+        if let address = CodingAIAccountLabels.accountLabel(signIn) ?? CodingAILogins.normalizedEmail(signIn?.remembered) { lines.append(address) }
+        lines.append(account.isAPIKey ? (apiStatus ?? "API key") : model.stateLine)
+        var marks: [String] = []
+        if model.defaultBadge { marks.append("Default") }
+        if model.ownInstallBadge { marks.append("Your own install") }
+        if model.keptBadge { marks.append("Kept in this app") }
+        if !marks.isEmpty { lines.append(marks.joined(separator: " · ")) }
+        if let usage, !usage.isEmpty, model.showsUsage { lines.append(usage) }
+        if account.isAPIKey { lines.append("Usage and reported cost appear in each chat.") }
+        for line in [model.lastLogin, model.sessions, model.duplicate, model.problem?.text, model.signOutNote] {
+            if let line, !line.isEmpty { lines.append(line) }
+        }
+        if keptCopies > 0 { lines.append("A second copy of this account is kept by the app. Remove it from this row's menu.") }
+        if !model.note.isEmpty { lines.append(model.note) }
+        return .init(name: name(account, signIn), plan: plan, dot: dot, state: state, info: lines.joined(separator: "\n\n"))
+    }
+}
+
+/// The 7 pt dot: green signed in, orange he must act, grey while the AI has not answered.
+struct NativeCodingAIStateDot: View {
+    let dot: NativeCodingAIAccountFacts.Dot
+    var body: some View {
+        Circle().fill(dot == .ready ? Color.green : dot == .needsAction ? DeckTokens.warn : Color(nsColor: .tertiaryLabelColor))
+            .frame(width: DeckSettingsLook.stateDot, height: DeckSettingsLook.stateDot)
+            .accessibilityLabel(dot == .ready ? "Signed in" : dot == .needsAction ? "Needs you" : "Checking")
+    }
+}
+
+/// The row as drawn (also by the pictures): dot, name (i), the plan or the orange state at the right, then "…".
+struct NativeCodingAIAccountLine<Menu: View>: View {
+    let facts: NativeCodingAIAccountFacts
+    @ViewBuilder var menu: () -> Menu
+    var body: some View {
+        HStack(spacing: DeckTokens.Spacing.s12) {
+            DeckSettingsRowLabel(title: facts.name, leading: AnyView(NativeCodingAIStateDot(dot: facts.dot)
+                                    .frame(width: DeckSettingsLook.rowTile, height: DeckSettingsLook.rowTile)),
+                                 info: facts.info)
+            Spacer(minLength: DeckTokens.Spacing.s8)
+            if let state = facts.state {
+                Text(state).font(DeckSettingsLook.rowTitle).foregroundStyle(DeckTokens.warn).lineLimit(1)
+            } else if let plan = facts.plan {
+                Text(plan).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary).lineLimit(1)
+            }
+            menu()
+        }
+        .padding(.horizontal, DeckSettingsLook.rowPadding)
+        .frame(maxWidth: .infinity, minHeight: DeckSettingsLook.rowHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The "…" of a row: one borderless ellipsis that opens a menu.
+enum NativeSettingsMoreGlyph {
+    static let glyph = "ellipsis"
+    static let size: CGFloat = 13
+}
+
+struct NativeSettingsMoreMenu<Items: View>: View {
+    let label: String
+    @ViewBuilder var items: () -> Items
+    var body: some View {
+        // SP-1 (15 Nov): the plain three dots, 13 pt, secondary (a circled mark read as a minus sign). Drawn by SwiftUI
+        // (button-style menu, plain) so the secondary colour holds.
+        Menu { items() } label: {
+            Image(systemName: NativeSettingsMoreGlyph.glyph).font(.system(size: NativeSettingsMoreGlyph.size)).foregroundStyle(.secondary)
+                .frame(width: 22, height: 22).contentShape(.rect)
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .accessibilityLabel("More for \(label)")
+    }
+}
+
+/// One account of Settings › Coding AIs. Every action the old row had is in its "…" menu: Sign in again, Sign out,
+/// Rename, Check key / Edit key (API keys), Install (when the AI is missing), Remove copy, Remove.
 struct NativeCodingAIAccountRow: View {
     @State private var confirmMacSignOut = false
-    @State private var keepCopy = false
+    @State private var editingKey = false
     @Bindable var store: NativeCodingAIStore
     let account: CodingAIAccount
     let model: CodingAIAccountRowModel
@@ -13,176 +129,83 @@ struct NativeCodingAIAccountRow: View {
     @Binding var removing: CodingAIAccount?
     @FocusState private var nameFocused: Bool
 
+    private var facts: NativeCodingAIAccountFacts {
+        NativeCodingAIAccountFacts.make(account: account, signIn: store.signIn[account.id], model: model,
+                                        usage: NativeAccountLevelsModel.shared.usage[account.id],
+                                        apiStatus: account.isAPIKey ? (NativeAPIAccounts.shared.busy.contains(account.id) ? "Checking…" : NativeAPIAccounts.status(account)) : nil,
+                                        keptCopies: store.copies(of: account).count)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                NativeCodingAIDot(token: account.color)
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-
-                if renamingId == account.id {
-                    renameForm
-                } else {
-                    details
-                    Spacer(minLength: 8)
-                    actions
-                }
-            }
-            // Remove asks on the row itself, with what it would cost.
-            if removing?.id == account.id {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(model.removeConfirm).fixedSize(horizontal: false, vertical: true)
-                        if let cost = model.removeCost {
-                            Text(cost).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    NativeSessionButton(model.removeClosesSessions ? "Close them and remove" : "Remove", role: .destructive) {
-                        removing = nil
-                        store.remove(account, closingSessions: model.removeClosesSessions)
-                    }
-                    .disabled(store.busy)
-                    NativeSessionButton("Keep it") { removing = nil }
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+        Group {
+            if renamingId == account.id {
+                DeckSettingsRow("Name") { renameForm }
+            } else {
+                NativeCodingAIAccountLine(facts: facts) { menu }
             }
         }
-        .padding(.vertical, 2)
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(model.label)
-                    .textSelection(.enabled)
-                NativeCodingAIBadge(text: account.isAPIKey ? "API key" : "Subscription", quiet: true)
-                if model.defaultBadge { NativeCodingAIBadge(text: "Default") }
-                if model.ownInstallBadge { NativeCodingAIBadge(text: "Your own install", quiet: true) }
-                if model.keptBadge { NativeCodingAIBadge(text: "Kept in this app", quiet: true) }
+        .confirmationDialog(model.removeConfirm, isPresented: Binding(get: { removing?.id == account.id }, set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible) {
+            Button(model.removeClosesSessions ? "Close them and remove" : "Remove", role: .destructive) {
+                removing = nil
+                store.remove(account, closingSessions: model.removeClosesSessions)
             }
-            HStack(spacing: 5) {
-                if account.isAPIKey {
-                    Image(systemName: account.apiCheckState == "invalid" ? "exclamationmark.triangle" : "key")
-                        .foregroundStyle(account.apiCheckState == "invalid" ? DeckTokens.bad : DeckTokens.textSecondary)
-                } else { NativeCodingAIStateMark(state: model.state.rawValue) }
-                Text(account.isAPIKey ? (NativeAPIAccounts.shared.busy.contains(account.id) ? "Checking..." : NativeAPIAccounts.status(account)) : model.stateLine)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                NativeCodingAIInfo(label: model.label, text: model.note)
-            }
-            .font(.callout)
-            if account.isAPIKey {
-                Text("Usage and reported cost appear in each chat. Subscription windows are separate.").font(.caption).foregroundStyle(.secondary)
-            } else if model.showsUsage { NativeAccountUsageLine(accountID: account.id) }
-            if let last = model.lastLogin {
-                Text(last).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            if let sessions = model.sessions {
-                Text(sessions)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let duplicate = model.duplicate {
-                blocked(duplicate)
-            }
-            if !store.copies(of: account).isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("A second copy of this account is kept by the app")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !keepCopy {
-                        HStack(spacing: 10) {
-                            ForEach(store.copies(of: account)) { copy in
-                                NativeSessionButton("Remove copy") { store.removeCopy(copy) }
-                                    .disabled(store.busy)
-                                    .help("Remove the saved login and move its folder to a backup. All history is kept.")
-                            }
-                            NativeSessionButton("Keep") { keepCopy = true }
-                        }.font(.callout)
-                    }
-                }
-            }
-            if let problem = model.problem {
-                VStack(alignment: .leading, spacing: 3) {
-                    blocked(problem.text)
-                    // CONNECT-SKILLS: one click instead of a terminal command; then this account's sign-in.
-                    if problem.install != nil {
-                        let provider = account.provider ?? "claude"
-                        NativeAIToolInstallButton(tool: provider) {
-                            if account.isAPIKey { store.refreshAll() } else { NativeAccountSignInModel.shared.open(account, store: store) }
-                        }
-                    }
-                }
-            }
-            if let note = model.signOutNote {
-                blocked(note)
-            }
+            Button("Keep it", role: .cancel) { removing = nil }
+        } message: { if let cost = model.removeCost { Text(cost) } }
+        // This Mac's own login is not the app's: signing it out signs the AI out for the Terminal and every other app
+        // too, and the AI starts on its first-run screen again. Never one click.
+        .confirmationDialog("Sign \(CodingAICatalog.label(account.provider ?? "claude")) out on this Mac?", isPresented: $confirmMacSignOut) {
+            Button("Sign Out on This Mac", role: .destructive) { store.signOut(account) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This is the Mac’s own login, not one Terminal Deck keeps. Your Terminal and every app that uses \(CodingAICatalog.label(account.provider ?? "claude")) on this Mac are signed out too, and it starts with its first-run screen next time.")
         }
+        .sheet(isPresented: $editingKey) { NativeAPIAccountEditor(account: account) }
+        .onAppear { openRequestedEditor() }
+        .onChange(of: NativeAPIAccounts.shared.requestedEditorID) { _, _ in openRequestedEditor() }
     }
 
-    private func blocked(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    @ViewBuilder private var actions: some View {
-        HStack(spacing: 6) {
-            if account.isAPIKey { NativeAPIAccountActions(account: account) }
+    @ViewBuilder private var menu: some View {
+        NativeSettingsMoreMenu(label: facts.name) {
             if !account.isAPIKey, model.offersSignIn {
                 // Claude and Codex: the app runs the sign-in and the browser opens (no terminal).
-                // The same button is "Sign in again" for an account that was signed out or expired.
-                NativeSessionButton(account.lastUsedAt == nil ? "Sign in" : "Sign in again") {
-                    NativeAccountSignInModel.shared.open(account, store: store)
-                }
-                    .disabled(store.busy)
+                Button(account.lastUsedAt == nil ? "Sign in" : "Sign in again") { NativeAccountSignInModel.shared.open(account, store: store) }
             }
             if !account.isAPIKey, model.offersSignOut {
-                // This Mac's own login is not the app's: signing it out signs the AI out for the Terminal
-                // and every other app too, and the AI starts on its first-run screen again. Never one click.
-                NativeSessionButton("Sign out") { if account.system { confirmMacSignOut = true } else { store.signOut(account) } }
-                    .disabled(store.busy)
-                    .confirmationDialog("Sign \(CodingAICatalog.label(account.provider ?? "claude")) out on this Mac?", isPresented: $confirmMacSignOut) {
-                        NativeSessionButton("Sign Out on This Mac", role: .destructive) { store.signOut(account) }
-                        NativeSessionButton("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("This is the Mac’s own login, not one Terminal Deck keeps. Your Terminal and every app that uses \(CodingAICatalog.label(account.provider ?? "claude")) on this Mac are signed out too, and it starts with its first-run screen next time.")
-                    }
+                Button("Sign out") { if account.system { confirmMacSignOut = true } else { store.signOut(account) } }
             }
-            if model.hasMenu {
-                Menu {
-                    // FINAL-CONNECT (row 62): "Use by default" was a second control for the "Whole Terminal Deck" row of
-                    // Who uses what (same value); that row is the one place now.
-                    // Every account renames here, this Mac's own login too (no longer on the session's menu).
-                    if model.offersRename {
-                        NativeSessionButton("Rename") {
-                            renameText = account.name
-                            renamingId = account.id
-                        }
+            if account.isAPIKey {
+                Button(account.apiKind == "compatibleLocal" ? "Check connection" : "Check key") { NativeAPIAccounts.shared.check(account.id) }
+                    .disabled(NativeAPIAccounts.shared.busy.contains(account.id))
+                Button("Edit key…") { editingKey = true }
+            }
+            if model.problem?.install != nil {
+                // CONNECT-SKILLS: one click instead of a terminal command; then this account's sign-in.
+                Button("Install \(CodingAICatalog.label(account.provider ?? "claude"))") {
+                    let store = store, account = account
+                    NativeAIToolInstallModel.shared.install(account.provider ?? "claude") {
+                        if account.isAPIKey { store.refreshAll() } else { NativeAccountSignInModel.shared.open(account, store: store) }
                     }
-                    if model.offersRenameRemove {
-                        Divider()
-                        NativeSessionButton("Remove", role: .destructive) { removing = account }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(store.busy)
-                .accessibilityLabel("More for \(model.label)")
-                .help("More for \(model.label)")
+            }
+            if model.offersRename {
+                Button("Rename") { renameText = account.name; renamingId = account.id }
+            }
+            ForEach(store.copies(of: account)) { copy in
+                Button("Remove the second copy") { store.removeCopy(copy) }
+            }
+            if model.offersRenameRemove {
+                Divider()
+                Button("Remove", role: .destructive) { removing = account }
             }
         }
+        .disabled(store.busy)
     }
 
     private var renameForm: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: DeckTokens.Spacing.s8) {
             NativeSessionTextField("Name", text: $renameText)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.roundedBorder).frame(width: 200)
                 .sessionFocused($nameFocused)
                 .accessibilityLabel("New name for \(model.label)")
                 .onChange(of: renameText) { _, text in
@@ -190,10 +213,8 @@ struct NativeCodingAIAccountRow: View {
                 }
                 .sessionOnSubmit(save)
                 .sessionOnExitCommand { renamingId = nil }
-            NativeSessionButton("Save", action: save)
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-            NativeSessionButton("Cancel") { renamingId = nil }
+            Button("Save", action: save).keyboardShortcut(.defaultAction)
+            Button("Cancel") { renamingId = nil }
         }
         .onAppear { nameFocused = true }
     }
@@ -202,6 +223,12 @@ struct NativeCodingAIAccountRow: View {
         let typed = renameText
         renamingId = nil
         store.rename(account, to: typed)
+    }
+
+    private func openRequestedEditor() {
+        guard account.isAPIKey, NativeAPIAccounts.shared.requestedEditorID == account.id else { return }
+        editingKey = true
+        NativeAPIAccounts.shared.requestedEditorID = nil
     }
 }
 

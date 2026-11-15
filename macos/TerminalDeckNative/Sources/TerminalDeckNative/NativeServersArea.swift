@@ -26,6 +26,11 @@ final class NativeServersModel {
     private(set) var lookOnly: Set<String> = []
     private(set) var reading = true
     private(set) var problem: String?
+    /// 13 Nov: saved sign-ins from the earlier app that are not converted to this app's key yet (one line, and
+    /// `earlierCanConvert` offers the one button). nil when there is nothing to say.
+    private(set) var earlier: String?
+    private(set) var earlierCanConvert = false
+    private(set) var converting = false
     /// Each opened server's page state, kept while the app runs (the list's summaries read it).
     private(set) var states: [String: ServerRoomState] = [:]
     private(set) var adding = false
@@ -64,6 +69,28 @@ final class NativeServersModel {
                 problem = EngineDeadline.serverText(error, fallback: "Could not read your servers.")
             }
             reading = false
+            await readEarlier()
+        }
+    }
+
+    /// `servers:earlier-signins`: converts quietly when macOS need not ask; otherwise says so, with one button.
+    private func readEarlier() async {
+        guard let raw = try? await call("servers:earlier-signins") else { return }
+        take(raw)
+    }
+    private func take(_ raw: CodingAIJSON) {
+        if raw["ok"].bool == false { earlier = raw["message"].text ?? raw["sentence"].text; return }
+        earlier = raw["sentence"].text
+        earlierCanConvert = raw["canConvert"].isTrue
+    }
+
+    /// The person's press: macOS may ask once for the earlier app's key.
+    func convertEarlier() {
+        converting = true
+        Task {
+            if let raw = try? await call("servers:earlier-signins:convert") { take(raw) }
+            else { earlier = "The saved sign-ins were not converted. Nothing was changed." }
+            converting = false
         }
     }
 
@@ -195,6 +222,14 @@ struct NativeServersSection: View {
                 HStack(spacing: 8) {
                     NativeCodingAINotice(tone: .error, text: problem)
                     DeckRetryButton("Try again", autoRetry: true) { model.reread() } // autoRetry: re-reads the server list
+                }
+            }
+            if let earlier = model.earlier {
+                HStack(spacing: 8) {
+                    NativeCodingAINotice(tone: .error, text: earlier)
+                    if model.earlierCanConvert {
+                        Button("Convert saved sign-ins") { model.convertEarlier() }.disabled(model.converting)
+                    }
                 }
             }
             if model.problem == nil && model.reading && model.servers.isEmpty {

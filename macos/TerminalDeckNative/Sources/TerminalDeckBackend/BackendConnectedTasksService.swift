@@ -360,6 +360,7 @@ public actor BackendConnectedTasksService {
         clients[id] = (url.absoluteString + "\u{0}" + token, client)
         if let value = probe.people { people[id] = value }
         do { try save() } catch { connections.removeAll { $0["id"].string == id }; try? secrets.remove(id); throw error }
+        tokenSaved?()
         await changed()
         return view(row)
     }
@@ -401,19 +402,124 @@ public actor BackendConnectedTasksService {
         }
         replace(row)
         try save()
+        if probed != nil { tokenSaved?() }
         await changed()
         return view(row)
     }
 
     public func remove(_ id: String) async throws {
         _ = try connection(id)
+        // Review fix 1 (Decker): the token of a connection removed in the app is removed EVERYWHERE through the delete
+        // rule (Bin 30 days), so Cloud never brings it back. Not handled (saved passwords off): removed below as before.
+        let tokenGone = (try? await BackendCloudKeysRemovals.shared.removeEverywhere(sourceId: "tasks", id: id)) == true
+        _ = try connection(id)
         connections.removeAll { $0["id"].string == id }
         cache[id] = nil; people[id] = nil; clients[id] = nil; owners[id] = nil
         forget(id, nil)
         handoffs.removeAll { $0["connection"].string == id }
-        try secrets.remove(id)
+        if tokenGone { try? secrets.remove(id) } else { try secrets.remove(id) }
+        try save()
+        // Tasks everywhere: a connection the person removed is removed on his other Macs too.
+        cloudRemoved?(id)
+        await changed()
+    }
+
+    // MARK: Cloud (tasks everywhere, 15 Nov 2026)
+    // The CONNECTION travels (address and options, `CloudBrainMergeTables.taskSystem`); its token travels only inside
+    // saved passwords (`BackendCloudSecretsTaskStore`, domain task-connection). Each Mac reads the system's tasks
+    // itself: nothing fetched is ever sent through the Cloud. Nothing here calls the outside system.
+
+    private var cloudRemoved: (@Sendable (String) -> Void)?
+    private var tokenSaved: (@Sendable () -> Void)?
+    /// The token store saved passwords reads (the same Keychain items this service writes); values only through it.
+    public nonisolated var cloudTokens: any BackendConnectedTasksSecrets { secrets }
+    /// Told after a token was saved here (connect, or a new token), so saved passwords take it at once; nil stops it.
+    public func setTokenSaved(_ hook: (@Sendable () -> Void)?) { tokenSaved = hook }
+    /// Told after the person removed a connection on this Mac (the Cloud owner marks the removal to travel).
+    public func setCloudRemoved(_ hook: (@Sendable (String) -> Void)?) { cloudRemoved = hook }
+    /// This Mac's connections as saved (the token is never in a row).
+    public func cloudConnectionRows() throws -> [NativeRPCValue] { try requireStarted(); return connections }
+    public func cloudConnectionIDs() throws -> [String] { try requireStarted(); return connections.compactMap { $0["id"].string } }
+    /// The fields of a connection that travel; everything else on the row is this Mac's own.
+    public static let cloudSharedKeys = ["id", "createdAt", "name", "url", "enabled", "changes", "markDone", "projectId", "profile",
+                                         "server", "me", "docsUrl"]
+
+    /// A connection made or changed on another device. Checked as a connection made here is (https address, name,
+    /// mode); this Mac's own fields (its problem line, folder) are kept. No call to the system and no token.
+    public func cloudPutConnection(_ shared: NativeRPCValue) async throws {
+        try requireStarted()
+        guard let id = shared["id"].string, id.hasPrefix("cts-"), id.count <= 40, let address = shared["url"].string, address.count <= 2_048,
+              let url = URL(string: address) else { throw NativeRPCError.invalidArguments("This connection from another device cannot be read.") }
+        try BackendConnectedTasksClient.checkEndpoint(url)
+        let name = try Self.cleanName(shared["name"])
+        _ = try Self.changes(shared["changes"])
+        let index = connections.firstIndex { $0["id"].string == id }
+        guard index != nil || connections.count < Self.maximumConnections else {
+            throw NativeRPCError.invalidArguments("Up to \(Self.maximumConnections) task systems can be connected.")
+        }
+        var row = index.map { connections[$0] } ?? .object([.init("problem", .null)])
+        let before = row["url"].string
+        for key in Self.cloudSharedKeys { row = shared.has(key) ? row.setting(key, shared[key]) : row.removing(key) }
+        row = row.setting("name", .string(name))
+        if let explicit = shared["projectId"].string, !explicit.isEmpty { row = row.removing("projectIdInferred") }
+        else { row = row.removing("projectId").setting("projectIdInferred", .bool(true)) }
+        if before != address { clients[id] = nil }
+        // The token may already be here (saved passwords can arrive first): show its last four characters as a
+        // connection made here does. The token itself is never written into the row.
+        if let token = try? secrets.read(id), !token.isEmpty { row = row.setting("tokenEnding", .string("…" + String(token.suffix(4)))) }
+        if let index { connections[index] = row } else { connections.append(row) }
         try save()
         await changed()
+    }
+
+    /// The person removed this connection on another device. Removed here the way `remove` does, without telling back.
+    public func cloudRemoveConnection(_ id: String) async throws {
+        try requireStarted()
+        guard connections.contains(where: { $0["id"].string == id }) else { return }
+        connections.removeAll { $0["id"].string == id }
+        cache[id] = nil; people[id] = nil; clients[id] = nil; owners[id] = nil
+        forget(id, nil)
+        handoffs.removeAll { $0["connection"].string == id }
+        try? secrets.remove(id)
+        try save()
+        await changed()
+    }
+
+    /// Saved passwords' writer for a connection token that arrived from another device: only into a connection this Mac
+    /// has, never over a different token already here (both are kept by saved passwords then).
+    public func cloudInsertTokenIfAbsent(_ id: String, _ token: String) async throws -> CloudApplyStatus {
+        try requireStarted()
+        guard let index = connections.firstIndex(where: { $0["id"].string == id }), !token.isEmpty else { throw CloudFailure.unavailable }
+        if let existing = try secrets.read(id) { return existing == token ? .alreadyPresent : .keptBoth }
+        try secrets.write(id, token: token)
+        connections[index] = connections[index].setting("tokenEnding", .string("…" + String(token.suffix(4))))
+        clients[id] = nil
+        try save()
+        await changed()
+        return .applied
+    }
+
+    /// Keys travel (15 Nov): each connection's name, for the token's Bin row and his phones' list. Never a token.
+    public func cloudConnectionNames() throws -> [String: String] {
+        try requireStarted()
+        var named: [String: String] = [:]
+        for row in connections { if let id = row["id"].string, let name = row["name"].string { named[id] = name } }
+        return named
+    }
+
+    /// The delete rule's compare-and-remove for a token (Security seat, keys travel): the token goes only while it is
+    /// still exactly `token`; the connection itself stays (it travels with the tasks and has its own delete rule).
+    public func cloudRemoveTokenIfSame(_ id: String, _ token: String) async throws -> Bool {
+        try requireStarted()
+        guard let index = connections.firstIndex(where: { $0["id"].string == id }) else { return true }
+        guard let existing = try secrets.read(id) else { return true }
+        guard existing == token else { return false }
+        try secrets.remove(id)
+        connections[index] = connections[index].removing("tokenEnding")
+        clients[id] = nil
+        try save()
+        await changed()
+        return try secrets.read(id) == nil
     }
 
     // MARK: Reading

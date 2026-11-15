@@ -129,7 +129,7 @@ struct NativeOtherMacsCard: View {
                 Text("See and use their screens").font(.caption).foregroundStyle(.secondary)
             }
             if model.macs.isEmpty {
-                Text("Pair another Mac running Terminal Deck (Pair a device on that Mac, then its code here) to see and use its screen.")
+                Text("Your other Macs show here when they can share their screens with this one.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(model.macs) { mac in

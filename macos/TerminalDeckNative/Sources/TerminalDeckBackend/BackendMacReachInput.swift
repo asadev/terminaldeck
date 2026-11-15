@@ -24,6 +24,9 @@ public enum BackendMacReachInput {
     /// Async (Reviewer, 31 Oct): a drag's steps wait with `Task.sleep`, never a `usleep` that would hold a thread of the
     /// shared cooperative pool for the whole drag. Everything but a drag-swipe is posted at once (`postNow`).
     public static func post(_ input: BackendPhoneDeviceInput, bounds: CGRect) async {
+        // R3: the time of every event this path posts is recorded, so a trust or approval button can refuse a press
+        // that follows remote input (BackendRemoteInputGuard). The record holds a time only.
+        BackendRemoteInputMark.posted()
         let source = CGEventSource(stateID: .hidSystemState)
         func mouse(_ type: CGEventType, _ at: CGPoint, _ button: CGMouseButton = .left, clicks: Int64 = 1) {
             guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: button) else { return }
@@ -39,14 +42,17 @@ public enum BackendMacReachInput {
         for step in 1...steps {
             let t = Double(step) / Double(steps)
             mouse(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+            BackendRemoteInputMark.posted()
             try? await Task.sleep(for: .milliseconds(max(4, min(25, ms / Double(steps)))))
         }
         mouse(.leftMouseUp, to)
+        BackendRemoteInputMark.posted()
     }
 
     /// One input as events, now, on the caller's thread (round 3: the phone's input lane). A drag-swipe goes through
     /// `post` (it takes its time).
     public static func postNow(_ input: BackendPhoneDeviceInput, bounds: CGRect) {
+        BackendRemoteInputMark.posted() // R3: see `post`
         let source = CGEventSource(stateID: .hidSystemState)
         func mouse(_ type: CGEventType, _ at: CGPoint, _ button: CGMouseButton = .left, clicks: Int64 = 1) {
             guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: at, mouseButton: button) else { return }

@@ -19,9 +19,11 @@ struct NativeIslandSettings: View {
     @State private var model = NativeIslandSettingsModel()
 
     var body: some View {
-        NativeSettingsPage(sectionId: "island") {
-            NativeIslandSettingsContent(model: model)
+        DeckSettingsScaffold(title: NativeSettingsNavigation.title("island")) {
+            // The preview draws what the island would show now, from the app's own facts.
+            NativeIslandSettingsContent(model: model, facts: IslandController.shared.liveFacts)
         }
+        .onAppear { NativeSettingsValues.shared.start() }
         .task { await model.load() }
         .onDisappear { model.stop() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
@@ -30,86 +32,69 @@ struct NativeIslandSettings: View {
     }
 }
 
-/// Separately renderable: a fixture model performs no calls and reads no data.
+/// Separately renderable: a fixture model performs no calls and reads no data. DESIGN.md section 5: the preview, then
+/// ONE group; no sentence under any row, explanations behind the info button.
 struct NativeIslandSettingsContent: View {
     @Bindable var model: NativeIslandSettingsModel
+    var facts = NativeIslandFacts()
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Section {
-            NativeIslandSettingsPreview(look: model.look, width: model.width, scheme: scheme)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-        }
-        if let error = model.error {
-            Section { NativeSettingsNote(tone: .error, text: error) }
-        }
-        Section {
-            toggle("Show Hoot at the top of the screen",
-                   help: "Status, replies and approvals without opening the app.",
-                   value: model.enabled, action: model.setEnabled)
-        }
-        Section {
-            NativeSettingRow(label: "Screen", help: "Where it sits when you have more than one.") {
-                Picker("Screen", selection: Binding(get: { model.screen }, set: model.setScreen)) {
-                    Text("Screen with the menu bar").tag("main")
-                    if model.displays.contains(where: \.builtIn) {
-                        Text("Built-in display").tag("builtIn")
-                    } else if model.screen == "builtIn" {
-                        Text("Built-in display (disconnected)").tag("builtIn")
-                    }
-                    ForEach(model.displays) { display in Text(display.name).tag("named:" + display.id) }
-                    if model.screen.hasPrefix("named:"), !model.displays.contains(where: { "named:" + $0.id == model.screen }) {
-                        Text((model.rememberedScreenName ?? "Chosen screen") + " (disconnected)").tag(model.screen)
-                    }
-                    Text("Screen with the mouse").tag("pointer")
+        NativeIslandSettingsPreview(shows: model.shows, look: model.look, width: model.width, facts: facts, scheme: scheme)
+        DeckSettingsGroup {
+            DeckSettingsToggleRow("Show at the top of the screen",
+                info: "Status, replies and approvals without opening the app.",
+                isOn: Binding(get: { model.enabled }, set: model.setEnabled))
+                .disabled(model.loading)
+            DeckSettingsRow("Shows", info: "What lives in the island: Hoot and his chat, your running sessions, your open tasks, or only what is waiting for you. A click opens it.") {
+                Picker("Shows", selection: Binding(get: { model.shows.rawValue }, set: { model.saveString(NativeIslandSettingsModel.showsKey, $0) })) {
+                    ForEach(NativeIslandShows.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
                 }
-                .labelsHidden()
-                .fixedSize()
-                .disabled(model.loading || !model.screenAvailable)
+                .fixedSize().disabled(model.loading)
             }
-            NativeSettingRow(label: "Look", help: "On a screen with a notch it is always black, to blend in.") {
+            DeckSettingsRow("Look", info: "On a screen with a notch it is always black, to blend in.") {
                 Picker("Look", selection: Binding(get: { model.look }, set: { model.saveString(NativeIslandSettingsModel.lookKey, $0) })) {
                     Text("Match the app").tag("app")
                     Text("Always dark").tag("dark")
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .disabled(model.loading)
+                .fixedSize().disabled(model.loading)
             }
-            NativeSettingRow(label: "Width") {
-                Picker("Width", selection: Binding(get: { model.width }, set: { model.saveString(NativeIslandSettingsModel.widthKey, $0) })) {
+            DeckSettingsRow("Size") {
+                Picker("Size", selection: Binding(get: { model.width }, set: { model.saveString(NativeIslandSettingsModel.widthKey, $0) })) {
                     Text("Compact").tag("compact")
                     Text("Standard").tag("standard")
                     Text("Wide").tag("wide")
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .disabled(model.loading)
+                .fixedSize().disabled(model.loading)
             }
-            NativeSettingRow(label: "When nothing is happening") {
+            DeckSettingsRow("When nothing is happening") {
                 Picker("When nothing is happening", selection: Binding(get: { model.quiet }, set: { model.saveString(NativeIslandSettingsModel.quietKey, $0) })) {
-                    Text("Show Hoot small").tag("small")
+                    Text("Stay small").tag("small")
                     Text("Hide").tag("hide")
                 }
-                .labelsHidden()
-                .fixedSize()
-                .disabled(model.loading)
+                .fixedSize().disabled(model.loading)
             }
-        }
-    }
-
-    private func toggle(_ title: String, help: String? = nil, value: Bool, action: @escaping (Bool) -> Void) -> some View {
-        Toggle(isOn: Binding(get: { value }, set: action)) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                if let help { Text(help).font(.callout).foregroundStyle(.secondary) }
+            if model.displays.count > 1 {
+                DeckSettingsRow("Screen", info: "Where it sits. This choice stays on this Mac.") {
+                    Picker("Screen", selection: Binding(get: { model.screen }, set: model.setScreen)) {
+                        Text("Screen with the menu bar").tag("main")
+                        if model.displays.contains(where: \.builtIn) {
+                            Text("Built-in display").tag("builtIn")
+                        } else if model.screen == "builtIn" {
+                            Text("Built-in display (disconnected)").tag("builtIn")
+                        }
+                        ForEach(model.displays) { display in Text(display.name).tag("named:" + display.id) }
+                        if model.screen.hasPrefix("named:"), !model.displays.contains(where: { "named:" + $0.id == model.screen }) {
+                            Text((model.rememberedScreenName ?? "Chosen screen") + " (disconnected)").tag(model.screen)
+                        }
+                        Text("Screen with the mouse").tag("pointer")
+                    }
+                    .fixedSize()
+                    .disabled(model.loading || !model.screenAvailable)
+                }
             }
+            if let error = model.error { DeckSettingsProblem(text: error) }
         }
-        .toggleStyle(.switch)
-        .disabled(model.loading)
     }
 }
 
@@ -124,7 +109,7 @@ final class NativeIslandSettingsModel {
     typealias Read = @MainActor () async throws -> CodingAIJSON
     typealias Configure = @MainActor (CodingAIJSON) async throws -> CodingAIJSON
     static let lookKey = "copilot.islandLook", widthKey = "copilot.islandWidthPreset"
-    static let quietKey = "copilot.islandQuiet"
+    static let quietKey = "copilot.islandQuiet", showsKey = NativeFIXESIslandPreferences.showsKey
     var loading = true
     var error: String?
     var enabled = true
@@ -169,6 +154,7 @@ final class NativeIslandSettingsModel {
         return ["compact", "standard", "wide"].contains(value) ? value : "standard"
     }
     var quiet: String { values[Self.quietKey]?.string == "hide" ? "hide" : "small" }
+    var shows: NativeIslandShows { NativeIslandShows(stored: values[Self.showsKey]?.string) }
     var hasBuiltInDisplay: Bool { displays.contains(where: \.builtIn) }
 
     func load() async {
@@ -251,6 +237,7 @@ final class NativeIslandSettingsModel {
         if let look = raw["look"].string { values[Self.lookKey] = .string(look) }
         if let width = raw["width"].string { values[Self.widthKey] = .string(width) }
         if let quiet = raw["whenQuiet"].string { values[Self.quietKey] = .string(quiet) }
+        if let shows = raw["shows"].string { values[Self.showsKey] = .string(shows) }
         acceptChoice(raw["showOn"])
         displays = (raw["screens"].array ?? []).compactMap {
             guard let id = $0["id"].string ?? $0["screenUUID"].string, let name = $0["name"].string else { return nil }
@@ -279,7 +266,7 @@ final class NativeIslandSettingsModel {
     func saveBool(_ key: String, _ value: Bool) { save(key, .bool(value)) }
     private func save(_ key: String, _ value: CodingAIJSON) {
         let configure = configure
-        let option = [Self.lookKey: "look", Self.widthKey: "width", Self.quietKey: "whenQuiet"][key]
+        let option = [Self.lookKey: "look", Self.widthKey: "width", Self.quietKey: "whenQuiet", Self.showsKey: "shows"][key]
         var fields = [key: value]
         // The fallback uses the existing scalar settings owner too. A preset
         // removes a remembered drag width, while retaining its chosen height.
@@ -321,56 +308,48 @@ final class NativeIslandSettingsModel {
     }
 }
 
-/// An illustrative preview, matching mockup 06, with no app/session content.
-private struct NativeIslandSettingsPreview: View {
+/// The preview (DESIGN.md section 5): 560 x 120, radius 12, the island drawn with the chosen options by the real
+/// island's own pieces (its layout policy, outline and capsule), over a plain desktop and menu bar.
+struct NativeIslandSettingsPreview: View {
+    let shows: NativeIslandShows
     let look: String
     let width: String
+    let facts: NativeIslandFacts
     let scheme: SwiftUI.ColorScheme
-    private var dark: Bool { look == "dark" || scheme == .dark }
-    private var pillWidth: CGFloat { width == "compact" ? 236 : width == "wide" ? 330 : 280 }
+
+    static let size = CGSize(width: 560, height: 120)
+    private static let screen = IslandScreen(frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 876))
+
+    private var options: FIXESIslandOptions {
+        FIXESIslandOptions(look: FIXESIslandOptions.Look(rawValue: look) ?? .matchApp,
+            width: FIXESIslandOptions.Width(rawValue: width) ?? .standard)
+    }
+    private var dark: Bool { FIXESIslandDisplayPolicy.dark(appearance: scheme == .dark ? "dark" : "light", builtIn: false, hasNotch: false, look: options.look) }
 
     var body: some View {
+        let face = NativeIslandFace.make(shows: shows, facts: facts)
+        let layout = FIXESIslandDisplayPolicy.layout(for: Self.screen, options: options, quiet: face.quiet)
         ZStack(alignment: .top) {
-            LinearGradient(colors: [Color(red: 0.62, green: 0.72, blue: 0.87), Color(red: 0.89, green: 0.79, blue: 0.69)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            HStack(spacing: 12) {
-                Text("Terminal Deck")
-                Text("File")
-                Text("Edit")
-                Spacer()
-                Text("Fri 10 Oct 09:41")
+            LinearGradient(colors: scheme == .dark
+                    ? [Color(red: 0.16, green: 0.19, blue: 0.27), Color(red: 0.27, green: 0.22, blue: 0.20)]
+                    : [Color(red: 0.62, green: 0.72, blue: 0.87), Color(red: 0.89, green: 0.79, blue: 0.69)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+            Rectangle().fill(.regularMaterial).frame(height: 24).frame(maxHeight: .infinity, alignment: .top)
+            ZStack(alignment: .top) {
+                IslandOutline(width: layout.pill.width, height: layout.pill.height, radius: layout.pill.radius, shoulder: layout.pill.shoulder)
+                    .fill(dark ? Color.black : Color.white)
+                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+                IslandIndicators(face: face, layout: layout)
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .frame(height: 24)
-            .background(Color.white.opacity(0.55))
-            HStack(spacing: 8) {
-                HootMark(size: 13, animated: false)
-                Text("Commander").fontWeight(.semibold)
-                Text("is working").foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                HStack(spacing: 3) {
-                    ForEach(0..<3) { index in
-                        Circle().fill(Color(red: 0.78, green: 0.46, blue: 0.17).opacity(0.4 + Double(index) * 0.3)).frame(width: 4, height: 4)
-                    }
-                }
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(dark ? Color.white : Color.black)
-            .padding(.horizontal, 12)
-            .frame(width: pillWidth, height: 30)
-            .background(dark ? Color.black : Color.white, in: UnevenRoundedRectangle(bottomLeadingRadius: 15, bottomTrailingRadius: 15))
+            .frame(width: layout.pill.outerWidth, height: layout.pill.height, alignment: .top)
             .environment(\.colorScheme, dark ? .dark : .light)
-            .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
         }
-        .frame(height: 120)
-        .overlay(alignment: .bottomLeading) {
-            Text(look == "dark" ? "Preview · always dark" : "Preview · matches the app (\(scheme == .dark ? "dark" : "light"))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(12)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .accessibilityLabel("Dynamic Island appearance preview")
+        .frame(width: Self.size.width, height: Self.size.height)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Dynamic Island preview")
+        .accessibilityValue(face.line)
     }
 }

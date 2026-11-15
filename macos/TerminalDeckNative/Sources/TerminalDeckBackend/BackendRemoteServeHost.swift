@@ -102,8 +102,9 @@ public actor BackendRemoteServeRoster {
         }
         return rows
     }
-    public func revoke(_ deviceID: String) async throws -> Bool {
-        guard try await trust.revoke(deviceID) else { return false }
+    /// `quietBefore`: the 30-day clean-up's removal, only for a device not seen since (`BackendRemoteTrustStore.revoke`).
+    public func revoke(_ deviceID: String, quietBefore: Double? = nil) async throws -> Bool {
+        guard try await trust.revoke(deviceID, quietBefore: quietBefore) else { return false }
         await drop(deviceID)
         do { try await forget(deviceID) } catch { await announce(); throw error }
         await announce(); return true

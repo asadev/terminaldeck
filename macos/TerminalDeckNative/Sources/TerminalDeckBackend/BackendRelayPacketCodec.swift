@@ -50,8 +50,15 @@ public enum BackendRelayPacketCodec {
     public struct MCPReplyHead: Equatable, Sendable {
         public let status: Int
         public let contentType: String?
-        public init(status: Int, contentType: String?) { self.status = status; self.contentType = contentType }
-        public var value: NativeRPCValue { .object([.init("status", .number(Double(status))), .init("contentType", contentType.map(NativeRPCValue.string) ?? .null)]) }
+        /// 15 Nov (AI apps through our server): this Mac's own word that the key was wrong or unknown. The relay
+        /// counts it per caller (10 in a minute: 5 minutes out) and never shows it; older relays ignore it.
+        public let refused: Bool
+        public init(status: Int, contentType: String?, refused: Bool = false) { self.status = status; self.contentType = contentType; self.refused = refused }
+        public var value: NativeRPCValue {
+            var fields: [NativeRPCValue.Field] = [.init("status", .number(Double(status))), .init("contentType", contentType.map(NativeRPCValue.string) ?? .null)]
+            if refused { fields.append(.init("refused", .bool(true))) }
+            return .object(fields)
+        }
     }
     public struct MCPReplySlice: Equatable, Sendable { public let first: Bool; public let last: Bool; public let head: MCPReplyHead?; public let chunk: Data }
     public static let mcpReplyFirst: UInt8 = 1
@@ -110,7 +117,7 @@ public enum BackendRelayPacketCodec {
         if !first { return MCPReplySlice(first: false, last: last, head: nil, chunk: rest) }
         guard let (head, chunk) = readHead(rest), let status = head["status"].number,
               status.rounded() == status, status >= 100, status <= 599 else { return nil }
-        return MCPReplySlice(first: true, last: last, head: MCPReplyHead(status: Int(status), contentType: head["contentType"].string), chunk: chunk)
+        return MCPReplySlice(first: true, last: last, head: MCPReplyHead(status: Int(status), contentType: head["contentType"].string, refused: head["refused"].bool == true), chunk: chunk)
     }
     private static func withHead(_ head: NativeRPCValue, rest: Data) throws -> Data {
         let json = try head.encodedJSON()

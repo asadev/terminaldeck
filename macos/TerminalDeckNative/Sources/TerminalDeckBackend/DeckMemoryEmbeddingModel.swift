@@ -133,7 +133,12 @@ public final class DeckMemoryCoreMLEmbedder: DeckMemoryEmbedding, @unchecked Sen
         if let loaded { return loaded }
         guard !failed else { return nil }
         do {
-            let configuration = MLModelConfiguration(); configuration.computeUnits = .all
+            // MAC-NEXT-8 (13 Nov, 19 GB on the MacBook after its index caught up on 38,000 arrived rows). Proven on that
+            // MacBook's own chip (M1 Pro) with a stand-alone copy of this model and generated texts: every prediction on
+            // the GPU or the Neural Engine kept about 0.8-1 MB that was never given back (`.all`: 6 GB after 6,442 pieces;
+            // GPU only, five lengths, a pool per text: 1.6 GB after 1,994), while the CPU alone stayed at 9 MB just as
+            // fast (20 s per 1,000 texts). An M4 stays flat on every unit, which is why it never showed here. CPU only.
+            let configuration = MLModelConfiguration(); configuration.computeUnits = .cpuOnly
             let model = try MLModel(contentsOf: folder.appendingPathComponent(Self.modelFile), configuration: configuration)
             let tokenizer = try DeckMemoryWordPiece(vocabulary: folder.appendingPathComponent(Self.vocabularyFile))
             loaded = (model, tokenizer)
@@ -145,22 +150,35 @@ public final class DeckMemoryCoreMLEmbedder: DeckMemoryEmbedding, @unchecked Sen
         }
     }
 
+    /// MAC-NEXT-8: every input is padded (attention mask 0, which the model's mean pooling leaves out) to one of these
+    /// lengths, so the model only ever sees five shapes and keeps nothing per length. Same vectors: cosine 0.9993 to
+    /// 1.0009 against the unpadded input on the GPU (half-precision noise).
+    public static let lengths = [32, 64, 128, 256, 512]
+    static func paddedLength(_ count: Int) -> Int { lengths.first { $0 >= count } ?? lengths.last! }
+
     public func vector(for text: String) async -> [Float]? {
         lock.withLock {
             guard let (model, tokenizer) = ready() else { return nil }
             let ids = tokenizer.encode(text)
-            do {
-                let shape = [1, NSNumber(value: ids.count)]
-                let input = try MLMultiArray(shape: shape, dataType: .int32), mask = try MLMultiArray(shape: shape, dataType: .int32)
-                let inputPointer = input.dataPointer.bindMemory(to: Int32.self, capacity: ids.count)
-                let maskPointer = mask.dataPointer.bindMemory(to: Int32.self, capacity: ids.count)
-                for (index, id) in ids.enumerated() { inputPointer[index] = id; maskPointer[index] = 1 }
-                let output = try model.prediction(from: try MLDictionaryFeatureProvider(dictionary: ["input_ids": input, "attention_mask": mask]))
-                guard let values = output.featureValue(for: "embedding")?.multiArrayValue else { return nil }
-                return (0..<values.count).map { values[$0].floatValue }
-            } catch {
-                NSLog("[memory] the meaning model could not read a text: %@", error.localizedDescription)
-                return nil
+            // Every Core ML object of one text is released when the text is done, never at the end of a long catch-up.
+            return autoreleasepool { () -> [Float]? in
+                do {
+                    let length = Self.paddedLength(ids.count)
+                    let shape = [1, NSNumber(value: length)]
+                    let input = try MLMultiArray(shape: shape, dataType: .int32), mask = try MLMultiArray(shape: shape, dataType: .int32)
+                    let inputPointer = input.dataPointer.bindMemory(to: Int32.self, capacity: length)
+                    let maskPointer = mask.dataPointer.bindMemory(to: Int32.self, capacity: length)
+                    for index in 0..<length {
+                        inputPointer[index] = index < ids.count ? ids[index] : 0
+                        maskPointer[index] = index < ids.count ? 1 : 0
+                    }
+                    let output = try model.prediction(from: try MLDictionaryFeatureProvider(dictionary: ["input_ids": input, "attention_mask": mask]))
+                    guard let values = output.featureValue(for: "embedding")?.multiArrayValue else { return nil }
+                    return (0..<values.count).map { values[$0].floatValue }
+                } catch {
+                    NSLog("[memory] the meaning model could not read a text: %@", error.localizedDescription)
+                    return nil
+                }
             }
         }
     }

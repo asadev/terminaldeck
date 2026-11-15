@@ -6,9 +6,8 @@ import TerminalDeckNativeCore
 @MainActor
 enum MACHINESObjectWindows {
     private static var servers: [String: NSPanel] = [:]
-    private static var devices: NSPanel?
 
-    /// Shared object windows (READY L1-CORE): one scene per saved server and one for device access.
+    /// Shared object windows (READY L1-CORE): one scene per saved server. Device access is on the Devices window itself.
     static func registerShared() {
         if !ObjectWindows.hasProvider(for: ObjectRef(kind: "server", id: "probe")) {
             ObjectWindows.register(kind: "server", title: { ref in
@@ -20,35 +19,6 @@ enum MACHINESObjectWindows {
                 }
                 return AnyView(MACHINESServerSettingsContent(model: .shared, server: server))
             })
-        }
-        if !ObjectWindows.hasProvider(for: ObjectRef(kind: "device", id: "probe")) {
-            ObjectWindows.register(kind: "device", title: { _ in "Device access" }, content: { _ in
-                AnyView(MACHINESDevicesAccessContent(model: RemoteSectionModel()))
-            })
-        }
-    }
-
-    static func openDevices() {
-        registerShared()
-        if ObjectWindows.open(ObjectRef(kind: "device", id: "access")) { return }
-        // Fall-back panel: only for the person, like the shared door above (NativeFront).
-        NativeFront.whenPersonActs("device-access") {
-            if let panel = devices { panel.makeKeyAndOrderFront(nil); return }
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
-                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-            panel.title = "Device access"
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
-            panel.isReleasedWhenClosed = false
-            panel.contentMinSize = NSSize(width: 520, height: 440)
-            panel.contentView = NSHostingView(rootView: MACHINESDevicesAccessContent(model: RemoteSectionModel()))
-            if let main = NSApp.mainWindow {
-                let visible = main.screen?.visibleFrame ?? main.frame
-                panel.setFrameOrigin(NSPoint(x: min(main.frame.maxX + 16, visible.maxX - 560), y: min(main.frame.maxY - 520, visible.maxY - 520)))
-            } else { panel.center() }
-            panel.setFrameAutosaveName("device-access")
-            devices = panel
-            panel.makeKeyAndOrderFront(nil)
         }
     }
 

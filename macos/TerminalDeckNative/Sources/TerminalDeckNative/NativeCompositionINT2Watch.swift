@@ -13,15 +13,23 @@ extension NativeCompositionProduction {
             Task { try? await registry.publish(BackendAGTShellAgents.changedEvent, arguments: [], ownerID: BackendCompositionRoot.appOwnerID) }
         })
         BackendAGTShellAgents.install(shells)
+        // Witness for the sync engines: was a vanished file removed by an AI command in one of these sessions?
+        let witness = BackendAIDeleteWitness(dataRoot: root.dataRoot)
+        BackendAIDeleteWitness.install(witness)
         let lifecycle = sessions.lifecycle
         let hookToken = await sessions.hookCoordinator.observeAccepted { event in
             await activity.accept(event)
-            if let id = event.sessionID { shells.accept(event, session: authority.sessionViews().first { $0["id"].string == id }) }
+            if let id = event.sessionID {
+                let row = authority.sessionViews().first { $0["id"].string == id }
+                shells.accept(event, session: row)
+                witness.accept(event, session: row)
+            }
         }
         let lifecycleToken = await sessions.lifecycle.observe { event in
             switch event {
             case .removed(let id, _), .exit(let id, _):
                 await activity.remove(id)
+                witness.sessionEnded(id)
             case .status(let id, _):
                 // A shell tab's screen changed state: look once at its own process tree (throttled per tab).
                 if let row = authority.sessionViews().first(where: { $0["id"].string == id }), row["provider"].string == "shell" {
@@ -95,12 +103,14 @@ extension NativeCompositionProduction {
             try await root.retain(.init(name: "agents-watch-activity", domains: ["agents-watch-activity"], ownerID: "native-composition:agents-watch-activity", invokes: [],
                 stop: {
                     BackendAGTShellAgents.install(nil)
+                    BackendAIDeleteWitness.install(nil)
                     await sessions.hookCoordinator.removeAcceptedObserver(hookToken)
                     await sessions.lifecycle.removeObserver(lifecycleToken)
                     await activity.stop()
                 }))
         } catch {
             BackendAGTShellAgents.install(nil)
+            BackendAIDeleteWitness.install(nil)
             await sessions.hookCoordinator.removeAcceptedObserver(hookToken)
             await sessions.lifecycle.removeObserver(lifecycleToken)
             await activity.stop()
@@ -112,7 +122,22 @@ extension NativeCompositionProduction {
     /// here leaves the tools absent (said in the log) and never takes tasks down with it.
     func installAGTAgents(source: any AWAgentsWatchSource, tasks: BackendTaskStateView, taskAuthority: BackendTaskToolAuthority) async {
         let owner = "native-composition:agents-directory", registry = root.registry, mcp = root.mcp
-        let live = BackendAGTDirectoryService.liveRead(source)
+        let ownerLive = BackendAGTDirectoryService.liveRead(source)
+        // 14 Nov (web walk): his OWN phone or browser (kind `.mine`) with Full control (the start rule,
+        // `BackendIOS2PhonePanels.seesThisMacsLiveAgents`: its level, or none set) sees this Mac's agents at work in its
+        // Agents panel, as the side panel does. Only when the caller's own read is refused, only this Mac's agents (never
+        // another machine's), and no owner-only notices. A guest, even raised to Full, and every other caller: exactly
+        // as before (review 14 Nov 15:01).
+        let live: BackendAGTDirectoryService.LiveRead = { [weak self] caller in
+            do { return try await ownerLive(caller) }
+            catch let error as NativeRPCError where ["access-denied", "not-permitted", "not-granted"].contains(error.code) {
+                guard let authority = await MainActor.run(body: { self?.authority }), let trust = await MainActor.run(body: { self?.remoteTrust }),
+                      let resolved = try? await authority.resolve(caller).caller, resolved.kind == .remote, let device = resolved.deviceID,
+                      BackendIOS2PhonePanels.seesThisMacsLiveAgents(kind: await trust.kindOf(device), level: await trust.phoneAccess(device)) else { throw error }
+                let snapshot = try await source.snapshot(.app(try authority.localContext()))
+                return (snapshot.agents.filter { $0.machineID.isEmpty }, snapshot.tasks, [])
+            }
+        }
         let service = BackendAGTDirectoryService(config: tasks.config, authority: taskAuthority, live: live,
             profileRead: { [weak self] caller, id in
                 // The directory is installed first. Resolve the later-installed canonical profile reader at call time.

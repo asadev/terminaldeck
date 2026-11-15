@@ -60,7 +60,9 @@ enum NativeChatWorktreeLedger {
 extension NativeCompositionProduction {
     /// F38 fork, F56 worktree launch/cleanup and F57 execution location for one project Chat. Every launch goes
     /// through the ordinary launcher, so the new Chat has its own account lease, tools and permission owner.
-    func chatForkFeature(_ parentID: String, action: String, arguments: NativeRPCValue, context: NativeRPCContext) async throws -> NativeRPCValue {
+    /// `chooseForPerson`: only the Mac window's own Fork button (session:chat:fork) brings the new chat up; the tool
+    /// and a phone's fork leave the person where he is (Asad 13 Nov: a tool call never moves him).
+    func chatForkFeature(_ parentID: String, action: String, arguments: NativeRPCValue, context: NativeRPCContext, chooseForPerson: Bool = false) async throws -> NativeRPCValue {
         let historyParent = await sessionChats?.conversation(parentID)?.session
         guard ["fork", "worktree-chat", "worktree-status", "worktree-remove", "location"].contains(action), let chats = sessionChats,
               let parent = sessions?.manager.list().first(where: { $0.id == parentID }) ?? historyParent, parent.chat == true else {
@@ -176,7 +178,8 @@ extension NativeCompositionProduction {
                 throw NativeRPCError(code: "fork-unconfirmed", message: "The provider did not confirm the new conversation. The new Chat and clean worktree were rolled back where possible.")
             }
             if action == "fork", (confirmed || pendingFork), let metadata = named.foundation as? [String: Any] {
-                AppModel.shared.buttonActions.created(metadata); AppModel.shared.select(id)
+                AppModel.shared.buttonActions.created(metadata)
+                if chooseForPerson { AppModel.shared.select(id) } // person-ok: only the window's own Fork button passes true
             }
             return .object([.init("session", named), .init("action", .string(action)), .init("parentSessionId", .string(parentID)),
                 .init("conversationId", actual.isEmpty ? .null : .string(actual)), .init("parentConversationId", plan["parentConversationId"]),

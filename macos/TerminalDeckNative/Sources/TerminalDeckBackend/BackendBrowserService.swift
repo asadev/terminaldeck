@@ -100,7 +100,7 @@ public final class BackendBrowserService {
         if action == "open" {
             let state = try await nativeCreate(context, arguments: arguments)
             let id = try state["id"].requireString("tabId")
-            _ = await runtime.reveal(id)
+            _ = await runtime.readyForInput(id) // in the background: the person opens it himself
             return state.removing("id").setting("window", .string(bindings.displayName(id) ?? ""))
         }
         let name = try arguments["window"].requireString("window", nonempty: true)
@@ -258,7 +258,9 @@ public final class BackendBrowserService {
               || !frame && who.session != nil && Self.sessionPageOperations.contains(operation) else {
             throw NativeRPCError(code: "not-permitted", message: "A session's browser_page does: \(Self.sessionPageOperations.sorted().joined(separator: ", ")), on its own windows. The rest of the toolbar is the person's.")
         }
-        if operation == "reveal", !frame { return try await revealScreenshot(context, path: arguments["path"].requireString("path", nonempty: true)) }
+        // browser_page reveal: a tool never brings Finder forward (Asad 13 Nov). The saved image's path goes back to
+        // the caller; only the person's own toolbar (browser-view:reveal -> revealScreenshot) shows it in Finder.
+        if operation == "reveal", !frame { return try await screenshotPlace(context, path: arguments["path"].requireString("path", nonempty: true)) }
         if who.routesToOriginatingDevice {
             guard let forward else { throw NativeRPCError(code: "unavailable", message: "The originating device's browser transport is unavailable.") }
             try await authorize(.init(tool: frame ? "browser.frames" : "browser.page", principal: who, tier: .act))
@@ -318,7 +320,8 @@ public final class BackendBrowserService {
         try Task.checkCancellation()
         let answer: NativeRPCValue
         if frame { answer = try await runtime.frameCommand(id, operation: operation, arguments: arguments) }
-        else { answer = try await runtime.pageCommand(id, operation: operation, arguments: arguments) }
+        // MAC-NEXT-15b: a tool's print never opens the print sheet on his window: the page goes to a PDF file.
+        else { answer = try await runtime.pageCommand(id, operation: operation == "print" ? "print-file" : operation, arguments: arguments) }
         guard (who.session == nil || bindings.owner(of: id) == who.session), runtime.handoverPrompt(id) == nil else {
             throw NativeRPCError(code: "not-permitted", message: "This page's grant changed while the operation was running.")
         }
@@ -331,8 +334,18 @@ public final class BackendBrowserService {
         try await authorize(.init(tool: "browser:\(operation)", principal: who, tabID: id,
             profileID: try runtime.pageState(id)["profileId"].string, origin: BackendBrowserOrigin.exact(runtime.pageURL(id)),
             tier: operation == "recordclear" ? .alter : ["state", "recording", "frame", "user-screenshot", "pick"].contains(operation) ? .read : .act, arguments: arguments))
-        return try await runtime.pageCommand(id, operation: operation, arguments: arguments)
+        // His toolbar's Print (the app itself) opens the print sheet; anyone else's print goes to a PDF file.
+        let printing = operation == "print" && context.caller != .nativeApp ? "print-file" : operation
+        return try await runtime.pageCommand(id, operation: printing, arguments: arguments)
     }
+    func screenshotPlace(_ context: NativeRPCContext, path: String) async throws -> NativeRPCValue {
+        let who = try await principal(context)
+        guard who.managesWindows, context.caller != .pairedDevice else { throw NativeRPCError(code: "not-permitted", message: "Only the person's browser tools may reveal saved images.") }
+        try await authorize(.init(tool: "browser-view:reveal", principal: who, tier: .read, resourcePath: path))
+        return .object([.init("shown", .bool(false)), .init("path", .string(path)),
+            .init("forThePerson", .string("The saved image is at this path; the person shows it in Finder himself."))])
+    }
+    /// The person's own toolbar only (browser-view:reveal). Tools get `screenshotPlace`.
     public func revealScreenshot(_ context: NativeRPCContext, path: String) async throws -> NativeRPCValue {
         let who = try await principal(context)
         guard who.managesWindows, context.caller != .pairedDevice else { throw NativeRPCError(code: "not-permitted", message: "Only the person's browser tools may reveal saved images.") }
@@ -385,7 +398,7 @@ public final class BackendBrowserService {
         do { try await authorize(.init(tool: "browser:bind", principal: who, tabID: id, tier: .alter, targetSession: session)) }
         catch { runtime.closeTab(id); bindings.closed(id); throw error }
         let bound = try bindings.attach(id, to: session)
-        _ = await runtime.reveal(id)
+        _ = await runtime.showForPerson(id) // person-ok: the person's own Session menu (BindMenuModel), never a tool
         return .object([.init("window", .string(bound.name))])
     }
     public func openLink(_ context: NativeRPCContext, arguments: NativeRPCValue) async throws -> NativeRPCValue {
@@ -413,7 +426,7 @@ public final class BackendBrowserService {
         }
         let value = try await nativeCreate(context, arguments: .object([.init("url", .string(url))]))
         let id = try value["id"].requireString("tabId", nonempty: true)
-        _ = await runtime.reveal(id)
+        _ = await runtime.readyForInput(id) // in the background: a tab in the strip, never selected for him
         return .object([.init("route", .string("tab")), .init("line", .string("Opened in the app's browser.")),
             .init("window", .string(bindings.displayName(id) ?? "")), .init("url", .string(url))])
     }
@@ -626,7 +639,7 @@ private final class BackendBrowserCallHost: BrowserDriverHost {
         guard permittedTab(id), runtime.handoverPrompt(id) == nil else { throw NativeRPCError(code: "not-permitted", message: "This page's grant changed during the read.") }
         return value
     }
-    func reveal(_ id: String) async -> Bool { guard !Task.isCancelled else { return false }; return await runtime.reveal(id) }
+    func readyForInput(_ id: String) async -> Bool { guard !Task.isCancelled else { return false }; return await runtime.readyForInput(id) }
     func click(_ id: String, cssRect: CGRect) -> Bool { mayInput(id) && runtime.click(id, cssRect: cssRect) }
     func focusForTyping(_ id: String) -> Bool { mayInput(id) && runtime.focusForTyping(id) }
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool { mayInput(id) && runtime.type(id, plan: plan) }
@@ -660,6 +673,9 @@ private final class BackendBrowserCallHost: BrowserDriverHost {
     func handoverPrompt(_ id: String) -> String? { runtime.handoverPrompt(id) }
     func otherHandover(than id: String) -> String? { runtime.otherHandover(than: id) }
     func handOver(_ id: String, prompt: String, windowMs: Int) async -> String { await runtime.handOver(id, prompt: prompt, windowMs: windowMs) }
+    func handoverOpened(_ id: String) -> Bool { permittedTab(id) && runtime.handoverOpened(id) }
+    func takePageNotes(_ id: String) -> [[String: Any]] { permittedTab(id) ? runtime.takePageNotes(id) : [] }
+    func toolStepStarts(_ id: String) { if permittedTab(id) { runtime.toolStepStarts(id) } }
     func closeTab(_ id: String) { if !Task.isCancelled { runtime.closeTab(id); map.closed(id) } }
     func unbind(_ id: String) { map.detach(id) }
     func now() -> Double { runtime.now() }

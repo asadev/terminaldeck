@@ -5,7 +5,7 @@ import TerminalDeckNativeCore
 
 // ACCOUNTS-SPEC (Asad, 11 Oct): "accounts management will be one place in settings, there we
 // can just switch what to assign to who". The "Who uses what" table: Whole Terminal Deck, Hoot,
-// each project and its roles, one picker each ("Same as above" or an account), the account in
+// each project and its roles, one picker each ("Default (…)" or an account), the account in
 // effect and where it comes from, and Switch now. Only account ids are handled here; logins never
 // leave the app's own store and are never read, shown or logged by this file.
 
@@ -407,17 +407,52 @@ final class NativeAccountLevelsModel {
     }
 }
 
-/// The "Who uses what" section of Settings › Coding AIs.
+/// Settings › Coding AIs › Which account agents use (owner, 15 Nov; DESIGN.md section 6): every agent is ONE row with
+/// ONE pop-up. A signed-out login is not repeated here (its own account row on Coding AIs says it, once). "Switch now"
+/// for one row is on its right-click menu; "Switch all now" is the page's one action in the top bar.
+struct NativeWhichAccountPage: View {
+    @State private var store = NativeCodingAIStore.shared
+    var fixtureAccounts: [CodingAIAccount]? = nil
+    var fixtureRows: [NativeAccountLevelRow]? = nil
+    var model = NativeAccountLevelsModel.shared
+
+    var body: some View {
+        let accounts = fixtureAccounts ?? store.snapshot.accounts
+        let rows = fixtureRows ?? model.liveRows()
+        DeckSettingsScaffold(title: NativeCodingAIThisMachine.whichAccountTitle, trailing: AnyView(
+            HStack(spacing: DeckTokens.Spacing.s8) {
+                DeckSettingsInfoButton(label: NativeCodingAIThisMachine.whichAccountTitle, text: NativeAccountLevelsSection.explanation)
+                Button("Switch all now") {
+                    if let app = rows.first(where: { $0.kind == .app }) {
+                        model.planSwitch(app, rows: rows, names: NativeAccountLevelsSection.names(accounts))
+                    }
+                }
+                .disabled(model.olderHelper || fixtureRows != nil)
+                .help("Move every running session to the account set for it here, without restarting any of them")
+            })) {
+            NativeAccountLevelsSection(accounts: accounts, signIns: store.signIn, defaultID: store.snapshot.defaultId,
+                                       model: model, fixtureRows: fixtureRows)
+        }
+        .onAppear { if fixtureAccounts == nil, !store.accountsLoaded { store.refreshAll() } }
+    }
+}
+
+/// The rows of "Which account agents use": the AI chooser (installed AIs with accounts), then one row per agent level
+/// (whole app, Hoot, each project, its lead and roles), each with one pop-up.
 struct NativeAccountLevelsSection: View {
     let accounts: [CodingAIAccount]
     var signIns: [String: CodingAISignIn] = [:]
-    /// Accounts that are signed out or expired: a row that uses one offers "Sign in again".
+    /// Kept for callers; a signed-out login is said on its own account row now, never here.
     var signedOut: Set<String> = []
     /// The page's own default (an account row's "Use by default" writes the Whole Terminal Deck row).
     var defaultID: String? = nil
     var model = NativeAccountLevelsModel.shared
     /// Offscreen pictures pass fixed rows.
     var fixtureRows: [NativeAccountLevelRow]? = nil
+
+    static let explanation = "An account set here is used for everything started from now on. Switch all now also moves what is already running, in place: same terminal, same conversation. Right-click a row to move only its running sessions."
+    /// What the pop-up of a row that follows the row above it says.
+    static func inheritedWord(_ name: String) -> String { "Default (" + name + ")" }
 
     private var providers: [String] {
         let owned = Set(accounts.compactMap(\.provider))
@@ -431,86 +466,59 @@ struct NativeAccountLevelsSection: View {
         guard let original, !original.system else { return "" }
         return original.id
     }
-    private var names: [String: String] {
+    static func names(_ accounts: [CodingAIAccount]) -> [String: String] {
         Dictionary(accounts.map { ($0.id, $0.system ? CodingAIAccountLabels.ownLoginLabel($0.provider) : $0.name) }, uniquingKeysWith: { first, _ in first })
     }
 
     var body: some View {
         @Bindable var model = model
         let rows = fixtureRows ?? model.liveRows()
-        Section {
-            if model.olderHelper { NativeCodingAINotice(tone: .info, text: NativeAccountLevelsModel.olderHelperLine) }
-            else if let problem = model.problem { NativeCodingAINotice(tone: .error, text: problem) }
-            if providers.count > 1 {
-                Picker("AI", selection: $model.provider) {
-                    ForEach(providers, id: \.self) { DeckRowLabel.provider(CodingAICatalog.label($0), id: $0).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden()
+        let names = Self.names(accounts)
+        if providers.count > 1 {
+            Picker("AI", selection: $model.provider) {
+                ForEach(providers, id: \.self) { Text(CodingAICatalog.label($0)).tag($0) }
             }
-            if rows.count > 8 || !model.search.isEmpty {
-                NativeSessionTextField("Find a project or role", text: $model.search).textFieldStyle(.roundedBorder)
-            }
-            ForEach(rows) { row in rowView(row, rows: rows) }
-        } header: {
-            HStack {
-                Text("Who uses what")
-                Spacer()
-                NativeSessionButton("Switch everything now") {
-                    if let app = rows.first(where: { $0.kind == .app }) { model.planSwitch(app, rows: rows, names: names) }
-                }
-                .controlSize(.small)
-                .disabled(model.olderHelper)
-                .help("Move every running session to the account set for it here, without restarting any of them")
-            }
-        } footer: {
-            Text("An account set here is used for everything started from now on. Switch now also moves what is already running, in place: same terminal, same conversation.")
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .frame(maxWidth: .infinity)
+        }
+        if model.olderHelper || model.problem != nil {
+            DeckSettingsGroup { DeckSettingsProblem(text: model.olderHelper ? NativeAccountLevelsModel.olderHelperLine : model.problem ?? "", warn: !model.olderHelper) }
+        }
+        if rows.count > 8 || !model.search.isEmpty {
+            NativeSessionTextField("Find a project or role", text: $model.search).textFieldStyle(.roundedBorder)
+        }
+        DeckSettingsGroup {
+            ForEach(rows) { row in rowView(row, rows: rows, names: names) }
         }
         .task { model.start() }
-        // An account added, removed, renamed or made the default from the list above shows here at once.
+        // An account added, removed, renamed or made the default on Coding AIs shows here at once.
         .onChange(of: accounts) { _, _ in Task { await model.reload() } }
         .onChange(of: defaultID) { _, _ in Task { await model.reload() } }
         .sheet(item: $model.plan) { _ in NativeAccountSwitchSheet(model: model) }
     }
 
-    private func rowView(_ row: NativeAccountLevelRow, rows: [NativeAccountLevelRow]) -> some View {
-        let effective = model.effective(row), inherited = model.inherited(row)
-        return HStack(spacing: 10) {
-            picture(row).frame(width: 22, height: 22).padding(.leading, row.indented ? 22 : 0)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(row.title).fontWeight(row.indented ? .regular : .medium).lineLimit(1)
-                    if !row.detail.isEmpty { Text(row.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                Text(effective.id == NativeAccountLevelsModel.mixedID ? "Uses " + effective.from : "Uses \(names[effective.id] ?? effective.id) · \(effective.from)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if signedOut.contains(effective.id), let account = accounts.first(where: { $0.id == effective.id }) {
-                    // Signing in again keeps everything assigned to this account as it is.
-                    NativeSessionButton("\(account.system ? CodingAIAccountLabels.ownLoginLabel(account.provider) : account.name) is signed out. Sign in again") {
-                        NativeAccountSignInModel.shared.open(account)
-                    }
-                    .buttonStyle(.link).font(.caption)
-                }
-            }
-            Spacer(minLength: 8)
+    private func rowView(_ row: NativeAccountLevelRow, rows: [NativeAccountLevelRow], names: [String: String]) -> some View {
+        let inherited = model.inherited(row)
+        return HStack(spacing: DeckTokens.Spacing.s12) {
+            DeckSettingsRowLabel(title: row.title, leading: AnyView(picture(row).frame(width: DeckSettingsLook.rowTile, height: DeckSettingsLook.rowTile)),
+                                 note: row.detail.isEmpty ? nil : row.detail)
+                .padding(.leading, row.indented ? DeckSettingsLook.rowTile : 0)
+            Spacer(minLength: DeckTokens.Spacing.s8)
             Picker("Account for \(row.title)", selection: Binding(get: { model.mixed(row) ? NativeAccountLevelsModel.mixedID : displayedSelection(model.assigned(row)) },
                                                                     set: { if $0 != NativeAccountLevelsModel.mixedID { model.set(row, account: $0.isEmpty ? nil : $0, rows: rows) } })) {
-                if model.mixed(row) {
-                    DeckRowLabel("Different in each folder", image: DeckRowIcon.symbolIcon("square.split.2x1")).tag(NativeAccountLevelsModel.mixedID)
-                }
-                DeckRowLabel(row.kind == .app ? "This Mac’s own login" : "Same as above · " + (names[inherited.id] ?? inherited.id),
-                             image: DeckRowIcon.symbolIcon(row.kind == .app ? "laptopcomputer" : "arrow.turn.left.up")).tag("")
-                ForEach(choices().filter { !$0.system }) { account in
-                    DeckRowLabel(account.name, image: DeckRowIcon.provider(model.provider)).tag(account.id)
-                }
+                if model.mixed(row) { Text("Different in each folder").tag(NativeAccountLevelsModel.mixedID) }
+                Text(row.kind == .app ? "This Mac’s own login" : Self.inheritedWord(names[inherited.id] ?? inherited.id)).tag("")
+                ForEach(choices().filter { !$0.system }) { account in Text(account.name).tag(account.id) }
             }
             .labelsHidden().fixedSize()
             .disabled(model.olderHelper)
-            NativeSessionButton("Switch now") { model.planSwitch(row, rows: rows, names: names) }
-                .controlSize(.small)
-                .disabled(model.olderHelper)
-                .help("Also move the sessions already running under \(row.title)")
         }
-        .padding(.vertical, 1)
+        .padding(.horizontal, DeckSettingsLook.rowPadding)
+        .frame(maxWidth: .infinity, minHeight: DeckSettingsLook.rowHeight, alignment: .leading)
+        .contentShape(.rect)
+        .contextMenu {
+            Button("Switch running sessions now") { model.planSwitch(row, rows: rows, names: names) }.disabled(model.olderHelper)
+        }
     }
 
     @ViewBuilder private func picture(_ row: NativeAccountLevelRow) -> some View {

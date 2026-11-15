@@ -13,7 +13,7 @@ extension NativeCompositionProduction {
             .init("action", text.setting("enum", .array(actions.map(NativeRPCValue.string)))), .init("id", text), .init("value", text), .init("folder", text)])),
             .init("required", .array([.string("action")])), .init("additionalProperties", .bool(false))])
         let spec = try BackendMCPTool(id: "window.buttons", wireName: "window_buttons",
-            description: "Use the main window’s native buttons. action is a button name; id is a tab, pane, split, folder, server or panel. value is the divider ratio, server name or panel focus; folder optionally sets the server terminal’s start folder. set-mode uses id terminal or split. Either side of the split can be a session or a browser tab: select-tab with a browser tab id fills the focused pane while the split is on (else shows it), and split-with id (a session or browser tab) puts it beside the one on show, turning the split on if needed. Every answer lists the panes (pane id, tab, kind, focused) for focus-pane, close-pane and resize-split. Opening sessions shows the native form; new-session-start submits it, new-session-cancel closes it. remove-project removes its folder and ends its local sessions. start-machine-session uses id machine, folder remote path and value AI, and waits for creation. open-server-shell uses id server and value agent command. server-shell-opened uses id tab and value shell ID; server-shell-ended marks its tab ended; close-tab folds a session back into the side panel; close-session and close-project ask the person’s usual delete question. Refusals return an error.",
+            description: "Use the main window’s native buttons. action is a button name; id is a tab, pane, split, folder, server or panel. value is the divider ratio, server name or panel focus; folder optionally sets the server terminal’s start folder. set-mode uses id terminal or split. Either side of the split can be a session or a browser tab: select-tab with a browser tab id fills the focused pane while the split is on (else shows it), and split-with id (a session or browser tab) puts it beside the one on show, turning the split on if needed. Every answer lists the panes (pane id, tab, kind, focused) for focus-pane, close-pane and resize-split. new-session and new-session-in start nothing: they only set the folder on the person's New session page (not while he is on it or has typed there); the page is not shown and the keyboard is not moved. new-session-start submits the full New session form only while the person has it open, quietly (added to the side panel, not shown); with no form open it refuses. new-session-cancel closes that form and otherwise changes nothing. To start a session use sessions_start_agent (then sessions_chat options and say for model, effort and the first message). remove-project removes the project from this Mac only (Not on this Mac; Bring back is in Your Cloud); its folders and sessions are kept. start-machine-session uses id machine, folder remote path and value AI, and waits for creation. open-server-shell uses id server and value agent command. server-shell-opened uses id tab and value shell ID; server-shell-ended marks its tab ended; close-tab folds a session back into the side panel; close-session and close-project ask the person’s usual delete question. Refusals return an error.",
             inputSchema: schema, tier: .alter)
         try await mcp.registerTool(spec, ownerID: owner) { caller, args in
             guard caller.allowedTiers.contains(.alter) else { throw NativeRPCError(code: "not-granted", message: "This caller cannot change the window.") }
@@ -24,7 +24,7 @@ extension NativeCompositionProduction {
             let task = await MainActor.run {
                 NativeButtonActions.routeForTool(command, nativeSelection: { id in
                     guard AppModel.nativeOnly(id) else { return false }
-                    AppModel.shared.select(id); return true
+                    AppModel.shared.select(id); return true // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
                 }, fallback: {
                     command.name == "close-tab" ? AppModel.shared.closeTabForTool(args["id"].string ?? "") : AppModel.shared.runButtonForTool(command)
                 })
@@ -57,7 +57,7 @@ extension NativeButtonActions {
     static func command(_ action: String, id: String, value: String, folder: String? = nil) throws -> PageCommand {
         switch action {
         case "select": return .select(id)
-        case "select-tab": return .selectTab(id)
+        case "select-tab": return .selectTab(id) // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
         case "close-session": return .closeSession(id)
         case "close-tab": return .closeTab(id)
         case "new-session": return .newSession

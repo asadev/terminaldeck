@@ -19,7 +19,8 @@ struct NativeUIGTasksWorkView: View {
 
     var body: some View {
         let d = model.drawn(state, now: now, projects: projects)
-        let selected = d.shown.map(\.id).filter { model.selected.contains($0) }
+        // Bulk changes reach only his own tasks; a connected system's task is changed where it came from.
+        let selected = d.shown.filter(TaskList.editableInList).map(\.id).filter { model.selected.contains($0) }
         VStack(alignment: .leading, spacing: 10) {
             toolbar(d)
             if !model.trashOpen && !selected.isEmpty { bulk(selected, drawn: d) }
@@ -87,7 +88,7 @@ struct NativeUIGTasksWorkView: View {
             showClosed: Binding(get: { model.view.showClosed }, set: { model.view.showClosed = $0 }),
             me: Binding(get: { model.view.filters.pile == .mine }, set: { on in model.filter { $0.pile = on ? .mine : .all } }),
             filterCount: UIGTasksPresentation.filterCount(model.view.filters), matchingCount: drawn.shown.count,
-            totalCount: drawn.local.count,
+            totalCount: drawn.listed.count,
             contentCount: UIGTasksPresentation.contentCount(drawn.shown, tab: model.view.tab, week: drawn.week),
             trashCount: state.trash.count, projectSections: drawn.byProject) {
                 TasksColumnsPanel(model: model)
@@ -96,7 +97,7 @@ struct NativeUIGTasksWorkView: View {
 
     private func emptyNote(_ drawn: MyWorkModel.Drawn) -> some View {
         HStack(spacing: 8) {
-            Text(drawn.local.isEmpty && !model.view.filters.archived ? "No tasks yet. Add one with New task."
+            Text(drawn.listed.isEmpty && !model.view.filters.archived ? "No tasks yet. Add one with New task."
                 : "No tasks match this search and filters.")
                 .foregroundStyle(.secondary)
             if model.view.filters.narrows || model.view.filters.archived {
@@ -109,7 +110,7 @@ struct NativeUIGTasksWorkView: View {
     }
 
     private func filterPanel(_ drawn: MyWorkModel.Drawn) -> some View {
-        let boards = Array(Set(drawn.local.compactMap(\.board) + model.view.filters.boards))
+        let boards = Array(Set(drawn.listed.compactMap(\.board) + model.view.filters.boards))
             .filter { $0 != "none" }
             .sorted { $0.localizedCompare($1) == .orderedAscending }
         return VStack(alignment: .leading, spacing: 12) {
@@ -186,7 +187,7 @@ struct NativeUIGTasksWorkView: View {
     }
 
     @ViewBuilder private func empty(_ drawn: MyWorkModel.Drawn) -> some View {
-        if drawn.local.isEmpty && !model.view.filters.archived {
+        if drawn.listed.isEmpty && !model.view.filters.archived {
             NativePageEmpty(symbol: "checklist", title: "No tasks yet") {
                 Text("Use New task to add work for yourself, Hoot or a task agent.")
             }
@@ -202,7 +203,7 @@ struct NativeUIGTasksWorkView: View {
 
     /// Selected tasks: change their status or priority together, mark them done, archive or delete them.
     private func bulk(_ selected: [String], drawn: MyWorkModel.Drawn) -> some View {
-        let all = drawn.shown.map(\.id)
+        let all = drawn.shown.filter(TaskList.editableInList).map(\.id)
         return TasksFlow(spacing: 8, lineSpacing: 8) {
             Text("\(selected.count) selected").font(.callout.weight(.semibold))
             if selected.count < all.count {
@@ -285,12 +286,13 @@ struct NativeUIGTasksWorkView: View {
         var visible = group.items.map(\.id).filter { $0 != dragged }
         visible.insert(dragged, at: visible.firstIndex(of: target) ?? visible.count)
         let inGroup = Set(group.items.map(\.id))
-        let full = drawn.local.filter { inGroup.contains($0.id) || ($0.dueDate == drawn.today && $0.crmStatus != "Done") }.map(\.id)
+        let full = drawn.listed.filter { inGroup.contains($0.id) || ($0.dueDate == drawn.today && $0.crmStatus != "Done") }.map(\.id)
         let ids = group.items.map(\.id) + full.filter { !inGroup.contains($0) }
         let order = TaskList.reorderWithinSlots(ids, visible)
         Task {
             for (position, id) in order.enumerated() {
-                if let task = drawn.local.first(where: { $0.id == id }), task.position != Double(position) {
+                // A task a connected system sent keeps its slot; only his own tasks take a new position.
+                if let task = drawn.listed.first(where: { $0.id == id }), TaskList.editableInList(task), task.position != Double(position) {
                     guard await store.run({ await store.update(id, ["position": position]) }) else { return }
                 }
             }

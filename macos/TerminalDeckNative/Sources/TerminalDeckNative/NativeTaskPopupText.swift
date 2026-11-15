@@ -449,7 +449,7 @@ struct TaskRichText: View {
 private struct TaskRichTextOwner: View {
     @Environment(\.nativeSessionInputScope) private var scope
     let parent: TaskRichText
-    var body: some View { TaskRichTextHost(parent: parent).id(scope?.identity) }
+    var body: some View { nativeSessionOwnedInput(TaskRichTextHost(parent: parent), owner: scope) }
 }
 
 private struct TaskRichTextHost: NSViewRepresentable {

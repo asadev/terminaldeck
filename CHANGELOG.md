@@ -10,6 +10,57 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-11-16
+
+Terminal Deck 0.22.0 brings Cloud: sign in once with your Terminal Deck account and your work follows you to every Mac, your phones and the web.
+
+### Cloud: everything on every device
+- Sign in once on each device. Your memory, AI instruction files, agents, projects, tasks, settings, saved passwords, project secret files, API keys, server keys and artifacts are the same everywhere. You do not need a code or have to answer a question.
+- The Terminal Deck Cloud folder keeps files the same across your Macs. Your phones and the web can open any Cloud file even when every Mac is off.
+- See sessions from your other Macs ("Claude · MacBook Air"), open one and use it live from the Mac in front of you.
+- Delete something on one device and it is deleted everywhere. It waits in the Bin in case you want it back.
+- Lost a laptop or phone? Sign it out from any of your other devices. It loses access to your Cloud at once.
+- A small Cloud line in the bottom bar shows that everything is up to date. "Sync now" is one click away.
+- Settings → Cloud has a file manager for everything that syncs, and a page for your code on GitHub.
+- A spare key for your saved passwords is made with Touch ID. Your devices unlock them by themselves.
+
+### Settings
+- A new Settings window, laid out like Apple's: a Profile page with your picture, name, sign-in and devices; quieter pages with fewer words and an info button where you want more.
+- Devices has its own page, and old devices you no longer use are tucked away.
+- Appearance is now simply Match Mac, Light or Dark.
+- "AI apps" (formerly Outside AI apps) connect through one Terminal Deck address with one switch.
+- Coding AIs show proper model names. Shortcuts, Plugins and Voice are gone, and browser settings now live in the browser.
+
+### New session and Hoot
+- New session: choose the model (all of them), effort, whether it asks before it changes files, the project, the account by its name, and optionally an agent. Chat or Terminal.
+- Hoot: cleaner chat, a stopped answer simply says "Stopped", every account and model in Hoot's settings, ready when you open them.
+- Tasks get numbers and travel with Cloud.
+
+### Phones (iPhone and Android 0.22.0)
+- Sign in with your account instead of pairing.
+- Cloud with every Mac off: settings, saved passwords, files and your sessions grouped by account; one Devices screen.
+- Sign a lost device out from your phone.
+- Faster on a slow connection: answers come first.
+
+### Web
+- Sign in at the web app and open your Cloud files and sessions. You can also sign a computer out from the browser.
+
+### Fixes
+- A session's "last used" time no longer jumps when the app starts.
+- Memory repairs itself file by file and never lets an app default replace your own text.
+- Phone panels, the Dynamic Island and many small layout fixes.
+
+### Install
+macOS 26 or later, Apple silicon. Open `terminaldeck-0.22.0-arm64.dmg` and drag Terminal Deck to Applications. Already on 0.21.x? The app offers this update by itself.
+
+This Mac build is signed with a Developer ID certificate but is not notarized yet. The first time you open a fresh download, macOS refuses it once. Click **Done**, then go to System Settings → Privacy & Security and click **Open Anyway**. Updates from inside the app are not affected.
+
+Windows stays on 0.21.2.0 in this release.
+
+## [0.21.4] — 2026-11-12
+
+Mac, iPhone and Android 0.21.4 (public release of 12 Nov; Windows stays 0.21.2.0). Fixes on top of 0.21.3.
+
 ## [0.20.3] — 2026-10-31
 
 iPhone, Android and Mac move to 0.20.3 together (0.20.2 was approved for the App Store, so its train is closed). Mac: local install 16.

@@ -17,7 +17,11 @@ public struct BackendMachineLinkState: Sendable {
     public let retryAt: Double?
     /// m5-direct-only: the direct link's path ("host", "internet", "turn") once this Mac moved onto it; empty on the relay.
     public var linkPath: String = ""
-    public var value: NativeRPCValue { .object([.init("id", .string(id)), .init("state", .string(phase.rawValue)), .init("reason", reason.map(NativeRPCValue.string) ?? .null),
+    /// The Cloud's ref of that machine (its `sessions`/`welcome` header `machine`), once it said it: how the Cloud page
+    /// finds the live twin of a session row. Nil from an older or signed-out machine.
+    public var machine: String?
+    public var value: NativeRPCValue { machine.map { valueFields.setting("machine", .string($0)) } ?? valueFields }
+    private var valueFields: NativeRPCValue { .object([.init("id", .string(id)), .init("state", .string(phase.rawValue)), .init("reason", reason.map(NativeRPCValue.string) ?? .null),
         .init("sessions", .array(sessions)), .init("folders", folders.map { .array($0.map(NativeRPCValue.string)) } ?? .null),
         .init("capabilities", .array(capabilities.sorted().map(NativeRPCValue.string))), .init("ports", .array(ports)), .init("hoot", copilot),
         .init("hostPlatform", .string(hostPlatform)), .init("hostVersion", .string(hostVersion)), .init("hostKind", hostKind.map(NativeRPCValue.string) ?? .null), .init("retryAt", retryAt.map(NativeRPCValue.number) ?? .null)]) }
@@ -85,6 +89,9 @@ public actor BackendRemoteGuest {
     private var linkTimer: Task<Void, Never>?
     private var pongDue: Task<Void, Never>?
     private var hostName = "that computer"
+    /// Reach by account: the relay token the join carries (nil for a paired machine).
+    private let relayToken: (@Sendable () async throws -> String)?
+    private var machineRef: String?
     public init(id: String, secrets: BackendMachineSecrets, localName: String, declaredCapabilities: Set<String> = [],
                 onState: @escaping @Sendable (BackendMachineLinkState) async -> Void,
                 onOutput: @escaping @Sendable (String, String, Bool) async -> Void,
@@ -93,7 +100,9 @@ public actor BackendRemoteGuest {
                 windowsAllowed: @escaping @Sendable () async throws -> Bool = { false }, windowCall: WindowCall? = nil,
                 windowsHeld: (@Sendable () async -> [NativeRPCValue])? = nil, ownSessions: (@Sendable () async -> [NativeRPCValue])? = nil,
                 receivedHolds: (@Sendable ([String], [NativeRPCValue]) async -> Void)? = nil,
-                receivedResult: (@Sendable (String, Bool, String) async -> Void)? = nil) {
+                receivedResult: (@Sendable (String, Bool, String) async -> Void)? = nil,
+                relayToken: (@Sendable () async throws -> String)? = nil) {
+        self.relayToken = relayToken
         self.id = id; self.secrets = secrets; name = localName; self.declaredCapabilities = declaredCapabilities
         self.onState = onState; self.onOutput = onOutput; self.onWelcome = onWelcome; self.onFrame = onFrame
         self.windowsAllowed = windowsAllowed; self.windowCall = windowCall
@@ -103,6 +112,7 @@ public actor BackendRemoteGuest {
         var state = BackendMachineLinkState(id: id, phase: phase, reason: reason, sessions: sessions, folders: folders, capabilities: capabilities,
             ports: ports, copilot: copilot, hostPlatform: platform, hostVersion: version, hostKind: hostKind, retryAt: retryAt)
         state.linkPath = stage == .moved ? linkPath : ""
+        state.machine = machineRef
         return state
     }
     public func connect() { guard stopped else { return }; stopped = false; beginDial() }
@@ -111,7 +121,7 @@ public actor BackendRemoteGuest {
         guard !stopped, channel == nil else { return }
         generation = UUID(); let epoch = generation
         phase = .connecting; reason = nil; retryAt = nil
-        let channel = BackendRemoteGuestChannel(relayURL: secrets.relayURL, hostID: secrets.hostID, hostKey: secrets.hostPublicKey, identity: secrets.guestIdentity)
+        let channel = BackendRemoteGuestChannel(relayURL: secrets.relayURL, hostID: secrets.hostID, hostKey: secrets.hostPublicKey, identity: secrets.guestIdentity, relayToken: relayToken)
         self.channel = channel
         receiver = Task { [weak self] in
             await self?.announce()
@@ -157,6 +167,7 @@ public actor BackendRemoteGuest {
         case "welcome":
             phase = .online; reason = nil; retryAt = nil; everWelcomed = true; connectedAt = Date().timeIntervalSince1970 * 1000
             sessions = value["sessions"].elements ?? []; folders = value["folders"].elements?.compactMap(\.string)
+            machineRef = Self.machineHeader(value) ?? machineRef
             capabilities = Set(value["capabilities"].elements?.compactMap(\.string) ?? [])
             copilot = value["hoot"] == .missing ? .null : value["hoot"]
             platform = value["hostPlatform"].string ?? ""; version = value["appVersion"].string ?? ""; hostKind = value["hostKind"].string
@@ -191,7 +202,7 @@ public actor BackendRemoteGuest {
                 while !Task.isCancelled { try? await Task.sleep(for: .seconds(10)); guard !Task.isCancelled else { return }; await self?.beat(epoch) }
             }
             await announce()
-        case "sessions": sessions = value["sessions"].elements ?? []; await announce()
+        case "sessions": sessions = value["sessions"].elements ?? []; machineRef = Self.machineHeader(value) ?? machineRef; await announce()
         case "created": if let row = BackendRemoteProtocol.remoteSession(value["session"]) { sessions.removeAll { $0["id"] == row["id"] }; sessions.append(row); await announce() }
         case "closed": sessions.removeAll { $0["id"] == value["id"] }; attachments[value["id"].string ?? ""] = nil; await announce()
         case "output": await onOutput(value["id"].string!, value["data"].string!, replaying.contains(value["id"].string!))
@@ -302,6 +313,13 @@ public actor BackendRemoteGuest {
         guard sessions.contains(where: { $0["id"].string == session }) else { throw NativeRPCError(code: "unknown-session", message: "That remote session is not in the host's list") }
         attachments[session] = (cols, rows); replaying.insert(session)
         try await send(type: "attach", fields: [.init("id", .string(session)), .init("cols", .number(Double(cols))), .init("rows", .number(Double(rows)))]); return true
+    }
+    /// Sessions this Mac shows live from that machine now (a reach link idle with none is let go).
+    public var attachedCount: Int { attachments.count }
+    /// The `machine` header: 32 lowercase hex, else ignored.
+    static func machineHeader(_ value: NativeRPCValue) -> String? {
+        guard let ref = value["machine"].string, ref.utf8.count == 32, ref.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return nil }
+        return ref
     }
     public func detach(_ session: String) async throws { attachments[session] = nil; replaying.remove(session); try await send(type: "detach", fields: [.init("id", .string(session))]) }
     public func input(_ session: String, data: String) async throws {

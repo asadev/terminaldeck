@@ -59,6 +59,7 @@ extension NativeCompositionProduction {
             report(choice.description)
             let store = try await DeckMemoryStore.open(dataRoot: root.dataRoot, embedder: choice.embedder)
             for line in await store.openingReport() { report(line) }
+            await store.setCatchUpPause(DeckMemoryStore.appCatchUpPause)
             let registry = root.registry
             await store.setOnRootChanged { DeckMemoryCenter.shared.noteRoot($0) }
             // Web and phone pages hear changes on a channel; native views use the notification.

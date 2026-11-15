@@ -35,6 +35,10 @@ enum NativeUIGSessionSimulatorRelease { static let enabled = true }
             return entry
         }.filter { $0.layout.isOpen }
     }
+    /// Whether a session holds a phone in either of its panels, shown or not (the row's quiet phone mark).
+    func holdsDevice(_ sessionID: String) -> Bool {
+        [0, 1].contains { entries[NativePaneArrangement.panelKey(sessionID, slot: $0)]?.ticket != nil }
+    }
     /// Whether a session's panel in `slot` is open and on screen now (docked and visible, or in its own window).
     func isShowing(_ session: any NativeUIGSimulatorOwner, slot: Int) -> Bool {
         guard let entry = entries[NativePaneArrangement.panelKey(session.sessionId, slot: slot)], entry.session === session else { return false }

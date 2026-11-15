@@ -146,7 +146,7 @@ struct NativeTasksAllList: View {
             ForEach(lines) { line in
                 TasksListRow(line: line, state: state, columns: columns, today: drawn.today, nowHm: drawn.nowHm,
                     busy: store.busy, selected: model.selected.contains(line.task.id), selecting: selecting,
-                    open: model.open == line.task.id, orderable: orderable && line.depth == 0,
+                    open: model.open == line.task.id, orderable: orderable && line.depth == 0 && TaskList.editableInList(line.task),
                     onSelect: { on in if on { model.selected.insert(line.task.id) } else { model.selected.remove(line.task.id) } },
                     onOpen: { model.open = line.task.id },
                     onToggleChildren: { model.toggleParent(line.task.id) },
@@ -281,6 +281,9 @@ struct TasksListRow: View {
     private var store: TasksStore { TasksStore.shared }
     private var task: TaskRow { line.task }
     private var done: Bool { task.crmStatus == "Done" }
+    /// 15 Nov: a task a connected system sent is listed with his own but changed only where it came from.
+    private var editable: Bool { TaskList.editableInList(task) }
+    private var locked: Bool { busy || !editable }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -289,11 +292,12 @@ struct TasksListRow: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .frame(width: TasksListColumns.lead, alignment: .leading)
-                .opacity(hovering || selected || selecting ? 1 : 0)
+                .opacity(editable && (hovering || selected || selecting) ? 1 : 0)
+                .disabled(!editable) // bulk changes never reach a task a connected system sent
                 .accessibilityLabel("Select \(task.title)")
             Color.clear.frame(width: CGFloat(line.depth) * 20)
             disclosure
-            TaskRing(task: task, busy: busy) { update(["status": done ? "To-Do" : "Done"]) }
+            TaskRing(task: task, busy: locked) { update(["status": done ? "To-Do" : "Done"]) }
                 .padding(.trailing, 8)
             name
             ForEach(columns.shown) { kind in
@@ -313,9 +317,13 @@ struct TasksListRow: View {
             return true
         } isTargeted: { dropTarget = orderable && $0 }
         .contextMenu {
-            NativeSessionButton("Rename") { beginRename() }
-            NativeSessionButton("Edit tags") { beginTags() }
-            TKMoveToProjectMenu(task: task, projects: projects)
+            if editable {
+                NativeSessionButton("Rename") { beginRename() }
+                NativeSessionButton("Edit tags") { beginTags() }
+                TKMoveToProjectMenu(task: task, projects: projects)
+            } else {
+                NativeSessionButton("Open task") { onOpen() }
+            }
         }
         .popover(isPresented: $renaming) { editTitle }
         .popover(isPresented: $editingTags) { editTags }
@@ -394,6 +402,11 @@ struct TasksListRow: View {
             if !task.instructions.isEmpty {
                 Image(systemName: "text.alignleft").font(.caption2).foregroundStyle(.tertiary).help("Has details")
             }
+            if let source = TaskList.source(task, connections: state.connections) {
+                // The one quiet mark of where it comes from (the connection's name).
+                Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    .help(task.copyFrom == nil ? "\(source). Change it there." : "\(source). Read-only here.")
+            }
             if compact { compactCues } else { cues }
             ForEach(tags, id: \.self) { tag in
                 TagPill(text: tag).lineLimit(1).frame(maxWidth: 110).fixedSize(horizontal: true, vertical: false).help(tag)
@@ -404,11 +417,11 @@ struct TasksListRow: View {
                     .help(task.labels.joined(separator: ", "))
             }
             Spacer(minLength: 8)
-            if hovering {
+            if hovering && editable {
                 NativeSessionButton { beginTags() } label: { Image(systemName: "tag").frame(width: 20, height: 24) }
-                    .buttonStyle(.plain).disabled(busy).help("Edit tags").accessibilityLabel("Edit tags for \(task.title)")
+                    .buttonStyle(.plain).disabled(locked).help("Edit tags").accessibilityLabel("Edit tags for \(task.title)")
                 NativeSessionButton { beginRename() } label: { Image(systemName: "pencil").frame(width: 20, height: 24) }
-                    .buttonStyle(.plain).disabled(busy).help("Rename").accessibilityLabel("Rename \(task.title)")
+                    .buttonStyle(.plain).disabled(locked).help("Rename").accessibilityLabel("Rename \(task.title)")
             }
         }
         .frame(minWidth: 120, maxWidth: .infinity, alignment: .leading)
@@ -421,12 +434,12 @@ struct TasksListRow: View {
             Text("Rename task").font(.headline)
             NativeSessionTextField("Task name", text: $titleDraft).textFieldStyle(.roundedBorder).sessionOnSubmit { saveTitle() }
             HStack { NativeSessionButton("Cancel") { renaming = false }; Spacer(); NativeSessionButton("Save") { saveTitle() }
-                    .disabled(busy || titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    .disabled(locked || titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }.padding(16).frame(width: 320)
     }
     private func saveTitle() {
         let title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, !busy else { return }
+        guard !title.isEmpty, !locked else { return }
         renaming = false; update(["title": title])
     }
     private var editTags: some View {
@@ -434,11 +447,11 @@ struct TasksListRow: View {
             Text("Edit tags").font(.headline)
             NativeSessionTextField("Tags, separated by commas", text: $tagsDraft).textFieldStyle(.roundedBorder).sessionOnSubmit { saveTags() }
             Text("Separate tags with commas. Clear the box to remove them.").font(.caption).foregroundStyle(.secondary)
-            HStack { NativeSessionButton("Cancel") { editingTags = false }; Spacer(); NativeSessionButton("Save") { saveTags() }.disabled(busy) }
+            HStack { NativeSessionButton("Cancel") { editingTags = false }; Spacer(); NativeSessionButton("Save") { saveTags() }.disabled(locked) }
         }.padding(16).frame(width: 320)
     }
     private func saveTags() {
-        guard !busy else { return }
+        guard !locked else { return }
         var seen = Set<String>()
         let tags = tagsDraft.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seen.insert($0).inserted }
@@ -488,7 +501,7 @@ struct TasksListRow: View {
         switch kind {
         case .assignee: assigneeCell
         case .due:
-            TasksListDueCell(task: task, today: today, nowHm: nowHm, busy: busy, hovering: hovering) {
+            TasksListDueCell(task: task, today: today, nowHm: nowHm, busy: locked, hovering: hovering) {
                 update(["dueDate": $0 ?? NSNull()])
             }
         case .priority: priorityCell
@@ -527,7 +540,7 @@ struct TasksListRow: View {
             }
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .disabled(busy)
+        .disabled(locked)
         .help(task.assignee == "none" ? "Nobody has it yet. Choose who has it" : "\(name) has it")
         .accessibilityLabel("Who has \(task.title): \(task.assignee == "none" ? "nobody" : name)")
     }
@@ -550,7 +563,7 @@ struct TasksListRow: View {
             }
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .disabled(busy)
+        .disabled(locked)
         .help(task.priority.map { "Priority: \($0)" } ?? "No priority. Choose one")
         .accessibilityLabel("Priority of \(task.title): \(task.priority ?? "none")")
     }
@@ -565,7 +578,7 @@ struct TasksListRow: View {
             TasksStatusPill(status: task.crmStatus)
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .disabled(busy)
+        .disabled(locked)
         .accessibilityLabel("Status of \(task.title): \(task.crmStatus)")
     }
 
@@ -584,7 +597,7 @@ struct TasksListRow: View {
             }
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .disabled(busy)
+        .disabled(locked)
         .accessibilityLabel("Goal of \(task.title): \(current ?? "none")")
     }
 
@@ -594,11 +607,13 @@ struct TasksListRow: View {
         let next = TaskList.nextStatus(task.crmStatus)
         return Menu {
             NativeSessionButton("Open task") { onOpen() }
-            if let next { NativeSessionButton("Move to \(next)") { update(["status": next]) } }
-            NativeSessionButton(done ? "Reopen" : "Mark done") { update(["status": done ? "To-Do" : "Done"]) }
-            TKMoveToProjectMenu(task: task, projects: projects)
-            Divider()
-            NativeSessionButton("Delete", role: .destructive) { Task { await store.run { await store.remove(task.id) } } }
+            if editable {
+                if let next { NativeSessionButton("Move to \(next)") { update(["status": next]) } }
+                NativeSessionButton(done ? "Reopen" : "Mark done") { update(["status": done ? "To-Do" : "Done"]) }
+                TKMoveToProjectMenu(task: task, projects: projects)
+                Divider()
+                NativeSessionButton("Delete", role: .destructive) { Task { await store.run { await store.remove(task.id) } } }
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .foregroundStyle(.secondary)

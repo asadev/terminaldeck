@@ -7,6 +7,7 @@ public actor BackendAGSSessionChoices {
     private struct Record: Codable { let version: Int; var entries: [String: AGSAgentSettings] }
     private let persistence: BackendTaskPersistence, cipher: any BackendAccountVaultCipher
     private var entries: [String: AGSAgentSettings] = [:], started = false
+    private var cloudArchive: BackendCloudBrainAgentsArchive?
     public init(persistence: BackendTaskPersistence, cipher: any BackendAccountVaultCipher) { self.persistence = persistence; self.cipher = cipher }
     public func start() throws {
         guard !started else { return }
@@ -45,6 +46,54 @@ public actor BackendAGSSessionChoices {
         do { encrypted = try cipher.encrypt(String(decoding: bytes, as: UTF8.self), existingVault: existing) } catch { throw unavailable() }
         try persistence.write("ags-session-choices.json", value: .object([.init("version", .number(1)), .init("encrypted", .string(encrypted.base64EncodedString()))]))
         entries = next
+        if !cloudImporting, cloudArchive?.attached == true { _ = try? cloudArchive!.capture(try Self.cloudRecords(next), sourceID: "agent-session-options", complete: true) }
+    }
+    // MARK: Cloud (lane A2). Per-tab choices are history: kept in the Cloud without secrets, never resumed here.
+    private var cloudImporting = false
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        if cloudArchive == nil { cloudArchive = .init(ownerDirectory: persistence.ownership == .memory ? nil : persistence.directory, namespace: "agent-session-options", domains: ["agent-session-options"]) }
+        try cloudArchive!.attach(account)
+    }
+    public func cloudDetach() { cloudArchive?.detach() }
+    private static func cloudRecords(_ entries: [String: AGSAgentSettings]) throws -> [CloudBrainAgentsRecord] {
+        try entries.keys.sorted().map { key in
+            CloudBrainAgentsRecord(domain: "agent-session-options", id: CloudBrainTasks.entity(kind: "tab", id: key),
+                value: .object([.init("tabKey", .string(key)), .init("settings", try BackendAGSCodec.value(CloudBrainAgentsOptions.portable(entries[key]!)))]))
+        }
+    }
+    public func cloudChoicesInventory() throws -> [CloudCoverage] {
+        guard started else {
+            return [.init(sourceId: "agent-session-options", inventoryRow: "I10", complete: false, items: 0, bytes: 0,
+                blockedReasons: ["The encrypted session choices are locked on this Mac; nothing was read or exported."])]
+        }
+        return [try BackendCloudBrainAgentsSupport.coverage(row: "I10", sourceID: "agent-session-options", records: try Self.cloudRecords(entries),
+            blocked: ["Hook and environment values stay on this Mac; their secret parts belong to Cloud secrets."], attention: cloudArchive?.attention() ?? [])]
+    }
+    public func cloudChoicesSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        try ready()
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        try cloudArchive!.capture(try Self.cloudRecords(entries), sourceID: "agent-session-options", complete: true)
+        return .init(operations: try cloudArchive!.ownOperations(), coverage: try cloudChoicesInventory())
+    }
+    public func cloudChoicesImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        return try cloudArchive!.importing(operations, current: { _ in nil }, shape: .init(show: { op, payload in
+            guard Set((payload.fields ?? []).map(\.key)) == ["tabKey", "settings"], let key = payload["tabKey"].string,
+                  CloudBrainTasks.entity(kind: "tab", id: key) == op.entityId else { throw CloudFailure.invalidRequest }
+            let settings = try BackendAGSCodec.decode(AGSAgentSettings.self, payload["settings"])
+            guard CloudBrainAgentsOptions.isPortable(settings) else { throw CloudFailure.invalidRequest }
+            try BackendAGSValidation.check(settings)
+            return nil
+        }), write: { _ in [:] })
+    }
+    public func cloudChoicesRetained(_ operations: [CloudOperation]) throws -> Bool { try cloudArchive?.retained(operations) ?? false }
+    public func cloudChoiceVersions() throws -> [CloudOperation] { try cloudArchive?.revisions() ?? [] }
+    public func cloudChoicesOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.ownChanges(after: after, limit: limit) }
+    public func cloudChoicesCursor() throws -> String? { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.cursor() }
+    public func cloudChoicesSaveCursor(_ value: String) throws { guard cloudArchive != nil else { throw CloudFailure.gateClosed }; try cloudArchive!.saveCursor(value) }
+    public func cloudChoicesNotices() -> AsyncStream<Void> {
+        guard cloudArchive != nil else { return AsyncStream { $0.finish() } }
+        return cloudArchive!.notices()
     }
     private func validKey(_ key: String) throws { guard !key.isEmpty, key.utf8.count <= 200, !key.contains("\0"), !key.contains("/") else { throw NativeRPCError.invalidArguments("The saved tab identity is invalid.") } }
     private func ready() throws { guard started else { throw unavailable() } }

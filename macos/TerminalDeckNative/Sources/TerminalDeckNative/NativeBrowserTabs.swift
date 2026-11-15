@@ -66,6 +66,7 @@ final class NativeBrowserTabs {
     }
 
     private init() {
+        _ = NativeBrowserWebView.checkSuppressSwitchOnce
         list = BrowserTabsStore.decode(UserDefaults.standard.data(forKey: BrowserTabsStore.defaultsKey))
         profileSubscription = EngineBridge.shared.on("browser-profile:state") { [weak self] args in
             if let value = args.first { self?.applyProfiles(value) }
@@ -113,9 +114,10 @@ final class NativeBrowserTabs {
         tab.ensurePage()
     }
 
-    /// Bring a tab forward for something that needs it on screen (an agent's
-    /// click, screenshot or handover). True once its page is in a window.
-    func reveal(_ id: String) async -> Bool {
+    /// Select a tab and show it: the person's own menu choice ONLY (NativeSafariRuntime.showForPerson). An agent's
+    /// click, type, screenshot or handover never comes here; its page works where it is (readyForInput, parked off
+    /// screen when he is not showing it). True once its page is in a window.
+    func showForPerson(_ id: String) async -> Bool {
         guard let tab = pages[id] else { return false }
         select(id)
         onSelect?(id)
@@ -149,9 +151,13 @@ final class NativeBrowserTabs {
     /// A page asked for a window (`window.open`, a target=_blank link, "Open Link
     /// in New Tab"): it becomes a tab, made with the page's own configuration so
     /// the opener link and the cookies are the page's.
+    /// MAC-NEXT-15: when a tool is driving the opener (its click opened the window), the new tab opens in the
+    /// background: not selected, not shown, nothing focused, and the tool drives it too. His own click shows it.
     func adoptWindowRequest(configuration: WKWebViewConfiguration, from opener: NativeBrowserTab) -> WKWebView? {
+        let byTool = opener.handoverPrompt == nil && opener.automation.toolDriving
         let tab = create(after: opener.id, isolated: opener.isolated, profile: opener.profile,
-                         show: true, configuration: configuration)
+                         show: BrowserPagePersonRule.newTabShows(personAskedToShow: true, toolDriving: byTool), configuration: configuration)
+        if byTool { tab.automation.toolTouched() }
         return tab.webView
     }
 

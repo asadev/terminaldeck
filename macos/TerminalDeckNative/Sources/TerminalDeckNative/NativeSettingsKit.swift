@@ -7,6 +7,8 @@ import TerminalDeckNativeCore
 typealias NativeSettingsStyle = DeckTokens
 
 typealias NativeSettingsFormFrame = NativeSettingsFallbackFrame
+/// Review 14 Nov (item 11): the same page frame as every other Settings page (title position, column), so General,
+/// Appearance and the other form pages line up with Profile, Devices and Cloud.
 struct NativeSettingsFallbackFrame: View {
     let title: String
     let content: AnyView
@@ -14,15 +16,7 @@ struct NativeSettingsFallbackFrame: View {
         self.title = title; self.content = AnyView(content())
     }
     var body: some View {
-        VStack(spacing: 0) {
-            NativeSettingsHead(title: title, blurb: nil)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .padding(.horizontal, 20)
-            content.frame(minHeight: 0, maxHeight: .infinity)
-        }
-        .frame(maxWidth: 680)
-        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-        .background(NativeSettingsStyle.page)
+        DeckSettingsFrame(title: title) { content }
     }
 }
 private struct NativeSettingsHoverRow<Content: View>: View {
@@ -46,43 +40,184 @@ enum NativeSettingsNavigation {
         let group: Int
         let description: String
     }
-    static let items: [Item] = [
-        .init(id: "general", title: "General", symbol: "gearshape", tint: .gray, group: 0, description: "Sessions and this Mac."),
-        .init(id: "appearance", title: "Appearance", symbol: "circle.lefthalf.filled", tint: Color(white: 0.2), group: 0, description: "The window and your sessions."),
-        .init(id: "notifications", title: "Notifications", symbol: "bell", tint: .red, group: 0, description: "What the app tells you, and how."),
-        .init(id: "island", title: "Dynamic Island", symbol: "capsule", tint: .black, group: 0, description: "Hoot at the top of the screen."),
-        .init(id: "agents", title: "Coding AIs", symbol: "terminal", tint: .blue, group: 1, description: "Accounts and live session status."),
-        .init(id: "ai-apps", title: "Outside AI apps", symbol: "link", tint: .indigo, group: 1, description: "Let other AI apps reach this Mac."),
-        .init(id: "agent-defaults", title: "Agents", symbol: "person.2", tint: .green, group: 1, description: "Defaults for every agent."),
-        .init(id: "browser", title: "Browser", symbol: "globe", tint: .teal, group: 2, description: "Pages, sign-ins, downloads and capture."),
-        .init(id: "tasks", title: "Tasks", symbol: "checklist", tint: .orange, group: 2, description: "Connected task systems."),
-        .init(id: "features", title: "Voice", symbol: "mic", tint: .pink, group: 2, description: "Turn your voice into text."),
-        .init(id: "plugins", title: "Plugins", symbol: "puzzlepiece.extension", tint: .purple, group: 2, description: "Tools you add yourself."),
-        .init(id: "privacy", title: "Privacy", symbol: "hand.raised", tint: .blue, group: 3, description: "Mac permissions and old helper entries."),
-        .init(id: "advanced", title: "Advanced", symbol: "bolt", tint: .gray, group: 3, description: "Help with problems and starting over."),
-        .init(id: "help", title: "About", symbol: "info.circle", tint: .gray, group: 3, description: "Version, links and help topics."),
+    /// Owner, 15 Nov (DESIGN.md section 1): [profile] · General, Appearance, Notifications, Dynamic Island · Coding AIs,
+    /// Agents, Tasks, AI apps · Privacy, Advanced, About. Shortcuts, Voice, Plugins and Browser left the window
+    /// (`retired`); Devices and Cloud are inside Profile (`profilePages`).
+    private static let baseItems: [Item] = [
+        .init(id: "general", title: "General", symbol: "gearshape.fill", tint: .gray, group: 0, description: "Sessions, this Mac, folder and updates."),
+        .init(id: "appearance", title: "Appearance", symbol: "circle.lefthalf.filled", tint: Color(white: 0.2), group: 0, description: "Match Mac, light or dark."),
+        .init(id: "notifications", title: "Notifications", symbol: "bell.badge.fill", tint: .red, group: 0, description: "When a session finishes, and a sound."),
+        .init(id: "island", title: "Dynamic Island", symbol: "capsule.fill", tint: .black, group: 0, description: "Hoot at the top of the screen."),
+        .init(id: "agents", title: "Coding AIs", symbol: "terminal.fill", tint: .blue, group: 1, description: "Accounts and live session status."),
+        .init(id: "agent-defaults", title: "Agents", symbol: "person.2.fill", tint: .green, group: 1, description: "Defaults for every agent."),
+        .init(id: "tasks", title: "Tasks", symbol: "checklist", tint: .orange, group: 1, description: "Connected task systems."),
+        .init(id: "ai-apps", title: "AI apps", symbol: "link", tint: .indigo, group: 1, description: "Let other AI apps reach this Mac."),
+        .init(id: "privacy", title: "Privacy", symbol: "hand.raised.fill", tint: .blue, group: 2, description: "This Mac's permissions."),
+        .init(id: "advanced", title: "Advanced", symbol: "bolt.fill", tint: .gray, group: 2, description: "Debug mode, logs and starting over."),
+        .init(id: "help", title: "About", symbol: "info.circle.fill", tint: .gray, group: 2, description: "Version, links and help topics."),
     ]
-    static func item(_ id: String) -> Item? { items.first { $0.id == canonical(id) } }
+    /// Pages that left the Settings window (owner, 15 Nov). Their ids still open something sensible (`canonical`); their
+    /// names are kept for a page drawn elsewhere (the Browser's own settings window).
+    static let retired: [Item] = [
+        .init(id: "shortcuts", title: "Shortcuts", symbol: "keyboard", tint: .gray, group: 9, description: ""),
+        .init(id: "features", title: "Voice", symbol: "mic", tint: .pink, group: 9, description: ""),
+        .init(id: "plugins", title: "Plugins", symbol: "puzzlepiece.extension", tint: .purple, group: 9, description: ""),
+        .init(id: "browser", title: "Browser", symbol: "globe", tint: .teal, group: 9, description: ""),
+    ]
+    /// Owner, 14 Nov: his devices are listed in this one place (there is no Devices window any more). Since 15 Nov the
+    /// place is Profile's "Devices" group; the Devices page stays a list row only where this copy has no Profile.
+    static let devicesID = "devices"
+    private static let devices = Item(id: devicesID, title: "Devices", symbol: "laptopcomputer.and.iphone", tint: .indigo, group: -1,
+                                      description: "Your devices, and whether they may open this Mac.")
+    static let profileID = "profile"
+    static let personalID = "profile.personal"
+    static let signInID = "profile.sign-in"
+    static let cloudID = "cloud"
+    static let olderDevicesID = "devices.older"
+    /// A device's own page: "device:" + the device row's id.
+    static let devicePrefix = "device:"
+    static func devicePage(_ rowID: String) -> String { devicePrefix + rowID }
+    static func deviceRow(_ page: String) -> String? { page.hasPrefix(devicePrefix) ? String(page.dropFirst(devicePrefix.count)) : nil }
+
+    /// Pages one click inside Coding AIs, Agents and Tasks (owner, 15 Nov; DESIGN.md section 6). They light their
+    /// parent's row and are drawn here only.
+    static let whichAccountID = "agents.which-account"
+    static let agentHooksID = "agent-defaults.hooks"
+    static let taskConnectionsID = "tasks.connections"
+    static let taskAgentPrefix = "tasks.agent:"
+    static let taskWorkflowPrefix = "tasks.workflow:"
+    static func taskAgentPage(_ agentID: String) -> String { taskAgentPrefix + agentID }
+    static func taskWorkflowPage(_ projectID: String) -> String { taskWorkflowPrefix + projectID }
+    static func taskAgent(_ page: String) -> String? { page.hasPrefix(taskAgentPrefix) ? String(page.dropFirst(taskAgentPrefix.count)) : nil }
+    static func taskWorkflow(_ page: String) -> String? { page.hasPrefix(taskWorkflowPrefix) ? String(page.dropFirst(taskWorkflowPrefix.count)) : nil }
+    /// The list row a page inside Coding AIs, Agents or Tasks belongs to (nil: not such a page).
+    static func innerPageParent(_ id: String) -> String? {
+        if id == whichAccountID { return "agents" }
+        if id == agentHooksID { return "agent-defaults" }
+        if id == taskConnectionsID || taskAgent(id) != nil || taskWorkflow(id) != nil { return "tasks" }
+        return nil
+    }
+
+    /// The pages reached from Profile (never rows of the list; search finds them).
+    static var profilePages: [Item] {
+        let gate = NativeCloudDisplayGate.shared
+        return [
+            .init(id: personalID, title: "Personal information", symbol: "person.text.rectangle.fill", tint: .gray, group: -1,
+                  description: "Name, username and e-mail."),
+            .init(id: signInID, title: "Sign-in", symbol: "lock.shield.fill", tint: .gray, group: -1,
+                  description: "Google, GitHub, Apple. Sign out."),
+            .init(id: cloudID, title: "Cloud", symbol: "cloud.fill", tint: .blue, group: -1,
+                  description: gate.get() ? "Sync, files, saved passwords and space." : "Sign in to keep your work on all your devices."),
+            .init(id: devicesID, title: "Devices", symbol: "laptopcomputer.and.iphone", tint: .indigo, group: -1,
+                  description: "Your devices, and whether they may open this Mac."),
+            .init(id: olderDevicesID, title: "Older and browser sign-ins", symbol: "clock.arrow.circlepath", tint: .gray, group: -1,
+                  description: "Browsers and devices not seen for 30 days."),
+        ]
+    }
+    static var items: [Item] {
+        let gate = NativeCloudDisplayGate.shared
+        guard gate.shows else { return [devices] + baseItems }
+        // Owner, 14 Nov: Profile is the top row (its own group). Settings still opens on General (`opening`).
+        let profile = Item(id: profileID, title: "Profile", symbol: "person.crop.circle", tint: .blue, group: -1,
+                           description: "Your account: picture, name, e-mail, sign-in, Cloud and devices.")
+        return [profile] + baseItems
+    }
+    /// The page every plain "open Settings" shows (menu, ⌘, and the gear), whichever page was on show last (owner, 14 Nov).
+    static let opening = "general"
+    /// The groups of the sidebar, in order (Profile's own group first).
+    static func groups(_ items: [Item]) -> [Int] { Array(Set(items.map(\.group))).sorted() }
+    /// One line of the Settings list: a page's row, or the SPACE between two groups (owner, 15 Nov: never a line).
+    enum Entry: Identifiable, Equatable {
+        case row(String)
+        case gap(Int)
+        var id: String {
+            switch self {
+            case .row(let id): return "row:" + id
+            case .gap(let group): return "gap:\(group)"
+            }
+        }
+    }
+    /// Owner, 14 Nov (Mac mini: an empty row between Notifications and Shortcuts): the list is ONE flat run of what is
+    /// shown, built here, so an entry that is not shown takes no space and a gap sits only between two groups that
+    /// both still show a row (never two gaps, never one at the top or the bottom). A row with no title is never drawn.
+    static func entries(_ items: [Item]) -> [Entry] {
+        var made: [Entry] = []
+        var lastGroup: Int?
+        for group in groups(items) {
+            let rows = items.filter { $0.group == group && !$0.title.trimmingCharacters(in: .whitespaces).isEmpty }
+            guard !rows.isEmpty else { continue }
+            if lastGroup != nil { made.append(.gap(group)) }
+            lastGroup = group
+            made += rows.map { .row($0.id) }
+        }
+        return made
+    }
+    /// A page's facts: a list row, a page inside Profile, or a page that left the window (its name only).
+    static func item(_ id: String) -> Item? {
+        let id = canonical(id)
+        return items.first { $0.id == id } ?? (NativeCloudDisplayGate.shared.shows ? profilePages.first { $0.id == id } : nil)
+            ?? (id == olderDevicesID ? profilePages.first { $0.id == id } : nil)
+    }
+    /// The name a page's top bar shows (a device's page names its device itself).
+    static func title(_ id: String) -> String {
+        if let gone = retired.first(where: { $0.id == id }) { return gone.title }
+        return item(id)?.title ?? id
+    }
+    /// The row of the list that is lit while `id` is on show: every page inside Profile lights Profile.
+    static func listRow(_ id: String) -> String {
+        let id = canonical(id)
+        if let parent = innerPageParent(id) { return parent }
+        guard NativeCloudDisplayGate.shared.shows else {
+            return id == olderDevicesID || deviceRow(id) != nil ? devicesID : id
+        }
+        if id == personalID || id == signInID || id == cloudID || id == devicesID || id == olderDevicesID || deviceRow(id) != nil {
+            return profileID
+        }
+        return id
+    }
+    /// A page drawn only here (never by the web page): kept on show when the web page re-reports its list.
+    static func nativeOnly(_ id: String) -> Bool { item(id) != nil || deviceRow(id) != nil || innerPageParent(id) != nil }
     /// Hoot's own section moved to the Hoot page; its ids stay valid as links that open that page.
     static func isHoot(_ id: String) -> Bool { id == "copilot" || id == "hoot" }
-    /// What the sidebar selects: an unknown or Hoot id shows the first section.
+    /// What the sidebar selects: no id, or a Hoot id, shows General.
     static func shown(_ id: String?) -> String {
-        guard let id, !isHoot(id) else { return items.first?.id ?? "general" }
+        guard let id, !isHoot(id) else { return opening }
         return canonical(id)
     }
+    /// The page Settings shows when it is opened: the page a link names on purpose ("Fix this in Settings", a tool),
+    /// else General.
+    static func opened(naming section: String?) -> String {
+        guard let section, !section.isEmpty, !isHoot(section) else { return opening }
+        return section
+    }
+    /// What the Settings page's own list report changes. `wanted` is the page an opening asked for (it wins once);
+    /// a page drawn only here (Profile, Cloud, a device…) stays on show when the web page re-reports its list.
+    static func afterPageReport(wanted: String?, current: String?, selected: String?, pageIDs: [String])
+        -> (selection: String?, tellPage: String?) {
+        if let wanted { return (wanted, wanted != selected && pageIDs.contains(wanted) ? wanted : nil) }
+        if let current, !pageIDs.contains(current), nativeOnly(current) { return (current, nil) }
+        return (selected, nil)
+    }
+    /// The page a link or an old id shows. Pages that left the window open General (Browser's settings open in their
+    /// own window before this is asked: `AppModel.showSettings`); Devices opens Profile, where the devices are listed.
     static func canonical(_ id: String) -> String {
-        switch id {
+        let shows = NativeCloudDisplayGate.shared.shows
+        if !shows && (id == cloudID || id == profileID || id == personalID || id == signInID) { return "general" }
+        if shows && id == devicesID { return profileID }
+        return switch id {
         case "power": "general"
-        case "scraping": "browser"
+        case "scraping", "browser": "general"
+        case "shortcuts", "features", "plugins": "general"
         case "linux": "general"
         default: id
         }
     }
+    /// Search: the list's rows, and (while typing) the pages inside Profile, so "cloud" or "devices" finds them.
     static func matching(_ query: String) -> [Item] {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? items : items.filter {
-            ($0.title + " " + $0.description).localizedCaseInsensitiveContains(text)
-        }
+        guard !text.isEmpty else { return items }
+        let inside = NativeCloudDisplayGate.shared.shows ? profilePages.filter { $0.id != devicesID } : []
+        return (items + inside).filter { ($0.title + " " + $0.description).localizedCaseInsensitiveContains(text) }
     }
 }
 
@@ -185,6 +320,7 @@ final class NativeSettingsValues {
                 let (prefsValue, extraValue) = try await (prefs, extra)
                 guard mine == loadId, generation == saveGeneration else { return }
                 values = SettingsSchema.values(settings: extraValue, preferences: prefsValue)
+                NativeLandingOpensOn.mirror(values[NativeLandingOpensOn.settingID]?.string)
                 applyNativeAppearance()
                 loading = false
                 loadError = nil
@@ -203,6 +339,7 @@ final class NativeSettingsValues {
         var raw = values
         for (key, value) in patch { raw[key] = value }
         values = SettingsSchema.merge(raw)
+        if let opens = patch[NativeLandingOpensOn.settingID]?.string { NativeLandingOpensOn.mirror(opens) }
         let split = SettingsSchema.split(patch)
         guard !split.prefs.isEmpty || !split.extra.isEmpty else { return }
         // Which control saved what, and whether the person was here (walk-1 theme flip:
@@ -276,8 +413,7 @@ final class NativeSettingsValues {
     func number(_ id: String) -> Double { SettingsSchema.number(values, id) }
 }
 
-// The Shortcuts button at the foot opens the keyboard-shortcuts sheet, which the
-// app frame owns: `NativeSettingsShortcuts.present()` (lane S, NativeShortcutsSheet.swift).
+// The keyboard shortcuts are Settings → Shortcuts (`NativeShortcutsSettings`, NativeShortcutsSheet.swift; owner 14 Nov).
 
 // MARK: - The page around a section
 
@@ -287,8 +423,7 @@ struct NativeSettingsPage<Content: View>: View {
     private let store = NativeSettingsValues.shared
 
     var body: some View {
-        let info = NativeSettingsNavigation.item(sectionId)
-        NativeSettingsFormFrame(title: info?.title ?? sectionId) {
+        NativeSettingsFormFrame(title: NativeSettingsNavigation.title(sectionId)) {
           Form {
             if let error = store.loadError {
                 Section {
@@ -327,29 +462,24 @@ struct NativeSettingsHead: View {
     }
 }
 
-/// The foot of the page: whether the last change saved, and Shortcuts.
-struct NativeSettingsFoot: View {
+/// Owner, 14 Nov: no stripe at the foot (its saving sentence and Shortcuts are gone; Shortcuts is a page).
+/// A change that could NOT be saved still says so: one small note over the foot of the page, only while it applies.
+struct NativeSettingsSaveProblem: View {
     private let store = NativeSettingsValues.shared
 
     var body: some View {
-        HStack {
-            Text(store.saveState == .idle ? "Changes save as you make them." : store.saveState.line)
-                .font(.callout)
-                .foregroundStyle(store.saveState.isFailure ? Color.red : Color.secondary)
-                .accessibilityAddTraits(.updatesFrequently)
-            Spacer()
-            NativeSessionButton {
-                NativeSettingsShortcuts.present()
-            } label: {
-                Label("Shortcuts", systemImage: "keyboard")
+        if store.saveState.isFailure {
+            HStack(alignment: .firstTextBaseline, spacing: DeckTokens.Spacing.s8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).accessibilityHidden(true)
+                Text(store.saveState.line).font(.callout).foregroundStyle(.primary)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.borderless)
-            .help("Keyboard shortcuts")
-            .accessibilityLabel("Keyboard shortcuts")
+            .padding(.horizontal, DeckTokens.Spacing.s12).padding(.vertical, DeckTokens.Spacing.s8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DeckTokens.Metrics.rowRadius))
+            .padding(DeckTokens.Spacing.s16)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(NativeSettingsStyle.frame)
     }
 }
 

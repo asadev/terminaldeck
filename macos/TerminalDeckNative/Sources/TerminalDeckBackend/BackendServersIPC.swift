@@ -36,6 +36,7 @@ public actor BackendServersIPC {
         "servers:host:look", "servers:host:state", "servers:host:install", "servers:host:pair", "servers:host:link", "servers:host:remove", "servers:host:cancel"
         ]
         if BackendDockerMCPServerKeyScope.enabled { channels.formUnion(["servers:ai-access:read", "servers:ai-access:set"]) }
+        channels.formUnion(["servers:earlier-signins", "servers:earlier-signins:convert"])
         channels.formUnion(["servers:ssh-aliases", "servers:access:read", "servers:access:set", "servers:shown-apps:read", "servers:shown-apps:set"])
         return channels
     }()
@@ -161,6 +162,16 @@ public actor BackendServersIPC {
                     _ = try store.setAIKeyAccess(id, keyIDs: ids)
                 }
                 return .object([.init("serverId", .string(id)), .init("keyIDs", .array((try store.get(id)?.aiKeyIDs ?? []).map(NativeRPCValue.string)))])
+            case "servers:earlier-signins":
+                // 13 Nov: saved sign-ins the earlier app sealed with its own key. Converts them when macOS need not ask.
+                try await room.check(caller, .init(operation: channel, tier: .read))
+                return credentials.earlierAppStanding().wireValue
+            case "servers:earlier-signins:convert":
+                // Only the person's own press: reading the earlier key may make macOS ask, and no tool may cause that.
+                guard caller.kind == .nativeUI else { throw NativeRPCError(code: "access-denied", message: "Only the person at this Mac can convert saved sign-ins from the earlier app.") }
+                try await room.check(caller, .init(operation: channel, tier: .alter))
+                do { return try credentials.convertEarlierAppSignIns().wireValue }
+                catch { return BackendServersWire.failure((error as? NativeRPCError)?.message ?? "The saved sign-ins were not converted. Nothing was changed.") }
             case "servers:rename":
                 guard let id = arg(0).string, let name = arg(1).string else { return flag("renamed", false) }
                 try await room.check(caller, .init(operation: channel, serverId: id, tier: .alter))

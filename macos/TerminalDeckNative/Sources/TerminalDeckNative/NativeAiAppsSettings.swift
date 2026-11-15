@@ -2,83 +2,104 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// Settings → Connect an AI app, drawn in Swift (web: `settings/sections/AiAppsSection.tsx`).
+/// Settings → AI apps (15 Nov 2026, items 51 and 60; design: notes/review-20261115/DESIGN.md section 6 "AI APPS").
 ///
-/// The same pane, top to bottom: the section's line, any problem, From the
-/// internet (Internet reach), On this Mac (Local address), then Keys — each key
-/// with its level, last use, where it may work, how it is told, and Change,
-/// which opens rename, level, ask-first, tasks, folders, notify, pushes and
-/// Revoke. New key makes one and shows it once with the setup for each app.
-/// Every control calls the channel the web one calls (`ai-apps:*`).
+/// Group 1: "Let AI apps use this Mac" (the keys' internet switch: the relay forwards to this Mac only while it is on)
+/// and "Connection address", the ONE address through our own server, with Copy; the address on this Mac only in its
+/// info popover; the address row only while the switch is on (DESIGN-FIXES A-2). Group 2 "Keys": one row per key (its
+/// NAME only, what it may do, the date and time it was made at the right, chevron to its page); keys with the same name
+/// are told apart by that date and time alone (DESIGN-FIXES A-1); "+ New key" last. Built only from the Settings kit (DeckSettingsKit).
+/// Every control calls the channel it always called (`ai-apps:*`).
 struct NativeAiAppsSettings: View {
     @State private var model = AiAppsSettingsModel.shared
 
     var body: some View {
-        NativeSettingsPage(sectionId: "ai-apps") {
-            // Only when there is something to say: an empty group draws as a gap.
-            if model.problem != nil || model.state?.problem != nil || model.state == nil {
-            Section {
-                if let problem = model.problem {
-                    NativeCodingAINotice(tone: .error, text: problem)
-                }
-                if let warn = model.state?.problem {
-                    NativeCodingAINotice(tone: .warn, text: warn)
-                }
-                if model.state == nil {
-                    Text("Reading the keys…").foregroundStyle(.secondary)
-                }
-            }
-            }
-
+        DeckSettingsScaffold(title: "AI apps") {
             if let state = model.state {
-                Section("Reach") {
-                    AiSwitchRow(label: "From the internet", help: "Lets AI apps on the web reach this Mac through the relay.",
-                                more: AiAppsLines.internetMore(state),
-                                isOn: state.internetOn, disabled: model.busy) { model.setInternet($0) }
-                    if state.internetOn, !state.connected, let reason = state.reason {
-                        NativeCodingAINotice(tone: .warn, text: reason)
-                    }
-                    HStack(alignment: .top) {
-                        AiLabel(label: "Address on this Mac",
-                                help: state.localURL ?? "The tools are not running right now.",
-                                more: "Apps on this Mac connect here with a key in their settings. The address stays the same after a restart unless something else takes its port.")
-                        Spacer(minLength: 8)
-                        if let url = state.localURL { AiCopyButton(id: "local", value: url) }
-                    }
-                    if let moved = state.movedFrom {
-                        NativeCodingAINotice(tone: .warn, text: "The address moved from port \(Int(moved)), because something else was using it. Apps you set up before need the new address.")
-                    }
-                }
-
-                Section("Keys") {
-                    if state.keys.isEmpty, !model.making, model.made == nil {
-                        Text("One key per AI app, so you can take one back.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(state.keys) { key in
-                        AiKeyRow(key: key, state: state, model: model)
-                    }
-                    if let made = model.made {
-                        AiNewKeyMade(made: made, state: state, model: model)
-                    } else if model.making {
-                        AiNewKeyForm(folders: state.folders, model: model)
-                    } else {
-                        NativeSessionButton("New key") { model.making = true }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.busy)
-                    }
+                AiAppsPageGroups(state: state, model: model)
+            } else {
+                DeckSettingsGroup {
+                    if let problem = model.problem { DeckSettingsProblem(text: problem) }
+                    else { DeckSettingsProblem(text: "Reading the keys…", warn: false) }
                 }
             }
         }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         .task {
-            // "5 minutes ago" moves on while the pane is open.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 model.now = Date().timeIntervalSince1970 * 1000
             }
         }
+    }
+}
+
+/// The page's two groups for one state (also drawn by AIAppsPictures).
+struct AiAppsPageGroups: View {
+    let state: AiAppsState
+    let model: AiAppsSettingsModel
+    @State private var openKey: AiAccessKey?
+
+    var body: some View {
+        DeckSettingsGroup {
+            DeckSettingsToggleRow("Let AI apps use this Mac", info: AiAppsLines.switchInfo,
+                                  isOn: Binding(get: { state.internetOn }, set: { model.setInternet($0) }))
+                .disabled(model.busy)
+            if state.internetOn {
+                DeckSettingsRow("Connection address", subtitle: state.internetBase,
+                                info: AiAppsLines.addressInfo(localURL: state.localURL),
+                                state: state.internetBase == nil ? "Not connected" : nil) {
+                    if let address = state.internetBase { AiCopyButton(id: "address", value: address) }
+                }
+            }
+            if state.internetOn, state.internetBase != nil, !state.connected {
+                DeckSettingsProblem(text: "Not connected to the server right now. It reconnects by itself.")
+            }
+            if let problem = model.problem ?? state.problem { DeckSettingsProblem(text: problem) }
+        }
+        DeckSettingsGroup("Keys") {
+            ForEach(state.keys) { key in
+                DeckSettingsLinkRow(title: key.name, subtitle: AiAppsLines.mayDo(key),
+                                    value: AiAppsLines.madeAt(key.createdAt)) { openKey = key }
+                    .disabled(model.busy)
+            }
+            DeckSettingsButtonRow(title: "+ New key") { model.making = true }
+                .disabled(model.busy)
+        }
+        .sheet(item: $openKey) { key in
+            NativeAIKeySettingsEditor(key: key, state: state, model: model) { openKey = nil }
+        }
+        // Open while a key is being made or a made key waits to be copied (also one Hoot made).
+        .sheet(isPresented: Binding(get: { model.making || model.made != nil }, set: { if !$0 { model.making = false; model.made = nil } })) {
+            AiNewKeySheet(state: state, model: model) { model.making = false; model.made = nil }
+        }
+    }
+}
+
+/// "+ New key": the form, then the key shown once with its setup.
+private struct AiNewKeySheet: View {
+    let state: AiAppsState
+    let model: AiAppsSettingsModel
+    let done: () -> Void
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(model.made == nil ? "New key" : "Key ready").font(.headline)
+                Spacer()
+                NativeSessionButton(model.made == nil ? "Cancel" : "Done", action: done).buttonStyle(.bordered)
+            }.padding(16)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let problem = model.problem { NativeCodingAINotice(tone: .error, text: problem) }
+                    if let made = model.made { AiNewKeyMade(made: made, state: model.state ?? state, model: model) }
+                    else { AiNewKeyForm(folders: state.folders, model: model) }
+                }.padding(16)
+            }
+        }
+        .frame(width: 560, height: 520)
+        .background(NativeSettingsStyle.page)
     }
 }
 
@@ -144,49 +165,6 @@ private struct AiCopyButton: View {
             }
         }
         .help("Copy to the clipboard")
-    }
-}
-
-private struct AiKeyRow: View {
-    let key: AiAccessKey
-    let state: AiAppsState
-    let model: AiAppsSettingsModel
-    @State private var open = false
-    @State private var revoking = false
-
-    var body: some View {
-        NativeSessionButton { open = true } label: {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(key.name).fontWeight(.medium)
-                        NativeCodingAIBadge(text: key.level.label, quiet: true)
-                    }
-                    note(AiAppsLines.scope(key))
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(model.busy)
-        .contextMenu {
-            NativeSessionButton("Change…") { open = true }
-            NativeSessionButton("Revoke…", role: .destructive) { revoking = true; open = true }
-        }
-        .sheet(isPresented: $open) {
-            NativeAIKeySettingsEditor(key: key, state: state, model: model, initiallyRevoking: revoking) {
-                open = false
-                revoking = false
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(text)
     }
 }
 
@@ -638,10 +616,27 @@ final class AiAppsSettingsModel {
                 else if readFailed { problem = nil; readFailed = false }
                 state = next
                 now = Date().timeIntervalSince1970 * 1000
+                followConnection(next)
             } catch {
                 problem = CodingAIErrorText.from(error, fallback: "Could not read the keys.")
                 readFailed = true
             }
+        }
+    }
+
+    /// review-fixes 1: the switch starts the relay link by itself; the link's own connect raises no "ai-apps:changed",
+    /// so while the switch is on and the link is not up yet the page reads again every 3 s (at most 20 times).
+    @ObservationIgnored private var followTries = 0
+    @ObservationIgnored private var followPending = false
+    private func followConnection(_ next: AiAppsState?) {
+        guard let next, next.internetOn, !next.connected else { followTries = 0; return }
+        guard changed != nil, !followPending, followTries < 20 else { return }
+        followTries += 1; followPending = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self else { return }
+            self.followPending = false
+            if self.changed != nil { self.load() }
         }
     }
 

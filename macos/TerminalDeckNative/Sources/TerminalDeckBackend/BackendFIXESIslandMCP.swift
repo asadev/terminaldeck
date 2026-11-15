@@ -8,10 +8,10 @@ public enum BackendFIXESIslandMCP {
         read: @escaping @Sendable () async throws -> NativeRPCValue,
         configure: @escaping @Sendable (NativeRPCValue) async throws -> NativeRPCValue) throws -> [BackendDeckToolsDefinition] {
         let specs: [(String, String, String, BackendMCPTier, String)] = [
-            ("hoot.island.read", "island_settings_get", "Read Dynamic Island's screen, look, width and quiet setting.", .read,
+            ("hoot.island.read", "island_settings_get", "Read Dynamic Island's screen, what it shows, look, width and quiet setting.", .read,
                 #"{"type":"object","properties":{},"additionalProperties":false}"#),
-            ("hoot.island.configure", "island_settings_set", "Change Dynamic Island's screen, look, width or quiet setting after asking the person.", .alter,
-                #"{"type":"object","properties":{"enabled":{"type":"boolean"},"mode":{"type":"string","enum":["main","builtIn","pointer","named"]},"screenID":{"type":"string"},"screenUUID":{"type":"string"},"showOn":{"type":"object","properties":{"mode":{"type":"string","enum":["main","builtIn","pointer","named"]},"screenUUID":{"type":"string"}},"required":["mode"],"additionalProperties":false},"look":{"type":"string","enum":["app","dark"]},"width":{"type":"string","enum":["compact","standard","wide"]},"whenQuiet":{"type":"string","enum":["small","hide"]}},"additionalProperties":false}"#),
+            ("hoot.island.configure", "island_settings_set", "Change Dynamic Island's screen, what it shows (hoot, sessions, tasks, needs-me), look, width or quiet setting after asking the person.", .alter,
+                #"{"type":"object","properties":{"enabled":{"type":"boolean"},"mode":{"type":"string","enum":["main","builtIn","pointer","named"]},"screenID":{"type":"string"},"screenUUID":{"type":"string"},"showOn":{"type":"object","properties":{"mode":{"type":"string","enum":["main","builtIn","pointer","named"]},"screenUUID":{"type":"string"}},"required":["mode"],"additionalProperties":false},"look":{"type":"string","enum":["app","dark"]},"width":{"type":"string","enum":["compact","standard","wide"]},"whenQuiet":{"type":"string","enum":["small","hide"]},"shows":{"type":"string","enum":["hoot","sessions","tasks","needs-me"]}},"additionalProperties":false}"#),
         ]
         return try specs.map { id, wire, description, tier, schema in
             let spec = try BackendMCPTool(id: id, wireName: wire, description: description,

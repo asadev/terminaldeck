@@ -164,9 +164,18 @@ public struct BackendAppDeviceOwnIOS: BackendAppDeviceDriving {
     public func type(_ text: String) async throws {
         guard !text.isEmpty else { return }
         if try await direct(.type(text)) { return }
+        // MAC-NEXT-15b/15c: only his own marked typing goes through a pasteboard that Simulator copies to HIS Mac
+        // clipboard; every other route (any tool) is refused by default.
+        if !BackendSimulatorPasteboard.typingForPerson, await Self.pasteboardReachesTheMac() {
+            throw BackendAppSessionError(BackendSimulatorPasteboard.toolRefusal)
+        }
         let copied = await BackendAppDeviceDrivers.bytes(platform, "/usr/bin/xcrun", ["simctl", "pbcopy", udid], input: Data(text.utf8), timeoutMilliseconds: 15_000)
         guard copied.data != nil else { throw BackendAppSessionError("The text could not be put on the simulator's pasteboard (\(copied.why)). Nothing was typed.") }
         guard try await direct(.key("paste")) else { throw noWay }
+    }
+    public static func pasteboardReachesTheMac() async -> Bool {
+        if let forced = BackendSimulatorPasteboard.syncOverride { return forced }
+        return await MainActor.run { BackendSimulatorPasteboard.syncsToTheMac() }
     }
     public func key(_ key: String, modifiers: [String]) async throws {
         guard try await direct(.key(key), modifiers: modifiers) else { throw noWay }

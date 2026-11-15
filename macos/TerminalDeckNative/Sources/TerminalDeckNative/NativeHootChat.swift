@@ -399,6 +399,8 @@ struct HootChatSource: Equatable, Sendable {
     /// not working on it, once per message, and never after anything else was sent.
     func interrupted(_ row: HootChatRow) -> Bool {
         guard !readOnly, !fixtureMode, !resuming, let turn = retryTurn, row.kind == .user, row.id.hasPrefix(turn + ":"), !resent.contains(turn) else { return false }
+        // A turn that ended with its own line ("Stopped", or a failure with Try again) needs no second button here.
+        if sessionEvents.contains(where: { $0.turnID == turn && $0.record.kind == .error }) { return false }
         return !busy && !sending
     }
     /// Sends that same message once more, exactly as it was written, with the same mentions (pictures are not kept,
@@ -722,7 +724,52 @@ struct HootChatSource: Equatable, Sendable {
     }
     var currentRoutes: [NativeRPCValue] { displayRows.compactMap { $0.value["routing"].fields == nil ? nil : $0.value["routing"] } }
     func attachmentPreview(for row: HootChatRow) -> NSImage? {
-        fixtureMode ? fixtureImages[row.id] : NativeHOOTSIMFeedback.preview(conversation: conversationID, rowID: row.id)
+        if fixtureMode { return fixtureImages[row.id] }
+        // 15 Nov (item 22): after a restart the picture comes from its saved file in the app's own picture folders.
+        return NativeHOOTSIMFeedback.preview(conversation: conversationID, rowID: row.id) ?? HootSavedPicture.thumbnail(for: row.value)
+    }
+    /// How a turn that did not finish ends (items 15 and 21): "Stopped", or one plain sentence with Try again.
+    func turnEnd(_ row: HootChatRow) -> HootTurnEnd {
+        let stoppedByPerson = sessionEvents.contains { row.id.hasPrefix($0.turnID + ":") && $0.record.kind == .interrupted && $0.record.value["by"].string == "person" }
+        return HootTurnEnd.of(kind: row.kind, text: row.value["text"].string ?? "", stoppedByPerson: stoppedByPerson)
+    }
+    /// Try again under a failed answer: the person's message of that turn goes in once more, exactly as it was written,
+    /// with its picture when the picture can still be read. Only the newest failed turn offers it.
+    func canTryAgain(_ row: HootChatRow) -> Bool {
+        guard !readOnly, !fixtureMode || chatInvoke != nil, !busy, !sending, readyToSend != false, !changingConversation,
+              case .failed = turnEnd(row),
+              let user = sessionEvents.last(where: { $0.record.kind == .user && !$0.turnID.hasPrefix("bg:") }),
+              row.id.hasPrefix(user.turnID + ":") else { return false }
+        return !resent.contains(user.turnID)
+    }
+    func tryAgain(_ row: HootChatRow) {
+        guard canTryAgain(row), let user = sessionEvents.last(where: { $0.record.kind == .user && row.id.hasPrefix($0.turnID + ":") }) else { return }
+        let turn = user.turnID
+        let text = user.record.value["text"].string ?? ""
+        let context = user.record.value["context"].fields == nil ? NativeRPCValue.object([]) : user.record.value["context"]
+        var blocks: [Any] = []
+        if user.record.value["attachmentCount"].number ?? 0 > 0 {
+            let userRow = rows.first { $0.kind == .user && $0.id.hasPrefix(turn + ":") }
+            guard let userRow, let image = attachmentPreview(for: userRow), let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+                  let made = try? NativeHOOTSIMFeedback.attachments(images: [png]) else {
+                guard !composerDraft.canSend else { problem = "Keep or send your current draft before trying this message again."; return }
+                composerDraft.text = HootMessageDisplay.shown(text)
+                problem = "Attach the picture again, then send."
+                return
+            }
+            blocks = made.map { $0.foundation ?? NSNull() }
+        }
+        resent.insert(turn)
+        sending = true; problem = nil
+        outgoingSend = Task {
+            defer { sending = false; outgoingSend = nil; if !busy { flushOptions() } }
+            do {
+                try Task.checkCancellation()
+                let receipt = try await invokeChat("say", [text, blocks, context.foundation ?? [String: Any]()])
+                accept(receipt)
+            } catch { resent.remove(turn); if !Task.isCancelled { problem = error.localizedDescription } }
+        }
     }
     var status: String {
         if readOnly { return "Finished · Saved history" }
@@ -1578,7 +1625,10 @@ struct HootChatSource: Equatable, Sendable {
     /// The AI in use has a live model list (Claude, Codex) and it was not loaded at the last read; tried again per turn.
     @ObservationIgnored private var missingLiveList = false
     @ObservationIgnored private var optionsRetryTurn = ""
+    /// Hoot's choices (permission, model, effort) have been read at least once.
+    private(set) var optionsKnown = false
     private func applyOptions(_ value: NativeRPCValue) {
+        optionsKnown = true
         if let ready = value["ready"].bool { readyToSend = ready }
         if let mode = value["permissionMode"].string.flatMap(HootPermissionMode.init(rawValue:)) {
             confirmedPermission = mode; composerDraft.permissionMode = mode
@@ -1667,7 +1717,9 @@ struct NativeHootChat: View {
     @Bindable var model: NativeHootChatModel = .shared
     var compact = false
     var notices: AnyView? = nil
-    static let columnWidth: CGFloat = 760
+    /// Hoot's model list: the live one, or a picture's fixed copy (the page passes its own).
+    var lists: HootSharedLists = .shared
+    static let columnWidth: CGFloat = 720
     /// Build only the newest page until the person asks for earlier history.
     static let pageSize = 60
     @State private var toolDetail: HootChatRow?
@@ -1685,9 +1737,13 @@ struct NativeHootChat: View {
         let shown = all.suffix(shownCount)
         let progressAnchor = model.taskProgress["anchorRowId"].string
         let progressAnchorVisible = shown.contains { $0.id == progressAnchor }
-        VStack(spacing: 6) {
+        // The frame (the conversation above, the box at the bottom, the quiet line under it) is shared with the New
+        // session page (`NativeChatFrame`): a change here changes it there.
+        // 15 Nov (item 20): Hoot's box has the New session page's row under it (permission left, model and effort right),
+        // shown once Hoot's choices are read (item 17: never a wrong value first).
+        NativeChatFrame(compact: compact, showsMeta: !model.readOnly && (!model.source.isHoot || model.optionsKnown)) {
             if model.findVisible { NativeChatFindBar(model: model) }
-            VStack(spacing: 0) {
+        } transcript: {
             ScrollView {
                 // A plain stack: only the latest page of messages is built (see pageSize), so
                 // the bottom is laid out exactly and the chat opens there without a jump.
@@ -1739,7 +1795,7 @@ struct NativeHootChat: View {
                 // centred with it, so nothing peeks out at either side of the box.
                 // Same inset left and right, lined up with the text inside the box (16 pt).
                 .scrollTargetLayout()
-                .padding(.horizontal, side + 16).padding(.top, compact ? 6 : 20).hootColumn(compact)
+                .modifier(NativeChatColumnInsets(compact: compact))
                 .background(NativeChatFollowScroll(viewport: followViewport))
             }
             // Like any chat app: open at the latest message, stay pinned while replies stream
@@ -1747,8 +1803,7 @@ struct NativeHootChat: View {
             .environment(\.nativeChatFolder, model.referenceRoot)
             .environment(\.nativeChatToolSessionID, model.source.sessionID ?? "hoot")
             .environment(\.nativeChatVisualMaximumHeight, richChatHeight * 0.7)
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .defaultScrollAnchor(.bottom, for: .alignment)
+            .modifier(NativeChatScrollPlacement())
             .scrollPosition($followViewport.position)
             .onScrollPhaseChange { _, phase in
                 followViewport.interacting = phase == .interacting || phase == .decelerating
@@ -1760,6 +1815,7 @@ struct NativeHootChat: View {
                 LinearGradient(colors: [model.source.isHoot ? DeckTokens.page : DeckTokens.chatPage, (model.source.isHoot ? DeckTokens.page : DeckTokens.chatPage).opacity(0)], startPoint: .top, endPoint: .bottom)
                     .frame(height: 16).allowsHitTesting(false).accessibilityHidden(true)
             }
+        } box: {
                 VStack(spacing: 8) {
                     if (compact && !model.fixtureMode) || model.canUndoRewind || model.rewindProblem != nil || model.compacting || !model.pending.isEmpty {
                     VStack(spacing: 8) {
@@ -1804,17 +1860,12 @@ struct NativeHootChat: View {
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { followViewport.composer = $0 }
                     }
                 }
-                .padding(.horizontal, side).hootColumn(compact)
                 // In the island panel the box is a solid card in the panel's own light or dark
                 // colours (the Reduce Transparency fallback), so nothing shows through it.
                 .environment(\.agkitOffscreenSolid, inheritedSolid)
-                .zIndex(1)
-            }
-            if !model.source.isHoot && !model.readOnly {
-                composer(.meta).padding(.horizontal, side).hootColumn(compact)
-            }
+        } meta: {
+            composer(.meta)
         }
-        .padding(.bottom, compact ? 10 : 12)
         .background { NativeChatMenu(model: model) }
         .environment(\.nativeChatFindQuery, model.findVisible ? model.findQuery : "")
         .background(NativeChatFindTarget(model: model))
@@ -1856,11 +1907,13 @@ struct NativeHootChat: View {
     }
     private func composer(_ part: HootComposerPart) -> some View {
         // The island uses the very same box as the page: glass, and the permission/model/effort row.
-        HootComposer(draft: model.ownedComposerBinding, ownerID: (model.source.sessionID ?? "hoot") + "/" + model.conversationID, focusWhenShown: true, catalogue: model.catalogue, showMeta: true, part: part,
+        HootComposer(draft: model.ownedComposerBinding, ownerID: (model.source.sessionID ?? "hoot") + "/" + model.conversationID, focusWhenShown: true,
+                     catalogue: model.source.isHoot ? lists.catalogue(base: model.catalogue, modelID: model.composerDraft.modelID) : model.catalogue,
+                     showMeta: true, part: part,
                      busy: model.busy || model.sending || model.stopping || model.steeringQueuedID != nil, allowsSteering: !model.stopping, enabled: composerEnabled,
                      placeholder: model.source.isHoot ? "Ask Hoot — type @ to mention a session, page, agent or app"
                                                       : "Message \(model.source.agentName) — type / for its commands",
-                     agentName: model.source.agentName, plainMeta: !model.source.isHoot,
+                     agentName: model.source.agentName, plainMeta: true,
                      microphoneAvailable: model.fixtureMode ? false : nil,
                      onSend: { followViewport.latest(); model.send($0) }, onStop: { model.stop() },
                      onManageTools: { if !model.fixtureMode { AppModel.shared.select("mcp") } },
@@ -1920,15 +1973,16 @@ struct NativeHootChat: View {
         }.redacted(reason: .placeholder).accessibilityLabel("Loading \(model.source.agentName) conversation")
     }
     private var empty: some View {
-        VStack(spacing: 16) {
+        // Shared with the New session page (`NativeChatEmpty`): the AI's mark and one line.
+        NativeChatEmpty(compact: compact, line: model.source.isHoot ? "Ask Hoot anything about your projects."
+                                                                     : "Ask \(model.source.agentName) anything in this session.") {
             if model.source.isHoot {
                 HootAvatar(size: compact ? 36 : 64, animated: !model.fixtureMode, showsStatus: false)
-                Text("Ask Hoot anything about your projects.").font(.headline)
             } else {
                 // A chat session: its own AI, in this session's folder.
                 avatar(.awake, animated: false, size: compact ? 36 : 64)
-                Text("Ask \(model.source.agentName) anything in this session.").font(.headline)
             }
+        } extra: {
             if !model.source.isHoot {
                 EmptyView()
             } else if model.readyToSend == false {
@@ -1941,8 +1995,7 @@ struct NativeHootChat: View {
                     }
                 }
             }
-        // Compact (the island panel): fit the space above the message box.
-        }.frame(maxWidth: .infinity).padding(.top, compact ? 8 : 100).padding(.bottom, compact ? 8 : 28)
+        }
     }
     @ViewBuilder private func chatRow(_ row: HootChatRow) -> some View {
         if let about = row.value["background"]["id"].string {
@@ -1975,10 +2028,10 @@ struct NativeHootChat: View {
             }
             if !model.fixtureMode { NativeChatMCPAppView(sessionID: model.source.sessionID ?? "hoot", row: row) }
         } else if row.kind == .user {
-            HootMessageFrame(row: row, trailing: true, onRewind: model.messageAction("rewind", row: row) ? { model.rewind(to: row) } : nil,
-                             onFork: model.messageAction("fork", row: row) ? { model.fork(from: row) } : nil,
+            HootMessageFrame(row: row, trailing: true, onRewind: shownAction(model.messageAction("rewind", row: row)) { model.rewind(to: row) },
+                             onFork: shownAction(model.messageAction("fork", row: row)) { model.fork(from: row) },
                              actionsBusy: model.busy || model.changingMessageHistory,
-                             onHandoff: model.canHandoff ? { model.handoff(upTo: row, fromIsland: compact) } : nil) {
+                             onHandoff: shownAction(model.canHandoff) { model.handoff(upTo: row, fromIsland: compact) }) {
             VStack(alignment: .leading, spacing: 10) {
                 let team = AGTTeamChatHistory.shared.rows.first { $0["session"]["id"].string == model.source.sessionID }
                 if let sender = incomingAgentName(row) {
@@ -1988,10 +2041,14 @@ struct NativeHootChat: View {
                     }
                 }
                 if row.value["attachmentCount"].number ?? 0 > 0 { attachmentCard(row) }
-                NativeChatMarkdown(text: row.value["text"].string ?? "")
+                // 15 Nov (item 22): never the app's picture markers or file paths; Hoot still receives them.
+                let shownText = HootMessageDisplay.shown(row.value["text"].string ?? "")
+                if !shownText.isEmpty { NativeChatMarkdown(text: shownText) }
             }
-                .padding(14).frame(maxWidth: 520, alignment: .leading)
-                .background(Color.accentColor.opacity(0.12), in: UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18))
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                // 15 Nov (DESIGN-FIXES H-1, H-2): the bubble hugs its text (or its picture), at most 70 % of the column.
+                .modifier(HootBubbleWidth.Fit(compact: compact))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             // Who an @ mention reached, or why it could not: one small line each; a click opens the task that carries the answer.
@@ -2033,26 +2090,32 @@ struct NativeHootChat: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 }.buttonStyle(.plain).help("Open the answer").frame(maxWidth: 520, alignment: .trailing).frame(maxWidth: .infinity, alignment: .trailing)
             }
+        } else if row.kind == .error || row.kind == .interrupted {
+            // 15 Nov (items 15, 21): a stopped turn is one quiet word where the answer would be; a failed one is one plain
+            // sentence with Try again. A CLI diagnostic line is never drawn (the app's log has it).
+            HootTurnEndRow(end: model.turnEnd(row), canTryAgain: model.canTryAgain(row), tryAgain: { model.tryAgain(row) },
+                           statusText: { model.statusText($0) }) { replyName(.awake, animated: false) }
         } else {
             HootMessageFrame(row: row, trailing: false, onRewind: nil,
-                             onFork: model.messageAction("fork", row: row) ? { model.fork(from: row) } : nil,
+                             onFork: shownAction(model.messageAction("fork", row: row)) { model.fork(from: row) },
                              actionsBusy: model.busy || model.changingMessageHistory,
-                             onHandoff: model.canHandoff && [.message, .textDelta].contains(row.kind) ? { model.handoff(upTo: row, fromIsland: compact) } : nil) {
+                             onHandoff: shownAction(model.canHandoff && [.message, .textDelta].contains(row.kind), when: [.message, .textDelta].contains(row.kind)) { model.handoff(upTo: row, fromIsland: compact) }) {
             VStack(alignment: .leading, spacing: 6) {
-                    replyName(row.kind == .error ? .stopped : .awake, animated: false)
-                    if row.kind == .error || row.kind == .interrupted {
-                        Text(model.statusText(row.value["text"].string ?? (row.kind == .interrupted ? "Stopped." : "")))
-                            .font(NativeChatMarkdown.bodyType).lineSpacing(5).textSelection(.enabled)
-                    } else {
-                        // Hoot writes markdown: the sessions' own renderer (bold, italics, code, lists, tables,
-                        // headings, links, code blocks), with its marked parts (Needs you, Done, Waiting on,
-                        // Heads-up) drawn as boxes.
-                        HootReplyText(text: row.value["text"].string ?? "", streaming: row.kind == .textDelta,
-                                      onReply: model.fixtureMode ? nil : { model.replyByNumber($0) })
-                    }
+                    replyName(.awake, animated: false)
+                    // Hoot writes markdown: the sessions' own renderer (bold, italics, code, lists, tables,
+                    // headings, links, code blocks), with its marked parts (Needs you, Done, Waiting on,
+                    // Heads-up) drawn as boxes.
+                    HootReplyText(text: row.value["text"].string ?? "", streaming: row.kind == .textDelta,
+                                  onReply: model.fixtureMode ? nil : { model.replyByNumber($0) })
             }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+    /// A message action when it exists. A picture (fixture: no Hoot runtime behind it) still draws every action the
+    /// message has in the app, as an inert glyph, so the pictures show the line he sees (DESIGN-FIXES H-3).
+    private func shownAction(_ available: Bool, when exists: Bool = true, _ action: @escaping () -> Void) -> (() -> Void)? {
+        if available { return action }
+        return model.fixtureMode && exists ? {} : nil
     }
     private func toolExpansion(_ key: String) -> Binding<Bool> {
         Binding(get: { followViewport.expandedCards.contains(key) }, set: { expanded in
@@ -2101,9 +2164,9 @@ struct NativeHootChat: View {
         let reply = column
         if let answer {
             HootMessageFrame(row: answer, trailing: false, onRewind: nil,
-                             onFork: model.messageAction("fork", row: answer) ? { model.fork(from: answer) } : nil,
+                             onFork: shownAction(model.messageAction("fork", row: answer)) { model.fork(from: answer) },
                              actionsBusy: model.busy || model.changingMessageHistory,
-                             onHandoff: model.canHandoff ? { model.handoff(upTo: answer, fromIsland: compact) } : nil) { reply }
+                             onHandoff: shownAction(model.canHandoff) { model.handoff(upTo: answer, fromIsland: compact) }) { reply }
         } else if live {
             VStack(spacing: 0) { Color.clear.frame(height: 18); reply }
         } else if !steps.isEmpty {
@@ -2114,26 +2177,27 @@ struct NativeHootChat: View {
             }
         }
     }
+    /// 15 Nov (DESIGN 8): an attached screenshot is the real picture above the text (at most 240 x 150, radius 8) with the
+    /// page's or device's name as an 11 pt caption; never a path, a marker or an id.
     private func attachmentCard(_ row: HootChatRow) -> some View {
         let source = row.value["context"]["source"]
-        let title = source["title"].string.flatMap { DeckOwner.isOwn(title: $0, sender: $0) ? nil : $0 }
+        let text = row.value["text"].string ?? ""
+        let title = HootMessageDisplay.cardTitle(source).flatMap { DeckOwner.isOwn(title: $0, sender: $0) ? nil : $0 }
         let count = Int(row.value["attachmentCount"].number ?? 1)
-        return HStack(spacing: 10) {
-            Group {
-                if let image = model.attachmentPreview(for: row) {
-                    Image(nsImage: image).resizable().scaledToFit()
-                } else {
-                    Image(systemName: "photo").font(.system(size: 24)).foregroundStyle(.secondary)
-                }
-            }.frame(width: 84, height: 54).background(.quaternary, in: .rect(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title ?? "\(count) attachment\(count == 1 ? "" : "s")").font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                if let detail = source["url"].string ?? source["deviceId"].string {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
+        return VStack(alignment: .leading, spacing: 5) {
+            if let image = model.attachmentPreview(for: row) {
+                Image(nsImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: 240, maxHeight: 150, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel(title ?? "Attached picture")
+            } else {
+                Image(systemName: "photo").font(.system(size: 22)).foregroundStyle(.secondary)
+                    .frame(width: 120, height: 76).background(.quaternary, in: .rect(cornerRadius: 8))
             }
-            Spacer(minLength: 0)
-        }.padding(8).background(.background, in: .rect(cornerRadius: 10))
+            let caption = title ?? HootMessageDisplay.cardDetail(text: text, source: source) ?? "\(count) attachment\(count == 1 ? "" : "s")"
+            Text(caption).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .help(HootMessageDisplay.cardDetail(text: text, source: source) ?? caption)
+        }
     }
     @ViewBuilder private func approvalCard(_ request: NativeRPCValue) -> some View {
         if BackendChatPlans.isReview(request) {
@@ -2164,9 +2228,90 @@ struct NativeHootChat: View {
     }
 }
 
-private extension View {
+extension View {
+    /// The chat's centred column (the box's width), or the full width in the compact island panel.
     @ViewBuilder func hootColumn(_ compact: Bool) -> some View {
         if compact { self } else { frame(maxWidth: NativeHootChat.columnWidth).frame(maxWidth: .infinity) }
+    }
+}
+
+/// The chat window under its bar: the conversation (or the empty line) scrolling above, the message box at the bottom
+/// in the centred column, and the quiet line under the box. An open chat (`NativeHootChat`) and the New session page
+/// (`NativeLandingPage`) both draw through this one view, so they can never drift apart.
+struct NativeChatFrame<Top: View, Transcript: View, Box: View, Meta: View>: View {
+    var compact = false
+    /// The quiet line under the box (a session's chat has one; Hoot's page and a finished chat do not).
+    var showsMeta = true
+    @ViewBuilder var top: () -> Top
+    @ViewBuilder var transcript: () -> Transcript
+    @ViewBuilder var box: () -> Box
+    @ViewBuilder var meta: () -> Meta
+    private var side: CGFloat { compact ? 12 : 20 }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            top()
+            VStack(spacing: 0) {
+                transcript()
+                box()
+                    .padding(.horizontal, side).hootColumn(compact)
+                    .zIndex(1)
+            }
+            if showsMeta { meta().padding(.horizontal, side).hootColumn(compact) }
+        }
+        .padding(.bottom, compact ? 10 : 12)
+    }
+}
+
+/// The conversation column's insets inside the chat's scroll area (side + 16, top 20; compact: 12 + 16, top 6), in the
+/// message box's centred column. Shared by an open chat and the New session page.
+struct NativeChatColumnInsets: ViewModifier {
+    var compact = false
+    func body(content: Content) -> some View {
+        content.padding(.horizontal, (compact ? 12 : 20) + 16).padding(.top, compact ? 6 : 20).hootColumn(compact)
+    }
+}
+
+/// Where the conversation sits in the chat's scroll area: at the bottom, just above the message box, also when it is
+/// shorter than the area (so the empty state's mark and line sit right above the box). Shared by an open chat and the
+/// New session page, so the page's mark is exactly where the chat's is, at every width.
+struct NativeChatScrollPlacement: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+    }
+}
+
+/// Where the empty state's mark sits, in the coordinate space named `space` (the pictures check that the New session
+/// page's mark and an open chat's are in the same place). Nothing listens in the app.
+struct NativeChatEmptyMarkFrame: PreferenceKey {
+    static let space = "native-chat-empty-window"
+    static let defaultValue = CGRect.null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isNull { value = next }
+    }
+}
+
+/// A chat with nothing said yet: who answers (its mark) and one line, right above the message box (the chat's scroll
+/// placement). Shared by an open chat and the New session page.
+struct NativeChatEmpty<Mark: View, Extra: View>: View {
+    var compact = false
+    let line: String
+    @ViewBuilder var mark: () -> Mark
+    @ViewBuilder var extra: () -> Extra
+
+    var body: some View {
+        VStack(spacing: 16) {
+            mark()
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: NativeChatEmptyMarkFrame.self, value: proxy.frame(in: .named(NativeChatEmptyMarkFrame.space)))
+                })
+            Text(line).font(.headline)
+            extra()
+        // Compact (the island panel): fit the space above the message box.
+        }.frame(maxWidth: .infinity).padding(.top, compact ? 8 : 100).padding(.bottom, compact ? 8 : 28)
     }
 }
 
@@ -2221,7 +2366,6 @@ struct HootMessageFrame<Content: View>: View {
     var actionsBusy = false
     var onHandoff: (() -> Void)? = nil
     @ViewBuilder var content: Content
-    @State private var hovering = false
     @State private var copied = false
     @State private var confirmRewind = false
     var body: some View {
@@ -2230,7 +2374,6 @@ struct HootMessageFrame<Content: View>: View {
             actions
         }
         .frame(maxWidth: .infinity, alignment: trailing ? .trailing : .leading)
-        .contentShape(Rectangle()).onHover { hovering = $0 }
         .alert("Rewind to here?", isPresented: $confirmRewind) {
             Button("Cancel", role: .cancel) {}
             Button("Rewind", role: .destructive) { onRewind?() }
@@ -2238,19 +2381,20 @@ struct HootMessageFrame<Content: View>: View {
             Text("Later messages in this chat are removed from the conversation. Your message returns to the box for editing. Files are kept as they are.")
         }
     }
+    /// 15 Nov (Asad: "It should not change on my hover ... They should stay always like this"): the time and every
+    /// action are always shown, in one fixed order, for his messages and Hoot's; nothing appears, moves or hides on hover.
     private var actions: some View {
-        HStack(spacing: 4) {
-            if row.at > 0 && hovering {
-                Text(HootMessageTime.short(row.at)).foregroundStyle(.tertiary).hootQuickTip(HootMessageTime.exact(row.at)).padding(.trailing, 4)
+        HStack(spacing: 10) {
+            if row.at > 0 {
+                Text(HootMessageTime.short(row.at)).font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .hootQuickTip(HootMessageTime.exact(row.at))
             }
-            if !trailing, let onHandoff, !copied, hovering { HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff) }
-            Group {
-                HootMessageIcon(symbol: copied ? "checkmark" : "doc.on.doc", tip: copied ? "Copied" : "Copy this message") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(HootCallout.plain(row.value["text"].string ?? ""), forType: .string)
-                    copied = true
-                    Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-                }
+            HootMessageIcon(symbol: copied ? "checkmark" : "doc.on.doc", tip: copied ? "Copied" : "Copy this message") {
+                NSPasteboard.general.clearContents()
+                let said = row.value["text"].string ?? ""
+                NSPasteboard.general.setString(trailing ? HootMessageDisplay.shown(said) : HootCallout.plain(said), forType: .string)
+                copied = true
+                Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
             }
             if let onRewind {
                 HootMessageIcon(symbol: "arrow.uturn.backward",
@@ -2260,12 +2404,36 @@ struct HootMessageFrame<Content: View>: View {
             if let onFork {
                 HootMessageIcon(symbol: "arrow.triangle.branch", tip: "Fork from here", action: onFork).disabled(actionsBusy)
             }
-            if trailing, let onHandoff, !copied, hovering {
+            if let onHandoff {
                 HootMessageIcon(symbol: "doc.text", tip: "Handoff: everything up to this message", action: onHandoff)
             }
         }
         .font(.system(size: 10.5)).foregroundStyle(.secondary).buttonStyle(.plain)
-        .frame(height: HootMessageRow.actionsHeight).padding(.leading, trailing ? 0 : 38)
+        // 15 Nov (DESIGN-FIXES H-3): under Hoot's answer the line starts at the answer's own left edge (no indent).
+        .frame(height: HootMessageRow.actionsHeight)
+    }
+}
+
+/// 15 Nov (DESIGN-FIXES H-1, H-2): his bubble is as wide as its text or picture, whichever is wider, and never wider
+/// than 70 % of the 720 pt column (504 pt); in the island's narrow panel 70 % of the row.
+struct HootBubbleWidth: Layout {
+    var compact = false
+    static let fraction: CGFloat = 0.7
+    static func limit(available: CGFloat?, compact: Bool) -> CGFloat {
+        let column = NativeHootChat.columnWidth * fraction
+        guard let available, available.isFinite else { return column }
+        return compact ? available * fraction : min(available, column)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let bubble = subviews.first else { return .zero }
+        return bubble.sizeThatFits(ProposedViewSize(width: Self.limit(available: proposal.width, compact: compact), height: nil))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+    struct Fit: ViewModifier {
+        var compact = false
+        func body(content: Content) -> some View { HootBubbleWidth(compact: compact) { content } }
     }
 }
 
@@ -2275,30 +2443,59 @@ enum HootMessageRow {
 }
 
 /// One icon-only message button with its quick tip.
+/// A turn that did not finish (items 15, 21): "Stopped" in secondary text where the answer would be, or one plain sentence
+/// with Try again. Never an internal diagnostic.
+struct HootTurnEndRow<Name: View>: View {
+    let end: HootTurnEnd
+    let canTryAgain: Bool
+    let tryAgain: () -> Void
+    let statusText: (String) -> String
+    @ViewBuilder var name: Name
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            name
+            switch end {
+            case .stopped:
+                Text("Stopped").font(NativeChatMarkdown.bodyType).foregroundStyle(.secondary)
+            case .failed(let sentence):
+                HStack(spacing: 10) {
+                    Text(statusText(sentence)).font(NativeChatMarkdown.bodyType).textSelection(.enabled)
+                    if canTryAgain {
+                        Button(action: tryAgain) { Label("Try again", systemImage: "arrow.clockwise") }
+                            .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.system(size: 12))
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct HootMessageIcon: View {
     let symbol: String
     let tip: String
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 11.5)).frame(width: 22, height: 18).contentShape(.rect)
+            // Glyph-wide, so the line's 10 pt spacing is the space between the glyphs themselves.
+            Image(systemName: symbol).font(.system(size: 13)).opacity(0.55).frame(height: 18).contentShape(.rect)
         }
         .buttonStyle(.plain).hootQuickTip(tip).accessibilityLabel(tip)
     }
 }
 
-/// The time under a compact line (a background task), shown only while the pointer is on it.
+/// The time under a compact line (a background task). Always shown (15 Nov: nothing changes on hover).
 struct HootHoverTime: View {
     let at: Double
-    @State private var hovering = false
     var body: some View {
         Group {
             if at > 0 {
-                Text(HootMessageTime.short(at)).font(.system(size: 10.5)).foregroundStyle(.tertiary).opacity(hovering ? 1 : 0)
+                Text(HootMessageTime.short(at)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
                     .hootQuickTip(HootMessageTime.exact(at))
             }
         }
-        .frame(height: 14).contentShape(Rectangle()).onHover { hovering = $0 }
+        .frame(height: 14)
     }
 }
 

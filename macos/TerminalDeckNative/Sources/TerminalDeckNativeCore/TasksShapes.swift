@@ -250,6 +250,11 @@ public struct TaskRow: Equatable, Sendable, Identifiable {
     public var stalled: TaskStall?
     public var waitingOn: [String]
     public var createdAt: Double
+    /// Tasks everywhere: the name of the OTHER Mac whose session works this task ("Working on Mac mini"); nil when
+    /// nobody works it elsewhere.
+    public var workingElsewhere: String?
+    /// A read-only copy of a task a connected CRM sent to another of his Macs: "From iLoop, on Mac mini"; nil otherwise.
+    public var copyFrom: String?
 
     public init(id: String, keyId: String = "", externalTaskId: String = "", title: String = "Untitled task",
                 agent: String = "Hoot", project: String = "", crmStatus: String = "", process: ProcessState = .queued,
@@ -261,7 +266,10 @@ public struct TaskRow: Equatable, Sendable, Identifiable {
                 completedAt: Double? = nil, position: Double? = nil, recurrence: String? = nil, goalId: String? = nil,
                 useWorkspace: Bool = false, stalled: TaskStall? = nil, waitingOn: [String] = [], createdAt: Double = 0,
                 keepAliveUntilClose: Bool? = nil, parentTaskId: String? = nil, parentExternalTaskId: String? = nil,
-                reviewerTaskId: String? = nil, reviewOfTaskId: String? = nil, projectID: String? = nil) {
+                reviewerTaskId: String? = nil, reviewOfTaskId: String? = nil, projectID: String? = nil,
+                workingElsewhere: String? = nil, copyFrom: String? = nil) {
+        self.workingElsewhere = workingElsewhere
+        self.copyFrom = copyFrom
         self.id = id
         self.keyId = keyId
         self.externalTaskId = externalTaskId
@@ -385,10 +393,13 @@ public struct TasksState: Equatable, Sendable {
     public var localStatuses: [String]
     /// Your goals, oldest first.
     public var goals: [GoalRow]
+    /// Tasks everywhere: one plain line per connected CRM that sends its tasks to another of your Macs.
+    public var elsewhere: [String]
 
     public init(agents: [AgentProfile] = [], connections: [CrmConnection] = [], keys: [TasksKey] = [], tasks: [TaskRow] = [],
                 trash: [TaskRow] = [], outbox: (pending: Int, undelivered: Int) = (0, 0),
-                localStatuses: [String] = DEFAULT_CRM_STATUSES.statuses, goals: [GoalRow] = []) {
+                localStatuses: [String] = DEFAULT_CRM_STATUSES.statuses, goals: [GoalRow] = [], elsewhere: [String] = []) {
+        self.elsewhere = elsewhere
         self.agents = agents
         self.connections = connections
         self.keys = keys
@@ -403,7 +414,7 @@ public struct TasksState: Equatable, Sendable {
         lhs.agents == rhs.agents && lhs.connections == rhs.connections && lhs.keys == rhs.keys && lhs.tasks == rhs.tasks
             && lhs.trash == rhs.trash && lhs.outbox.pending == rhs.outbox.pending
             && lhs.outbox.undelivered == rhs.outbox.undelivered && lhs.localStatuses == rhs.localStatuses
-            && lhs.goals == rhs.goals
+            && lhs.goals == rhs.goals && lhs.elsewhere == rhs.elsewhere
     }
 }
 

@@ -160,6 +160,9 @@ public actor BackendHootChatStore {
     private var pendingContinuation: (turn: String, text: String)?
     /// Why the next stop happens ("person": the Stop button; "quit": the app is closing), written on its interrupted line.
     private var stopReason: String?
+    /// 15 Nov (Asad's recording: every reply was "[ede_diagnostic] …"): the turn an interrupt was sent for, and who
+    /// sent it. Its CLI result ("error_during_execution") then shows as one quiet "Stopped", never the raw diagnostic.
+    private var interruptSent: (turn: String, by: String)?
     private var lastError: String?
     private var initializationID: String?
     private var initialization: CheckedContinuation<Void, Error>?
@@ -1493,6 +1496,10 @@ public actor BackendHootChatStore {
             try persist(); publish(reset: false)
         }
         guard !cancelledPreparing, foregroundWorking, let child = process else { return }
+        // Who stopped this answer goes to the app's log, so a stop nobody pressed can be traced (15 Nov).
+        let by = stopReason ?? "unnamed caller"
+        interruptSent = (turnID, by)
+        BackendRemoteRelayClient.note("hoot: stop sent to the AI for the current answer (by \(by))")
         // The CLI cancels only foreground permission requests and reports their cancellation;
         // denying every pending request here would also cancel a background agent's work.
         let message: NativeRPCValue
@@ -1685,6 +1692,13 @@ public actor BackendHootChatStore {
             .init("commands", commands),
             .init("problem", lastError.map(NativeRPCValue.string) ?? .null),
             .init("unread", ChatReadCompatibility.empty(sequence: sequence))])
+    }
+    /// What a turn that ended without an answer (and was not stopped) says in the chat.
+    public static let unfinishedAnswer = "Hoot could not finish this answer."
+    /// A CLI's own diagnostic line ("[ede_diagnostic] result_type=user …"): every line of the text is one.
+    public static func isProviderDiagnostic(_ text: String) -> Bool {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return !lines.isEmpty && lines.allSatisfy { $0.range(of: #"^\[[a-z][a-z0-9_]*_diagnostic\]"#, options: .regularExpression) != nil }
     }
     /// The current (or restored latest) turn's provider receipt, never its saved selection.
     static func appliedModelReceipt(events: [HootChatEvent], provider: HootChatProvider, sessionID: String?, turn: String) -> NativeRPCValue {
@@ -2024,6 +2038,19 @@ public actor BackendHootChatStore {
             cliStatus = "idle"
             busy = !backgroundTasks.isEmpty || !pending.isEmpty
         }
+        if record.kind == .error, let raw = record.value["text"].string, Self.isProviderDiagnostic(raw) {
+            // An internal CLI line is for the log, never the chat (15 Nov). A stopped answer says "Stopped";
+            // anything else is one plain sentence the chat offers Try again for.
+            BackendRemoteRelayClient.note("hoot: the AI ended a turn without an answer: " + String(raw.prefix(300)))
+            if let sent = interruptSent, sent.turn == turnID {
+                interruptSent = nil
+                record = .init(.interrupted, value: .object([.init("by", .string(["quit", "job-finished", "background turn"].contains(sent.by) ? sent.by : "person"))]))
+            } else {
+                record = .init(.error, value: .object([.init("text", .string(Self.unfinishedAnswer)), .init("retry", .bool(true)),
+                    .init("cause", .string("provider-ended-without-answer"))]))
+            }
+        }
+        if record.kind == .completed, interruptSent?.turn == turnID { interruptSent = nil }
         if record.kind == .error {
             if lastError == record.value["text"].string { return }
             lastError = record.value["text"].string

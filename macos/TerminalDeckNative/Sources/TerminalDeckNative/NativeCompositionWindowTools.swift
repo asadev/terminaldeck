@@ -29,7 +29,7 @@ extension NativeCompositionProduction {
                      .init("required", .array(required.map(NativeRPCValue.string))), .init("additionalProperties", .bool(false))])
         }
         let definitions: [(String, BackendMCPTier, String, NativeRPCValue)] = [
-            ("windows.move_page", .act, "Move a main page into its own window, or show its existing window. page: tasks, agents-all, hoot, memory, servers, devices, or settings:<section> (omit for the current page).",
+            ("windows.move_page", .act, "Move a main page into its own window, or show its existing window. page: tasks, agents-all, hoot, memory, servers or devices (omit for the current page). Settings is always one window and is never split into pages.",
              schema([("page", text)], required: [])),
             ("sessions.pin", .act, "Pin a session to the top of the side panel (pinned true) or unpin it, as the session menu's Pin does.",
              schema([("session", text), ("pinned", flag)], required: ["session", "pinned"])),
@@ -84,11 +84,14 @@ extension NativeCompositionProduction {
                 switch id {
                 case "windows.move_page":
                     let page = args["page"].string
+                    // Owner, 14 Nov: a Settings page never becomes a window of its own (no pop-out for Settings).
+                    if page?.hasPrefix("settings:") == true {
+                        throw NativeRPCError(code: "unavailable", message: "Settings is one window and cannot be split.")
+                    }
                     let ref = await MainActor.run { () -> ScreenRef? in
                         if let page {
                             let ref = NativePageWindows.page(kind: "panel", id: page)
                             let known = page == "agents" || page == "hoot" || NativeScreens.registered.contains(page) || SHELLRoutes.owns(page)
-                                || (page.hasPrefix("settings:") && NativeSettingsNavigation.items.contains { "settings:" + $0.id == page })
                                 || AppModel.shared.sidebar?.item(id: page) != nil
                             return known ? ref : nil
                         }
@@ -97,7 +100,11 @@ extension NativeCompositionProduction {
                     guard let ref else { throw NativeRPCError.invalidArguments("Choose a page to move to its own window.") }
                     guard UIGMemoryVisibility.showsScreen(ref) else { throw NativeRPCError(code: "unavailable", message: "Memory is not available right now.") }
                     try await joins.prepareNative(caller, tier: tier, sentence: "Move \(ref.id) to its own window", ownerMustAnswer: false)
-                    await MainActor.run { AppModel.shared.movePageToWindow(ref, bringForward: false) }
+                    await MainActor.run { AppModel.shared.movePageToWindow(ref, bringForward: false) } // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
+                    if ref.id == "devices" {
+                        // Devices is a page of Settings now: say what really happened.
+                        return .value(.object([.init("page", .string(ref.id)), .init("opened", .string("Settings → Devices"))]))
+                    }
                     return .value(.object([.init("page", .string(ref.id)), .init("requested", .bool(true))]))
                 case "sessions.pin":
                     let session = try args["session"].requireString("session", nonempty: true), pinned = args["pinned"].bool ?? true
@@ -119,7 +126,7 @@ extension NativeCompositionProduction {
                     guard let agent else { throw NativeRPCError.invalidArguments("There is no agent called \(wanted).") }
                     if id == "agents.open_profile" {
                         try await joins.prepareNative(caller, tier: tier, sentence: "Open the profile of \(agent.name)", ownerMustAnswer: false)
-                        await MainActor.run { AppModel.shared.select("agents"); AGTAgentsStore.shared.openProfile = agent.id }
+                        await MainActor.run { AppModel.shared.select("agents"); AGTAgentsStore.shared.openProfile = agent.id } // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
                         return .value(.object([.init("opened", .string(agent.name))]))
                     }
                     let role = args["role"].string.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -208,7 +215,7 @@ extension NativeCompositionProduction {
                 default:
                     let task = try args["task"].requireString("task", nonempty: true)
                     try await joins.prepareNative(caller, tier: tier, sentence: "Open the task \(task)", ownerMustAnswer: false)
-                    await MainActor.run { AppModel.shared.select("tasks"); TasksStore.shared.openTask(task) }
+                    await MainActor.run { AppModel.shared.select("tasks"); TasksStore.shared.openTask(task) } // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
                     return .value(.object([.init("opened", .string(task))]))
                 }
             }

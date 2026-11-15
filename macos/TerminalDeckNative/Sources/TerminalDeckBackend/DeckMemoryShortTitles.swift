@@ -117,7 +117,9 @@ public actor DeckMemoryShortTitles {
     static func missing(_ memory: any DeckMemoryStoring, skipping: Set<String>) async -> [Item] {
         var items: [Item] = []
         let notes = (try? await memory.notes(.init(limit: 5_000))) ?? []
-        for note in notes where note.shortTitleBy != .helper && note.shortTitleBy != .person {
+        // MAC-NEXT-7 (C): a note that arrived from another device is titled there, never rewritten here.
+        let arrived = await memory.cloudArrivedNoteIDs(notes.filter { $0.shortTitleBy != .helper && $0.shortTitleBy != .person }.map(\.id))
+        for note in notes where note.shortTitleBy != .helper && note.shortTitleBy != .person && !arrived.contains(note.id) {
             let item = Item(kind: .note(note.id), text: note.title + (note.body.isEmpty ? "" : ": " + String(note.body.prefix(300)).replacingOccurrences(of: "\n", with: " ")))
             if !skipping.contains(key(item)) { items.append(item) }
         }

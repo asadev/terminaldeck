@@ -116,6 +116,11 @@ public struct BackendCreateSessionInput: Codable, Equatable, Sendable {
     public var claudeAgent: String?
     public var allowedTools: [String]?
     public var permissionMode: String?
+    /// LANDING-LIKE-CHAT fix: the person's own "Before it changes files" pick on this Mac's New session page, as this
+    /// AI's CLI value. Only that page sets it. A fresh start runs in exactly this mode (passed by name, "default"
+    /// included) in place of the R73 bypass; a value this AI does not have refuses the start, never falls back to
+    /// Bypass. Nil (every other launch): R73 as before. Restores and replacements ignore it.
+    public var chosenStartPermission: String?
     public var agentSettings: AGSAgentSettings?
     /// Backend-owned task launch marker, never parsed from renderer input.
     public var taskID: String?
@@ -136,6 +141,8 @@ public struct BackendCreateSessionInput: Codable, Equatable, Sendable {
     public var chat: Bool?
     /// App-owned identity of an AI-to-AI job; never reused for another job.
     public var teamJob: BackendTeamChatJob?
+    /// Cloud Continue only (in-process marker; never honoured when decoded).
+    public var cloudContinue: BackendCloudContinueMarker?
     /// The AIs that can run as a chat.
     public static let chatProviders: Set<String> = ["claude", "codex", "gemini"]
 

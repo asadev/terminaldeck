@@ -75,7 +75,7 @@ public enum BackendAGSCodec {
         if let entries = value.elements { return .array(entries.map { masking($0, secrets: secrets) }) }; return value
     }
 }
-private struct BackendAGSState: Codable, Sendable {
+private struct BackendAGSState: Codable, Sendable, Equatable {
     var version = 1
     var defaults = AGSDefaults()
     var profiles: [String: AGSAgentSettings] = [:]
@@ -98,6 +98,8 @@ public actor BackendAGSStore {
     private let persistence: BackendTaskPersistence, cipher: any BackendAccountVaultCipher
     private let changed: @Sendable () async -> Void
     private let supportedAppEvents: Set<String>
+    private var cloudArchive: BackendCloudBrainAgentsArchive?
+    private var cloudImporting = false, cloudCaptureFailed = false
     private var state = BackendAGSState(), started = false, revision: UInt64 = 0
     private var transaction: (token: UUID, next: BackendAGSState)?
     public init(persistence: BackendTaskPersistence, cipher: any BackendAccountVaultCipher,
@@ -196,6 +198,7 @@ public actor BackendAGSStore {
             throw NativeRPCError(code: "settings-changed", message: "The prepared agent settings were not published intact.")
         }
         state = pending.next; revision += 1; transaction = nil
+        cloudCaptureWritten()
     }
     public func cancelProfileTransaction(_ prepared: BackendAGSProfileTransaction) throws {
         guard transaction?.token == prepared.token else { throw BackendAGSMCP.changed() }
@@ -205,6 +208,107 @@ public actor BackendAGSStore {
         transaction = nil
     }
     public func announceProfileTransaction() async { await changed() }
+    // MARK: Cloud (lane A2). Options travel without environment, hooks or working folder (those are secrets or this
+    // Mac's paths). They are written only through this vault's own commit: no side file is merged at start, so a
+    // deleted option stays deleted (finding 3), and a locked vault starts nothing and launches nothing (finding 4).
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        if cloudArchive == nil { cloudArchive = .init(ownerDirectory: persistence.ownership == .memory ? nil : persistence.directory, namespace: "agent-options", domains: ["agent-options"]) }
+        try cloudArchive!.attach(account)
+    }
+    public func cloudDetach() { cloudArchive?.detach() }
+    private static func cloudRecords(_ state: BackendAGSState) throws -> [CloudBrainAgentsRecord] {
+        var records: [CloudBrainAgentsRecord] = []
+        for (kind, rows) in [("profile", state.profiles), ("default", state.defaults.providers)] {
+            for id in rows.keys.sorted() {
+                records.append(.init(domain: "agent-options", id: kind + ":" + id,
+                    value: .object([.init("kind", .string(kind)), .init("id", .string(id)), .init("settings", try BackendAGSCodec.value(CloudBrainAgentsOptions.portable(rows[id]!)))])))
+            }
+        }
+        return records
+    }
+    private func cloudCaptureWritten() {
+        guard !cloudImporting, cloudArchive?.attached == true else { return }
+        do { try cloudArchive!.capture(try Self.cloudRecords(state), sourceID: "agent-options", complete: true) } catch { cloudCaptureFailed = true }
+    }
+    private static let cloudBlocked = ["Hook, environment and working-folder values stay on this Mac; their secret parts belong to Cloud secrets."]
+    /// While the vault is locked there is nothing readable to count, and the source says so.
+    public func cloudOptionsInventory() throws -> [CloudCoverage] {
+        guard started else {
+            return [.init(sourceId: "agent-options", inventoryRow: "I10", complete: false, items: 0, bytes: 0,
+                blockedReasons: ["The encrypted agent options are locked on this Mac; nothing was read or exported."])]
+        }
+        let failed = cloudCaptureFailed ? ["A save on this Mac could not be recorded for the Cloud yet; the next save or snapshot records it."] : []
+        return [try BackendCloudBrainAgentsSupport.coverage(row: "I10", sourceID: "agent-options", records: try Self.cloudRecords(state),
+            blocked: Self.cloudBlocked + failed, attention: cloudArchive?.attention() ?? [])]
+    }
+    public func cloudOptionsSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        try requireStarted()
+        guard transaction == nil else { throw CloudFailure.versionChanged }
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        // `state` changes only after a successful commit, so it is exactly what the vault holds.
+        try cloudArchive!.capture(try Self.cloudRecords(state), sourceID: "agent-options", complete: true)
+        cloudCaptureFailed = false
+        return .init(operations: try cloudArchive!.ownOperations(), coverage: try cloudOptionsInventory())
+    }
+    private func cloudShape() -> CloudBrainAgentsShape {
+        CloudBrainAgentsShape(show: { op, payload in
+            guard let kind = payload["kind"].string, let id = payload["id"].string, op.entityId == kind + ":" + id,
+                  kind == "profile" || kind == "default", Set((payload.fields ?? []).map(\.key)) == ["kind", "id", "settings"] else { throw CloudFailure.invalidRequest }
+            let settings = try BackendAGSCodec.decode(AGSAgentSettings.self, payload["settings"])
+            guard CloudBrainAgentsOptions.isPortable(settings) else { throw CloudFailure.invalidRequest }
+            try BackendAGSValidation.check(settings)
+            if kind == "default" { guard AGSCapabilities.providers.contains(id) else { throw CloudFailure.unsupportedFormat } }
+            return payload
+        })
+    }
+    public func cloudOptionsImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        // A locked vault keeps every option in history and shows none; nothing is written beside the vault.
+        let writable = started && transaction == nil && cipher.available() && (try? persistence.writable()) != nil
+        let current = Dictionary(try Self.cloudRecords(state).map { ($0.key, $0.value.raw) }, uniquingKeysWith: { first, _ in first })
+        cloudImporting = true
+        let results: [CloudItemResult]
+        do {
+            results = try cloudArchive!.importing(operations, current: { current[$0] }, shape: cloudShape(),
+                validate: { items in writable ? [:] : Dictionary(items.map { ($0.key, "the encrypted agent options are locked on this Mac") }, uniquingKeysWith: { a, _ in a }) },
+                write: { try self.cloudWrite($0) })
+        } catch { cloudImporting = false; throw error }
+        cloudImporting = false
+        return results
+    }
+    /// Shows options that waited for the vault to unlock.
+    public func cloudOptionsRefresh() throws -> Int {
+        try requireStarted()
+        guard transaction == nil, cipher.available() else { throw unavailable() }
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let current = Dictionary(try Self.cloudRecords(state).map { ($0.key, $0.value.raw) }, uniquingKeysWith: { first, _ in first })
+        cloudImporting = true; defer { cloudImporting = false }
+        return try cloudArchive!.refresh(current: { current[$0] }, shape: cloudShape(), write: { try self.cloudWrite($0) })
+    }
+    private func cloudWrite(_ items: [CloudBrainAgentsProjection]) throws -> [String: NativeRPCValue?] {
+        var next = state
+        for item in items {
+            guard let image = item.image, let kind = image["kind"].string, let id = image["id"].string else { continue }
+            var settings = try BackendAGSCodec.decode(AGSAgentSettings.self, image["settings"])
+            // This Mac's own environment, hooks and folder stay with its profile.
+            let existing = kind == "profile" ? next.profiles[id] : next.defaults.providers[id]
+            if let existing { settings.environment = existing.environment; settings.hooks = existing.hooks; settings.workingFolder = existing.workingFolder }
+            try BackendAGSValidation.check(settings)
+            if kind == "profile" { try profileID(id); next.profiles[id] = settings } else { next.defaults.providers[id] = settings }
+        }
+        if next != state { try commit(next) }
+        let after = Dictionary(try Self.cloudRecords(state).map { ($0.key, $0.value.raw) }, uniquingKeysWith: { first, _ in first })
+        return Dictionary(items.map { ($0.key, after[$0.key]) }, uniquingKeysWith: { first, _ in first })
+    }
+    public func cloudOptionsRetained(_ operations: [CloudOperation]) throws -> Bool { try cloudArchive?.retained(operations) ?? false }
+    public func cloudOptionsVersions() throws -> [CloudOperation] { try cloudArchive?.revisions() ?? [] }
+    public func cloudOptionsOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.ownChanges(after: after, limit: limit) }
+    public func cloudOptionsCursor() throws -> String? { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.cursor() }
+    public func cloudOptionsSaveCursor(_ value: String) throws { guard cloudArchive != nil else { throw CloudFailure.gateClosed }; try cloudArchive!.saveCursor(value) }
+    public func cloudOptionsNotices() -> AsyncStream<Void> {
+        guard cloudArchive != nil else { return AsyncStream { $0.finish() } }
+        return cloudArchive!.notices()
+    }
     private func requireNoTransaction() throws {
         guard transaction == nil else { throw NativeRPCError(code: "settings-saving", message: "The combined agent profile save is still running. Try again after it finishes.") }
     }
@@ -223,6 +327,7 @@ public actor BackendAGSStore {
         do { blob = try cipher.encrypt(plain, existingVault: exists) } catch { throw unavailable() }
         try persistence.write("ags-settings.json", value: .object([.init("version", .number(1)), .init("encrypted", .string(blob.base64EncodedString()))]))
         state = next; revision += 1
+        cloudCaptureWritten()
     }
     private func checkRevision(_ expected: UInt64) throws { guard expected == revision else { throw NativeRPCError(code: "settings-changed", message: "Agent settings changed while approval was open. Read them again before saving.") } }
     private func profileID(_ id: String) throws { guard id.range(of: #"^[a-z0-9][a-z0-9-]{0,39}$"#, options: .regularExpression) != nil else { throw BackendAGSValidation.bad("Choose an existing task-agent identifier.") } }

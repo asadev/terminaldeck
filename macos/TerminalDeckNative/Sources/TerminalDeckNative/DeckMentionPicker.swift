@@ -61,7 +61,7 @@ enum DeckMentionRows {
     private static let pageSymbols = ["agents-all": "person.3", "agents": "person.3", "tasks": "list.bullet", "artifacts": "doc.richtext",
                                       "servers": "server.rack", "devices": "laptopcomputer.and.iphone", "receiver": "antenna.radiowaves.left.and.right",
                                       "mcp": "puzzlepiece.extension", "store": "bag", "files": "folder", "git": "arrow.triangle.branch",
-                                      "github": "arrow.triangle.pull", "overview": "square.grid.2x2", "readiness": "checkmark.seal"]
+                                      "github": "arrow.triangle.pull", "readiness": "checkmark.seal"]
 
     /// The rows for these mentions, in section order (agents first), each section in the given order.
     static func rows(for mentions: [HootMention], agents: [AGTAgent], projects: [PROJProject],

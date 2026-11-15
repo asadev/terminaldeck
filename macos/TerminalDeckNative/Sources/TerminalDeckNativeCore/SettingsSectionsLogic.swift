@@ -135,7 +135,9 @@ public enum SettingsNotifications {
     public static let refused = "\(osName) refused to show the banner."
     public static let wouldNotOpen = "\(osName) would not open its notification settings."
     public static let noAudio = "No audio output is available to play that on."
-    public static let testLabel = "Show a test notification"
+    /// SW-5 (15 Nov): the row says what it is, its one small button says what it does; never the same words twice.
+    public static let testTitle = "Test notification"
+    public static let testLabel = "Send"
     public static let askingLabel = "Asking \(osName)…"
     /// How long a test banner stays when nothing can say whether it arrived.
     public static let bannerSeconds = 6.0

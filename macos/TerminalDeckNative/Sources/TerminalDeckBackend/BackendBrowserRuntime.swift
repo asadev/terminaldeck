@@ -56,6 +56,13 @@ public protocol BackendBrowserRuntime: BrowserDriverHost {
     func dataCommand(_ operation: String, arguments: NativeRPCValue) async throws -> NativeRPCValue
     func revealScreenshot(_ path: String) throws
     func createProfileTab(url: URL, isolated: Bool, profileID: String) -> String
+    /// Select and show a tab: ONLY for the person's own menu choice (the Session menu's new window). No tool path
+    /// calls it (NativeBackgroundToolsPolicy); tools use `readyForInput`, which never moves the person.
+    func showForPerson(_ id: String) async -> Bool // person-ok: the declaration; its one caller is marked
+}
+
+public extension BackendBrowserRuntime {
+    func showForPerson(_ id: String) async -> Bool { await readyForInput(id) } // person-ok: a window-less runtime has nothing to show
 }
 
 public extension BackendBrowserRuntime {

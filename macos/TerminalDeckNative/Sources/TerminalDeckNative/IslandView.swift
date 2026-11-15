@@ -41,19 +41,22 @@ struct IslandView: View {
                 .fill(model.usesBlack ? Color.black : Color.white)
                 .shadow(color: .black.opacity(expanded ? 0.4 : 0), radius: 14, x: 0, y: 8)
 
-            // Open, the panel is only Hoot's chat (Asad, 10 Oct: "remove this all quiet too when opened").
-            if !(expanded && NativeCompositionHootUI.shared.isBound) {
-                IslandIndicators(state: model.state, layout: layout, quiet: model.quiet)
+            // Open, Hoot's panel is only his chat (Asad, 10 Oct: "remove this all quiet too when opened"); the other
+            // "Shows" choices keep their capsule line above their list.
+            let hootChat = model.shows == .hoot && NativeCompositionHootUI.shared.isBound
+            if !(expanded && hootChat) {
+                IslandIndicators(face: model.face, layout: layout)
             }
 
             // Hoot's chat runs to the panel's top edge (Asad, 10 Oct): the scroll area starts under the
             // pill row and its first line sits just below it, so text scrolls all the way up.
-            let fullHeight = NativeCompositionHootUI.shared.isBound && suppliedContent == nil && NativeIslandContent.isNative
+            let fullHeight = hootChat && suppliedContent == nil && NativeIslandContent.isNative
             let top = fullHeight ? IslandMetrics.contentInset : layout.contentTop
             Group {
                 if let suppliedContent { suppliedContent }
                 else if NativeIslandContent.isNative {
-                    NativeIslandContent(expanded: expanded, chatTopInset: fullHeight && layout.notched ? max(0, layout.contentTop - top) : 0)
+                    NativeIslandContent(expanded: expanded, shows: model.shows, facts: model.facts,
+                        chatTopInset: fullHeight && layout.notched ? max(0, layout.contentTop - top) : 0)
                 }
             }
                 .frame(width: layout.contentSize.width,
@@ -181,78 +184,75 @@ final class IslandContainerView: NSView {
     override func mouseExited(with event: NSEvent) { onExit?() }
 }
 
-/// Beside a notch: the status in the left ear, the badge in the right one. Without
-/// a notch: the two side by side, centred in the compact pill — no gap standing in
-/// for a notch that is not there. They never move while the shape morphs.
+/// The resting capsule's inside (15 Nov design): one 16 pt glyph, one line 12 pt medium, at most one trailing mark,
+/// 12 pt side padding. Beside a notch the camera sits in the middle: the glyph keeps the left ear, the mark the right.
+/// Drawn by the real island and by the Settings preview alike.
 struct IslandIndicators: View {
-    let state: IslandState?
+    let face: NativeIslandFace
     let layout: IslandLayout
-    var quiet = false
+
+    static let glyphSize: CGFloat = 16
+    static let lineFont = Font.system(size: 12, weight: .medium)
 
     var body: some View {
         Group {
             if layout.notched {
                 HStack(spacing: 0) {
-                    // The owl in the left ear, the thinking/attention dots beside it; the badge keeps the right ear.
-                    HStack(spacing: 3) { owl; status }.frame(width: layout.ear)
+                    HStack(spacing: 0) { glyph; Spacer(minLength: 0) }
+                        .padding(.leading, FIXESIslandDisplayPolicy.capsulePadding).frame(width: layout.ear)
                     Color.clear.frame(width: layout.gap)
-                    Group {
-                        if quiet { Text("All quiet").font(.caption).foregroundStyle(.secondary) }
-                        else { badge }
-                    }.frame(width: layout.ear)
+                    HStack(spacing: 0) { Spacer(minLength: 0); mark }
+                        .padding(.trailing, FIXESIslandDisplayPolicy.capsulePadding).frame(width: layout.ear)
                 }
             } else {
-                HStack(spacing: 5) {
-                    owl
-                    Text(quiet ? "All quiet" : state?.line ?? "Hoot")
-                        .font(.callout.weight(.medium)).lineLimit(1).truncationMode(.tail)
-                    if state != nil { status }
-                    if let state, state.badge > 0 { badge }
+                HStack(spacing: 6) {
+                    glyph
+                    Text(face.line).font(Self.lineFont).foregroundStyle(.primary)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    mark
                 }
+                .padding(.horizontal, FIXESIslandDisplayPolicy.capsulePadding)
             }
         }
         .frame(width: layout.pill.width, height: layout.row)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Terminal Deck")
-        .accessibilityValue(state?.line ?? "")
-        .help(state?.line ?? "")
+        .accessibilityValue(face.line)
+        .help(face.line)
     }
 
-    /// Keep Hoot visible while stopped, starting, or waiting for its first snapshot.
-    private var owl: some View {
-        HootMark(size: max(10, layout.pill.height - 8))
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: NativeFIXESIslandOwlFrameKey.self,
-                    value: geometry.frame(in: .named("FIXES-island-canvas")))
-            })
-            .accessibilityHidden(true)
-    }
-
-    @ViewBuilder private var status: some View {
-        switch state?.status {
-        // Quiet shows nothing: a lone dot reads as the camera (Asad, 2026-10-07).
-        case nil, .idle:
-            Color.clear.frame(width: 1, height: 1)
-        case .working:
-            HootStatusLine(state: .thinking, text: "")
-        case .needsYou:
-            Circle().fill(Color.orange).frame(width: 7, height: 7)
-        case .offline:
-            Circle().strokeBorder(Color.secondary, lineWidth: 1.2).frame(width: 7, height: 7)
+    @ViewBuilder private var glyph: some View {
+        switch face.glyph {
+        case .hoot:
+            // Keep Hoot visible while stopped, starting, or waiting for its first snapshot.
+            HootMark(size: Self.glyphSize)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: NativeFIXESIslandOwlFrameKey.self,
+                        value: geometry.frame(in: .named("FIXES-island-canvas")))
+                })
+                .accessibilityHidden(true)
+        case .symbol(let name):
+            Image(systemName: name).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary)
+                .frame(width: Self.glyphSize, height: Self.glyphSize).accessibilityHidden(true)
         }
     }
 
-    @ViewBuilder private var badge: some View {
-        if let state, state.badge > 0 {
-            Text(layout.notched ? (state.badge > 99 ? "99+ waiting" : "\(state.badge) waiting") : (state.badge > 99 ? "99+" : "\(state.badge)"))
+    @ViewBuilder private var mark: some View {
+        switch face.mark {
+        // Quiet shows nothing: a lone dot reads as the camera (Asad, 2026-10-07).
+        case .none:
+            Color.clear.frame(width: 1, height: 1)
+        case .working:
+            HootStatusLine(state: .thinking, text: "")
+        case .count(_, let attention):
+            Text(face.countText ?? "")
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.primary)
+                .foregroundStyle(attention ? Color.white : Color.primary)
                 .lineLimit(1)
                 .padding(.horizontal, 5)
-                .frame(minWidth: 16, minHeight: 16)
-                .background(Capsule().fill(state.status == .needsYou ? Color.orange : Color.secondary.opacity(0.2)))
-        } else {
-            Color.clear.frame(width: 1, height: 1)
+                .frame(minWidth: 18, minHeight: 18)
+                .background(Capsule().fill(attention ? Color.orange : Color.secondary.opacity(0.2)))
         }
     }
 }

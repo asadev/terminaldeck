@@ -72,6 +72,8 @@ public struct GitBranch: Equatable, Sendable {
 
 public enum GitUnavailableReason: String, Sendable, Equatable {
     case notARepo = "not-a-repo", gitMissing = "git-missing", noSuchFolder = "no-such-folder", error
+    /// A folder the app made for a project from the Cloud that holds no code yet (CODE-PARENT, 14 Nov).
+    case codeNotHere = "code-not-here"
 }
 
 public struct GitRepoStatus: Equatable, Sendable {
@@ -191,6 +193,7 @@ public enum GitRules {
         case .gitMissing: "git is not installed"
         case .noSuchFolder: "That folder is gone"
         case .error: "Source control is unavailable"
+        case .codeNotHere: "Code not on this Mac yet"
         }
     }
 
@@ -200,6 +203,7 @@ public enum GitRules {
             return GitUnavailableView(title: unavailableTitle(.error), message: "git could not read this folder", canInit: false)
         }
         let canInit = canInitHere && hasInit
+        if reason == .codeNotHere { return GitUnavailableView(title: unavailableTitle(reason), message: "", canInit: false) }
         return GitUnavailableView(title: unavailableTitle(reason),
                                   message: canInit ? "This folder is not a git repository." : message, canInit: canInit)
     }

@@ -229,6 +229,9 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
             try BackendDeckCoreCatalogueBuiltins.requireExistingFolder(folder)
             return folder
         }
+        // Fault 1 (14 Nov): the Mac's own default folder, for his own Full-control device's Tasks only (set only by the
+        // phone panel door: `defaultTaskFolder`), counts like an open project.
+        if Self.defaultTaskPlace(folder, caller: core.caller) { return folder }
         let allowed = try await allowedFolders(core)
         let ownedWorkspace: Bool
         if core.caller.kind == .session, let id = core.caller.sessionID, let session = prepared.manager.list().first(where: { $0.id == id && $0.exitCode == nil }) {
@@ -243,6 +246,12 @@ public final class BackendCompositionAuthority: @unchecked Sendable {
             throw NativeRPCError(code: "access-denied", message: message)
         }
         return folder
+    }
+    /// Fault 1 (14 Nov): the folder is the Mac's own default folder, carried by his own Full-control device's Tasks
+    /// call. Every other caller and folder: false, so the project grant below decides as before.
+    public static func defaultTaskPlace(_ folder: String, caller: BackendDeckCoreSecurityCaller) -> Bool {
+        guard caller.kind == .remote, !caller.tiers.isEmpty, let place = caller.defaultTaskFolder, folder.hasPrefix("/"), !folder.contains("\0") else { return false }
+        return within(folder, place)
     }
     private func allowedFolders(_ core: BackendDeckCoreSecurityCallContext) async throws -> [String] {
         let projects = state.listProjects().compactMap { $0["path"].string }

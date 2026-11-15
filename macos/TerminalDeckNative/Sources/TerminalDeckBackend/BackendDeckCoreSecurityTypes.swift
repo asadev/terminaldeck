@@ -18,13 +18,19 @@ public struct BackendDeckCoreSecurityCaller: Sendable {
     /// grant only. This is never read from wire metadata or tool arguments.
     public let projectRoot: String?
     public let taskProject: String?
+    /// 14 Nov (phones fault 1): the Mac's own New session default folder (`~/Terminal Deck/Independent`, offered to the
+    /// phone as `defaultFolder`), whose TASKS the person's OWN device at Full control may read like an open project's.
+    /// Set only by the phone panel door for a Tasks call (`BackendINT2PhonePanelScope.defaultTaskFolder`), never from
+    /// the wire; nil for every other caller (guests, lower levels, app keys, sessions, the app).
+    public let defaultTaskFolder: String?
     public init(kind: Kind, tiers: Set<BackendMCPTier>, deviceID: String? = nil,
                 keyID: String? = nil, keyName: String? = nil, askFirst: Bool? = nil,
                 tasks: Bool = false, folders: [String]? = nil, sessionID: String? = nil, machineID: String? = nil,
-                projectRoot: String? = nil, taskProject: String? = nil) {
+                projectRoot: String? = nil, taskProject: String? = nil, defaultTaskFolder: String? = nil) {
         self.kind = kind; self.tiers = tiers; self.deviceID = deviceID; self.keyID = keyID
         self.keyName = keyName; self.askFirst = askFirst; self.tasks = tasks; self.folders = folders
         self.sessionID = sessionID; self.machineID = machineID; self.projectRoot = projectRoot; self.taskProject = taskProject
+        self.defaultTaskFolder = kind == .remote ? defaultTaskFolder : nil
     }
     public static let local = Self(kind: .local, tiers: [.read, .act, .alter])
     public var actsAsOwner: Bool { kind == .local || kind == .key }

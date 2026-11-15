@@ -193,7 +193,22 @@ public actor BackendDeckCoreSecurityServer {
     /// Same grant, exchange and gate for relay traffic; the relay owns the outer socket.
     public func answerRelay(authorization: String?, pathKey: String?, userAgent: String?, protocolVersion: String?,
                             body: Data, cancellation: BackendMCPCancellation) async -> BackendDeckCoreSecurityHTTPResponse {
-        guard let keys, let grant = await keys.grant(credential: pathKey ?? BackendDeckCoreSecurityCallerTable.bearerOf(authorization), via: "internet", userAgent: userAgent, external: cancellation) else { return Self.relayNotFound }
+        await answerRelayMarked(authorization: authorization, pathKey: pathKey, userAgent: userAgent, protocolVersion: protocolVersion,
+                                body: body, cancellation: cancellation).response
+    }
+    /// 15 Nov (AI apps through our server): the same answer, plus whether it was refused for a wrong or unknown key
+    /// while the switch was on (the relay counts those per caller). The answer itself is the same 404 either way.
+    public func answerRelayMarked(authorization: String?, pathKey: String?, userAgent: String?, protocolVersion: String?,
+                                  body: Data, cancellation: BackendMCPCancellation) async -> (response: BackendDeckCoreSecurityHTTPResponse, refused: Bool) {
+        guard let keys else { return (Self.relayNotFound, false) }
+        let credential = pathKey ?? BackendDeckCoreSecurityCallerTable.bearerOf(authorization)
+        guard let grant = await keys.grant(credential: credential, via: "internet", userAgent: userAgent, external: cancellation) else {
+            // review-fixes 7: marked (counted by the relay as a wrong key) only when NO key matched while serving; a good
+            // key whose request was cancelled or raced a revoke is not a wrong key. The key check itself is unchanged.
+            let serving = await keys.serving()
+            let matched = await keys.keys.match(credential) != nil
+            return (Self.relayNotFound, serving && !matched)
+        }
         let response: BackendDeckCoreSecurityHTTPResponse
         do {
             let parsed = try NativeRPCValue.parseJSON(body, maximumBytes: Self.maximumBodyBytes)
@@ -203,7 +218,7 @@ public actor BackendDeckCoreSecurityServer {
             headers = Self.withStandardHeaders(headers, parsed: parsed)
             response = await serve(parsed: parsed, headers: headers, grant: grant, cancellation: cancellation)
         } catch { response = Self.rpcError(id: .null, code: -32700, message: "That request was not JSON.", status: 400) }
-        await grant.done(); return response
+        await grant.done(); return (response, false)
     }
     public func serve(parsed: NativeRPCValue, headers: [String: String], grant: BackendDeckCoreSecurityGrant,
                       cancellation: BackendMCPCancellation) async -> BackendDeckCoreSecurityHTTPResponse {

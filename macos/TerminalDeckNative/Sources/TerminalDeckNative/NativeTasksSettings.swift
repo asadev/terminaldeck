@@ -2,38 +2,286 @@ import AppKit
 import SwiftUI
 import TerminalDeckNativeCore
 
-// Settings → Tasks (settings/sections/TasksSection.tsx): the agents that take
-// work from a CRM, and the CRMs allowed to send it. Plain words: every field
-// says what it does in one line, and a refusal from the engine is shown as the
-// sentence it was written as, beside the form it is about.
+// Settings → Tasks: project workflows and the agents that take work; Connections holds the CRMs allowed to send it.
+// A refusal from the engine is shown as the sentence it was written as, beside what it is about.
 
+/// Settings › Tasks (owner, 15 Nov; DESIGN.md section 6): "Project workflows" (one row per project ›) and "Task
+/// agents" (one row per agent: name, its role in one line, chevron). Each agent's own page holds the rest. CRM and
+/// connected task systems are one row deeper ("Connections ›"). No paths, no source button, no remove mark here.
 struct NativeTasksSettings: View {
+    private let store = TasksStore.shared
+    /// Pictures pass their own state and projects.
+    var fixtureState: TasksState? = nil
+    var fixtureProjects: [PROJProject]? = nil
+
+    var body: some View {
+        DeckSettingsScaffold(title: "Tasks") {
+            if let fixtureState {
+                NativeTasksPageBody(state: fixtureState, projects: fixtureProjects ?? [])
+            } else {
+                switch store.phase {
+                case .loading:
+                    DeckSettingsGroup { DeckSettingsRow("Reading the task settings…").redacted(reason: .placeholder) }
+                case .failed:
+                    DeckSettingsGroup { DeckSettingsProblem(text: "The app answered with something this page cannot read.") }
+                case .ready(let state):
+                    NativeTasksPageBody(state: state, projects: NativePROJLabels.shared.projects)
+                }
+            }
+        }
+        .onAppear { if fixtureState == nil { store.start(); NativePROJLabels.shared.start() } }
+    }
+
+    /// Run one change and keep what came back. The caller shows a refusal beside its own row.
+    static func run(_ work: @escaping @MainActor () async -> TasksResult) async -> TasksResult {
+        let result = await work()
+        TasksStore.shared.adopt(result)
+        return result
+    }
+}
+
+/// The groups of the Tasks page, from plain data (the pictures draw it too).
+struct NativeTasksPageBody: View {
+    let state: TasksState
+    let projects: [PROJProject]
+    @Environment(\.deckSettingsOpen) private var open
+    @State private var importMessage: String?
+    @State private var importModel: AGFRAMEImportModel?
+
+    var body: some View {
+        if !projects.isEmpty {
+            DeckSettingsGroup("Project workflows", info: "A workflow decides what must happen before an agent starts work in that project.") {
+                ForEach(projects) { project in
+                    DeckSettingsLinkRow(title: project.name, leading: AnyView(ProjectLogoView(project: project, name: project.name, size: 22)
+                        .frame(width: DeckSettingsLook.rowTile, height: DeckSettingsLook.rowTile))) {
+                        open(NativeSettingsNavigation.taskWorkflowPage(project.id))
+                    }
+                }
+            }
+        }
+        DeckSettingsGroup("Task agents", info: "Agents that take work from your tasks and from a connected CRM. Open one to see and change its settings.") {
+            ForEach(Self.listed(state.agents)) { agent in
+                NativeTaskAgentRow(agent: agent) { open(NativeSettingsNavigation.taskAgentPage(agent.id)) }
+            }
+            // U114 (#190): one create page (Agents › New agent) and one editor (the agent's own settings window).
+            DeckSettingsButtonRow(title: "+ Add agent") { AGTAgentsStore.shared.openProfile = "new"; AppModel.shared.select(NativeINT2Navigation.allID) }
+            DeckSettingsButtonRow(title: "Import agents…", info: "Brings in agents described in Claude Code's agents folder. Files you leave unticked stay out.") {
+                importMessage = nil; importModel = AGFRAMEImportModel()
+            }
+            if let importMessage { DeckSettingsProblem(text: importMessage, warn: false) }
+        }
+        DeckSettingsGroup {
+            DeckSettingsLinkRow(title: "Connections", value: Self.connectionsValue(state)) { open(NativeSettingsNavigation.taskConnectionsID) }
+        }
+        .sheet(isPresented: Binding(get: { importModel != nil }, set: { if !$0 { importModel = nil } })) {
+            if let importModel { AGFRAMEImportSheet(model: importModel) { message, _ in importMessage = message } }
+        }
+    }
+
+    /// Working agents first, archived ones last (their row says "Archived"; their page restores them).
+    static func listed(_ agents: [AgentProfile]) -> [AgentProfile] {
+        TasksRules.pickableAgents(agents) + agents.filter { $0.status == .archived }
+    }
+
+    static func connectionsValue(_ state: TasksState) -> String? {
+        let count = state.connections.count
+        return count == 0 ? nil : count == 1 ? "1 CRM" : "\(count) CRMs"
+    }
+}
+
+/// One task agent: the name, its role in ONE line truncated at the row's end, a paused/archived word, the chevron.
+struct NativeTaskAgentRow: View {
+    let agent: AgentProfile
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: DeckTokens.Spacing.s8) {
+                Text(agent.name).font(DeckSettingsLook.rowTitle).foregroundStyle(.primary).lineLimit(1).layoutPriority(1)
+                Text(Self.oneLine(agent.role)).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: DeckTokens.Spacing.s8)
+                if let badge = TasksSettingsText.statusBadge(agent.status) {
+                    Text(badge).font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Image(systemName: "chevron.right").font(.system(size: DeckSettingsLook.chevron - 2, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor)).accessibilityHidden(true)
+            }
+            .padding(.horizontal, DeckSettingsLook.rowPadding)
+            .frame(maxWidth: .infinity, minHeight: DeckSettingsLook.rowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(DeckSettingsPressStyle())
+        .accessibilityLabel([agent.name, agent.role, TasksSettingsText.statusBadge(agent.status)].compactMap { $0 }.joined(separator: ", "))
+    }
+    /// The role on one line (a written role may hold line breaks).
+    static func oneLine(_ role: String) -> String {
+        role.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
+
+/// Settings › Tasks › an agent (owner, 15 Nov): its description, model, limits, tools, project and reviewer; whether
+/// it takes work; "Show in Finder" for the file it came from (the sync time in its info, never the path); Archive or
+/// Restore; Delete. Every other setting is in its own settings window ("All settings").
+struct NativeTaskAgentPage: View {
+    let agentID: String
+    var fixture: (agent: AgentProfile, all: [AgentProfile])? = nil
+    private let store = TasksStore.shared
+    @State private var busy = false
+    @State private var problem: String?
+    @Environment(\.deckSettingsOpen) private var open
+
+    var body: some View {
+        let all: [AgentProfile] = fixture?.all ?? { if case .ready(let state) = store.phase { return state.agents } else { return [] } }()
+        let agent = fixture?.agent ?? all.first { $0.id == agentID }
+        DeckSettingsScaffold(title: agent?.name ?? "Agent") {
+            if let agent {
+                content(agent, all: all)
+            } else {
+                DeckSettingsGroup { DeckSettingsProblem(text: "This agent is no longer listed.", warn: false) }
+            }
+        }
+        .onAppear { if fixture == nil { store.start() } }
+    }
+
+    @ViewBuilder private func content(_ agent: AgentProfile, all: [AgentProfile]) -> some View {
+        let role = NativeTaskAgentRow.oneLine(agent.role)
+        if !role.isEmpty {
+            DeckSettingsGroup {
+                Text(agent.role).font(DeckSettingsLook.rowTitle).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, DeckSettingsLook.rowPadding).padding(.vertical, DeckTokens.Spacing.s12)
+                    .frame(maxWidth: .infinity, minHeight: DeckSettingsLook.rowHeight, alignment: .leading)
+            }
+        }
+        let facts = Self.facts(agent)
+        DeckSettingsGroup {
+            DeckSettingsRow("Model", state: facts.model)
+            DeckSettingsRow("Limits", info: facts.limitsInfo, state: facts.limits)
+            DeckSettingsRow("Tools", info: TasksSettingsText.agentStackSummary(agent), state: facts.tools)
+            DeckSettingsRow("Project", state: NativePROJLabels.shared.name(for: agent.hasExplicitProjectID ? agent.projectID : nil, folder: agent.defaultProject))
+            DeckSettingsRow("Reviewer", state: TAGAgentSettings.reviewerLabel(agent, agents: all))
+            if agent.status != .archived {
+                DeckSettingsRow("Takes work", info: "Paused: takes no new work; what it is running carries on.") {
+                    Picker("Takes work", selection: Binding(get: { agent.status == .paused ? "paused" : "active" }, set: { next in
+                        Task { await lifecycle(agent.id, next == "paused" ? .pause : .resume) }
+                    })) {
+                        Text("Yes").tag("active")
+                        Text("Paused").tag("paused")
+                    }
+                    .labelsHidden().fixedSize().disabled(busy || fixture != nil)
+                }
+            }
+            DeckSettingsLinkRow(title: "All settings") {
+                // U114 (#190): every setting is changed in the agent's own settings window, never in a form here.
+                AGTAgentSettingsWindow.open(agent.id)
+            }
+        }
+        if let source = agent.sourceFile {
+            DeckSettingsGroup {
+                DeckSettingsRow("Instructions file", info: Self.syncInfo(status: agent.syncStatus, syncedAt: agent.syncedAt),
+                                state: agent.syncStatus == "synced" ? nil : Self.syncWord(agent.syncStatus),
+                                stateColor: agent.syncStatus == "synced" ? .secondary : DeckTokens.warn) {
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: source)]) }
+                }
+                if let error = agent.syncError, !error.isEmpty { DeckSettingsProblem(text: error) }
+            }
+        }
+        DeckSettingsGroup {
+            if agent.status == .archived {
+                DeckSettingsButtonRow(title: "Restore", info: "Takes work again and is offered everywhere.") { Task { await lifecycle(agent.id, .restore) } }
+                    .disabled(busy)
+            } else {
+                DeckSettingsButtonRow(title: "Archive", info: "Kept, and offered nowhere until restored.") { Task { await lifecycle(agent.id, .archive) } }
+                    .disabled(busy)
+            }
+            // Delete rule: one press, no question; the agent goes to the Bin on all devices for 30 days.
+            DeckSettingsButtonRow(title: "Delete", role: .destructive, info: "Removed from all devices, in the Bin for 30 days.") {
+                Task { await remove(agent.id) }
+            }
+            // SW-3: full strength whenever he can press it; in a picture (fixture) the press does nothing.
+            .disabled(busy)
+            if let problem { DeckSettingsProblem(text: problem) }
+        }
+    }
+
+    struct Facts: Equatable { var model: String; var limits: String; var limitsInfo: String; var tools: String }
+
+    /// Short words for the rows (names and numbers, never paths or ids).
+    static func facts(_ agent: AgentProfile) -> Facts {
+        let model = [TasksSettingsText.providerName(agent.provider), agent.model].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let run = agent.maxRunMinutes == 0 ? "No time limit" : "\(agent.maxRunMinutes) min"
+        let keep = agent.keepAliveUntilClose == true ? "stays open until you close it"
+            : agent.keepAliveMinutes == 0 ? "closes when done" : "stays open \(agent.keepAliveMinutes) min"
+        let effort = agent.effort.map { " · " + NativeAGSWords.option($0) + " effort" } ?? ""
+        let counts = agent.toolsPreferred.count + agent.skills.count + (agent.allowedTools?.count ?? 0)
+        return Facts(model: model + effort,
+                     limits: "\(agent.maxConcurrent) at once · " + run,
+                     limitsInfo: "Runs up to \(agent.maxConcurrent) at once; \(run.lowercased()); \(keep).",
+                     tools: agent.allowedTools?.isEmpty == true ? "None allowed" : counts == 0 ? "Default" : "\(counts) chosen")
+    }
+
+    static func syncWord(_ status: String?) -> String {
+        switch status {
+        case "synced": "Synced"
+        case "missing": "File missing"
+        case "error": "Sync failed"
+        default: "Not confirmed"
+        }
+    }
+
+    /// The (i) of the file row: whether it is in step, and when it last was (a date, never a path).
+    static func syncInfo(status: String?, syncedAt: Double?) -> String {
+        var line = "This agent is described in a file on this Mac. " + syncWord(status) + "."
+        if status == "synced", let syncedAt {
+            line += " Last synced " + Date(timeIntervalSince1970: syncedAt / 1000).formatted(date: .abbreviated, time: .shortened) + "."
+        }
+        return line
+    }
+
+    private func remove(_ id: String) async {
+        guard fixture == nil else { return }
+        busy = true; defer { busy = false }
+        let result = await NativeTasksSettings.run { await TasksStore.shared.call("tasks:agent-remove", [id]) }
+        if result.ok { open("tasks") } else { problem = result.message ?? "That did not go through." }
+    }
+
+    /// Pause, resume, archive or restore. A refusal is said on this page.
+    private func lifecycle(_ id: String, _ action: AgentAction) async {
+        guard fixture == nil else { return }
+        busy = true; defer { busy = false }
+        let result = await NativeTasksSettings.run { await TasksStore.shared.call("tasks:agent-status", [id, action.rawValue]) }
+        problem = result.ok ? nil : (result.message ?? "That did not go through.")
+    }
+}
+
+/// Settings › Tasks › Connections: the CRM connections and connected task systems, as before.
+struct NativeTaskConnectionsPage: View {
     private let store = TasksStore.shared
     @State private var busy = false
 
     var body: some View {
-        NativeSettingsPage(sectionId: "tasks") {
-            switch store.phase {
-            case .loading:
-                Section { Text("Reading the task settings…").foregroundStyle(.secondary) }
-            case .failed:
-                Section { NativeCodingAINotice(tone: .error, text: "The app answered with something this page cannot read.") }
-            case .ready(let state):
-                ProjectWorkflowsGroup()
-                TaskAgentsGroup(state: state, busy: busy, run: run)
-                CrmConnectionsGroup(state: state, busy: busy, run: run)
-                ConnectedTaskSystemsGroup()
+        DeckSettingsFrame(title: "Connections") {
+            Form {
+                switch store.phase {
+                case .loading:
+                    Section { Text("Reading the task settings…").foregroundStyle(.secondary) }
+                case .failed:
+                    Section { NativeCodingAINotice(tone: .error, text: "The app answered with something this page cannot read.") }
+                case .ready(let state):
+                    CrmConnectionsGroup(state: state, busy: busy, run: run)
+                    ConnectedTaskSystemsGroup()
+                }
             }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
         }
         .onAppear { store.start() }
     }
 
-    /// Run one change and keep what came back. The caller shows a refusal beside its own form.
     private func run(_ work: @escaping @MainActor () async -> TasksResult) async -> TasksResult {
         busy = true
-        let result = await work()
+        let result = await NativeTasksSettings.run(work)
         busy = false
-        store.adopt(result)
         return result
     }
 }
@@ -145,147 +393,6 @@ private struct OnceSecret: View {
     }
 }
 
-// MARK: - Agents
-
-private struct TaskAgentsGroup: View {
-    let state: TasksState
-    let busy: Bool
-    let run: TasksSettingsRun
-    @State private var removing: String?
-    @State private var problem: String?
-    @State private var importMessage: String?
-    @State private var importModel: AGFRAMEImportModel?
-
-    var body: some View {
-        let current = TasksRules.pickableAgents(state.agents)
-        let archived = state.agents.filter { $0.status == .archived }
-        Section {
-            if current.isEmpty {
-                Text("No agents yet. Add one for each kind of work, such as building or reviewing.").foregroundStyle(.secondary)
-            }
-            ForEach(current) { agent in
-                agentRow(agent)
-            }
-            if !archived.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Archived").font(.callout.weight(.semibold)).foregroundStyle(.secondary)
-                    ForEach(archived) { agent in
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(agent.name).font(.body.weight(.medium))
-                                }
-                                Text(agent.role).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                if let line = TasksSettingsText.statusLine(agent.status, at: agent.statusAt) {
-                                    Text(line).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            NativeSessionButton("Restore") { Task { await lifecycle(agent.id, .restore) } }.disabled(busy)
-                        }
-                    }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Archived agents")
-            }
-            HStack {
-                // U114 (#190): one create page (Agents › New agent) and one editor (the agent's own settings window).
-                NativeSessionButton("Add agent") { reset(); AGTAgentsStore.shared.openProfile = "new"; AppModel.shared.select(NativeINT2Navigation.allID) }
-                    .buttonStyle(.borderedProminent).disabled(busy)
-                NativeSessionButton("Import from .claude/agents/…", action: importAgents).disabled(busy)
-                Spacer()
-                Text(state.agents.count == 1 ? "1 agent" : "\(state.agents.count) agents").font(.caption).foregroundStyle(.secondary)
-            }
-            if let importMessage { Text(importMessage).font(.caption).foregroundStyle(.secondary) }
-            if let problem { NativeCodingAINotice(tone: .error, text: problem) }
-        } header: {
-            Text("Task agents")
-        }
-        .sheet(isPresented: Binding(get: { importModel != nil }, set: { if !$0 { importModel = nil } })) {
-            if let importModel {
-                AGFRAMEImportSheet(model: importModel) { message, _ in reset(); importMessage = message }
-            }
-        }
-    }
-
-    @ViewBuilder private func agentRow(_ agent: AgentProfile) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(agent.name).font(.body.weight(.medium))
-                        if let badge = TasksSettingsText.statusBadge(agent.status) { QuietBadge(text: badge) }
-                    }
-                    Text(agent.role).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    Text(NativePROJLabels.shared.name(for: agent.hasExplicitProjectID ? agent.projectID : nil, folder: agent.defaultProject)).font(.caption).foregroundStyle(.secondary)
-                    Text(TasksSettingsText.agentSummary(agent)).font(.caption).foregroundStyle(.secondary)
-                    if let stack = TasksSettingsText.agentStackSummary(agent) { Text(stack).font(.caption).foregroundStyle(.secondary) }
-                    if let line = TasksSettingsText.statusLine(agent.status, at: agent.statusAt) { Text(line).font(.caption).foregroundStyle(.secondary) }
-                    Text(TAGAgentSettings.reviewerLabel(agent, agents: state.agents)).font(.caption).foregroundStyle(.secondary)
-                    if let source = agent.sourceFile {
-                        NativeTAGSourceStatus(source: source, status: agent.syncStatus, syncedAt: agent.syncedAt, error: agent.syncError)
-                    }
-                }
-                Spacer()
-                // U114 (#190): every setting is changed in the agent's own settings window, never in a form here.
-                NativeSessionButton("Settings…") { reset(); AGTAgentSettingsWindow.open(agent.id) }.disabled(busy)
-                    .help("Open \(agent.name)'s settings")
-                Menu {
-                    if agent.status == .paused {
-                        NativeSessionButton("Resume") { Task { await lifecycle(agent.id, .resume) } }.help("Takes new work again")
-                    } else {
-                        NativeSessionButton("Pause") { Task { await lifecycle(agent.id, .pause) } }.help("Takes no new work; what it is running carries on")
-                    }
-                    NativeSessionButton("Archive") { Task { await lifecycle(agent.id, .archive) } }.help("Kept, and offered nowhere until restored")
-                    Divider()
-                    NativeSessionButton("Remove…", role: .destructive) { reset(); removing = agent.id }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(busy)
-                .accessibilityLabel("Whether \(agent.name) takes work")
-            }
-            if removing == agent.id {
-                HStack(spacing: 8) {
-                    Text("Remove “\(agent.name)”? CRM identities that point at it are cleared too.").font(.callout)
-                    Spacer()
-                    NativeSessionButton("Remove", role: .destructive) { Task { await remove(agent.id) } }.disabled(busy)
-                    NativeSessionButton("Keep it") { removing = nil }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Remove \(agent.name)")
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func reset() {
-        removing = nil
-        problem = nil
-    }
-
-    /// #321/#350: the Agents page's Import sheet, so files the person leaves unticked stay out here too.
-    private func importAgents() {
-        problem = nil; importMessage = nil
-        importModel = AGFRAMEImportModel()
-    }
-
-    private func remove(_ id: String) async {
-        let result = await run { await TasksStore.shared.call("tasks:agent-remove", [id]) }
-        if result.ok { reset() } else { problem = result.message ?? "That did not go through." }
-    }
-
-    /// Pause, resume, archive or restore. A refusal is said under the list.
-    private func lifecycle(_ id: String, _ action: AgentAction) async {
-        let result = await run { await TasksStore.shared.call("tasks:agent-status", [id, action.rawValue]) }
-        if result.ok {
-            reset()
-        } else {
-            problem = result.message ?? "That did not go through."
-        }
-    }
-}
-
 // MARK: - CRM connections
 
 private struct CrmConnectionsGroup: View {
@@ -339,7 +446,7 @@ private struct CrmConnectionsGroup: View {
                 }
                 if confirming {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Make a new access key named “\(name) (CRM)”? It is shown once, it can only send tasks, and it can be taken back in Settings → Outside AI apps.")
+                        Text("Make a new access key named “\(name) (CRM)”? It is shown once, it can only send tasks, and it can be taken back in Settings → AI apps.")
                             .font(.callout)
                         HStack(spacing: 8) {
                             NativeSessionButton("Make the key and connect") { Task { await connectWithNewKey(state: state) } }
@@ -356,7 +463,7 @@ private struct CrmConnectionsGroup: View {
                             .disabled(busy || name.isEmpty)
                             .help(name.isEmpty ? "Give the CRM a name first" : "")
                         if state.keys.isEmpty {
-                            NativeSessionButton("Open Outside AI apps") { AppModel.shared.selectSettingsSection("ai-apps") }
+                            NativeSessionButton("Open AI apps") { AppModel.shared.selectSettingsSection("ai-apps") }
                         }
                     }
                 }

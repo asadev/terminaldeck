@@ -7,11 +7,16 @@ import TerminalDeckNativeCore
 /// Coding AI, like a session's account chip), the model of that AI, the context window in use (a plain line, only when
 /// it is known), effort, and "Before it changes files". Which Coding AI and its setup live on Hoot's profile. "What
 /// Hoot may do" is gone: Hoot can always run sessions, hand problems out, use phones and open any folder.
+///
+/// 15 Nov (Asad: "Hoot and new session can all have all things same"): permission, model and effort are the pills under
+/// Hoot's box, as on the New session page, and the account is the chip in the Hoot page's bar. This small panel stays
+/// only for the island (which has no bar): the account chip and the way to Hoot's profile. The Hoot page has no
+/// sliders button any more.
 struct HootQuickSettings: View {
     var brain: ROUTINESHootBrainModel = .shared
     var live = true
     var close: () -> Void = {}
-    static let size = CGSize(width: 400, height: 400)
+    static let size = CGSize(width: 340, height: 132)
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
@@ -19,10 +24,11 @@ struct HootQuickSettings: View {
                 Text("Hoot").font(.headline)
                 Spacer()
             }.padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
-            Form {
-                Section { HootBrainRows(brain: brain, compact: true, quick: true) }
-            }
-            .formStyle(.grouped).scrollContentBackground(.hidden)
+            HStack {
+                Text("Account").foregroundStyle(.secondary)
+                Spacer()
+                HootAccountChip(brain: brain, live: live)
+            }.padding(.horizontal, 16).frame(maxHeight: .infinity)
             Divider()
             HStack {
                 Button("Open Hoot's profile…") {
@@ -34,7 +40,7 @@ struct HootQuickSettings: View {
             }.padding(.horizontal, 16).frame(height: 36)
         }
         .frame(width: Self.size.width, height: Self.size.height)
-        .onAppear { if live { brain.reload() } }
+        .onAppear { if live { brain.load(); HootSharedLists.shared.load() } }
     }
 }
 

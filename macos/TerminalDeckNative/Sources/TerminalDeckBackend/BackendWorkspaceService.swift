@@ -32,9 +32,16 @@ public actor BackendWorkspaceService {
             return folder(existing)
         }
         if !useWorkspace { refusals[taskID] = nil; try persist(); return nil }
+        // CODE-PARENT (14 Nov): one rule (`BackendProjectCode`) for which repository is the project's code. A project
+        // from the Cloud whose code is not here, or a folder inside a repository that is not its own (the home
+        // folder's), gets no workspace: nothing is made in a parent repository.
+        if git.codeNotHere(actual) { try refuse(taskID, project: actual, reason: "This project's code is not on this Mac yet, so the task runs in its project folder."); return nil }
         let top = try await git.workspaceCommand(cwd: actual, arguments: ["rev-parse", "--show-toplevel"], context: context, writing: false)
         guard top.ok else { try refuse(taskID, project: actual, reason: "Git could not find a usable repository, so this task runs in its project folder. \(top.stderr)"); return nil }
         let repo = try BackendFilesystemAuthority.canonical(URL(fileURLWithPath: top.stdout.trimmingCharacters(in: .whitespacesAndNewlines))).path
+        guard await git.isCode(top: repo, folder: actual, context: context) else {
+            try refuse(taskID, project: actual, reason: "This folder has no Git repository of its own, so the task runs in its project folder."); return nil
+        }
         guard !BackendFilesystemAuthority.within(URL(fileURLWithPath: repo), userData.resolvingSymlinksInPath()) else {
             try refuse(taskID, project: actual, reason: "A repository inside this app's own storage is not given a workspace."); return nil
         }

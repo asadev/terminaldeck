@@ -586,6 +586,17 @@ private func nativeSessionFieldBecomeFirstResponder(_ field: NSTextField, become
     return became
 }
 
+/// Changing the session owner replaces the actual input client: the owner's identity is the
+/// native control's id. That id must stay INSIDE the field. Bare, it became the field's own
+/// identity in its container, and every session field on a screen carries the same one (the
+/// screen's scope, or none), so a grouped Form or List took its fields for one row: the four
+/// "Add a server" boxes showed one text and no server could be added (0.21.4 to 0.22.0, 13 Nov).
+/// A single-child ZStack is one view to its container, so the field keeps its place identity.
+@MainActor @ViewBuilder
+func nativeSessionOwnedInput<Content: View>(_ content: Content, owner: NativeSessionInputScope?) -> some View {
+    ZStack(alignment: .leading) { content.id(owner?.identity) }
+}
+
 /// Changing the session owner replaces the actual input client, not just its binding.
 struct NativeSessionTextField: View {
     @Environment(\.nativeSessionInputScope) private var scope
@@ -600,7 +611,7 @@ struct NativeSessionTextField: View {
     }
 
     var body: some View {
-        content.id(scope?.identity).modifier(NativeSessionDeclaredFocus(binding: content.focus)).overlay(alignment: .leading) {
+        nativeSessionOwnedInput(content, owner: scope).modifier(NativeSessionDeclaredFocus(binding: content.focus)).overlay(alignment: .leading) {
             if content.text.isEmpty, let prompt {
                 prompt.foregroundStyle(.tertiary).padding(.horizontal, 3)
                     .allowsHitTesting(false).accessibilityHidden(true)
@@ -653,7 +664,7 @@ struct NativeSessionSecureField: View {
     }
 
     var body: some View {
-        content.id(scope?.identity).modifier(NativeSessionDeclaredFocus(binding: content.focus)).overlay(alignment: .leading) {
+        nativeSessionOwnedInput(content, owner: scope).modifier(NativeSessionDeclaredFocus(binding: content.focus)).overlay(alignment: .leading) {
             if content.text.isEmpty, let prompt {
                 prompt.foregroundStyle(.tertiary).padding(.horizontal, 3)
                     .allowsHitTesting(false).accessibilityHidden(true)
@@ -698,7 +709,7 @@ struct NativeSessionTextEditor: View {
     private var content: NativeSessionTextEditorContent
 
     init(text: Binding<String>) { content = NativeSessionTextEditorContent(text: text) }
-    var body: some View { content.id(scope?.identity).modifier(NativeSessionDeclaredFocus(binding: content.focus)) }
+    var body: some View { nativeSessionOwnedInput(content, owner: scope).modifier(NativeSessionDeclaredFocus(binding: content.focus)) }
     func sessionFocused(_ focus: FocusState<Bool>.Binding) -> Self {
         var copy = self
         copy.content = content.sessionFocused(focus)

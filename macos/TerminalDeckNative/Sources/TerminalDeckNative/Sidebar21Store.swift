@@ -6,15 +6,43 @@ import TerminalDeckNativeCore
 final class Sidebar21Store {
     static let shared = Sidebar21Store(defaults: .standard)
     static let key = "sidebar.pagePins.v1"
+    /// Owner, 14 Nov: Cloud joins the side panel once (after Tasks), only where this copy can use Cloud.
+    static let cloudAddedKey = "sidebar.pagePins.cloudAdded.v1"
     private(set) var ids: [String]
     private(set) var initialized: Bool
     @ObservationIgnored private let defaults: UserDefaults
+
+    @ObservationIgnored private var arrival: NSObjectProtocol?
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
         let saved = defaults.stringArray(forKey: Self.key)
         ids = saved ?? Sidebar21Pages.defaults
         initialized = saved != nil
+        // Same everywhere (15 Nov): a pin made, removed or moved on another device shows here at once. A pinned page
+        // this device does not have yet stays in the list and shows as soon as it is here.
+        arrival = NotificationCenter.default.addObserver(forName: CloudSyncChoices.choicesArrived, object: nil, queue: .main) { [weak self] note in
+            let keys = note.userInfo?["keys"] as? [String] ?? []
+            MainActor.assumeIsolated { if keys.contains(Sidebar21Store.key) { self?.reload() } }
+        }
+    }
+    /// The pins as saved now (after values from another device were written).
+    func reload() {
+        guard let saved = defaults.stringArray(forKey: Self.key), saved != ids else { return }
+        ids = saved; initialized = true
+    }
+    /// Pins Cloud once (after Tasks), only where this copy can use Cloud; unpinning it later sticks.
+    func addCloudOnce() {
+        guard initialized, !defaults.bool(forKey: Self.cloudAddedKey) else { return }
+        defaults.set(true, forKey: Self.cloudAddedKey)
+        guard !ids.contains(Sidebar21Pages.cloudID) else { return }
+        ids = Self.addingCloud(ids); initialized = true; save()
+    }
+    static func addingCloud(_ ids: [String]) -> [String] {
+        guard !ids.contains(Sidebar21Pages.cloudID) else { return ids }
+        var next = ids
+        next.insert(Sidebar21Pages.cloudID, at: ids.firstIndex(of: "tasks").map { $0 + 1 } ?? ids.count)
+        return next
     }
     func initialize(existingUser: Bool, pages: [Sidebar21Page]) {
         guard !initialized else { return }

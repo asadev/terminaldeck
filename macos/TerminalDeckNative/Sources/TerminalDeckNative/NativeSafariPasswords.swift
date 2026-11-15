@@ -92,7 +92,7 @@ final class NativeSafariPasswords: NSObject, WKScriptMessageHandler {
                         throw NativeRPCError(code: "clipboard-failed", message: "The password could not be copied.")
                     }
                 }
-            }, reveal: { file in await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([file]) } })
+            }, reveal: { file in await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([file]) } }) // person-ok: the Passwords settings' Show file; browser.passwords reveal returns the path
     }
     private func snapshot(_ id: String) -> BackendBrowserPasswordTab? {
         guard let page = pages[id], page.view != nil, let owned = ownership(id), let committedURL = page.committedURL else { return nil }
@@ -164,7 +164,7 @@ final class NativeSafariPasswords: NSObject, WKScriptMessageHandler {
     static func signInHost(readVersionOutput: @escaping @Sendable (String) async throws -> String?) -> BackendBrowserSignIn {
         BackendBrowserSignIn(openExternal: { url in
             try await MainActor.run {
-                guard NSWorkspace.shared.open(url) else { throw NativeRPCError(code: "signin-open-failed", message: "macOS could not open the sign-in page in the system browser.") }
+                guard NSWorkspace.shared.open(url) else { throw NativeRPCError(code: "signin-open-failed", message: "macOS could not open the sign-in page in the system browser.") } // person-ok: the sign-in band's own button; the browser.signin tool returns the address
             }
         }, readVersionOutput: readVersionOutput)
     }

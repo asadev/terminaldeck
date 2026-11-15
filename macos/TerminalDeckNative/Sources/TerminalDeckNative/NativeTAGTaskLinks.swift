@@ -31,6 +31,10 @@ struct NativeTAGTaskLinks: View {
         let children = TAGAgentSettings.children(of: task, in: tasks)
         if compact {
             HStack(spacing: 6) {
+                // Tasks everywhere: a task worked on another of his Macs says where, in plain words.
+                if let elsewhere = task.workingElsewhere { Label("Working on \(elsewhere)", systemImage: "desktopcomputer") }
+                // A read-only copy of a CRM task another Mac receives: one quiet line saying where it lives.
+                if let home = task.copyFrom { Label(home, systemImage: "lock") }
                 if let parent { link("Parent task", parent, icon: "arrow.turn.up.left") }
                 if !children.isEmpty {
                     Menu {
@@ -42,9 +46,17 @@ struct NativeTAGTaskLinks: View {
                     }.menuStyle(.borderlessButton).fixedSize()
                 }
             }.font(.caption).foregroundStyle(.secondary)
-        } else if parent != nil || !children.isEmpty || task.parentTaskId != nil || task.parentExternalTaskId != nil {
+        } else if parent != nil || !children.isEmpty || task.parentTaskId != nil || task.parentExternalTaskId != nil || task.workingElsewhere != nil || task.copyFrom != nil {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Linked work").font(.callout.weight(.semibold))
+                if let elsewhere = task.workingElsewhere {
+                    Label("Working on \(elsewhere)", systemImage: "desktopcomputer").font(.callout).foregroundStyle(.secondary)
+                }
+                if let home = task.copyFrom {
+                    // The task's own page: why it cannot be changed here.
+                    Label(home + ". It is changed and worked on there; here it is read-only.", systemImage: "lock")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 if let parent {
                     link("Parent: \(parent.title)", parent, icon: "arrow.turn.up.left")
                 } else if task.parentTaskId != nil || task.parentExternalTaskId != nil {

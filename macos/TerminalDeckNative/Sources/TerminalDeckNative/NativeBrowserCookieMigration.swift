@@ -217,6 +217,10 @@ final class NativeBrowserCookieMigration {
 
     private struct AttributeFailure: Error {}
 
+    /// Cloud imports use the same validated attributes as the one-time migration.
+    func cloudCookie(_ row: CloudBrowserCookie) throws -> HTTPCookie { try makeCookie(.init(cloud: row)) }
+    func cloudAttributesMatch(_ saved: HTTPCookie, _ wanted: HTTPCookie) -> Bool { sameAttributes(saved, wanted) }
+
     private func makeCookie(_ row: TerminalDeckCookieMigration.Cookie) throws -> HTTPCookie {
         guard let origin = URL(string: "\(row.secure ? "https" : "http")://\(row.host)/") else { throw AttributeFailure() }
         var properties: [HTTPCookiePropertyKey: Any] = [

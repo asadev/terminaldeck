@@ -32,8 +32,13 @@ enum SIDEBARSessionLine {
     @MainActor
     static func title(_ session: SidebarItem, store: SIDEBARProjectStore) -> String {
         let given = NativeSessionNames.shared.names[session.id]
-        return title(given: given, own: store.sessionTitles[session.id], rail: session.title, folder: store.sessionProjects[session.id]?.cwd ?? nil,
-                     retained: NativeSessionRailContinuity.shared.title(session.id))
+        let folder = store.sessionProjects[session.id]?.cwd ?? nil
+        let shown = title(given: given, own: store.sessionTitles[session.id], rail: session.title, folder: folder,
+                          retained: NativeSessionRailContinuity.shared.title(session.id))
+        // LANDING-FIX-3: a session still named after its project's folder reads as the project ("CRM", not
+        // "ClaudeCRM"); a name he gave stays exactly as he gave it.
+        return given?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? shown
+            : NativeProjectNames.sessionTitle(shown, folder: folder, registry: store.projects.isEmpty ? nil : store.projects)
     }
 
     /// The AI or shell name, written in full beneath the session title.
@@ -49,6 +54,65 @@ enum SIDEBARSessionLine {
         let ai = ai?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if agent.isEmpty { return ai.isEmpty ? nil : ai }
         return ai.isEmpty || ai == agent ? agent : agent + " · " + ai
+    }
+
+    /// Small fixes item 5: the second line of a session that runs on another machine, a Cloud row and a live one alike:
+    /// "Claude Code · Mac mini" (the AI, a middle dot, the machine). No tag.
+    static func machineLine(ai: String?, machine: String) -> String {
+        [ai, machine].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// The machine a session tab runs on: its name for a `machine <id> <session>` tab ("Another Mac" while the name is
+    /// not known yet); nil for this Mac's own and a server's shell.
+    static func machineName(_ tabId: String, names: [String: String]) -> String? {
+        guard let id = SessionTarget(tabId: tabId)?.machineId else { return nil }
+        let name = names[id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty || name == id ? "Another Mac" : name
+    }
+}
+
+/// Session rows in the side panel (Asad, 15 Nov: "only keep session names and chat and terminal icon to identify
+/// session type only which will be also very simple liner icon"; DESIGN-SESSION-ROWS SR-1 to SR-8): a session row is
+/// this one outline glyph and the session's name. No agent or project picture, no AI, no machine, no tool marks.
+struct SIDEBARSessionTypeIcon: View {
+    /// A chat session; anything else (an AI in a terminal, a shell) is a terminal.
+    let chat: Bool
+    var onAccent = false
+    static let size: CGFloat = 14
+    /// SR-2: the outline symbols, never the filled ones.
+    static func symbol(chat: Bool) -> String { chat ? "bubble.left" : "terminal" }
+    static func words(chat: Bool) -> String { chat ? "Chat" : "Terminal" }
+
+    var body: some View {
+        Image(systemName: Self.symbol(chat: chat))
+            .symbolVariant(.none)
+            .font(.system(size: Self.size, weight: .regular))
+            .foregroundStyle(onAccent ? AnyShapeStyle(Color.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+            .frame(width: 18, height: 18)
+            .accessibilityLabel(Self.words(chat: chat))
+    }
+}
+
+/// SR-6: the one signal a session row keeps: a small orange dot while the session needs him (an approval or an
+/// answer, or a page waiting for him); nothing in any other state. A waiting page's dot is its own click, which
+/// opens that page; the row under it keeps opening the session.
+struct SIDEBARNeedsYouDot: View {
+    let needsYou: Bool
+    var waitingPage: String? = nil
+    var onAccent = false
+    static func needsYou(status: String?) -> Bool { StatusMeaning(status) == .needsInput }
+
+    var body: some View {
+        if let waitingPage {
+            Button { NativeWaitingPages.open(waitingPage) } label: { dot.frame(width: 16, height: 16).contentShape(.rect) }
+                .buttonStyle(.plain).help(NativeWaitingPages.words).accessibilityLabel(NativeWaitingPages.words)
+        } else if needsYou {
+            dot.help("Needs you").accessibilityLabel("Needs you")
+        }
+    }
+
+    private var dot: some View {
+        Circle().fill(onAccent ? Color.white : Color(nsColor: .systemOrange)).frame(width: 8, height: 8)
     }
 }
 

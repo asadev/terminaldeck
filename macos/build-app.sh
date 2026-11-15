@@ -212,6 +212,36 @@ if [ -n "${TD_VERSION:-}" ]; then
   plutil -replace CFBundleShortVersionString -string "$TD_VERSION" "$APP/Contents/Info.plist"
   plutil -replace CFBundleVersion -string "${TD_BUILD_VERSION:-$TD_VERSION}" "$APP/Contents/Info.plist"
 fi
+# Cloud sign-in: the Store's PUBLIC client key (the one terminaldeck.dev already ships), read by
+# NativeCloudApplication.make as TDCloudStorePublishableKey. Without it no Cloud account can be built at all.
+# Source: TD_CLOUD_STORE_KEY, else the SUPABASE_PUBLISHABLE_KEY= line of the file TD_CLOUD_STORE_KEY_FILE names
+# (the release run points it at the saved credentials file). Required for every Developer ID build (a release) or with TD_CLOUD_STORE_KEY_REQUIRED=1;
+# an ad-hoc dev build without it simply has no Cloud. Only the publishable kind is accepted: a secret or
+# service-role key (sb_secret_…, any JWT) is refused. The value is never printed.
+TD_CLOUD_KEY_REQUIRED=0
+if [ "${TD_CLOUD_STORE_KEY_REQUIRED:-0}" = 1 ] || [ "${TD_SIGN_IDENTITY:--}" != "-" ] ||
+   [ -n "${TD_SIGNING_KEYCHAIN:-}${TD_SIGNING_SHA1:-}" ]; then TD_CLOUD_KEY_REQUIRED=1; fi
+TD_CLOUD_KEY="${TD_CLOUD_STORE_KEY:-}"
+TD_CLOUD_KEY_FILE="${TD_CLOUD_STORE_KEY_FILE:-}"
+if [ -z "$TD_CLOUD_KEY" ] && [ -n "$TD_CLOUD_KEY_FILE" ] && [ -f "$TD_CLOUD_KEY_FILE" ]; then
+  # Read that one line only; the file is never sourced (it holds other, secret values).
+  # Both forms are accepted: `SUPABASE_PUBLISHABLE_KEY=value` (env files) and `SUPABASE_PUBLISHABLE_KEY: value`
+  # (the saved credentials notes), with optional `export`, surrounding spaces and quotes.
+  TD_CLOUD_KEY="$(grep -E '^[[:space:]]*(export[[:space:]]+)?SUPABASE_PUBLISHABLE_KEY[[:space:]]*[=:]' "$TD_CLOUD_KEY_FILE" | tail -n 1 |
+    sed -E 's/^[[:space:]]*(export[[:space:]]+)?SUPABASE_PUBLISHABLE_KEY[[:space:]]*[=:][[:space:]]*//; s/[[:space:]]+$//; s/^["'"'"']//; s/["'"'"']$//')" || TD_CLOUD_KEY=""
+fi
+if [ -n "$TD_CLOUD_KEY" ]; then
+  # {8,255}: macOS grep refuses a repetition bound above 255 ("maximum repetition exceeds 255").
+  if ! printf '%s' "$TD_CLOUD_KEY" | grep -Eq '^sb_publishable_[A-Za-z0-9_-]{8,255}$'; then
+    echo "error: the Cloud Store key is not a publishable (public) key; refusing to put it in the app (the value is not shown)" >&2
+    exit 1
+  fi
+  plutil -replace TDCloudStorePublishableKey -string "$TD_CLOUD_KEY" "$APP/Contents/Info.plist"
+  echo "    + Info.plist TDCloudStorePublishableKey (sb_publishable_…)"
+elif [ "$TD_CLOUD_KEY_REQUIRED" = 1 ]; then
+  echo "error: a release build needs the Store's public key: set TD_CLOUD_STORE_KEY (sb_publishable_…) or TD_CLOUD_STORE_KEY_FILE with a SUPABASE_PUBLISHABLE_KEY= line" >&2
+  exit 1
+fi
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # Packages' resource bundles (SwiftTerm's Metal shaders). Their generated lookup
@@ -339,8 +369,22 @@ if [ "${TD_WITH_WIDGETS:-1}" = "1" ]; then
   "${SIGN[@]}" --entitlements "$WIDGET_DERIVED/widget.entitlements" "$APP/Contents/PlugIns/DeckWidgets.appex"
   ENTITLEMENTS="$WIDGET_DERIVED/app.entitlements"
 fi
+# Passkey spare key: the main app alone gets the profile + webcredentials:terminaldeck.dev (signed releases only).
+source "$HERE/../scripts/mac-app-profile.sh"
+ENTITLEMENTS="$(td_mac_app_profile "$APP" "$IDENTITY" "$ENTITLEMENTS")" || exit 1
 "${SIGN[@]}" --entitlements "$ENTITLEMENTS" "$APP"
 if [ "${TD_APPLY_COMPILE_ONLY:-0}" != "1" ]; then codesign --verify --deep --strict --verbose=2 "$APP"; fi
+# Release gate on the signed app: it carries the Store's public key, of the publishable kind, exactly as given.
+if [ "$TD_CLOUD_KEY_REQUIRED" = 1 ] || [ -n "$TD_CLOUD_KEY" ]; then
+  TD_CLOUD_KEY_BUILT="$(plutil -extract TDCloudStorePublishableKey raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  if [ -z "$TD_CLOUD_KEY_BUILT" ] || [ "$TD_CLOUD_KEY_BUILT" != "$TD_CLOUD_KEY" ] ||
+     ! printf '%s' "$TD_CLOUD_KEY_BUILT" | grep -Eq '^sb_publishable_'; then
+    echo "error: the built app does not carry the Store's public key (TDCloudStorePublishableKey); Cloud sign-in would be impossible" >&2
+    exit 1
+  fi
+  echo "==> Cloud sign-in key present in the app ($(printf '%s' "$TD_CLOUD_KEY_BUILT" | cut -c1-15)…)"
+fi
+unset TD_CLOUD_KEY TD_CLOUD_KEY_BUILT
 
 echo "==> built for: $(otool -l "$APP/Contents/MacOS/$EXE" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos|sdk/{printf "%s %s  ", $1, $2} f&&/sdk/{exit}')"
 echo "==> done: $APP"

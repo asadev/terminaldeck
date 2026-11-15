@@ -42,6 +42,8 @@ enum NativeBRSettingsLink {
     /// Bring the Settings window up, then show the section once its page is ready.
     static func open(_ section: String, passwords: Bool = false) {
         if passwords { NativeBrowserSettingsDestination.shared.showPasswords = true }
+        // Owner, 15 Nov: Browser (and Scraping, folded into it) open in the Browser's own settings window.
+        if NativeBrowserSettingsWindow.handles(section) { NativeBrowserSettingsWindow.show(); return }
         let app = AppModel.shared
         app.requestSettings()
         pending?.cancel()

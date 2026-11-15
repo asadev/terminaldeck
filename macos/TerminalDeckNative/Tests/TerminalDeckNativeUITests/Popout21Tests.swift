@@ -24,7 +24,7 @@ struct Popout21Tests {
         #expect(NativePageWindows.page(kind: "session", id: "untouched") == nil)
         store.requested(ScreenRef(kind: .panel, id: "agents-org"))
         #expect(store.contains(ScreenRef(kind: .panel, id: "agents-watch")))
-        store.requested(ScreenRef(kind: .panel, id: "overview"))
+        store.requested(ScreenRef(kind: .panel, id: NativeLanding.pageID))
         #expect(store.fallback() == "tasks")
         store.closed(agents)
         #expect(!store.contains(agents))
@@ -34,7 +34,7 @@ struct Popout21Tests {
         let (defaults, name) = try scratchDefaults()
         defer { defaults.removePersistentDomain(forName: name) }
         let store = NativePageWindows(defaults: defaults)
-        for id in ["overview", "tasks", "agents-all", "memory", "servers"] { store.requested(ScreenRef(kind: .panel, id: id)) }
+        for id in [NativeLanding.pageID, "tasks", "agents-all", "memory", "servers"] { store.requested(ScreenRef(kind: .panel, id: id)) }
         #expect(store.fallback() == NativePageWindows.emptyMainID)
         #expect(NativePageWindows.page(kind: "panel", id: store.fallback()) == nil)
         #expect(NativeScreens.detail(kind: "panel", id: store.fallback()) != nil)
@@ -127,7 +127,7 @@ struct Popout21Tests {
         let reopened = refs.filter { !$0.isHoot }
         #expect(app.takeScreensToRestore() == reopened)
         #expect(app.takeScreensToRestore().isEmpty)
-        #expect(app.currentScreen?.id == "overview")
+        #expect(app.currentScreen?.id == NativeLanding.pageID)
         refs.forEach { NativePageWindows.shared.closed($0) }
         let work = MyWorkModel.shared
         work.view.filters.search = "release"

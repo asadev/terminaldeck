@@ -11,6 +11,9 @@ public struct BackendDockerMCPServerSSHConfig: Sendable {
         /// Effective order from ssh -G. Existence/credential choice belongs to
         /// the existing server discovery/approval owner, never this resolver.
         public let identityFiles: [String]
+        /// Review fix 2 (15 Nov): true when his SSH settings name no IdentityFile for this name, so the key files are
+        /// only OpenSSH's defaults. Such files are never "his entry" for a server and are never sent to Cloud.
+        public var fromDefaults: Bool = false
     }
     public struct Evaluation: Sendable {
         public let executable: URL
@@ -52,7 +55,7 @@ public struct BackendDockerMCPServerSSHConfig: Sendable {
             guard !identities.isEmpty else { throw Self.unavailable("SSH did not report a default identity file.") }
         }
         try Task.checkCancellation()
-        return Resolution(hostname: hostname, user: user, port: port, identityFiles: identities)
+        return Resolution(hostname: hostname, user: user, port: port, identityFiles: identities, fromDefaults: !parsed.hasIdentityDirective)
     }
 
     private func run(_ request: Evaluation) async throws -> String {

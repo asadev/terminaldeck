@@ -29,11 +29,18 @@ struct ProjectPage: View {
     static func settingsView(_ project: PROJProject) -> AnyView { AnyView(PROJPAGEProjectSettings(project: project)) }
 
     private var folder: String? { project.folders.first }
+    /// Project folders (14 Nov): the folder is named on this Mac but is not there (moved, renamed or deleted). A calm
+    /// state with "Use another folder", never an error wall; nothing in the Cloud changes because of it.
+    /// Looked at once per appearance and when the folder changes, off the main thread (a sleeping network drive must
+    /// never freeze the page), never on every redraw.
+    @State private var folderMissing = false
     /// A registered project (made through the guide or registered before), not a plain folder's stand-in.
     private var registered: Bool { SHELLRoutes.registry.contains { $0.id == project.id && $0.id != PROJProjects.independentID } }
     private var subtitle: String {
         let path = folder.map(PROJPAGEStyle.shortPath) ?? "Independent"
         guard let status = overview.git else { return path }
+        // No repository of its own (or code not here yet): no branch and no "0 changed".
+        guard status.repo else { return "\(path) · \(status.reason == "code-not-here" ? GitWidgetRules.notRepoTitle(status.reason) : "No repository")" }
         return "\(path) · \(status.branchName ?? "No repository") · \(status.unstaged.count) changed"
     }
 
@@ -60,7 +67,18 @@ struct ProjectPage: View {
             .menuStyle(.borderlessButton).help("Project settings").accessibilityLabel("Project settings")
             NativeSessionButton { NativeNewSession.show(project: project) } label: { Label("New session", systemImage: "plus") }.buttonStyle(.borderedProminent)
         } content: {
-            if let folder {
+            if let folder, folderMissing {
+                ContentUnavailableView {
+                    Label("Folder not on this Mac", systemImage: "folder")
+                } description: {
+                    Text(PROJPAGEStyle.shortPath(folder))
+                } actions: {
+                    VStack(spacing: 6) {
+                        NativeSessionButton("Use another folder…") { PROJFolderChoice.useAnother(project) }
+                        if project.folders.count > 1 { Text(PROJFolderChoice.othersLine).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            } else if let folder {
                 switch tab {
                 case .overview:
                     // Asad 11 Oct: "Setup N%" and the missing parts until the project is fully set up;
@@ -84,13 +102,20 @@ struct ProjectPage: View {
                 case .staysFixed: NativeSFXScreen(projectPath: folder, onReviewChanges: { tab = .code; code = "Changes" })
                 }
             } else {
-                ContentUnavailableView("Choose a folder", systemImage: "folder", description: Text("Open a folder to use \(project.name)’s files and code."))
+                ContentUnavailableView {
+                    Label("No folder on this Mac yet", systemImage: "folder")
+                } description: {
+                    Text(project.name)
+                } actions: {
+                    NativeSessionButton("Use another folder…") { PROJFolderChoice.useAnother(project) }
+                }
             }
         }
         .task(id: project.id + tab.rawValue) {
             overview.stop()
-            if tab == .overview, let folder { await overview.load(project: project, folder: folder) }
+            if tab == .overview, let folder, !(await PROJFolderChoice.missing(folder)) { await overview.load(project: project, folder: folder) }
         }
+        .task(id: folder ?? "") { folderMissing = await PROJFolderChoice.missing(folder) }
         .task(id: project.id + (registered ? ":registered" : "")) { if registered { await setup.start(project.id) } }
         .onDisappear { overview.stop(); setup.stop() }
         .deployFocus(project.id) { tab = .overview }
@@ -292,6 +317,7 @@ struct PROJPAGEProjectSettings: View {
     @State private var logoSuggestions: [URL] = []
     @State private var accountLine: String?
     @State private var logoDropTargeted = false
+    @State private var folderMissing = false
     init(project: PROJProject, model: PROJPAGESettingsModel = PROJPAGESettingsModel(), section: String = "General") {
         self.project = project; _model = State(initialValue: model); _section = State(initialValue: section)
     }
@@ -354,10 +380,14 @@ struct PROJPAGEProjectSettings: View {
                                 }
                             }
                             LabeledContent("Folder") {
-                                HStack { Text(shown.folders.first.map(PROJPAGEStyle.shortPath) ?? "Independent").font(.system(size: 12, design: .monospaced)).lineLimit(1)
-                                    NativeSessionButton("Choose…") { chooseFolder() }
+                                HStack { Text(shown.folders.first.map(PROJPAGEStyle.shortPath) ?? "None on this Mac").font(.system(size: 12, design: .monospaced)).lineLimit(1)
+                                    if shown.folders.first != nil, folderMissing {
+                                        Text("Not on this Mac").foregroundStyle(.secondary)
+                                    }
+                                    NativeSessionButton("Use another folder…") { chooseFolder() }
                                 }
                             }
+                            if shown.folders.count > 1 { Text(PROJFolderChoice.othersLine).font(.caption).foregroundStyle(.secondary) }
                         case "Server":
                             // SETTINGS-TRUTH row 42: named in every brief for work in this project (BackendTaskEngine.linkedServersLine).
                             field("Linked servers", "linkedServers")
@@ -388,6 +418,9 @@ struct PROJPAGEProjectSettings: View {
             }.formStyle(.grouped).frame(maxWidth: 680)
         }.task { await model.load(project.id) }
         .onChange(of: live, initial: true) { _, now in model.registryChanged(now) }
+        .task(id: (shown.folders.first ?? "") + ":missing") {
+            folderMissing = model.isRenderFixture ? false : await PROJFolderChoice.missing(shown.folders.first)
+        }
         .task(id: shown.folders.first) {
             guard !model.isRenderFixture, let folder = shown.folders.first else { logoSuggestions = []; return }
             logoSuggestions = await Task.detached(priority: .utility) { ProjectLogos.suggestions(folder: folder) }.value
@@ -419,13 +452,7 @@ struct PROJPAGEProjectSettings: View {
     private func save(_ next: PROJProject) { model.saveProject(next) }
     private func chooseFolder() {
         guard !model.isRenderFixture else { return }
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-        panel.begin { response in
-            MainActor.assumeIsolated {
-                guard response == .OK, let path = panel.url?.path else { return }
-                var next = shown; next.folders = [path]; save(next)
-            }
-        }
+        PROJFolderChoice.useAnother(shown) { model.error = $0 }
     }
     /// The AI New session starts with for this project (NewSessionStart.resolve); agents keep their own.
     private var codingAIPicker: some View {
@@ -442,5 +469,32 @@ struct PROJPAGEProjectSettings: View {
     }
     private func field(_ label: String, _ key: String) -> some View {
         NativeSessionTextField(label, text: Binding(get: { model.values[key] as? String ?? "" }, set: { model.set(key, $0, projectID: project.id) }))
+    }
+}
+
+/// "Use another folder" (project folders, 14 Nov): his own folder choice points the project at a folder that already
+/// exists on this Mac. Nothing is made, moved, copied or deleted; the folder used before stays where it is. Only this
+/// Mac changes (a folder never travels).
+@MainActor enum PROJFolderChoice {
+    /// Under the button on a project with several folders: the chosen folder becomes its only one here.
+    static let othersLine = "The project's other folders will no longer belong to it."
+    /// The project names a folder here that is not there. Asked off the main thread.
+    nonisolated static func missing(_ folder: String?) async -> Bool {
+        guard let folder else { return false }
+        return await Task.detached(priority: .utility) { !NativeLandingPlaces.folderExists(folder) }.value
+    }
+    static func useAnother(_ project: PROJProject, failed: @escaping @MainActor (String) -> Void = { AppModel.shared.buttonActions.problem = $0 }) {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use This Folder"
+        panel.begin { response in
+            MainActor.assumeIsolated {
+                guard response == .OK, let path = panel.url?.path else { return }
+                Task { @MainActor in
+                    do { _ = try await EngineBridge.shared.invoke("project-folders:use", [["projectId": project.id, "folder": path]]) }
+                    catch { failed(error.localizedDescription) }
+                }
+            }
+        }
     }
 }
