@@ -372,6 +372,14 @@ public sealed class CloudAiDeleteWitness : ICloudDeleteWitness
         else { uncertain = true; if (detached) background = true; }
         continue;
       }
+      // Keys travel: an AI's own `claude mcp remove <name>` (user scope, or no scope given) names that one MCP server, as
+      // a stand-in path. Only this exact command counts; Claude Code's own writes to its settings file never do.
+      if (CloudMcpRemoveCommand.IsClaude(verb) && CloudMcpRemoveCommand.Removed(args.Select(a => (a.Text, a.Dynamic, a.Glob)).ToList()) is { } mcpServer)
+      {
+        covers.Add(new(CoverKind.Path, CloudMcpRemoveCommand.StandInPath(mcpServer), false));
+        if (detached) background = true;
+        continue;
+      }
       // Scripts and inline code can remove arbitrary paths. Keep only uncertainty.
       if (Script(verb) || verb == "swift" && args.FirstOrDefault(a => !a.Text.StartsWith('-'))?.Text.EndsWith(".swift", StringComparison.Ordinal) == true
         || !Removers.Contains(verb) && !Movers.Contains(verb) && !Cleaners.Contains(verb) && verb is not ("git" or "find" or "rsync" or "xargs" or "npx" or "pnpx" or "bunx")
