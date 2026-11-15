@@ -112,6 +112,26 @@ public sealed class AccountService
     finally { gate.Release(); }
   }
 
+  /// Keys travel: an API account that arrived from another device, made under exactly this id (add-only; an id in use
+  /// is refused, never replaced). Only the API-key accounts' Cloud door calls it.
+  public async ValueTask<AccountProfile> CloudCreateAsync(string id, string provider, string name, CancellationToken cancellationToken = default)
+  {
+    if (!Guid.TryParseExact(id, "N", out _) || id != id.ToLowerInvariant() || !providers.ContainsKey(provider) || string.IsNullOrWhiteSpace(name) || name.Length > 80 || name.Any(char.IsControl))
+      throw new ArgumentException("Choose a provider and an account name.");
+    await gate.WaitAsync(cancellationToken);
+    try
+    {
+      using var sharedLease = await EnterSharedAsync(cancellationToken);
+      if (state.Accounts.Any(a => a.Id == id || a.HomeId == id)) throw new InvalidOperationException("This account already exists here.");
+      var used = state.Accounts.Where(a => a.Provider == provider).Select(a => a.Color).ToHashSet();
+      var color = AccountColors.All.FirstOrDefault(c => !used.Contains(c)) ?? AccountColors.All[state.Accounts.Length % AccountColors.All.Length];
+      var row = new AccountProfile(id, provider, name.Trim(), null, AccountAuthentication.ApiKey, false, id, null, Color: color);
+      Save(state with { Accounts = [.. state.Accounts, row] });
+      return row;
+    }
+    finally { gate.Release(); }
+  }
+
   public async ValueTask<AccountProfile> RefreshAsync(string id, CancellationToken cancellationToken = default)
   {
     await gate.WaitAsync(cancellationToken);

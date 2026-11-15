@@ -6,7 +6,7 @@ public enum CloudTrustStanding { ThisPc, Trusted, New }
 /// and key so a press can store exactly what was shown (R1); none of it is drawn on a page except the code inside the
 /// compare dialog of "Ask me for each new device".
 public sealed record CloudTrustRow(string DeviceId, string Name, CloudTrustStanding Standing, string? Code, string? KeyId, CloudPublicJwk? SignKey,
-  long? KnownSince, bool Removed, bool ByAccount = false, bool KeyChanged = false, bool SameCode = false, bool SameKey = false)
+  long? KnownSince, bool Removed, bool ByAccount = false, bool KeyChanged = false, bool SameCode = false, bool SameKey = false, string? Platform = null)
 {
   /// What a Trust press (ask mode) or automatic trust may add: a new device with a readable key and no alarm.
   public bool CanBeTrusted => Standing == CloudTrustStanding.New && SignKey is not null && Code is not null && KeyId is not null && !SameCode && !SameKey && !Removed;
@@ -45,7 +45,10 @@ public static class CloudTrustRows
       var keyId = unique && key is not null ? CloudDeviceCode.KeyId(key) : null;
       var code = keyId is not null ? CloudDeviceCode.Code(device.DeviceId, keyId) : null;
       var offered = code is not null && (list is not null || isThis);
-      rows.Add(new(device.DeviceId, name, standing, code, code is null ? null : keyId, offered ? key : null, entry?.TrustedAt, removed, markKeyChanges && entry?.How == "account"));
+            // The kind of device only with the key it belongs to (the Mac: a row of a changed key carries no kind).
+      var kind = entry is null || CloudDeviceCode.KeyId(device.SignPublicJwk) == entry.KeyId ? device.Platform : null;
+      rows.Add(new(device.DeviceId, name, standing, code, code is null ? null : keyId, offered ? key : null, entry?.TrustedAt, removed, markKeyChanges && entry?.How == "account",
+        Platform: kind));
     }
     // Every code and key this PC knows of: the rows, and entries the service no longer lists.
     var codes = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);

@@ -6,7 +6,7 @@ namespace TerminalDeck.Core.Cloud;
 // W3 engine (the Mac's CloudSyncEngine.swift, memory class only): capture → outbox → sealed, signed pack → push; pull →
 // judged by THIS PC's trusted list (slice 2, CloudJudgedFeed) → apply, hold or refuse → recorded. No first upload: a
 // device's baseline is its ordinary records in ordinary signed packs. Saved passwords (the secrets class) keep their
-// own position and are not handled here; their feed positions are passed over by memory.
+// own position and their own judged loop (CloudSecretsEngine.cs); memory passes their feed positions over.
 
 /// Where an incoming record came from. `DeviceId` is the verified signer, never the pack's own origin field.
 public sealed record CloudImportOrigin(string DeviceId, ulong Seq, long? CommittedAt, bool Late);
@@ -53,7 +53,7 @@ public sealed record CloudSyncState(CloudSyncPhase Phase, int Sending, int Recei
   public static CloudSyncState Idle { get; } = new(CloudSyncPhase.Idle, 0, 0, null, 0, 0, 0, 0, 0);
 }
 
-public sealed class CloudSyncEngine
+public sealed partial class CloudSyncEngine
 {
   public const string FirstUploadPassedOver = "first-upload-passed-over";
   /// Sync-store key prefix of an incoming record its owner refused for good (value: the refusal code).
@@ -76,11 +76,11 @@ public sealed class CloudSyncEngine
   public CloudFeedLedger Ledger { get; }
   public CloudJudgedFeed Feed { get; }
   /// False when no record kind is registered here: every round is then a no-op that sends and asks nothing.
-  public bool HasKinds => adapters.Count > 0;
+  public bool HasKinds => adapters.Count > 0 || secretAdapters.Count > 0;
 
   /// `sign`: this device's ES256 signature (raw r||s, 64 bytes) over the given bytes. Windows: CloudDeviceKeys.
   public CloudSyncEngine(string subject, string deviceId, CloudFeedClient client, CloudSyncStore store, ICloudDeviceTrust trust,
-    Func<byte[], byte[]> sign, IEnumerable<ICloudSyncAdapter> owners, Action<string>? log = null, Func<long>? now = null)
+    Func<byte[], byte[]> sign, IEnumerable<ICloudSyncAdapter> owners, Action<string>? log = null, Func<long>? now = null, CloudSecretsClass? secrets = null)
   {
     CloudBytes.TransportId(deviceId);
     if (store.Subject != subject) throw new CloudFailure("unsafe_configuration");
@@ -93,6 +93,7 @@ public sealed class CloudSyncEngine
     }
     Ledger = new CloudFeedLedger(store.LedgerSlot, this.now);
     Feed = new CloudJudgedFeed(subject, "brain", new LinkedFeed(this), new Sink(this), trust, Ledger);
+    UseSecrets(secrets);
   }
 
   // ---- One round: capture, send, receive ----
@@ -154,12 +155,13 @@ public sealed class CloudSyncEngine
 
   public async Task CaptureAsync(CancellationToken ct)
   {
-    foreach (var owner in owners)
+    foreach (var owner in owners.Concat(secretOwners))
     {
       var capture = await owner.CaptureAsync(client.ServiceNow, ct);
       if (capture.Operations.Count > 0)
       {
         if (capture.Operations.Any(o => !owner.Domains.Contains(o.Domain) || o.OriginDevice != deviceId)) throw new CloudFailure("invalid_request");
+        if (secretOwners.Contains(owner)) CheckSecretRecords(capture.Operations);
         store.Enqueue(capture.Operations);
       }
       capture.Commit();
@@ -175,16 +177,25 @@ public sealed class CloudSyncEngine
   {
     if (store.GetLong("sendStoppedUntil") > now()) return;
     var refusedInARow = store.GetLong("sendStopStreak") > 0 ? 2 : 0;
+    // Saved passwords go only while this PC holds the confirmed key of the Cloud's generation; what was sealed under
+    // an older one is retired first (it could not be opened any more). Memory never waits for them.
+    var secretsEpoch = SecretsEpochForSending();
     while (true)
     {
       ct.ThrowIfCancellationRequested();
-      if (store.Unacknowledged() is { } segment)
+      if (store.Unacknowledged(s => s.Descriptor.StorageClass == "brain" || secretsEpoch > 0 && s.Descriptor.KeyEpoch == secretsEpoch) is { } segment)
       {
         CloudCommitReceipt receipt;
         var firstSend = !segment.SentOnce;
         if (firstSend) store.MarkSentOnce(segment.Descriptor.SegmentId);
         var sentAt = now();
         try { receipt = await client.CommitAsync(segment.Descriptor, segment.Ciphertext, ct); }
+        catch (CloudFailure locked) when (segment.Descriptor.StorageClass == "secrets" && CloudRefusal.Classify(locked, packScoped: true) == CloudRefusalKind.SecretsLocked)
+        {
+          // This PC is not approved for saved passwords right now: they wait; memory goes on.
+          secretsEpoch = 0;
+          continue;
+        }
         catch (CloudFailure refused) when (CloudRefusal.Classify(refused, packScoped: true) == CloudRefusalKind.PackOnly)
         {
           store.RetireSegment(segment.Descriptor.SegmentId);
@@ -213,8 +224,8 @@ public sealed class CloudSyncEngine
         knownHead = Math.Max(knownHead, receipt.HeadSeq);
         continue;
       }
-      var pending = store.Pending(now());
-      if (pending.Count == 0) return;
+      var pending = store.Pending(now()).Where(r => !secretDomains.Contains(r.Domain) || secretsEpoch > 0).ToArray();
+      if (pending.Length == 0) return;
       var first = pending[0];
       var batch = new List<CloudOperation>(); var bytes = 2;
       if (first.Bytes.Length + 2 > MaximumPackPlainBytes) { store.Park(first.OpId, "This edit is larger than one upload can carry; it is kept here.", now()); continue; }
@@ -227,12 +238,21 @@ public sealed class CloudSyncEngine
       }
       var plain = CloudPackFormat.Encode(batch);
       if (plain.Length != bytes) throw new CloudFailure("unsupported_format");
-      var (epoch, key) = await KeyAsync(null, ct);
       var id = CloudBytes.NewTransportId();
-      var envelope = CloudBrainContent.Seal(plain, id, "brain", epoch, "gzip", subject, key);
+      var storageClass = "brain"; var purpose = "brain"; int epoch; CloudContentEnvelope envelope;
+      if (secretDomains.Contains(first.Domain))
+      {
+        storageClass = "secrets"; epoch = secretsEpoch; purpose = SecretsPackPurpose(batch);
+        envelope = secrets!.Content.Seal(plain, id, purpose, epoch, "gzip");
+      }
+      else
+      {
+        (epoch, var key) = await KeyAsync(null, ct);
+        envelope = CloudBrainContent.Seal(plain, id, "brain", epoch, "gzip", subject, key);
+      }
       var sealedBytes = envelope.Canonical();
       if (sealedBytes.Length > CloudFeedClient.MaximumSegmentBytes) throw new CloudFailure("invalid_request");
-      var unsigned = new CloudSegmentDescriptor(id, CloudBytes.NewTransportId(), "brain", "brain", [first.Domain], epoch, CloudBytes.Sha256Hex(sealedBytes),
+      var unsigned = new CloudSegmentDescriptor(id, CloudBytes.NewTransportId(), storageClass, purpose, [first.Domain], epoch, CloudBytes.Sha256Hex(sealedBytes),
         sealedBytes.Length, batch.Count, CloudPackFormat.Name, "");
       var signature = sign(unsigned.SigningBytes(subject));
       if (signature.Length != 64) throw new CloudFailure("invalid_request");
@@ -251,7 +271,7 @@ public sealed class CloudSyncEngine
     return (answered, key);
   }
   /// Sign-out: forget the keys held in memory.
-  public void Forget() { foreach (var key in keys.Values) CryptographicOperations.ZeroMemory(key); keys.Clear(); }
+  public void Forget() { foreach (var key in keys.Values) CryptographicOperations.ZeroMemory(key); keys.Clear(); secrets?.Lane?.Seal(); }
 
   // ---- Receive ----
 
@@ -259,7 +279,8 @@ public sealed class CloudSyncEngine
   {
     // The switch: a first upload that sits in slot 1 (the only slot the service gives one) is passed over, never
     // imported, so it cannot stall this PC at position 0.
-    if (Ledger.Cursor == 0)
+    // With no memory kind here (saved passwords alone) the memory feed is not consumed: its position stays.
+    if (adapters.Count > 0 && Ledger.Cursor == 0)
     {
       var peek = await client.ChangesAsync(0, 1, ct);
       knownHead = Math.Max(knownHead, peek.HeadSeq);
@@ -270,14 +291,13 @@ public sealed class CloudSyncEngine
         Ledger.Refuse(1, null, FirstUploadPassedOver, 1);
       }
     }
-    await Feed.PullAsync(ct);
-    await RetryKindWaitingAsync(ct);
-    var cursor = Ledger.Cursor;
-    if (cursor > (ulong)store.GetLong("reportedSeq"))
+    if (adapters.Count > 0)
     {
-      await client.AppliedAsync(cursor, (ulong)store.GetLong("reportedSecretsSeq"), null, ct);
-      store.SetLong("reportedSeq", (long)cursor);
+      await Feed.PullAsync(ct);
+      await RetryKindWaitingAsync(ct);
     }
+    await PullSecretsAsync(ct);
+    await ReportAppliedAsync(ct);
   }
 
   /// The judged loop's feed: pages from the service, their one-minute links kept for the sink. Entries of the other
@@ -309,6 +329,8 @@ public sealed class CloudSyncEngine
   {
     // N2: a trusted pack of a kind this PC does not take WAITS (nothing downloaded), kept by position, applied as a
     // late arrival once every kind it names is taken here. It stops nothing.
+    // Saved-password domains travel only in saved-password packs (sealed with the saved-passwords key).
+    if (descriptor.Domains.Any(secretDomains.Contains)) throw new CloudFailure("unsupported_format");
     if (!kindsChecked && descriptor.Domains.Any(d => !adapters.ContainsKey(d)))
     {
       store.WaitForKind(new(entry.Seq, signer, descriptor.Domains));

@@ -463,7 +463,7 @@ public sealed partial class AgentsPage : Grid
   private async Task DeleteAsync(SavedAgent agent)
   {
     if (!await ConfirmAsync(XamlRoot, "Delete " + agent.Name + " permanently?", "Its role memory and run history stay for the next hire. Current sessions must be ended first.", "Delete permanently")) return;
-    if (await Model.RunAsync(() => Model.Agents.Remove(agent.Id), "Agent deleted. Its role memory was kept.")) Model.SelectedId = null;
+    if (await Model.RunAsync(() => TerminalDeck.Core.Cloud.CloudRecordDeletes.RemoveAgent(Model.Agents, agent.Id), "Agent deleted. Its role memory was kept.")) Model.SelectedId = null;
   }
   private void MemoryTab(StackPanel body, SavedAgent agent)
   {

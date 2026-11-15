@@ -15,13 +15,26 @@ namespace TerminalDeck.Core.Cloud;
 // - Tasks of a CONNECTED task system are that system's data: never sent, never applied from the Cloud.
 // - "Needs your approval" is the safe direction: it travels; an arriving "no approval needed" never turns it off here.
 //   A larger spending limit is never taken from another device.
-// - A task waits until its project is on this PC. Nothing is deleted on this PC by the Cloud.
+// - A task waits until its project is on this PC.
+// - The delete rule (lane D2, the Mac's 87941cff8): the Trash is the Bin. A task moved to Trash carries who removed it
+//   (person or AI, which device, which group) while every device reads table version 2; "Delete for good" travels and
+//   applies over the Trash only (a live task edited elsewhere stays); each device ages its own Trash after 30 days by the
+//   service clock, and that never travels.
+// - Tasks everywhere (table version 2): who a task is assigned to, its links, board, page details and which Mac works it
+//   arrive and are carried back unchanged; this PC never starts work from them.
+// - A connected task system, a CRM task link and a CRM task's read-only copy (version 2 records) are not part of this
+//   PC's app yet: they wait here, kept, and are never refused.
 // - Values this PC cannot hold (a Mac's estimate, result, model, approval, budget, a goal not on this PC) are kept here
 //   exactly as they came and travel back unchanged, so an edit here never overwrites them on the Macs.
-public sealed class CloudTasksOwner : ICloudRecordOwner
+public sealed class CloudTasksOwner : ICloudRecordOwner, ICloudDeleteOwning
 {
   public const string DomainName = "tasks", InventoryRowName = "I12", SourceIdName = "task-list";
-  public static readonly CloudRecordKind Kind = new("task:", CloudMergeTables.Task, "", new HashSet<string>(StringComparer.Ordinal) { "title" });
+  public static readonly CloudRecordKind Kind = new("task:", CloudMergeTablesV2.Task, "", new HashSet<string>(StringComparer.Ordinal) { "title" });
+  public static readonly CloudRecordKind SystemKind = new("task-system:", CloudMergeTablesV2.TaskSystem, "", new HashSet<string>(StringComparer.Ordinal) { "name" });
+  public static readonly CloudRecordKind LinkKind = new("task-link:", CloudMergeTablesV2.TaskLink, "", new HashSet<string>(StringComparer.Ordinal) { "name" });
+  public static readonly CloudRecordKind CrmKind = new("crm-task:", CloudMergeTablesV2.CrmTask, "", new HashSet<string>(StringComparer.Ordinal) { "title" });
+  public const string NotOnThisPcYet = "Connected task systems and CRM task links are not part of this PC's app yet; kept until they are.";
+  public const long TrashDays = 30;
   public static readonly IReadOnlyList<string> Exclusions =
   [
     "Tasks from a connected task system come to each device from that system, not through your Cloud.",
@@ -56,13 +69,17 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
   private Ledger ledger = new();
   /// The goals of the task list read last (set at every entry point, never read again inside a write).
   private ImmutableArray<DeckGoal> goals = [];
+  private readonly CloudRecordsDeleteLedger deletes;
+  private string receivingDevice = ""; private long receivingAt;
+  private long? trashAgedAt;
+  public CloudRecordsDeleteLedger Deletes => deletes;
 
   /// `tasks`: this PC's one task ledger (the same file the Tasks page and the Keeper use, under its own lock).
   /// `changed`: display only, after tasks arrived. `ledgerFile`: this PC's own carried values and times (never sent).
-  public CloudTasksOwner(TaskStore tasks, IProjects projects, CloudKindsKept? kept = null, CloudKindsSettle? settle = null, string? ledgerFile = null,
-    Func<long>? now = null, Action? changed = null)
+  public CloudTasksOwner(TaskStore tasks, IProjects projects, CloudRecordsDeleteLedger deletes, CloudKindsKept? kept = null, CloudKindsSettle? settle = null,
+    string? ledgerFile = null, Func<long>? now = null, Action? changed = null)
   {
-    this.tasks = tasks; this.projects = projects; this.kept = kept; this.ledgerFile = ledgerFile; this.changed = changed ?? (() => { });
+    this.tasks = tasks; this.deletes = deletes; this.projects = projects; this.kept = kept; this.ledgerFile = ledgerFile; this.changed = changed ?? (() => { });
     this.now = now ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     this.settle = settle ?? new CloudKindsSettle(0, () => 0);
     if (ledgerFile is not null && File.Exists(ledgerFile))
@@ -70,8 +87,11 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
   }
   private void SaveLedger() { if (ledgerFile is not null) new CloudFileSlot(ledgerFile).Write(JsonSerializer.SerializeToUtf8Bytes(ledger)); }
 
-  public CloudRecordAdapter Adapter(CloudRecordStore store, string account, string deviceId, CloudRecordOrigins origins) =>
-    new(DomainName, InventoryRowName, SourceIdName, [Kind], store, account, deviceId, this, origins, Exclusions);
+  public CloudRecordAdapter Adapter(CloudRecordStore store, string account, string deviceId, CloudRecordOrigins origins)
+  {
+    deletes.Bind(store, deviceId);
+    return new(DomainName, InventoryRowName, SourceIdName, [Kind, SystemKind, LinkKind, CrmKind], store, account, deviceId, this, origins, Exclusions);
+  }
 
   // ---- the Mac's row shape ↔ this PC's DeckTask ----
 
@@ -138,7 +158,7 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
 
   /// The task as the Mac's row (travelling fields only). A field whose value here is what the carried Cloud value already
   /// means travels as that carried value, so nothing is rewritten by the difference in shape.
-  private CloudJson.Object Row(DeckTask task, CloudJson.Object? carried, bool observe)
+  private CloudJson.Object Row(DeckTask task, CloudJson.Object? carried, bool observe, CloudJson.Object? meta = null, bool everywhere = false)
   {
     var external = task.Id[LocalPrefix.Length..];
     CloudJson Kept(string key, CloudJson fallback) => CloudRecordJson.Has(carried, key) ? CloudRecordJson.Get(carried, key)! : fallback;
@@ -157,6 +177,10 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
       if (value is not null) fields.Add((map.Key, value));
     }
     foreach (var key in CarriedOnly) if (CloudRecordJson.Has(carried, key)) fields.Add((key, CloudRecordJson.Get(carried, key)!));
+    // Version 2, only while every device reads it: the tasks-everywhere values as they came, and who moved it to Trash.
+    if (everywhere) foreach (var key in CloudMergeTablesV2.TaskEverywhereFields) if (CloudRecordJson.Has(carried, key)) fields.Add((key, CloudRecordJson.Get(carried, key)!));
+    if (task.DeletedAt is not null && meta is not null && everywhere && CloudDeleteText.IsUuid(CloudRecordJson.Text(CloudRecordJson.Get(meta, "deletedGroup"))))
+      foreach (var key in CloudMergeTablesV2.RecordDeleteFields) if (CloudRecordJson.Has(meta, key)) fields.Add((key, CloudRecordJson.Get(meta, key)!));
     fields.Add(("createdAt", CloudJson.From(Ms(task.CreatedAt))));
     fields.Add(("updatedAt", CloudJson.From(Ms(task.UpdatedAt))));
     fields.Add(("deletedAt", task.DeletedAt is { } deleted ? CloudJson.From(Ms(deleted)) : CloudJson.Null.Value));
@@ -209,12 +233,27 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
   private static CloudJson.Object Merge(CloudJson.Object? carried, CloudJson.Object row)
   {
     var result = carried ?? CloudRecordJson.Object([]);
-    foreach (var member in CloudRecordAdapter.Travelling(row, CloudMergeTables.Task).Members) result = CloudRecordJson.Set(result, member.Key, member.Value);
+    // A tasks-everywhere value the row does not carry never removes the one carried here (an older copy does not know it).
+    foreach (var member in CloudRecordAdapter.Travelling(CloudRecordsDeleteLedger.Clearing(row), Kind.Table).Members) result = CloudRecordJson.Set(result, member.Key, member.Value);
     foreach (var field in CarriedOnly) if (!CloudRecordJson.Has(row, field)) result = CloudRecordJson.Remove(result, field);
     return result;
   }
   private Dictionary<string, DeckTask> Local() => ReadAll().Tasks.Where(IsLocal).ToDictionary(t => Kind.Entity(t.Id), StringComparer.Ordinal);
-  private CloudJson.Object Shared(DeckTask task, bool observe) => CloudRecordAdapter.Travelling(Row(task, Carried(task.Id), observe), CloudMergeTables.Task);
+  private CloudJson.Object Shared(DeckTask task, bool observe, bool? open = null) =>
+    CloudRecordAdapter.Travelling(Row(task, Carried(task.Id), observe, Meta(task.Id), open ?? deletes.IsOpen()), Kind.Table);
+  private CloudJson.Object? Meta(string id) => deletes.Saved("meta:" + Kind.Entity(id)) as CloudJson.Object;
+  private void SetMeta(string id, CloudJson.Object? meta) { if (meta is null) deletes.ClearSaved("meta:" + Kind.Entity(id)); else deletes.Put("meta:" + Kind.Entity(id), meta); }
+  private static CloudJson.Object DeleteFields(CloudJson.Object value) =>
+    CloudRecordJson.Object(CloudMergeTablesV2.RecordDeleteFields.Where(f => CloudRecordJson.Has(value, f)).Select(f => (f, CloudRecordJson.Get(value, f)!)));
+  /// Who moved a task to Trash on this PC: the person, or the AI the task's own history names.
+  private CloudJson.Object TrashedHere(DeckTask task)
+  {
+    var by = (task.Activity.IsDefault ? [] : task.Activity).LastOrDefault(a => a.Text == "Moved to Trash.")?.By;
+    var ai = by is not null && by.Kind != "human";
+    var at = task.DeletedAt?.ToUnixTimeMilliseconds() ?? now();
+    var actor = deletes.Actor(ai ? CloudDeleteBy.Ai : CloudDeleteBy.Person, ai ? by!.Name : null, at: at);
+    return CloudRecordsDeleteLedger.Metadata(actor.Intent(Kind.Entity(task.Id), CloudDeleteScope.Everywhere), actor.MacName);
+  }
   /// Two shared values that differ only in `updatedAt` (touched by every save) are the same for settling.
   private static bool SameSettled(CloudJson.Object a, CloudJson.Object b) =>
     CloudRecordAdapter.Equal(CloudRecordJson.Remove(a, "updatedAt"), CloudRecordJson.Remove(b, "updatedAt"));
@@ -229,13 +268,22 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
 
   public IReadOnlyDictionary<string, CloudJson.Object> CloudRecords()
   {
+    AgeTrash();
+    var open = deletes.IsOpen();
     var current = new Dictionary<string, CloudJson.Object>(StringComparer.Ordinal);
-    foreach (var (entity, task) in Local()) current[entity] = Shared(task, observe: true);
+    foreach (var (entity, task) in Local())
+    {
+      // A task moved to Trash on this PC gets its attribution once; one taken out of the Trash loses it.
+      if (task.DeletedAt is not null && Meta(task.Id) is null) SetMeta(task.Id, TrashedHere(task));
+      else if (task.DeletedAt is null && Meta(task.Id) is not null) SetMeta(task.Id, null);
+      current[entity] = Shared(task, observe: true, open);
+    }
     return settle.Pass(current, SameSettled);
   }
 
   public CloudRecordPlan CloudPlan(string entity, CloudJson.Object? cloud)
   {
+    if (SystemKind.IdOf(entity) is not null || LinkKind.IdOf(entity) is not null || CrmKind.IdOf(entity) is not null) return new(null, Waiting: NotOnThisPcYet);
     var id = Kind.IdOf(entity) ?? throw new CloudRecordRefusal("This is not a task record.");
     DeckTask? existing;
     try { existing = ReadAll().Tasks.FirstOrDefault(t => t.Id == id); }
@@ -243,14 +291,17 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
     if (existing is not null && !IsLocal(existing)) return new(null, Waiting: ConnectedSystem);
     var carried = Carried(id);
     var mine = existing is null ? null : Shared(existing, observe: false);
-    // Removed for good on another device: nothing is deleted here.
-    if (cloud is null) return new(mine);
+    // Deleted for good on another device: applies over the Trash only. A live task edited here stays.
+    if (cloud is null) return new(existing?.DeletedAt is not null ? null : mine);
+    // A task this PC aged out of its own Trash is not placed back into that Trash.
+    if (existing is null && CloudRecordJson.Text(CloudRecordJson.Get(cloud, "place")) == "trash" && deletes.Saved(CloudRecordsDeleteLedger.AgedKey(entity)) is not null) return new(null);
     var external = id.StartsWith(LocalPrefix, StringComparison.Ordinal) ? id[LocalPrefix.Length..] : "";
     if (external.Length == 0 || external.Length > 200 || external.Any(char.IsControl) || CloudRecordJson.Text(CloudRecordJson.Get(cloud, "keyId")) != "local"
       || CloudRecordJson.Text(CloudRecordJson.Get(cloud, "externalTaskId")) != external || CloudRecordJson.Text(CloudRecordJson.Get(cloud, "id")) != id)
       return new(mine, Waiting: ConnectedSystem);
     if (TextIn(CloudRecordJson.Get(CloudRecordJson.Get(cloud, "projectRef"), "projectId")) is { } projectId && !projects.List().Any(p => p.Id == projectId))
       return new(mine, Waiting: WaitsForProject);
+    if (CloudRecordJson.Text(CloudRecordJson.Get(cloud, "place")) == "trash") CloudRecordsDeleteLedger.Validate(cloud);
 
     CloudJson.Object next = cloud;
     var held = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -291,11 +342,23 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
 
     // Exactly what this PC will hold after the write, so the write is never sent back as a change of its own.
     var task = Taken(next, existing ?? Fresh(id, CloudRecordJson.Text(CloudRecordJson.Get(next, "title")) ?? ""));
-    var planned = CloudRecordAdapter.Travelling(Row(task, Merge(carried, next), observe: false), CloudMergeTables.Task);
+    var planned = CloudRecordAdapter.Travelling(Row(task, Merge(carried, next), observe: false, MetaAfter(next, task), deletes.IsOpen()), Kind.Table);
     foreach (var field in new[] { "title", "instructions", "crmStatus", "priority", "labels", "dueDate", "dueTime", "startDate", "startTime", "taskType", "goalId", "projectRef", "place" })
       if (CloudRecordJson.Has(cloud, field) && !held.ContainsKey(field) && !CloudRecordAdapter.Equal(Value(planned, field), Value(cloud, field)))
         held[field] = NotHeldHere;
     return new(planned, held);
+  }
+  /// The attribution this PC keeps for a task after taking in `value`: the arriving one, or for an old-form Trash copy
+  /// its device and day ("older version", never sent); none outside the Trash.
+  private CloudJson.Object? MetaAfter(CloudJson.Object value, DeckTask task)
+  {
+    if (task.DeletedAt is null) return null;
+    if (CloudDeleteText.IsUuid(CloudRecordJson.Text(CloudRecordJson.Get(value, "deletedGroup")))) return DeleteFields(value);
+    if (CloudRecordJson.Text(CloudRecordJson.Get(value, "place")) != "trash") return Meta(task.Id);
+    var at = CloudRecordJson.Number(CloudRecordJson.Get(value, "deletedAt")) is { } d ? (long)d : receivingAt > 0 ? receivingAt : now();
+    var actor = deletes.Arriving(value, receivingDevice, at);
+    return CloudRecordJson.Object([("deletedBy", CloudJson.From(CloudDeleteText.Raw(actor.By))), ("deletedOn", CloudJson.From(actor.Mac)), ("deletedGroup", CloudJson.From(actor.Group)),
+      ("deletedMacName", CloudJson.From(actor.MacName)), ("deletedTime", CloudJson.From(actor.At))]);
   }
   private static CloudJson Value(CloudJson.Object o, string field) => CloudRecordJson.Has(o, field) && !CloudRecordJson.Nullish(CloudRecordJson.Get(o, field)) ? CloudRecordJson.Get(o, field)! : CloudJson.Null.Value;
 
@@ -304,7 +367,7 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
     var id = Kind.IdOf(entity) ?? throw new CloudFailure("invalid_request");
     if (CloudRecordJson.Text(CloudRecordJson.Get(value, "keyId")) != "local" || !id.StartsWith(LocalPrefix, StringComparison.Ordinal)) throw new CloudFailure("invalid_request");
     var carried = Carried(id);
-    CloudJson.Object? before = null;
+    CloudJson.Object? before = null, meta = null;
     try
     {
       tasks.Change(state =>
@@ -317,6 +380,7 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
           throw new CloudRecordRefusal("This task changed on this PC while a change from another device was being applied; it is applied on the next try.");
         var task = Taken(value, existing ?? Fresh(id, CloudRecordJson.Text(CloudRecordJson.Get(value, "title")) ?? ""));
         if (!GoalHere(task.GoalId, task.ProjectId)) task = task with { GoalId = null };
+        meta = MetaAfter(value, task);
         task = task with { Revision = (existing?.Revision ?? 0) + 1 };
         var list = existing is null ? state.Tasks.Add(task) : state.Tasks.Replace(existing, task);
         return (state with { Tasks = list }, true);
@@ -325,8 +389,161 @@ public sealed class CloudTasksOwner : ICloudRecordOwner
     catch (IOException error) { throw new CloudRecordRefusal("Not applied on this PC: " + error.Message + " It is tried again later."); }
     ledger.Carried[id] = CloudRecordJson.Encode(Merge(carried, value));
     SaveLedger();
+    SetMeta(id, meta);
+    if (CloudRecordJson.Text(CloudRecordJson.Get(value, "place")) != "trash") deletes.ClearSaved(CloudRecordsDeleteLedger.AgedKey(entity));
     if (before is not null && !CloudRecordAdapter.Equal(before, value)) kept?.Keep(entity, before);
     settle.Wrote(entity, value);
+  }
+
+  // ---- the delete rule ----
+
+  public void ConfigureDeleteRule(Func<bool>? gate = null, Func<string, string?>? deviceName = null, Func<long?>? serviceNow = null) => deletes.Configure(gate, deviceName, serviceNow);
+  /// Each device ages its OWN Trash: a local task 30 days in the Trash goes, by the service clock only (nothing ages while
+  /// it is not known), at most once an hour. Remembered here only and never sent.
+  private void AgeTrash()
+  {
+    if (deletes.ServiceNow() is not { } service) return;
+    if (trashAgedAt is { } last && service >= last && service - last < 3_600_000) return;
+    trashAgedAt = service;
+    var cutoff = service - TrashDays * 86_400_000;
+    try
+    {
+      tasks.Change(state =>
+      {
+        var aged = state.Tasks.Where(t => IsLocal(t) && t.CurrentRunId is null && t.DeletedAt is { } at && at.ToUnixTimeMilliseconds() < cutoff).ToArray();
+        foreach (var t in aged) deletes.Put(CloudRecordsDeleteLedger.AgedKey(Kind.Entity(t.Id)), CloudJson.From(true));
+        return aged.Length == 0 ? (state, false) : (state with { Tasks = state.Tasks.RemoveRange(aged) }, true);
+      });
+    }
+    catch (IOException) { }
+  }
+  private DeckTask? Find(string id) => ReadAll().Tasks.FirstOrDefault(t => t.Id == id);
+  private void Purge(string id)
+  {
+    tasks.Change(state =>
+    {
+      var row = state.Tasks.FirstOrDefault(t => t.Id == id);
+      return row is null || !IsLocal(row) || row.DeletedAt is null || row.CurrentRunId is not null ? (state, false) : (state with { Tasks = state.Tasks.Remove(row) }, true);
+    });
+    SetMeta(id, null);
+  }
+  private DeckTask? Restore(string id)
+  {
+    var entity = Kind.Entity(id);
+    deletes.ClearSaved("purged:" + entity);
+    deletes.Put(entity, CloudJson.From(true), restoring: true);
+    DeckTask? back = null;
+    tasks.Change(state =>
+    {
+      var row = state.Tasks.FirstOrDefault(t => t.Id == id);
+      if (row is null || !IsLocal(row) || row.DeletedAt is null) return (state, false);
+      back = row with { DeletedAt = null, UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(now()), Revision = row.Revision + 1 };
+      return (state with { Tasks = state.Tasks.Replace(row, back) }, true);
+    });
+    if (back is null) throw new CloudFailure("invalid_request");
+    SetMeta(id, null);
+    changed();
+    return back;
+  }
+
+  public void CloudReceiving(string entity, string device, long at) { receivingDevice = device; receivingAt = at; }
+  public bool CloudRestoring(string entity) => deletes.Restoring(entity);
+  public void CloudCaptured(string entity, bool removed)
+  {
+    deletes.Captured(entity, removed);
+    if (removed && Kind.IdOf(entity) is { } id) SetMeta(id, null);
+  }
+  /// Only "Delete for good" pressed here travels; a task merely gone (aged, or never this account's) does not.
+  public CloudRecordMissing? CloudMissing(string entity, CloudJson.Object last) =>
+    Kind.IdOf(entity) is not null && deletes.Saved("purged:" + entity) is not null ? new CloudRecordMissing(null) : null;
+  public void CloudRemove(string entity, CloudJson.Object? expecting, CloudJson.Object removal, string device, long at)
+  {
+    if (Kind.IdOf(entity) is not { } id) return;
+    DeckTask? existing;
+    try { existing = Find(id); } catch (IOException) { throw new CloudRecordRefusal("The task list on this PC cannot be read right now."); }
+    if (existing is null || !IsLocal(existing) || existing.DeletedAt is null) return;
+    if (!CloudRecordAdapter.Equal(Shared(existing, observe: false), expecting)) throw new CloudRecordRefusal("This task changed while its purge arrived.");
+    try { Purge(id); } catch (IOException error) { throw new CloudRecordRefusal("Not applied on this PC: " + error.Message + " It is tried again later."); }
+  }
+
+  /// Tasks are always "Everywhere": into the Trash on every device.
+  public Task<CloudBinGroup> DeleteItemsAsync(IReadOnlyList<CloudDeleteItem> items, CloudDeleteScope scope, CloudDeleteActor by)
+  {
+    var removed = new List<CloudDeleteItem>();
+    foreach (var item in items)
+    {
+      var id = Kind.IdOf(item.Id) ?? item.Id;
+      DeckTask? moved = null;
+      var meta = CloudRecordsDeleteLedger.Metadata(by.Intent(Kind.Entity(id), CloudDeleteScope.Everywhere), by.MacName);
+      tasks.Change(state =>
+      {
+        var row = state.Tasks.FirstOrDefault(t => t.Id == id);
+        if (row is null || !IsLocal(row) || row.DeletedAt is not null || row.CurrentRunId is not null) return (state, false);
+        moved = row with { DeletedAt = DateTimeOffset.FromUnixTimeMilliseconds(by.At), UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(now()), Revision = row.Revision + 1 };
+        return (state with { Tasks = state.Tasks.Replace(row, moved) }, true);
+      });
+      if (moved is null) continue;
+      deletes.ClearRestoring(Kind.Entity(id));
+      SetMeta(id, meta);
+      removed.Add(new(Kind.Entity(id), "task", moved.Title));
+    }
+    if (removed.Count > 0) changed();
+    return Task.FromResult(new CloudBinGroup(by.Group, by.By, by.MacName, by.Session, by.Agent, by.At, removed));
+  }
+  public Task<IReadOnlyList<CloudDeleteItem>> BringBackAsync(IReadOnlyList<CloudDeleteItem> items, CloudBringBackDestination to)
+  {
+    foreach (var item in items) Restore(Kind.IdOf(item.Id) ?? item.Id);
+    return Task.FromResult(items);
+  }
+  public Task<IReadOnlyList<CloudNotHereItem>> NotHereAsync() => Task.FromResult<IReadOnlyList<CloudNotHereItem>>([]);
+  /// The Trash as Bin groups: by its attribution; a row whose attribution does not read is left out, the rest shows.
+  public Task<IReadOnlyList<CloudBinGroup>> BinGroupsAsync()
+  {
+    var rows = new List<(CloudDeleteItem, CloudDeleteActor)>();
+    var own = deletes.OwnDevice() ?? "this-pc";
+    foreach (var task in ReadAll().Tasks.Where(t => IsLocal(t) && t.DeletedAt is not null))
+    {
+      var entity = Kind.Entity(task.Id);
+      var at = task.DeletedAt!.Value.ToUnixTimeMilliseconds();
+      var meta = Meta(task.Id);
+      CloudDeleteActor actor;
+      if (CloudRecordJson.Text(CloudRecordJson.Get(meta, "deletedGroup")) is not { } group)
+        actor = new(CloudDeleteBy.Person, own, deletes.OwnName(), null, null, at, "before:" + own + ":" + (at / 86_400_000).ToString(CultureInfo.InvariantCulture));
+      else if (CloudDeleteText.IsUuid(group))
+      {
+        try { actor = deletes.Arriving(meta!, CloudRecordJson.Text(CloudRecordJson.Get(meta, "deletedOn")) ?? "", at); }
+        catch (CloudRecordRefusal) { continue; }
+      }
+      else actor = new(CloudDeleteBy.Person, CloudRecordJson.Text(CloudRecordJson.Get(meta, "deletedOn")) ?? "",
+        CloudRecordJson.Text(CloudRecordJson.Get(meta, "deletedMacName")) ?? CloudDeleteWords.AnotherDevice, null, null, at, group);
+      rows.Add((new CloudDeleteItem(entity, "task", task.Title), actor));
+    }
+    return Task.FromResult(CloudRecordsDeleteLedger.Groups(rows));
+  }
+  public Task<IReadOnlyList<CloudDeleteItem>> PutBackGroupAsync(string group) => Task.FromResult(PutBackAll(group).Restored);
+  public CloudRecordsPutBack PutBackAll(string group)
+  {
+    var found = BinGroupsAsync().GetAwaiter().GetResult().FirstOrDefault(g => g.Id == group);
+    var restored = new List<CloudDeleteItem>(); var failed = new List<CloudDeleteItem>();
+    foreach (var item in found?.Items ?? [])
+    {
+      try { Restore(Kind.IdOf(item.Id) ?? item.Id); restored.Add(item); }
+      catch (Exception error) when (error is not OutOfMemoryException) { failed.Add(item); }
+    }
+    return new(restored, failed);
+  }
+  /// "Delete for good" (the person's page only): only a stopped local task in the Trash; it travels.
+  public Task DeleteForGoodAsync(IReadOnlyList<CloudDeleteItem> items)
+  {
+    foreach (var item in items)
+    {
+      var id = Kind.IdOf(item.Id) ?? item.Id;
+      if (Find(id) is not { DeletedAt: not null, CurrentRunId: null } row || !IsLocal(row)) continue;
+      deletes.Put("purged:" + Kind.Entity(id), CloudJson.From(true));
+      try { Purge(id); } catch { deletes.ClearSaved("purged:" + Kind.Entity(id)); throw; }
+    }
+    changed();
+    return Task.CompletedTask;
   }
 
   public void CloudImported(IReadOnlyList<string> entities) { if (entities.Count > 0) changed(); }

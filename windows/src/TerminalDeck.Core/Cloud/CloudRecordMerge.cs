@@ -131,6 +131,71 @@ public static class CloudMergeTables
     All(CloudMergeClass.ThisDeviceField, "eventsSecret", "eventsUrl", "statuses", "hootIdentity", "identities", "allowedSenders", "folders", "maxHops"));
 }
 
+/// Table VERSION 2 of the record tables (the Mac's CloudBrainAgentsFieldTables.swift extensions `recordsDeleteRule` and
+/// `tasksEverywhere`, td-mac-next2 87941cff8 + bd3e3321b). Version 1 above stays the Security-reviewed list; version 2 only
+/// ADDS fields, each introduced at 2, so a revision that writes one carries minTable 2 and a version-1 reader parks it
+/// instead of half-applying it. Nothing of version 2 is written while the delete rule's gate is closed.
+public static class CloudMergeTablesV2
+{
+  /// Who removed a record, on which device, in which group and with which scope (the delete rule's travel fields on records).
+  public static readonly IReadOnlyList<string> RecordDeleteFields = ["deletedBy", "deletedOn", "deletedGroup", "deletedSession", "deletedAgent", "deletedMacName",
+    "deletedTime", "deletedScope", "deletedWithAgent"];
+  /// The delete fields travel with `partner` (`$exists`, or a task's `place`): among the heads holding the partner's shown
+  /// stamp, the newest own stamp wins.
+  public static CloudMergeTable RecordsDeleteRule(CloudMergeTable @base, string partner = CloudRecordMerge.ExistsField)
+  {
+    var classes = new Dictionary<string, CloudMergeClass>(@base.Classes, StringComparer.Ordinal);
+    var introduced = new Dictionary<string, int>(@base.Introduced, StringComparer.Ordinal);
+    foreach (var field in RecordDeleteFields) { classes[field] = new CloudMergeClass.Follows(new CloudMergeFollow.Partner(partner)); introduced[field] = 2; }
+    return new(@base.Domain, Math.Max(2, @base.Version), classes, introduced);
+  }
+  /// Task fields that were "this device" (or not listed) and travel from version 2 ("tasks everywhere"). An arriving one
+  /// never starts work; this PC carries them back unchanged.
+  public static readonly IReadOnlyList<string> TaskEverywhereFields = ["assignee", "mainAssignee", "handedFrom", "requestedBy", "parentTaskId",
+    "parentExternalTaskId", "reviewOfTaskId", "reviewerTaskId", "reviewVerdict", "reusedFromTask", "askedFromTask", "board",
+    "position", "recurrence", "useWorkspace", "tokenUsage", "tokenUsageByAgent", "detail", "workingOn"];
+  public static CloudMergeTable TasksEverywhere(CloudMergeTable @base)
+  {
+    var classes = new Dictionary<string, CloudMergeClass>(@base.Classes, StringComparer.Ordinal);
+    var introduced = new Dictionary<string, int>(@base.Introduced, StringComparer.Ordinal);
+    foreach (var field in TaskEverywhereFields) { classes[field] = CloudMergeClass.SharedField; introduced[field] = 2; }
+    return new(@base.Domain, Math.Max(2, @base.Version), classes, introduced);
+  }
+  private static Dictionary<string, CloudMergeClass> All(CloudMergeClass kind, params string[] keys) => keys.ToDictionary(k => k, _ => kind, StringComparer.Ordinal);
+  private static Dictionary<string, CloudMergeClass> Join(params Dictionary<string, CloudMergeClass>[] parts)
+  {
+    var classes = new Dictionary<string, CloudMergeClass>(StringComparer.Ordinal);
+    foreach (var part in parts) foreach (var (key, kind) in part) classes.TryAdd(key, kind);
+    return classes;
+  }
+  private static Dictionary<string, int> AtTwo(IEnumerable<string> keys) => keys.ToDictionary(k => k, _ => 2, StringComparer.Ordinal);
+
+  /// `task:<id>`: the task table with the delete fields (partner `place`) and the tasks-everywhere fields.
+  public static readonly CloudMergeTable Task = TasksEverywhere(RecordsDeleteRule(CloudMergeTables.Task, partner: "place"));
+  /// `agent:<id>` and `instruction:<id>.md`.
+  public static readonly CloudMergeTable Agent = RecordsDeleteRule(CloudMergeTables.Agent);
+  public static readonly CloudMergeTable Instruction = RecordsDeleteRule(new CloudMergeTable("agents", 1, new Dictionary<string, CloudMergeClass>(StringComparer.Ordinal)
+    { ["id"] = CloudMergeClass.IdentityField, ["text"] = CloudMergeClass.SharedField }));
+  /// `project:<id>`.
+  public static readonly CloudMergeTable Project = RecordsDeleteRule(CloudMergeTables.Project);
+  /// A connected task system (`task-system:<id>`), never its token. Every field is new at 2.
+  public static readonly CloudMergeTable TaskSystem = new("tasks", 2, Join(All(CloudMergeClass.IdentityField, "id", "createdAt"),
+    All(CloudMergeClass.SharedField, "name", "url", "enabled", "changes", "markDone", "projectId", "profile", "server", "me", "docsUrl"),
+    All(CloudMergeClass.ThisDeviceField, "tokenEnding", "problem", "projectIdInferred", "folder", "startIn")),
+    AtTwo(["id", "createdAt", "name", "url", "enabled", "changes", "markDone", "projectId", "profile", "server", "me", "docsUrl"]));
+  /// A CRM task one Mac receives, shown on the other devices as a read-only copy (`crm-task:<keyId>:<externalTaskId>`).
+  public static readonly CloudMergeTable CrmTask = MakeCrmTask();
+  private static CloudMergeTable MakeCrmTask()
+  {
+    var classes = new Dictionary<string, CloudMergeClass>(TasksEverywhere(CloudMergeTables.Task).Classes, StringComparer.Ordinal)
+    { ["systemName"] = CloudMergeClass.SharedField, ["homeMac"] = CloudMergeClass.SharedField };
+    return new("tasks", 2, classes, AtTwo(classes.Keys));
+  }
+  /// A CRM task link (`task-link:<keyId>`): name and on/off only.
+  public static readonly CloudMergeTable TaskLink = new("tasks", 2, Join(All(CloudMergeClass.IdentityField, "keyId"), All(CloudMergeClass.SharedField, "name", "enabled")),
+    AtTwo(["keyId", "name", "enabled"]));
+}
+
 /// When and by which revision a field (or a collection element) was last changed. Identical on every device.
 public readonly record struct CloudMergeStamp(long Time, string Op)
 {

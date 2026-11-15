@@ -45,6 +45,13 @@ public sealed partial class CloudAccountClient
     if (notice is null && CloudTrustRows.ServiceShowsAnotherKeyForThisPc(list.Devices, record.DeviceId, registration.SignPublicJwk))
       notice = automatic ? AnotherKeyForThisPcPlain : AnotherKeyForThisPc;
     var rows = CloudTrustRows.Build(list.Devices, stored, record.DeviceId, registration.SignPublicJwk, automatic);
+    // Saved passwords: the kind of device is kept with its key (a missing one filled once, never changed), and a
+    // removed browser leaves the list after 30 days. Neither trusts anything new.
+    if (notice is null && stored is not null)
+    {
+      try { trust.NotePlatforms(rows); trust.PruneRemovedBrowsers(); }
+      catch (CloudTrustRefusal refusal) { Log("cloud sign-in: device kinds failed: " + Kind(refusal)); }
+    }
     if (automatic && notice is null && stored is not null)
     {
       try

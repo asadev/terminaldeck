@@ -272,8 +272,12 @@ public static class CodeBackupWords
       parts.Add(Plural(project.PrivateCommitCount, "commit", "commits") + " not pushed to " + target + ": backed up privately");
     }
     var large = project.Held.Count(h => h.Reason == CodeBackupHeldReason.TooLarge);
-    var secret = project.Held.Count - large;
+    // Lane S3 joined (the Mac's decorate): held secret files that travel with his saved passwords are said so.
+    var travelling = TerminalDeck.Core.Cloud.CloudProjectSecretFilesWords.TravellingFiles(TerminalDeck.Core.Cloud.CloudProjectSecretFilesHolder.Shared.Store?.Status(), project.Id);
+    var travels = project.Held.Count(h => h.Reason == CodeBackupHeldReason.LooksSecret && travelling.ContainsKey(h.Name));
+    var secret = project.Held.Count - large - travels;
     if (large > 0) parts.Add(Plural(large, "file", "files") + " too large");
+    if (travels > 0) parts.Add(Plural(travels, "secret file", "secret files") + " travel with your saved passwords");
     if (secret > 0) parts.Add(Plural(secret, "secret file", "secret files") + " not sent to GitHub");
     return string.Join(" · ", parts);
   }

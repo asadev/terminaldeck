@@ -282,8 +282,10 @@ public sealed partial class CloudAccountClient : IDisposable
       await DescribeSelfOnceAsync(record, listed, ct);
       if (firstSignIn && trustPorts is not null) Stage("device trust");
       var (trust, notice, mode) = TrustRowsLocked(record, list);
-      Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId, configuration.DeviceLabel,
-        Rows(list, record.DeviceId, trust), TrustMode: mode, TrustNotice: notice));
+      // This PC is called what the service calls it (its friendly name), as the Mac names itself; else its label.
+      var rows = Rows(list, record.DeviceId, trust);
+      Publish(new(record.CloudOff ? CloudPhase.Paused : CloudPhase.SignedIn, user.Email, user.DisplayName, record.DeviceId,
+        rows.FirstOrDefault(r => r.ThisDevice)?.Name ?? configuration.DeviceLabel, rows, TrustMode: mode, TrustNotice: notice));
     }
     catch (CloudFailure failure) when (version == generation)
     {
@@ -425,7 +427,7 @@ public sealed partial class CloudAccountClient : IDisposable
     .Select(d =>
     {
       var row = trust?.FirstOrDefault(t => t.DeviceId == d.DeviceId);
-      return new CloudDeviceRow(d.DeviceId, OneLine(d.Label), d.DeviceId == thisDevice,
+      return new CloudDeviceRow(d.DeviceId, OneLine(d.DisplayName), d.DeviceId == thisDevice,
         d.RegisteredAt is { } added ? DateTimeOffset.FromUnixTimeMilliseconds(added) : null,
         d.LastSeenAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(d.LastSeenAt) : null,
         row, row is not null && Joined(row));
