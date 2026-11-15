@@ -11,8 +11,8 @@ namespace TerminalDeck.Core.Cloud;
 // What Windows does differently from the Mac, on purpose (the engine shape and the 7C rules):
 // - No setup page: a PC sends its own records only after the engine read the whole feed once (FeedRead); until the join
 //   is finished every first copy goes out as a BASELINE (rule J) and loses to what the Macs already hold.
-// - Removals do not travel from Windows yet: a record gone from its owner here is never captured as removed, and a
-//   removal from a Mac never deletes anything here (the owner keeps its copy).
+// - Removals follow the delete rule (lane D2, the Mac's 87941cff8): a record gone from its owner travels as a removal
+//   only with the owner's intent (CloudMissing); an arriving removal is the owner's to apply (CloudRemove, into its Bin).
 // - A record that cannot be applied now (its owner refuses, the record it needs has not arrived, it was made by a newer
 //   app) waits inside this adapter and is tried again at every capture; the feed moves on (the Mac parks it).
 
@@ -58,7 +58,34 @@ public interface ICloudRecordOwner
   /// A short fingerprint of what this owner's plans depend on besides its own records; when it changes, records that
   /// wait are looked at again.
   string CloudContext() => "";
+
+  // ---- the delete rule (the Mac's CloudBrainRecordOwner removal calls, 87941cff8). Absence is never intent: a record
+  // gone from its owner travels as a removal only when the owner says so. ----
+
+  /// A record this PC held is gone from its owner: its owner's intended removal (with the delete fields to write first,
+  /// or null for the old form), or null = keep (never sent).
+  CloudRecordMissing? CloudMissing(string entity, CloudJson.Object last) => null;
+  /// Records with a removal intent stored by the owner (they may never have been captured).
+  IReadOnlyList<string> CloudPendingRemovals() => [];
+  /// The last value of a removed record this PC never captured (so its first version can go before its removal).
+  CloudJson.Object? CloudRemovalBase(string entity) => null;
+  /// The Cloud removed the record: the owner takes it out (into its Bin). Throws CloudRecordRefusal when it cannot now.
+  void CloudRemove(string entity, CloudJson.Object? expecting, CloudJson.Object removal, string device, long at) =>
+    throw new CloudRecordRefusal("This record's owner cannot apply a removal.");
+  /// "Not on this PC" / "Only on this PC": the record is this PC's only and is not captured.
+  bool CloudLocalOnly(string entity) => false;
+  /// The owner put the record back: its next capture undoes the removal.
+  bool CloudRestoring(string entity) => false;
+  void CloudCaptured(string entity, bool removed) { }
+  /// Who and when the version being shown came from (before CloudPlan / CloudWrite / CloudRemove).
+  void CloudReceiving(string entity, string device, long at) { }
+  /// The Cloud's view of the record is a removal (also for a record this PC keeps only here).
+  void CloudTombstone(string entity, CloudJson.Object removal, string device, long at) { }
 }
+
+/// An owner's intended removal of a record gone from it. `Metadata`: the delete fields captured first (only while every
+/// device reads table version 2); null = the old form (a plain removal).
+public sealed record CloudRecordMissing(CloudJson.Object? Metadata);
 
 /// Which Cloud account each record on this PC came from. One file for the PC, beside the account folders. A record that
 /// belongs to another account only is never sent and never merged for this one.
@@ -220,10 +247,15 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
 
   // ---- capture (this PC → Cloud) ----
 
-  private void Capture(CloudRecordKey key, CloudJson.Object? value, CloudMergeTable table)
+  private bool Capture(CloudRecordKey key, CloudJson.Object? value, CloudMergeTable table, bool restore = false)
   {
-    try { store.Capture(key, value, table, CloudBytes.NewTransportId(), deviceId); incomplete.Remove(key.Entity); }
-    catch (CloudMergeHistoryIncomplete) { incomplete.Add(key.Entity); }
+    try { store.Capture(key, value, table, CloudBytes.NewTransportId(), deviceId, restore: restore); incomplete.Remove(key.Entity); return true; }
+    catch (CloudMergeHistoryIncomplete) { incomplete.Add(key.Entity); return false; }
+  }
+  private static CloudJson.Object Merged(CloudJson.Object value, CloudJson.Object extra)
+  {
+    foreach (var member in extra.Members) value = CloudRecordJson.Set(value, member.Key, member.Value);
+    return value;
   }
   /// A field stops waiting when this PC's value has become the Cloud's value (the person set it here).
   private void Release(CloudRecordKey key, CloudJson.Object value, CloudMergeTable table)
@@ -281,16 +313,49 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
       foreach (var entity in records.Keys.Where(e => kind.IdOf(e) is not null).OrderBy(e => e, StringComparer.Ordinal))
       {
         if (origins.BelongsElsewhere(Domain, entity, account)) { foreign++; continue; }
+        if (owner.CloudLocalOnly(entity)) continue;
         count++;
         var value = Travelling(records[entity], kind.Table);
         if (lastSeen.TryGetValue(entity, out var seen) && Equal(seen, value)) continue;
         var key = CloudRecordKey.Of(Domain, entity);
-        Capture(key, value, kind.Table);
+        if (!Capture(key, value, kind.Table, owner.CloudRestoring(entity))) continue;
+        owner.CloudCaptured(entity, removed: false);
         origins.Add(Domain, entity, account);
         Release(key, value, kind.Table);
         lastSeen[entity] = value; changed = true;
       }
-    // Removals do not travel from Windows yet: a record its owner no longer holds is not captured as removed.
+    // Absence is not intent: every missing record asks its owner before a removal is captured. A record made and removed
+    // before its first capture still sends its first version first, so the removal has a history in the Cloud.
+    var pending = owner.CloudPendingRemovals();
+    foreach (var kind in kinds)
+      foreach (var entity in pending.Where(e => kind.IdOf(e) is not null).OrderBy(e => e, StringComparer.Ordinal))
+      {
+        var key = CloudRecordKey.Of(Domain, entity);
+        if (store.Holds(key) || owner.CloudRemovalBase(entity) is not { } @base || owner.CloudMissing(entity, @base) is null) continue;
+        Capture(key, Travelling(@base, kind.Table), kind.Table);
+      }
+    foreach (var entity in store.StoredEntities(Domain).Concat(pending).Distinct(StringComparer.Ordinal).OrderBy(e => e, StringComparer.Ordinal))
+    {
+      if (records.ContainsKey(entity) || KindOf(entity) is not { } found) continue;
+      var key = CloudRecordKey.Of(Domain, entity);
+      CloudMergeView? view;
+      try { view = store.View(key, found.Kind.Table); }
+      catch (CloudMergeHistoryIncomplete) { incomplete.Add(entity); continue; }
+      var last = store.Image(key).Value ?? (view?.Shown()) ?? owner.CloudRemovalBase(entity);
+      if (last is null || owner.CloudMissing(entity, last) is not { } removal) continue;
+      var restoring = view?.Exists == false;
+      if (removal.Metadata is { } metadata)
+      {
+        if (!Capture(key, Travelling(Merged(last, metadata), found.Kind.Table), found.Kind.Table, restoring)) continue;
+      }
+      else if (view is null || restoring)
+      {
+        if (!Capture(key, Travelling(last, found.Kind.Table), found.Kind.Table, restoring)) continue;
+      }
+      if (!Capture(key, null, found.Kind.Table)) continue;
+      owner.CloudCaptured(entity, removed: true);
+      lastSeen.Remove(entity); changed = true;
+    }
     items = count; elsewhere = foreign;
     var context = owner.CloudContext();
     if (changed || !reconsidered || context != lastContext || state.Retry.Count > 0)
@@ -388,13 +453,20 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
 
   /// Shows the Cloud's merged view of one record here as its owner decides. Returns the value written, or null when
   /// nothing was written (already the same, waiting, or its history is incomplete here).
-  private CloudJson.Object? Show(CloudRecordKey key, string entity, CloudRecordKind kind, CloudJson.Object? mine, string device, long time)
+  private sealed record ShownValue(CloudJson.Object? Value);
+  private ShownValue? Show(CloudRecordKey key, string entity, CloudRecordKind kind, CloudJson.Object? mine, string device, long time)
   {
     CloudMergeView? view;
     try { view = store.View(key, kind.Table); }
     catch (CloudMergeHistoryIncomplete) { incomplete.Add(entity); return null; }
     incomplete.Remove(entity);
     if (view is null) return null;
+    // A reconsidered old-form removal still names its author, never the device delivering the retry.
+    var sourceStamp = view.Stamps.TryGetValue(Domain == "tasks" && view.Exists ? "place" : CloudRecordMerge.ExistsField, out var s) ? s : (CloudMergeStamp?)null;
+    var source = sourceStamp is { } stamp && store.GraphOf(key).Nodes.TryGetValue(stamp.Op, out var node) ? node : null;
+    var sourceDevice = source?.Device ?? device; var sourceTime = sourceStamp?.Time ?? time;
+    owner.CloudReceiving(entity, sourceDevice, sourceTime);
+    if (!view.Exists) owner.CloudTombstone(entity, view.Shown(), sourceDevice, sourceTime);
     var plan = owner.CloudPlan(entity, view.Exists ? view.Shown() : null);
     var reasons = plan.Waiting is null ? plan.Held ?? new Dictionary<string, string>() : new Dictionary<string, string>();
     if (plan.Waiting is null) state.Waiting.Remove(entity); else state.Waiting[entity] = plan.Waiting;
@@ -402,14 +474,16 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
     store.SetHeld(key, reasons.Keys);
     var line = plan.Waiting is null ? plan.Note : null;
     if (line is null) state.Notes.Remove(entity); else state.Notes[entity] = line;
-    if (plan.Waiting is not null || plan.Store is not { } next || Equal(next, mine))
+    var next = plan.Store;
+    if (plan.Waiting is not null || Equal(next, mine))
     {
       if (plan.Waiting is null) state.Retry.Remove(entity);
       return null;
     }
-    owner.CloudWrite(entity, next, mine);
+    if (next is not null) owner.CloudWrite(entity, next, mine);
+    else owner.CloudRemove(entity, mine, view.Shown(), sourceDevice, sourceTime);
     store.Shown(key, view.Heads, next);
-    lastSeen[entity] = Travelling(next, kind.Table);
+    if (next is null) lastSeen.Remove(entity); else lastSeen[entity] = Travelling(next, kind.Table);
     state.Retry.Remove(entity);
     if (device.Length > 0)
     {
@@ -422,7 +496,7 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
       }
       if (mine is null) state.Changes.Add(new(entity, CloudRecordMerge.ExistsField, device, time, null, null));
     }
-    return next;
+    return new(next);
   }
 
   public Task ApplyAsync(CloudOperation operation, CloudImportOrigin origin, CancellationToken ct)
@@ -460,9 +534,20 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
     }
     var mine = packRecords.TryGetValue(entity, out var raw) ? Travelling(raw, table) : null;
     var stored = store.Image(parsed.Key).Stored;
-    // An edit made here before this delivery stays concurrent with it, so it is captured first. A record gone from this
-    // PC's owner is not captured as removed (removals do not travel from Windows yet).
-    if (stored && mine is not null) Capture(parsed.Key, mine, table);
+    // An edit made here before this delivery stays concurrent with it, so it is captured first; so is an intended removal
+    // made here (a record merely gone from this PC's owner is not).
+    if (stored)
+    {
+      if (mine is not null && !owner.CloudLocalOnly(entity))
+      {
+        if (Capture(parsed.Key, mine, table, owner.CloudRestoring(entity))) owner.CloudCaptured(entity, removed: false);
+      }
+      else if (store.Image(parsed.Key).Value is { } last && owner.CloudMissing(entity, last) is { } removal)
+      {
+        var enriched = removal.Metadata is not { } metadata || Capture(parsed.Key, Merged(last, metadata), table);
+        if (enriched && Capture(parsed.Key, null, table)) owner.CloudCaptured(entity, removed: true);
+      }
+    }
     var revision = new CloudMergeRevision(new CloudMergeNode(op.OpId, op.Parents, device, op.CreatedAt, parsed.Version.Baseline), parsed.Version);
     try { store.Receive(parsed.Key, [revision], table); }
     catch (CloudRecordTooFarAhead) { ParkOp(op, device, "This record is dated more than a day ahead of the Cloud's clock."); return; }
@@ -472,7 +557,11 @@ public sealed class CloudRecordAdapter : ICloudSyncAdapter
     origins.Add(Domain, entity, account);
     try
     {
-      if (Show(parsed.Key, entity, parsed.Kind, mine, device, op.CreatedAt) is { } next) { packRecords[entity] = next; written.Add(entity); }
+      if (Show(parsed.Key, entity, parsed.Kind, mine, device, op.CreatedAt) is { } shown)
+      {
+        if (shown.Value is { } next) packRecords[entity] = next; else packRecords.Remove(entity);
+        written.Add(entity);
+      }
     }
     catch (CloudRecordRefusal refusal) { Refused(entity, refusal.Reason); }
     if (waitingFor.Remove(entity)) retryWanted = true;

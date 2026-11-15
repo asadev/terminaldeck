@@ -29,8 +29,10 @@ public sealed class CloudKindsForAccount
     var origins = new CloudRecordOrigins(accounts, account, "kinds-origins.json");
     Kept = new CloudKindsKept(Path.Combine(own, "replaced-values.json"), now);
     double Local() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-    Tasks = new CloudTasksOwner(tasks, projects, Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "task-ledger.json"), now, tasksChanged);
+    Tasks = new CloudTasksOwner(tasks, projects, new CloudRecordsDeleteLedger(accountFolder, own, "tasks", clock), Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "task-ledger.json"), now, tasksChanged);
     Settings = new CloudSettingsOwner(settings, fullAccess, Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "settings-chosen.json"), settingsChanged);
     Adapters = [Tasks.Adapter(Store, account, deviceId, origins), Settings.Adapter(Store, account, deviceId, origins)];
   }
+  /// The delete rule for tasks (see CloudRecordsForAccount.ConfigureDeleteRule).
+  public void ConfigureDeleteRule(Func<bool> gate, Func<string, string?> deviceName, Func<long?>? serviceNow = null) => Tasks.ConfigureDeleteRule(gate, deviceName, serviceNow);
 }

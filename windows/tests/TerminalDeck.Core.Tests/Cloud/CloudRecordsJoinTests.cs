@@ -228,27 +228,28 @@ public sealed class CloudRecordsJoinTests : IDisposable
     Assert.EndsWith("deck", Assert.Single(a.Projects.Get("deck").Folders), StringComparison.Ordinal);
   }
 
+  /// Lane D2 (the delete rule): a delete in the app goes into the Bin on every device; a Mac's later edit made on top of
+  /// that removal (it had seen it) does not bring it back; a record merely gone from this PC without intent never travels.
   [Fact]
-  public async Task An_agent_removed_on_the_PC_stays_removed_and_is_not_removed_on_the_Macs()
+  public async Task An_agent_deleted_on_the_PC_goes_into_the_Bin_on_the_Macs_too()
   {
-    var (a, _) = await TwoMacs();
+    var (a, b) = await TwoMacs();
     var pc = Make(Pc);
     await pc.Engine.SyncAsync(default);
     await pc.Engine.SyncAsync(default);
-    var writer = pc.Agents.Get("writer");
-    pc.Agents.Save(writer with { Status = SavedAgentStatus.Archived }, expected: writer);
-    pc.Agents.Remove("writer");
+    pc.Records.Agents.RemoveByApp("writer");
     await pc.Engine.SyncAsync(default);
-    service.Now += 5_000;
-    var onMac = a.Agents.Get("writer");
-    a.Agents.Save(onMac with { Description = "Edits the release notes" }, expected: onMac);
-    await a.Engine.SyncAsync(default);
-    await pc.Engine.SyncAsync(default);
+    await a.Engine.SyncAsync(default); await b.Engine.SyncAsync(default);
     Assert.DoesNotContain(pc.Agents.List(), x => x.Id == "writer");
-    Assert.Contains(pc.Records.Adapters[1].Listing().WaitingHere, w => w.Record == "agent:writer" && w.Reason == CloudAgentsOwner.RemovedHere);
-    await a.Engine.SyncAsync(default);
-    Assert.Equal(SavedAgentStatus.Active, a.Agents.Get("writer").Status);
-    Assert.Equal("Edits the release notes", a.Agents.Get("writer").Description);
+    Assert.DoesNotContain(a.Agents.List(), x => x.Id == "writer");
+    Assert.DoesNotContain(b.Agents.List(), x => x.Id == "writer");
+    Assert.Single(await a.Records.Agents.BinGroupsAsync());
+    Assert.Single(await pc.Records.Agents.BinGroupsAsync());
+    // Put back on a Mac: the agent comes back everywhere, with its instructions.
+    var group = (await a.Records.Agents.BinGroupsAsync())[0].Id;
+    Assert.Single(await a.Records.Agents.PutBackGroupAsync(group));
+    await a.Engine.SyncAsync(default); await pc.Engine.SyncAsync(default);
+    Assert.Equal("Write clearly and briefly.", pc.Agents.ReadInstructions("writer"));
   }
 
   [Fact]
