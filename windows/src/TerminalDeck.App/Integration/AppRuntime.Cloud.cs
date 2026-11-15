@@ -49,6 +49,10 @@ public sealed partial class AppRuntime
     // Lane S3: project secret files' tool.
     CloudProjectSecretFilesTools.Register(CloudProjectSecretFilesHolder.Shared, Door);
     RegisterCloudFilesTools();
+    // Signed out: the Your Cloud page has no reader (it says "Sign in to see what is in your Cloud.").
+    Cloud.Changed += _ => { if (Cloud.SyncIdentity is null) YourCloud = null; };
+    // Lane U3: an agent's Delete goes to the Bin while signed in (the record owners exist), else the plain local delete.
+    TerminalDeck.App.ViewModels.Agents.AgentsViewModel.BinDelete = () => CloudRecordDeletes.Current?.Invoke() is null ? null : (agents, id) => CloudRecordDeletes.RemoveAgent(agents, id);
     InitializeCloudChats();
     CloudSync.Start();
   }
@@ -126,11 +130,24 @@ public sealed partial class AppRuntime
       CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);
     kinds.ConfigureDeleteRule(announce.DeleteRuleIsOpen, CloudDeviceName, () => CloudSync?.ServiceNow);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
-    var owners = new List<ICloudSyncAdapter>([.. records.Adapters, memory, .. kinds.Adapters,
-      CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce)]);
+    var bootFiles = (CloudBootFilesAdapter)CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce);
+    var owners = new List<ICloudSyncAdapter>([.. records.Adapters, memory, .. kinds.Adapters, bootFiles]);
     // Lane F: the Cloud folder and artifacts, on the account's ONE Bin.
     owners.AddRange(CloudFilesOwners(subject, deviceId, announce, CloudBin.ForAccount(folder), () => CloudSync?.ServiceNow));
     StartCloudHousekeeping(announce, folder);
+    // Lane U1: the Your Cloud page's reader, every kind registered. It only reads and does what the person presses.
+    YourCloud = CloudContentsReader.Make(announce.DeleteRuleIsOpen,
+      () => new CloudDeleteActor(CloudDeleteBy.Person, deviceId, Cloud.Snapshot.ThisDeviceName ?? Environment.MachineName, null, null,
+        CloudSync?.ServiceNow ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Guid.NewGuid().ToString("D")), WriteCloudLog,
+      memory: memory.Store, memoryAdapter: memory,
+      bootPlaces: () => CloudBootProjectFolders().Select(p => new CloudBootFilesPlace(CloudBootFilesFormat.SourceId(CloudBootFilesPlaceKind.Project, p.Key),
+        CloudBootFilesPlaceKind.Project, p.Value, Projects.List().FirstOrDefault(x => x.Id == p.Key)?.Name ?? p.Key)).ToArray(),
+      bootFiles: bootFiles, cloudFolder: CloudFolder, artifacts: CloudArtifactsStore,
+      sessions: async ct => CloudChatsDoor() is { } door ? (await CloudSessionsRead.ListAsync(door, earlier: false))?.Rows ?? [] : [],
+      sessionsRemovals: CloudChatsDeleting,
+      settings: () => CloudSettingsOwner.ForWindows(General, TerminalAppearance), tasks: kinds.Tasks, agents: records.Agents, projects: records.Projects,
+      projectNames: () => Projects.List().ToDictionary(p => p.Id, p => p.Name),
+      passwordStores: () => cloudSecretStores.OfType<CloudSecretsDeleteOwner>().ToArray(), secretFiles: () => CloudProjectSecretFilesHolder.Shared.Store);
     return owners;
   }
 

@@ -15,6 +15,8 @@ public sealed partial class AppRuntime
   /// The delete rule's gate (every computer announced it). Closed until lane D's announcer is wired: no removal of a
   /// saved password is made or sent, exactly as on a Mac while the gate is closed.
   public Func<bool> CloudSecretsDeleteRuleOpen { get; set; } = () => false;
+  /// The saved-password stores of the signed-in account (the Your Cloud page lists their items by name).
+  private IReadOnlyList<ICloudSecretsStore> cloudSecretStores = [];
 
   private CloudSecretsPlatform CloudSecretsPlatform() => new(
     (subject, deviceId) => new WindowsCloudSecretsSlots(Root, subject, deviceId),
@@ -58,6 +60,7 @@ public sealed partial class AppRuntime
       deleteGate: () => CloudSecretsDeleteRuleOpen(), deleteStamp: serviceNow, deleteDevice: () => deviceId, deleteMacName: DeviceName,
       witness: CloudDeleteWitnessSlot.Shared);
     CloudProjectSecretFilesHolder.Shared.Store = files; CloudProjectSecretFilesHolder.Shared.StateRoot = fileState;
-    return [serversOwner, api, mcp, ssh, files];
+    cloudSecretStores = [serversOwner, api, mcp, ssh, files];
+    return cloudSecretStores;
   }
 }

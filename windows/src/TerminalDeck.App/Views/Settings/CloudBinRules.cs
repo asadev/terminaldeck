@@ -10,7 +10,7 @@ public sealed class CloudBinRules
 {
   public const string PutBack = "Put back", DeleteForGood = "Delete for good", Info = "About the Bin";
   /// Until Core carries `CloudContentsWords.BinEmpty` (requested in the result file), the one calm line of an empty Bin.
-  public const string Empty = "The Bin is empty.";
+  public const string Empty = TerminalDeck.Core.Cloud.CloudContentsWords.BinEmpty;
   public const string NoMatch = "Nothing in the Bin matches.";
   public const string Failed = "Could not finish that. Nothing was changed.";
 
