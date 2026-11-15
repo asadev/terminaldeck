@@ -138,6 +138,10 @@ public static class CloudFolderRules
     return null;
   }
 
+  /// Explorer's own files (`Thumbs.db`, `desktop.ini`, any letter case): this PC never sends them.
+  public static bool IsExplorerOwn(string name) =>
+    string.Equals(name, "Thumbs.db", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "desktop.ini", StringComparison.OrdinalIgnoreCase);
+
   /// Windows only (plan section 4, the smallest equivalent): a name another device can make that Windows cannot hold
   /// (`<>:"|?*`, a name ending in a dot or space, a device name such as CON or NUL). Such an arrival is kept unread and
   /// never written here, as a refused path is on the Mac; nothing of this PC is touched.
@@ -200,6 +204,8 @@ public sealed class CloudFolderWalk
           continue;
         }
         if (child is not FileInfo file) { walk.Skip(CloudFolderSkip.NotAFile, relative); continue; }
+        // Windows (Decker, 15 Nov): Explorer's own files are never sent from this PC. One that arrived is kept as any file.
+        if (CloudFolderRules.IsExplorerOwn(child.Name)) { walk.Skip(CloudFolderSkip.Hidden, relative); continue; }
         if (CloudFolderRules.Refusal(relative) is { } why)
         {
           walk.Skip(why, relative);

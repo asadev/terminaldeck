@@ -286,6 +286,24 @@ public sealed class CloudFolderSafetyTests
     Assert.Contains(CloudFolderFormat.SecretLine(["api_token.txt", "id_rsa", "server.pem"]), a.PageLines());
   }
 
+  /// Windows (Decker, 15 Nov): Explorer's own files never leave this PC; one that arrives from another device is kept.
+  [Fact]
+  public async Task Explorers_own_files_are_never_sent_but_one_that_arrives_is_kept()
+  {
+    using var f = new CloudFolderFixture();
+    var mac = f.Mac("mac", f.DeviceA); var pc = f.Mac("pc", f.DeviceB);
+    // A Mac's file of that name, as the Mac's own engine records it (its rule does not leave it out).
+    CloudFolderFixture.WriteAt(mac.CopyRoot, "Pictures/Thumbs.db", "made on a Mac", f.Clock.Ms);
+    mac.Core().ReconcileAll();
+    await f.Send(mac, f.DeviceA, pc, new CloudFolderCursor());
+    Assert.Equal("made on a Mac", f.Text("pc", "Pictures/Thumbs.db"));
+    f.Write("pc", "thumbs.DB", "explorer"); f.Write("pc", "Plans/Desktop.ini", "explorer"); f.Write("pc", "ok.md", "ok");
+    await f.Settle(pc);
+    Assert.Equal(["file/folder/ok.md"], CloudFolderFixture.Journal(pc).Select(op => op.Source.RecordId).Distinct());
+    Assert.Equal("made on a Mac", f.Text("pc", "Pictures/Thumbs.db"));
+    Assert.Empty(await pc.NotHereAsync());
+  }
+
   [Fact]
   public void An_arriving_secret_is_refused_before_a_byte_is_kept()
   {
