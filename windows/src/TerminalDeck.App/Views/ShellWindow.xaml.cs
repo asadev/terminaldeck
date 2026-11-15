@@ -46,6 +46,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
   public ShellWindow(AppDataRoot root)
   {
     InitializeComponent();
+    WhatsApp.WhatsAppMenus.InstallPageHooks();
     AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "icons", "app.ico"));
     dataRoot = root;
     Runtime = new(root, null, DispatchTool);
@@ -89,6 +90,8 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     Runtime.SignInFlowRequested = AccountSignInSheet.ControlAsync;
     settings.SettingsBrowser = browser.Core; settings.PrivacyBrowser = browser; browser.PrivacyWindowHandle = WindowHandle;
     browser.OpenSettingsRequested = () => OpenSettingsAsync("browser");
+    // The WhatsApp submenu's "Add a WhatsApp agent…" (no agent yet) opens Settings > AI apps.
+    WhatsApp.WhatsAppMenus.OpenSettings = () => OpenSettingsAsync(WhatsApp.WhatsAppWords.SettingsSection);
     InitializeGeneralSettings();
     InitializeSettingsPanel();
     InitializeWindows(root);

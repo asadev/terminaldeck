@@ -8,7 +8,7 @@ namespace TerminalDeck.App.Views;
 // Settings → AI apps (Mac, 15 Nov). Group 1: "Let AI apps use this PC" and, only while it is on, the
 // connection address through Terminal Deck's server with a Copy button (the address itself, and any
 // local address, never on the surface). Group 2 "Keys": one row per key (its name, what it may do,
-// a "…" menu), "+ New key" last.
+// a "…" menu), "+ New key" last. Last group "WhatsApp": the WhatsApp agents (Views/WhatsApp).
 public sealed partial class SettingsPane
 {
   private CallerConnectionFiles CallerFiles => new(runtime.Root);
@@ -57,6 +57,22 @@ public sealed partial class SettingsPane
     // MCP servers: a second page of this window, not a switch at the top (15 Nov).
     if (NavigateSettings is { } navigate)
       stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageLinkRow("MCP servers", () => navigate("mcp-servers"))]));
+    // WhatsApp agents (15 Nov): the page's LAST group.
+    stack.Children.Add(new WhatsApp.WhatsAppSettingsGroup(TerminalDeck.Core.WhatsApp.WhatsAppAgentsStore.Shared, WhatsAppChoices));
+  }
+  // Where a WhatsApp agent can be received: his saved agents (not archived) under their project, the open sessions by name.
+  private WhatsApp.WhatsAppReceiverChoices WhatsAppChoices()
+  {
+    try
+    {
+      var projects = runtime.Projects.List().GroupBy(p => p.Id).ToDictionary(g => g.Key, g => g.First().Name);
+      var agents = runtime.Agents.List().Where(a => a.Status != TerminalDeck.Core.Agents.SavedAgentStatus.Archived)
+        .Select(a => (a.Id, a.Name, a.ProjectId == TerminalDeck.Core.Projects.ProjectIdentity.IndependentId ? "" : projects.GetValueOrDefault(a.ProjectId, "")));
+      var sessions = runtime.Sessions.Where(s => s.State != TerminalDeck.Core.Sessions.SessionState.Exited).Select(s => (s.Definition.Id, s.Definition.Title)).ToList();
+      if (runtime.Chats is not null) sessions.AddRange(runtime.Chats.List().Where(c => !c.Ended).Select(c => (c.Definition.Id, c.Definition.Title)));
+      return WhatsApp.WhatsAppReceiverChoices.From(agents, sessions);
+    }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException) { return WhatsApp.WhatsAppReceiverChoices.Empty; }
   }
   // What a key may do, in words (its calling AI's permission setting).
   private static string KeyMayDo(AiPermissionMode mode) => mode switch

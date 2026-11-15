@@ -59,6 +59,8 @@ public sealed partial class ShellWindow
     var create = new MenuFlyoutItem { Text = "New attached window" };
     create.Click += async (_, _) => { try { await CreateWindowAsync(row.Id, "browser"); } catch (Exception ex) when (ex is not OutOfMemoryException) { Model.Notice = "The attached browser could not open."; } };
     binding.Items.Add(create); menu.Items.Add(binding);
+    // WhatsApp agents (15 Nov): "WhatsApp ›" attaches one of his WhatsApp agents to this session; the row itself gets nothing.
+    menu.Items.Add(WhatsApp.WhatsAppMenus.Submenu(TerminalDeck.Core.WhatsApp.WhatsAppReceiver.Session(row.Id, row.Title)));
     if (row.IsLive && row.State is not ("ended" or "exited" or "held")) Add("Stop", () => StopSessionAsync(row));
     menu.Items.Add(new MenuFlyoutSeparator()); Add("Delete", () => DeleteSessionAsync(row));
     return menu;

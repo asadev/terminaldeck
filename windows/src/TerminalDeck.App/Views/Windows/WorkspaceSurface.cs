@@ -607,6 +607,9 @@ internal sealed partial class WorkspaceSurface : Grid
             }
             location.Children.Add(chip);
           }
+          // WhatsApp agents (15 Nov): the chip and its switch, only while a WhatsApp agent is attached to this session.
+          if (tab.Kind is "chat" or "terminal")
+            location.Children.Add(new TerminalDeck.App.Views.WhatsApp.WhatsAppChip(TerminalDeck.Core.WhatsApp.WhatsAppReceiver.Session(tab.Subject, tab.Title), separated: location.Children.Count > 0));
           if (UsageMeter?.Invoke(tab) is { } meter) controls.Children.Add(meter);
           identity.SizeChanged += (_, _) =>
           {

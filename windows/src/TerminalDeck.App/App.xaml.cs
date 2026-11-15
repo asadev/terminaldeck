@@ -95,6 +95,15 @@ public partial class App : Application
         window.AppWindow.Show(false);
         return;
       }
+      // The WhatsApp screens' picture proof (developer copies only): the engine's in-memory fixture, PNGs into a folder
+      // inside the scratch data folder, then it closes. No runtime, keeper, key or network; never WhatsApp.
+      if (DevelopmentRun && Environment.GetEnvironmentVariable("TD_WHATSAPP_SCREENS_PROOF") is { } whatsAppPictures &&
+          Path.GetFullPath(whatsAppPictures).StartsWith(root.DirectoryPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+      {
+        window = new Verification.WhatsAppScreensProofWindow(root, whatsAppPictures);
+        window.AppWindow.Show(false);
+        return;
+      }
       var instance = Microsoft.Windows.AppLifecycle.AppInstance.FindOrRegisterForKey("terminaldeck-preview-" + root.NamespaceId);
       if (!instance.IsCurrent) { await instance.RedirectActivationToAsync(activation); Exit(); return; }
       TerminalDeck.Platform.Windows.Integration.PreviewShareRoot.Remember(root);
