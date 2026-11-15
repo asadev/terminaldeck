@@ -35,7 +35,7 @@ public sealed partial class AppRuntime
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
       subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
-      CloudOwners), WriteCloudLog);
+      CloudOwners, Secrets: CloudSecretsPlatform()), WriteCloudLog);
     // Lane R: the account's socket events reach by sign-in needs (`devices`, `gate`, `hello`).
     CloudSync.AccountEvent += e =>
     {
@@ -56,6 +56,8 @@ public sealed partial class AppRuntime
   /// written and nothing is remembered for later.
   private const bool CloudAnnouncementsOn = false;
   private Timer? cloudAnnounceTimer;
+  /// The signed-in account's record owners (projects, agents): deletes made in the app go through them so they travel.
+  public CloudRecordsForAccount? CloudRecords { get; private set; }
 
   /// The account's computers for the announcements (lowercased device ids), null while the list is not known.
   private IReadOnlyCollection<string>? CloudComputers() =>
@@ -72,7 +74,8 @@ public sealed partial class AppRuntime
     {
       try
       {
-        CloudDeleteRuleAnnouncement.Announce(announce);
+        // Lane R2's switch (CloudDeleteRuleSwitch.AnnounceV1, off) inside the one switch (CloudAnnouncementsOn, off).
+        CloudDeleteRuleSwitch.Announce(announce);
         announce.Announce(CloudFolderFormat.Feature, CloudFolderFormat.Format);
         announce.Announce(CloudArtifactsFormat.Feature, CloudArtifactsFormat.Format);
         announce.RetryPending();
@@ -102,9 +105,16 @@ public sealed partial class AppRuntime
     var announce = new CloudAnnounce(memory.Store, () => deviceId, () => CloudSync?.ServiceNow, CloudComputers,
       new CloudFileSlot(Path.Combine(folder, "sync", "announce-pending.json")), send: CloudAnnouncementsOn);
     memory.UseAnnounce(announce);
+    // Lane S: saved passwords' removals follow the same gate (closed while nothing is announced).
+    CloudSecretsDeleteRuleOpen = announce.DeleteRuleIsOpen;
+    // Lane R2: tasks, agents and projects follow the delete rule (record version 2); gate closed = old-form removals only.
+    records.ConfigureDeleteRule(announce.DeleteRuleIsOpen, CloudDeviceName, () => CloudSync?.ServiceNow);
+    CloudRecords = records;
+    CloudRecordDeletes.Current = () => Cloud.SyncIdentity is { } who && who.Subject == subject ? CloudRecords : null;
     // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
     var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
       CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);
+    kinds.ConfigureDeleteRule(announce.DeleteRuleIsOpen, CloudDeviceName, () => CloudSync?.ServiceNow);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
     var owners = new List<ICloudSyncAdapter>([.. records.Adapters, memory, .. kinds.Adapters,
       CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce)]);

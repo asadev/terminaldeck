@@ -25,7 +25,7 @@ public sealed partial class AppRuntime
   private IReadOnlyList<ICloudSecretsStore> CloudSecretStores(string subject, string deviceId, Func<long?> serviceNow)
   {
     var state = Path.Combine(CloudAccountFolder(subject), "secrets");
-    var servers = new CloudSecretsServerStore(new ServerStore(Root, new WindowsCredentialStore(Root)), Path.Combine(state, "server-ids.json"));
+    var servers = new CloudSecretsServerStore(LiveServerStore ?? new ServerStore(Root, new WindowsCredentialStore(Root)), Path.Combine(state, "server-ids.json"));
     string? DeviceName(string id) => Cloud.Snapshot.DeviceRows.FirstOrDefault(d => string.Equals(d.DeviceId, id, StringComparison.OrdinalIgnoreCase))?.Name;
     return [new CloudSecretsDeleteOwner(servers, Path.Combine(state, "servers"), () => CloudSecretsDeleteRuleOpen(), CloudSecretsServerStore.Name, servers.RemoveAsync,
       deviceName: DeviceName, serviceClock: serviceNow)];

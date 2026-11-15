@@ -13,6 +13,8 @@ public sealed partial class AppRuntime
 {
   public IHoot Hoot { get; private set; } = null!;
   public IServers Servers { get; private set; } = null!;
+  /// The one live server store (saved passwords' server sign-ins write through it, never a second instance).
+  public ServerStore? LiveServerStore { get; private set; }
   public IHootSurface? HootSurface { get; set; }
   private ServersMcp? serverTools;
   private ServerCapabilitiesMcp? serverCapabilityTools;
@@ -23,7 +25,8 @@ public sealed partial class AppRuntime
   {
     var secrets = new WindowsCredentialStore(Root);
     var runtime = new WindowsOpenSshRuntime(Root, secrets, Path.Combine(Path.GetDirectoryName(KeeperExecutable)!, "askpass", "TerminalDeck.Servers.Askpass.exe"));
-    Servers = new ServerService(new(Root, secrets), runtime, authorizer, new KeeperServerTerminal(this));
+    LiveServerStore = new(Root, secrets);
+    Servers = new ServerService(LiveServerStore, runtime, authorizer, new KeeperServerTerminal(this));
     InitializeServerSignin(runtime);
     serverTools = new(Servers, keyPicker, isHoot: grant => Hoot is not null && HootPolicy.IsHoot(grant, Hoot.Read()));
     serverCapabilityTools = new(Servers);
