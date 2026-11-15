@@ -111,6 +111,7 @@ internal sealed class CloudScreensProofWindow : Window
     await Page("your-cloud-folder-selected", () => Shot("your-cloud-folder-selected", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch", "Design review"); return Task.CompletedTask; }));
     await Page("your-cloud-reading-pane", () => Shot("your-cloud-reading-pane", Cloud(), 1280, 760, settle: 800, ready: async () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch"); await Cloud().ProofOpenAsync("Plan for the launch"); }));
     await Page("your-cloud-not-on-this-pc", () => Shot("your-cloud-not-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Old pricing ideas"); return Task.CompletedTask; }));
+    await Page("your-cloud-only-on-this-pc", () => Shot("your-cloud-only-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Kept notes"); return Task.CompletedTask; }));
     await Page("your-cloud-saved-passwords", () => Shot("your-cloud-saved-passwords", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Passwords"); return Task.CompletedTask; }));
     await Page("your-cloud-tasks", () => Shot("your-cloud-tasks", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Tasks"); return Task.CompletedTask; }));
 

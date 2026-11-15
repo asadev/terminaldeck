@@ -117,8 +117,13 @@ public sealed class YourCloudPage : UserControl
   internal void ProofVisit(string place, params string[] path) { ClosePane(); Visit(place, path); }
   internal void ProofSelect(params string[] names)
   {
-    list.SelectedItems.Clear();
-    foreach (var item in list.Items.OfType<ListViewItem>()) if ((item.Tag as Entry)?.Item is { } row && names.Contains(row.Name)) item.IsSelected = true;
+    rendering = true;
+    try
+    {
+      list.SelectedItems.Clear();
+      foreach (var item in list.Items.OfType<ListViewItem>()) if ((item.Tag as Entry)?.Item is { } row && names.Contains(row.Name)) list.SelectedItems.Add(item);
+    }
+    finally { rendering = false; }
     UpdateActions();
   }
   internal Task ProofOpenAsync(string name) =>
@@ -198,12 +203,11 @@ public sealed class YourCloudPage : UserControl
         }
       }
       else entries.AddRange(listing.Items.Select(i => new Entry(null, i)));
-      foreach (var entry in entries)
-      {
-        var row = ListRow(entry);
-        list.Items.Add(row);
-        if (entry.Item is { } item && kept.Contains(item.Id)) row.IsSelected = true;
-      }
+      foreach (var entry in entries) list.Items.Add(ListRow(entry));
+      // Through the list's own selection, not the row's IsSelected: a row not yet laid out drops IsSelected when the
+      // list prepares it, so a redraw lost the selection (seen in the r7 pictures).
+      foreach (var row in list.Items.OfType<ListViewItem>())
+        if ((row.Tag as Entry)?.Item is { } item && kept.Contains(item.Id)) list.SelectedItems.Add(row);
       if (entries.Count == 0) Empty(CloudContentsWords.NothingYet); else empty.Visibility = Visibility.Collapsed;
     }
     finally { rendering = false; }
@@ -244,7 +248,8 @@ public sealed class YourCloudPage : UserControl
   {
     var isBin = placeKey == "Bin";
     var actions = YourCloudRules.For(isBin ? null : Place(), Selected());
-    open.Visibility = isBin ? Visibility.Collapsed : Visibility.Visible;
+    // Rows "Not on this PC" / "Only on this PC" show only their one action (Bring back / Put in Cloud again).
+    open.Visibility = isBin || actions.BringBack || actions.PutInCloudAgain ? Visibility.Collapsed : Visibility.Visible;
     open.IsEnabled = actions.Open && !working;
     binCloud.Visibility = actions.ShowBins && Place()?.CanBinCloud == true ? Visibility.Visible : Visibility.Collapsed;
     binEverywhere.Visibility = actions.ShowBins && Place()?.CanBinEverywhere == true ? Visibility.Visible : Visibility.Collapsed;
@@ -376,19 +381,24 @@ public sealed class YourCloudPage : UserControl
       body.Children.Add(web);
     }
     else if (item.Text is { Length: > 0 } text)
-      body.Children.Add(FormattedText(text));
+      body.Children.Add(FormattedText(text, item.Name));
     pane.Child = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     pane.Visibility = Visibility.Visible;
   }
 
   /// A note as formatted text (C-1), drawn natively from the chat's own markdown reading (ChatMarkdown): headings,
   /// lists, quotes, bold, italic, links, code in a monospace face. Nothing to wait for, so no "loading" words.
-  internal static RichTextBlock FormattedText(string text)
+  internal static RichTextBlock FormattedText(string text, string? title = null)
   {
+    var first = true;
     var view = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20 };
     var mono = new FontFamily("Cascadia Mono, Consolas");
     foreach (var block in TerminalDeck.Core.Chats.ChatMarkdown.Blocks(text))
     {
+      // The pane's header already names the note: a first heading that says the same is not drawn again.
+      var skip = first && block.Kind == "heading" && YourCloudRules.RepeatsTitle(block.Text, title);
+      first = false;
+      if (skip) continue;
       var paragraph = new Microsoft.UI.Xaml.Documents.Paragraph { Margin = new(0, 0, 0, 8) };
       switch (block.Kind)
       {

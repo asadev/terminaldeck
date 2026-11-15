@@ -35,6 +35,10 @@ public static class YourCloudRules
   /// What the top bar offers for the selected items of one place. Selected rows "Not on this PC" show only "Bring back"
   /// (in place of the bins); rows "Only on this PC" only "Put in Cloud again". No bins at all for a place whose delete
   /// rule is not open (Core says so per place). Folders are never acted on from here: only items count.
+  /// The reading pane's header shows the note's name; its first heading is not drawn again when it says the same.
+  public static bool RepeatsTitle(string? heading, string? title) =>
+    heading is not null && title is not null && string.Equals(heading.Trim().Trim('*', '_').Trim(), title.Trim(), StringComparison.OrdinalIgnoreCase);
+
   public static YourCloudActions For(CloudContentsPlace? place, IReadOnlyList<CloudContentsRow> selected)
   {
     var canCloud = place?.CanBinCloud == true;

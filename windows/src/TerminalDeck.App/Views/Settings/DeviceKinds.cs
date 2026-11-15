@@ -24,10 +24,12 @@ public static class DeviceKinds
     return DeviceKind.Pc;
   }
 
-  /// Segoe Fluent Icons: a desktop computer (monitor), a laptop, a PC tower, a phone, a tablet, the web.
+  /// Segoe Fluent Icons: a desktop computer (monitor, E7FB), a laptop (E7F8), a PC (E977), a phone (E8EA), a tablet (E70A),
+  /// the web (E774). Never E7F4 (TV monitor): DeckIcon's catalog lists it under "bell" and draws a bell.
+  public const string DesktopGlyph = "\uE7FB", LaptopGlyph = "\uE7F8", PcGlyph = "\uE977", PhoneGlyph = "\uE8EA", TabletGlyph = "\uE70A", WebGlyph = "\uE774";
   public static string Glyph(DeviceKind kind) => kind switch
   {
-    DeviceKind.Desktop => "", DeviceKind.Laptop => "", DeviceKind.Phone => "", DeviceKind.Tablet => "", DeviceKind.Web => "",
-    _ => ""
+    DeviceKind.Desktop => DesktopGlyph, DeviceKind.Laptop => LaptopGlyph, DeviceKind.Phone => PhoneGlyph, DeviceKind.Tablet => TabletGlyph, DeviceKind.Web => WebGlyph,
+    _ => PcGlyph
   };
 }

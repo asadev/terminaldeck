@@ -191,6 +191,23 @@ public sealed class CloudScreensTests
     Assert.Equal(DeviceKind.Phone, DeviceKinds.Of(null, "Galaxy S25"));
     var glyphs = new[] { DeviceKind.Desktop, DeviceKind.Laptop, DeviceKind.Pc, DeviceKind.Phone }.Select(DeviceKinds.Glyph).ToArray();
     Assert.Equal(glyphs.Length, glyphs.Distinct().Count());
+    // Exact Segoe codes; E7F4 is drawn by DeckIcon's catalog as a bell (Studio Mac showed a bell in r7).
+    Assert.Equal("\uE7FB", DeviceKinds.Glyph(DeviceKind.Desktop));
+    Assert.Equal("\uE7F8", DeviceKinds.Glyph(DeviceKind.Laptop));
+    Assert.Equal("\uE977", DeviceKinds.Glyph(DeviceKind.Pc));
+    Assert.Equal("\uE8EA", DeviceKinds.Glyph(DeviceKind.Phone));
+    Assert.Equal("\uE70A", DeviceKinds.Glyph(DeviceKind.Tablet));
+    Assert.Equal("\uE774", DeviceKinds.Glyph(DeviceKind.Web));
+    Assert.DoesNotContain("\uE7F4", Enum.GetValues<DeviceKind>().Select(DeviceKinds.Glyph));
+  }
+
+  [Fact]
+  public void TheReadingPaneDoesNotRepeatTheTitle()
+  {
+    Assert.True(YourCloudRules.RepeatsTitle("Plan for the launch", "Plan for the launch"));
+    Assert.True(YourCloudRules.RepeatsTitle(" plan for the launch ", "Plan for the launch"));
+    Assert.False(YourCloudRules.RepeatsTitle("Launch steps", "Plan for the launch"));
+    Assert.False(YourCloudRules.RepeatsTitle("Plan for the launch", null));
   }
 
   [Fact]
