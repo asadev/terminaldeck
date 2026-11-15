@@ -196,21 +196,24 @@ public sealed class CloudBootFilesJoinTests : IDisposable
   }
 
   [Fact]
-  public async Task A_removal_on_the_PC_or_on_a_Mac_removes_nothing()
+  public async Task A_removal_by_hand_on_the_PC_or_a_Mac_removal_of_another_version_removes_nothing()
   {
     var (a, _) = await TwoMacs();
     var pc = Make(Pc);
     await pc.Engine.SyncAsync(default);
     var sent = service.Segments;
 
-    // Removed on the PC: never sent as a removal; the Macs keep the file.
+    // Removed on the PC by hand (two looks 3 s apart): never sent; "Not on this PC"; the Macs keep the file.
     File.Delete(Path.Combine(FolderOf(Pc), "AGENTS.md"));
+    await pc.Engine.SyncAsync(default);
+    service.Now += 4_000;
     await pc.Engine.SyncAsync(default);
     await a.Engine.SyncAsync(default);
     Assert.Equal(sent, service.Segments);
     Assert.Equal("Agents from Mac A.\n", Read(MacA, "AGENTS.md"));
+    Assert.Equal(CloudLocalMark.NotOnThisPc, Assert.Single(await pc.Adapter.NotHereAsync()).Mark);
 
-    // Removed on a Mac (a removal record): listed on the PC, the PC's file stays.
+    // A Mac's removal of a version this PC never used (an edit on top wins): the PC's file stays.
     const string key = "file/project/7031/CLAUDE.md";
     string store = Guid.NewGuid().ToString("D"), parent = Guid.NewGuid().ToString("D"), version = Guid.NewGuid().ToString("D");
     var hash = CloudMemoryFormat.Hash(Encoding.UTF8.GetBytes("Rules from Mac A.\n"));
@@ -223,7 +226,7 @@ public sealed class CloudBootFilesJoinTests : IDisposable
     await pc.Adapter.ApplyAsync(removal, new CloudImportOrigin(MacA, 999, null, false), default);
     await pc.Adapter.SettleAsync(default);
     Assert.Equal("Rules from Mac A.\n", Read(Pc, "CLAUDE.md"));
-    Assert.Contains(pc.Adapter.Lines, l => l.Kind == "removed-elsewhere" && l.Path == "CLAUDE.md");
+    Assert.Empty(await pc.Adapter.BinGroupsAsync());
   }
 
   [Fact]
@@ -251,7 +254,8 @@ public sealed class CloudBootFilesJoinTests : IDisposable
     }
     Assert.Equal(before, Snapshot(Pc));
     Assert.Empty(pc.Adapter.Lines);
-    Assert.False(Directory.Exists(Path.Combine(scratch, Pc, "state", "retained")));
+    // Only this PC's own skill is retained (the Bin's copy if an AI removes it); nothing of a refused record.
+    Assert.Equal([CloudMemoryFormat.Hash(Encoding.UTF8.GetBytes("An ordinary skill.\n"))], Directory.GetFiles(Path.Combine(scratch, Pc, "state", "retained")).Select(Path.GetFileName));
   }
 
   [Fact]

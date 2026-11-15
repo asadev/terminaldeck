@@ -20,12 +20,13 @@ namespace TerminalDeck.Core.Cloud;
 //   used on every device; the other text is kept (outside the folder, never sent) and listed. A file is written only
 //   if it still holds exactly the bytes just read; otherwise nothing is written and it is tried again later.
 // - A file that can run a command or grant tools (CloudBootFilesFormat.RunReasons) waits: Windows has no Accept step yet.
-// - Removals do NOT travel to or from Windows yet, and sync never deletes anything in a person's folder.
+// - Removals follow the 15 Nov delete rule (CloudBootFilesDeleteRule.cs): by hand = "Not on this PC", an AI or an
+//   explicit delete = Everywhere into the Bin; an arriving removal applies over exactly the version in use.
 
 /// One line the Cloud page can show: a file written here from another device, a text kept, or a file that waits.
 public sealed record CloudBootFilesLine(string Kind, string Place, string Path, string Device, string Why, string? Kept, long At);
 
-public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
+public sealed partial class CloudBootFilesAdapter : ICloudSyncAdapter, ICloudDeleteOwning
 {
   public const string WaitingFolder = "no-folder", WaitingHome = "home", WaitingAccept = "needs-accept", RefusedFolder = "home-folder";
   private readonly ICloudLedgerSlot slot;
@@ -45,7 +46,7 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
   /// (or hold); `stateFolder`: this adapter's own folder, never inside a project folder.
   public CloudBootFilesAdapter(ICloudLedgerSlot slot, string retainedFolder, string deviceId, Func<IReadOnlyDictionary<string, string>>? projectFolders = null,
     Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null, string? userProfile = null, string? stateFolder = null, bool autoAccept = false,
-    Func<bool>? autoAcceptNow = null)
+    Func<bool>? autoAcceptNow = null, CloudBootFilesDeleteOptions? delete = null)
   {
     CloudBytes.TransportId(deviceId);
     this.slot = slot; retained = retainedFolder; this.deviceId = deviceId; this.projectFolders = projectFolders;
@@ -60,6 +61,7 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     guarded = list;
     state = slot.Read() is { } bytes ? JsonSerializer.Deserialize<State>(bytes) ?? new State() : new State();
     if (!Guid.TryParse(state.StoreId, out _)) state.StoreId = Guid.NewGuid().ToString("D");
+    InitDelete(delete);
   }
 
   /// One signed-in account on this PC: `<account>\sync\bootfiles.json` (this bookkeeping), `<account>\bootfiles\retained`
@@ -67,9 +69,11 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
   /// `autoAccept`: "Automatically, with my account" (the Mac's setAutoAccept): an arrived file that could run something is
   /// written without a click; otherwise such a file waits for an accept.
   public static CloudBootFilesAdapter ForAccount(string accountFolder, string deviceId, Func<IReadOnlyDictionary<string, string>>? projectFolders = null,
-    Func<bool>? autoAccept = null) =>
+    Func<bool>? autoAccept = null, CloudAnnounce? announce = null, Func<string, string?>? deviceName = null, string thisDeviceName = CloudDeleteWords.ThisPc) =>
     new(new CloudFileSlot(Path.Combine(accountFolder, "sync", "bootfiles.json")), Path.Combine(accountFolder, "bootfiles", "retained"), deviceId, projectFolders,
-      keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "instructions")), stateFolder: accountFolder, autoAcceptNow: autoAccept);
+      keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "instructions")), stateFolder: accountFolder, autoAcceptNow: autoAccept,
+      delete: new CloudBootFilesDeleteOptions(CloudBin.ForAccount(accountFolder), new CloudFileSlot(Path.Combine(accountFolder, "sync", "bootfiles-delete.json")),
+        announce, deviceName, thisDeviceName, RunStartedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
   public IReadOnlyCollection<string> Domains => [CloudBootFilesFormat.Domain];
 
@@ -79,6 +83,13 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
   {
     public string Version { get; set; } = ""; public string StoreId { get; set; } = ""; public string Key { get; set; } = ""; public string Hash { get; set; } = "";
     public List<string> Parents { get; set; } = []; public long CreatedAt { get; set; } public string Device { get; set; } = "";
+    /// The delete rule: this version is a removal (the file is gone from the Cloud).
+    public bool Removal { get; set; }
+  }
+  private sealed class PendingRemoval
+  {
+    public string Version { get; set; } = ""; public List<string> Parents { get; set; } = []; public long At { get; set; } public string Mac { get; set; } = "";
+    public string StoreId { get; set; } = ""; public string Key { get; set; } = ""; public Dictionary<string, string> Fields { get; set; } = []; public bool Safe { get; set; }
   }
   private sealed class PathState
   {
@@ -118,6 +129,14 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     public Dictionary<string, Known> Known { get; set; } = [];
     public HashSet<string> Applied { get; set; } = [];
     public List<Line> Lines { get; set; } = [];
+    /// The delete rule: about-records by the removal they speak for, refused ones, arrived removals that wait for their
+    /// folder, and the two looks of files seen gone.
+    public Dictionary<string, string> Abouts { get; set; } = [];
+    public HashSet<string> RefusedAbouts { get; set; } = [];
+    public Dictionary<string, PendingRemoval> PendingRemovals { get; set; } = [];
+    public Dictionary<string, long> GoneAt { get; set; } = [];
+    public Dictionary<string, long> GoneSeen { get; set; } = [];
+    public long LastLook { get; set; }
   }
   private void Save() { slot.Write(JsonSerializer.SerializeToUtf8Bytes(state)); dirty = false; }
   private static string Pk(string sourceId, string relative) => sourceId + "\n" + relative;
@@ -201,10 +220,17 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
 
   /// This PC's new and edited instruction files since the last capture, as new versions. Never a removal. Nothing
   /// before the whole feed was read once.
-  public Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
+  public async Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
   {
     foldersNow = null;
-    if (!state.FeedRead) return Task.FromResult(CloudCapture.None);
+    if (!state.FeedRead) return CloudCapture.None;
+    await turn.WaitAsync(ct);
+    try { return await CaptureLockedAsync(stampNow, ct); }
+    finally { turn.Release(); }
+  }
+  private async Task<CloudCapture> CaptureLockedAsync(Func<long> stampNow, CancellationToken ct)
+  {
+    RetryRemovals();
     // Files that waited (for a folder, or for something in the way) are placed first, on the saved state.
     foreach (var waiting in state.Versions.Values.Where(v => v.Done && !v.Settled && v.Waiting is not null and not WaitingHome).OrderBy(v => v.Seq).ToArray())
     {
@@ -214,13 +240,16 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     if (dirty) Save();
     var before = JsonSerializer.SerializeToUtf8Bytes(state);
     var operations = new List<CloudOperation>();
+    sentIntents.Clear();
+    operations.AddRange(Intents(stampNow));
     foreach (var (projectId, folder) in Folders())
     {
       if (string.IsNullOrEmpty(folder) || FolderRefused(folder)) continue;
       var root = Path.GetFullPath(folder);
       var sourceId = CloudBootFilesFormat.SourceId(CloudBootFilesPlaceKind.Project, projectId);
       if (!CloudBootFilesFormat.ValidSourceId(sourceId)) continue;
-      foreach (var entry in CloudBootFilesDisk.Scan(root, CloudBootFilesPlaceKind.Project).Files)
+      var walk = CloudBootFilesDisk.Scan(root, CloudBootFilesPlaceKind.Project);
+      foreach (var entry in walk.Files)
       {
         ct.ThrowIfCancellationRequested();
         var pk = Pk(sourceId, entry.Relative);
@@ -229,8 +258,10 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
         if (ps.Stamp == stamp && ps.Head is not null && ps.Base == ps.Head.Hash) continue;
         if (CloudBootFilesDisk.Read(root, entry.Relative).Bytes is not { } bytes || !CloudBootFilesFormat.IsText(bytes)) continue;
         var hash = CloudMemoryFormat.Hash(bytes);
+        if (Reappeared(pk, root, entry.Relative, bytes, hash)) continue;
         ps.Stamp = stamp;
         if (ps.Head?.Hash == hash) { ps.Base = hash; continue; }
+        Retain(hash, bytes);
         // Rule J: a file never agreed with the Cloud never goes up over a path the Cloud already holds.
         if (ps.Base is null && ps.CloudHeld) continue;
         var parents = new List<string>();
@@ -250,18 +281,33 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
         foreach (var record in records) state.Applied.Add(record.OpId);
         operations.AddRange(records);
       }
+      operations.AddRange(await DeleteRulePassAsync(sourceId, root, walk, stampNow, ct));
     }
+    state.LastLook = localNow();
     var staged = state;
     state = JsonSerializer.Deserialize<State>(before)!;
-    return Task.FromResult(new CloudCapture(operations, () => { state = staged; Save(); }));
+    return new CloudCapture(operations, () => { state = staged; Save(); CommitDeletePass(); });
   }
 
   // ---- Apply ----
 
-  public Task ApplyAsync(CloudOperation op, CloudImportOrigin origin, CancellationToken ct)
+  public async Task ApplyAsync(CloudOperation op, CloudImportOrigin origin, CancellationToken ct)
+  {
+    await turn.WaitAsync(ct);
+    try { await ApplyLocked(op, origin); }
+    finally { turn.Release(); }
+  }
+  private Task ApplyLocked(CloudOperation op, CloudImportOrigin origin)
   {
     if (state.Applied.Contains(op.OpId)) return Task.CompletedTask;
     if (op.Domain != CloudBootFilesFormat.Domain) throw new CloudFailure("unsupported_format");
+    if (CloudFileDeleteRecords.IsAbout(op))
+    {
+      dirty = true;
+      TakeAbout(op, origin);
+      state.Applied.Add(op.OpId);
+      return Task.CompletedTask;
+    }
     // Every rule first: a record that is not a boot file is refused before anything is kept or written.
     var item = CloudBootFilesFormat.Describe(op);
     var pk = Pk(item.SourceId, item.Relative);
@@ -273,10 +319,8 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     dirty = true;
     if (item.Archive)
     {
-      // A removal on another device is listed; it is never applied here.
-      if (state.Paths.ContainsKey(pk))
-        state.Lines.Add(new Line { Kind = "removed-elsewhere", SourceId = item.SourceId, Relative = item.Relative, Device = origin.DeviceId,
-          Why = "removed on another device; this PC keeps its file (removals do not travel to Windows yet)", At = localNow() });
+      // A removal on another device: the delete rule (CloudBootFilesDeleteRule.cs).
+      ApplyRemoval(item, origin);
       state.Applied.Add(op.OpId);
       return Task.CompletedTask;
     }
@@ -372,6 +416,7 @@ public sealed class CloudBootFilesAdapter : ICloudSyncAdapter
     var ps = PathOf(pk);
     // An earlier version of what this PC already uses: nothing to do.
     if (ps.Head is { } current && (current.Version == a.Version || IsAncestor(pk, a.Version, current.Version))) { Settle(a); return; }
+    if (MarkedArrival(a, root, body)) return;
     var found = CloudBootFilesDisk.Read(root, a.Relative);
     if (found.Blocked is { } blocked) { a.Waiting = "blocked:" + blocked; return; }
     var local = found.Bytes;

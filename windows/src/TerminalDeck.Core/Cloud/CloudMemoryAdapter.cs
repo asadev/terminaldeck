@@ -17,8 +17,10 @@ namespace TerminalDeck.Core.Cloud;
 //   A fresh PC's empty memory sends nothing at all: empty is "nothing yet", never "everything removed".
 // - Two different texts of one file: the newer revision by the Cloud's order is used; the other text is kept, outside
 //   the memory folder (it never travels), and listed. Never a second live copy beside the file.
-// - Removals do NOT travel from Windows yet, and nothing is ever deleted by sync here: a removed setting or a removal
-//   marker arriving from a Mac leaves this PC's copy in place and is listed.
+// - Files follow the 15 Nov delete rule (CloudMemoryDeleteRule.cs): by hand = "Not on this PC" (never sent); an AI seen
+//   by the witness, or a delete from the page or a tool = a removal marker into the Bin on every device; an arriving
+//   marker applies over exactly the version it removed. A removed shared setting arriving from a Mac still leaves this
+//   PC's value in place and is listed (settings are not part of the delete rule).
 
 /// One row of a memory table, cells in the table's column order (DeckMemoryCloudSchema).
 public sealed record DeckMemoryRow(string Table, IReadOnlyList<DeckMemoryCell> Cells)
@@ -29,8 +31,8 @@ public sealed record DeckMemoryRow(string Table, IReadOnlyList<DeckMemoryCell> C
 /// A file in the memory folder: '/'-separated relative path, size and last write time (ticks, any fixed origin).
 public sealed record DeckMemoryFileInfo(string Path, long Length, long ModifiedTicks);
 
-/// What a Deck Memory store gives Cloud. There is deliberately no way to remove a row or a file through it: sync on
-/// Windows never deletes. Every write here comes from Cloud's apply and is recognised as such by content.
+/// What a Deck Memory store gives Cloud. There is no way to remove a row through it. A file is removed only by the delete
+/// rule (an arriving removal, or the person's/an AI's delete), and only while it still holds exactly the expected bytes.
 public interface IDeckMemoryCloudStore
 {
   /// A stable random id for this memory store (a UUID made once, kept with the memory).
@@ -50,6 +52,8 @@ public interface IDeckMemoryCloudStore
   /// The file's bytes, or null when it is not there.
   byte[]? ReadFile(string path);
   void WriteFile(string path, byte[] bytes);
+  /// Removes the file only while it still holds exactly the bytes with this fingerprint (an edit a moment ago stays).
+  void RemoveFile(string path, string expectedHash);
   /// Makes every row written so far durable (files are durable when WriteFile returns).
   void Flush();
 }
@@ -65,12 +69,12 @@ public interface ICloudMemoryKeeper
 public sealed record CloudMemoryOtherVersion(string Key, string Table, string Version, string Device, long Stamp, string Value, string Why);
 
 /// The capture and apply sides for Deck Memory (inventory rows I01..I06), one adapter for all six kinds.
-public sealed class CloudMemoryAdapter : ICloudSyncAdapter
+public sealed partial class CloudMemoryAdapter : ICloudSyncAdapter, ICloudDeleteOwning
 {
   /// MAC-NEXT-8: the board and its history are a device's live status; never sent, and an arrival is acknowledged
   /// and ignored (not placed, not kept, not waiting).
   public const string LocalOnlyRow = "I03";
-  public const string KeptRemovalWhy = "removed on another device; this PC keeps its copy (removals do not travel to Windows yet)";
+  public const string KeptRemovalWhy = "removed on another device; this PC keeps its value (settings removals do not apply on Windows)";
   private readonly IDeckMemoryCloudStore memory;
   private readonly ICloudLedgerSlot slot;
   private readonly ICloudMemoryKeeper keeper;
@@ -84,7 +88,7 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   /// `enabledRows`: the inventory rows switched on for this account (null: all). `projects(projectId, originStore)`:
   /// this PC's project for another device's project-scoped memory (7C-2's project list), null while not matched (waits).
   public CloudMemoryAdapter(IDeckMemoryCloudStore memory, ICloudLedgerSlot slot, string deviceId, IEnumerable<string>? enabledRows = null,
-    Func<string, string, string?>? projects = null, Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null)
+    Func<string, string, string?>? projects = null, Func<long>? localNow = null, ICloudMemoryKeeper? keeper = null, CloudMemoryDeleteOptions? delete = null)
   {
     CloudBytes.TransportId(deviceId);
     if (!Guid.TryParse(memory.StoreId, out _)) throw new CloudFailure("invalid_request");
@@ -95,19 +99,33 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     if (rows.Any(r => !CloudMemoryFormat.InventoryRows.Contains(r))) throw new CloudFailure("invalid_request");
     rows.Remove(LocalOnlyRow);
     state = slot.Read() is { } bytes ? JsonSerializer.Deserialize<State>(bytes) ?? new State() : new State();
+    InitDelete(delete);
   }
 
   /// The six memory kinds. The board's kind is taken only to acknowledge and ignore what an older device sends.
   public IReadOnlyCollection<string> Domains => rows.Append(LocalOnlyRow).Distinct().Select(CloudMemoryFormat.Domain).ToArray();
   public IReadOnlyList<CloudMemoryOtherVersion> OtherVersions => state.Others.ToArray();
+  /// This account's memory store (the announcements are shared memory settings written into it).
+  public IDeckMemoryCloudStore Store => memory;
   public int WaitingCount => state.Versions.Values.Count(v => v.Waiting is not null);
 
   /// The memory store for one signed-in account on this PC: `<account folder>/memory` (notes and tables),
   /// `<account folder>/sync/memory.json` (this adapter's bookkeeping), `<account folder>/kept/memory` (kept texts).
   /// Per account, so signing in with another account never sends one account's memory into the other.
-  public static CloudMemoryAdapter ForAccount(string accountFolder, string deviceId, Func<string, string, string?>? projects = null) =>
-    new(FileDeckMemoryStore.At(Path.Combine(accountFolder, "memory")), new CloudFileSlot(Path.Combine(accountFolder, "sync", "memory.json")), deviceId,
-      projects: projects, keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "memory")));
+  /// The delete rule's state beside it: `<account folder>/sync/memory-delete.json` (marks and intents),
+  /// `sync/memory-delete-requests.json`, `<account folder>/archive/versions` (the Bin), `<account folder>/memory-retained`.
+  /// `announce`: the account's announcements (null: the gate stays closed); `deviceName`: device id → its name.
+  public static CloudMemoryAdapter ForAccount(string accountFolder, string deviceId, Func<string, string, string?>? projects = null,
+    CloudAnnounce? announce = null, Func<string, string?>? deviceName = null, string thisDeviceName = CloudDeleteWords.ThisPc)
+  {
+    var store = FileDeckMemoryStore.At(Path.Combine(accountFolder, "memory"));
+    var delete = new CloudMemoryDeleteOptions(CloudBin.ForAccount(accountFolder), new CloudFileSlot(Path.Combine(accountFolder, "sync", "memory-delete.json")),
+      new CloudFileSlot(Path.Combine(accountFolder, "sync", "memory-delete-requests.json")), Path.Combine(accountFolder, "memory-retained"),
+      path => Path.Combine(new[] { store.FilesFolder }.Concat(FileDeckMemoryStore.WindowsName(path).Split('/')).ToArray()), announce, deviceName, thisDeviceName,
+      RunStartedAt: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    return new(store, new CloudFileSlot(Path.Combine(accountFolder, "sync", "memory.json")), deviceId,
+      projects: projects, keeper: new CloudMemoryKeptFolder(Path.Combine(accountFolder, "kept", "memory")), delete: delete);
+  }
 
   // ---- Durable bookkeeping (beside the sync store, one atomic file) ----
 
@@ -137,6 +155,13 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     public List<string> Pending { get; set; } = [];
     /// The whole feed was read once: before that nothing of this PC is captured (its first copy waits for the Cloud's).
     public bool FeedRead { get; set; }
+    /// The delete rule: fingerprints of removal markers, when a captured file was first seen gone, the last full look,
+    /// and every fingerprint a place ever held here ("path\nhash", J-7).
+    public HashSet<string> RemovalHashes { get; set; } = [];
+    public Dictionary<string, long> GoneAt { get; set; } = [];
+    public Dictionary<string, long> GoneSeen { get; set; } = [];
+    public long LastLook { get; set; }
+    public HashSet<string> KnownHashes { get; set; } = [];
   }
   private void Save() { slot.Write(JsonSerializer.SerializeToUtf8Bytes(state)); dirty = false; }
   private static string V(string storeId, string key, string version) => storeId + "\n" + key + "\n" + version;
@@ -194,11 +219,19 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
   /// that changed: rows of the enabled tables (shared settings only; `meta` never) and memory-folder files. Never a
   /// removal. Stamped once, here, on the service clock. Deterministic ids: a capture repeated after a crash makes the
   /// same records.
-  public Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
+  public async Task<CloudCapture> CaptureAsync(Func<long> stampNow, CancellationToken ct)
   {
-    if (!state.FeedRead) return Task.FromResult(CloudCapture.None);
+    if (!state.FeedRead) return CloudCapture.None;
+    await turn.WaitAsync(ct);
+    try { return await CaptureLockedAsync(stampNow, ct); }
+    finally { turn.Release(); }
+  }
+  private async Task<CloudCapture> CaptureLockedAsync(Func<long> stampNow, CancellationToken ct)
+  {
     var before = JsonSerializer.SerializeToUtf8Bytes(state);
     var operations = new List<CloudOperation>();
+    clearedIntents.Clear();
+    PutInCloudRequests();
     foreach (var pending in state.Pending) operations.Add(CloudOperation.FromJson(CloudJson.Parse(pending)));
     foreach (var t in DeckMemoryCloudSchema.Tables.Where(t => rows.Contains(t.Row) && t.Name != "meta"))
       foreach (var row in memory.Rows(t.Name))
@@ -208,19 +241,23 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
         if (DeckMemoryCloudSchema.IsMachineLocal(t, row.Cells)) continue;
         // A shared setting with no value is a removal; removals do not travel from Windows.
         if (DeckMemoryCloudSchema.IsSettingTombstone(t, row.Cells)) continue;
-        // "This device understands removal records" is never claimed by Windows.
-        if (t.Name == "settings" && row.Cells[t.Index("key")].Value is { } key && key.StartsWith(DeckMemoryCloudSchema.SharedSettingPrefix, StringComparison.Ordinal)) continue;
+        // Memory's own "this device understands removal records" (no feature) is never claimed by Windows; a feature's
+        // announcement (`onerule.understands.<feature>.<device>`, CloudAnnounce) travels like any shared setting.
+        if (t.Name == "settings" && row.Cells[t.Index("key")].Value is { } key && key.StartsWith(DeckMemoryCloudSchema.SharedSettingPrefix, StringComparison.Ordinal)
+          && !key[DeckMemoryCloudSchema.SharedSettingPrefix.Length..].Contains('.')) continue;
         operations.AddRange(Export(Logical(t, row), stampNow));
       }
-    foreach (var file in memory.ListFiles().OrderBy(f => f.Path, StringComparer.Ordinal))
+    var listed = memory.ListFiles().OrderBy(f => f.Path, StringComparer.Ordinal).ToArray();
+    foreach (var file in listed)
     {
       ct.ThrowIfCancellationRequested();
       if (FileResource(file) is { } resource) operations.AddRange(Export(resource, stampNow));
     }
+    operations.AddRange(await DeleteRulePassAsync(listed, stampNow, ct));
     var committed = state;
     state = JsonSerializer.Deserialize<State>(before)!;
     var staged = committed;
-    return Task.FromResult(new CloudCapture(operations, () => { state = staged; state.Pending.Clear(); Save(); }));
+    return new CloudCapture(operations, () => { state = staged; state.Pending.Clear(); Save(); CommitDeletePass(); });
   }
 
   /// A memory-folder file as it travels, or null when it never travels or did not change since it was last read and
@@ -239,10 +276,23 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     if (state.FileStamps.TryGetValue(path, out var known) && known.StartsWith(stamp, StringComparison.Ordinal) && head?.Hash == known[stamp.Length..]) return null;
     if (memory.ReadFile(path) is not { } bytes) return null;
     var hash = CloudMemoryFormat.Hash(bytes);
-    state.FileStamps[path] = stamp + hash;
-    if (head?.Hash == hash) return null;
+    state.GoneAt.Remove(path);
     // Removal-marker text written into a file (by a script, an AI in a terminal) is never sent as an edit.
     if (CloudMemoryFormat.IsRemovalMarker(bytes)) return null;
+    // A marked place: "Only on this PC" is never sent; a file back at a "Not on this PC" place follows J-7.
+    if (Reappeared(path, bytes, hash))
+    {
+      if (marks.Mark(path) is null) state.FileStamps[path] = stamp + hash;
+      return null;
+    }
+    state.FileStamps[path] = stamp + hash;
+    origin = state.FileOrigins.GetValueOrDefault(path);
+    storeId = origin?.StoreId ?? memory.StoreId;
+    key = origin?.Key ?? "file/" + path;
+    head = state.Heads.GetValueOrDefault(storeId + ":" + key);
+    if (head?.Hash == hash) return null;
+    Retain(bytes, hash);
+    state.KnownHashes.Add(path + "\n" + hash);
     return new Resource(row, storeId, key, bytes, hash, origin?.Version, null, path);
   }
 
@@ -346,18 +396,25 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
 
   // ---- Apply ----
 
-  public Task ApplyAsync(CloudOperation op, CloudImportOrigin origin, CancellationToken ct)
+  public async Task ApplyAsync(CloudOperation op, CloudImportOrigin origin, CancellationToken ct)
   {
-    if (state.Applied.Contains(op.OpId)) return Task.CompletedTask;
+    if (state.Applied.Contains(op.OpId)) return;
+    await turn.WaitAsync(ct);
+    try { ApplyLocked(op, origin); }
+    finally { turn.Release(); }
+  }
+  private void ApplyLocked(CloudOperation op, CloudImportOrigin origin)
+  {
+    if (state.Applied.Contains(op.OpId)) return;
     var row = CloudMemoryFormat.RowOfDomain(op.Domain) ?? throw new CloudFailure("unsupported_format");
     dirty = true;
     // The board (an older device's live status): acknowledged and ignored.
-    if (row == LocalOnlyRow) { state.Applied.Add(op.OpId); return Task.CompletedTask; }
+    if (row == LocalOnlyRow) { state.Applied.Add(op.OpId); return; }
     if (!rows.Contains(row)) throw new CloudFailure("unsupported_format");
     var p = CloudMemoryFormat.ValidatePart(op, row);
     // Local database backups and the app's own help files never travel; an incoming one changes nothing.
     if (p.Key.StartsWith("backup/", StringComparison.Ordinal) || p.Key.StartsWith("file/", StringComparison.Ordinal) && DeckMemoryCloudSchema.AppHelpFiles.Contains(p.Key[5..]))
-    { state.Applied.Add(op.OpId); return Task.CompletedTask; }
+    { state.Applied.Add(op.OpId); return; }
     var vk = V(p.StoreId, p.Key, p.Version);
     if (!state.Versions.TryGetValue(vk, out var v))
       Put(vk, v = new Version { StoreId = p.StoreId, Key = p.Key, Id = p.Version, Row = row, Hash = p.ResourceHash, Parents = p.Parents.ToList(), Count = p.Count, Device = origin.DeviceId });
@@ -382,7 +439,6 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
       }
     }
     state.Applied.Add(op.OpId);
-    return Task.CompletedTask;
   }
 
   private CloudMemoryRevision Revision(Version v)
@@ -405,14 +461,13 @@ public sealed class CloudMemoryAdapter : ICloudSyncAdapter
     // A name Windows cannot hold (a ':' or '?', a reserved name such as CON) is kept under the nearest allowed name;
     // the record keeps its original name, so it travels back unchanged.
     var path = FileDeckMemoryStore.WindowsName(placed);
+    var marker = bytes.Length < CloudMemoryFormat.RemovalMarkerLimit ? CloudMemoryRemoval.Parse(bytes) : null;
+    if (marker is null) Retain(bytes, v.Hash);
+    else state.RemovalHashes.Add(v.Hash);
+    if (DeleteRuleArrival(v, path, bytes, marker) is not null) return;
+    // A removal (the delete rule): applied over exactly the version it removed, into this PC's Bin first.
+    if (marker is not null) { ApplyRemoval(v, path, marker); return; }
     var local = memory.ReadFile(path);
-    // A removal from a Mac (its one rule): this PC keeps its copy. Nothing is deleted or blanked by sync here.
-    if (bytes.Length < CloudMemoryFormat.RemovalMarkerLimit && CloudMemoryFormat.IsRemovalMarker(bytes))
-    {
-      v.Projection = "";
-      if (local is not null) List(v, "file", path, KeptRemovalWhy);
-      return;
-    }
     if (local is null) { memory.WriteFile(path, bytes); Claim(path, v, onlyIfUnowned: false); return; }
     var current = CloudMemoryFormat.Hash(local);
     if (current == v.Hash) { Claim(path, v, onlyIfUnowned: true); return; }
@@ -708,6 +763,12 @@ public sealed class InMemoryDeckMemoryStore(string storeId) : IDeckMemoryCloudSt
   {
     if (!DeckMemoryCloudSchema.SafePath(path)) throw new CloudFailure("invalid_request");
     files[path] = bytes.ToArray(); written[path] = ++ticks;
+  }
+  public void RemoveFile(string path, string expectedHash)
+  {
+    if (!files.TryGetValue(path, out var held)) return;
+    if (CloudMemoryFormat.Hash(held) != expectedHash) throw new CloudFailure("version_changed");
+    files.Remove(path); written.Remove(path);
   }
   public void Flush() { }
 }

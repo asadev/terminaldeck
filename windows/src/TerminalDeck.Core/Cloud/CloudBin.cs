@@ -61,8 +61,16 @@ public sealed class CloudBin
     slot = new CloudFileSlot(System.IO.Path.Combine(root, "keeper.json"));
     index = slot.Read() is { } bytes ? JsonSerializer.Deserialize<Index>(bytes) ?? new Index() : new Index();
   }
-  /// `<account>\archive\versions`.
-  public static CloudBin ForAccount(string accountFolder) => new(System.IO.Path.Combine(accountFolder, "archive", "versions"));
+  /// `<account>\archive\versions`: ONE keeper per account, shared by every kind's owner (the same instance for the same
+  /// folder, so two owners never overwrite each other's index).
+  public static CloudBin ForAccount(string accountFolder) => Shared(System.IO.Path.Combine(accountFolder, "archive", "versions"));
+  private static readonly Dictionary<string, CloudBin> shared = new(StringComparer.OrdinalIgnoreCase);
+  public static CloudBin Shared(string root)
+  {
+    var full = System.IO.Path.GetFullPath(root);
+    lock (shared) return shared.TryGetValue(full, out var held) ? held : shared[full] = new CloudBin(full);
+  }
+  private readonly object gate = new();
   public string Root => root;
   private void Save() => slot.Write(JsonSerializer.SerializeToUtf8Bytes(index));
 
@@ -94,20 +102,21 @@ public sealed class CloudBin
   /// moves its date forward. Returns the date it is kept until.
   public long Keep(string kind, string itemKey, string name, string? place, long at, string device, byte[] content, long now)
   {
-    var sha = CloudBytes.Sha256Hex(content);
-    Store(kind, sha, content);
-    var until = now + KeptFor;
-    var held = index.Versions.FirstOrDefault(v => v.ItemKey == itemKey && v.Sha256 == sha);
-    if (held is null) index.Versions.Add(new StoredKept { ItemKey = itemKey, Kind = kind, Name = name, Place = place, At = at, Device = device, Bytes = content.Length, Sha256 = sha, KeptUntil = until });
-    else held.KeptUntil = Math.Max(held.KeptUntil, until);
-    Save();
-    return Math.Max(held?.KeptUntil ?? until, until);
+    lock (gate)
+    {
+      var sha = CloudBytes.Sha256Hex(content);
+      Store(kind, sha, content);
+      var until = now + KeptFor;
+      var held = index.Versions.FirstOrDefault(v => v.ItemKey == itemKey && v.Sha256 == sha);
+      if (held is null) index.Versions.Add(new StoredKept { ItemKey = itemKey, Kind = kind, Name = name, Place = place, At = at, Device = device, Bytes = content.Length, Sha256 = sha, KeptUntil = until });
+      else held.KeptUntil = Math.Max(held.KeptUntil, until);
+      Save();
+      return Math.Max(held?.KeptUntil ?? until, until);
+    }
   }
   /// What is kept for one item, newest first.
-  public IReadOnlyList<Kept> Versions(string itemKey) =>
-    index.Versions.Where(v => v.ItemKey == itemKey).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray();
-  public IReadOnlyList<Kept> VersionsOfKind(string kind) =>
-    index.Versions.Where(v => v.Kind == kind).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray();
+  public IReadOnlyList<Kept> Versions(string itemKey) { lock (gate) return index.Versions.Where(v => v.ItemKey == itemKey).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray(); }
+  public IReadOnlyList<Kept> VersionsOfKind(string kind) { lock (gate) return index.Versions.Where(v => v.Kind == kind).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray(); }
 
   // ---- The Bin ----
 
@@ -119,54 +128,64 @@ public sealed class CloudBin
   public Binned Put(string kind, string itemKey, string name, string? place, string path, long removedAt, string device, byte[] content, bool shown, long now,
     CloudBinGroup? group = null)
   {
-    var sha = CloudBytes.Sha256Hex(content);
-    Store(kind, sha, content);
-    if (index.Bin.TryGetValue(itemKey, out var earlier) && earlier.Sha256 != sha && Content(earlier.Kind, earlier.Sha256) is { } held)
-      Keep(earlier.Kind, itemKey, earlier.Name, earlier.Place, earlier.RemovedAt, earlier.Device, held, now);
-    var until = now + KeptFor;
-    var entry = new StoredBin
+    lock (gate)
     {
-      Kind = kind, Name = name, Place = place, Path = path, RemovedAt = removedAt, Device = device, Bytes = content.Length, Sha256 = sha,
-      KeptUntil = Math.Max(earlier?.KeptUntil ?? 0, until), Shown = shown || earlier?.Shown == true,
-      Group = group is null ? earlier?.Group : Stored(group)
-    };
-    index.Bin[itemKey] = entry;
-    Save();
-    return Value(itemKey, entry);
+      var sha = CloudBytes.Sha256Hex(content);
+      Store(kind, sha, content);
+      if (index.Bin.TryGetValue(itemKey, out var earlier) && earlier.Sha256 != sha && Content(earlier.Kind, earlier.Sha256) is { } held)
+        Keep(earlier.Kind, itemKey, earlier.Name, earlier.Place, earlier.RemovedAt, earlier.Device, held, now);
+      var until = now + KeptFor;
+      var entry = new StoredBin
+      {
+        Kind = kind, Name = name, Place = place, Path = path, RemovedAt = removedAt, Device = device, Bytes = content.Length, Sha256 = sha,
+        KeptUntil = Math.Max(earlier?.KeptUntil ?? 0, until), Shown = shown || earlier?.Shown == true,
+        Group = group is null ? earlier?.Group : Stored(group)
+      };
+      index.Bin[itemKey] = entry;
+      Save();
+      return Value(itemKey, entry);
+    }
   }
-  public Binned? Get(string itemKey) => index.Bin.TryGetValue(itemKey, out var b) ? Value(itemKey, b) : null;
+  public Binned? Get(string itemKey) { lock (gate) return index.Bin.TryGetValue(itemKey, out var b) ? Value(itemKey, b) : null; }
   /// The Bin as he sees it: removals only (moves are kept but not listed), newest first.
-  public IReadOnlyList<Binned> List(string kind) =>
-    index.Bin.Where(b => b.Value.Kind == kind && b.Value.Shown).Select(b => Value(b.Key, b.Value)).OrderByDescending(b => b.RemovedAt).ThenBy(b => b.ItemKey, StringComparer.Ordinal).ToArray();
+  public IReadOnlyList<Binned> List(string kind) { lock (gate) return index.Bin.Where(b => b.Value.Kind == kind && b.Value.Shown).Select(b => Value(b.Key, b.Value)).OrderByDescending(b => b.RemovedAt).ThenBy(b => b.ItemKey, StringComparer.Ordinal).ToArray(); }
   /// Every Bin item of one kind, listed or not.
-  public IReadOnlyList<Binned> All(string kind) =>
-    index.Bin.Where(b => b.Value.Kind == kind).Select(b => Value(b.Key, b.Value)).OrderByDescending(b => b.RemovedAt).ThenBy(b => b.ItemKey, StringComparer.Ordinal).ToArray();
+  public IReadOnlyList<Binned> All(string kind) { lock (gate) return index.Bin.Where(b => b.Value.Kind == kind).Select(b => Value(b.Key, b.Value)).OrderByDescending(b => b.RemovedAt).ThenBy(b => b.ItemKey, StringComparer.Ordinal).ToArray(); }
   /// Out of the Bin (put back, or a newer edit brought it back); the content stays a kept version for its 30 days.
   public void Take(string itemKey, long now)
   {
-    if (!index.Bin.TryGetValue(itemKey, out var item)) return;
-    if (Content(item.Kind, item.Sha256) is { } held) Keep(item.Kind, itemKey, item.Name, item.Place, item.RemovedAt, item.Device, held, now);
-    index.Bin.Remove(itemKey);
-    Save();
+    lock (gate)
+    {
+      if (!index.Bin.TryGetValue(itemKey, out var item)) return;
+      if (Content(item.Kind, item.Sha256) is { } held) Keep(item.Kind, itemKey, item.Name, item.Place, item.RemovedAt, item.Device, held, now);
+      index.Bin.Remove(itemKey);
+      Save();
+    }
   }
   /// The person's "Delete for good" (page only). The content goes when nothing else names it.
   public void DeleteForGood(string itemKey)
   {
-    if (!index.Bin.Remove(itemKey, out var item)) return;
-    Save();
-    DropUnnamed([(item.Kind, item.Sha256)]);
+    lock (gate)
+    {
+      if (!index.Bin.Remove(itemKey, out var item)) return;
+      Save();
+      DropUnnamed([(item.Kind, item.Sha256)]);
+    }
   }
 
   /// The 30-day keeper: every version and Bin item kept until `before` or earlier, and each content nothing names.
   public int Sweep(long before)
   {
-    var gone = new List<(string, string)>();
-    foreach (var v in index.Versions.Where(v => v.KeptUntil <= before).ToArray()) { index.Versions.Remove(v); gone.Add((v.Kind, v.Sha256)); }
-    foreach (var (key, b) in index.Bin.Where(b => b.Value.KeptUntil <= before).ToArray()) { index.Bin.Remove(key); gone.Add((b.Kind, b.Sha256)); }
-    if (gone.Count == 0) return 0;
-    Save();
-    DropUnnamed(gone);
-    return gone.Count;
+    lock (gate)
+    {
+      var gone = new List<(string, string)>();
+      foreach (var v in index.Versions.Where(v => v.KeptUntil <= before).ToArray()) { index.Versions.Remove(v); gone.Add((v.Kind, v.Sha256)); }
+      foreach (var (key, b) in index.Bin.Where(b => b.Value.KeptUntil <= before).ToArray()) { index.Bin.Remove(key); gone.Add((b.Kind, b.Sha256)); }
+      if (gone.Count == 0) return 0;
+      Save();
+      DropUnnamed(gone);
+      return gone.Count;
+    }
   }
   private void DropUnnamed(IEnumerable<(string Kind, string Sha)> pairs)
   {
@@ -188,19 +207,22 @@ public sealed class CloudBin
     g.Items.Select(i => new CloudDeleteItem(i.Id, i.Kind, i.Name, i.Place)).ToArray(),
     g.Era switch { "olderVersion" => CloudBinEra.OlderVersion, "beforeNewRule" => CloudBinEra.BeforeNewRule, _ => CloudBinEra.Current });
   /// The group an entry went in with, or null (an entry from before the rule).
-  public CloudBinGroup? GroupOf(string itemKey) => index.Bin.TryGetValue(itemKey, out var b) ? Group(b.Group) : null;
+  public CloudBinGroup? GroupOf(string itemKey) { lock (gate) return index.Bin.TryGetValue(itemKey, out var b) ? Group(b.Group) : null; }
 
   /// The Bin of one kind as the page shows it: one row per group, newest first. `item` turns an entry into its page
   /// item; `deviceName` turns a device id into its name (null: "Another of your devices").
   public IReadOnlyList<CloudBinGroup> Groups(string kind, Func<Binned, CloudDeleteItem?> item, Func<string, string?> deviceName)
   {
-    var groups = new List<CloudBinGroup>();
-    foreach (var b in List(kind))
+    lock (gate)
     {
-      if (GroupOf(b.ItemKey) is { } g) { groups.Add(g); continue; }
-      if (item(b) is not { } shown) continue;
-      groups.Add(CloudFileDeleteRecords.LegacyGroup(shown, b.Device, deviceName(b.Device.ToLowerInvariant()) ?? CloudDeleteWords.AnotherDevice, b.RemovedAt, CloudBinEra.BeforeNewRule));
+      var groups = new List<CloudBinGroup>();
+      foreach (var b in List(kind))
+      {
+        if (GroupOf(b.ItemKey) is { } g) { groups.Add(g); continue; }
+        if (item(b) is not { } shown) continue;
+        groups.Add(CloudFileDeleteRecords.LegacyGroup(shown, b.Device, deviceName(b.Device.ToLowerInvariant()) ?? CloudDeleteWords.AnotherDevice, b.RemovedAt, CloudBinEra.BeforeNewRule));
+      }
+      return CloudFileDeleteRecords.Merge(groups);
     }
-    return CloudFileDeleteRecords.Merge(groups);
   }
 }
