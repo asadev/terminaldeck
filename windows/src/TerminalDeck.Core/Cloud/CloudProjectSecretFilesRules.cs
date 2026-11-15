@@ -120,19 +120,14 @@ public static class CloudProjectSecretFilesRules
     return false;
   }
   /// A name another device can make that Windows cannot hold or that could leave the folder (review 15 Nov, fault A):
-  /// the Cloud folder's rule (lane F `CloudFolderRules.WindowsCannotHold`, the same list; JOIN: call that one) plus
+  /// the Cloud folder's rule (lane F `CloudFolderRules.WindowsCannotHold`, called) plus
   /// separators, control characters, `.`/`..` and empty parts. Such a file is never written here: it waits sealed.
   public static bool WindowsCannotHold(string relative)
   {
     if (relative.Length == 0 || relative.Contains('\\') || relative.Any(char.IsControl)) return true;
-    foreach (var name in relative.Split('/'))
-    {
-      if (name.Length == 0 || name is "." or ".." || name.EndsWith('.') || name.EndsWith(' ') || name.IndexOfAny(['<', '>', ':', '"', '|', '?', '*']) >= 0) return true;
-      var stem = name.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
-      if (stem is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$") return true;
-      if (stem.Length == 4 && (stem.StartsWith("COM", StringComparison.Ordinal) || stem.StartsWith("LPT", StringComparison.Ordinal)) && stem[3] is >= '0' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3') return true;
-    }
-    return false;
+    if (relative.Split('/').Any(name => name is "." or "..")) return true;
+    // The list itself is the Cloud folder's (one rule, never two that disagree).
+    return CloudFolderRules.WindowsCannotHold(relative);
   }
   /// A project folder's own name as it travels: one plain name, nothing that climbs.
   public static bool CleanFolderName(string name) => CloudBootFilesFormat.CleanRelative(name) && !name.Contains('/');
