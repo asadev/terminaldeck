@@ -33,12 +33,17 @@ internal sealed record NewSessionPageServices(
   Action<string?> AllChoices,
   Action OpenCodingAis,
   Func<nint> WindowHandle,
-  Func<Task> Ready);
+  Func<Task> Ready,
+  Func<NewSessionStart, string, string, IReadOnlyList<NewSessionFile>, CancellationToken, Task<string>>? StartInFolder = null);
+// AllChoices is no longer opened from this page (owner, 15 Nov: "Only two options instead of a very big
+// line and all choices thing"); the full form stays for its other callers. StartInFolder starts in the
+// folder he picked with "Choose folder…" (start, folder, text, files); the item shows only when it is wired.
 
 // The New session page IS the chat window with no session yet (owner, 14 Nov: "It should be looking
-// like all other chat windows"). The bar, the frame, the empty line and the box are the open chat's
-// own parts (ChatBar, ChatFrame, ChatAppearance.Empty, ChatComposerBox). The only extra controls:
-// project and agent in ONE menu on the bar's second line, and the small Chat · Terminal switch at the
+// like all other chat windows"). The bar, the frame and the box are the open chat's own parts
+// (ChatBar, ChatFrame, ChatComposerBox); above the box the page stays calm and empty (15 Nov: no AI
+// mark, no sentence). "New session" is written once, by the window bar. The only extra controls:
+// project, folder and agent in ONE menu on the bar's line, and the Chat | Terminal switch at the
 // bar's trailing end, where an open chat keeps its own controls.
 internal sealed class NewSessionPage : Grid
 {
@@ -52,31 +57,34 @@ internal sealed class NewSessionPage : Grid
   private readonly Button projectChip;
   private readonly Button accountChip;
   private readonly TextBlock dot = ChatBar.Dot();
-  private readonly StackPanel modes = new() { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+  private readonly StackPanel modes = new() { Orientation = Orientation.Horizontal, Spacing = 2 };
+  private readonly Border modeSwitch = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(2), BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center };
   private readonly ToggleButton chatMode = new() { Content = "Chat" };
   private readonly ToggleButton terminalMode = new() { Content = "Terminal" };
   private readonly Notices.CompactNotice problem = new() { Severity = InfoBarSeverity.Error, IsClosable = true };
   private readonly List<NewSessionFile> files = [];
   private IReadOnlyList<NewSessionFile> sending = [];
   private NewSessionStart choices;
+  // A folder picked with "Choose folder…" (the session runs there, with no project); null otherwise.
+  private string? folder;
   private IReadOnlyList<ProviderModel> models = [];
   private int modelRead;
 
   public NewSessionPage(NewSessionPageServices services, NewSessionMemory memory, string? projectId)
   {
     this.services = services; this.memory = memory;
-    flow = new((start, text, ct) => services.Start(start, text, sending, ct));
+    flow = new((start, text, ct) => folder is { } picked && services.StartInFolder is { } inFolder
+      ? inFolder(start, picked, text, sending, ct) : services.Start(start, text, sending, ct));
     choices = NewSessionPresets.Resolve(memory.Last(), services.World(), projectId);
     AutomationProperties.SetAutomationId(this, "newSession.page");
     RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
     this.SetResourceReference(BackgroundProperty, "DeckCanvasBrush");
 
-    // The bar: "New session" where the chat's title is; the project (and agent) where the chat's
-    // folder is, then the dot and the same account chip.
+    // The bar: the project (and agent) where the chat's folder is, then the dot and the same account
+    // chip. No title here: the window bar already says "New session" (15 Nov: written once).
     var bar = ChatBar.Frame(false);
     bar.SetResourceReference(BackgroundProperty, "DeckCanvasBrush");
     var identity = ChatBar.Identity();
-    identity.Children.Add(ChatBar.Title("New session"));
     var line = ChatBar.Line();
     projectChip = ChatBar.ProjectChip("");
     AutomationProperties.SetAutomationId(projectChip, "newSession.project");
@@ -89,16 +97,21 @@ internal sealed class NewSessionPage : Grid
     foreach (var mode in new[] { chatMode, terminalMode })
     {
       mode.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
-      mode.MinHeight = 28; mode.MinWidth = 32; mode.Padding = new Thickness(8, 4, 8, 4); mode.FontSize = 12;
+      mode.MinHeight = 26; mode.MinWidth = 72; mode.Padding = new Thickness(10, 3, 10, 3); mode.FontSize = 12;
+      mode.CornerRadius = new CornerRadius(6); mode.HorizontalContentAlignment = HorizontalAlignment.Center;
       modes.Children.Add(mode);
     }
+    // One segmented switch: both choices in one rounded track, the chosen one filled.
+    modeSwitch.Child = modes;
+    modeSwitch.SetResourceReference(Border.BackgroundProperty, "SubtleFillColorSecondaryBrush");
+    modeSwitch.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
     chatMode.Click += (_, _) => { choices = NewSessionPresets.WithMode(choices, "chat"); Show(); };
     terminalMode.Click += (_, _) => { choices = NewSessionPresets.WithMode(choices, "terminal"); Show(); };
     AutomationProperties.SetName(modes, "Open as"); AutomationProperties.SetAutomationId(chatMode, "newSession.chat"); AutomationProperties.SetAutomationId(terminalMode, "newSession.terminal");
-    SetColumn(modes, 1); bar.Children.Add(modes);
+    SetColumn(modeSwitch, 1); bar.Children.Add(modeSwitch);
     Children.Add(bar);
 
-    // The chat's own frame, column, empty line and box.
+    // The chat's own frame, column and box.
     ChatFrame.Layout(frame); SetRow(frame, 1);
     var scroll = ChatFrame.History(column, () => { });
     AutomationProperties.SetAutomationId(scroll, "newSession.history"); SetRow(scroll, 1); frame.Children.Add(scroll);
@@ -144,7 +157,7 @@ internal sealed class NewSessionPage : Grid
   // Shown again (New session pressed, or the app opened): take the keyboard and refresh the lists.
   public void Arrive(string? projectId)
   {
-    if (projectId is not null && box.Text.Text.Length == 0) choices = NewSessionPresets.WithProject(choices, projectId, services.World());
+    if (projectId is not null && box.Text.Text.Length == 0) { folder = null; choices = NewSessionPresets.WithProject(choices, projectId, services.World()); }
     else choices = Refit(choices);
     Show();
     DispatcherQueue.TryEnqueueHandled(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => box.Text.Focus(FocusState.Programmatic));
@@ -161,20 +174,19 @@ internal sealed class NewSessionPage : Grid
   private void Show()
   {
     var provider = choices.Provider; var name = services.ProviderName(provider);
-    // Project (and agent) on the bar's second line, like the chat's folder.
-    var place = services.ProjectName(choices.ProjectId) + (choices.AgentId is { } agent ? " · " + services.AgentName(agent) : "");
+    // Project (or the picked folder's name), and agent, on the bar's line, like the chat's folder.
+    var where = folder is { } picked ? FolderName(picked) : services.ProjectName(choices.ProjectId);
+    var place = where + (choices.AgentId is { } agent ? " · " + services.AgentName(agent) : "");
     ((TextBlock)projectChip.Content).Text = place;
     ToolTipService.SetToolTip(projectChip, "Project and agent · " + place); AutomationProperties.SetName(projectChip, "Project and agent: " + place);
     var account = choices.AccountId is { } id ? services.Accounts(provider).FirstOrDefault(a => a.Id == id) : null;
     var accountLabel = NewSessionPresets.UsesAccount(provider) ? account is null ? name + " · add an account" : account.Name + (account.SignedIn ? "" : " · sign-in needed") : name;
     accountChip.Content = accountLabel; ToolTipService.SetToolTip(accountChip, accountLabel); AutomationProperties.SetName(accountChip, "AI and account: " + accountLabel);
     // Chat · Terminal only for an AI that can chat.
-    modes.Visibility = NewSessionPresets.CanChat(provider) ? Visibility.Visible : Visibility.Collapsed;
+    modeSwitch.Visibility = NewSessionPresets.CanChat(provider) ? Visibility.Visible : Visibility.Collapsed;
     chatMode.IsChecked = choices.Mode == "chat"; terminalMode.IsChecked = choices.Mode == "terminal";
-    // The empty line: the chat's own, with what this page does.
+    // Calm and empty above the box: no AI mark, no sentence (owner, 15 Nov).
     column.Children.Clear();
-    var line = choices.AgentId is { } who ? "Ask " + services.AgentName(who) + " anything. Your first message starts the session." : "Ask " + name + " anything. Your first message starts the session.";
-    column.Children.Add(ChatAppearance.Empty(line, provider));
     box.Text.PlaceholderText = NewSessionPresets.CanChat(provider) ? "Message " + name : "Type a command for " + name;
     // The line under the box: the chat's permission, model and effort places.
     var permission = services.StartPermission(choices);
@@ -195,10 +207,12 @@ internal sealed class NewSessionPage : Grid
     box.Attach.Visibility = NewSessionPresets.CanChat(provider) ? Visibility.Visible : Visibility.Collapsed;
     RenderFiles();
   }
+  private static string FolderName(string path) => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } name ? name : path;
   private TextBlock Chip(string text) => new() { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, Style = (Style)frame.Resources["ChatChoiceText"] };
 
-  // ONE menu for where the session runs: his projects, the chosen project's agents, No project,
-  // Choose folder is the full form's job, so "All choices…" sits at its foot.
+  // ONE menu for where the session runs (owner, 15 Nov: "it should just give me projects ... instead,
+  // we can have a choose folder here"): his projects, then "Choose folder…", then "Choose agent…" for
+  // starting with a specific agent. No agents list and no "All choices…" here.
   private MenuFlyout ProjectMenu()
   {
     var menu = new MenuFlyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft };
@@ -208,34 +222,58 @@ internal sealed class NewSessionPage : Grid
       var world = services.World();
       foreach (var id in new[] { ProjectIdentity.IndependentId }.Concat(world.ProjectIds.Where(p => p != ProjectIdentity.IndependentId)))
       {
-        var item = new ToggleMenuFlyoutItem { Text = id == ProjectIdentity.IndependentId ? "No project" : services.ProjectName(id), IsChecked = id == choices.ProjectId };
+        var item = new ToggleMenuFlyoutItem { Text = id == ProjectIdentity.IndependentId ? "No project" : services.ProjectName(id), IsChecked = folder is null && id == choices.ProjectId };
         var chosen = id;
-        item.Click += (_, _) => { choices = NewSessionPresets.WithProject(choices, chosen, services.World()); Show(); };
+        item.Click += (_, _) => { folder = null; choices = NewSessionPresets.WithProject(choices, chosen, services.World()); Show(); };
         menu.Items.Add(item);
       }
-      var agents = NewSessionPresets.AgentsFor(choices.ProjectId, world);
-      if (agents.Count > 0)
-      {
-        var sub = new MenuFlyoutSubItem { Text = "Agent in " + services.ProjectName(choices.ProjectId) };
-        var none = new ToggleMenuFlyoutItem { Text = "No agent", IsChecked = choices.AgentId is null };
-        none.Click += (_, _) => { choices = NewSessionPresets.WithAgent(choices, null, services.World()); Show(); };
-        sub.Items.Add(none);
-        foreach (var agent in agents)
-        {
-          var row = new ToggleMenuFlyoutItem { Text = agent.Name + (agent.Lead && agent.ProjectId == choices.ProjectId ? " (lead)" : ""), IsChecked = agent.Id == choices.AgentId };
-          var chosen = agent.Id;
-          row.Click += (_, _) => { choices = NewSessionPresets.WithAgent(choices, chosen, services.World()); Show(); };
-          sub.Items.Add(row);
-        }
-        menu.Items.Add(new MenuFlyoutSeparator()); menu.Items.Add(sub);
-      }
       menu.Items.Add(new MenuFlyoutSeparator());
-      var all = new MenuFlyoutItem { Text = "All choices…" };
-      AutomationProperties.SetAutomationId(all, "newSession.allChoices");
-      all.Click += (_, _) => services.AllChoices(choices.ProjectId == ProjectIdentity.IndependentId ? null : choices.ProjectId);
-      menu.Items.Add(all);
+      if (services.StartInFolder is not null)
+      {
+        var pick = new MenuFlyoutItem { Text = "Choose folder…" };
+        AutomationProperties.SetAutomationId(pick, "newSession.chooseFolder");
+        pick.Click += async (_, _) => await ChooseFolderAsync();
+        menu.Items.Add(pick);
+      }
+      var agent = new MenuFlyoutItem { Text = "Choose agent…", IsEnabled = NewSessionPresets.AgentsFor(choices.ProjectId, world).Count > 0 };
+      AutomationProperties.SetAutomationId(agent, "newSession.chooseAgent");
+      agent.Click += (_, _) => DispatcherQueue.TryEnqueueHandled(ShowAgents);
+      menu.Items.Add(agent);
     };
     return menu;
+  }
+
+  // The agents that can start here (the project's lead first), as a small menu under the chip.
+  private void ShowAgents()
+  {
+    var menu = new MenuFlyout { Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft };
+    var none = new ToggleMenuFlyoutItem { Text = "No agent", IsChecked = choices.AgentId is null };
+    none.Click += (_, _) => { choices = NewSessionPresets.WithAgent(choices, null, services.World()); Show(); };
+    menu.Items.Add(none);
+    foreach (var agent in NewSessionPresets.AgentsFor(choices.ProjectId, services.World()))
+    {
+      var row = new ToggleMenuFlyoutItem { Text = agent.Name + (agent.Lead && agent.ProjectId == choices.ProjectId ? " (lead)" : ""), IsChecked = agent.Id == choices.AgentId };
+      var chosen = agent.Id;
+      row.Click += (_, _) => { choices = NewSessionPresets.WithAgent(choices, chosen, services.World()); Show(); };
+      menu.Items.Add(row);
+    }
+    menu.ShowAt(projectChip);
+  }
+
+  // The folder picker the app uses elsewhere. A picked folder runs the session there, with no project.
+  private async Task ChooseFolderAsync()
+  {
+    var handle = services.WindowHandle();
+    if (handle == 0) return;
+    try
+    {
+      if (await TerminalDeck.App.Views.Projects.ProjectAgentUi.PickFolderAsync(handle) is not { } picked) return;
+      folder = picked;
+      choices = NewSessionPresets.WithProject(choices, ProjectIdentity.IndependentId, services.World());
+      Show();
+    }
+    catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException)
+    { problem.Message = "That folder could not be opened. Choose another folder."; problem.IsOpen = true; }
   }
 
   // The same account list as the chat's chip, grouped by AI: picking another AI's account picks
@@ -260,7 +298,15 @@ internal sealed class NewSessionPage : Grid
         }
         foreach (var account in rows)
         {
-          var item = new ToggleMenuFlyoutItem { Text = account.Name + (account.SignedIn ? "" : " · Not signed in"), IsChecked = choices.Provider == provider && choices.AccountId == account.Id };
+          // By name; an account that needs him carries one orange dot, the others nothing.
+          var item = new ToggleMenuFlyoutItem { Text = account.Name, IsChecked = choices.Provider == provider && choices.AccountId == account.Id };
+          if (!account.SignedIn)
+          {
+            var needs = new FontIcon { Glyph = "\u25CF", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe UI"), FontSize = 10 };
+            needs.SetResourceReference(IconElement.ForegroundProperty, "SystemFillColorCautionBrush");
+            item.Icon = needs;
+            AutomationProperties.SetName(item, account.Name + ", needs sign-in");
+          }
           var ai = provider; var id = account.Id;
           item.Click += (_, _) => { choices = NewSessionPresets.WithProvider(choices, ai, services.World(), id); Show(); };
           menu.Items.Add(item);
