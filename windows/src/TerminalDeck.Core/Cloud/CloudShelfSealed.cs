@@ -306,6 +306,10 @@ public static class CloudShelfSealed
           }
         return new("Server key · " + (Clip(Text(Sub(p, "server"), "name"), 110) ?? "server"), "Server key", Clip(address, 512), fields);
       }
+      case "whatsapp":
+        // The key as a secret field "WhatsApp · <name>" (as the Mac's BackendCloudShelfSealed).
+        if (!Domain(record, "whatsapp") || Text(p, "key") is not { Length: > 0 } waKey) return null;
+        return new("WhatsApp · " + (Clip(Text(p, "name"), 110) ?? "WhatsApp agent"), "WhatsApp agent", null, [new("Key", waKey, true)]);
       case "receiver":
       {
         if (!Domain(record, "receiver") || Sub(p, "source") is not CloudJson.Object source || Sub(p, "secrets") is not CloudJson.Object secrets
@@ -330,7 +334,7 @@ public static class CloudShelfSealed
   public static string Noun(string domain) => domain switch
   {
     "api-key" => "API key", "server" => "Server sign-in", "ssh" => "SSH key", "mcp" => "MCP server", "task-connection" => "Task connection",
-    "receiver" => "Receiver sign-in", "project" => "Project password", "app" => "App password", _ => "Saved password"
+    "receiver" => "Receiver sign-in", "project" => "Project password", "app" => "App password", "whatsapp" => "WhatsApp agent", _ => "Saved password"
   };
   private static readonly string[] SecretWords = ["key", "token", "secret", "password", "passwd", "passphrase", "auth", "credential", "cookie", "session", "bearer"];
   private static void Flatten(CloudJson value, string path, List<CloudShelfSeal.Field> fields)

@@ -20,7 +20,8 @@ public sealed class CloudKindsForAccount
   /// `settings`: CloudSettingsOwner.ForWindows(...) in the app. `fullAccess`: true while the trust setting is "Automatically,
   /// with my account". `tasksChanged` / `settingsChanged`: display only, after an import.
   public CloudKindsForAccount(string accountFolder, string account, string deviceId, TaskStore tasks, IProjects projects, IEnumerable<CloudSetting> settings,
-    Func<bool?>? fullAccess = null, Func<long>? clock = null, double quiet = Quiet, Action? tasksChanged = null, Action? settingsChanged = null)
+    Func<bool?>? fullAccess = null, Func<long>? clock = null, double quiet = Quiet, Action? tasksChanged = null, Action? settingsChanged = null,
+    IEnumerable<CloudSettingFamily>? settingFamilies = null)
   {
     var accounts = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(accountFolder)) ?? accountFolder;
     var own = Path.Combine(accountFolder, "kinds");
@@ -30,7 +31,7 @@ public sealed class CloudKindsForAccount
     Kept = new CloudKindsKept(Path.Combine(own, "replaced-values.json"), now);
     double Local() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     Tasks = new CloudTasksOwner(tasks, projects, new CloudRecordsDeleteLedger(accountFolder, own, "tasks", clock), Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "task-ledger.json"), now, tasksChanged);
-    Settings = new CloudSettingsOwner(settings, fullAccess, Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "settings-chosen.json"), settingsChanged);
+    Settings = new CloudSettingsOwner(settings, fullAccess, Kept, new CloudKindsSettle(quiet, Local), Path.Combine(own, "settings-chosen.json"), settingsChanged, settingFamilies);
     Adapters = [Tasks.Adapter(Store, account, deviceId, origins), Settings.Adapter(Store, account, deviceId, origins)];
   }
   /// The delete rule for tasks (see CloudRecordsForAccount.ConfigureDeleteRule).

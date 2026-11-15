@@ -127,7 +127,8 @@ public sealed partial class AppRuntime
     CloudRecordDeletes.Current = () => Cloud.SyncIdentity is { } who && who.Subject == subject ? CloudRecords : null;
     // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
     var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
-      CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);
+      CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account,
+      settingFamilies: [WhatsAppSettings.CloudFamily()]);
     kinds.ConfigureDeleteRule(announce.DeleteRuleIsOpen, CloudDeviceName, () => CloudSync?.ServiceNow);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
     var bootFiles = (CloudBootFilesAdapter)CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce);

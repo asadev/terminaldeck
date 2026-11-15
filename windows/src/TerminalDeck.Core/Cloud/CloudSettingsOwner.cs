@@ -12,6 +12,15 @@ public sealed record CloudSetting(string Entity, CloudJson Default, Func<CloudJs
   public string Key => Entity[(Entity.IndexOf(':') + 1)..];
 }
 
+/// A family of settings named by a prefix (15 Nov 2026: WhatsApp agents, `setting:whatsapp.agent.<id>`, any number of them,
+/// the Mac's settings-file keys that all travel). Each member travels as soon as it exists (no default, always chosen).
+/// `Read`: setting key -> value. `Write`: a value from another device for that key. `Accepts`: (key, value) usable here.
+public sealed record CloudSettingFamily(string EntityPrefix, Func<IReadOnlyDictionary<string, CloudJson>> Read, Action<string, CloudJson> Write,
+  Func<string, CloudJson, bool> Accepts)
+{
+  public string KeyPrefix => EntityPrefix[(EntityPrefix.IndexOf(':') + 1)..];
+}
+
 // The settings that are about HIM (row I21, domain `settings`), the Mac's BackendCloudKindsSettings on Windows.
 // - Only settings on the Mac's travelling list that this PC also has travel, under the Mac's names (default deny): reopen
 //   sessions, name sessions from the conversation, copy on select, the default coding AI, the terminal's colours, font
@@ -43,12 +52,14 @@ public sealed class CloudSettingsOwner : ICloudRecordOwner
   private readonly string? chosenFile;
   private readonly HashSet<string> chosen;
   private readonly Action changed;
+  private readonly IReadOnlyList<CloudSettingFamily> families;
   /// This account's record store, read only: tells a first copy (a baseline) from a real change.
   public CloudRecordStore? Records { get; set; }
 
   public CloudSettingsOwner(IEnumerable<CloudSetting> settings, Func<bool?>? fullAccess = null, CloudKindsKept? kept = null, CloudKindsSettle? settle = null,
-    string? chosenFile = null, Action? changed = null)
+    string? chosenFile = null, Action? changed = null, IEnumerable<CloudSettingFamily>? families = null)
   {
+    this.families = families?.ToArray() ?? [];
     this.settings = settings.ToDictionary(s => s.Entity, StringComparer.Ordinal);
     this.fullAccess = fullAccess ?? (() => false); this.kept = kept; this.chosenFile = chosenFile; this.changed = changed ?? (() => { });
     this.settle = settle ?? new CloudKindsSettle(0, () => 0);
@@ -109,6 +120,13 @@ public sealed class CloudSettingsOwner : ICloudRecordOwner
       result[setting.Entity] = Record(setting.Key, value);
     }
     if (added) SaveChosen();
+    foreach (var family in families)
+    {
+      IReadOnlyDictionary<string, CloudJson> members;
+      try { members = family.Read(); } catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { continue; }
+      foreach (var (key, value) in members)
+        if (key.StartsWith(family.KeyPrefix, StringComparison.Ordinal)) result[family.EntityPrefix + key[family.KeyPrefix.Length..]] = Record(key, value);
+    }
     return result;
   }
   /// CLOUD-KINDS-2, rule 2: the Cloud's value of this setting is a first copy (a baseline: some device's setting as it was
@@ -129,6 +147,16 @@ public sealed class CloudSettingsOwner : ICloudRecordOwner
   {
     if (AppKind.IdOf(entity) is null && PreferenceKind.IdOf(entity) is null) throw new CloudRecordRefusal("This is not a setting record.");
     var mine = Visible().GetValueOrDefault(entity);
+    if (Family(entity) is { } family)
+    {
+      // A member of a family: newest wins, removals do not travel (a member is marked removed inside its own value).
+      if (cloud is null) return new(mine);
+      var key = entity[(entity.IndexOf(':') + 1)..];
+      if (CloudRecordJson.Text(CloudRecordJson.Get(cloud, "key")) != key) return new(mine, Waiting: NotUsable);
+      var member = CloudRecordJson.Get(cloud, "value") ?? CloudJson.Null.Value;
+      if (!family.Accepts(key, member)) return new(mine, new Dictionary<string, string>(StringComparer.Ordinal) { ["value"] = NotUsable });
+      return new(Record(key, member));
+    }
     if (!settings.TryGetValue(entity, out var setting)) return new(mine, Waiting: NotListed);
     // Set back to its default on another device: nothing changes here.
     if (cloud is null) return new(mine);
@@ -143,8 +171,21 @@ public sealed class CloudSettingsOwner : ICloudRecordOwner
     return new(Record(setting.Key, value));
   }
 
+  private CloudSettingFamily? Family(string entity) => families.FirstOrDefault(f => entity.StartsWith(f.EntityPrefix, StringComparison.Ordinal) && entity.Length > f.EntityPrefix.Length);
+
   public void CloudWrite(string entity, CloudJson.Object value, CloudJson.Object? expecting)
   {
+    if (Family(entity) is { } family)
+    {
+      var key = entity[(entity.IndexOf(':') + 1)..];
+      if (CloudRecordJson.Text(CloudRecordJson.Get(value, "key")) != key) throw new CloudFailure("invalid_request");
+      if (!CloudRecordAdapter.Equal(Visible().GetValueOrDefault(entity), expecting))
+        throw new CloudRecordRefusal("This setting changed on this PC while a change from another device was being applied; it is applied on the next try.");
+      try { family.Write(key, CloudRecordJson.Get(value, "value") ?? CloudJson.Null.Value); }
+      catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException) { throw new CloudRecordRefusal("Not applied on this PC: " + error.Message); }
+      settle.Wrote(entity, value);
+      return;
+    }
     if (!settings.TryGetValue(entity, out var setting) || CloudRecordJson.Text(CloudRecordJson.Get(value, "key")) != setting.Key) throw new CloudFailure("invalid_request");
     var before = Visible().GetValueOrDefault(entity);
     if (!CloudRecordAdapter.Equal(before, expecting))
