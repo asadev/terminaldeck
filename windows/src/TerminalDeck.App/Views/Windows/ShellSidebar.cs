@@ -301,7 +301,8 @@ public sealed partial class ShellWindow
   }
 
   /// Your Cloud: a full page of the main window (DESIGN-WINDOWS-CLOUD.md 1).
-  private FrameworkElement YourCloudView() => new WorkspaceLoadingView();
+  private FrameworkElement YourCloudView() => new TerminalDeck.App.Views.Settings.YourCloudPage(Runtime.YourCloud, () => { Model.Page = ShellPage.GitHub; },
+    ShowBrowserSettingsWindow, message => Model.Notice = message);
 
   private FrameworkElement ConnectionPage(ShellPage page)
   {

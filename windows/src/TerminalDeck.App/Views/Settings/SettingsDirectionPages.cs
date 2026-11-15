@@ -23,6 +23,8 @@ public sealed partial class SettingsPane
 
   // Settings > Advanced > "Paired with a code" opens the paired devices' own window.
   public Func<bool>? OpenPairedDevices { get; set; }
+  // Settings > Profile > Cloud > "Manage files": the Your Cloud page, a full page of the main window.
+  public Func<bool>? OpenYourCloud { get; set; }
   // Opens a page of the Settings window through its history (set by SettingsPanel; null in other hosts).
   internal Func<string, Task>? NavigateSettings { get; set; }
   // The account the Settings list's profile row shows.
@@ -35,7 +37,7 @@ public sealed partial class SettingsPane
     "personal" => new PersonalPage(runtime.Cloud),
     "sign-in" => new SignInPage(runtime.Cloud),
     _ when SettingsNavigation.IsDevice(id) => new DevicePage(runtime.Cloud, id[SettingsNavigation.DevicePrefix.Length..], select),
-    "cloud" => new CloudPage(runtime.Cloud, runtime.CloudSync),
+    "cloud" => new CloudPage(runtime.Cloud, runtime.CloudSync, () => OpenYourCloud?.Invoke()),
     "general" => GeneralSettings(),
     "notifications" => NotificationSettings(),
     "privacy" => PrivacySettings(),
