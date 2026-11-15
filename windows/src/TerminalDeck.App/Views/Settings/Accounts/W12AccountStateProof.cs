@@ -43,7 +43,11 @@ public sealed partial class ShellWindow
       var signedOut = renamed with { Accounts = renamed.Accounts.Select(a => a.Id == account.Id ? a with { Email = "prior-signin@example.invalid", SignedIn = false } : a).ToArray() };
       await File.WriteAllBytesAsync(path, JsonSerializer.SerializeToUtf8Bytes(signedOut));
       await settingsPanel.SelectAsync("coding-ais");
-      check("Previously used signed-out account offers Sign in again", SettingsTree(settings).OfType<Button>().Any(b => b.Content as string == "Sign in again"));
+      // The state is the row's orange dot; Sign in again sits in the row's "…" menu.
+      InvokeW12(CallerCard("Audit Codex"), "Account actions"); await Task.Delay(100);
+      var menu = VisualTreeHelper.GetOpenPopupsForXamlRoot(settings.XamlRoot).ToArray();
+      check("Previously used signed-out account offers Sign in again", menu.SelectMany(p => SettingsTree(p.Child)).OfType<MenuFlyoutItem>().Any(m => m.Text == "Sign in again…"));
+      foreach (var popup in menu) popup.IsOpen = false;
     }
     finally { await File.WriteAllBytesAsync(path, renamedBytes); }
     await settingsPanel.SelectAsync("coding-ais");

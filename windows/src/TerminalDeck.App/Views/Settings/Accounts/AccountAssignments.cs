@@ -32,7 +32,6 @@ public sealed partial class SettingsPane
     switchAll.Click += async (_, _) => await ShowBulkSwitchAsync(providers[picker.SelectedIndex]);
     var rows = new StackPanel { Spacing = 16 };
     stack.Children.Add(picker); stack.Children.Add(filter);
-    stack.Children.Add(Description("Choices here apply to new sessions. Running sessions keep their account until you switch them."));
     stack.Children.Add(switchAll); stack.Children.Add(rows);
     bool Matches(string text) => text.Contains(filter.Text.Trim(), StringComparison.OrdinalIgnoreCase);
     void Populate()
@@ -41,12 +40,13 @@ public sealed partial class SettingsPane
       var provider = providers[picker.SelectedIndex];
       var accounts = runtime.Accounts.List(provider).ToArray();
       var app = runtime.Accounts.Default(provider);
-      string Label(AccountProfile a) => a.Name + (a.Authentication == AccountAuthentication.ApiKey ? " · API key" : "") + (a.SignedIn ? "" : " · sign in needed");
+      // A signed-out login is said once, as that account's orange dot in Coding AIs, never here per row (item 59).
+      string Label(AccountProfile a) => a.Name + (a.Authentication == AccountAuthentication.ApiKey ? " · API key" : "");
       string Identity(string? id, AccountProfile? fallback, string basis)
       {
-        if (id is null) return fallback is null ? "No account chosen yet" : "Uses " + fallback.Name + " · " + basis + (fallback.SignedIn ? "" : " · Sign in again");
+        if (id is null) return fallback is null ? "No account chosen yet" : "Uses " + fallback.Name + " · " + basis;
         var account = accounts.FirstOrDefault(a => a.Id == id);
-        return account is null ? "Saved account is no longer available · choose another" : "Uses " + account.Name + " · Set here" + (account.SignedIn ? "" : " · Sign in again");
+        return account is null ? "Saved account is no longer available · choose another" : "Uses " + account.Name + " · Set here";
       }
       if (Matches("Whole app"))
       {
@@ -63,7 +63,6 @@ public sealed partial class SettingsPane
           finally { savingDefault = false; defaultPicker.IsEnabled = true; }
         };
         rows.Children.Add(defaultPicker); rows.Children.Add(outcome);
-        if (app is { SignedIn: false } && app.Authentication == AccountAuthentication.Subscription) rows.Children.Add(Card(app.Name, "This saved choice stays in place while you sign in again.", "Sign in again", () => SignInAccountAsync(app.Id)));
       }
       var hoot = runtime.Hoot.Read().Settings;
       if (hoot?.Provider == provider && Matches("Hoot")) rows.Children.Add(Card("Hoot", Identity(hoot.AccountId, null, "Hoot") + "\n" + ModelDefaults(provider, hoot.Options.Model, hoot.Options.Effort), "Hoot settings", () => { model.Page = ViewModels.ShellPage.Hoot; return Task.CompletedTask; }));
@@ -105,7 +104,7 @@ public sealed partial class SettingsPane
         var inherited = accounts.FirstOrDefault(a => a.Id == inheritedId);
         var lead = project?.Lead == "agent:" + agent.Id;
         rows.Children.Add(Card(agent.Name + (lead ? " (lead)" : "") + " · " + (project?.Name ?? "Independent") + (agent.Seat.Length > 0 ? " · " + agent.Seat : ""),
-          Identity(agent.AccountId, inherited, "Same as above") + "\n" + ModelDefaults(provider, agent.Model, agent.Effort), "Change in Agents…", () => { model.Page = ViewModels.ShellPage.Agents; return Task.CompletedTask; }));
+          Identity(agent.AccountId, inherited, project?.Name ?? "Whole app") + "\n" + ModelDefaults(provider, agent.Model, agent.Effort), "Change in Agents…", () => { model.Page = ViewModels.ShellPage.Agents; return Task.CompletedTask; }));
       }
       if (rows.Children.Count == 0) rows.Children.Add(Description("No matching projects or roles"));
     }
