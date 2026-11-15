@@ -81,6 +81,8 @@ public sealed partial class DeviceTrust
   {
     lock (gate)
     {
+      // Reach by account live: devices join by signing in, no code is taken (paired devices keep working).
+      if (pairingLockedByReach) throw new ProtocolException(ReachPage.PairingLocked);
       if (!Pairing.Consume(code)) throw new ProtocolException("That pairing code is not right or has expired.");
       if (publicKey.Length != 32) throw Refused();
       var clean = Clean(name, 60);
@@ -198,7 +200,7 @@ public sealed partial class DeviceTrust
       StoredDevice? match = null;
       foreach (var row in devices)
         if (row.Approved && !row.Revoked && !row.LocalWeb && row.PublicKey.Length == peerKey.Length && CryptographicOperations.FixedTimeEquals(row.PublicKey, peerKey)) match = row;
-      return match is null ? null : View(match);
+      return match is null ? ReachFor(peerKey) : View(match);
     }
   }
 
@@ -206,6 +208,7 @@ public sealed partial class DeviceTrust
   {
     lock (gate)
     {
+      if (ReachAdmission.IsHostId(id)) return CurrentReach(id, peerKey) ?? throw Refused();
       var row = devices.FirstOrDefault(d => d.Id == id && d.Approved && !d.Revoked);
       if (row is null || !CryptographicOperations.FixedTimeEquals(row.PublicKey, peerKey)) throw Refused();
       return View(row);
@@ -214,16 +217,23 @@ public sealed partial class DeviceTrust
 
   internal void Connected(string id, string channel)
   {
+    var reach = ReachAdmission.IsHostId(id);
     lock (gate)
     {
-      if (!devices.Any(d => d.Id == id && d.Approved && !d.Revoked)) throw Refused();
+      if (reach ? !reachDevices.ContainsKey(id) : !devices.Any(d => d.Id == id && d.Approved && !d.Revoked)) throw Refused();
       connectedChannels[channel] = id;
-      ObserveSeen(id);
+      // An account device is never saved: only who is connected now.
+      if (!reach) { ObserveSeen(id); return; }
     }
+    Changed?.Invoke();
   }
   internal void Disconnected(string channel)
   {
-    lock (gate) if (connectedChannels.Remove(channel, out var id)) ObserveSeen(id);
+    lock (gate)
+    {
+      ReachChannelGone(channel);
+      if (connectedChannels.Remove(channel, out var id) && !ReachAdmission.IsHostId(id)) ObserveSeen(id);
+    }
   }
   private void ObserveSeen(string id)
   {

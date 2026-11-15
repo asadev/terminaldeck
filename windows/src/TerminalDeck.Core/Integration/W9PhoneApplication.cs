@@ -112,7 +112,7 @@ public sealed partial class W9PhoneApplication : IRelayPhoneApplication, IW9Phon
       if (channels.ContainsKey(channel)) throw new ProtocolException("This connection already said hello.");
       var reply = await next.ReceiveAsync(channel, peerKey, plaintext, ct);
       if (reply.Close) return reply;
-      var current = trust.Authenticate(Text(message, "token", 200), peerKey.Span);
+      var current = trust.AuthenticateHello(channel, Text(message, "token", 200), peerKey.Span);
       var events = message.TryGetProperty("capabilities", out var caps) && caps.ValueKind == JsonValueKind.Array &&
         caps.EnumerateArray().Any(c => c.ValueKind == JsonValueKind.String && c.GetString() == "hoot.events");
       var accessUpdates = caps.ValueKind == JsonValueKind.Array && caps.EnumerateArray().Any(c => c.ValueKind == JsonValueKind.String && c.GetString() == "device.access");
