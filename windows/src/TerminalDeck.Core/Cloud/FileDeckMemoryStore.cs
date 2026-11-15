@@ -6,7 +6,8 @@ namespace TerminalDeck.Core.Cloud;
 // 7C-1: this PC's copy of Deck Memory for one signed-in account. The notes and other memory files are ordinary files
 // under `<folder>/files` (the same relative paths as on the Mac, with '/' turned into the Windows separator); the
 // labels (the memory tables) are one JSON file per table under `<folder>/tables`, written whole by atomic replace when
-// the sync engine settles a pack. No SQLite (see CloudSyncStore). There is no remove: sync on Windows never deletes.
+// the sync engine settles a pack. No SQLite (see CloudSyncStore). A file is removed only by the delete rule, and only
+// while it still holds the bytes the rule put in the Bin.
 
 public sealed class FileDeckMemoryStore : IDeckMemoryCloudStore
 {
@@ -171,6 +172,14 @@ public sealed class FileDeckMemoryStore : IDeckMemoryCloudStore
   {
     if (WindowsName(path) != path) throw new CloudFailure("invalid_request");
     new CloudFileSlot(Full(path)).Write(bytes);
+  }
+
+  public void RemoveFile(string path, string expectedHash)
+  {
+    var full = Full(path);
+    if (!File.Exists(full)) return;
+    if (CloudMemoryFormat.Hash(File.ReadAllBytes(full)) != expectedHash) throw new CloudFailure("version_changed");
+    File.Delete(full);
   }
 
   private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)

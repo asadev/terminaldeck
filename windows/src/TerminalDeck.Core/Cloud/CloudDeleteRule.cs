@@ -369,3 +369,10 @@ public static class CloudFileDeleteRecords
       return first with { Items = rows.SelectMany(r => r.Items).ToArray() };
     }).OrderByDescending(g => g.At).ThenBy(g => g.Id, StringComparer.Ordinal).ToArray();
 }
+
+/// What this build announces for the delete rule, at start and every 12 hours (the composition calls it on the sync
+/// thread). `none` (J-1: "applies no removals, sends none") until every kind Windows keeps follows the rule; then `v1`.
+public static class CloudDeleteRuleAnnouncement
+{
+  public static bool Announce(CloudAnnounce announce, bool force = false) => announce.AnnounceNone(CloudDeleteGate.Feature);
+}
