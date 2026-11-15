@@ -161,7 +161,7 @@ public sealed class CloudMemoryJoinTests : IDisposable
   }
 
   [Fact]
-  public async Task A_removal_from_a_Mac_leaves_the_PCs_copy_and_the_PC_never_sends_one()
+  public async Task An_older_Macs_removal_applies_everywhere_into_the_Bin_and_a_file_gone_by_hand_is_never_sent()
   {
     var (_, _, memA, _) = await TwoMacs();
     var pc = MakePc();
@@ -170,6 +170,7 @@ public sealed class CloudMemoryJoinTests : IDisposable
     Assert.NotEmpty(text);
 
     // The Mac's one rule: a removal is a new version of the file (on top of the one in use) whose text is a marker.
+    // No delete-rule fields (an older build): applied as Everywhere, into this PC's Bin, labelled "(older version)".
     const string key = "file/hoot/notes/a-5.md";
     var parent = CloudMemoryFormat.Uuid(StoreA + ":" + key + "\n" + CloudMemoryFormat.Hash(Encoding.UTF8.GetBytes(text)));
     var marker = Encoding.UTF8.GetBytes("---\nid: a-5\ntype: removed\nstatus: removed\ntd_removed: 1763000000000\ntd_removed_by: " + MacA + "\n---\n# Removed: a-5\n");
@@ -178,15 +179,20 @@ public sealed class CloudMemoryJoinTests : IDisposable
       Convert.ToBase64String(marker), service.Now + 1, false), MacA, [], service.Now);
     await pc.Adapter.ApplyAsync(removal, new CloudImportOrigin(MacA, 999, null, false), default);
     await pc.Adapter.SettleAsync(default);
-    Assert.Equal(text, Text(pc.Memory, "hoot/notes/a-5.md"));
-    Assert.Equal(CloudMemoryAdapter.KeptRemovalWhy, Assert.Single(pc.Adapter.OtherVersions).Why);
+    Assert.Null(pc.Memory.ReadFile("hoot/notes/a-5.md"));
+    var group = Assert.Single(await pc.Adapter.BinGroupsAsync());
+    Assert.Equal(CloudBinEra.OlderVersion, group.Era);
+    Assert.Equal("a-5", Assert.Single(group.Items).Name);
 
-    // A label row the PC still holds and a file gone from the PC's folder never travel as removals.
+    // A file gone from the PC's folder by hand (two looks 3 s apart) never travels: "Not on this PC", Cloud keeps it.
     var sent = service.Segments;
     File.Delete(Path.Combine(scratch, "memory", "files", "hoot", "notes", "a-6.md"));
     await pc.Engine.SyncAsync(default);
+    service.Now += 4_000;
+    await pc.Engine.SyncAsync(default);
     Assert.Equal(sent, service.Segments);
     Assert.NotEmpty(Text(memA, "hoot/notes/a-6.md"));
+    Assert.Equal(CloudLocalMark.NotOnThisPc, Assert.Single(await pc.Adapter.NotHereAsync()).Mark);
   }
 
   [Fact]

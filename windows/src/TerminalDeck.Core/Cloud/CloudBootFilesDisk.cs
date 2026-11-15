@@ -215,6 +215,26 @@ public static class CloudBootFilesDisk
     throw new Stop("changed");
   }
 
+  /// The delete rule: removes a file whose bytes have the fingerprint `expecting`, and nothing else (an edit that
+  /// landed a moment ago is put back exactly as it was).
+  public static void Remove(string root, string relative, string expecting)
+  {
+    var (folderPart, name) = Split(relative);
+    var folder = Descend(Root(root), folderPart.Length == 0 ? [] : folderPart.Split('/'), create: false) ?? throw new Stop("changed");
+    var current = ReadIn(folder, name, CloudBootFilesFormat.MaximumFileBytes);
+    if (current.Blocked is { } blocked) throw new Stop(blocked == "too-large" ? "changed" : blocked);
+    if (current.Bytes is not { } held || CloudMemoryFormat.Hash(held) != expecting) throw new Stop("changed");
+    var target = Path.Combine(folder, name);
+    var aside = Path.Combine(folder, ".td-cloud-" + Guid.NewGuid().ToString("N") + ".gone");
+    try { File.Move(target, aside, overwrite: false); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { throw new Stop("unwritable"); }
+    byte[]? moved = null;
+    try { moved = File.ReadAllBytes(aside); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    if (moved is not null && CloudMemoryFormat.Hash(moved) == expecting) { TryDelete(aside); return; }
+    try { File.Move(aside, target, overwrite: false); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    throw new Stop("changed");
+  }
+
   /// The boot files of one place by the list: only the listed top-level files and the listed folders are opened.
   public static Walk Scan(string root, CloudBootFilesPlaceKind kind)
   {
