@@ -349,6 +349,72 @@ public sealed class WhatsAppEngineTests : IDisposable
     b.Stop();
   }
 
+  // ---- A session that moves to another Mac takes its agent with it (16 Nov): Windows keeps the Cloud id ----
+
+  [Fact]
+  public async Task EveryWindowsWriteKeepsTheSessionsCloudId()
+  {
+    var a = w.Engine(w.PcA); var b = w.Engine(w.PcB);
+    w.Receivers.Open(new("s1", false));
+    var added = await a.AddAsync("Phone", KeyA);
+    await Settled(added.Id);
+    await a.SetReceiverAsync(added.Id, WhatsAppReceiver.Session("s1", "CRM"));
+    await w.Settings.EditAsync(added.Id, r => r with { CloudSessionId = "c1" });      // written by a Mac
+    async Task<string?> Cloud() => (await w.Settings.RecordsAsync()).Single(r => r.Id == added.Id).CloudSessionId;
+    await a.RenameAsync(added.Id, "Work phone"); Assert.Equal("c1", await Cloud());
+    await a.SetSendingAsync(false, added.Id); Assert.Equal("c1", await Cloud());
+    await b.ReplaceKeyAsync(added.Id, KeyB); Assert.Equal("c1", await Cloud());      // the key fingerprint
+    await a.SessionEndedAsync("s1"); Assert.Equal("c1", await Cloud());              // ended: kept, as on the Mac
+    // Take-over (Hoot moves after ten minutes) rewrites the reader only.
+    var hoot = await a.AddAsync("Home", "made-up-whatsapp-key-cccccccccccccccc");
+    await a.SetReceiverAsync(hoot.Id, WhatsAppReceiver.Hoot);
+    await Settled(hoot.Id);
+    await w.Settings.EditAsync(hoot.Id, r => r with { CloudSessionId = "c9" });
+    a.Stop();
+    w.Seen["a"] = w.Clock.Now.AddMinutes(-11);
+    await b.ReconcileAsync();
+    var taken = (await w.Settings.RecordsAsync()).Single(r => r.Id == hoot.Id);
+    Assert.True(taken.TakenOver && taken.ReaderId == "b" && taken.CloudSessionId == "c9");
+    b.Stop();
+    // The reading position (the link's own write).
+    var box = new RecordBox(Rec(WhatsAppReceiver.Session("s1", "CRM"), creator: null, offset: null) with { CloudSessionId = "c1" });
+    w.Wa.AddBacklog([w.Text("old-1", "hello", ago: 60)]);
+    var link = w.Link(box);
+    link.Start();
+    await World.Until(() => box.Record.Offset == w.Wa.NextOffset);
+    link.Stop();
+    Assert.Equal("c1", box.Record.CloudSessionId);
+  }
+
+  /// The new agent's first read has learned the head: its link writes nothing more while no message comes.
+  private Task Settled(string id) => World.Until(async () => (await w.Settings.RecordsAsync()).Single(r => r.Id == id).Offset is not null);
+
+  [Fact]
+  public async Task ANewReceiverChosenOnWindowsLeavesNoOldCloudIdBehind()
+  {
+    var a = w.Engine(w.PcA);
+    foreach (var id in new[] { "s1", "s2", "s3" }) w.Receivers.Open(new(id, false));
+    var added = await a.AddAsync("Phone", KeyA);
+    await Settled(added.Id);
+    async Task<string?> After(WhatsAppReceiver receiver)
+    {
+      await w.Settings.EditAsync(added.Id, r => r with { Receiver = WhatsAppReceiver.Session("s1", "CRM"), CloudSessionId = "c1" });
+      await a.SetReceiverAsync(added.Id, receiver);
+      return (await w.Settings.RecordsAsync()).Single(r => r.Id == added.Id).CloudSessionId;
+    }
+    // The Mac's setReceiver: the new session's own Cloud id, none when it is unknown; Hoot, an agent, Nowhere: none.
+    Assert.Null(await After(WhatsAppReceiver.Hoot));
+    Assert.Null(await After(WhatsAppReceiver.Agent("ag1", "Builder")));
+    Assert.Null(await After(WhatsAppReceiver.Nowhere));
+    Assert.Null(await After(WhatsAppReceiver.Session("s2", "Here")));                 // a PC session: no Cloud id known
+    w.Receivers.Clouds["s3"] = "c3";
+    Assert.Equal("c3", await After(WhatsAppReceiver.Session("s3", "Other")));
+    await w.Settings.EditAsync(added.Id, r => r with { Receiver = WhatsAppReceiver.Session("s1", "CRM"), CloudSessionId = "c1" });
+    await a.OffAsync(WhatsAppReceiver.Session("s1", ""));                            // Off = Nowhere
+    Assert.Null((await w.Settings.RecordsAsync()).Single(r => r.Id == added.Id).CloudSessionId);
+    a.Stop();
+  }
+
   [Fact]
   public async Task A409WhileStillTheReaderPollsAgainAndAnotherNamedReaderStopsIt()
   {
@@ -593,6 +659,9 @@ internal sealed class FakeReceivers : IWhatsAppReceiverPort
     lock (gate) return Task.FromResult(target.SessionId.StartsWith("hoot-", StringComparison.Ordinal) || target.SessionId.StartsWith("agent-", StringComparison.Ordinal) || open.ContainsKey(target.SessionId));
   }
   public Task<bool> IsToolSessionAsync(WhatsAppTarget target, string sessionId) => Task.FromResult(false);
+  /// Local session id -> its Cloud id (the Mac's fake `clouds`); Windows' own port knows none yet.
+  public Dictionary<string, string> Clouds { get; } = [];
+  public Task<string?> CloudSessionIdAsync(string sessionId) { lock (gate) return Task.FromResult(Clouds.GetValueOrDefault(sessionId)); }
 }
 
 /// The synced settings both computers share, through the Mac's JSON (as the synced setting is).

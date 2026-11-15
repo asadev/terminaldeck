@@ -39,6 +39,10 @@ public sealed record WhatsAppAgentRecord
   /// Security review fault 1: the first 16 hex of the key's SHA-256 (not the key). A computer reads the agent only while
   /// its own stored key has this fingerprint.
   public string? KeyId { get; init; }
+  /// The session receiver's Cloud id (the same on every computer, unlike its local id): how a session that moves to another
+  /// Mac takes its WhatsApp agent with it. Windows cannot take a session, so it only carries this field unchanged through
+  /// its own writes (dropping it would erase it on every computer) and clears it when it sets a new receiver, as the Mac does.
+  public string? CloudSessionId { get; init; }
 
   // ---- the Mac's JSON shape (Swift synthesized Codable: nil optionals left out, enum cases as one-key objects) ----
 
@@ -62,6 +66,7 @@ public sealed record WhatsAppAgentRecord
     o["addedAt"] = AddedAt;
     if (Sending is bool s) o["sending"] = s;
     if (KeyId is not null) o["keyID"] = KeyId;
+    if (CloudSessionId is not null) o["cloudSessionID"] = CloudSessionId;
     return o.ToJsonString();
   }
 
@@ -93,6 +98,7 @@ public sealed record WhatsAppAgentRecord
         Id = id, Name = name, Receiver = receiver, ReaderId = Str(o, "readerID"), ReaderName = Str(o, "readerName"), TakenOver = takenOver,
         Creator = Str(o, "creator"), Offset = Num(o, "offset") is double off ? (long)off : null, LastMessageAt = Num(o, "lastMessageAt"),
         Refused = refused, EndedSession = ended, Removed = removed, AddedAt = addedAt, Sending = Bool(o, "sending"), KeyId = Str(o, "keyID"),
+        CloudSessionId = Str(o, "cloudSessionID"),
       };
     }
     catch (JsonException) { return null; }
@@ -168,4 +174,6 @@ public interface IWhatsAppReceiverPort
   /// Whether a tool call carrying sessionId comes from this target (its own id, or for Hoot's lasting conversation the
   /// AI process behind it).
   Task<bool> IsToolSessionAsync(WhatsAppTarget target, string sessionId);
+  /// A local session's Cloud id (the same on every computer); null when unknown. Windows sessions have none yet.
+  Task<string?> CloudSessionIdAsync(string sessionId) => Task.FromResult<string?>(null);
 }

@@ -15,7 +15,25 @@ public sealed class WhatsAppWindowsTests
     """{"addedAt":1763200000000,"creator":"user:1","endedSession":false,"id":"wa-1","keyID":"0123456789abcdef","lastMessageAt":1763200000123,"name":"Phone","offset":7,"readerID":"a","readerName":"Mac A","receiver":{"hoot":{}},"refused":false,"removed":false,"sending":true,"takenOver":false}""",
     """{"addedAt":5,"endedSession":true,"id":"wa-2","name":"Build","receiver":{"session":{"id":"s1","name":"CRM"}},"refused":true,"removed":true,"sending":false,"takenOver":true}""",
     """{"addedAt":0,"endedSession":false,"id":"wa-3","name":"N","receiver":{"nowhere":{}},"refused":false,"removed":false,"takenOver":false}""",
+    // 16 Nov: the session's Cloud id (lane/mac-whatsapp-follow aabe9266c, BackendWhatsAppPorts.swift `cloudSessionID`).
+    """{"addedAt":1763200000000,"cloudSessionID":"cloud-s-1","creator":"user:1","endedSession":false,"id":"wa-5","keyID":"0123456789abcdef","lastMessageAt":1763200000123,"name":"Phone","offset":7,"readerID":"a","readerName":"Mac A","receiver":{"session":{"id":"s1","name":"CRM"}},"refused":false,"removed":false,"sending":false,"takenOver":false}""",
   ];
+
+  [Fact]
+  public void TheSessionsCloudIdIsReadAndSavedAsTheMacWritesIt()
+  {
+    var mac = WhatsAppAgentRecord.FromJson(Golden[3])!;
+    Assert.Equal("cloud-s-1", mac.CloudSessionId);
+    var saved = mac.ToJson();
+    // The Mac's own field order (Codable declaration order: cloudSessionID last, after keyID); the same bytes on every re-save.
+    Assert.EndsWith(",\"keyID\":\"0123456789abcdef\",\"cloudSessionID\":\"cloud-s-1\"}", saved);
+    Assert.Equal(saved, WhatsAppAgentRecord.FromJson(saved)!.ToJson());
+    // Without it: absent, never null or empty, and the old bytes unchanged.
+    var plain = WhatsAppAgentRecord.FromJson(Golden[0])!;
+    Assert.Null(plain.CloudSessionId);
+    Assert.DoesNotContain("cloudSessionID", plain.ToJson());
+    Assert.Equal(plain.ToJson(), (plain with { CloudSessionId = "c" }).ToJson().Replace(",\"cloudSessionID\":\"c\"", ""));
+  }
 
   [Fact]
   public void TheSyncedRecordIsTheMacsOwnJson()

@@ -183,11 +183,13 @@ public sealed class WhatsAppAgents : IWhatsAppAgentsControlling
   {
     var me = presence.ThisComputer();
     var nowhere = receiver.Kind == WhatsAppReceiverKind.Nowhere;
+    // A new receiver replaces the old session's Cloud id (the Mac's setReceiver): a session's own, anything else none.
+    var cloud = receiver.Kind == WhatsAppReceiverKind.Session ? await receivers.CloudSessionIdAsync(receiver.Id) : null;
     // Moving the receiver moves the reader: the computer where he attached it. Attaching turns the switch on.
     await ChangeAsync(id, r => r with
     {
       Receiver = receiver, ReaderId = nowhere ? null : me.Id, ReaderName = nowhere ? null : me.Name,
-      TakenOver = false, EndedSession = false, Sending = true,
+      TakenOver = false, EndedSession = false, Sending = true, CloudSessionId = cloud,
     });
     TakeLink(id)?.Stop();
     await ReconcileAsync();
