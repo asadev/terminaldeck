@@ -49,13 +49,26 @@ public sealed class CloudChatsClient(CloudSyncEndpoint endpoint, ICloudSyncAuth 
 /// PC reads too (contract §7: `self:false` rows are other machines'). The Mac's BackendCloudSessionsRead.
 public static class CloudSessionsRead
 {
-  public sealed record Machine(string? Ref, string? Name, bool? On, bool? Listed);
+  /// One of the account's machines as the session list names it: `DisplayName` is the service's name for it (the
+  /// friendly name it was given), else the kind of machine; never empty.
+  public sealed record Machine(string? Ref, string? Name, bool? On, bool? Listed, string? Platform = null)
+  {
+    [System.Text.Json.Serialization.JsonIgnore] public string DisplayName => CloudDeviceNames.Shown(Name, null, Platform);
+  }
   public sealed record Move(string Id, string? To, string? ToName, string? From, string? FromName, double? At);
   public sealed record Row(string Ref, string? SessionId = null, string? Name = null, double? LastUsedAt = null, CloudChats.Project? Project = null,
     string? Ai = null, string? Kind = null, string? Status = null, string? Machine = null, string? MachineName = null, bool? MachineOn = null,
     [property: System.Text.Json.Serialization.JsonPropertyName("self")] bool? Mine = null, bool? Readable = null, double? ClosedAt = null,
     string? Cwd = null, string? Login = null, string? ConversationId = null, double? StartedAt = null, long? CodeAt = null, [property: System.Text.Json.Serialization.JsonPropertyName("move")] Move? MoveOpen = null,
     string? MovedFrom = null, double? MovedAt = null);
+  /// The machine a session runs on, as "Runs on <name>" says it: its machine's name in the account's list (by ref), else
+  /// the name the row carries, else "another computer". Never empty.
+  public static string RunsOn(Row row, IReadOnlyDictionary<string, Machine>? machines = null)
+  {
+    if (row.Machine is { } reference && machines is not null && machines.TryGetValue(reference, out var machine)
+      && (machine.Name?.Trim().Length > 0 || row.MachineName?.Trim() is not { Length: > 0 })) return machine.DisplayName;
+    return row.MachineName?.Trim() is { Length: > 0 } name ? name : "another computer";
+  }
   public sealed record Page(IReadOnlyList<Machine>? Machines, IReadOnlyList<Row>? Sessions, string? Next);
   /// One page of a readable copy: its events (raw, as the phones draw them), where it starts.
   public sealed record ChatPage(int Gen, int Total, int First, int Count, IReadOnlyList<JsonElement> Events);

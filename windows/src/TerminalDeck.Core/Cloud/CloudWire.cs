@@ -99,8 +99,30 @@ public sealed record CloudAuthSession(string AccessToken, string RefreshToken, l
 public sealed record CloudPublicJwk(string Kty, string Crv, string X, string? Y = null);
 public sealed record CloudDeviceRegistration(string DeviceId, string Label, string Platform, string AppVersion, CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk);
 public sealed record CloudDeviceRegistrationReceipt(string DeviceId, string Status, bool SecretsApproved, string? HeadSeq = null, string? VaultState = null);
+/// `FriendlyName`: the service's `displayName`, the computer's friendly name as the device last told it (null from an older
+/// service). `DisplayName` is what every page and list calls the device (the Mac's CloudDevice.shownName): that name,
+/// else the recorded label, else the kind of device ("Mac", "PC", "iPhone"). Never empty; display only.
 public sealed record CloudDevice(string DeviceId, string Label, string Platform, string AppVersion, string Status, bool SecretsApproved, long LastSeenAt,
-  CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null);
+  CloudPublicJwk SignPublicJwk, CloudPublicJwk WrapPublicJwk, long? RegisteredAt = null,
+  [property: System.Text.Json.Serialization.JsonPropertyName("displayName")] string? FriendlyName = null)
+{
+  [System.Text.Json.Serialization.JsonIgnore] public string DisplayName => CloudDeviceNames.Shown(FriendlyName, Label, Platform);
+}
+/// How a machine is named on every page (the Mac's CloudDevice.shownName, plus a kind word so a name is never empty).
+public static class CloudDeviceNames
+{
+  /// The kind of device a platform word names.
+  public static string Kind(string? platform) => platform switch
+  {
+    "macos" => "Mac", "windows" => "PC", "ios" => "iPhone", "android" => "Android phone", "web" => "Browser", _ => "Computer"
+  };
+  public static string Shown(string? friendly, string? label, string? platform)
+  {
+    var name = friendly?.Trim() ?? "";
+    if (name.Length == 0) name = label?.Trim() ?? "";
+    return name.Length == 0 ? Kind(platform) : name;
+  }
+}
 public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string? ReceiverDeviceId = null);
 
 /// One row of the page's device list: what is drawn is ONLY the name, the date added and last seen, and "This PC".
