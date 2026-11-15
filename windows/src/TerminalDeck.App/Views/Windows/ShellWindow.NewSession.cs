@@ -15,12 +15,39 @@ public sealed partial class ShellWindow
 {
   private NewSessionPage? newSessionPage;
   private readonly Dictionary<string, string> pendingChatDrafts = [];
+  // Which coding AIs are on this PC (15 Nov: the account menu lists only installed ones). Unknown counts as
+  // installed until the check answers, so nothing disappears by mistake.
+  private readonly Dictionary<string, bool> installedAis = [];
+  private bool checkingAis;
 
   internal void OpenNewSessionPage(string? projectId = null)
   {
     var page = NewSessionView();
     Model.Page = ShellPage.NewSession;
     page.Arrive(projectId);
+    _ = CheckInstalledAisAsync();
+  }
+
+  private async Task CheckInstalledAisAsync()
+  {
+    if (checkingAis) return;
+    checkingAis = true;
+    var changed = false;
+    try
+    {
+      foreach (var provider in new[] { "claude", "codex", "gemini" })
+      {
+        if (Runtime.Accounts.List(provider).FirstOrDefault() is not { } account) continue;
+        try
+        {
+          if ((await Runtime.Accounts.InstallationAsync(account.Id)).Installed is { } installed && installedAis.GetValueOrDefault(provider, true) != installed)
+          { installedAis[provider] = installed; changed = true; }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { }
+      }
+    }
+    finally { checkingAis = false; }
+    if (changed) newSessionPage?.Refresh();
   }
 
   // "When Terminal Deck opens" (Settings > General). Proof and test runs keep their own start.
@@ -54,7 +81,8 @@ public sealed partial class ShellWindow
     var leads = projects.ToDictionary(p => p.Id, p => p.Lead);
     var agents = Runtime.Agents.List().Where(a => a.Status == TerminalDeck.Core.Agents.SavedAgentStatus.Active)
       .Select(a => new NewSessionAgent(a.Id, a.Name, a.ProjectId, a.Provider, leads.GetValueOrDefault(a.ProjectId) == "agent:" + a.Id)).ToArray();
-    return new(projects.Select(p => p.Id).ToArray(), agents, ["claude", "codex", "gemini", "shell"],
+    string[] providers = [.. new[] { "claude", "codex", "gemini" }.Where(p => installedAis.GetValueOrDefault(p, true)), "shell"];
+    return new(projects.Select(p => p.Id).ToArray(), agents, providers,
       provider => Runtime.Accounts.List(provider).Select(a => a.Id).ToArray(), provider => Runtime.Accounts.Default(provider)?.Id, Runtime.General.Read().DefaultProvider);
   }
 

@@ -18,7 +18,7 @@ public sealed class AdvancedPreferencesPage : UserControl
   private readonly Action? resetTheme;
   private readonly Action<bool>? closeConfirmation;
   private readonly Func<bool>? openPaired;
-  private readonly StackPanel body = new() { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+  private readonly StackPanel body = SettingsPanel.Column();
   private readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(8, -8, 0, 0) };
   public AdvancedPreferencesPage(AppRuntime runtime, BrowserModel? browser, Action? resetTheme, Action<bool>? closeConfirmation, Func<bool>? openPaired = null)
   {

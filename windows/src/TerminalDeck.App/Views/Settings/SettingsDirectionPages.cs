@@ -23,6 +23,8 @@ public sealed partial class SettingsPane
 
   // Settings > Advanced > "Paired with a code" opens the paired devices' own window.
   public Func<bool>? OpenPairedDevices { get; set; }
+  // Opens a page of the Settings window through its history (set by SettingsPanel; null in other hosts).
+  internal Func<string, Task>? NavigateSettings { get; set; }
   // The account the Settings list's profile row shows.
   internal TerminalDeck.Core.Cloud.CloudAccountClient CloudAccount => runtime.Cloud;
   // Devices and Cloud live inside Profile (Mac, 15 Nov); a device's own page is "device:<id>".
@@ -41,6 +43,7 @@ public sealed partial class SettingsPane
     "agent-defaults" => AgentSettings(),
     "browser" => BrowserSettings(),
     "tasks" => TaskSettings(select),
+    "custom-clis" => CustomCliSettings(),
     _ => null
   };
 
@@ -222,6 +225,17 @@ public sealed partial class SettingsPane
     ], chooser);
   }
 
+  // Coding AIs > Custom terminal CLIs, a second page of this window (15 Nov), not its own window.
+  private FrameworkElement CustomCliSettings()
+  {
+    FrameworkElement? form = null;
+    nint Handle() => form?.XamlRoot?.ContentIslandEnvironment is { } island ? Microsoft.UI.Win32Interop.GetWindowFromWindowId(island.AppWindowId) : 0;
+    var body = Agents.CustomTerminalProviderWindow.Form(runtime.CustomProviders, Handle, false);
+    body.Padding = new Thickness(12);
+    form = body;
+    return DirectionPage([("Definitions", Agents.CustomTerminalProviderWindow.About, new FrameworkElement[] { body })]);
+  }
+
   private FrameworkElement BrowserSettings()
   {
     var store = new JsonStateStore<BrowserStartPage>(runtime.Root, "browser-start-page");
@@ -266,9 +280,11 @@ public sealed partial class SettingsPane
       })));
     }
     else profiles.Add(SettingsPanel.SettingRow("Profiles", "Open Browser to manage profiles and sign-ins.", null));
-    if (PrivacyBrowser is { } privacyBrowser) profiles.Add(new BrowserPrivacyPage(privacyBrowser));
+    // Every row inside its group's card, one line each (15 Nov).
+    var privacy = PrivacyBrowser is { } privacyBrowser ? new BrowserPrivacyPage(privacyBrowser) : null;
+    if (privacy is not null) profiles.AddRange(privacy.SignInRows);
     var result = DirectionPage([("Pages", null, rows.ToArray()),
-      ("Cookies and sign-ins", "Each profile is a separate set of logins and cookies. Shared tabs keep sign-ins between app launches.", profiles.ToArray())]);
+      ("Cookies and sign-ins", "Each profile is a separate set of logins and cookies. Shared tabs keep sign-ins between app launches.", profiles.ToArray())], bottom: privacy);
     if (loadProblem is not null) directionStatus.Text = loadProblem;
     return result;
   }
@@ -371,9 +387,9 @@ public sealed partial class SettingsPane
 
   // One centred column; no heading inside the page (the top bar is the heading); groups apart by space; a group's
   // explanation sits behind the info button beside its title.
-  private FrameworkElement DirectionPage(IEnumerable<(string? Heading, string? Help, FrameworkElement[] Rows)> groups, FrameworkElement? top = null)
+  private FrameworkElement DirectionPage(IEnumerable<(string? Heading, string? Help, FrameworkElement[] Rows)> groups, FrameworkElement? top = null, FrameworkElement? bottom = null)
   {
-    var body = new StackPanel { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+    var body = SettingsPanel.Column();
     if (top is not null) body.Children.Add(top);
     foreach (var (heading, help, rows) in groups)
     {
@@ -381,6 +397,7 @@ public sealed partial class SettingsPane
       if (!string.IsNullOrWhiteSpace(heading)) body.Children.Add(SettingsPanel.GroupTitle(heading, help));
       body.Children.Add(SettingsPanel.GroupRows(rows));
     }
+    if (bottom is not null) body.Children.Add(bottom);
     var surface = new Grid();
     var scroll = new ScrollViewer { Content = body, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; surface.Children.Add(scroll);
     directionStatus = new Notices.CompactNotice { Scope = surface };

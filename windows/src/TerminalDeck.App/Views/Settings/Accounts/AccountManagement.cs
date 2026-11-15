@@ -49,7 +49,8 @@ public sealed partial class SettingsPane
     if (accounts.Count == 0) stack.Children.Add(Description("No accounts yet"));
     foreach (var section in sections) stack.Children.Add(section);
     if (sections.Count == 0) stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageAddRow("Add account", "accounts.add", () => ShowAddAccountAsync())]));
-    var more = new List<FrameworkElement> { AiPageLinkRow("Which account agents use", () => SelectSectionAsync(1)) };
+    // A second page of this window (15 Nov): the bar names it and Back returns.
+    var more = new List<FrameworkElement> { AiPageLinkRow("Which account agents use", () => NavigateSettings?.Invoke("accounts") ?? SelectSectionAsync(1)) };
     foreach (var provider in missing)
     {
       var install = new Button { Content = "Install" };
@@ -57,7 +58,11 @@ public sealed partial class SettingsPane
       install.Click += async (_, _) => await AiPageRunAsync(install, async () => { await runtime.InstallAiAsync(provider); installations.Remove(provider); await RenderAsync(); });
       more.Add(AiPageRow(AccountMcp.AgentName(provider), "Not installed", install));
     }
-    more.Add(AiPageLinkRow("Custom terminal CLIs", () => { Agents.CustomTerminalProviderWindow.Open(runtime.CustomProviders, ActualTheme); return Task.CompletedTask; }));
+    more.Add(AiPageLinkRow("Custom terminal CLIs", () =>
+    {
+      if (NavigateSettings is { } navigate) return navigate("custom-clis");
+      Agents.CustomTerminalProviderWindow.Open(runtime.CustomProviders, ActualTheme); return Task.CompletedTask;
+    }));
     stack.Children.Add(Settings.SettingsPanel.GroupRows(more));
   }
 

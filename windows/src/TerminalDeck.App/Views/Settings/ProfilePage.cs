@@ -49,10 +49,18 @@ public sealed class ProfilePage : UserControl
     var snapshot = account.Snapshot;
     if (!AccountPages.SignedIn(snapshot))
     {
-      var signIn = new Button { Content = snapshot.Phase == CloudPhase.SigningIn ? CloudPageText.Cancel : CloudPageText.SignIn, IsEnabled = !working };
+      // Signed out (15 Nov): centred, a round placeholder picture, "Not signed in", ONE accent "Sign in".
+      var signingIn = snapshot.Phase == CloudPhase.SigningIn;
+      var signIn = new Button { Content = signingIn ? CloudPageText.Cancel : CloudPageText.SignIn, IsEnabled = !working, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0) };
+      if (!signingIn) signIn.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+      AutomationProperties.SetAutomationId(signIn, "settings.profile.signInButton");
       signIn.Click += async (_, _) => await PressAsync(async () => { if (account.Snapshot.Phase == CloudPhase.SigningIn) account.CancelSignIn(); else await account.BeginSignInAsync(); });
-      body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow(snapshot.Phase == CloudPhase.SigningIn ? CloudPageText.SigningInLine : "Not signed in",
-        "Sign in once with your " + TerminalDeck.Core.Brand.Name + " account; your devices, sessions and data follow.", signIn)]));
+      var nobody = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) };
+      nobody.Children.Add(new PersonPicture { Width = 96, Height = 96, HorizontalAlignment = HorizontalAlignment.Center });
+      nobody.Children.Add(new TextBlock { Text = signingIn ? CloudPageText.SigningInLine : "Not signed in", FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) });
+      nobody.Children.Add(signIn);
+      body.Children.Add(nobody);
+      if (pressProblem is { } failed) body.Children.Add(AccountPages.Problem(failed));
       return;
     }
     var profile = read ?? CloudProfile.FromSnapshot(snapshot);
@@ -186,7 +194,7 @@ public sealed class SignInPage : UserControl
 // What the account pages share: the centred column, the signed-in test, the device words and the sign-out question.
 internal static class AccountPages
 {
-  internal static StackPanel Body() => new() { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+  internal static StackPanel Body() => SettingsPanel.Column();
 
   internal static ScrollViewer Scroll(StackPanel body) => new() { Content = body, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
 

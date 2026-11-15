@@ -93,7 +93,10 @@ internal sealed class NewSessionPage : Grid
     AutomationProperties.SetAutomationId(accountChip, "newSession.account");
     accountChip.Flyout = AccountMenu();
     line.Children.Add(projectChip); line.Children.Add(dot); line.Children.Add(accountChip);
+    // The bar says "New session" on this page (15 Nov); the page itself has no other heading.
+    identity.Children.Add(ChatBar.Title("New session"));
     identity.Children.Add(line); bar.Children.Add(identity);
+    Quiet(projectChip); Quiet(accountChip);
     foreach (var mode in new[] { chatMode, terminalMode })
     {
       mode.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
@@ -132,6 +135,8 @@ internal sealed class NewSessionPage : Grid
     box.Permission.IsHitTestVisible = false; box.Permission.IsTabStop = false;
     box.Send.Click += async (_, _) => await SendAsync();
     frame.Children.Add(box.Assemble((Style)frame.Resources["ComposerGlass"], null));
+    // Under the box: the same small quiet chips as the project and the account (15 Nov), not bare words.
+    Quiet(box.Permission); Quiet(box.Model); Quiet(box.Effort);
     frame.SizeChanged += (_, _) => ChatFrame.Fit(frame, box);
     AutomationProperties.SetAutomationId(box.Text, "newSession.box");
     Children.Add(frame);
@@ -153,6 +158,9 @@ internal sealed class NewSessionPage : Grid
     box.Text.TextCompositionEnded += (_, _) => enter.CompositionEnded();
     Show();
   }
+
+  // The window learned something new (which AIs are installed): redraw with the same choices where they still fit.
+  public void Refresh() { choices = Refit(choices); Show(); }
 
   // Shown again (New session pressed, or the app opened): take the keyboard and refresh the lists.
   public void Arrive(string? projectId)
@@ -177,11 +185,18 @@ internal sealed class NewSessionPage : Grid
     // Project (or the picked folder's name), and agent, on the bar's line, like the chat's folder.
     var where = folder is { } picked ? FolderName(picked) : services.ProjectName(choices.ProjectId);
     var place = where + (choices.AgentId is { } agent ? " · " + services.AgentName(agent) : "");
-    ((TextBlock)projectChip.Content).Text = place;
+    projectChip.Content = Chip(place);
     ToolTipService.SetToolTip(projectChip, "Project and agent · " + place); AutomationProperties.SetName(projectChip, "Project and agent: " + place);
     var account = choices.AccountId is { } id ? services.Accounts(provider).FirstOrDefault(a => a.Id == id) : null;
-    var accountLabel = NewSessionPresets.UsesAccount(provider) ? account is null ? name + " · add an account" : account.Name + (account.SignedIn ? "" : " · sign-in needed") : name;
-    accountChip.Content = accountLabel; ToolTipService.SetToolTip(accountChip, accountLabel); AutomationProperties.SetName(accountChip, "AI and account: " + accountLabel);
+    var accountLabel = NewSessionPresets.UsesAccount(provider) ? account is null ? name + " · add an account" : account.Name : name;
+    // An account that needs sign-in carries an orange dot before its name, never words (15 Nov).
+    var needsSignIn = account is { SignedIn: false } && NewSessionPresets.UsesAccount(provider);
+    var chipLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+    if (needsSignIn) chipLine.Children.Add(NeedsDot());
+    chipLine.Children.Add(Chip(accountLabel));
+    accountChip.Content = chipLine;
+    var spoken = needsSignIn ? accountLabel + ", needs sign-in" : accountLabel;
+    ToolTipService.SetToolTip(accountChip, spoken); AutomationProperties.SetName(accountChip, "AI and account: " + spoken);
     // Chat · Terminal only for an AI that can chat.
     modeSwitch.Visibility = NewSessionPresets.CanChat(provider) ? Visibility.Visible : Visibility.Collapsed;
     chatMode.IsChecked = choices.Mode == "chat"; terminalMode.IsChecked = choices.Mode == "terminal";
@@ -208,7 +223,27 @@ internal sealed class NewSessionPage : Grid
     RenderFiles();
   }
   private static string FolderName(string path) => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } name ? name : path;
-  private TextBlock Chip(string text) => new() { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, Style = (Style)frame.Resources["ChatChoiceText"] };
+  private static TextBlock Chip(string text)
+  {
+    var words = new TextBlock { Text = text, FontSize = 12, MaxWidth = 200, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+    words.SetResourceReference(TextBlock.ForegroundProperty, "DeckSecondaryInkBrush");
+    return words;
+  }
+
+  // The app's small quiet chip: a soft fill, a small radius, one line of secondary text.
+  private static void Quiet(Button chip)
+  {
+    chip.SetResourceReference(Control.BackgroundProperty, "DeckControlBrush");
+    chip.CornerRadius = new CornerRadius(6); chip.Padding = new Thickness(8, 2, 8, 2);
+    chip.Height = 24; chip.MinHeight = 24; chip.MinWidth = 0; chip.FontSize = 12; chip.VerticalAlignment = VerticalAlignment.Center;
+  }
+
+  private static Microsoft.UI.Xaml.Shapes.Ellipse NeedsDot()
+  {
+    var needs = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
+    needs.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, "DeckProjectOrangeBrush");
+    return needs;
+  }
 
   // ONE menu for where the session runs (owner, 15 Nov: "it should just give me projects ... instead,
   // we can have a choose folder here"): his projects, then "Choose folder…", then "Choose agent…" for
@@ -303,7 +338,7 @@ internal sealed class NewSessionPage : Grid
           if (!account.SignedIn)
           {
             var needs = new FontIcon { Glyph = "\u25CF", FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe UI"), FontSize = 10 };
-            needs.SetResourceReference(IconElement.ForegroundProperty, "SystemFillColorCautionBrush");
+            needs.SetResourceReference(IconElement.ForegroundProperty, "DeckProjectOrangeBrush");
             item.Icon = needs;
             AutomationProperties.SetName(item, account.Name + ", needs sign-in");
           }

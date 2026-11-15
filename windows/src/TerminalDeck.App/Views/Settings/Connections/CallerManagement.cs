@@ -54,6 +54,9 @@ public sealed partial class SettingsPane
     }
     keys.Add(AiPageAddRow("New key", "aiApps.newKey", ConnectAiAppAsync));
     stack.Children.Add(AiPageSection("Keys", null, null, Settings.SettingsPanel.GroupRows(keys)));
+    // MCP servers: a second page of this window, not a switch at the top (15 Nov).
+    if (NavigateSettings is { } navigate)
+      stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageLinkRow("MCP servers", () => navigate("mcp-servers"))]));
   }
   // What a key may do, in words (its calling AI's permission setting).
   private static string KeyMayDo(AiPermissionMode mode) => mode switch

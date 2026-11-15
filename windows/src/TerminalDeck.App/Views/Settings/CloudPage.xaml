@@ -6,6 +6,6 @@
       group 1 = the state and Sync now, then Use Cloud on this PC; then how this PC trusts your other devices.
       No heading inside the page: the Settings top bar is the heading. -->
  <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
-  <StackPanel x:Name="Body" MaxWidth="640" Spacing="20" Margin="20,8,20,20" HorizontalAlignment="Center"/>
+  <StackPanel x:Name="Body" MaxWidth="560" Spacing="20" Margin="20,8,20,20" HorizontalAlignment="Stretch"/>
  </ScrollViewer>
 </UserControl>

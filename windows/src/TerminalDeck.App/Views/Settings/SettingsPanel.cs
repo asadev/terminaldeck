@@ -49,6 +49,9 @@ public sealed partial class SettingsPanel : Grid
     legacy.SettingsContentRendered += () => { if (page.Children.Contains(legacy)) PresentHostedPage(); };
     legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await ShowAsync(selectedSection, false); };
     legacy.CloudAccount.Changed += _ => DispatcherQueue.TryEnqueueHandled(UpdateProfileRow);
+    // A row that opens a second page ("Which account agents use", "MCP servers", "Custom terminal CLIs") goes
+    // through this window's history, so the bar names it and Back returns.
+    legacy.NavigateSettings = SelectAsync;
     readTheme = theme; changeTheme = setTheme;
     selectedSection = initialSection; SelectedCategory = SettingsNavigation.Canonical(initialSection);
     AutomationProperties.SetAutomationId(this, "settings.panel");
@@ -61,7 +64,7 @@ public sealed partial class SettingsPanel : Grid
     // Only the rail header is draggable; the content stays white up to its top edge.
     DragArea = new Grid { Height = 40, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
     DragArea.Children.Add(new TextBlock { Text = "Settings", FontSize = 13, Margin = new Thickness(16, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-    var body = new Grid(); body.ColumnDefinitions.Add(new() { Width = new GridLength(194) }); body.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); SetRow(body, 1); Children.Add(body);
+    var body = new Grid(); body.ColumnDefinitions.Add(new() { Width = new GridLength(RailWidth) }); body.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); SetRow(body, 1); Children.Add(body);
     var rail = new Grid(); SetResourceReference(rail, BackgroundProperty, "DeckTransparentBrush"); rail.RowDefinitions.Add(new() { Height = GridLength.Auto }); rail.RowDefinitions.Add(new() { Height = GridLength.Auto }); rail.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
     rail.Children.Add(DragArea);
     AutomationProperties.SetName(search, "Search Settings"); search.TextChanged += (_, _) => FilterCategories(); SetRow(search, 1); rail.Children.Add(search);
@@ -71,7 +74,8 @@ public sealed partial class SettingsPanel : Grid
     SetRow(magnifier, 1); rail.Children.Add(magnifier);
     categories.Margin = new Thickness(8, 0, 8, 8); SetRow(categories, 2); rail.Children.Add(categories); body.Children.Add(rail);
     categories.SelectionChanged += async (_, _) => { if (!selecting && categories.SelectedItem is ListViewItem { Tag: string id }) await SelectAsync(id); };
-    SetResourceReference(detail, BackgroundProperty, "DeckCanvasBrush");
+    // The window's own material shows through, so a group's card reads as a card (Windows Settings' look).
+    SetResourceReference(detail, BackgroundProperty, "DeckTransparentBrush");
     InstallSelectionResources();
     detail.CornerRadius = new CornerRadius(0); detail.Margin = new Thickness(0);
     detail.RowDefinitions.Add(new() { Height = GridLength.Auto }); detail.RowDefinitions.Add(new() { Height = GridLength.Auto });
@@ -90,7 +94,7 @@ public sealed partial class SettingsPanel : Grid
     SetRow(tabSurface, 1); detail.Children.Add(tabSurface); SetRow(page, 2); detail.Children.Add(page); SetColumn(detail, 1); body.Children.Add(detail);
     // Keep a long previous page from giving the next ScrollViewer an oversized
     // desired width. Every category measures against this actual content cell.
-    SizeChanged += (_, _) => page.Width = Math.Max(0, ActualWidth - 194);
+    SizeChanged += (_, _) => page.Width = Math.Max(0, ActualWidth - RailWidth);
     saveStatus.Scope = this; Children.Add(saveStatus);
     // Collapse only the old navigation. Its content and all account/AI actions remain intact.
     legacy.Children[0].Visibility = Visibility.Collapsed;
@@ -148,7 +152,7 @@ public sealed partial class SettingsPanel : Grid
       visited.Add(section); visitedAt = visited.Count - 1;
     }
     UpdateHistoryButtons();
-    pageTitle.Text = SettingsNavigation.Title(SelectedCategory);
+    pageTitle.Text = SettingsNavigation.Title(section is "accounts" or "mcp-servers" ? section : SelectedCategory);
     NavigationChanged?.Invoke(section);
     selecting = true;
     var owner = SettingsNavigation.ListOwner(SelectedCategory);
@@ -162,16 +166,8 @@ public sealed partial class SettingsPanel : Grid
     }
     if (SelectedCategory == "appearance") { page.Children.Add(AppearancePage()); return; }
     if (SelectedCategory == "about") { page.Children.Add(AboutPage()); return; }
-    var index = SelectedCategory switch { "coding-ais" => section == "accounts" ? 1 : 0, "advanced" => 2, _ => section == "mcp" ? 3 : 4 };
-    if (SelectedCategory == "coding-ais")
-    {
-      AddTab("Coding AIs", 0, index); AddTab("Who uses what", 1, index);
-    }
-
-    if (SelectedCategory == "outside-ai-apps")
-    {
-      AddTab("AI apps", 4, index); AddTab("MCP servers", 3, index);
-    }
+    // No switch at the top of a page: the second half is a page of its own, opened from a row.
+    var index = SelectedCategory switch { "coding-ais" => section == "accounts" ? 1 : 0, "advanced" => 2, _ => section is "mcp" or "mcp-servers" ? 3 : 4 };
     tabSurface.Visibility = tabs.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     tabSurface.Margin = new Thickness(0, 0, 0, 12);
     page.Children.Add(legacy); selectingLegacy = true;
@@ -180,27 +176,13 @@ public sealed partial class SettingsPanel : Grid
     PresentHostedPage();
   }
 
-  private void AddTab(string title, int index, int selected)
-  {
-    var button = new ToggleButton { Content = title, IsChecked = index == selected, Padding = new Thickness(12, 5, 12, 5), MinHeight = 30 };
-    foreach (var key in new[] { "ToggleButtonBackgroundChecked", "ToggleButtonBackgroundCheckedPointerOver", "ToggleButtonBackgroundCheckedPressed" }) button.Resources[key] = TerminalDeck.App.Shell.ShellTheme.Resource(this, "DeckSidebarSelectionBrush");
-    foreach (var key in new[] { "ToggleButtonForegroundChecked", "ToggleButtonForegroundCheckedPointerOver", "ToggleButtonForegroundCheckedPressed" }) button.Resources[key] = TerminalDeck.App.Shell.ShellTheme.Resource(this, "DeckSidebarSelectionInkBrush");
-    AutomationProperties.SetName(button, title);
-    button.Click += async (_, _) =>
-    {
-      if (index == 3 && OpenMainPage?.Invoke("Mcp") == true) return;
-      await SelectAsync(index switch { 1 => "accounts", 3 => "mcp", 4 => "outside-ai-apps", _ => "coding-ais" });
-    };
-    tabs.Children.Add(button);
-  }
-
   // Present the retained account/connection controls in the Mac's compact card layout.
   // Their labels, values, click handlers and ownership stay with SettingsPane.
   private void PresentHostedPage()
   {
     if (legacy.Children.OfType<ScrollViewer>().FirstOrDefault()?.Content is not Grid container ||
         container.Children.OfType<StackPanel>().FirstOrDefault() is not { } stack) return;
-    stack.MaxWidth = 640; stack.Spacing = 12; stack.HorizontalAlignment = HorizontalAlignment.Center; stack.Margin = new Thickness(20, 8, 20, 20);
+    stack.MaxWidth = ColumnWidth; stack.Spacing = 20; stack.HorizontalAlignment = HorizontalAlignment.Stretch; stack.Margin = new Thickness(20, 8, 20, 20);
     // The top bar is the heading: the page's own big title goes.
     if (stack.Children.FirstOrDefault() is TextBlock heading) heading.Visibility = Visibility.Collapsed;
     foreach (var card in stack.Children.OfType<Border>())
@@ -233,12 +215,13 @@ public sealed partial class SettingsPanel : Grid
       if (profile)
       {
         // [picture] Name / "Terminal Deck account".
-        var picture = new PersonPicture { Width = 36, Height = 36, VerticalAlignment = VerticalAlignment.Center };
+        var picture = new PersonPicture { Width = 32, Height = 32, VerticalAlignment = VerticalAlignment.Center };
         var words = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
         title = new TextBlock { FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
-        second = new TextBlock { Text = TerminalDeck.Core.Brand.Name + " account", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
+        // Never cut (15 Nov): the second line wraps rather than trims.
+        second = new TextBlock { Text = TerminalDeck.Core.Brand.Name + " account", FontSize = 11, TextWrapping = TextWrapping.Wrap };
         words.Children.Add(title); words.Children.Add(second);
-        var grid = new Grid { ColumnSpacing = 10 };
+        var grid = new Grid { ColumnSpacing = 8 };
         grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         grid.Children.Add(picture); SetColumn(words, 1); grid.Children.Add(words);
         railPicture = picture; railName = title; row = grid;
@@ -361,10 +344,15 @@ public sealed partial class SettingsPanel : Grid
   // One scroll area fills the right side (its bar at the window's edge); the column is centred.
   internal static FrameworkElement Page(FrameworkElement content)
   {
-    var stack = new StackPanel { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+    var stack = Column();
     stack.Children.Add(content);
     return new ScrollViewer { Content = stack, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
   }
+
+  // ONE column on every page (15 Nov): 560 wide, centred in the right side whatever the page holds.
+  internal const double ColumnWidth = 560;
+  internal const double RailWidth = 210;
+  internal static StackPanel Column() => new() { Spacing = 20, MaxWidth = ColumnWidth, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(20, 8, 20, 20) };
 
   // Kept for older callers; pages no longer draw a heading of their own (the top bar is the heading).
   internal static FrameworkElement PageHead(string title) => new Border { Height = 0, Visibility = Visibility.Collapsed, Child = new TextBlock { Text = title } };
@@ -372,7 +360,7 @@ public sealed partial class SettingsPanel : Grid
   // A group's title, 8 above its group; an explanation sits behind ONE info button beside it.
   internal static FrameworkElement GroupTitle(string text, string? help = null)
   {
-    var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(8, 0, 0, -12) };
+    var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(12, 0, 0, -12) };
     line.Children.Add(new TextBlock { Text = text, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
     if (!string.IsNullOrWhiteSpace(help)) line.Children.Add(InfoButton(text, help));
     return line;
@@ -443,14 +431,15 @@ public sealed partial class SettingsPanel : Grid
       row.RowDefinitions.Add(new() { Height = GridLength.Auto }); row.RowDefinitions.Add(new() { Height = GridLength.Auto });
       row.SizeChanged += (_, _) =>
       {
-        var compact = row.ActualWidth < 460;
+        // ONE line (15 Nov): title at the left, the control at the right; only a very narrow window stacks them.
+        var compact = row.ActualWidth < 320;
         SetRow(control, compact ? 1 : 0); SetColumn(control, compact ? 0 : 1); SetColumnSpan(control, compact ? 2 : 1);
         control.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Right;
         control.Margin = new Thickness(0, compact ? 8 : 0, 0, 0);
         control.MaxWidth = Math.Max(0, compact ? row.ActualWidth : Math.Min(280, row.ActualWidth * .48));
       };
     }
-    var card = new Border { Padding = new Thickness(12, 10, 12, 10), CornerRadius = new CornerRadius(10), Child = row, BorderThickness = new Thickness(0), MinHeight = 44 };
+    var card = new Border { Padding = new Thickness(12, 6, 12, 6), CornerRadius = new CornerRadius(8), Child = row, BorderThickness = new Thickness(0), MinHeight = 44 };
     SetResourceReference(card, Border.BorderBrushProperty, "DeckDividerBrush");
     AutomationProperties.SetAutomationId(card, "settings.row"); SetResourceReference(card, Border.BackgroundProperty, "DeckCardBrush"); return card;
   }
@@ -465,10 +454,11 @@ public sealed partial class SettingsPanel : Grid
         var divider = new Border { Height = 1, Margin = new Thickness(12, 0, 12, 0) };
         SetResourceReference(divider, Border.BackgroundProperty, "DeckDividerBrush"); rows.Children.Add(divider);
       }
-      if (card is Border border) { border.CornerRadius = new CornerRadius(0); border.Padding = new Thickness(12, 10, 12, 10); border.BorderThickness = new Thickness(0); }
+      if (card is Border border) { border.CornerRadius = new CornerRadius(0); border.Padding = new Thickness(12, 6, 12, 6); border.BorderThickness = new Thickness(0); border.MinHeight = 44; }
       rows.Children.Add(card);
     }
-    var group = new Border { CornerRadius = new CornerRadius(10), Child = rows };
+    // A group is a card: radius 8, the quiet card fill, no border.
+    var group = new Border { CornerRadius = new CornerRadius(8), Child = rows };
     SetResourceReference(group, Border.BackgroundProperty, "DeckCardBrush");
     return group;
   }

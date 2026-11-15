@@ -25,8 +25,15 @@ public static class SettingsNavigation
   public static IReadOnlyList<SettingsCategory> InnerPages { get; } = [
     new("cloud", "Cloud", "", "DeckProjectBlueBrush", 0, "cloud sync"),
     new("personal", "Personal information", "", "DeckProjectGraphiteBrush", 0, "name e-mail"),
-    new("sign-in", "Sign-in", "", "DeckProjectGraphiteBrush", 0, "google github apple sign out")
+    new("sign-in", "Sign-in", "", "DeckProjectGraphiteBrush", 0, "google github apple sign out"),
+    new("custom-clis", "Custom terminal CLIs", "\uE756", "SystemFillColorAttentionBrush", 2, "custom terminal cli")
   ];
+
+  // The list row an inner page lights (a second page keeps its owner selected).
+  private static readonly Dictionary<string, string> Owners = new(StringComparer.Ordinal)
+  {
+    ["cloud"] = "profile", ["personal"] = "profile", ["sign-in"] = "profile", ["custom-clis"] = "coding-ais"
+  };
 
   // One device's own page: "device:" + the device's id (the id is a route only, never drawn).
   public const string DevicePrefix = "device:";
@@ -42,11 +49,16 @@ public static class SettingsNavigation
   public static bool IsDevice(string section) => section.StartsWith(DevicePrefix, StringComparison.Ordinal) && section.Length > DevicePrefix.Length;
 
   // The list row lit for a page: a page inside Profile lights Profile.
-  public static string ListOwner(string id) => Categories.Any(item => item.Id == id) ? id : "profile";
+  public static string ListOwner(string id) => Categories.Any(item => item.Id == id) ? id : Owners.TryGetValue(id, out var owner) ? owner : "profile";
 
-  // The page's name in the top bar (a device's page names itself).
-  public static string Title(string id) =>
-    Categories.Concat(InnerPages).FirstOrDefault(item => item.Id == id)?.Title ?? (IsDevice(id) ? "Device" : "Settings");
+  // The page's name in the top bar (a device's page names itself). A second page that shares its owner's
+  // category ("accounts", "mcp-servers") has its own name.
+  public static string Title(string id) => id switch
+  {
+    "accounts" => "Which account agents use",
+    "mcp" or "mcp-servers" => "MCP servers",
+    _ => Categories.Concat(InnerPages).FirstOrDefault(item => item.Id == id)?.Title ?? (IsDevice(id) ? "Device" : "Settings")
+  };
 
   public static string Canonical(string section) => section switch
   {
@@ -54,7 +66,7 @@ public static class SettingsNavigation
     "power" => "general",
     "accounts" or "coding-ais" => "coding-ais",
     "hoot" or "copilot" => "hoot",
-    "mcp" => "outside-ai-apps",
+    "mcp" or "mcp-servers" => "outside-ai-apps",
     "devices" => "profile",
     _ when IsDevice(section) => section,
     _ when Categories.Any(item => item.Id == section) || InnerPages.Any(item => item.Id == section) => section,

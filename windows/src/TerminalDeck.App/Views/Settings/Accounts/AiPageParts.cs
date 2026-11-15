@@ -15,7 +15,7 @@ public sealed partial class SettingsPane
   private static StackPanel AiPageSection(string title, string? provider, string? info, params FrameworkElement[] groups)
   {
     var section = new StackPanel { Spacing = 8 };
-    var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(8, 12, 0, 0) };
+    var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(12, 0, 0, 0) };
     if (provider is not null) line.Children.Add(new BrandIcon { Kind = provider, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center });
     line.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
     if (!string.IsNullOrWhiteSpace(info)) line.Children.Add(AiPageInfo(title, info));
@@ -63,7 +63,7 @@ public sealed partial class SettingsPane
     if (!string.IsNullOrWhiteSpace(info)) end.Children.Add(AiPageInfo(title, info));
     if (control is not null) { control.VerticalAlignment = VerticalAlignment.Center; end.Children.Add(control); }
     Grid.SetColumn(end, 2); row.Children.Add(end);
-    var card = new Border { Padding = new Thickness(12, 10, 12, 10), Child = row };
+    var card = new Border { Padding = new Thickness(12, 6, 12, 6), Child = row, MinHeight = 44 };
     card.SetResourceReference(Border.BackgroundProperty, "DeckCardBrush");
     AutomationProperties.SetAutomationId(card, "settings.row");
     return card;
