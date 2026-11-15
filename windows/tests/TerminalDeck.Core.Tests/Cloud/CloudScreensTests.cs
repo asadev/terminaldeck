@@ -162,6 +162,38 @@ public sealed class CloudScreensTests
   }
 
   [Fact]
+  public void TheBinShowsOnlyItsOwnBar()
+  {
+    Assert.False(YourCloudRules.ShowsListBar("Bin"));
+    foreach (var kind in Enum.GetValues<CloudContentsKind>()) Assert.True(YourCloudRules.ShowsListBar(kind.ToString()));
+  }
+
+  [Fact]
+  public void ANotOnThisPcRowGetsBringBackAndAnOnlyOnThisPcRowPutInCloudAgain()
+  {
+    var memory = new CloudContentsPlace(CloudContentsKind.Memory, "Memory", 3, true, true);
+    var away = YourCloudRules.For(memory, [Item("Old pricing ideas", CloudItemState.NotOnThisPc)]);
+    Assert.Equal((true, false, false, false), (away.BringBack, away.BinCloud, away.BinEverywhere, away.ShowBins));
+    var here = YourCloudRules.For(memory, [Item("Kept notes", CloudItemState.OnlyOnThisPc)]);
+    Assert.Equal((true, false, false), (here.PutInCloudAgain, here.BringBack, here.ShowBins));
+  }
+
+  [Fact]
+  public void EachDeviceRowHasTheGlyphOfItsKind()
+  {
+    Assert.Equal(DeviceKind.Desktop, DeviceKinds.Of("macos", "Studio Mac"));
+    Assert.Equal(DeviceKind.Laptop, DeviceKinds.Of("macos", "MacBook Air"));
+    Assert.Equal(DeviceKind.Pc, DeviceKinds.Of("windows", "Office PC"));
+    Assert.Equal(DeviceKind.Laptop, DeviceKinds.Of("windows", "Surface Laptop"));
+    Assert.Equal(DeviceKind.Phone, DeviceKinds.Of("ios", "Sam's iPhone"));
+    Assert.Equal(DeviceKind.Phone, DeviceKinds.Of("android", "Pixel 9"));
+    Assert.Equal(DeviceKind.Web, DeviceKinds.Of("web", "Chrome"));
+    Assert.Equal(DeviceKind.Phone, DeviceKinds.Of(null, "Galaxy S25"));
+    var glyphs = new[] { DeviceKind.Desktop, DeviceKind.Laptop, DeviceKind.Pc, DeviceKind.Phone }.Select(DeviceKinds.Glyph).ToArray();
+    Assert.Equal(glyphs.Length, glyphs.Distinct().Count());
+  }
+
+  [Fact]
   public void DatesAndSizesAreWords()
   {
     var now = new DateTimeOffset(2026, 11, 15, 12, 0, 0, TimeSpan.Zero).ToLocalTime();

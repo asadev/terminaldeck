@@ -73,6 +73,10 @@ public static class YourCloudRules
     return (value >= 10 ? Math.Round(value).ToString("0", CultureInfo.CurrentCulture) : value.ToString("0.#", CultureInfo.CurrentCulture)) + " " + units[unit];
   }
 
+  /// The page's own top bar and column titles show for every place except the Bin, which draws its ONE bar (back /
+  /// forward, "Bin" with its info button, search, "Put back all").
+  public static bool ShowsListBar(string placeKey) => placeKey != "Bin";
+
   /// The crumbs: the place, then each folder by name.
   public static IReadOnlyList<string> Crumbs(string place, IReadOnlyList<string> folder) => [place, .. folder];
 

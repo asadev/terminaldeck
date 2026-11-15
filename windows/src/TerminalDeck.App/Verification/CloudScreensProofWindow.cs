@@ -36,7 +36,7 @@ internal sealed class CloudScreensProofWindow : Window
   internal CloudScreensProofWindow(AppDataRoot data, string output)
   {
     this.data = data; this.output = output;
-    host.SetResourceReference(Panel.BackgroundProperty, "DeckCanvasBrush");
+    // The background is set per picture (Shot): the canvas, or the Settings window's grey.
     Content = host; AppWindow.Resize(new(1500, 1000)); AppWindow.Move(new(-20000, -20000));
     host.Loaded += async (_, _) =>
     {
@@ -56,7 +56,7 @@ internal sealed class CloudScreensProofWindow : Window
     };
   }
 
-  private async Task Shot(string name, FrameworkElement page, double width, double height, bool dark = false, int settle = 400, Func<Task>? ready = null)
+  private async Task Shot(string name, FrameworkElement page, double width, double height, bool dark = false, int settle = 400, Func<Task>? ready = null, string background = "DeckCanvasBrush")
   {
     foreach (var theme in dark ? new[] { ElementTheme.Light, ElementTheme.Dark } : [ElementTheme.Light])
     {
@@ -67,6 +67,8 @@ internal sealed class CloudScreensProofWindow : Window
         host.Children.Add(page);
         await Task.Delay(settle); host.UpdateLayout();
         if (ready is not null) { await ready(); await Task.Delay(settle); host.UpdateLayout(); }
+        // The window's own background for this page (Settings pages sit on the Settings window's grey, so their cards show).
+        host.Background = (Brush)ShellTheme.Resource(host, background); host.UpdateLayout();
         var themeWord = theme == ElementTheme.Dark ? "dark" : "light";
         await W10Proof.CaptureAsync(host, output, "r6-" + name, themeWord, "Made-up local data; no account, no network", _ => { });
         written.Add("r6-" + name + "-" + themeWord + ".png");
@@ -107,7 +109,7 @@ internal sealed class CloudScreensProofWindow : Window
     YourCloudPage Cloud() => cloud ??= new YourCloudPage(Contents(withBin: true), () => { }, () => { }, _ => { });
     await Page("your-cloud-places", () => Shot("your-cloud-places", Cloud(), 1280, 760, dark: true, ready: Cloud().ProofReadAsync));
     await Page("your-cloud-folder-selected", () => Shot("your-cloud-folder-selected", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch", "Design review"); return Task.CompletedTask; }));
-    await Page("your-cloud-reading-pane", () => Shot("your-cloud-reading-pane", Cloud(), 1280, 760, settle: 2500, ready: async () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch"); await Cloud().ProofOpenAsync("Plan for the launch"); }));
+    await Page("your-cloud-reading-pane", () => Shot("your-cloud-reading-pane", Cloud(), 1280, 760, settle: 800, ready: async () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Plan for the launch"); await Cloud().ProofOpenAsync("Plan for the launch"); }));
     await Page("your-cloud-not-on-this-pc", () => Shot("your-cloud-not-on-this-pc", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Memory", "Website"); Cloud().ProofSelect("Old pricing ideas"); return Task.CompletedTask; }));
     await Page("your-cloud-saved-passwords", () => Shot("your-cloud-saved-passwords", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Passwords"); return Task.CompletedTask; }));
     await Page("your-cloud-tasks", () => Shot("your-cloud-tasks", Cloud(), 1280, 760, ready: () => { Cloud().ProofVisit("Tasks"); return Task.CompletedTask; }));
@@ -171,12 +173,12 @@ internal sealed class CloudScreensProofWindow : Window
       signedIn = true;
     });
     if (!signedIn) { failed.Add("settings-profile, settings-cloud-manage-files, settings-device: skipped, the made-up sign-in failed"); return; }
-    await Page("settings-profile", () => Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 720, dark: true, settle: 800));
-    await Page("settings-cloud-manage-files", () => Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 520, settle: 800));
+    await Page("settings-profile", () => Shot("settings-profile", new ProfilePage(account, _ => { }), 760, 720, dark: true, settle: 800, background: "DeckRailBrush"));
+    await Page("settings-cloud-manage-files", () => Shot("settings-cloud-manage-files", new CloudPage(account, null, () => { }), 760, 520, settle: 800, background: "DeckRailBrush"));
     await Page("settings-device", async () =>
     {
       if (account.Snapshot.DeviceRows.FirstOrDefault(d => !d.ThisDevice) is { } other)
-        await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 420, settle: 600);
+        await Shot("settings-device", new DevicePage(account, other.DeviceId, _ => { }), 760, 420, settle: 600, background: "DeckRailBrush");
       else failed.Add("settings-device: the made-up account shows no other device");
     });
   }
@@ -237,7 +239,11 @@ internal sealed class CloudScreensProofWindow : Window
 
   private static CloudContents Contents(bool withBin)
   {
-    var contents = new CloudContents(() => true, () => new(CloudDeleteBy.Person, "proof-pc", "Office PC", null, null, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Guid.NewGuid().ToString()));
+    var contents = new CloudContents(() => true, () => new(CloudDeleteBy.Person, "proof-pc", "Office PC", null, null, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Guid.NewGuid().ToString()))
+    {
+      // A removal's place is a route (the project's id); the page names it ("12 notes in Website").
+      PlaceNames = id => id switch { "p-website" => "Website", "p-mobile" => "Mobile app", _ => null }
+    };
     var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     long Ago(double hours) => now - (long)(hours * 3_600_000);
     CloudContentsRow R(CloudContentsKind kind, string name, string[] folder, double hours, long? bytes = null, string? detail = null, bool secret = false) =>
@@ -261,19 +267,30 @@ internal sealed class CloudScreensProofWindow : Window
     contents.Register(new ProofSource(CloudContentsKind.Passwords, [
       R(CloudContentsKind.Passwords, "github.com · sam.rivera", [], 12, secret: true), R(CloudContentsKind.Passwords, "store.example.com · sam", [], 48, secret: true),
       R(CloudContentsKind.Passwords, "Mobile app .env", [], 72, secret: true)]));
+    // C-6: every place has something to show.
+    contents.Register(new ProofSource(CloudContentsKind.InstructionFiles, [
+      R(CloudContentsKind.InstructionFiles, "CLAUDE.md", ["Website"], 6, 3_200), R(CloudContentsKind.InstructionFiles, "AGENTS.md", ["Mobile app"], 30, 1_400)]));
+    contents.Register(new ProofSource(CloudContentsKind.Artifacts, [
+      R(CloudContentsKind.Artifacts, "Launch checklist.html", [], 4, 18_000), R(CloudContentsKind.Artifacts, "Pricing table.html", [], 28, 9_500)]));
+    contents.Register(new ProofSource(CloudContentsKind.CloudFolder, [
+      R(CloudContentsKind.CloudFolder, "Logo.svg", ["Designs"], 10, 12_000), R(CloudContentsKind.CloudFolder, "Brand colours.pdf", ["Designs"], 34, 220_000),
+      R(CloudContentsKind.CloudFolder, "Interview notes.txt", [], 52, 4_100)]));
+    contents.Register(new ProofSource(CloudContentsKind.Sessions, [
+      R(CloudContentsKind.Sessions, "Fix the login page", ["Website"], 1), R(CloudContentsKind.Sessions, "Write the release notes", ["Mobile app"], 3),
+      R(CloudContentsKind.Sessions, "Plan the launch", ["Website"], 24)], cloudOnly: false));
     return contents;
   }
 
   private static IReadOnlyList<CloudBinGroup> Groups(long now)
   {
-    CloudDeleteItem Note(string name, string place = "Website") => new("bin:" + place + ":" + name, "memory", name, place);
+    CloudDeleteItem Note(string name, string place = "p-website") => new("bin:" + place + ":" + name, "memory", name, place);
     CloudBinGroup G(string id, CloudDeleteBy by, string device, double hours, params CloudDeleteItem[] items) => new(id, by, device, null, null, now - (long)(hours * 3_600_000), items);
     return [
       G("g1", CloudDeleteBy.Person, "Studio Mac", 2, Note("Old landing copy")),
       G("g2", CloudDeleteBy.Ai, "MacBook Air", 5, Note("Draft FAQ")),
       G("g3", CloudDeleteBy.Person, "Studio Mac", 26, [.. Enumerable.Range(1, 12).Select(i => Note("Note " + i))]),
-      G("g4", CloudDeleteBy.Person, "Office PC", 50, Note("Store screenshots v1", "Mobile app")),
-      G("g5", CloudDeleteBy.Ai, "Studio Mac", 80, Note("Test plan", "Mobile app")),
+      G("g4", CloudDeleteBy.Person, "Office PC", 50, Note("Store screenshots v1", "p-mobile")),
+      G("g5", CloudDeleteBy.Ai, "Studio Mac", 80, Note("Test plan", "p-mobile")),
       G("g6", CloudDeleteBy.Person, "MacBook Air", 200, Note("Pricing table"))
     ];
   }

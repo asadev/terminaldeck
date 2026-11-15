@@ -430,7 +430,7 @@ public sealed partial class CloudAccountClient : IDisposable
       return new CloudDeviceRow(d.DeviceId, OneLine(d.DisplayName), d.DeviceId == thisDevice,
         d.RegisteredAt is { } added ? DateTimeOffset.FromUnixTimeMilliseconds(added) : null,
         d.LastSeenAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(d.LastSeenAt) : null,
-        row, row is not null && Joined(row));
+        row, row is not null && Joined(row), d.Platform);
     })
     .OrderByDescending(r => r.ThisDevice).ThenBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(r => r.Added).ToArray();
   /// A device names itself; its text is shown as one plain line and never reaches an agent raw.

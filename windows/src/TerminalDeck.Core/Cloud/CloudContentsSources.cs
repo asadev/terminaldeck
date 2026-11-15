@@ -466,7 +466,8 @@ public static class CloudContentsReader
     CloudTasksOwner? tasks = null, CloudAgentsOwner? agents = null, CloudProjectsOwner? projects = null, Func<IReadOnlyDictionary<string, string>>? projectNames = null,
     Func<IReadOnlyList<CloudSecretsDeleteOwner>>? passwordStores = null, Func<CloudProjectSecretFilesStore?>? secretFiles = null)
   {
-    var contents = new CloudContents(deleteRuleOpen, person) { Log = log };
+    var placeNames = memoryNames ?? projectNames;
+    var contents = new CloudContents(deleteRuleOpen, person) { Log = log, PlaceNames = placeNames is null ? null : place => placeNames().GetValueOrDefault(place) };
     if (memory is not null) contents.Register(new CloudMemoryContentsSource(memory, memoryAdapter, memoryNames ?? projectNames));
     if (bootPlaces is not null) contents.Register(new CloudBootFilesContentsSource(bootPlaces, bootFiles));
     if (cloudFolder is not null) contents.Register(new CloudFolderContentsSource(cloudFolder));

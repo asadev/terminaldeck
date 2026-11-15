@@ -129,7 +129,7 @@ public sealed record CloudDeviceList(IReadOnlyList<CloudDevice> Devices, string?
 /// `DeviceId` and `Trust` (the device as this PC's trusted list sees it) are for presses and are never drawn.
 /// `Joined`: show "joined your account".
 public sealed record CloudDeviceRow(string DeviceId, string Name, bool ThisDevice, DateTimeOffset? Added, DateTimeOffset? LastSeen,
-  CloudTrustRow? Trust = null, bool Joined = false)
+  CloudTrustRow? Trust = null, bool Joined = false, string? Platform = null)
 {
   public override string ToString() => "<Cloud device row>";
 }

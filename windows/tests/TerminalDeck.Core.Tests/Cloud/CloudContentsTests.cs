@@ -144,6 +144,22 @@ public sealed class CloudContentsTests
   }
 
   [Fact]
+  public async Task Bin_ARemovalOfSeveralThingsNamesWhereTheyWere()
+  {
+    var memory = new Owner();
+    CloudDeleteItem Note(int i, string? place) => new("projects/" + (place ?? "x") + "/notes/n" + i + ".md", "memory", "Note " + i, place);
+    memory.Bin.Add(new("g1", CloudDeleteBy.Person, "Studio Mac", null, null, 300, [.. Enumerable.Range(1, 12).Select(i => Note(i, "p-website"))]));
+    memory.Bin.Add(new("g2", CloudDeleteBy.Person, "Studio Mac", null, null, 200, [Note(1, "p-website"), Note(2, "p-mobile")]));
+    memory.Bin.Add(new("g3", CloudDeleteBy.Person, "Studio Mac", null, null, 100, [Note(3, "p-unknown"), Note(4, "p-unknown")]));
+    var contents = new CloudContents(() => true, Person) { PlaceNames = id => id switch { "p-website" => "Website", "p-mobile" => "Mobile app", _ => null } };
+    contents.Register(new Source(CloudContentsKind.Memory, memory));
+    var lines = await contents.BinAsync();
+    Assert.Equal("12 notes in Website", lines.Single(l => l.Id == "g1").What);
+    Assert.Equal("2 notes", lines.Single(l => l.Id == "g2").What);     // two places: no "in"
+    Assert.Equal("2 notes", lines.Single(l => l.Id == "g3").What);     // a place without a name is never shown
+  }
+
+  [Fact]
   public async Task Bin_OneLinePerRemovalWithTheDevicesName_PutBackAllAndDeleteForGoodReachEveryOwner()
   {
     var memory = new Owner();

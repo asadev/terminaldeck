@@ -223,11 +223,10 @@ internal static class AccountPages
 
   internal static string Date(DateTimeOffset at) => at.ToLocalTime().ToString("d MMM yyyy", CultureInfo.CurrentCulture);
 
-  // The kind of device, as its name tells it: a phone or a computer.
+  // The kind of device (its platform, then its model words): a desktop, a laptop, a PC, a phone.
   internal static FrameworkElement DeviceGlyph(CloudDeviceRow device)
   {
-    var phone = new[] { "iphone", "android", "pixel", "galaxy", "phone" }.Any(word => device.Name.Contains(word, StringComparison.OrdinalIgnoreCase));
-    var icon = new DeckIcon { Glyph = phone ? "" : "", FontSize = 20, Width = 28, Height = 28, VerticalAlignment = VerticalAlignment.Center };
+    var icon = new DeckIcon { Glyph = DeviceKinds.Glyph(DeviceKinds.Of(device.Platform, device.Name)), FontSize = 20, Width = 28, Height = 28, VerticalAlignment = VerticalAlignment.Center };
     icon.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
     return icon;
   }

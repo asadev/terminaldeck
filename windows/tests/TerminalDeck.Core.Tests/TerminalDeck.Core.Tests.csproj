@@ -15,6 +15,7 @@
     <!-- Lane U2: the Cloud screens' rules (side panel rows, Your Cloud's top bar, the Cloud chat page). -->
     <Compile Include="../../src/TerminalDeck.App/Views/Windows/SidebarCloudRows.cs" Link="CloudScreens/SidebarCloudRows.cs" />
     <Compile Include="../../src/TerminalDeck.App/Views/Settings/YourCloudRules.cs" Link="CloudScreens/YourCloudRules.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Settings/DeviceKinds.cs" Link="CloudScreens/DeviceKinds.cs" />
     <Compile Include="../../src/TerminalDeck.App/Views/Chat/CloudChatRules.cs" Link="CloudScreens/CloudChatRules.cs" />
     <!-- M4 (review 25): the GPU encoder's lifetime helper is plain .NET; its tests run here. -->
     <Compile Include="../../src/TerminalDeck.Platform.Windows/Phone/EncoderEventThread.cs" Link="Remote/EncoderEventThread.cs" />

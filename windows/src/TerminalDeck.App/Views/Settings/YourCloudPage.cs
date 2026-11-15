@@ -42,6 +42,11 @@ public sealed class YourCloudPage : UserControl
   private string placeKey = nameof(CloudContentsKind.Memory);
   private string[] folder = [];
   private bool rendering, working;
+  /// The top bar and the column titles: hidden on the Bin, which draws its own one bar (C-3).
+  private Grid bar = null!, heads = null!;
+  /// The search words the list was last drawn with: TextBox raises TextChanged later, also for a reset to the same
+  /// words, and a redraw then would drop the selection.
+  private string drawnSearch = "";
 
   /// One line of the list: a folder or an item.
   private sealed record Entry(CloudContentsFolderRow? Folder, CloudContentsRow? Item, string? Group = null);
@@ -65,7 +70,7 @@ public sealed class YourCloudPage : UserControl
 
     // RIGHT: the top bar, the column heads, the list.
     right.RowDefinitions.Add(new() { Height = GridLength.Auto }); right.RowDefinitions.Add(new() { Height = GridLength.Auto }); right.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-    var bar = new Grid { Padding = new(12, 8, 12, 8), ColumnSpacing = 8 };
+    bar = new Grid { Padding = new(12, 8, 12, 8), ColumnSpacing = 8 };
     bar.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); bar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); bar.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); bar.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     var arrows = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 }; arrows.Children.Add(back); arrows.Children.Add(forward);
     bar.Children.Add(arrows);
@@ -75,7 +80,7 @@ public sealed class YourCloudPage : UserControl
     foreach (var button in new[] { open, binCloud, binEverywhere, bringBack, putInCloud }) actions.Children.Add(button);
     Grid.SetColumn(actions, 3); bar.Children.Add(actions);
     right.Children.Add(bar);
-    var heads = Columns(Head("Name"), Head("Changed"), Head("On"), Head("Size"));
+    heads = Columns(Head("Name"), Head("Changed"), Head("On"), Head("Size"));
     heads.Padding = new(24, 0, 24, 2);
     Grid.SetRow(heads, 1); right.Children.Add(heads);
     list.Padding = new(12, 0, 12, 12);
@@ -96,7 +101,7 @@ public sealed class YourCloudPage : UserControl
     Content = page;
 
     back.Click += (_, _) => Go(-1); forward.Click += (_, _) => Go(1);
-    search.TextChanged += (_, _) => RenderList();
+    search.TextChanged += (_, _) => { if (search.Text.Trim() != drawnSearch) RenderList(); };
     open.Click += (_, _) => OpenSelection();
     binCloud.Click += async (_, _) => await RunAsync(c => c.RemoveFromCloudAsync(Selected()));
     binEverywhere.Click += async (_, _) => await RunAsync(c => c.RemoveEverywhereAsync(Selected()));
@@ -109,7 +114,7 @@ public sealed class YourCloudPage : UserControl
   // ---- the picture proof only (CloudScreensProofWindow, a developer flag): drive the page without a pointer ----
 
   internal Task ProofReadAsync() => ReadAsync();
-  internal void ProofVisit(string place, params string[] path) => Visit(place, path);
+  internal void ProofVisit(string place, params string[] path) { ClosePane(); Visit(place, path); }
   internal void ProofSelect(params string[] names)
   {
     list.SelectedItems.Clear();
@@ -153,20 +158,29 @@ public sealed class YourCloudPage : UserControl
   private void RenderList()
   {
     rendering = true;
+    // A redraw (a reload, a search) keeps what was selected, by id.
+    var kept = Selected().Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
     try
     {
       list.Items.Clear();
+      drawnSearch = search.Text.Trim();
       RenderCrumbs();
       back.IsEnabled = at > 0; forward.IsEnabled = at < history.Count - 1;
       var isBin = placeKey == "Bin";
       list.Visibility = isBin ? Visibility.Collapsed : Visibility.Visible;
-      search.Visibility = isBin ? Visibility.Collapsed : Visibility.Visible;
+      bar.Visibility = heads.Visibility = YourCloudRules.ShowsListBar(placeKey) ? Visibility.Visible : Visibility.Collapsed;
       // The Bin is its own page (the Bin hand's CloudBinPage), drawn in this page's right side.
       foreach (var child in listArea.Children.Where(c => c is not ListView && !ReferenceEquals(c, empty)).ToArray()) listArea.Children.Remove(child);
       if (isBin)
       {
         empty.Visibility = Visibility.Collapsed;
-        if (contents is not null) listArea.Children.Add(CloudBinPage.Open(contents));
+        if (contents is not null)
+        {
+          var page = CloudBinPage.Open(contents);
+          // The Bin's own bar holds back / forward: they walk this page's history.
+          if (page is CloudBinPage binPage) binPage.SetHistory(at > 0, at < history.Count - 1, () => Go(-1), () => Go(1));
+          listArea.Children.Add(page);
+        }
         return;
       }
       if (snapshot is null || contents is null) { Empty(CloudContentsWords.SignedOut); return; }
@@ -184,7 +198,12 @@ public sealed class YourCloudPage : UserControl
         }
       }
       else entries.AddRange(listing.Items.Select(i => new Entry(null, i)));
-      foreach (var entry in entries) list.Items.Add(ListRow(entry));
+      foreach (var entry in entries)
+      {
+        var row = ListRow(entry);
+        list.Items.Add(row);
+        if (entry.Item is { } item && kept.Contains(item.Id)) row.IsSelected = true;
+      }
       if (entries.Count == 0) Empty(CloudContentsWords.NothingYet); else empty.Visibility = Visibility.Collapsed;
     }
     finally { rendering = false; }
@@ -205,7 +224,6 @@ public sealed class YourCloudPage : UserControl
       if (last)
       {
         crumbs.Children.Add(new TextBlock { Text = parts[i], FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
-        if (placeKey == "Bin") crumbs.Children.Add(SettingsPanel.InfoButton(CloudContentsWords.Bin, YourCloudRules.BinInfo));
         continue;
       }
       var depth = i;
@@ -358,9 +376,55 @@ public sealed class YourCloudPage : UserControl
       body.Children.Add(web);
     }
     else if (item.Text is { Length: > 0 } text)
-      body.Children.Add(TerminalDeck.App.Views.Chat.ChatMarkdownView.Render(text, copied => { }, problem => notice(problem)));
+      body.Children.Add(FormattedText(text));
     pane.Child = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     pane.Visibility = Visibility.Visible;
+  }
+
+  /// A note as formatted text (C-1), drawn natively from the chat's own markdown reading (ChatMarkdown): headings,
+  /// lists, quotes, bold, italic, links, code in a monospace face. Nothing to wait for, so no "loading" words.
+  internal static RichTextBlock FormattedText(string text)
+  {
+    var view = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, FontSize = 13, LineHeight = 20 };
+    var mono = new FontFamily("Cascadia Mono, Consolas");
+    foreach (var block in TerminalDeck.Core.Chats.ChatMarkdown.Blocks(text))
+    {
+      var paragraph = new Microsoft.UI.Xaml.Documents.Paragraph { Margin = new(0, 0, 0, 8) };
+      switch (block.Kind)
+      {
+        case "heading":
+          paragraph.FontSize = block.Level <= 1 ? 18 : block.Level == 2 ? 16 : 14; paragraph.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+          paragraph.Margin = new(0, 4, 0, 6); Spans(paragraph, block.Text); break;
+        case "list":
+          paragraph.TextIndent = -14; paragraph.Margin = new(14, 0, 0, 4);
+          paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = (block.Language is { Length: > 0 } marker && char.IsDigit(marker[0]) ? marker : "•") + "  " });
+          Spans(paragraph, block.Text); break;
+        case "code":
+          paragraph.FontFamily = mono; paragraph.FontSize = 12;
+          paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = block.Text }); break;
+        case "quote":
+          paragraph.Margin = new(12, 0, 0, 8); paragraph.FontStyle = Windows.UI.Text.FontStyle.Italic; Spans(paragraph, block.Text); break;
+        default:
+          Spans(paragraph, block.Text); break;
+      }
+      view.Blocks.Add(paragraph);
+    }
+    return view;
+
+    void Spans(Microsoft.UI.Xaml.Documents.Paragraph paragraph, string line)
+    {
+      foreach (var span in TerminalDeck.Core.Chats.ChatMarkdown.Spans(line))
+        switch (span.Kind)
+        {
+          case "strong": paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Bold { Inlines = { new Microsoft.UI.Xaml.Documents.Run { Text = span.Text } } }); break;
+          case "emphasis": paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Italic { Inlines = { new Microsoft.UI.Xaml.Documents.Run { Text = span.Text } } }); break;
+          case "code": paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = span.Text, FontFamily = mono }); break;
+          case "link" when span.Target is { } target && TerminalDeck.Core.Chats.ChatMarkdown.CanOpenLink(target):
+            var link = new Microsoft.UI.Xaml.Documents.Hyperlink { NavigateUri = new Uri(target) };
+            link.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = span.Text }); paragraph.Inlines.Add(link); break;
+          default: paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = span.Text }); break;
+        }
+    }
   }
 
   private void ClosePane() { pane.Visibility = Visibility.Collapsed; pane.Child = null; }

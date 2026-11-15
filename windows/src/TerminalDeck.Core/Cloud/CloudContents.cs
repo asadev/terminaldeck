@@ -136,6 +136,10 @@ public sealed class CloudContents
   /// Which provider a marked row (an item no longer listed) belongs to, and its delete item.
   private Dictionary<string, (ICloudContentsSource Source, CloudDeleteItem Item)> markedRows = new(StringComparer.Ordinal);
 
+  /// The folder a removal's items share, by NAME (memory: the project a note sat in): "12 notes in Website". A place
+  /// with no name here is never shown (a place is a route, never words).
+  public Func<string, string?>? PlaceNames { get; set; }
+
   /// One plain line per provider that could not be read (fixed words and the kind's title only; never a name or a path).
   public Action<string>? Log { get; set; }
 
@@ -195,7 +199,7 @@ public sealed class CloudContents
       var (cloud, everywhere) = Scopes(source.Kind, source.OffersCloudOnly, open, canDelete && source.Removals is not null);
       places.Add(new CloudContentsPlace(source.Kind, CloudContentsWords.Title(source.Kind), made.Count, cloud, everywhere));
     }
-    var lines = Lines(groups, out var parts);
+    var lines = Lines(groups, PlaceNames, out var parts);
     lock (gate) { binParts = parts; markedRows = marked; }
     return new CloudContentsSnapshot(places, rows, lines.Count);
   }
@@ -337,12 +341,12 @@ public sealed class CloudContents
       try { foreach (var g in await removals.BinGroupsAsync()) groups.Add((source, g)); }
       catch (Exception e) { Say(source.Kind, "Bin could not be read", e); }
     }
-    var lines = Lines(groups, out var parts);
+    var lines = Lines(groups, PlaceNames, out var parts);
     lock (gate) binParts = parts;
     return lines;
   }
 
-  private static List<CloudBinLine> Lines(IEnumerable<(ICloudContentsSource Source, CloudBinGroup Group)> groups,
+  private static List<CloudBinLine> Lines(IEnumerable<(ICloudContentsSource Source, CloudBinGroup Group)> groups, Func<string, string?>? placeNames,
     out Dictionary<string, List<(ICloudContentsSource, CloudBinGroup)>> parts)
   {
     parts = new(StringComparer.Ordinal);
@@ -362,18 +366,24 @@ public sealed class CloudContents
         foreach (var item in group.Items)
           if (seen.Add(Key(item))) items.Add((source.Kind, item));
       var kinds = items.Select(i => i.Kind).Distinct().OrderBy(k => k).ToArray();
-      lines.Add(new CloudBinLine(id, kinds, What(items), list.Max(p => p.Item2.At), CloudShelfWords.Plain(first.MacName) ?? CloudDeleteWords.AnotherDevice,
+      lines.Add(new CloudBinLine(id, kinds, What(items, placeNames), list.Max(p => p.Item2.At), CloudShelfWords.Plain(first.MacName) ?? CloudDeleteWords.AnotherDevice,
         first.By == CloudDeleteBy.Ai, items.Count, first.Era));
     }
     return lines.OrderByDescending(l => l.At).ThenBy(l => l.Id, StringComparer.Ordinal).ToList();
   }
 
-  /// What a removal was: its name, or "12 notes", or "12 items" for several kinds.
-  private static string What(IReadOnlyList<(CloudContentsKind Kind, CloudDeleteItem Item)> items)
+  /// What a removal was: its name, or "12 notes", or "12 items" for several kinds; "… in Website" when every item sat
+  /// in the same named place.
+  internal static string What(IReadOnlyList<(CloudContentsKind Kind, CloudDeleteItem Item)> items, Func<string, string?>? placeNames = null)
   {
     if (items.Count == 1) return CloudShelfWords.Plain(items[0].Item.Name) ?? CloudContentsWords.Noun(items[0].Kind, 1);
     var kinds = items.Select(i => i.Kind).Distinct().ToArray();
-    return kinds.Length == 1 ? items.Count + " " + CloudContentsWords.Noun(kinds[0], items.Count) : CloudContentsWords.Items(items.Count);
+    var what = kinds.Length == 1 ? items.Count + " " + CloudContentsWords.Noun(kinds[0], items.Count) : CloudContentsWords.Items(items.Count);
+    var places = items.Select(i => i.Item.Place).Distinct(StringComparer.Ordinal).ToArray();
+    string? name = null;
+    if (places is [{ Length: > 0 } place] && placeNames is not null)
+      try { name = CloudShelfWords.Plain(placeNames(place)); } catch (Exception e) when (e is not OutOfMemoryException) { name = null; }
+    return name is null ? what : what + " in " + name;
   }
 
   /// "Put back all" for the selected lines.
