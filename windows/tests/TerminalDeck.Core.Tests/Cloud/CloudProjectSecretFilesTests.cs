@@ -567,6 +567,78 @@ public sealed class CloudProjectSecretFilesTests
   }
 }
 
+/// Review 15 Nov, fault A: a name a Mac can make that Windows cannot hold, or that could leave the folder, is never
+/// written anywhere; it waits sealed and the rest of the round still lands; a removal for it removes nothing anywhere.
+public sealed class CloudProjectSecretFilesWindowsNamesTests
+{
+  private static readonly string[] Unholdable = ["d:prod.p12", "c:prod.p12", "x/a:b/.env", "CON/.env", "aux.p12", "lpt1.p12", ".env.", "keys./.env", "deploy /.env", "a/s:x.keystore"];
+
+  [Fact]
+  public async Task Names_Windows_cannot_hold_wait_sealed_and_nothing_is_written_outside_the_project()
+  {
+    using var f = new CloudProjectSecretFilesFixture();
+    var b = f.Mac("PC");
+    var outside = new[] { Path.GetFullPath("c:prod.p12"), Path.GetFullPath("d:prod.p12"), Path.Combine(Path.GetTempPath(), "prod.p12"), Path.GetFullPath("prod.p12") }
+      .Where(p => Path.GetPathRoot(p) is { } r && Directory.Exists(r)).ToArray();
+    Assert.All(outside, p => Assert.False(File.Exists(p)));
+    var bad = Unholdable.Select(n => f.Forged(n, "MADE_UP=" + n.Length + "\n")).ToArray();
+    var outcomes = await CloudProjectSecretFilesFixture.Deliver([.. bad, f.Forged(".env", "GOOD=1\n")], b);
+    Assert.All(outcomes[..^1], o => Assert.Equal(CloudApplyStatus.AlreadyPresent, o));
+    Assert.Equal(CloudApplyStatus.Applied, outcomes[^1]);
+    Assert.Equal("GOOD=1\n", f.Read("PC", ".env"));
+    Assert.All(outside, p => Assert.False(File.Exists(p)));
+    // Inside the project only README.md and the good file; nothing else anywhere under the test folder.
+    var written = Directory.GetFiles(f.Base, "*", SearchOption.AllDirectories).Where(x => !x.Contains(Path.DirectorySeparatorChar + "state" + Path.DirectorySeparatorChar)).Select(x => Path.GetRelativePath(f.Folder("PC"), x)).Order().ToArray();
+    Assert.Equal(new[] { ".env", "README.md" }, written);
+    Assert.Equal(Unholdable.Length, CloudProjectSecretFilesFixture.Files(b).Count(x => x.State == CloudProjectSecretFilesWords.WaitingName));
+    // Each stays sealed: the next round places nothing and keeps them waiting.
+    await b.CaptureAsync();
+    Assert.Equal(Unholdable.Length, CloudProjectSecretFilesFixture.Files(b).Count(x => x.State == CloudProjectSecretFilesWords.WaitingName));
+    Assert.All(outside, p => Assert.False(File.Exists(p)));
+    // Paths the Mac refuses too are refused whole at validation (nothing placed, nothing waits).
+    foreach (var path in new[] { "..\\x.env", "/abs/.env", "\\\\server\\share\\.env", "a//.env" })
+      await Assert.ThrowsAsync<CloudFailure>(() => b.ValidateAsync(f.Forged(path, "X=1\n")));
+    // The disk layer refuses them on its own as well.
+    foreach (var name in Unholdable)
+    {
+      Assert.Equal("name", Assert.Throws<CloudProjectSecretFilesDisk.Refused>(() => CloudProjectSecretFilesDisk.Write(f.Folder("PC"), name, "X"u8.ToArray(), null, 1)).Code);
+      Assert.Equal("name", CloudProjectSecretFilesDisk.Read(f.Folder("PC"), name).Blocked);
+    }
+    Assert.All(outside, p => Assert.False(File.Exists(p)));
+  }
+
+  [Fact]
+  public async Task A_removal_for_such_a_name_removes_nothing_anywhere()
+  {
+    using var f = new CloudProjectSecretFilesFixture();
+    var b = f.Mac("PC");
+    // A made-up file at the drive-relative place "c:prod.p12" points to (this test's own working folder).
+    var decoy = Path.GetFullPath("c:prod.p12");
+    var hadDecoy = File.Exists(decoy);
+    if (!hadDecoy) File.WriteAllText(decoy, "MADE_UP=decoy\n");
+    try
+    {
+      Assert.Equal(CloudProjectSecretFilesDisk.Unlinked.Kept, CloudProjectSecretFilesDisk.UnlinkExactly(f.Folder("PC"), "c:prod.p12", "MADE_UP=decoy\n"u8.ToArray()));
+      Assert.True(File.Exists(decoy));
+      // The same through an arriving removal from another device (the record carried inside the removal).
+      var a = f.Store("A", () => []);
+      var record = f.Forged("c:prod.p12", "MADE_UP=decoy\n");
+      await b.MergeAsync(record);
+      Assert.True(File.Exists(decoy));
+      var removal = new CloudSecretRemoval(record.SourceId, record.RecordId, record.Domain, Guid.NewGuid().ToString("D"),
+        new Dictionary<string, string> { [CloudDeleteTravel.Rule] = "1", [CloudDeleteTravel.Scope] = "everywhere", [CloudDeleteTravel.By] = "person", [CloudDeleteTravel.Group] = Guid.NewGuid().ToString("D") },
+        "a", "Mac mini", f.Clock, record, null);
+      try { var outcome = await b.MergeRemovalAsync(removal); await b.VerifyRemovalAsync(removal, outcome); } catch (CloudFailure) { }
+      // And his own press on this PC: nothing outside is ever removed.
+      if (b.DeleteItem(f.ProjectId, "", "c:prod.p12") is { } item)
+        try { await b.DeleteItemsAsync([item], CloudDeleteScope.Everywhere, f.Actor()); } catch (CloudFailure) { }
+      Assert.True(File.Exists(decoy));
+      Assert.Equal("MADE_UP=decoy\n", File.ReadAllText(decoy));
+    }
+    finally { if (!hadDecoy) File.Delete(decoy); }
+  }
+}
+
 /// The delete rule for project secret files (the Mac's SecretsDeleteRuleTests, project cases).
 public sealed class CloudProjectSecretFilesDeleteRuleTests
 {
