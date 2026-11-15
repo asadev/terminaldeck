@@ -478,6 +478,8 @@ public sealed class CloudProjectSecretFilesStore : ICloudSecretsDeletingStore, I
     IReadOnlyList<CloudProjectSecretFilesProject> list, bool keep)
   {
     if (keep) return (Placed.Wait, CloudProjectSecretFilesWords.WaitingSetting);
+    // Fault A: a name Windows cannot hold (or one that could leave the folder) is never written: it waits sealed.
+    if (CloudProjectSecretFilesRules.WindowsCannotHold(value.Path)) return (Placed.Wait, CloudProjectSecretFilesWords.WaitingName);
     var arrival = Arrival(value.ProjectId, value.Folder, list);
     if (arrival.State != RootState.Ok) return (Placed.Wait, arrival.Why);
     var root = arrival.Path!;
@@ -738,7 +740,9 @@ public sealed class CloudProjectSecretFilesStore : ICloudSecretsDeletingStore, I
     var (value, bytes) = Decoded(record);
     // Only over exactly the removed version: a different file here (a later edit) wins; a link or unsafe folder on the
     // way is never followed. Both close the removal as not applied, without stalling the feed.
-    var root = Arrival(value.ProjectId, value.Folder, list);
+    // Fault A: such a name cannot be a file here: nothing to unlink, as with a folder not on this PC.
+    var root = CloudProjectSecretFilesRules.WindowsCannotHold(value.Path) ? new ArrivalRoot(RootState.Wait, null, CloudProjectSecretFilesWords.WaitingName)
+      : Arrival(value.ProjectId, value.Folder, list);
     var unplaced = false;
     switch (root.State)
     {
@@ -789,7 +793,8 @@ public sealed class CloudProjectSecretFilesStore : ICloudSecretsDeletingStore, I
     if (Keeper.Mark(removal.RecordId) is null) return Task.FromResult(false);
     if (removal.Fields.GetValueOrDefault(CloudDeleteTravel.Scope) == "cloud" || Keeper.Newest(removal.RecordId) is not { } record) return Task.FromResult(true);
     var value = Decoded(record).Value;
-    // No project folder here: nothing could be on disk; the sealed Bin entry and the mark are the result.
+    // No project folder here (or a name Windows cannot hold): nothing could be on disk; the Bin entry and the mark are the result.
+    if (CloudProjectSecretFilesRules.WindowsCannotHold(value.Path)) return Task.FromResult(true);
     var root = Arrival(value.ProjectId, value.Folder, projects());
     if (root.State != RootState.Ok) return Task.FromResult(true);
     return Task.FromResult(CloudProjectSecretFilesDisk.Read(root.Path!, value.Path).IsAbsent);

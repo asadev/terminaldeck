@@ -107,9 +107,18 @@ public static class CloudProjectSecretFilesDisk
     }
     return current;
   }
+  /// The full path is still directly inside `folder` (itself inside the project): checked before anything is written or removed.
+  private static string Inside(string folder, string name)
+  {
+    var target = Path.GetFullPath(Path.Combine(folder, name));
+    if (!string.Equals(Path.GetDirectoryName(target), Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), StringComparison.OrdinalIgnoreCase)
+      || !string.Equals(Path.GetFileName(target), name, StringComparison.Ordinal)) throw new Refused("name");
+    return target;
+  }
   private static (string[] Folders, string Name) Split(string relative)
   {
-    if (CloudBootFilesFormat.Parts(relative) is not { Length: > 0 } parts || parts[^1].Length == 0) throw new Refused("name");
+    // Fault A: a name Windows cannot hold or that could leave the folder (`d:x`, `CON`, `x.`) is never used at all.
+    if (CloudProjectSecretFilesRules.WindowsCannotHold(relative) || CloudBootFilesFormat.Parts(relative) is not { Length: > 0 } parts || parts[^1].Length == 0) throw new Refused("name");
     return (parts[..^1], parts[^1]);
   }
 
@@ -149,7 +158,8 @@ public static class CloudProjectSecretFilesDisk
   {
     var (folders, name) = Split(relative);
     var folder = Descend(root, folders, create: true)!;
-    var target = Path.Combine(folder, name);
+    var target = Inside(folder, name);
+    if (!target.StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new Refused("name");
     var temporary = Path.Combine(folder, CloudProjectSecretFilesRules.TemporaryName());
     try
     {
@@ -228,6 +238,7 @@ public static class CloudProjectSecretFilesDisk
       }
       if (IsLink(info!) || info is not FileInfo) return Unlinked.Kept;
       target = info.FullName;
+      if (!string.Equals(target, Inside(folder, name), StringComparison.OrdinalIgnoreCase)) return Unlinked.Kept;
     }
     catch (Refused) { return Unlinked.Kept; }
     if (!OperatingSystem.IsWindows())

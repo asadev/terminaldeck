@@ -119,6 +119,21 @@ public static class CloudProjectSecretFilesRules
       return key.Length > 2 + ending.Length;
     return false;
   }
+  /// A name another device can make that Windows cannot hold or that could leave the folder (review 15 Nov, fault A):
+  /// the Cloud folder's rule (lane F `CloudFolderRules.WindowsCannotHold`, the same list; JOIN: call that one) plus
+  /// separators, control characters, `.`/`..` and empty parts. Such a file is never written here: it waits sealed.
+  public static bool WindowsCannotHold(string relative)
+  {
+    if (relative.Length == 0 || relative.Contains('\\') || relative.Any(char.IsControl)) return true;
+    foreach (var name in relative.Split('/'))
+    {
+      if (name.Length == 0 || name is "." or ".." || name.EndsWith('.') || name.EndsWith(' ') || name.IndexOfAny(['<', '>', ':', '"', '|', '?', '*']) >= 0) return true;
+      var stem = name.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
+      if (stem is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$") return true;
+      if (stem.Length == 4 && (stem.StartsWith("COM", StringComparison.Ordinal) || stem.StartsWith("LPT", StringComparison.Ordinal)) && stem[3] is >= '0' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3') return true;
+    }
+    return false;
+  }
   /// A project folder's own name as it travels: one plain name, nothing that climbs.
   public static bool CleanFolderName(string name) => CloudBootFilesFormat.CleanRelative(name) && !name.Contains('/');
   public static bool ValidProjectId(string id) => ProjectIdentity.ValidId(id) && id != ProjectIdentity.IndependentId;
@@ -252,6 +267,7 @@ public static class CloudProjectSecretFilesWords
   public const string WaitingFolder = "waiting for the project's folder on this PC";
   public const string WaitingSetting = "waiting: kept on this PC only is on";
   public const string WaitingBlocked = "waiting: a link or another file is in its place";
+  public const string WaitingName = "waiting: its name cannot be used on Windows";
   public const string TooLarge = "too large to travel (over 32 KB)";
   public const string TooMany = "not sent: this project has more than 40 secret files or 512 KB";
   public const string KeptHere = "kept on this PC only";
