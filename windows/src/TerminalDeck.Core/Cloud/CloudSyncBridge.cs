@@ -52,6 +52,10 @@ public sealed class CloudSyncBridge : IDisposable
   public event Action<CloudSyncState?>? StatusChanged;
   /// The engine while it runs (tests and diagnostics).
   public CloudSyncEngine? Engine { get { lock (gate) return running?.Engine; } }
+  /// The service's clock in ms (this PC's clock plus the offset learned from the service), null while not known.
+  public long? ServiceNow { get { lock (gate) return running?.Client is { ServiceOffset: not null } c ? c.ServiceNow() : null; } }
+  /// Every event of the account's socket, after the sync's own nudge (reach by sign-in takes `devices`, `gate`, `hello`).
+  public event Action<CloudSyncEvent>? AccountEvent;
 
   /// Follows the account from now on. Builds nothing unless the account is already signed in with Cloud on.
   public void Start()
@@ -115,7 +119,7 @@ public sealed class CloudSyncBridge : IDisposable
     _ = Task.Run(() => LoopAsync(r, ct), CancellationToken.None);
     _ = Task.Run(async () =>
     {
-      try { await r.Client.ListenAsync(platform.Sockets, e => { if (e.Type is "hello" or "changed") Nudge(r); return Task.CompletedTask; }, ct, delay); }
+      try { await r.Client.ListenAsync(platform.Sockets, e => { if (e.Type is "hello" or "changed") Nudge(r); try { AccountEvent?.Invoke(e); } catch (Exception error) when (error is not OutOfMemoryException) { } return Task.CompletedTask; }, ct, delay); }
       catch (Exception error) when (error is not OutOfMemoryException) { if (!ct.IsCancellationRequested) log("cloud sync: events failed: " + CloudRefusal.Word(CloudRefusal.Classify(error))); }
     }, CancellationToken.None);
   }

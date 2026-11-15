@@ -1,4 +1,5 @@
 using TerminalDeck.Core.Cloud;
+using TerminalDeck.Core.Storage;
 using TerminalDeck.Platform.Windows;
 
 namespace TerminalDeck.App.Integration;
@@ -27,12 +28,59 @@ public sealed partial class AppRuntime
     Cloud = CloudComposition.Create(CloudConfiguration.Today(Environment.MachineName, PhoneAppVersion), new WindowsCloudKeyStore(Root), new WindowsCloudBrowser(), cloudHttp,
       trust: trust);
     Cloud.StageLog = WriteCloudLog;
-    CloudTools.Register(Cloud, Door);
+    // Lane C: this PC's machine (hashed MachineGuid, never sent) for the launch describe, set before ResumeCloudAsync.
+    Cloud.Machine = CloudMachineFacts.System(Path.Combine(Root.DirectoryPath, "cloud", "machine.mark"),
+      CloudMachineFacts.CopyName(Root.DirectoryPath, StableChannel.Root(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).DirectoryPath));
+    CloudTools.Register(Cloud, Door, () => CloudChats?.Uploader?.StatusWire());
     CloudSync = new CloudSyncBridge(Cloud, new CloudSyncPlatform(
       subject => CloudSyncStore.InFolder(CloudAccountFolder(subject), subject),
       () => new HttpClientCloudSyncHttp(), new ClientWebSocketCloudSyncSockets(), new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false),
       CloudOwners), WriteCloudLog);
+    // Lane R: the account's socket events reach by sign-in needs (`devices`, `gate`, `hello`).
+    CloudSync.AccountEvent += e =>
+    {
+      if (e.Type is not ("devices" or "gate" or "hello")) return;
+      using var payload = System.Text.Json.JsonDocument.Parse(CloudCanonical.Encode(e.Payload));
+      ReachEvent(e.Type, payload.RootElement.Clone());
+    };
+    // Lane D: the AI delete witness, once (until the hook envelope carries the tool fields every gone file counts as by hand).
+    CloudDeleteWitnessSlot.Shared.InstallOnce(new CloudAiDeleteWitness(Root.DirectoryPath, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), DateTimeOffset.UtcNow));
+    RegisterCloudFilesTools();
+    InitializeCloudChats();
     CloudSync.Start();
+  }
+
+  /// THE ONE SWITCH for every announcement this PC would write (`deleterule` none, `cloudfolder` v1, `artifacts` v1 and
+  /// their 12-hour renewals). OFF until the saved-passwords lane and the task/agent/project records lane are joined and
+  /// Decker says so: a signed-in PC that announced half would hold back parts of sync on the Macs. While off, nothing is
+  /// written and nothing is remembered for later.
+  private const bool CloudAnnouncementsOn = false;
+  private Timer? cloudAnnounceTimer;
+
+  /// The account's computers for the announcements (lowercased device ids), null while the list is not known.
+  private IReadOnlyCollection<string>? CloudComputers() =>
+    Cloud.Snapshot is { Phase: CloudPhase.SignedIn or CloudPhase.Paused, DeviceRows.Count: > 0 } s
+      ? s.DeviceRows.Where(d => d.Trust is not { Removed: true }).Select(d => d.DeviceId.ToLowerInvariant()).ToArray() : null;
+
+  /// At start and every hour: the announcements are renewed when 12 hours old (CloudAnnounce decides), the waiting ones
+  /// retried, and once a day the Bin's 30-day sweep runs. With the switch off the announcement half writes nothing.
+  private void StartCloudHousekeeping(CloudAnnounce announce, string folder)
+  {
+    cloudAnnounceTimer?.Dispose();
+    long lastSweep = 0;
+    cloudAnnounceTimer = new Timer(_ =>
+    {
+      try
+      {
+        CloudDeleteRuleAnnouncement.Announce(announce);
+        announce.Announce(CloudFolderFormat.Feature, CloudFolderFormat.Format);
+        announce.Announce(CloudArtifactsFormat.Feature, CloudArtifactsFormat.Format);
+        announce.RetryPending();
+        var now = CloudSync?.ServiceNow ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (now - lastSweep >= 86_400_000) { CloudBin.ForAccount(folder).Sweep(now); lastSweep = now; }
+      }
+      catch (Exception ex) when (ex is not OutOfMemoryException) { WriteCloudLog("cloud housekeeping: " + ex.GetType().Name); }
+    }, null, TimeSpan.FromSeconds(30), TimeSpan.FromHours(1));
   }
 
   private string CloudAccountFolder(string subject) => Path.Combine(Root.DirectoryPath, "cloud", "accounts", subject);
@@ -49,12 +97,21 @@ public sealed partial class AppRuntime
     CloudMemoryAdapter? memory = null;
     var records = new CloudRecordsForAccount(folder, subject, deviceId, Projects, Agents, CloudProjectFolders.Installed,
       () => trustMode.Load() == CloudTrustMode.Account, () => memory?.RetryProjects());
-    memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject);
+    memory = CloudMemoryAdapter.ForAccount(folder, deviceId, records.Projects.MemoryProject, deviceName: CloudDeviceName, thisDeviceName: Environment.MachineName);
+    // Lane D: ONE announce per account, shared by memory, instruction files and the Cloud folder / artifacts owners.
+    var announce = new CloudAnnounce(memory.Store, () => deviceId, () => CloudSync?.ServiceNow, CloudComputers,
+      new CloudFileSlot(Path.Combine(folder, "sync", "announce-pending.json")), send: CloudAnnouncementsOn);
+    memory.UseAnnounce(announce);
     // 7C-4: tasks and settings, in their own record store (the Mac keeps them apart from projects and agents).
     var kinds = new CloudKindsForAccount(folder, subject, deviceId, TerminalDeck.Core.Tasks.TaskStore.At(Root), Projects,
       CloudSettingsOwner.ForWindows(General, TerminalAppearance), () => trustMode.Load() == CloudTrustMode.Account);
     // 7C-3: AI instruction files last (AppRuntime.CloudBootFiles.cs).
-    return [.. records.Adapters, memory, .. kinds.Adapters, CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account)];
+    var owners = new List<ICloudSyncAdapter>([.. records.Adapters, memory, .. kinds.Adapters,
+      CloudBootFilesOwner(subject, deviceId, () => trustMode.Load() == CloudTrustMode.Account, announce)]);
+    // Lane F: the Cloud folder and artifacts, on the account's ONE Bin.
+    owners.AddRange(CloudFilesOwners(subject, deviceId, announce, CloudBin.ForAccount(folder), () => CloudSync?.ServiceNow));
+    StartCloudHousekeeping(announce, folder);
+    return owners;
   }
 
   /// One plain line per sign-in stage, in `logs\cloud.log` of this copy's own data folder. The lines never carry a token,
@@ -80,5 +137,5 @@ public sealed partial class AppRuntime
     catch (Exception ex) when (ex is not OutOfMemoryException) { }
   }
 
-  private void DisposeCloud() { CloudSync?.Dispose(); Cloud?.Dispose(); cloudHttp?.Dispose(); }
+  private void DisposeCloud() { cloudAnnounceTimer?.Dispose(); CloudChats?.Detach(); CloudSync?.Dispose(); Cloud?.Dispose(); cloudHttp?.Dispose(); }
 }

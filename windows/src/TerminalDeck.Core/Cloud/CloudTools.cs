@@ -11,7 +11,17 @@ public static class CloudTools
     new("cloud.status", "cloud_status", McpTier.Read, JsonSerializer.SerializeToElement(new { type = "object", properties = new { }, additionalProperties = false }))
   ];
 
-  public static void Register(CloudAccountClient account, McpDoor door) => door.Register("cloud.status", (_, _, _) => ValueTask.FromResult(Status(account.Snapshot)));
+  public static void Register(CloudAccountClient account, McpDoor door, Func<System.Text.Json.Nodes.JsonObject?>? sessions = null) =>
+    door.Register("cloud.status", (_, _, _) => ValueTask.FromResult(WithSessions(Status(account.Snapshot), sessions?.Invoke())));
+
+  /// Lane C: the sessions and chat histories line (counts only, read only), when the uploader runs.
+  private static JsonElement WithSessions(JsonElement status, System.Text.Json.Nodes.JsonObject? sessions)
+  {
+    if (sessions is null) return status;
+    var node = System.Text.Json.Nodes.JsonNode.Parse(status.GetRawText())!.AsObject();
+    node["sessions"] = sessions.DeepClone();
+    return JsonSerializer.SerializeToElement(node);
+  }
 
   /// The same plain state the person sees. Never a token, a key or the protected record.
   public static JsonElement Status(CloudSnapshot snapshot) => JsonSerializer.SerializeToElement(new

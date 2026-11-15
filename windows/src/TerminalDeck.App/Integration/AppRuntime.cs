@@ -91,6 +91,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     Remote.McpBridge = new McpRelayBridge(Door);
     OtherComputersTools.Register(Door, OtherComputers, this);
     InitializeCloud();
+    InitializeReach();
   }
   public async Task InitializeAsync()
   {

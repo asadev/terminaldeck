@@ -115,6 +115,20 @@ public sealed class CloudBin
     }
   }
   /// What is kept for one item, newest first.
+  /// The Mac's keepNewestOnly (lane F's request): of one item's kept versions only the newest (by its own time) stays;
+  /// the older ones go now, and their content when nothing else names it.
+  public void KeepNewestOnly(string itemKey)
+  {
+    lock (gate)
+    {
+      var mine = index.Versions.Where(v => v.ItemKey == itemKey).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).ToArray();
+      if (mine.Length <= 1) return;
+      var gone = new List<(string, string)>();
+      foreach (var v in mine.Skip(1)) { index.Versions.Remove(v); gone.Add((v.Kind, v.Sha256)); }
+      Save();
+      DropUnnamed(gone);
+    }
+  }
   public IReadOnlyList<Kept> Versions(string itemKey) { lock (gate) return index.Versions.Where(v => v.ItemKey == itemKey).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray(); }
   public IReadOnlyList<Kept> VersionsOfKind(string kind) { lock (gate) return index.Versions.Where(v => v.Kind == kind).OrderByDescending(v => v.At).ThenBy(v => v.Sha256, StringComparer.Ordinal).Select(v => v.Value).ToArray(); }
 

@@ -114,6 +114,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands, Chats = Runtime.Chats, DataDirectory = Runtime.Root.DirectoryPath, McpNavigation = id => new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(id, server, tool, args, ct)) };
         serversPage = new(new(Runtime.Servers), this);
         Runtime.RegisterTools();
+        Runtime.StartCodeBackup();
         RegisterWindowTools();
         RegisterShellReadTools();
         RegisterProjectRemovalTool();

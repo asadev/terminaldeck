@@ -723,10 +723,13 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
       if (Control("safetyCopy") == made) SetControl("safetyCopy", null);
     }
   }
-  /// A version kept for one file. (The Mac keeps only the newest of these; until the shared keeper can drop the older
-  /// ones, each stays its 30 days: more is kept, nothing less.)
-  private long KeepVersion(string itemKey, string name, string? place, long at, string device, byte[] content, long t) =>
-    keeper.Keep(Profile.KeeperKind, itemKey, name, place, at, device, content, t);
+  /// A version kept for one file; as on the Mac only the newest arrived version of each file is kept.
+  private long KeepVersion(string itemKey, string name, string? place, long at, string device, byte[] content, long t)
+  {
+    var until = keeper.Keep(Profile.KeeperKind, itemKey, name, place, at, device, content, t);
+    keeper.KeepNewestOnly(itemKey);
+    return until;
+  }
   /// His own work that sync set aside: kept under its own key (`<item>|mine`), only the 30-day sweep removes it.
   private long KeepMine(string path, long at, byte[] content, long t) => keeper.Keep(Profile.KeeperKind, MineKey(path), Name(path), Place(path), at, DeviceId, content, t);
   private void KeepBinnedHistory(string path, string? replacingWith = null)
@@ -738,6 +741,7 @@ public sealed class CloudFolderOwner : ICloudSyncAdapter, ICloudDeleteOwning
   {
     KeepBinnedHistory(itemKey[(Profile.KeeperKind.Length + 1)..]);
     keeper.Take(itemKey, t);
+    keeper.KeepNewestOnly(itemKey);
   }
 
   /// The Cloud page's lines for this kind, one per thing that holds files back or keeps them apart. Empty when nothing does.

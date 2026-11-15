@@ -42,8 +42,9 @@ public sealed class CloudAnnounce
   /// while not known. `serviceNow`: the service clock, null while not known. `pending`: where an announcement that waits
   /// for the clock is remembered. `changed`: called after a setting was written (the memory capture picks it up).
   public CloudAnnounce(IDeckMemoryCloudStore memory, Func<string?> deviceId, Func<long?> serviceNow, Func<IReadOnlyCollection<string>?> computers,
-    ICloudLedgerSlot pending, Action? changed = null)
+    ICloudLedgerSlot pending, Action? changed = null, bool send = true)
   {
+    Sends = send;
     this.memory = memory; this.deviceId = deviceId; this.serviceNow = serviceNow; this.computers = computers; pendingSlot = pending; this.changed = changed;
     this.pending = pending.Read() is { } bytes ? JsonSerializer.Deserialize<Dictionary<string, string>>(bytes) ?? [] : [];
   }
@@ -69,8 +70,13 @@ public sealed class CloudAnnounce
   /// J-1: "this PC applies no removals and sends none" for the delete rule. Never waited for by the other devices.
   public bool AnnounceNone(string feature) => Put(feature, CloudDeleteGate.None, force: false);
 
+  /// False: this PC writes no announcement at all (none, v1 or a renewal) and remembers none for later; the other
+  /// devices see this PC as not having announced anything. The App's one switch (AppRuntime.CloudAnnouncementsOn).
+  public bool Sends { get; }
+
   private bool Put(string feature, string what, bool force)
   {
+    if (!Sends) return false;
     if (feature.Length == 0 || feature.Contains('.')) return false;
     if (what != CloudDeleteGate.None && (!int.TryParse(what, NumberStyles.None, CultureInfo.InvariantCulture, out var f) || f <= 0)) return false;
     if (deviceId() is not { } id || !CloudDeleteText.IsUuid(id) || serviceNow() is not { } now || now <= 0)
