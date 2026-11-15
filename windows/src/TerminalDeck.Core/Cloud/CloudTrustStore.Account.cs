@@ -18,7 +18,7 @@ public sealed partial class CloudTrustStore
       {
         if (row.SignKey is not { } key || CloudDeviceCode.KeyId(key) is not { } keyId || keyId != row.KeyId || !CloudDeviceCode.IsDeviceId(row.DeviceId)) continue;
         if (devices.Any(d => d.DeviceId == row.DeviceId || d.KeyId == keyId) || devices.Count >= Limit) continue;
-        devices.Add(new(row.DeviceId, key, keyId, PlainName(row.Name), "trusted", "account", now()));
+        devices.Add(new(row.DeviceId, key, keyId, PlainName(row.Name), "trusted", "account", now(), Platform: row.Platform));
         added.Add(row.DeviceId);
       }
       if (added.Count == 0) return [];
@@ -83,8 +83,49 @@ public sealed partial class CloudTrustStore
       if (index < 0 || old.Devices[index].How == "self" || !old.Devices[index].Trusted) throw new CloudTrustRefusal(CloudTrustRefusalKind.ListChanged);
       if (old.Devices.Any(d => d.DeviceId != row.DeviceId && d.KeyId == keyId)) throw new CloudTrustRefusal(CloudTrustRefusalKind.SameKey);
       var devices = old.Devices.ToList();
-      devices[index] = new(row.DeviceId, key, keyId, PlainName(row.Name), "trusted", "click", now());
+      devices[index] = new(row.DeviceId, key, keyId, PlainName(row.Name), "trusted", "click", now(), Platform: old.Devices[index].Platform ?? row.Platform);
       Save(devices, old);
+    }
+  }
+
+  /// Saved passwords (the Mac's notePlatforms, PASSWORDS-2 review blocker 1): an entry stored before the kind of device
+  /// was kept gets it ONCE, from a row that reports the very key stored here. A kind once kept never changes. Only fills
+  /// a missing fact (it trusts nothing new), so it needs no press. Returns the ids filled.
+  public IReadOnlyList<string> NotePlatforms(IReadOnlyList<CloudTrustRow> rows)
+  {
+    lock (gate)
+    {
+      var old = List();
+      var devices = old.Devices.ToList();
+      var filled = new List<string>();
+      for (var i = 0; i < devices.Count; i++)
+      {
+        var was = devices[i];
+        if (was.Platform is not null || rows.FirstOrDefault(r => r.DeviceId == was.DeviceId) is not { KeyChanged: false, Platform: { } kind } row || row.KeyId != was.KeyId) continue;
+        devices[i] = was with { Platform = kind };
+        filled.Add(was.DeviceId);
+      }
+      if (filled.Count == 0) return [];
+      Save(devices, old);
+      return filled;
+    }
+  }
+
+  /// Passwords in the browser (the Mac's pruneRemovedBrowsers): a browser entry (kind "web") stopped because it was
+  /// removed is dropped from the list 30 days after it was stopped. A browser never comes back under the same id, so
+  /// nothing can return by itself; it only keeps cleared browsers from filling the list. Computers and phones never.
+  public const long BrowserKeptDays = 30;
+  public IReadOnlyList<string> PruneRemovedBrowsers()
+  {
+    lock (gate)
+    {
+      var old = List();
+      var cutoff = now() - BrowserKeptDays * 86_400_000;
+      var dropped = old.Devices.Where(d => d.Platform == "web" && !d.Trusted && d.How != "self" && d.StopReason is "removed" or "left account"
+        && (d.StoppedAt ?? long.MaxValue) <= cutoff).Select(d => d.DeviceId).ToArray();
+      if (dropped.Length == 0) return [];
+      Save(old.Devices.Where(d => !dropped.Contains(d.DeviceId)).ToList(), old);
+      return dropped;
     }
   }
 }

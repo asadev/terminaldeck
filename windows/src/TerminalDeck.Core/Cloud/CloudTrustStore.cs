@@ -28,16 +28,18 @@ public interface ICloudTrustSlot
 }
 
 public sealed record CloudTrustedDevice(string DeviceId, CloudPublicJwk SignKey, string KeyId, string Name, string Trust, string How, long TrustedAt,
-  long? StoppedAt = null, string? StopReason = null)
+  long? StoppedAt = null, string? StopReason = null, string? Platform = null)
 {
   /// Only "trusted" lets a pack apply ("stopped" does not).
   public bool Trusted => Trust == "trusted";
   public CloudJson ToJson() => CloudJson.Obj(("deviceId", CloudJson.From(DeviceId)), ("signKey", CloudP256.Json(SignKey)), ("keyId", CloudJson.From(KeyId)),
     ("name", CloudJson.From(Name)), ("trust", CloudJson.From(Trust)), ("how", CloudJson.From(How)), ("trustedAt", CloudJson.From(TrustedAt)),
-    ("stoppedAt", StoppedAt is { } s ? CloudJson.From(s) : null), ("stopReason", StopReason is { } r ? CloudJson.From(r) : null));
+    ("stoppedAt", StoppedAt is { } s ? CloudJson.From(s) : null), ("stopReason", StopReason is { } r ? CloudJson.From(r) : null),
+    ("platform", Platform is { } p ? CloudJson.From(p) : null));
   public static CloudTrustedDevice FromJson(CloudJson value) => value is CloudJson.Object o && o["signKey"] is { } key
     ? new(CloudFields.Text(o, "deviceId"), CloudP256.FromJson(key), CloudFields.Text(o, "keyId"), CloudFields.Text(o, "name"), CloudFields.Text(o, "trust"),
-      CloudFields.Text(o, "how"), CloudFields.Integer(o, "trustedAt"), CloudFields.OptionalInteger(o, "stoppedAt"), CloudFields.OptionalText(o, "stopReason"))
+      CloudFields.Text(o, "how"), CloudFields.Integer(o, "trustedAt"), CloudFields.OptionalInteger(o, "stoppedAt"), CloudFields.OptionalText(o, "stopReason"),
+      CloudFields.OptionalText(o, "platform"))
     : throw new CloudFailure("invalid_request");
 }
 
@@ -154,7 +156,7 @@ public sealed partial class CloudTrustStore : ICloudDeviceTrust
       // One key, one device: a key the list already holds for another device is never added again.
       if (old.Devices.Any(d => d.KeyId == keyId)) throw new CloudTrustRefusal(CloudTrustRefusalKind.SameKey);
       if (old.Devices.Count >= Limit) throw new CloudTrustRefusal(CloudTrustRefusalKind.ListFull);
-      Save([.. old.Devices, new(registration.DeviceId, registration.SignPublicJwk, keyId, PlainName(registration.Label), "trusted", "self", now())], old);
+      Save([.. old.Devices, new(registration.DeviceId, registration.SignPublicJwk, keyId, PlainName(registration.Label), "trusted", "self", now(), Platform: registration.Platform)], old);
     }
   }
 
@@ -197,7 +199,7 @@ public sealed partial class CloudTrustStore : ICloudDeviceTrust
         {
           // A stored key is never replaced by a press; a device already trusted stays as it was.
           if (devices[index].KeyId != keyId) throw new CloudTrustRefusal(CloudTrustRefusalKind.ListChanged);
-          if (!devices[index].Trusted) devices[index] = entry;
+          if (!devices[index].Trusted) devices[index] = entry with { Platform = devices[index].Platform };
         }
         else
         {

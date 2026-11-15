@@ -10,7 +10,13 @@ namespace TerminalDeck.Core.Cloud;
 /// What the bridge takes from the platform. `Store(subject)`: the account's own sync folder. `Http` is called only when
 /// a round actually sends. `Owners(subject, deviceId)`: the record kinds this PC syncs for that account (Deck Memory).
 public sealed record CloudSyncPlatform(Func<string, CloudSyncStore> Store, Func<ICloudSyncHttp> Http, ICloudSyncSocketFactory Sockets, CloudSyncEndpoint Endpoint,
-  Func<string, string, IReadOnlyList<ICloudSyncAdapter>> Owners, Func<long>? Clock = null);
+  Func<string, string, IReadOnlyList<ICloudSyncAdapter>> Owners, Func<long>? Clock = null, CloudSecretsPlatform? Secrets = null);
+
+/// Saved passwords on this PC. `Slots(subject, deviceId)`: the protected slots of the key (Windows: DPAPI). `Folder(subject)`:
+/// the account's own saved-passwords state folder (keyed marks, the sealed Bins, kept conflicts). `Stores(subject,
+/// deviceId, serviceNow)`: the travelling stores, each already under the delete rule (none yet = the key still travels).
+public sealed record CloudSecretsPlatform(Func<string, string, ICloudSecretsSlots> Slots, Func<string, string> Folder,
+  Func<string, string, Func<long?>, IReadOnlyList<ICloudSecretsStore>>? Stores = null);
 
 public sealed class CloudSyncBridge : IDisposable
 {
@@ -18,8 +24,11 @@ public sealed class CloudSyncBridge : IDisposable
   public static readonly TimeSpan AccountEvery = TimeSpan.FromMinutes(15);
   public static readonly TimeSpan HaltGrace = TimeSpan.FromSeconds(2);
 
-  private sealed class Running(string subject, string deviceId, CloudSyncEngine engine, CloudFeedClient client, LazySyncHttp http, CancellationTokenSource stop)
+  private sealed class Running(string subject, string deviceId, CloudSyncEngine engine, CloudFeedClient client, LazySyncHttp http, CancellationTokenSource stop,
+    CloudSecretsLane? secrets = null)
   {
+    public CloudSecretsLane? Secrets { get; } = secrets;
+    public int RemovedSightings;
     public string Subject { get; } = subject;
     public string DeviceId { get; } = deviceId;
     public CloudSyncEngine Engine { get; } = engine;
@@ -95,9 +104,12 @@ public sealed class CloudSyncBridge : IDisposable
       var store = platform.Store(subject);
       var http = new LazySyncHttp(platform.Http);
       var client = new CloudFeedClient(platform.Endpoint, subject, account, http, store, platform.Clock);
-      var engine = new CloudSyncEngine(subject, deviceId, client, store, account.SyncTrust, account.SignPack, platform.Owners(subject, deviceId), log, platform.Clock);
+      CloudSyncEngine? built = null; Running? made = null;
+      var secrets = BuildSecrets(subject, deviceId, client, store, () => built, () => made);
+      var engine = built = new CloudSyncEngine(subject, deviceId, client, store, account.SyncTrust, account.SignPack, platform.Owners(subject, deviceId), log, platform.Clock,
+        secrets);
       // The account was just asked (that is what started this); the next ask is due a while from now.
-      return new(subject, deviceId, engine, client, http, new CancellationTokenSource()) { AccountAskedAt = now() };
+      return made = new(subject, deviceId, engine, client, http, new CancellationTokenSource(), secrets?.Lane) { AccountAskedAt = now() };
     }
     catch (Exception error) when (error is not OutOfMemoryException)
     {
@@ -106,6 +118,36 @@ public sealed class CloudSyncBridge : IDisposable
     }
   }
 
+  /// Saved passwords for this account and device (null when the platform or the account does not take them). Built
+  /// inert: nothing is asked of anyone until the loop starts.
+  private CloudSecretsClass? BuildSecrets(string subject, string deviceId, CloudFeedClient client, CloudSyncStore store, Func<CloudSyncEngine?> engine, Func<Running?> running)
+  {
+    if (platform.Secrets is not { } sp || account is not ICloudSecretsAccount secretsAccount || secretsAccount.SecretsDevice is not { } device || device.DeviceId != deviceId) return null;
+    var folder = sp.Folder(subject);
+    var control = new CloudSecretsControl(client.SecretsCallAsync, client.DevicesAsync);
+    var handover = new CloudSecretsHandover(subject, device, account.SignPack, secretsAccount.SecretsSharedSecret, new CloudSecretsLocalKeys(sp.Slots(subject, deviceId)),
+      control, CloudSecretsAutoTrust.FromList(() => secretsAccount.SecretsTrust), () => account.SyncIdentity is { } id && id.Subject == subject, client.ServiceNow, log);
+    var content = new CloudSecretsContent(subject, deviceId, handover);
+    var known = new CloudSecretsKnownStore(Path.Combine(folder, "known"));
+    var conflicts = new CloudSecretsKeptConflicts(Path.Combine(folder, "kept-conflicts"));
+    var adapters = (sp.Stores?.Invoke(subject, deviceId, () => client.ServiceOffset is null ? null : client.ServiceNow()) ?? [])
+      .Where(s => CloudSecretsDomains.Admitted(s.SourceId, s.Domain))
+      .Select(s => new CloudSecretsLogicalAdapter(s, content, deviceId, known, store.OutboxId, op => engine()?.StillQueued(op) ?? true, conflicts.Keep, log)).ToArray();
+    var lane = new CloudSecretsLane(handover, adapters, () => { if (running() is { } r) Nudge(r); }, client.ServiceNow, log);
+    // B4: ANOTHER device signed this PC out. The service's word is taken only when it comes twice: the first sighting
+    // asks once more; the second removes this device id's Cloud keys (never any data).
+    client.RemovedByAnotherDevice += (name, at) =>
+    {
+      if (running() is not { } r) return;
+      var seen = Interlocked.Increment(ref r.RemovedSightings);
+      if (seen == 1) _ = Task.Run(async () => { try { await control.StatusAsync(); } catch (Exception) { } });
+      else if (seen == 2) { SignedOutElsewhere = (CloudTrustStore.PlainName(name), at); handover.ForgetAfterRemoteSignOut(); }
+    };
+    return new(content, adapters, new CloudFileSlot(Path.Combine(folder, "ledger-secrets.json")), lane);
+  }
+  /// Who signed this PC out and when (ms), once the service said so twice; for the Profile line. Null otherwise.
+  public (string Name, long At)? SignedOutElsewhere { get; private set; }
+
   private void Launch(Running? r)
   {
     if (r is null) { Publish(new(CloudSyncPhase.Waiting, 0, 0, "this PC's sync record cannot be read", 0, 0, 0, 0, 0)); return; }
@@ -113,9 +155,19 @@ public sealed class CloudSyncBridge : IDisposable
     if (!r.Engine.HasKinds) return; // Idle and silent: nothing on this PC syncs yet.
     var ct = r.Stop.Token;
     _ = Task.Run(() => LoopAsync(r, ct), CancellationToken.None);
+    if (r.Secrets is { } secrets) _ = Task.Run(secrets.CatchUpAsync, CancellationToken.None);
     _ = Task.Run(async () =>
     {
-      try { await r.Client.ListenAsync(platform.Sockets, e => { if (e.Type is "hello" or "changed") Nudge(r); return Task.CompletedTask; }, ct, delay); }
+      try
+      {
+        await r.Client.ListenAsync(platform.Sockets, e =>
+        {
+          if (e.Type is "hello" or "changed") Nudge(r);
+          // Saved passwords' notices: the key's hand-over, a key change, a device that joined or left.
+          if (e.Type is "hello" or "vault" or "approval" or "devices" && r.Secrets is { } lane) _ = Task.Run(() => lane.EventAsync(e.Type, e.Payload), CancellationToken.None);
+          return Task.CompletedTask;
+        }, ct, delay);
+      }
       catch (Exception error) when (error is not OutOfMemoryException) { if (!ct.IsCancellationRequested) log("cloud sync: events failed: " + CloudRefusal.Word(CloudRefusal.Classify(error))); }
     }, CancellationToken.None);
   }
@@ -150,6 +202,7 @@ public sealed class CloudSyncBridge : IDisposable
       catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException) { }
     }
     ct.ThrowIfCancellationRequested();
+    if (r.Secrets is { } secrets) await secrets.RoundAsync();
     var state = await r.Engine.SyncAsync(ct);
     if (IsCurrent(r)) Publish(state);
     return state;

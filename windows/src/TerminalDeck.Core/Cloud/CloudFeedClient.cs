@@ -282,6 +282,9 @@ public sealed class CloudFeedClient
     if (response.Status is >= 200 and < 300) { Backoff.Succeeded(); return response.Body; }
     var detail = ErrorDetail(response.Body);
     if (skewRetry && response.Status == 400 && detail.Code == "clock_skew" && detail.ServerTime is > 0) throw new ClockSkew(detail.ServerTime.Value);
+    // Saved passwords B4: the service's explicit word that ANOTHER device signed this device out (who and when).
+    if (detail.Code == "device_revoked" && detail.RemovedAt is > 0 && detail.RemovedByName is { Length: > 0 } by)
+      try { RemovedByAnotherDevice?.Invoke(by, detail.RemovedAt.Value); } catch (Exception) { }
     var failure = new CloudFailure(detail.Code ?? "unavailable", response.Status, detail.Retryable ?? response.Status is >= 500 or 429);
     var retryAfter = response.RetryAfterSeconds is { } s ? s * 1000 : detail.RetryAfterMs;
     Backoff.Failed(failure, retryAfter, packScoped);
@@ -302,16 +305,51 @@ public sealed class CloudFeedClient
     }
   }
 
-  private sealed record Detail(string? Code, bool? Retryable, long? RetryAfterMs, long? ServerTime);
+  private sealed record Detail(string? Code, bool? Retryable, long? RetryAfterMs, long? ServerTime, string? RemovedByName = null, long? RemovedAt = null);
   private static Detail ErrorDetail(byte[] body)
   {
     try
     {
       if (CloudJson.Parse(body) is CloudJson.Object o && o["error"] is CloudJson.Object e)
-        return new(e["code"]?.AsString, e["retryable"] is CloudJson.Bool b ? b.Value : null, e["retryAfterMs"]?.AsInteger, e["serverTime"]?.AsInteger);
+        return new(e["code"]?.AsString, e["retryable"] is CloudJson.Bool b ? b.Value : null, e["retryAfterMs"]?.AsInteger, e["serverTime"]?.AsInteger,
+          e["removedByName"]?.AsString, e["removedAt"]?.AsInteger);
     }
     catch (CloudFailure) { }
     return new(null, null, null, null);
+  }
+
+  // ---- Saved passwords' control calls ----
+
+  /// `device_revoked` with who and when: ANOTHER device signed this device out (raised per answer; the listener asks
+  /// once more before it acts, so a passing answer never removes anything).
+  public event Action<string, long>? RemovedByAnotherDevice;
+
+  /// `/secrets/*` and the account's device list, on this transport's own signed path. A POST carries `requestId` in its
+  /// body and goes out under that id (the service checks they match).
+  public Task<CloudJson> SecretsCallAsync(string method, string pathAndQuery, CloudJson? body, string? requestId, CancellationToken ct)
+  {
+    if (!pathAndQuery.StartsWith("/secrets/", StringComparison.Ordinal) && pathAndQuery != "/devices") throw new CloudFailure("invalid_request");
+    if (method == "POST" && requestId is null) throw new CloudFailure("invalid_request");
+    return CallAsync(method, pathAndQuery, body, requestId, false, ct);
+  }
+  /// GET /devices: the account's devices with their registered keys (saved passwords look a device up here).
+  public async Task<IReadOnlyList<CloudDevice>> DevicesAsync(CancellationToken ct)
+  {
+    var o = Object(await CallAsync("GET", "/devices", null, null, false, ct));
+    if (o["devices"] is not CloudJson.Array rows) throw new CloudFailure("invalid_response");
+    var list = new List<CloudDevice>();
+    foreach (var row in rows.Items.OfType<CloudJson.Object>())
+    {
+      try
+      {
+        if (row["signPublicJwk"] is not { } sign || row["wrapPublicJwk"] is not { } wrap) continue;
+        list.Add(new(Text(row, "deviceId"), row["label"]?.AsString ?? row["displayName"]?.AsString ?? "", Text(row, "platform"), row["appVersion"]?.AsString ?? "",
+          Text(row, "status"), row["secretsApproved"] is CloudJson.Bool { Value: true }, row["lastSeenAt"]?.AsInteger ?? 0, CloudP256.FromJson(sign), CloudP256.FromJson(wrap),
+          row["registeredAt"]?.AsInteger));
+      }
+      catch (CloudFailure) { }
+    }
+    return list;
   }
 
   // ---- Feed ----
