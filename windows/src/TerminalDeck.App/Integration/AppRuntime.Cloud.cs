@@ -44,7 +44,10 @@ public sealed partial class AppRuntime
       ReachEvent(e.Type, payload.RootElement.Clone());
     };
     // Lane D: the AI delete witness, once (until the hook envelope carries the tool fields every gone file counts as by hand).
-    CloudDeleteWitnessSlot.Shared.InstallOnce(new CloudAiDeleteWitness(Root.DirectoryPath, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), DateTimeOffset.UtcNow));
+    CloudWitness = new CloudAiDeleteWitness(Root.DirectoryPath, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), DateTimeOffset.UtcNow);
+    CloudDeleteWitnessSlot.Shared.InstallOnce(CloudWitness);
+    // Lane S3: project secret files' tool.
+    CloudProjectSecretFilesTools.Register(CloudProjectSecretFilesHolder.Shared, Door);
     RegisterCloudFilesTools();
     InitializeCloudChats();
     CloudSync.Start();
@@ -56,6 +59,10 @@ public sealed partial class AppRuntime
   /// written and nothing is remembered for later.
   private const bool CloudAnnouncementsOn = false;
   private Timer? cloudAnnounceTimer;
+  /// Lane D's AI delete witness (one per app); the MCP-servers store reads it for `claude mcp remove`.
+  public CloudAiDeleteWitness? CloudWitness { get; private set; }
+  /// The account's ONE announcer while signed in (lane S3's gate reads it).
+  private CloudAnnounce? cloudAnnounce;
   /// The signed-in account's record owners (projects, agents): deletes made in the app go through them so they travel.
   public CloudRecordsForAccount? CloudRecords { get; private set; }
 
@@ -78,6 +85,8 @@ public sealed partial class AppRuntime
         CloudDeleteRuleSwitch.Announce(announce);
         announce.Announce(CloudFolderFormat.Feature, CloudFolderFormat.Format);
         announce.Announce(CloudArtifactsFormat.Feature, CloudArtifactsFormat.Format);
+        // Lane S3: also while saved passwords are locked (a PC waiting for the key must not hold the gate shut).
+        announce.Announce(CloudProjectSecretFilesRules.Feature, CloudProjectSecretFilesRules.Format);
         announce.RetryPending();
         var now = CloudSync?.ServiceNow ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (now - lastSweep >= 86_400_000) { CloudBin.ForAccount(folder).Sweep(now); lastSweep = now; }
@@ -105,6 +114,7 @@ public sealed partial class AppRuntime
     var announce = new CloudAnnounce(memory.Store, () => deviceId, () => CloudSync?.ServiceNow, CloudComputers,
       new CloudFileSlot(Path.Combine(folder, "sync", "announce-pending.json")), send: CloudAnnouncementsOn);
     memory.UseAnnounce(announce);
+    cloudAnnounce = announce;
     // Lane S: saved passwords' removals follow the same gate (closed while nothing is announced).
     CloudSecretsDeleteRuleOpen = announce.DeleteRuleIsOpen;
     // Lane R2: tasks, agents and projects follow the delete rule (record version 2); gate closed = old-form removals only.

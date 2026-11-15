@@ -49,6 +49,7 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Cloud.CloudFolderTools.Specs.Concat(TerminalDeck.Core.Cloud.CloudArtifactsTools.Specs)) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Remote.ReachAccountTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Code.CodeBackupTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Cloud.CloudProjectSecretFilesTools.Specs) result[spec.Id] = spec;
     return result.Values.ToArray();
   }
   public static McpTier EffectiveTier(McpToolSpec spec, JsonElement arguments, bool ownsSession = false)

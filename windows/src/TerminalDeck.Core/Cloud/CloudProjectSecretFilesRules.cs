@@ -184,21 +184,10 @@ public static class CodeSecrets
     while (p < pattern.Length && pattern[p] == '*') p++;
     return p == pattern.Length;
   }
-  public static Kind KindOf(string path)
-  {
-    var parts = path.ToLowerInvariant().Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-    if (parts.Length == 0) return Kind.None;
-    var name = parts[^1]; var folders = parts[..^1];
-    bool Matches(IEnumerable<string> patterns) => patterns.Any(p => Glob(p, name));
-    if (folders.Any(f => CredentialFolders.Contains(f))) return Kind.Credential;
-    if (name == "debug.keystore") return Kind.LeaveOut;
-    if (Matches(CredentialPatterns)) return Kind.Credential;
-    if (Matches(KeyPatterns)) return Kind.MaybeKey;
-    if (Matches(LeaveOutPatterns) || folders.Any(f => LeaveOutFolders.Contains(f))) return Kind.LeaveOut;
-    return Kind.None;
-  }
+  /// ONE decision with the Code page (lane K joined): the same lists, read from CodeBackupReader.
+  public static Kind KindOf(string path) => (Kind)(int)TerminalDeck.Core.Code.CodeBackupReader.KindOf(path);
   public const int KeyBytes = 256 * 1024;
-  public static bool PrivateKey(ReadOnlySpan<byte> data) => Encoding.UTF8.GetString(data[..Math.Min(data.Length, KeyBytes)]).Contains("PRIVATE KEY", StringComparison.Ordinal);
+  public static bool PrivateKey(ReadOnlySpan<byte> data) => TerminalDeck.Core.Code.CodeBackupReader.PrivateKey(data);
 }
 
 /// Whether every computer of the account can take project secret files yet, and if not, the true reason.
