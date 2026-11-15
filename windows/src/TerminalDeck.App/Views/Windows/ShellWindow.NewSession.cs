@@ -40,12 +40,13 @@ public sealed partial class ShellWindow
     PageModelAndEffort,
     PagePermission,
     provider => provider == "shell" ? NewSessionPicker.Services?.ShellLabel?.Invoke() ?? "PowerShell" : TerminalDeck.Core.Agents.AgentSeats.ProviderName(provider),
-    StartFromPageAsync,
+    (start, text, files, ct) => StartFromPageAsync(start, text, files, ct),
     PageStarted,
     projectId => _ = ShowFullNewSessionFormAsync(projectId),
     OpenCodingAis,
     () => WindowHandle,
-    () => Ready), new NewSessionMemory(dataRoot), null);
+    () => Ready,
+    StartInFolder: (start, folder, text, files, ct) => StartFromPageAsync(start, text, files, ct, folder)), new NewSessionMemory(dataRoot), null);
 
   private NewSessionWorld NewSessionWorldNow()
   {
@@ -81,13 +82,13 @@ public sealed partial class ShellWindow
     return ChatPermissionModes.Supported(start.Provider).Contains(mode) ? mode : ChatPermissionModes.DefaultFor(start.Provider);
   }
 
-  private async Task<string> StartFromPageAsync(NewSessionStart start, string text, IReadOnlyList<NewSessionFile> files, CancellationToken ct)
+  private async Task<string> StartFromPageAsync(NewSessionStart start, string text, IReadOnlyList<NewSessionFile> files, CancellationToken ct, string? pickedFolder = null)
   {
     // No project, or a project whose folder is gone: "Terminal Deck\Independent" in the home folder.
     var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     var project = Runtime.Projects.List().FirstOrDefault(p => p.Id == start.ProjectId && p.IsOpen && p.HomeFolder is { } own && Directory.Exists(own));
-    var folder = project?.HomeFolder ?? NewSessionSend.IndependentFolder(home);
-    var projectId = project?.Id ?? ProjectIdentity.IndependentId;
+    var folder = pickedFolder is { } picked && Directory.Exists(picked) ? picked : project?.HomeFolder ?? NewSessionSend.IndependentFolder(home);
+    var projectId = pickedFolder is not null ? ProjectIdentity.IndependentId : project?.Id ?? ProjectIdentity.IndependentId;
     Directory.CreateDirectory(folder);
     if (start.Provider == "shell")
     {
