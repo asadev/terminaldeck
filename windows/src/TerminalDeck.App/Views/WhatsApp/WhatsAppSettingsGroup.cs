@@ -294,6 +294,9 @@ public sealed class WhatsAppSettingsGroup : StackPanel
 
   private void Close() { adding = false; addKey = ""; store.Problem = null; Draw(); }
 
+  private const double AddFieldHeight = 32;
+  private static readonly Thickness AddFieldPadding = new(10, 5, 6, 5);
+
   private bool CanAdd() => !store.Checking && addKey.Trim().Length > 0;
 
   private FrameworkElement AddForm()
@@ -301,10 +304,11 @@ public sealed class WhatsAppSettingsGroup : StackPanel
     var line = new Grid { ColumnSpacing = 8 };
     foreach (var width in new[] { GridLength.Auto, GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto })
       line.ColumnDefinitions.Add(new() { Width = width });
-    var name = new TextBox { Text = addName, Width = 160, MaxLength = WhatsAppAgentsLimits.MaximumNameLength, PlaceholderText = "Name", VerticalAlignment = VerticalAlignment.Center };
+    // Both fields are the same box: one height, one inner padding, text centred, so the two texts and "Add" share a centre line.
+    var name = new TextBox { Text = addName, Width = 160, MaxLength = WhatsAppAgentsLimits.MaximumNameLength, PlaceholderText = "Name", Height = AddFieldHeight, MinHeight = AddFieldHeight, Padding = AddFieldPadding, VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     AutomationProperties.SetName(name, "Name of the WhatsApp agent"); AutomationProperties.SetAutomationId(name, "aiApps.whatsapp.name");
     name.TextChanged += (_, _) => addName = name.Text;
-    var key = new PasswordBox { Password = addKey, Width = 230, PlaceholderText = WhatsAppWords.KeyPrompt, VerticalAlignment = VerticalAlignment.Center };
+    var key = new PasswordBox { Password = addKey, Width = 230, PlaceholderText = WhatsAppWords.KeyPrompt, Height = AddFieldHeight, MinHeight = AddFieldHeight, Padding = AddFieldPadding, VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     AutomationProperties.SetName(key, WhatsAppWords.KeyPrompt); AutomationProperties.SetAutomationId(key, "aiApps.whatsapp.key");
     var add = Small(WhatsAppWords.Add, () => _ = AddAsync());
     AutomationProperties.SetAutomationId(add, "aiApps.whatsapp.addButton");
