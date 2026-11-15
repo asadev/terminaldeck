@@ -46,6 +46,7 @@ public sealed partial class SettingsPanel : Grid
   {
     legacy = pane;
     legacy.OpenPairedDevices = () => OpenMainPage?.Invoke("Devices") == true;
+    legacy.OpenYourCloud = () => OpenMainPage?.Invoke("Cloud") == true;
     legacy.SettingsContentRendered += () => { if (page.Children.Contains(legacy)) PresentHostedPage(); };
     legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await ShowAsync(selectedSection, false); };
     legacy.CloudAccount.Changed += _ => DispatcherQueue.TryEnqueueHandled(UpdateProfileRow);

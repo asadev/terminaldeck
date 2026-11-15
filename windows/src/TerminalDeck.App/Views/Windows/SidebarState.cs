@@ -11,7 +11,7 @@ public sealed class SidebarState
     new("Servers", "Servers", "\uE968"), new("Devices", "Devices", "\uE975"),
     new("Store", "Store", "store"), new("Hooks", "Hooks", "link"), new("Receiver", "Receiver", "\uE704"), new("Mcp", "MCP servers", "\uEA86"),
     new("Files", "Files", "folder"), new("SourceControl", "Source control", "branch"),
-    new("GitHub", "GitHub", "repository")
+    new("GitHub", "GitHub", "repository"), new("Cloud", "Cloud", "\uE753")
   ];
   private readonly Action<SidebarSaved>? persist;
   public SidebarSaved Read { get; private set; }

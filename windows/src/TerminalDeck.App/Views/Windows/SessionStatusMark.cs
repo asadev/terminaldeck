@@ -15,6 +15,9 @@ public sealed class SessionStatusMark : Grid
   public bool OnAccent { get => (bool)GetValue(OnAccentProperty); set => SetValue(OnAccentProperty, value); }
   public static readonly DependencyProperty OnlyUnreadProperty = DependencyProperty.Register(nameof(OnlyUnread), typeof(bool), typeof(SessionStatusMark), new PropertyMetadata(false, Changed));
   public bool OnlyUnread { get => (bool)GetValue(OnlyUnreadProperty); set => SetValue(OnlyUnreadProperty, value); }
+  // Side panel session rows (DESIGN-SESSION-ROWS.md SR-6): the small orange dot ONLY while the session needs him.
+  public static readonly DependencyProperty OnlyNeedsYouProperty = DependencyProperty.Register(nameof(OnlyNeedsYou), typeof(bool), typeof(SessionStatusMark), new PropertyMetadata(false, Changed));
+  public bool OnlyNeedsYou { get => (bool)GetValue(OnlyNeedsYouProperty); set => SetValue(OnlyNeedsYouProperty, value); }
   public string State { get => (string)GetValue(StateProperty); set => SetValue(StateProperty, value); }
   public bool Unread { get => (bool)GetValue(UnreadProperty); set => SetValue(UnreadProperty, value); }
   public SessionStatusMark() { Width = 12; Height = 14; Children.Add(dot); ActualThemeChanged += (_, _) => Refresh(); Loaded += (_, _) => Refresh(); }
@@ -22,6 +25,14 @@ public sealed class SessionStatusMark : Grid
   private void Refresh()
   {
     var status = SessionStatus.From(State);
+    if (OnlyNeedsYou)
+    {
+      var needs = SidebarRowLook.NeedsYou(State);
+      Visibility = needs ? Visibility.Visible : Visibility.Collapsed;
+      dot.Fill = (Brush)ShellTheme.Resource(this, OnAccent ? "DeckSidebarSelectionInkBrush" : "DeckProjectOrangeBrush");
+      AutomationProperties.SetName(this, needs ? "Needs you" : ""); ToolTipService.SetToolTip(this, null);
+      return;
+    }
     Visibility = OnlyUnread && !Unread ? Visibility.Collapsed : Visibility.Visible;
     // A live keeper process is not evidence that its AI is busy.
     var brush = State.ToLowerInvariant() is "running" or "chat" or "ready" or "draft" ? "DeckSecondaryInkBrush" : status.Brush;

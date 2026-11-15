@@ -6,7 +6,7 @@ using TerminalDeck.Core.Platform;
 
 namespace TerminalDeck.App.ViewModels;
 
-public enum ShellPage { Sessions, Browser, Projects, Agents, Tasks, Artifacts, Servers, Receiver, Hoot, Settings, Devices, Mcp, Files, SourceControl, GitHub, Store, Hooks, NewSession }
+public enum ShellPage { Sessions, Browser, Projects, Agents, Tasks, Artifacts, Servers, Receiver, Hoot, Settings, Devices, Mcp, Files, SourceControl, GitHub, Store, Hooks, NewSession, Cloud, CloudChat }
 public enum SessionPresentation { Terminal, Chat }
 public enum SplitPresentation { None, Sessions, Browser }
 
@@ -28,6 +28,8 @@ public sealed class SessionDraft(string title, string provider, string folder, S
   public string Provider { get; } = provider;
   public string Folder { get; } = folder;
   public SessionPresentation Presentation { get; } = presentation;
+  /// The side panel row's one type icon (DESIGN-SESSION-ROWS.md SR-2): chat or terminal, nothing else.
+  public string TypeGlyph => TerminalDeck.App.Shell.SidebarRowLook.Glyph(Presentation == SessionPresentation.Chat);
   public string Subtitle { get; private set; } = provider;
   public string ProjectInitial { get; private set; } = Initial(title);
   public static string Initial(string value) => string.IsNullOrWhiteSpace(value) ? "?" : System.Globalization.StringInfo.GetNextTextElement(value.Trim()).ToUpperInvariant();
@@ -97,7 +99,7 @@ public sealed class ShellViewModel : INotifyPropertyChanged
   public SessionDraft? Selected { get => selected; set { selected = value; Changed(); Changed(nameof(Title)); } }
   public SplitPresentation Split { get => split; set { split = value; Changed(); } }
   public string Notice { get => notice; set { notice = value; Changed(); } }
-  public string Title => Page switch { ShellPage.Tasks => "Tasks", ShellPage.Artifacts => "Artifacts", ShellPage.Servers => "Servers", ShellPage.Receiver => "Receiver", ShellPage.Hoot => "Hoot", ShellPage.Browser => "Browser", ShellPage.Settings => "Settings", ShellPage.Devices => "Devices", ShellPage.Mcp => "MCP servers", ShellPage.Projects => "Projects", ShellPage.Agents => "Agents", ShellPage.Files => "Files", ShellPage.SourceControl => "Source control", ShellPage.GitHub => "GitHub", ShellPage.NewSession => "New session", _ => Selected?.Title ?? "Sessions" };
+  public string Title => Page switch { ShellPage.Tasks => "Tasks", ShellPage.Artifacts => "Artifacts", ShellPage.Servers => "Servers", ShellPage.Receiver => "Receiver", ShellPage.Hoot => "Hoot", ShellPage.Browser => "Browser", ShellPage.Settings => "Settings", ShellPage.Devices => "Devices", ShellPage.Mcp => "MCP servers", ShellPage.Projects => "Projects", ShellPage.Agents => "Agents", ShellPage.Files => "Files", ShellPage.SourceControl => "Source control", ShellPage.GitHub => "GitHub", ShellPage.NewSession => "New session", ShellPage.Cloud => TerminalDeck.Core.Cloud.CloudContentsWords.WindowTitle, ShellPage.CloudChat => "", _ => Selected?.Title ?? "Sessions" };
   public event PropertyChangedEventHandler? PropertyChanged;
   private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 

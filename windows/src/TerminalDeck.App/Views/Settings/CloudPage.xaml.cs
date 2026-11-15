@@ -27,11 +27,14 @@ public sealed partial class CloudPage : UserControl
   private Microsoft.UI.Xaml.Shapes.Ellipse? syncDot;
   private TextBlock? syncLine;
   private Button? syncNow;
+  /// "Manage files ›": opens the Your Cloud page in the main window (null in hosts without one).
+  private readonly Action? manageFiles;
 
-  public CloudPage(CloudAccountClient account, CloudSyncBridge? sync = null)
+  public CloudPage(CloudAccountClient account, CloudSyncBridge? sync = null, Action? manageFiles = null)
   {
     this.account = account;
     this.sync = sync;
+    this.manageFiles = manageFiles;
     InitializeComponent();
     Content = null; Content = SettingsPanel.Scroll(Body);
     changed = _ => DispatcherQueue.TryEnqueueHandled(Render);
@@ -91,6 +94,9 @@ public sealed partial class CloudPage : UserControl
         Body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.SettingRow(CloudPageText.TrustModeTitle, CloudPageText.TrustModeNote(mode), choice)]));
       }
       UpdateSync();
+      // The one way in to Your Cloud (DESIGN-WINDOWS-CLOUD.md 1): the page's last row.
+      if (manageFiles is not null)
+        Body.Children.Add(SettingsPanel.GroupRows([SettingsPanel.LinkRow(CloudContentsWords.OpenButton, null, null, null, manageFiles)]));
     }
     if ((pressProblem ?? page.Problem ?? summary.Problem) is { } problem) Body.Children.Add(AccountPages.Problem(problem));
   }
