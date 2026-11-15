@@ -6,7 +6,7 @@ using TerminalDeck.Core.Platform;
 
 namespace TerminalDeck.App.ViewModels;
 
-public enum ShellPage { Sessions, Browser, Projects, Agents, Tasks, Artifacts, Servers, Receiver, Hoot, Settings, Devices, Mcp, Files, SourceControl, GitHub, Store, Hooks }
+public enum ShellPage { Sessions, Browser, Projects, Agents, Tasks, Artifacts, Servers, Receiver, Hoot, Settings, Devices, Mcp, Files, SourceControl, GitHub, Store, Hooks, NewSession }
 public enum SessionPresentation { Terminal, Chat }
 public enum SplitPresentation { None, Sessions, Browser }
 
@@ -97,7 +97,7 @@ public sealed class ShellViewModel : INotifyPropertyChanged
   public SessionDraft? Selected { get => selected; set { selected = value; Changed(); Changed(nameof(Title)); } }
   public SplitPresentation Split { get => split; set { split = value; Changed(); } }
   public string Notice { get => notice; set { notice = value; Changed(); } }
-  public string Title => Page switch { ShellPage.Tasks => "Tasks", ShellPage.Artifacts => "Artifacts", ShellPage.Servers => "Servers", ShellPage.Receiver => "Receiver", ShellPage.Hoot => "Hoot", ShellPage.Browser => "Browser", ShellPage.Settings => "Settings", ShellPage.Devices => "Devices", ShellPage.Mcp => "MCP servers", ShellPage.Projects => "Projects", ShellPage.Agents => "Agents", ShellPage.Files => "Files", ShellPage.SourceControl => "Source control", ShellPage.GitHub => "GitHub", _ => Selected?.Title ?? "Sessions" };
+  public string Title => Page switch { ShellPage.Tasks => "Tasks", ShellPage.Artifacts => "Artifacts", ShellPage.Servers => "Servers", ShellPage.Receiver => "Receiver", ShellPage.Hoot => "Hoot", ShellPage.Browser => "Browser", ShellPage.Settings => "Settings", ShellPage.Devices => "Devices", ShellPage.Mcp => "MCP servers", ShellPage.Projects => "Projects", ShellPage.Agents => "Agents", ShellPage.Files => "Files", ShellPage.SourceControl => "Source control", ShellPage.GitHub => "GitHub", ShellPage.NewSession => "New session", _ => Selected?.Title ?? "Sessions" };
   public event PropertyChangedEventHandler? PropertyChanged;
   private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 

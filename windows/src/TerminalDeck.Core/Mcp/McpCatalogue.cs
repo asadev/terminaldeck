@@ -45,6 +45,7 @@ public static class McpCatalogue
     foreach (var spec in TerminalDeck.Core.Remote.PhoneManagementTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Hooks.ProviderHooksTools.Specs) result[spec.Id] = spec;
     foreach (var spec in TerminalDeck.Core.Notifications.NotificationTools.Specs) result[spec.Id] = spec;
+    foreach (var spec in TerminalDeck.Core.Cloud.CloudTools.Specs.Where(s => s.Tier == McpTier.Read)) result[spec.Id] = spec;
     return result.Values.ToArray();
   }
   public static McpTier EffectiveTier(McpToolSpec spec, JsonElement arguments, bool ownsSession = false)

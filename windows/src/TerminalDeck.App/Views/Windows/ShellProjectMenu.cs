@@ -17,8 +17,7 @@ public sealed partial class ShellWindow
       var item = new MenuFlyoutItem { Text = label }; item.Click += async (_, _) =>
       { try { await action(); } catch (Exception ex) when (ex is not OutOfMemoryException) { Model.Notice = ex is ArgumentException or InvalidOperationException ? ex.Message : "The project action could not finish. Check the folder and try again."; } }; menu.Items.Add(item);
     }
-    Add("New session here", () => NewSessionPicker.ShowAsync(Root.XamlRoot, Runtime.Agents, Runtime.Projects, Runtime.Accounts, this, project.Id,
-      terminalStart: async (folder, id) => { var row = await Runtime.StartShellForProjectAsync(folder, id); OpenSession(row.Definition.Id); }));
+    Add("New session here", () => { OpenNewSessionPage(project.Id); return Task.CompletedTask; });
     Add("Project settings…", () => { Projects.OpenProject(project.Id, "Settings"); Model.Page = ViewModels.ShellPage.Projects; return Task.CompletedTask; });
     Add("Show in Explorer", async () =>
     {

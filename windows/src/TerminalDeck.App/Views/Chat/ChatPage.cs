@@ -17,18 +17,20 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   public ChatViewModel Model { get; }
   private readonly Func<nint> currentWindowHandle;
   private readonly ChatNavigation? navigation;
-  private readonly StackPanel messages = new() { Spacing = 20, MaxWidth = 688, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 20, 0, 0) };
+  // The frame, the conversation column and the box are shared with the New session page (ChatFrame).
+  private readonly StackPanel messages = ChatFrame.Column();
   private readonly StackPanel pending = new() { Spacing = 8 };
-  private readonly StackPanel attachments = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
+  private readonly ChatComposerBox box = new();
+  private StackPanel attachments => box.Attachments;
   private readonly StackPanel problem = new() { Spacing = 8 };
-  private readonly TextBox composer = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 36, MaxHeight = 180, PlaceholderText = "Message" };
+  private TextBox composer => box.Text;
   // Not in the visual tree: Enter sends. The button only carries the "can send now" state.
-  private readonly Button send = new() { Content = "Send", MinHeight = 40 };
+  private Button send => box.Send;
   private readonly ComposerEnter enter = new();
-  private readonly Button stop = new() { Content = "Stop", MinHeight = 40 };
-  private readonly Button model = new() { MinHeight = 40, MaxWidth = 240, HorizontalAlignment = HorizontalAlignment.Left };
-  private readonly Button effort = new() { MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
-  private readonly Button account = new() { MinHeight = 40, MaxWidth = 200, HorizontalAlignment = HorizontalAlignment.Left };
+  private Button stop => box.Stop;
+  private Button model => box.Model;
+  private Button effort => box.Effort;
+  private Button account => box.Account;
   private readonly TextBlock title = new() { FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
   private readonly ScrollViewer scroll;
   private readonly Dictionary<string, RichChatWebView> richMessages = [];
@@ -38,21 +40,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
   {
     this.navigation = navigation;
     this.currentWindowHandle = currentWindowHandle ?? (() => ownerWindowHandle);
-    Resources = (ResourceDictionary)XamlReader.Load("""
-      <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-        <Style x:Key="ChatChoiceText" TargetType="TextBlock"><Setter Property="FontFamily" Value="{ThemeResource DeckTextFontFamily}"/><Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/></Style>
-        <Style x:Key="ChatCanvas" TargetType="Grid"><Setter Property="Background" Value="{ThemeResource DeckCanvasBrush}"/></Style>
-        <Style x:Key="ChatCard" TargetType="Border"><Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/><Setter Property="CornerRadius" Value="16"/><Setter Property="Padding" Value="16"/></Style>
-        <Style x:Key="UserText" TargetType="TextBlock"><Setter Property="FontFamily" Value="{ThemeResource DeckTextFontFamily}"/><Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/></Style>
-        <Style x:Key="UserBubble" TargetType="Border"><Setter Property="Background" Value="{ThemeResource DeckSelectionBrush}"/><Setter Property="CornerRadius" Value="18,18,6,18"/><Setter Property="Padding" Value="14"/></Style>
-        <Style x:Key="ChatSkeleton" TargetType="Border"><Setter Property="Background" Value="{ThemeResource ControlFillColorSecondaryBrush}"/><Setter Property="CornerRadius" Value="6"/></Style>
-        <Style x:Key="ComposerGlass" TargetType="Border"><Setter Property="Background" Value="{ThemeResource DeckGlassBrush}"/><Setter Property="CornerRadius" Value="22"/><Setter Property="Padding" Value="16"/></Style>
-      </ResourceDictionary>
-      """);
-    Style = (Style)Resources["ChatCanvas"];
-    Padding = new Thickness(20, 0, 20, 12); RowSpacing = 6;
-    RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
-    RowDefinitions.Add(new() { Height = GridLength.Auto }); RowDefinitions.Add(new() { Height = GridLength.Auto });
+    ChatFrame.Layout(this);
     Model = new(chats, chatId, action => DispatcherQueue.TryEnqueueHandled(() => action()), accountModels);
     if (navigation?.SignIn is { } signIn) Model.SignInRequested = () => signIn(Model.Snapshot.Definition.AccountId);
     var heading = new Grid { ColumnSpacing = 12, Height = 0, MaxWidth = 688, HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -61,60 +49,24 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     var headerActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
     SetupConversationTools(headerActions); SetColumn(headerActions, 1); heading.Children.Add(headerActions);
     Children.Add(heading);
-    send.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
-    send.SetResourceReference(Control.BackgroundProperty, "DeckProjectBlueBrush");
-    scroll = new() { Content = messages, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled, VerticalContentAlignment = VerticalAlignment.Top };
-    scroll.SizeChanged += (_, _) =>
-    {
-      messages.Width = Math.Max(0, Math.Min(688, scroll.ActualWidth));
-      FitRows();
-    };
+    scroll = ChatFrame.History(messages, FitRows);
     AutomationProperties.SetAutomationId(scroll, "chat.history"); SetRow(scroll, 1); Children.Add(scroll);
     var feedback = new StackPanel { Spacing = 8, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Stretch };
     feedback.Children.Add(searchBar); feedback.Children.Add(unread); SetRow(feedback, 2); Children.Add(feedback); Children.Add(problem);
-    var composition = new StackPanel { Spacing = 8 }; composition.Children.Add(promptSummary); composition.Children.Add(new ScrollViewer { Content = attachments, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
     // Mac "/" menu: the session's commands and skills, above the text like the Mac composer.
     var slash = new SlashCommandMenu(composer, () => ChatSlashSources.For(Model.Snapshot, chats.DataRoot), async () => { if (send.IsEnabled) await Model.SendAsync(); }, control =>
     {
       switch (control) { case "model": _ = ShowModelsAsync(); break; case "effort": ShowEffort(); break; case "permission": ShowPermissions(); break; }
     });
-    composition.Children.Add(slash.View); composition.Children.Add(composer);
-    // Mac keeps the choices below the floating box, leaving the text room to breathe.
-    var choices = new Grid { ColumnSpacing = 4, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Stretch };
-    choices.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
-    choices.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    choices.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    foreach (var chip in new[] { account, model, effort, permission })
-    {
-      chip.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
-      chip.MinHeight = 28; chip.MinWidth = 32; chip.Padding = new Thickness(6, 4, 6, 4); chip.FontSize = 12;
-    }
-    account.MaxWidth = 180; model.MaxWidth = 220; effort.MaxWidth = 100;
-    choices.Padding = new Thickness(12, 0, 12, 0);
-    choices.Children.Add(permission); SetColumn(model, 1); choices.Children.Add(model); SetColumn(effort, 2); choices.Children.Add(effort);
-    var controls = new Grid { ColumnSpacing = 8 };
-    controls.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
-    controls.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); controls.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); controls.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    var attach = Button("Add", () => Task.CompletedTask);
+    var attach = box.Attach;
     var addMenu = new MenuFlyout();
     var photos = new MenuFlyoutItem { Text = "Add photos…" }; photos.Click += async (_, _) => await PickImagesAsync(); addMenu.Items.Add(photos);
     var editPrompt = new MenuFlyoutItem { Text = "Edit full prompt…" }; editPrompt.Click += async (_, _) => await EditFullPromptAsync(); addMenu.Items.Add(editPrompt);
-    attach.Flyout = addMenu; attach.HorizontalAlignment = HorizontalAlignment.Left;
-    ChatAppearance.IconButton(attach, "\uE710", "Add to message"); controls.Children.Add(attach);
-    ChatAppearance.IconButton(stop, "\uE71A", "Stop the current answer");
-    ChatAppearance.IconButton(send, "\uE74A", "Send message", accent: true);
-    var dictate = Button("Dictate", StartVoiceTypingAsync);
-    ChatAppearance.IconButton(dictate, "\uE720", "Dictate with Windows voice typing (Win+H)");
-    AutomationProperties.SetAutomationId(dictate, "chat.dictate");
-    SetColumn(dictate, 1); controls.Children.Add(dictate);
+    attach.Flyout = addMenu;
+    var dictate = box.Dictate; dictate.Click += async (_, _) => await StartVoiceTypingAsync();
     Model.PropertyChanged += (_, _) => dictate.IsEnabled = !Model.Snapshot.Ended;
     dictate.IsEnabled = !Model.Snapshot.Ended;
-    SetColumn(stop, 2); controls.Children.Add(stop); composition.Children.Add(controls);
-    composer.BorderThickness = new Thickness(0); composer.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-    composer.Padding = new Thickness(0); composer.FontSize = 14;
-    var glass = new Border { Child = composition, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Stretch, Style = (Style)Resources["ComposerGlass"], Margin = new Thickness(0, 8, 0, 0) };
-    var dock = new StackPanel { Spacing = 8, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Stretch };
-    dock.Children.Add(glass); dock.Children.Add(controlFeedback); dock.Children.Add(choices); SetRow(dock, 3); Children.Add(dock);
+    Children.Add(box.Assemble((Style)Resources["ComposerGlass"], slash.View));
     ObserveText(composer, () => { if (composer.Text != Model.Draft) Model.Draft = composer.Text; UpdatePromptSummary(); UpdateControls(); });
     composer.KeyDown += async (_, e) =>
     {
@@ -196,17 +148,7 @@ public sealed partial class ChatPage : Grid, IAsyncDisposable
     AutomationProperties.SetAutomationId(this, "chat.page"); AutomationProperties.SetAutomationId(composer, "chat.composer");
     AutomationProperties.SetAutomationId(effort, "chat.effort"); AutomationProperties.SetAutomationId(model, "chat.model"); AutomationProperties.SetAutomationId(account, "chat.account");
     AutomationProperties.SetAutomationId(send, "chat.send"); AutomationProperties.SetAutomationId(stop, "chat.stop");
-    SizeChanged += (_, _) =>
-    {
-      var compact = ActualWidth < 640; Padding = new Thickness(compact ? 12 : 24, 12, compact ? 12 : 24, 12);
-      composer.MinHeight = 36; model.MaxWidth = compact ? 180 : 220; account.MaxWidth = 180;
-      SetColumn(permission, 0); SetColumn(model, 1); SetColumn(effort, 2);
-      permission.MaxWidth = compact ? 150 : 240;
-      model.MaxWidth = compact ? 150 : 220;
-      choices.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-      choices.ColumnDefinitions[1].Width = GridLength.Auto;
-      choices.ColumnDefinitions[2].Width = GridLength.Auto;
-    };
+    SizeChanged += (_, _) => ChatFrame.Fit(this, box);
     composer.Text = Model.Draft; UpdatePromptSummary(); Render();
   }
   // Imports and typing must validate at the same Text-property boundary.

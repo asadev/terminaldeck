@@ -293,6 +293,7 @@ public sealed partial class ShellWindow
     FrameworkElement content = page switch
     {
       ShellPage.Projects => Projects, ShellPage.Agents => Agents,
+      ShellPage.NewSession => NewSessionView(),
       ShellPage.Tasks when tasksPage is not null => tasksPage,
       ShellPage.Hoot when hootPage is not null => hootPage,
       ShellPage.Servers when serversPage is not null => serversPage,

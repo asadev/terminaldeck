@@ -33,6 +33,7 @@ public sealed partial class SettingsPanel : Grid
   public SettingsPanel(SettingsPane pane, Func<ElementTheme> theme, Action<ElementTheme> setTheme, string initialSection = "coding-ais")
   {
     legacy = pane;
+    legacy.OpenPairedDevices = () => OpenMainPage?.Invoke("Devices") == true;
     legacy.SettingsContentRendered += () => { if (page.Children.Contains(legacy)) PresentHostedPage(); };
     legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await SelectAsync(id); };
     readTheme = theme; changeTheme = setTheme;
@@ -105,7 +106,8 @@ public sealed partial class SettingsPanel : Grid
       if (OpenMainPage?.Invoke("Hoot") == true) return;
       throw new InvalidOperationException("Open Hoot from its page to change its settings.");
     }
-    if ((section is "devices" or "mcp") && OpenMainPage?.Invoke(section == "devices" ? "Devices" : "Mcp") == true) return;
+    // Devices is a Settings page now (Mac, 14 Nov); its "Paired with a code" row opens the paired devices' window.
+    if (section is "mcp" && OpenMainPage?.Invoke("Mcp") == true) return;
     SelectedCategory = SettingsNavigation.Canonical(section);
     selectedSection = section;
     NavigationChanged?.Invoke(section);
