@@ -1,0 +1,141 @@
+{
+  "bigText" : {
+    "repeat" : "abcdefgh",
+    "tail" : "é😀tail",
+    "times" : 32768
+  },
+  "emptyFingerprint" : "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "emptyJson" : "[]",
+  "format" : "td-shelf-vectors-1",
+  "rows" : [
+    {
+      "changedAt" : 1763200000123,
+      "changedBy" : "Mac mini",
+      "grouped" : false,
+      "key" : "memory|Terminal Deck · Decker|projects\/td\/roles\/decker\/notes\/a.md",
+      "name" : "Open items — \"today\"",
+      "place" : "Terminal Deck · Decker",
+      "sizeBytes" : 2048,
+      "textBytes" : 2048,
+      "textHash" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "textPieces" : 1
+    },
+    {
+      "binary" : true,
+      "changedAt" : 5,
+      "changedBy" : "This PC",
+      "fileBytes" : 3,
+      "fileHash" : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fileType" : "image\/png",
+      "grouped" : false,
+      "key" : "cloudFolder||Pictures\/cat 1.png",
+      "name" : "cat 1.png",
+      "sizeBytes" : 3
+    },
+    {
+      "changedAt" : 0,
+      "grouped" : false,
+      "key" : "settings||setting:theme",
+      "name" : "Tab\tand\u0001\u001fcontrol é 日本 😀 <b>&",
+      "place" : "General › Look",
+      "status" : "On"
+    },
+    {
+      "changedAt" : 99,
+      "changedBy" : "MacBook Pro",
+      "grouped" : true,
+      "key" : "memory|diary",
+      "name" : "Diary",
+      "sizeBytes" : 77,
+      "status" : "58 entries"
+    }
+  ],
+  "rowsFingerprint" : "a76a279b16f37d0fb33a525b6f13db57541eeae8a6c40b97a3c61478f8e755fe",
+  "rowsFingerprintGroupedMoved" : "a76a279b16f37d0fb33a525b6f13db57541eeae8a6c40b97a3c61478f8e755fe",
+  "rowsJson" : "[{\"changedAt\":1763200000123,\"changedBy\":\"Mac mini\",\"key\":\"memory|Terminal Deck · Decker|projects\\\/td\\\/roles\\\/decker\\\/notes\\\/a.md\",\"name\":\"Open items — \\\"today\\\"\",\"place\":\"Terminal Deck · Decker\",\"sizeBytes\":2048,\"textBytes\":2048,\"textHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"textPieces\":1},{\"binary\":true,\"changedAt\":5,\"changedBy\":\"This PC\",\"fileBytes\":3,\"fileHash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"fileType\":\"image\\\/png\",\"key\":\"cloudFolder||Pictures\\\/cat 1.png\",\"name\":\"cat 1.png\",\"sizeBytes\":3},{\"changedAt\":0,\"key\":\"settings||setting:theme\",\"name\":\"Tab\\tand\\u0001\\u001fcontrol é 日本 😀 <b>&\",\"place\":\"General › Look\",\"status\":\"On\"},{\"changedAt\":0,\"changedBy\":\"MacBook Pro\",\"key\":\"memory|diary\",\"name\":\"Diary\"}]",
+  "sealed" : {
+    "epoch" : 3,
+    "fileBytesHex" : "4150495f4b45593d6162630a",
+    "fileItemKey" : "project-secret-files\nproj-1\/.env",
+    "fileRef" : "e3d1309742b8287181f26502a9d1da35",
+    "filesFingerprint" : "5db4768316d178bac87d5e9310182c6bdf5ce72356c8131104bc1a23c1a2a051",
+    "fileValueId" : "88e8f5fe-4379-4592-a323-96d0a77c4fdf",
+    "fingerprint" : "e5ea4f8765e221c2f2dcaa4e76a50fa6e43339fd830017f39149b4e0cc039f1a",
+    "indexJson" : "{\"count\":1,\"kind\":\"savedPasswords\",\"madeAt\":1763200000000,\"madeBy\":\"Office PC\",\"part\":0,\"parts\":1,\"passwords\":[{\"for\":\"Server\",\"labels\":[\"User\",\"Password\"],\"name\":\"Web server\",\"place\":\"10.0.0.5:2222\",\"ref\":\"8bb0701af1c44ce480a28befc7f51e96\",\"value\":\"3c616956-bcf8-4d5c-9bc8-ac67d765e778\",\"valueBytes\":125}],\"putId\":\"33333333-3333-4333-8333-333333333333\",\"v\":1}",
+    "indexPiece" : {
+      "ciphertext" : "KAWWDAnML5vjkB2fpWWnjcZ92O474Xgsn-SFRbNlud-kMjJ7ASyMDUOtC7Mcg91G-kZ5K09q03zaSZHyr4KbPItw8cQm90E0tIK55N52qeMZxLNwUo2d42rSqCkEfN4wu2DHOacOzGekQCtQmDldeycpVvCIVo2W1e69iFi5zFDP5OrG_LcjGfPpSsNrozUPmLwdPxkiqpftMWDabUd5LgkPoSMiH_JGduZCgmhEiF8uUuwlQyqNmvCCiZ0_PYE6HW_-DaXHea5mipGRWqegVpf5vWyAICrSJqVQRjzlpsR5zlYVOiKtHw62rGdRLe9aFJ_AB2N7QWeoW9ZaN34S6hK3EDEW7rfWEKy6X9YAHxx_rht2Bpi_9X-nQsp6wfvyX-v1mk4rip9p00ywJ_YGShxK7rnlFuqGnoC6slCxfuXMlwtjG_-yLQhdI79obdwGMq2VpeZcQ3iVsmUbwl7DADM8GsqyxbmILQ9X2lGcDZswf2rCujAqhb8IC177JP1uQL29pfzZEXK9l7N6D4cj-r-LfRXIQpboJJBDBi_TT9tRP5Tx-zitgTwl6rN5LChC3EIBpRFJ_kLJSsfHtR42dDLQoG4CBAUEyCJ1DIP7rY9Ken7VH5_hTbNWoh-OhBzbKIbCkWUocqmNlgd5IQH0Ikh689MtydcVuVESSwys9pQ",
+      "nonce" : "AAECAwQFBgcICQoL",
+      "tag" : "KXISBoajS2NiwzQdjxYcZg"
+    },
+    "indexPieceId" : "22222222-2222-4222-8222-222222222222",
+    "itemKey" : "servers\nsrv-1",
+    "nonceHex" : "000102030405060708090a0b",
+    "paddedValueHex" : "0000007d7b226669656c6473223a5b7b226c6162656c223a2255736572222c22736563726574223a66616c73652c2276616c7565223a22726f6f745c2f61646d696e227d2c7b226c6162656c223a2250617373776f7264222c22736563726574223a747275652c2276616c7565223a22705c227720c3a9227d5d2c2276223a317d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "ref" : "8bb0701af1c44ce480a28befc7f51e96",
+    "shelfRootHex" : "06a98eaf400d2d59e433b54c43150cfe521a28f0fbfd5cde5e5092859016ed76",
+    "steadyFilesJson" : "{\"files\":[{\"changedAt\":1763200000001,\"changedBy\":\"Mac mini\",\"file\":\".env\",\"place\":\"app\\\/.env\",\"project\":\"Garden\",\"ref\":\"e3d1309742b8287181f26502a9d1da35\",\"sizeBytes\":12,\"value\":\"88e8f5fe-4379-4592-a323-96d0a77c4fdf\"}],\"passwords\":[]}",
+    "steadyJson" : "{\"files\":[],\"passwords\":[{\"for\":\"Server\",\"labels\":[\"User\",\"Password\"],\"name\":\"Web server\",\"place\":\"10.0.0.5:2222\",\"ref\":\"8bb0701af1c44ce480a28befc7f51e96\",\"value\":\"3c616956-bcf8-4d5c-9bc8-ac67d765e778\",\"valueBytes\":125}]}",
+    "steps" : [
+      [
+        1,
+        256
+      ],
+      [
+        252,
+        256
+      ],
+      [
+        253,
+        256
+      ],
+      [
+        262140,
+        262144
+      ],
+      [
+        262141,
+        262144
+      ]
+    ],
+    "sub" : "11111111-1111-4111-8111-111111111111",
+    "testOnlyRootHex" : "0909090909090909090909090909090909090909090909090909090909090909",
+    "valueId" : "3c616956-bcf8-4d5c-9bc8-ac67d765e778",
+    "valueJson" : "{\"fields\":[{\"label\":\"User\",\"secret\":false,\"value\":\"root\\\/admin\"},{\"label\":\"Password\",\"secret\":true,\"value\":\"p\\\"w é\"}],\"v\":1}",
+    "valuePiece" : {
+      "ciphertext" : "6P9QLdOpZyR3HAAOtiYKJJZ_qD-wBTEMLqAQlrt-Ek5DCONoTsTCc9PeCODa5eNbyN9_ve7opZNmxHg2GzFOpt5zOTDbHdjfVRXdpQaMITYkYeWgqqrL2EHoZkd57CPYLEyIkXPbAmsCJKmNvHZPfWnebc1nSn_QKZnI3T4tzxWCA4I5ntT9I4kmQgRNKojq03ak5wbTCBlX9vn2N_pdwNzZMMM0FziceY14X1YS8iH87948RTCUitIHDDHfgZ-EekNoW3sDjqfjzFj4AMzT6MMU971jLMUS9f4th2iVvvzMBoBQkbXKmxFd6T0BPgkyAPesXKVfZ4McnppKdvIr_g",
+      "nonce" : "AAECAwQFBgcICQoL",
+      "tag" : "tTlKcK0By_Pu7PNxBalHHA"
+    }
+  },
+  "source" : "lane\/mac-next2 BackendCloudShelf.swift, BackendCloudShelfSealed.swift, CloudSecretsShelfSeal.swift; Apple Foundation JSONEncoder(.sortedKeys) + CryptoKit",
+  "textFacts" : [
+    {
+      "bytes" : 30,
+      "hash" : "4dbef92256ff8e962535199334cce79a7acbe417ee99144bc6022e124bc7cf7e",
+      "name" : "small",
+      "pieceBytes" : [
+        30
+      ],
+      "pieces" : 1
+    },
+    {
+      "bytes" : 0,
+      "hash" : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name" : "empty",
+      "pieceBytes" : [
+        0
+      ],
+      "pieces" : 1
+    },
+    {
+      "bytes" : 262154,
+      "hash" : "fc08e9401eebeda6fbf41f5097acc38badf8322ab5ad8f18eed5fb0dce8601f6",
+      "name" : "overOnePiece",
+      "pieceBytes" : [
+        262144,
+        10
+      ],
+      "pieces" : 2
+    }
+  ]
+}
