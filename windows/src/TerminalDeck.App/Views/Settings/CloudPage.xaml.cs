@@ -33,6 +33,7 @@ public sealed partial class CloudPage : UserControl
     this.account = account;
     this.sync = sync;
     InitializeComponent();
+    Content = null; Content = SettingsPanel.Scroll(Body);
     changed = _ => DispatcherQueue.TryEnqueueHandled(Render);
     syncChanged = _ => DispatcherQueue.TryEnqueueHandled(UpdateSync);
     Loaded += (_, _) =>

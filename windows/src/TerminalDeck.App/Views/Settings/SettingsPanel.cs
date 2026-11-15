@@ -103,7 +103,7 @@ public sealed partial class SettingsPanel : Grid
       if (!selectingLegacy) await SelectAsync(navigation.SelectedIndex switch { 1 => "accounts", 2 => "devices", 3 => "mcp", 4 => "outside-ai-apps", _ => "coding-ais" });
     };
     legacy.ColumnDefinitions[0].Width = new GridLength(0); legacy.ColumnSpacing = 0;
-    if (legacy.Children.OfType<ScrollViewer>().FirstOrDefault() is { } scroll) scroll.Padding = new Thickness(0, 4, 4, 16);
+    if (legacy.Children.OfType<ScrollViewer>().FirstOrDefault() is { } scroll) scroll.Padding = new Thickness(0, 4, 0, 16);
     var find = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F, Modifiers = Windows.System.VirtualKeyModifiers.Control };
     find.Invoked += (_, args) => { search.Focus(FocusState.Keyboard); args.Handled = true; }; KeyboardAccelerators.Add(find);
     KeyDown += (_, args) => { if (args.Key == Windows.System.VirtualKey.Escape) { CloseRequested?.Invoke(); args.Handled = true; } };
@@ -182,7 +182,15 @@ public sealed partial class SettingsPanel : Grid
   {
     if (legacy.Children.OfType<ScrollViewer>().FirstOrDefault()?.Content is not Grid container ||
         container.Children.OfType<StackPanel>().FirstOrDefault() is not { } stack) return;
-    stack.MaxWidth = ColumnWidth; stack.Spacing = 20; stack.HorizontalAlignment = HorizontalAlignment.Stretch; stack.Margin = new Thickness(20, 8, 20, 20);
+    // The same centred container as every other page: three columns, the middle one at most 560.
+    if (container.ColumnDefinitions.Count == 0)
+    {
+      container.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+      container.ColumnDefinitions.Add(new() { Width = new GridLength(1000, GridUnitType.Star), MaxWidth = ColumnWidth });
+      container.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+    }
+    container.Padding = new Thickness(20, 0, 20, 0); SetColumn(stack, 1);
+    stack.MaxWidth = double.PositiveInfinity; stack.Spacing = 20; stack.HorizontalAlignment = HorizontalAlignment.Stretch; stack.Margin = new Thickness(0, 8, 0, 20);
     // The top bar is the heading: the page's own big title goes.
     if (stack.Children.FirstOrDefault() is TextBlock heading) heading.Visibility = Visibility.Collapsed;
     foreach (var card in stack.Children.OfType<Border>())
@@ -346,13 +354,29 @@ public sealed partial class SettingsPanel : Grid
   {
     var stack = Column();
     stack.Children.Add(content);
-    return new ScrollViewer { Content = stack, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    return Scroll(stack);
   }
 
   // ONE column on every page (15 Nov): 560 wide, centred in the right side whatever the page holds.
   internal const double ColumnWidth = 560;
   internal const double RailWidth = 210;
-  internal static StackPanel Column() => new() { Spacing = 20, MaxWidth = ColumnWidth, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(20, 8, 20, 20) };
+  internal static StackPanel Column() => new() { Spacing = 20, Margin = new Thickness(0, 8, 0, 20) };
+
+  // The ONE container every page uses: the column sits in the middle of three grid columns, the middle one at most
+  // 560 wide and the two sides sharing what is left equally, in a frame sized to the scroll area by measurement.
+  // So the column's centre is the pane's centre whatever the page holds.
+  internal static ScrollViewer Scroll(FrameworkElement column)
+  {
+    var frame = new Grid { Padding = new Thickness(20, 0, 20, 0), HorizontalAlignment = HorizontalAlignment.Left };
+    frame.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+    frame.ColumnDefinitions.Add(new() { Width = new GridLength(1000, GridUnitType.Star), MaxWidth = ColumnWidth });
+    frame.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+    column.HorizontalAlignment = HorizontalAlignment.Stretch; column.MaxWidth = double.PositiveInfinity;
+    SetColumn(column, 1); frame.Children.Add(column);
+    var scroll = new ScrollViewer { Content = frame, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    scroll.SizeChanged += (_, args) => frame.Width = Math.Max(0, args.NewSize.Width);
+    return scroll;
+  }
 
   // Kept for older callers; pages no longer draw a heading of their own (the top bar is the heading).
   internal static FrameworkElement PageHead(string title) => new Border { Height = 0, Visibility = Visibility.Collapsed, Child = new TextBlock { Text = title } };
@@ -429,14 +453,21 @@ public sealed partial class SettingsPanel : Grid
     if (control is not null)
     {
       row.RowDefinitions.Add(new() { Height = GridLength.Auto }); row.RowDefinitions.Add(new() { Height = GridLength.Auto });
+      // ONE line: title at the left, the control at the right. When this row's title and control do not both fit
+      // (measured, per row), THIS row stacks: the control under the title, left-aligned, never past the card.
       row.SizeChanged += (_, _) =>
       {
-        // ONE line (15 Nov): title at the left, the control at the right; only a very narrow window stacks them.
-        var compact = row.ActualWidth < 320;
+        var width = row.ActualWidth;
+        if (width <= 0) return;
+        var natural = new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity);
+        control.MaxWidth = double.PositiveInfinity;
+        label.Measure(natural); control.Measure(natural);
+        var compact = label.DesiredSize.Width + row.ColumnSpacing + control.DesiredSize.Width > width;
         SetRow(control, compact ? 1 : 0); SetColumn(control, compact ? 0 : 1); SetColumnSpan(control, compact ? 2 : 1);
         control.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Right;
         control.Margin = new Thickness(0, compact ? 8 : 0, 0, 0);
-        control.MaxWidth = Math.Max(0, compact ? row.ActualWidth : Math.Min(280, row.ActualWidth * .48));
+        control.MaxWidth = compact ? width : double.PositiveInfinity;
+        row.InvalidateMeasure();
       };
     }
     var card = new Border { Padding = new Thickness(12, 6, 12, 6), CornerRadius = new CornerRadius(8), Child = row, BorderThickness = new Thickness(0), MinHeight = 44 };

@@ -196,7 +196,7 @@ internal static class AccountPages
 {
   internal static StackPanel Body() => SettingsPanel.Column();
 
-  internal static ScrollViewer Scroll(StackPanel body) => new() { Content = body, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+  internal static ScrollViewer Scroll(StackPanel body) => SettingsPanel.Scroll(body);
 
   internal static bool SignedIn(CloudSnapshot snapshot) => snapshot.Phase is CloudPhase.SignedIn or CloudPhase.Paused or CloudPhase.NotAllowed;
 

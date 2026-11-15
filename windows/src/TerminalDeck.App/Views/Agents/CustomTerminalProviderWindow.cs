@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using TerminalDeck.App.Shell;
 using TerminalDeck.Core.Sessions;
 using Windows.Storage.Pickers;
+using SettingsPanel = TerminalDeck.App.Views.Settings.SettingsPanel;
 
 namespace TerminalDeck.App.Views.Agents;
 
@@ -59,6 +60,29 @@ internal static class CustomTerminalProviderWindow
     };
     remove.Click += (_, _) => { if (choices.SelectedItem is not ComboBoxItem { Tag: string key } || key.Length == 0) return; try { providers.Remove(key); Refresh(); notice.Text = "Definition removed. Existing terminal sessions keep running."; } catch (Exception ex) when (ex is not OutOfMemoryException) { notice.Text = ex.Message; } };
     actions.Children.Add(save); actions.Children.Add(remove);
+    if (!heading)
+    {
+      // As a Settings page (15 Nov): one-line rows in one card; the two multi-line boxes stay stacked inside it;
+      // Save and Remove definition are the card's last row, at the right.
+      choices.Header = null; name.Header = null; id.Header = null; executable.Header = null; inherited.Header = null; enabled.Header = null;
+      choices.MinWidth = 220; name.MinWidth = 220; id.MinWidth = 220; executable.Width = 220;
+      inherited.OnContent = ""; inherited.OffContent = ""; inherited.MinWidth = 40; enabled.OnContent = ""; enabled.OffContent = ""; enabled.MinWidth = 40;
+      browse.Content = "Choose…"; save.Content = "Save"; actions.HorizontalAlignment = HorizontalAlignment.Right;
+      var exe = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 }; exe.Children.Add(executable); exe.Children.Add(browse);
+      var rows = new List<FrameworkElement> {
+        SettingsPanel.SettingRow("Custom CLI", "", choices),
+        SettingsPanel.SettingRow("Name", "", name),
+        SettingsPanel.SettingRow("Key", "", id),
+        SettingsPanel.SettingRow("Executable", "", exe),
+        new Border { Child = arguments }, new Border { Child = environment },
+        SettingsPanel.SettingRow("Inherit this computer's environment", "", inherited),
+        SettingsPanel.SettingRow("Available in New session", "", enabled),
+        new Border { Child = actions } };
+      body.Spacing = 20;
+      body.Children.Add(SettingsPanel.GroupTitle("Definitions", About)); body.Children.Add(SettingsPanel.GroupRows(rows)); body.Children.Add(notice);
+      Refresh();
+      return body;
+    }
     foreach (var element in new UIElement[] { choices, id, name, executable, browse, arguments, environment, inherited, enabled, actions, notice }) body.Children.Add(element);
     Refresh();
     return body;

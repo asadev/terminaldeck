@@ -23,7 +23,7 @@ public sealed class AdvancedPreferencesPage : UserControl
   public AdvancedPreferencesPage(AppRuntime runtime, BrowserModel? browser, Action? resetTheme, Action<bool>? closeConfirmation, Func<bool>? openPaired = null)
   {
     this.runtime = runtime; this.browser = browser; this.resetTheme = resetTheme; this.closeConfirmation = closeConfirmation; this.openPaired = openPaired;
-    Content = new ScrollViewer { Content = body, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; Render();
+    Content = SettingsPanel.Scroll(body); Render();
   }
   // Advanced (Mac, 15 Nov): Debug mode · Open logs · Paired with a code · Reset all settings (red). No paths on the
   // surface: a path lives in its info button, the diagnostic details behind one click.

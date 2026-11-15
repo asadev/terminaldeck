@@ -25,18 +25,24 @@ public sealed partial class SettingsPane
   private void AddAssignmentRows(StackPanel stack)
   {
     var providers = CodingAis;
-    var picker = new ComboBox { Header = "AI", ItemsSource = providers.Select(AccountMcp.AgentName).ToArray(), SelectedIndex = assignmentProvider, HorizontalAlignment = HorizontalAlignment.Stretch };
-    var filter = new TextBox { PlaceholderText = "Find a project or role", Text = assignmentSearch };
-    var switchAll = new Button { Content = "Switch everything now…" };
+    var picker = new ComboBox { ItemsSource = providers.Select(AccountMcp.AgentName).ToArray(), SelectedIndex = assignmentProvider, MinWidth = 200 };
+    var filter = new TextBox { PlaceholderText = "Find a project or role", Text = assignmentSearch, HorizontalAlignment = HorizontalAlignment.Stretch };
+    var switchAll = new Button { Content = "Switch everything now…", HorizontalAlignment = HorizontalAlignment.Left };
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(switchAll, "accounts.switchAll");
     switchAll.Click += async (_, _) => await ShowBulkSwitchAsync(providers[picker.SelectedIndex]);
-    var rows = new StackPanel { Spacing = 16 };
-    stack.Children.Add(picker); stack.Children.Add(filter);
-    stack.Children.Add(switchAll); stack.Children.Add(rows);
+    // Every row inside a card (15 Nov): the choices in one card, the uses in the next.
+    var rows = new StackPanel();
+    stack.Children.Add(Settings.SettingsPanel.GroupRows([
+      Settings.SettingsPanel.SettingRow("AI", "", picker),
+      Padded(filter),
+      Padded(switchAll)]));
+    stack.Children.Add(rows);
+    static Border Padded(FrameworkElement block) => new() { Child = block };
     bool Matches(string text) => text.Contains(filter.Text.Trim(), StringComparison.OrdinalIgnoreCase);
     void Populate()
     {
       rows.Children.Clear();
+      var items = new List<FrameworkElement>();
       var provider = providers[picker.SelectedIndex];
       var accounts = runtime.Accounts.List(provider).ToArray();
       var app = runtime.Accounts.Default(provider);
@@ -62,10 +68,10 @@ public sealed partial class SettingsPane
           catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { defaultPicker.SelectedIndex = savedIndex; outcome.Text = "Couldn’t save the account. Your previous choice was kept. Try again."; }
           finally { savingDefault = false; defaultPicker.IsEnabled = true; }
         };
-        rows.Children.Add(defaultPicker); rows.Children.Add(outcome);
+        var whole = new StackPanel { Spacing = 4 }; whole.Children.Add(defaultPicker); whole.Children.Add(outcome); items.Add(Padded(whole));
       }
       var hoot = runtime.Hoot.Read().Settings;
-      if (hoot?.Provider == provider && Matches("Hoot")) rows.Children.Add(Card("Hoot", Identity(hoot.AccountId, null, "Hoot") + "\n" + ModelDefaults(provider, hoot.Options.Model, hoot.Options.Effort), "Hoot settings", () => { model.Page = ViewModels.ShellPage.Hoot; return Task.CompletedTask; }));
+      if (hoot?.Provider == provider && Matches("Hoot")) items.Add(Card("Hoot", Identity(hoot.AccountId, null, "Hoot") + "\n" + ModelDefaults(provider, hoot.Options.Model, hoot.Options.Effort), "Hoot settings", () => { model.Page = ViewModels.ShellPage.Hoot; return Task.CompletedTask; }));
       foreach (var project in runtime.Projects.List().Where(p => p.IsOpen && p.Id != ProjectIdentity.IndependentId))
       {
         foreach (var use in new[] { "sessions", "chats" })
@@ -93,7 +99,7 @@ public sealed partial class SettingsPane
             }
             catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { row.SelectedIndex = saved; note.Text = "Couldn’t save. The previous choice was kept."; }
           };
-          var block = new StackPanel { Spacing = 4 }; block.Children.Add(row); block.Children.Add(note); rows.Children.Add(block);
+          var block = new StackPanel { Spacing = 4 }; block.Children.Add(row); block.Children.Add(note); items.Add(Padded(block));
         }
       }
       foreach (var agent in runtime.Agents.List().Where(a => a.Provider == provider && a.Status == SavedAgentStatus.Active))
@@ -103,10 +109,11 @@ public sealed partial class SettingsPane
         var inheritedId = AccountAssignment.Effective(runtime.Accounts, project, "sessions", provider);
         var inherited = accounts.FirstOrDefault(a => a.Id == inheritedId);
         var lead = project?.Lead == "agent:" + agent.Id;
-        rows.Children.Add(Card(agent.Name + (lead ? " (lead)" : "") + " · " + (project?.Name ?? "Independent") + (agent.Seat.Length > 0 ? " · " + agent.Seat : ""),
+        items.Add(Card(agent.Name + (lead ? " (lead)" : "") + " · " + (project?.Name ?? "Independent") + (agent.Seat.Length > 0 ? " · " + agent.Seat : ""),
           Identity(agent.AccountId, inherited, project?.Name ?? "Whole app") + "\n" + ModelDefaults(provider, agent.Model, agent.Effort), "Change in Agents…", () => { model.Page = ViewModels.ShellPage.Agents; return Task.CompletedTask; }));
       }
-      if (rows.Children.Count == 0) rows.Children.Add(Description("No matching projects or roles"));
+      if (items.Count == 0) items.Add(Settings.SettingsPanel.SettingRow("No matching projects or roles", "", null));
+      rows.Children.Add(Settings.SettingsPanel.GroupRows(items));
     }
     picker.SelectionChanged += (_, _) => { assignmentProvider = picker.SelectedIndex; Populate(); };
     filter.TextChanged += (_, _) => { assignmentSearch = filter.Text; Populate(); };

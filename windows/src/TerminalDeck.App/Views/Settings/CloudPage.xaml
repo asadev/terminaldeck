@@ -5,7 +5,6 @@
  <!-- Profile > Cloud (Mac, 15 Nov). The rows are drawn in CloudPage.xaml.cs with the Settings rows' own helpers:
       group 1 = the state and Sync now, then Use Cloud on this PC; then how this PC trusts your other devices.
       No heading inside the page: the Settings top bar is the heading. -->
- <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
-  <StackPanel x:Name="Body" MaxWidth="560" Spacing="20" Margin="20,8,20,20" HorizontalAlignment="Stretch"/>
- </ScrollViewer>
+ <!-- The column moves into the Settings pages' one centred container (SettingsPanel.Scroll) in the constructor. -->
+ <StackPanel x:Name="Body" Spacing="20" Margin="0,8,0,20"/>
 </UserControl>

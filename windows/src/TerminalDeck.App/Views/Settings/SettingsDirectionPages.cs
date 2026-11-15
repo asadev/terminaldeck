@@ -199,7 +199,8 @@ public sealed partial class SettingsPane
     foreach (var (key, label) in new[] { ("card", "Card"), ("notes", "Notes"), ("helper", "Helper instructions") })
     {
       var enabled = template.Parts.IsDefault ? key is "card" or "notes" : template.Parts.Contains(key);
-      var part = new CheckBox { Content = label, IsChecked = enabled };
+      // No 120 px minimum per box (WinUI's default): the three fit the row, or the row stacks.
+      var part = new CheckBox { Content = label, IsChecked = enabled, MinWidth = 0 };
       part.Click += async (_, _) => await DirectionRunAsync(() => {
         var current = Current(); var saved = current.Parts.IsDefault ? System.Collections.Immutable.ImmutableArray.Create("card", "notes") : current.Parts;
         runtime.Agents.SaveTemplate(current with { Parts = part.IsChecked == true ? saved.Where(p => p != key).Append(key).ToImmutableArray() : saved.Where(p => p != key).ToImmutableArray() });
@@ -231,9 +232,8 @@ public sealed partial class SettingsPane
     FrameworkElement? form = null;
     nint Handle() => form?.XamlRoot?.ContentIslandEnvironment is { } island ? Microsoft.UI.Win32Interop.GetWindowFromWindowId(island.AppWindowId) : 0;
     var body = Agents.CustomTerminalProviderWindow.Form(runtime.CustomProviders, Handle, false);
-    body.Padding = new Thickness(12);
     form = body;
-    return DirectionPage([("Definitions", Agents.CustomTerminalProviderWindow.About, new FrameworkElement[] { body })]);
+    return DirectionPage([], bottom: body);
   }
 
   private FrameworkElement BrowserSettings()
@@ -399,7 +399,7 @@ public sealed partial class SettingsPane
     }
     if (bottom is not null) body.Children.Add(bottom);
     var surface = new Grid();
-    var scroll = new ScrollViewer { Content = body, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }; surface.Children.Add(scroll);
+    var scroll = SettingsPanel.Scroll(body); surface.Children.Add(scroll);
     directionStatus = new Notices.CompactNotice { Scope = surface };
     AutomationProperties.SetLiveSetting(directionStatus, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
     surface.Children.Add(directionStatus);
