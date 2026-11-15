@@ -553,6 +553,8 @@ public sealed partial class AgentsPage : Grid
       finally { deferral.Complete(); }
     };
   }
+  /// The Cloud screens' picture proof draws this menu's items (a menu cannot be drawn off-screen).
+  internal MenuFlyout AgentMenuForProof(SavedAgent agent) => AgentMenu(agent);
   private MenuFlyout AgentMenu(SavedAgent agent)
   {
     var menu = new MenuFlyout();

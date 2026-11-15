@@ -106,6 +106,19 @@ public sealed class YourCloudPage : UserControl
     Visit(placeKey, []);
   }
 
+  // ---- the picture proof only (CloudScreensProofWindow, a developer flag): drive the page without a pointer ----
+
+  internal Task ProofReadAsync() => ReadAsync();
+  internal void ProofVisit(string place, params string[] path) => Visit(place, path);
+  internal void ProofSelect(params string[] names)
+  {
+    list.SelectedItems.Clear();
+    foreach (var item in list.Items.OfType<ListViewItem>()) if ((item.Tag as Entry)?.Item is { } row && names.Contains(row.Name)) item.IsSelected = true;
+    UpdateActions();
+  }
+  internal Task ProofOpenAsync(string name) =>
+    snapshot?.Rows.FirstOrDefault(r => r.Name == name) is { } row ? ShowAsync(row) : Task.CompletedTask;
+
   // ---- reading ----
 
   private async Task ReadAsync()

@@ -86,6 +86,15 @@ public partial class App : Application
         }
         return;
       }
+      // The Cloud screens' picture proof (developer copies only): made-up local data, PNGs into a folder inside the
+      // scratch data folder, then it closes. No runtime, keeper, account or network.
+      if (DevelopmentRun && Environment.GetEnvironmentVariable("TD_CLOUD_SCREENS_PROOF") is { } pictures &&
+          Path.GetFullPath(pictures).StartsWith(root.DirectoryPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+      {
+        window = new Verification.CloudScreensProofWindow(root, pictures);
+        window.AppWindow.Show(false);
+        return;
+      }
       var instance = Microsoft.Windows.AppLifecycle.AppInstance.FindOrRegisterForKey("terminaldeck-preview-" + root.NamespaceId);
       if (!instance.IsCurrent) { await instance.RedirectActivationToAsync(activation); Exit(); return; }
       TerminalDeck.Platform.Windows.Integration.PreviewShareRoot.Remember(root);
