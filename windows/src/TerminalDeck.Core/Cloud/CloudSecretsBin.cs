@@ -303,6 +303,13 @@ internal sealed class CloudSecretsKeeper(string root, string source)
     return held.Removals.Values.Where(r => held.Sendable.Contains(r.RecordId) && held.LocalRemovals.ContainsKey(r.RecordId) && State().Intent(r.RecordId) is null).ToArray();
   }
   public bool IsDeleted(string id) => held.LocalRemovals.TryGetValue(id, out var s) && s == CloudDeleteScope.Everywhere;
+  // Project secret files (lane S3, the Mac's fileMarks / isUnplaced / placedUnplaced).
+  public bool IsUnplaced(string id) => held.Unplaced.Contains(id);
+  /// The file of an unplaced removal went into the Bin after all: from now on it counts as applied here.
+  public void PlacedUnplaced(string id) { if (held.Unplaced.Remove(id)) Save(); }
+  /// Every content mark this item had here (its history and its newest), for J-7 "old bytes came back".
+  public IReadOnlyList<string> FileMarks(string id) =>
+    [.. (held.History.GetValueOrDefault(id) ?? []).Select(v => v.FileMark).OfType<string>(), .. Newest(id) is { } n && FileMark(n) is { } m ? new[] { m } : []];
   public bool Superseded(CloudSecretRemoval removal) =>
     held.Republications.TryGetValue(removal.RecordId, out var g) && g == removal.Fields.GetValueOrDefault(CloudDeleteTravel.Group);
   public void Validate(CloudSecretRemoval removal)
