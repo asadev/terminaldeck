@@ -41,6 +41,10 @@ public sealed partial class AppRuntime
     driver.Attach(door, Path.Combine(CloudAccountFolder(who.Subject), "chats"), who.DeviceId, TerminalDeck.Core.Cloud.CloudChats.MachineRef(who.Subject, machine));
   }
 
+  /// The reading door for the Cloud chat page (a session on another machine): null while signed out.
+  public CloudChatsSend? CloudChatsDoor() => Cloud.SyncIdentity is null ? null
+    : new CloudChatsClient(new CloudSyncEndpoint(new Uri(CloudWire.ProductionBase), test: false), Cloud, new HttpClientCloudSyncHttp()).Door();
+
   /// What the side panel lists: the keeper's terminals and the app's chats.
   private Task<IReadOnlyList<CloudChatsSession>> ListForCloud()
   {

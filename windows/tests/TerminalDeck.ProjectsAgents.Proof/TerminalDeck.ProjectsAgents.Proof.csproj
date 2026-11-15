@@ -26,5 +26,6 @@
     <Compile Include="../../src/TerminalDeck.App/Views/Windows/SessionPicture.cs" Link="Shared/SessionPicture.cs" />
     <Compile Include="../../src/TerminalDeck.App/Views/Windows/ShellTheme.cs" Link="Shared/ShellTheme.cs" />
     <Compile Include="../../src/TerminalDeck.App/ViewModels/ShellViewModel.cs" Link="Shared/ShellViewModel.cs" />
+    <Compile Include="../../src/TerminalDeck.App/Views/Windows/SidebarCloudRows.cs" Link="Shared/SidebarCloudRows.cs" />
   </ItemGroup>
 </Project>

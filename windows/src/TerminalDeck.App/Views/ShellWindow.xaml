@@ -24,8 +24,8 @@
     <StackPanel x:Name="ProjectRows" Spacing="2"/>
    </StackPanel>
    <Grid RowSpacing="4">
-    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TextBlock Text="Running" Margin="8,8,0,0" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <TextBlock Text="Sessions" Margin="8,8,0,0" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
     <ListView Grid.Row="1" x:Name="SessionList" SelectionMode="Single" AutomationProperties.Name="Sessions" SelectionChanged="SessionList_SelectionChanged" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Hidden">
 
      <ListView.Resources>
@@ -38,26 +38,27 @@
       <StaticResource x:Key="ListViewItemSelectionIndicatorBrush" ResourceKey="DeckTransparentBrush"/>
      </ListView.Resources>
      <ListView.ItemTemplate><DataTemplate>
-      <views:SidebarSessionRow ColumnSpacing="8" Padding="8,3" Height="44" MinHeight="44" AutomationProperties.Name="{Binding Label}" ToolTipService.ToolTip="{Binding Folder}">
-       <Grid.ColumnDefinitions><ColumnDefinition Width="10"/><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/><ColumnDefinition Width="24"/></Grid.ColumnDefinitions>
-       <views:SessionPicture Grid.Column="1" Session="{Binding}" Width="28" Height="28" Margin="0,0,6,6" VerticalAlignment="Center"/>
-       <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="1">
-        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" MaxLines="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-        <TextBlock Tag="SessionSubtitle" Text="{Binding DisplaySubtitle}" FontSize="11" MaxLines="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-       </StackPanel>
-       <Button Grid.Column="3" Click="SessionActions_Click" Padding="2" MinWidth="22" Width="22" Height="28" MinHeight="0" Background="Transparent" AutomationProperties.Name="Session actions"><views:DeckIcon Glyph="&#xE712;" FontSize="12"/></Button>
-       <views:SessionStatusMark State="{Binding State}" Unread="{Binding Unread}" VerticalAlignment="Center"/>
+      <!-- DESIGN-SESSION-ROWS.md: a thin outline type icon and the session's name, one line; the small orange dot only
+           when the session needs him. No picture, no agent or machine name, no second line, no row button (the
+           right-click menu holds the actions). -->
+      <views:SidebarSessionRow ColumnSpacing="8" Padding="8,0" Height="32" MinHeight="32" AutomationProperties.Name="{Binding Title}">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions>
+       <views:DeckIcon Tag="SessionType" Glyph="{Binding TypeGlyph}" FontSize="14" VerticalAlignment="Center"/>
+       <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="13" MaxLines="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+       <views:SessionStatusMark Grid.Column="2" State="{Binding State}" OnlyNeedsYou="True" VerticalAlignment="Center"/>
       </views:SidebarSessionRow>
      </DataTemplate></ListView.ItemTemplate>
     </ListView>
-    <StackPanel x:Name="ArchivedSessions" Grid.Row="3" Visibility="Collapsed" Spacing="4">
+    <!-- Sessions on his other machines: the same rows, in the same list (SidebarCloudRows.cs). -->
+    <StackPanel Grid.Row="2" x:Name="CloudSessionRows" Spacing="0" Visibility="Collapsed" AutomationProperties.Name="Sessions on your other computers"/>
+    <StackPanel x:Name="ArchivedSessions" Grid.Row="4" Visibility="Collapsed" Spacing="4">
      <Button x:Name="ArchivedChatsToggle" Content="Archived chats" Click="ArchivedChats_Click" Style="{StaticResource DeckSidebarActionStyle}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" FontSize="12"/>
      <StackPanel x:Name="ArchivedChatRows" Visibility="Collapsed"/>
      <Grid Visibility="Collapsed">
      <ListView x:Name="ArchivedSessionList" ItemTemplate="{Binding ItemTemplate, ElementName=SessionList}" SelectionMode="Single" SelectionChanged="ArchivedSessionList_SelectionChanged" HorizontalContentAlignment="Stretch" Background="Transparent" AutomationProperties.Name="Archived sessions"/>
      </Grid>
     </StackPanel>
-    <TextBlock Grid.Row="2" x:Name="EmptySidebar" Text="New sessions appear here." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Style="{ThemeResource CaptionTextBlockStyle}"/>
+    <TextBlock Grid.Row="3" x:Name="EmptySidebar" Text="New sessions appear here." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Style="{ThemeResource CaptionTextBlockStyle}"/>
    </Grid>
    </StackPanel></ScrollViewer>
    <!-- Release 27: a newer GitHub release, just above Settings (ShellUpdates.cs fills it; hidden while there is none). -->

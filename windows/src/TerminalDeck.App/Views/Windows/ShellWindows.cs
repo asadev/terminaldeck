@@ -223,25 +223,17 @@ public sealed partial class ShellWindow
     foreach (var chat in archivedSessions)
     {
       var row = new Grid(); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-      var open = new Button { Content = ProjectAgentUi.SessionIdentityRow(chat), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
-      if (open.Content is Grid identity)
-      {
-        var selected = Model.Page == ShellPage.Sessions && Model.Selected == chat;
-        // One line each with "…", fixed row height, like the running rows (Mac).
-        foreach (var line in WorkspaceVisuals.Tree(identity).OfType<TextBlock>()) { line.TextWrapping = TextWrapping.NoWrap; line.TextTrimming = TextTrimming.CharacterEllipsis; line.MaxLines = 1; }
-        foreach (var picture in WorkspaceVisuals.Tree(identity).OfType<SessionPicture>()) { picture.OnAccent = selected; picture.RowSurface("DeckRailBrush"); }
-        if (selected)
-        {
-          open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
-          foreach (var text in WorkspaceVisuals.Tree(identity).OfType<TextBlock>().Where(t => !WorkspaceVisuals.Tree(identity).OfType<SessionPicture>().Any(p => WorkspaceVisuals.Tree(p).Contains(t))))
-            text.SetResourceReference(TextBlock.ForegroundProperty, "DeckSidebarSelectionInkBrush");
-        }
-      }
+      // The same one-line row as the running sessions (DESIGN-SESSION-ROWS.md): type icon and name only.
+      var selected = Model.Page == ShellPage.Sessions && Model.Selected == chat;
+      var open = new Button { Content = SidebarSimpleRow(chat.TypeGlyph, chat.Title, SidebarRowLook.NeedsYou(chat.State), selected), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(open, chat.Title);
+      if (selected) open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
       open.Click += (_, _) => SelectSessionWindow(chat); row.Children.Add(open);
       var restore = new Button { Content = "Restore", Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"], FontSize = 12 };
       restore.Click += (_, _) => SidebarGuard(() => sidebar.ArchiveChat(chat.Id, false)); Grid.SetColumn(restore, 1); row.Children.Add(restore); ArchivedChatRows.Children.Add(row);
     }
-    EmptySidebar.Visibility = sidebarSessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    RenderCloudSessionRows();
+    EmptySidebar.Visibility = sidebarSessions.Count == 0 && CloudSessionRows.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     RefreshProjectRows(); SyncNavigation();
   }
   private string renderedProjects = "";
@@ -289,6 +281,8 @@ public sealed partial class ShellWindow
   }
   private FrameworkElement PageView(ShellPage page)
   {
+    // A session on another machine: its own page each time (never retained under the one page key).
+    if (page == ShellPage.CloudChat) return cloudChatView ?? new WorkspaceLoadingView();
     if (pageViews.TryGetValue(page, out var retained)) return retained;
     FrameworkElement content = page switch
     {
@@ -298,6 +292,7 @@ public sealed partial class ShellWindow
       ShellPage.Hoot when hootPage is not null => hootPage,
       ShellPage.Servers when serversPage is not null => serversPage,
       ShellPage.Hooks => new Hooks.HooksPage(Runtime),
+      ShellPage.Cloud => YourCloudView(),
       ShellPage.Store => new Store.StorePage(Runtime.AppStore, () => { Model.Page = ShellPage.Mcp; }),
       ShellPage.Mcp => ConnectionPage(page),
       ShellPage.Files or ShellPage.SourceControl or ShellPage.GitHub => CodePageView(page),
