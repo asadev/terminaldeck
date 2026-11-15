@@ -25,6 +25,10 @@ public static class SidebarCloudRows
 {
   public const string Untitled = "Untitled session";
 
+  /// This PC's rows: every listed session ONCE, in the order given, whichever window or tab strip holds it.
+  public static IEnumerable<T> LocalRows<T>(IEnumerable<T> sessions, Func<T, string> id, Func<T, bool> listed) =>
+    sessions.Where(listed).DistinctBy(id);
+
   /// The other machines' rows to list. A session shows ONCE: a row of this PC (its own, `Mine`), a row whose session is
   /// already in the side panel here (`localIds`: a live tab or a session moved here) and a second copy of the same session
   /// are left out. Newest use first.

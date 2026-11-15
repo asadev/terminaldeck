@@ -208,7 +208,9 @@ public sealed partial class ShellWindow
   private void UpdateSidebarSessions()
   {
     if (windowState is null) return;
-    var rows = Model.Sessions.Where(s => windowState.OwnerOf(s.Id) == s.Id && !sidebar.Read.HiddenSessions.Contains(s.Id)).ToArray();
+    // Every open session is its own row (Asad, 15 Nov: "every open session is its own row"), whichever tab strip holds
+    // it: the old filter kept only each strip's owner, so sessions sharing a strip collapsed into one row.
+    var rows = SidebarCloudRows.LocalRows(Model.Sessions, s => s.Id, s => !sidebar.Read.HiddenSessions.Contains(s.Id)).ToArray();
     void SyncRows(System.Collections.ObjectModel.ObservableCollection<SessionDraft> list, SessionDraft[] values)
     {
       for (var i = list.Count - 1; i >= 0; i--) if (!values.Contains(list[i])) list.RemoveAt(i);
@@ -241,7 +243,7 @@ public sealed partial class ShellWindow
   private void RefreshProjectRows()
   {
     var projects = Runtime.Projects.List().Where(p => p.IsOpen).ToArray();
-    var key = JsonSerializer.Serialize(new { rows = projects.Select(p => new { p.Id, p.Name, p.Colour, p.Logo, count = ProjectRunningCount(p.Id) }), selected = Model.Page == ShellPage.Projects ? Projects?.Model.SelectedId : null, page = Model.Page });
+    var key = JsonSerializer.Serialize(new { rows = projects.Select(p => new { p.Id, p.Name, p.Colour, p.Logo }), selected = Model.Page == ShellPage.Projects ? Projects?.Model.SelectedId : null, page = Model.Page });
     RefreshPageCounts();
     if (key == renderedProjects) return; renderedProjects = key; ProjectRows.Children.Clear(); projectNavigation.Clear();
     if (projects.Length == 0)
@@ -253,7 +255,8 @@ public sealed partial class ShellWindow
     {
       var picture = ShellProjectPicture(project, 14);
       var label = new Grid(); label.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); label.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-      var count = new TextBlock { Text = ProjectRunningCount(project.Id) is var total && total > 0 ? total.ToString() : "", FontSize = 12, Opacity = 0.6 };
+      // A project row shows the project only; it never stands in for its sessions (each is a row under "Sessions").
+      var count = new TextBlock { Text = "", FontSize = 12, Opacity = 0.6 };
       label.Children.Add(new TextBlock { Text = project.Name, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis }); Grid.SetColumn(count, 1);
       var content = new Grid { ColumnSpacing = 8 }; content.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); content.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
       content.Children.Add(picture); Grid.SetColumn(label, 1); content.Children.Add(label);

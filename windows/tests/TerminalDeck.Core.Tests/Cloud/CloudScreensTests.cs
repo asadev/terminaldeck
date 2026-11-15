@@ -37,6 +37,19 @@ public sealed class CloudScreensTests
   }
 
   [Fact]
+  public void EveryOpenLocalSessionIsItsOwnRowAndAnotherMachinesIsOneMore()
+  {
+    // Four terminals on this PC (two of them share one tab strip: never collapsed into one row), one hidden.
+    var local = new[] { ("t1", true), ("t2", true), ("t3", true), ("t4", true), ("t2", true), ("gone", false) };
+    var rows = SidebarCloudRows.LocalRows(local, s => s.Item1, s => s.Item2).Select(s => s.Item1).ToArray();
+    Assert.Equal(["t1", "t2", "t3", "t4"], rows);
+    var others = SidebarCloudRows.From([Row("r9", "m9", "On the Mac", "m-mini"), Row("r2", "t2", "Same as a local one", "m-mini")], Machines, rows);
+    var all = rows.Concat(others.Select(o => o.SessionId!)).ToArray();
+    Assert.Equal(5, all.Length);
+    Assert.Equal(all.Length, all.Distinct().Count());
+  }
+
+  [Fact]
   public void SidebarHidesACloudRowWhileItsSessionHasARowHere()
   {
     var rows = SidebarCloudRows.From([Row("r1", "s1", "Fix the login page", "m-mini"), Row("r2", "s2", "Release notes", "m-mini")], Machines, ["s1"]);
