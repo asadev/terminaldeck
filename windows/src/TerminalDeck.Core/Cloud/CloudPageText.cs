@@ -28,6 +28,12 @@ public static class CloudPageText
   public const string SigningInLine = "Finish signing in in your browser, then come back here.";
   /// Owner, 13 Nov: joining is automatic; one switch, on after sign-in, for a person who wants Cloud off on this PC.
   public const string UseCloudToggle = "Use Cloud on this PC";
+  /// The sync line under the switch ("Level with your Cloud", "Sending n", "Receiving n", "Waiting: <plain reason>", or
+  /// that nothing on this PC syncs yet) and its button. Null while sync is not running (Cloud off).
+  public const string SyncNow = "Sync now";
+  public static string? SyncLine(CloudSyncState? state) => state?.Line;
+  /// "Sync now" is offered only while something on this PC syncs.
+  public static bool CanSyncNow(CloudSyncState? state) => state is { Phase: not CloudSyncPhase.Idle };
   public static string UseCloudState(bool on) => on
     ? "On. This PC is part of your Cloud with your other devices."
     : "Off. Nothing of this PC is sent, and nothing from your Cloud arrives here. Nothing is deleted.";

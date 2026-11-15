@@ -26,7 +26,7 @@ public sealed partial class SettingsPane
   {
     "profile" => new ProfilePage(runtime.Cloud),
     "devices" => new DevicesPage(runtime.Cloud, () => runtime.Remote.Trust.List().Count, OpenPairedDevices),
-    "cloud" => new CloudPage(runtime.Cloud),
+    "cloud" => new CloudPage(runtime.Cloud, runtime.CloudSync),
     "general" => GeneralSettings(),
     "notifications" => NotificationSettings(),
     "advanced" => AdvancedSettings(),
