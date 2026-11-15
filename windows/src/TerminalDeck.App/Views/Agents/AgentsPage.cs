@@ -58,6 +58,10 @@ public sealed partial class AgentsPage : Grid
     ProjectsAgentsParityProof.Start(navigation);
   }
   private Task OpenTemplatesAsync() => navigation is ISettingsPageNavigation settings ? settings.OpenSettingsAsync("agent-defaults") : AgentEditors.TemplatesAsync(XamlRoot, Model.Agents, Model);
+  // WhatsApp agents (15 Nov): the shell supplies the "WhatsApp" submenu for an agent's menu and the profile's heading chip
+  // with its switch (shown only while a WhatsApp agent is attached to that agent). Hooks, so the proofs build without them.
+  public static Func<SavedAgent, MenuFlyout, MenuFlyoutItemBase?>? WhatsAppSubmenu { get; set; }
+  public static Func<SavedAgent, FrameworkElement?>? WhatsAppChip { get; set; }
   public void OpenAgent(string id) { profileTab = "Dashboard"; Model.SelectedId = id; Render(); }
   private void Render()
   {
@@ -380,6 +384,8 @@ public sealed partial class AgentsPage : Grid
     void EditField(string? field = null) => _ = AgentEditors.EditAsync(XamlRoot, agent, Model.Agents, Model.Projects, Model, field);
     var activity = Model.Activity(agent);
     var actions = new List<UIElement> { IconButton("", "Agent settings", () => EditField()), new Button { Content = "Actions", Flyout = AgentMenu(agent) } };
+    // WhatsApp agents (15 Nov): the chip and its switch first, only while a WhatsApp agent is attached to this agent.
+    if (WhatsAppChip?.Invoke(agent) is { } whatsAppChip) actions.Insert(0, whatsAppChip);
     if (agent.Status == SavedAgentStatus.Active)
       actions.Add(AsyncButton("Start session", () => StartSessionAsync(agent), navigation is not IAgentTasksNavigation));
     if (navigation is IAgentTasksNavigation tasks) actions.Add(AsyncButton("Assign task", () => tasks.AssignTaskAsync(agent.ProjectId, agent.Id), true));
@@ -592,6 +598,8 @@ public sealed partial class AgentsPage : Grid
       Boss(boss.Id, boss.Name + " · " + Model.ProjectName(boss.ProjectId));
     menu.Items.Add(reports);
     if (agent.Status != SavedAgentStatus.Archived) Item(agent.Status == SavedAgentStatus.Paused ? "Resume" : "Pause", () => TogglePause(agent));
+    // WhatsApp agents (15 Nov): "WhatsApp ›" attaches one of his WhatsApp agents to this agent.
+    if (agent.Status != SavedAgentStatus.Archived && WhatsAppSubmenu?.Invoke(agent, menu) is { } whatsApp) menu.Items.Add(whatsApp);
     menu.Items.Add(new MenuFlyoutSeparator());
     Item("Open profile", () => { OpenAgent(agent.Id); return Task.CompletedTask; });
     Item("Settings…", () => AgentEditors.EditAsync(XamlRoot, agent, Model.Agents, Model.Projects, Model));

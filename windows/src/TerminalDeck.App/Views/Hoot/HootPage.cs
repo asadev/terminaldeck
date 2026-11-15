@@ -55,6 +55,10 @@ public sealed partial class HootPage : Grid, IDisposable
   public IChatSessions? Chats { get; init; }
   public Func<string, ChatMcpNavigation>? McpNavigation { get; init; }
   public string? DataDirectory { get; init; }
+  // WhatsApp agents (15 Nov): the shell supplies the "WhatsApp" submenu (for Hoot's menu) and the heading chip with its
+  // switch (shown only while a WhatsApp agent is attached to Hoot). Hooks, so the Hoot proof builds without them.
+  public static Func<MenuFlyout, MenuFlyoutItemBase?>? WhatsAppSubmenu { get; set; }
+  public static Func<FrameworkElement?>? WhatsAppChip { get; set; }
   public HootPage(IHoot hoot, Func<IReadOnlyList<AccountProfile>> accounts, Func<IReadOnlyList<HootSessionChoice>> sessions, Action<string>? openSession = null, Action? openCodingAis = null, Func<string, Task>? signIn = null)
   {
     this.accounts = accounts; this.sessions = sessions; this.openSession = openSession; this.openCodingAis = openCodingAis; this.signIn = signIn;
@@ -92,6 +96,8 @@ public sealed partial class HootPage : Grid, IDisposable
     { var route = name; AddMenu(menu, route, () => { SelectSection(route); return Task.CompletedTask; }); }
     Children.Add(header);
     AddMenu(menu, "Hoot settings", ShowSettingsAsync); AddMenu(menu, "Context handoff", ShowHandoffAsync); AddMenu(menu, "Background turns", ShowBackgroundAsync);
+    // WhatsApp agents (15 Nov): "WhatsApp ›" attaches one of his WhatsApp agents to Hoot.
+    if (WhatsAppSubmenu?.Invoke(menu) is { } whatsApp) menu.Items.Add(whatsApp);
     history = new() { Content = messages, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled };
     history.SizeChanged += (_, _) => messages.Width = Math.Max(0, Math.Min(760, history.ActualWidth)); SetRow(history, 1); Children.Add(history);
     AutomationProperties.SetAutomationId(history, "hoot.history");
@@ -134,7 +140,10 @@ public sealed partial class HootPage : Grid, IDisposable
       chip.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"]; chip.MinHeight = 28; chip.Padding = new Thickness(6, 4, 6, 4); chip.FontSize = 12;
       chip.Click += async (_, _) => await ShowSettingsAsync();
     }
-    chips.Children.Add(accountChip); SetColumn(modelChip, 1); chips.Children.Add(modelChip); dock.Children.Add(chips);
+    // The account chip, then (only while a WhatsApp agent is attached to Hoot) the WhatsApp chip and its switch.
+    var accountLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+    accountLine.Children.Add(accountChip); if (WhatsAppChip?.Invoke() is { } whatsAppChip) accountLine.Children.Add(whatsAppChip);
+    chips.Children.Add(accountLine); SetColumn(modelChip, 1); chips.Children.Add(modelChip); dock.Children.Add(chips);
     SetRow(dock, 3); Children.Add(dock);
     composer.PreviewKeyDown += async (_, e) => // before the multi-line TextBox adds a new line
     {

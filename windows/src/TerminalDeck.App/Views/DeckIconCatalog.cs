@@ -27,6 +27,8 @@ internal static class DeckIconCatalog
     new("search", "magnifyingglass", "\uE721", "M10.5,6.25 A4.25,4.25 0 1 1 2,6.25 A4.25,4.25 0 1 1 10.5,6.25 Z M9.5,9.5 L14,14"),
     new("bell", "bell", "\uEA8F \uE7F4", "M8,2 Q4,2 4,6 V9 L2.5,11.5 H13.5 L12,9 V6 Q12,2 8,2 Z M6.5,14 H9.5"),
     new("settings", "gearshape", "\uE713", "M6.5,1.5 H9.5 L10,3 L11.5,3.5 L13,3 L14.5,5.5 L13.5,6.5 V9 L14.5,10 L13,12.5 L11.5,12 L10,12.5 L9.5,14.5 H6.5 L6,12.5 L4.5,12 L3,12.5 L1.5,10 L2.5,9 V6.5 L1.5,5.5 L3,3 L4.5,3.5 L6,3 Z M10.5,8 A2.5,2.5 0 1 1 5.5,8 A2.5,2.5 0 1 1 10.5,8 Z"),
+    // WhatsApp agents (15 Nov): nobody's logo, the plain outline of a handset inside a speech bubble (Mac phone.bubble).
+    new("whatsapp", "phone.bubble", "", "M4,2.5 H12 Q14.5,2.5 14.5,5 V9.5 Q14.5,12 12,12 H6 L2.5,14 V11 Q1.5,10.5 1.5,9 V5 Q1.5,2.5 4,2.5 Z M6,5 L7,5.25 L7.25,6.5 L6.75,7 Q7.5,8.25 8.75,8.75 L9.25,8.25 L10.5,8.5 L10.75,9.5 Q6,10 6,5 Z"),
     new("phone", "iphone", "\uE8EA", "M5,1.5 H11 Q12,1.5 12,2.5 V13.5 Q12,14.5 11,14.5 H5 Q4,14.5 4,13.5 V2.5 Q4,1.5 5,1.5 Z M7,3 H9 M7,12.5 H9"),
     new("devices", "laptopcomputer.and.iphone", "\uE975", "M2,2 H10.5 V10 H2 Z M.75,12 H9 M12,6.5 H15 V14 H11 V6.5 Z M12.5,12.5 H13.5"),
     new("agents", "person.3", "\uE902 \uE9D9", "M10,4.5 A2,2 0 1 1 6,4.5 A2,2 0 1 1 10,4.5 Z M4,14 V12 Q4,9 8,9 Q12,9 12,12 V14 M4.5,5 A1.5,1.5 0 1 1 1.5,5 A1.5,1.5 0 1 1 4.5,5 Z M1,13 V11.5 Q1,9 4,9 M14.5,5 A1.5,1.5 0 1 1 11.5,5 A1.5,1.5 0 1 1 14.5,5 Z M12,9 Q15,9 15,11.5 V13"),

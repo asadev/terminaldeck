@@ -26,4 +26,8 @@
     <!-- Lane U3: the Bin page's rules (no screen needed). -->
     <Compile Include="../../src/TerminalDeck.App/Views/Settings/CloudBinRules.cs" Link="CloudBin/CloudBinRules.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- WhatsApp agents: the screens' rules (Settings rows, the submenu, the heading chip). -->
+    <Compile Include="../../src/TerminalDeck.App/Views/WhatsApp/WhatsAppScreenRules.cs" Link="WhatsAppScreens/WhatsAppScreenRules.cs" />
+  </ItemGroup>
 </Project>
