@@ -48,11 +48,12 @@ public sealed class CloudProfileTests
   }
 
   [Fact]
-  public void Settings_opens_its_list_with_Profile_then_Devices_and_old_device_links_land_on_Devices()
+  public void Settings_opens_its_list_with_Profile_and_old_device_links_land_on_Profile()
   {
-    Assert.Equal(new[] { "profile", "devices" }, SettingsNavigation.Categories.Where(c => c.Group == 0).Select(c => c.Id).ToArray());
-    Assert.Equal(new[] { "general", "cloud" }, SettingsNavigation.Categories.Where(c => c.Group == 1).Take(2).Select(c => c.Id).ToArray());
-    Assert.Equal("devices", SettingsNavigation.Canonical("devices"));
-    Assert.Equal("devices", Assert.Single(SettingsNavigation.Matching("paired")).Id);
+    Assert.Equal(new[] { "profile" }, SettingsNavigation.Categories.Where(c => c.Group == 0).Select(c => c.Id).ToArray());
+    Assert.Equal(new[] { "general", "appearance" }, SettingsNavigation.Categories.Where(c => c.Group == 1).Take(2).Select(c => c.Id).ToArray());
+    Assert.Equal("profile", SettingsNavigation.Canonical("devices"));
+    Assert.Equal("profile", Assert.Single(SettingsNavigation.Matching("devices")).Id);
+    Assert.Equal("profile", SettingsNavigation.ListOwner(SettingsNavigation.DevicePrefix + "abc"));
   }
 }

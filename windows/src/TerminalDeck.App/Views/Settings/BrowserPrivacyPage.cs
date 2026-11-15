@@ -42,8 +42,9 @@ public sealed class BrowserPrivacyPage : StackPanel
       if (!await Confirm("Import " + rows.Length + " cookies?", "This signs this profile into sites from the exported JSON file. Matching cookies are replaced. Direct access to another browser's encrypted store is not used.")) return;
       await browser.ImportBrowserCookiesAsync(Profile(), json);
     }));
+    // The import's explanation sits behind one info button, not as a grey line (Mac, 15 Nov).
+    cookies.Children.Add(SettingsPanel.InfoButton("Import cookies", "Import an exported cookie JSON array with name, value, domain, path, secure, httpOnly, expires and sameSite fields. Other browsers protect their own live stores with their own Windows keys."));
     Children.Add(cookies);
-    Children.Add(new TextBlock { Text = "Import an exported cookie JSON array with name, value, domain, path, secure, httpOnly, expires and sameSite fields. Other browsers protect their own live stores with their own Windows keys.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .7 });
     Children.Add(Action("Clear sign-ins and website data…", async () => { if (await Confirm("Sign out of this profile?", "Remove cookies and website storage in this profile. Saved passwords remain in their protected store.")) await browser.ClearBrowserSignInsAsync(Profile()); }));
     Children.Add(new TextBlock { Text = "Saved passwords", FontSize = 15, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }); Children.Add(logins);
     Children.Add(Action("Save a password…", async () =>

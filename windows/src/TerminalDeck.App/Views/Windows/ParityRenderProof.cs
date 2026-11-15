@@ -108,7 +108,7 @@ public sealed partial class ShellWindow
         // Host Settings content inside the already offscreen shell. Never open,
         // activate or clamp the normal native Settings window onto the display.
         settingsPanel ??= CreateSettingsPanel();
-        foreach (var route in new[] { "general", "appearance", "notifications", "agent-defaults", "browser", "tasks", "advanced", "about" })
+        foreach (var route in new[] { "general", "appearance", "notifications", "agent-defaults", "tasks", "privacy", "advanced", "about" })
         {
           W10HostUnlisted( settingsPanel); await settingsPanel.SelectAsync(route);
           await Capture("settings-" + route, "Real SettingsPanel content inside offscreen scratch shell; no controls invoked");

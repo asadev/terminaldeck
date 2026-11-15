@@ -39,7 +39,7 @@ public sealed partial class ShellWindow
         await Task.Delay(300);
         Check("Settings opens directly in its native window", settingsWindow is not null && settingsPanel?.Parent == settingsWindowRoot);
         Check("Settings has a native draggable title bar", settingsWindow?.ExtendsContentIntoTitleBar == true);
-        Check("Only working Windows categories appear in Mac order", SettingsNavigation.Categories.Select(c => c.Id).SequenceEqual(new[] { "general", "appearance", "notifications", "coding-ais", "outside-ai-apps", "agent-defaults", "browser", "tasks", "advanced", "about" }));
+        Check("Only working Windows categories appear in Mac order", SettingsNavigation.Categories.Select(c => c.Id).SequenceEqual(new[] { "profile", "general", "appearance", "notifications", "coding-ais", "agent-defaults", "tasks", "outside-ai-apps", "privacy", "advanced", "about" }));
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
         {
           SaveSettingsTheme(theme);

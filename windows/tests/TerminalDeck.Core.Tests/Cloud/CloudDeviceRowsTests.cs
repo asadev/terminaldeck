@@ -43,8 +43,8 @@ public sealed partial class CloudDeviceRowsTests : IDisposable
     Assert.DoesNotContain("platform", tool); Assert.DoesNotContain("code", tool);
   }
 
-  [Fact] public void CloudIsTheSecondEntryInSettings() =>
-    Assert.Equal(["general", "cloud"], TerminalDeck.App.Views.Settings.SettingsNavigation.Categories.Skip(2).Take(2).Select(c => c.Id));
+  [Fact] public void CloudAndDevicesLiveInsideProfile() =>
+    Assert.Equal(["profile", "general"], TerminalDeck.App.Views.Settings.SettingsNavigation.Categories.Take(2).Select(c => c.Id));
 
   private sealed class Slot : ICloudTrustSlot
   {

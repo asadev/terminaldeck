@@ -29,7 +29,7 @@ public sealed partial class ShellWindow
     try { Root.RequestedTheme = ParseSettingsTheme(settingsAppearance.Load()?.Theme ?? "system"); }
     catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
     { Model.Notice = "The saved appearance could not be read. Choose it again in Settings."; }
-    Closed += (_, _) => { settings.CloseServerEditors(); settingsWindow?.Close(); settingsWindow = null; devicesWindow?.Close(); };
+    Closed += (_, _) => { settings.CloseServerEditors(); settingsWindow?.Close(); settingsWindow = null; devicesWindow?.Close(); browserSettingsWindow?.Close(); };
     Root.ActualThemeChanged += (_, _) =>
     {
       if (settingsPanel is not null) settingsPanel.RequestedTheme = Root.RequestedTheme;
@@ -110,7 +110,7 @@ public sealed partial class ShellWindow
     catch (Exception ex) when (ex is IOException or JsonException or ArgumentException or UnauthorizedAccessException) { initial = "general"; }
     if (SettingsNavigation.IsHoot(initial)) initial = "general";
     if (initial == "mcp") initial = "outside-ai-apps";
-    if (initial == "devices") initial = "general";
+    if (initial == "devices" || SettingsNavigation.IsDevice(initial)) initial = "profile";
     var panel = new SettingsPanel(settings, () => Root.RequestedTheme, SaveSettingsTheme, initial);
     panel.NavigationChanged += section =>
     {
@@ -118,6 +118,7 @@ public sealed partial class ShellWindow
       catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Model.Notice = "The Settings destination could not be remembered."; }
     };
     panel.CloseRequested += CloseSettingsPanel;
+    panel.OpenBrowserSettings = () => { ShowBrowserSettingsWindow(); return true; };
     panel.OpenMainPage = name =>
     {
       if (!Enum.TryParse<ShellPage>(name, out var destination)) return false;
