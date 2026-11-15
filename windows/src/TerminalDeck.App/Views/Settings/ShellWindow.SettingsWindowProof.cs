@@ -101,7 +101,7 @@ public sealed partial class ShellWindow
             dialog = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(currentRoot).SelectMany(p => ProofTree(p.Child)).OfType<ContentDialog>().FirstOrDefault();
         }
         Check("Shortcuts opens in Settings XamlRoot", dialog?.Title as string == "Settings shortcuts"); dialog?.Hide(); await shortcuts.WaitAsync(TimeSpan.FromSeconds(5));
-        Check("Footer remains present", ProofTree(settingsPanel).OfType<TextBlock>().Any(t => t.Text == "Changes save as you make them."));
+        Check("Footer stays gone", !ProofTree(settingsPanel).OfType<TextBlock>().Any(t => t.Text == "Changes save as you make them."));
         Check("No pop-out button", !ProofTree(settingsPanel).OfType<Button>().Any(b => Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(b).Contains("own window", StringComparison.OrdinalIgnoreCase)));
         var scale = WindowScale(this);
         // Leave actual empty desktop to the right of the smaller main window.

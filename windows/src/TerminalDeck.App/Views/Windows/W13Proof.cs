@@ -91,7 +91,7 @@ public sealed partial class ShellWindow
         W10HostFixture(ShellPage.Artifacts, TerminalDeck.App.Views.Receiver.ReceiverParityFixture.Artifacts()); await Capture("artifacts-" + width);
         Model.Page = ShellPage.Mcp; await Capture("mcp-" + width);
         W10SelectSession(live.Id);
-        foreach (var route in new[] { "general", "appearance", "coding-ais", "accounts", "notifications", "agent-defaults", "browser", "tasks", "outside-ai-apps", "advanced", "about" })
+        foreach (var route in new[] { "general", "appearance", "coding-ais", "accounts", "notifications", "agent-defaults", "tasks", "outside-ai-apps", "advanced", "about" })
         {
           await OpenSettingsAsync(route); await Capture("settings-" + route + "-" + width);
           Check(width + " " + theme + " " + route + " Settings is a native window", settingsWindow is not null);

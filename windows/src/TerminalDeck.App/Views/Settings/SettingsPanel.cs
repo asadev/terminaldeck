@@ -4,6 +4,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using TerminalDeck.App.Shell;
+using TerminalDeck.Core.Cloud;
 
 namespace TerminalDeck.App.Views.Settings;
 
@@ -18,8 +20,16 @@ public sealed partial class SettingsPanel : Grid
   private readonly TextBox search = new() { PlaceholderText = "Search", CornerRadius = new CornerRadius(16), Margin = new Thickness(12, 12, 12, 8) };
   private readonly Grid detail = new() { Padding = new Thickness(0) };
   private readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
-  private readonly Border tabSurface = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(3), HorizontalAlignment = HorizontalAlignment.Left, Visibility = Visibility.Collapsed };
+  private readonly Border tabSurface = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(3), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed };
   private readonly Grid page = new();
+  // Top bar (Mac, 15 Nov): back and forward walk everything opened in this window; the page's name is the heading.
+  private readonly TextBlock pageTitle = new() { FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+  private readonly Button back = NavigationButton("", "Back");
+  private readonly Button forward = NavigationButton("", "Forward");
+  private readonly List<string> visited = [];
+  private int visitedAt = -1;
+  private PersonPicture? railPicture;
+  private TextBlock? railName;
   private string selectedSection = "coding-ais";
   private bool selecting;
   private bool selectingLegacy;
@@ -29,13 +39,16 @@ public sealed partial class SettingsPanel : Grid
   public event Action? CloseRequested;
   public event Action<string>? NavigationChanged;
   public Func<string, bool>? OpenMainPage { get; set; }
+  // The Browser's settings: their own small window, opened from the Browser (Mac, 15 Nov).
+  public Func<bool>? OpenBrowserSettings { get; set; }
 
   public SettingsPanel(SettingsPane pane, Func<ElementTheme> theme, Action<ElementTheme> setTheme, string initialSection = "coding-ais")
   {
     legacy = pane;
     legacy.OpenPairedDevices = () => OpenMainPage?.Invoke("Devices") == true;
     legacy.SettingsContentRendered += () => { if (page.Children.Contains(legacy)) PresentHostedPage(); };
-    legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await SelectAsync(id); };
+    legacy.DirectionRefreshRequested += async id => { if (SelectedCategory == id) await ShowAsync(selectedSection, false); };
+    legacy.CloudAccount.Changed += _ => DispatcherQueue.TryEnqueueHandled(UpdateProfileRow);
     readTheme = theme; changeTheme = setTheme;
     selectedSection = initialSection; SelectedCategory = SettingsNavigation.Canonical(initialSection);
     AutomationProperties.SetAutomationId(this, "settings.panel");
@@ -54,28 +67,27 @@ public sealed partial class SettingsPanel : Grid
     AutomationProperties.SetName(search, "Search Settings"); search.TextChanged += (_, _) => FilterCategories(); SetRow(search, 1); rail.Children.Add(search);
     search.Padding = new Thickness(32, 6, 10, 6); search.MinHeight = 28; search.BorderThickness = new Thickness(0);
     SetResourceReference(search, Control.BackgroundProperty, "DeckControlBrush");
-    var magnifier = new DeckIcon { Glyph = "\uE721", FontSize = 12, Margin = new Thickness(22, 12, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, IsHitTestVisible = false };
+    var magnifier = new DeckIcon { Glyph = "", FontSize = 12, Margin = new Thickness(22, 12, 0, 8), HorizontalAlignment = HorizontalAlignment.Left, IsHitTestVisible = false };
     SetRow(magnifier, 1); rail.Children.Add(magnifier);
     categories.Margin = new Thickness(8, 0, 8, 8); SetRow(categories, 2); rail.Children.Add(categories); body.Children.Add(rail);
     categories.SelectionChanged += async (_, _) => { if (!selecting && categories.SelectedItem is ListViewItem { Tag: string id }) await SelectAsync(id); };
     SetResourceReference(detail, BackgroundProperty, "DeckCanvasBrush");
     InstallSelectionResources();
     detail.CornerRadius = new CornerRadius(0); detail.Margin = new Thickness(0);
-    detail.RowDefinitions.Add(new() { Height = GridLength.Auto }); detail.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
-    detail.RowDefinitions.Add(new() { Height = GridLength.Auto });
-    var foot = new Grid { Padding = new Thickness(20, 10, 20, 10), ColumnSpacing = 12 };
-    foot.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); foot.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-    SetResourceReference(foot, BackgroundProperty, "DeckRailBrush");
-    var saving = new TextBlock { Text = "Changes save as you make them.", FontSize = 13, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-    SetResourceReference(saving, TextBlock.ForegroundProperty, "DeckSecondaryInkBrush"); foot.Children.Add(saving);
-    var shortcutLabel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-    shortcutLabel.Children.Add(new DeckIcon { Glyph = "\uE765", FontSize = 13 }); shortcutLabel.Children.Add(new TextBlock { Text = "Shortcuts", FontSize = 13 });
-    var shortcuts = new Button { Content = shortcutLabel, FontSize = 13, MinHeight = 28, Padding = new Thickness(6, 2, 6, 2) };
-    AutomationProperties.SetName(shortcuts, "Keyboard shortcuts");
-    shortcuts.Click += async (_, _) => { try { await ShowShortcutsAsync(); } catch (Exception ex) when (ex is not OutOfMemoryException) { saveStatus.Text = ex.Message; } };
-    SetColumn(shortcuts, 1); foot.Children.Add(shortcuts); SetRow(foot, 2); detail.Children.Add(foot);
+    detail.RowDefinitions.Add(new() { Height = GridLength.Auto }); detail.RowDefinitions.Add(new() { Height = GridLength.Auto });
+    detail.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
+    // The top bar: [‹ ›] Page name. No footer and no heading inside the page (Mac, 15 Nov).
+    var capsule = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+    capsule.Children.Add(back); capsule.Children.Add(forward);
+    var capsuleSurface = new Border { Child = capsule, CornerRadius = new CornerRadius(8), VerticalAlignment = VerticalAlignment.Center };
+    SetResourceReference(capsuleSurface, Border.BackgroundProperty, "DeckControlBrush");
+    back.Click += async (_, _) => await WalkAsync(-1); forward.Click += async (_, _) => await WalkAsync(1);
+    var topBar = new Grid { Height = 52, ColumnSpacing = 12, Padding = new Thickness(16, 0, 150, 0) };
+    topBar.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); topBar.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+    topBar.Children.Add(capsuleSurface); SetColumn(pageTitle, 1); topBar.Children.Add(pageTitle);
+    detail.Children.Add(topBar); UpdateHistoryButtons();
     tabSurface.Child = tabs; SetResourceReference(tabSurface, Border.BackgroundProperty, "DeckControlBrush");
-    detail.Children.Add(tabSurface); SetRow(page, 1); detail.Children.Add(page); SetColumn(detail, 1); body.Children.Add(detail);
+    SetRow(tabSurface, 1); detail.Children.Add(tabSurface); SetRow(page, 2); detail.Children.Add(page); SetColumn(detail, 1); body.Children.Add(detail);
     // Keep a long previous page from giving the next ScrollViewer an oversized
     // desired width. Every category measures against this actual content cell.
     SizeChanged += (_, _) => page.Width = Math.Max(0, ActualWidth - 194);
@@ -92,30 +104,62 @@ public sealed partial class SettingsPanel : Grid
     find.Invoked += (_, args) => { search.Focus(FocusState.Keyboard); args.Handled = true; }; KeyboardAccelerators.Add(find);
     KeyDown += (_, args) => { if (args.Key == Windows.System.VirtualKey.Escape) { CloseRequested?.Invoke(); args.Handled = true; } };
     FilterCategories();
-    Loaded += async (_, _) => { await SelectAsync(selectedSection); };
+    Loaded += async (_, _) => { await ShowAsync(selectedSection, visitedAt < 0); };
   }
 
   public void FocusSearch() => search.Focus(FocusState.Keyboard);
   public string SearchQuery => search.Text;
   public void Search(string query) => search.Text = query;
 
-  public async Task SelectAsync(string section)
+  public Task SelectAsync(string section) => ShowAsync(section, true);
+
+  private async Task WalkAsync(int step)
+  {
+    var next = visitedAt + step;
+    if (next < 0 || next >= visited.Count) return;
+    visitedAt = next;
+    await ShowAsync(visited[visitedAt], false);
+  }
+
+  private void UpdateHistoryButtons()
+  {
+    back.IsEnabled = visitedAt > 0;
+    forward.IsEnabled = visitedAt >= 0 && visitedAt < visited.Count - 1;
+  }
+
+  private async Task ShowAsync(string section, bool remember)
   {
     if (SettingsNavigation.IsHoot(section))
     {
       if (OpenMainPage?.Invoke("Hoot") == true) return;
       throw new InvalidOperationException("Open Hoot from its page to change its settings.");
     }
-    // Devices is a Settings page now (Mac, 14 Nov); its "Paired with a code" row opens the paired devices' window.
+    if (SettingsNavigation.IsBrowser(section))
+    {
+      if (OpenBrowserSettings?.Invoke() == true) return;
+      throw new InvalidOperationException("Open the Browser's settings from the Browser.");
+    }
     if (section is "mcp" && OpenMainPage?.Invoke("Mcp") == true) return;
     SelectedCategory = SettingsNavigation.Canonical(section);
     selectedSection = section;
+    if (remember && (visitedAt < 0 || visited[visitedAt] != section))
+    {
+      visited.RemoveRange(visitedAt + 1, visited.Count - visitedAt - 1);
+      visited.Add(section); visitedAt = visited.Count - 1;
+    }
+    UpdateHistoryButtons();
+    pageTitle.Text = SettingsNavigation.Title(SelectedCategory);
     NavigationChanged?.Invoke(section);
     selecting = true;
-    categories.SelectedItem = categories.Items.OfType<ListViewItem>().FirstOrDefault(item => item.Tag as string == SelectedCategory);
+    var owner = SettingsNavigation.ListOwner(SelectedCategory);
+    categories.SelectedItem = categories.Items.OfType<ListViewItem>().FirstOrDefault(item => item.Tag as string == owner);
     selecting = false;
     tabs.Children.Clear(); tabSurface.Visibility = Visibility.Collapsed; tabSurface.Margin = new Thickness(0); page.Children.Clear();
-    if (legacy.DirectionPage(SelectedCategory, id => _ = SelectAsync(id)) is { } directionPage) { page.Children.Add(directionPage); return; }
+    if (legacy.DirectionPage(SelectedCategory, id => _ = SelectAsync(id)) is { } directionPage)
+    {
+      if (directionPage.Tag is string named) pageTitle.Text = named;
+      page.Children.Add(directionPage); return;
+    }
     if (SelectedCategory == "appearance") { page.Children.Add(AppearancePage()); return; }
     if (SelectedCategory == "about") { page.Children.Add(AboutPage()); return; }
     var index = SelectedCategory switch { "coding-ais" => section == "accounts" ? 1 : 0, "advanced" => 2, _ => section == "mcp" ? 3 : 4 };
@@ -126,10 +170,10 @@ public sealed partial class SettingsPanel : Grid
 
     if (SelectedCategory == "outside-ai-apps")
     {
-      AddTab("Outside AI apps", 4, index); AddTab("MCP servers", 3, index);
+      AddTab("AI apps", 4, index); AddTab("MCP servers", 3, index);
     }
     tabSurface.Visibility = tabs.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-    tabSurface.Margin = new Thickness(0, 0, 0, 16);
+    tabSurface.Margin = new Thickness(0, 0, 0, 12);
     page.Children.Add(legacy); selectingLegacy = true;
     try { legacy.SelectSection(index); } finally { selectingLegacy = false; }
     await legacy.RenderAsync();
@@ -156,9 +200,9 @@ public sealed partial class SettingsPanel : Grid
   {
     if (legacy.Children.OfType<ScrollViewer>().FirstOrDefault()?.Content is not Grid container ||
         container.Children.OfType<StackPanel>().FirstOrDefault() is not { } stack) return;
-    stack.MaxWidth = 640; stack.Spacing = 12; stack.HorizontalAlignment = HorizontalAlignment.Center; stack.Margin = new Thickness(20, 0, 20, 20);
-    if (stack.Children.FirstOrDefault() is TextBlock heading)
-    { if (SelectedCategory == "advanced") heading.Text = "Advanced"; heading.FontSize = 20; heading.MinHeight = 0; heading.Margin = new Thickness(0, 14, 0, 14); }
+    stack.MaxWidth = 640; stack.Spacing = 12; stack.HorizontalAlignment = HorizontalAlignment.Center; stack.Margin = new Thickness(20, 8, 20, 20);
+    // The top bar is the heading: the page's own big title goes.
+    if (stack.Children.FirstOrDefault() is TextBlock heading) heading.Visibility = Visibility.Collapsed;
     foreach (var card in stack.Children.OfType<Border>())
     {
       SetResourceReference(card, Border.BackgroundProperty, "DeckCardBrush");
@@ -175,93 +219,223 @@ public sealed partial class SettingsPanel : Grid
 
   private void FilterCategories()
   {
-    selecting = true; categories.Items.Clear();
+    selecting = true; categories.Items.Clear(); railPicture = null; railName = null;
     var group = -1;
     foreach (var item in SettingsNavigation.Matching(search.Text))
     {
-      var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-      var icon = new Border { Width = 20, Height = 20, CornerRadius = new CornerRadius(5), Child = new DeckIcon { Glyph = item.Glyph, FontSize = 11, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) } };
-      SetResourceReference(icon, Border.BackgroundProperty, item.ColorResource); row.Children.Add(icon);
-      var title = new TextBlock { Text = item.Title, FontSize = 13, VerticalAlignment = VerticalAlignment.Center }; row.Children.Add(title);
+      // Groups are told apart by space alone, never by a line (Mac, 15 Nov).
       if (group >= 0 && group != item.Group)
+        categories.Items.Add(new ListViewItem { Content = new Border { Height = 2 }, IsEnabled = false, IsTabStop = false, MinHeight = 14, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch });
+      var profile = item.Id == "profile";
+      FrameworkElement row;
+      TextBlock title;
+      TextBlock? second = null;
+      if (profile)
       {
-        var rule = new Border { Height = 1, Margin = new Thickness(10, 6, 10, 6) };
-        SetResourceReference(rule, Border.BackgroundProperty, "DeckDividerBrush");
-        categories.Items.Add(new ListViewItem { Content = rule, IsEnabled = false, IsTabStop = false, MinHeight = 13, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch });
+        // [picture] Name / "Terminal Deck account".
+        var picture = new PersonPicture { Width = 36, Height = 36, VerticalAlignment = VerticalAlignment.Center };
+        var words = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
+        title = new TextBlock { FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+        second = new TextBlock { Text = TerminalDeck.Core.Brand.Name + " account", FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis };
+        words.Children.Add(title); words.Children.Add(second);
+        var grid = new Grid { ColumnSpacing = 10 };
+        grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); grid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        grid.Children.Add(picture); SetColumn(words, 1); grid.Children.Add(words);
+        railPicture = picture; railName = title; row = grid;
       }
-      var surface = new Border { Child = row, Padding = new Thickness(8, 4, 8, 4), CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Stretch };
-      var entry = new ListViewItem { Content = surface, Tag = item.Id, MinHeight = 32, Margin = new Thickness(0), Padding = new Thickness(0), CornerRadius = new CornerRadius(8), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+      else
+      {
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        var icon = new Border { Width = 20, Height = 20, CornerRadius = new CornerRadius(5), Child = new DeckIcon { Glyph = item.Glyph, FontSize = 11, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) } };
+        SetResourceReference(icon, Border.BackgroundProperty, item.ColorResource); line.Children.Add(icon);
+        title = new TextBlock { Text = item.Title, FontSize = 13, VerticalAlignment = VerticalAlignment.Center }; line.Children.Add(title);
+        row = line;
+      }
+      var surface = new Border { Child = row, Padding = new Thickness(8, profile ? 8 : 4, 8, profile ? 8 : 4), CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Stretch };
+      var entry = new ListViewItem { Content = surface, Tag = item.Id, MinHeight = profile ? 56 : 32, Margin = new Thickness(0), Padding = new Thickness(0), CornerRadius = new CornerRadius(8), HorizontalContentAlignment = HorizontalAlignment.Stretch };
       void SelectionInk()
       {
         SetResourceReference(surface, Border.BackgroundProperty, entry.IsSelected ? "DeckSidebarSelectionBrush" : "DeckTransparentBrush");
         title.ClearValue(TextBlock.ForegroundProperty);
         SetResourceReference(title, TextBlock.ForegroundProperty, entry.IsSelected ? "DeckSidebarSelectionInkBrush" : "DeckInkBrush");
+        if (second is not null)
+        {
+          second.ClearValue(TextBlock.ForegroundProperty);
+          SetResourceReference(second, TextBlock.ForegroundProperty, entry.IsSelected ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
+        }
       }
       entry.RegisterPropertyChangedCallback(ListViewItem.IsSelectedProperty, (_, _) => SelectionInk());
       entry.Loaded += (_, _) => SelectionInk(); SelectionInk();
       AutomationProperties.SetName(entry, item.Title); categories.Items.Add(entry); group = item.Group;
     }
     if (categories.Items.Count == 0) categories.Items.Add(new ListViewItem { Content = new TextBlock { Text = "No matching settings", TextWrapping = TextWrapping.Wrap, Opacity = 0.7 }, IsEnabled = false });
-    categories.SelectedItem = categories.Items.OfType<ListViewItem>().FirstOrDefault(item => item.Tag as string == SelectedCategory);
+    var owner = SettingsNavigation.ListOwner(SelectedCategory);
+    categories.SelectedItem = categories.Items.OfType<ListViewItem>().FirstOrDefault(item => item.Tag as string == owner);
     selecting = false;
+    UpdateProfileRow();
   }
 
+  // The profile row says who is signed in; signed out it says "Sign in".
+  private void UpdateProfileRow()
+  {
+    if (railPicture is null || railName is null) return;
+    var snapshot = legacy.CloudAccount.Snapshot;
+    var signedIn = snapshot.Phase is CloudPhase.SignedIn or CloudPhase.Paused or CloudPhase.NotAllowed;
+    var name = signedIn ? CloudProfile.FromSnapshot(snapshot).Name : "Sign in";
+    railName.Text = name;
+    railPicture.DisplayName = signedIn ? name : "";
+    railPicture.Initials = signedIn ? CloudProfile.Initials(name) : "";
+  }
+
+  // Appearance (Mac, 15 Nov): one group, three picture tiles; the chosen one is ringed in the accent colour.
+  // The terminal font and colours left this page; their saved values keep working.
   private FrameworkElement AppearancePage()
   {
-    var choices = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
-    var options = new[] { ("Light", ElementTheme.Light), ("Dark", ElementTheme.Dark), ("Match Windows", ElementTheme.Default) };
-    var buttons = new List<ToggleButton>();
+    var tiles = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(12, 16, 12, 16) };
+    var options = new[] { ("Match Windows", ElementTheme.Default), ("Light", ElementTheme.Light), ("Dark", ElementTheme.Dark) };
+    var rings = new List<Border>();
     void RefreshChoice()
     {
-      for (var i = 0; i < buttons.Count; i++) buttons[i].IsChecked = readTheme() == options[i].Item2;
+      for (var i = 0; i < rings.Count; i++)
+      {
+        var chosen = readTheme() == options[i].Item2;
+        rings[i].BorderThickness = new Thickness(chosen ? 2 : 1);
+        rings[i].BorderBrush = (Brush)ShellTheme.Resource(rings[i], chosen ? "AccentFillColorDefaultBrush" : "DeckDividerBrush");
+      }
     }
     foreach (var (label, theme) in options)
     {
-      var button = new ToggleButton { Content = label, Padding = new Thickness(10, 4, 10, 4), MinHeight = 32 };
-      AutomationProperties.SetName(button, label + " appearance");
-      button.Click += (_, _) =>
+      var ring = new Border { Width = 150, Height = 96, CornerRadius = new CornerRadius(8), Padding = new Thickness(2), Child = ThemePicture(theme) };
+      var words = new TextBlock { Text = label, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Center };
+      var stack = new StackPanel { Spacing = 8, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+      stack.Children.Add(ring); stack.Children.Add(words);
+      var tile = new ContentControl { Content = stack, IsTabStop = true, UseSystemFocusVisuals = true };
+      AutomationProperties.SetName(tile, label + " appearance");
+      void Choose()
       {
         try { saveStatus.Text = "Saving…"; changeTheme(theme); saveStatus.IsOpen = false; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         { saveStatus.Text = "The appearance could not be saved. Please try again."; }
         RefreshChoice();
-      };
-      buttons.Add(button); choices.Children.Add(button);
+      }
+      tile.Tapped += (_, _) => Choose();
+      tile.KeyDown += (_, args) => { if (args.Key is Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space) { Choose(); args.Handled = true; } };
+      rings.Add(ring); tiles.Children.Add(tile);
     }
-    RefreshChoice();
-    choices.ActualThemeChanged += (_, _) => RefreshChoice();
-    var content = new StackPanel { Spacing = 16 }; content.Children.Add(SettingRow("Theme", "Use the system appearance, or choose light or dark.", choices)); content.Children.Add(new TerminalAppearancePage(legacy.TerminalAppearance));
-    return Page("Appearance", "Window and terminal", content);
+    tiles.Loaded += (_, _) => RefreshChoice();
+    tiles.ActualThemeChanged += (_, _) => RefreshChoice();
+    return Page(GroupRows([tiles]));
   }
 
-  private static FrameworkElement AboutPage() => Page("About", "App", SettingRow(TerminalDeck.Core.Brand.Name,
-    // The installed package's version, the same build General and Windows show (never the 1.0.0 assembly stamp).
-    "App build " + Services.WindowsUpdateStatus.Version(), null));
-
-  internal static FrameworkElement Page(string title, string group, FrameworkElement card)
+  // A small drawing of the app's window in that look: a rail and a page with three lines.
+  private static FrameworkElement ThemePicture(ElementTheme theme)
   {
-    var stack = new StackPanel { Spacing = 12, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 0, 20, 20) };
-    stack.Children.Add(PageHead(title));
-    stack.Children.Add(new TextBlock { Text = group, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(8, 20, 0, 0) }); stack.Children.Add(card);
+    static SolidColorBrush Grey(byte value) => new(Windows.UI.Color.FromArgb(255, value, value, value));
+    static Grid Sketch(bool dark)
+    {
+      var window = new Grid();
+      window.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); window.ColumnDefinitions.Add(new() { Width = new GridLength(3, GridUnitType.Star) });
+      window.Children.Add(new Border { Background = Grey(dark ? (byte)0x2B : (byte)0xE9) });
+      var content = new StackPanel { Spacing = 5, Padding = new Thickness(8), Background = Grey(dark ? (byte)0x1C : (byte)0xFF) };
+      for (var i = 0; i < 3; i++)
+        content.Children.Add(new Border { Height = 6, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 0, i == 0 ? 0 : 16, 0), Background = Grey(dark ? (byte)0x45 : (byte)0xD6) });
+      Grid.SetColumn(content, 1); window.Children.Add(content);
+      return window;
+    }
+    FrameworkElement picture;
+    if (theme == ElementTheme.Default)
+    {
+      var halves = new Grid();
+      halves.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); halves.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+      var light = Sketch(false); var dark = Sketch(true); Grid.SetColumn(dark, 1);
+      halves.Children.Add(light); halves.Children.Add(dark); picture = halves;
+    }
+    else picture = Sketch(theme == ElementTheme.Dark);
+    return new Border { CornerRadius = new CornerRadius(6), Child = picture };
+  }
+
+  private static FrameworkElement AboutPage() => Page(GroupRows([SettingRow(TerminalDeck.Core.Brand.Name, "",
+    // The installed package's version, the same build General and Windows show (never the 1.0.0 assembly stamp).
+    StateText(Services.WindowsUpdateStatus.Version()))]));
+
+  // One scroll area fills the right side (its bar at the window's edge); the column is centred.
+  internal static FrameworkElement Page(FrameworkElement content)
+  {
+    var stack = new StackPanel { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+    stack.Children.Add(content);
     return new ScrollViewer { Content = stack, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
   }
 
-  internal static FrameworkElement PageHead(string title) => new Border { Height = 52, Child = new TextBlock { Text = title, FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center } };
+  // Kept for older callers; pages no longer draw a heading of their own (the top bar is the heading).
+  internal static FrameworkElement PageHead(string title) => new Border { Height = 0, Visibility = Visibility.Collapsed, Child = new TextBlock { Text = title } };
 
+  // A group's title, 8 above its group; an explanation sits behind ONE info button beside it.
+  internal static FrameworkElement GroupTitle(string text, string? help = null)
+  {
+    var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(8, 0, 0, -12) };
+    line.Children.Add(new TextBlock { Text = text, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+    if (!string.IsNullOrWhiteSpace(help)) line.Children.Add(InfoButton(text, help));
+    return line;
+  }
+
+  // The info button: a click (never hover) opens the explanation.
+  internal static Button InfoButton(string title, string help)
+  {
+    var info = new Button { Content = new DeckIcon { Glyph = "", FontSize = 12 }, Padding = new Thickness(2), MinWidth = 20, MinHeight = 20, CornerRadius = new CornerRadius(8), VerticalAlignment = VerticalAlignment.Center };
+    info.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
+    ToolTipService.SetToolTip(info, "About " + title); AutomationProperties.SetName(info, "About " + title);
+    info.Flyout = new Flyout { Content = new TextBlock { Text = help, MaxWidth = 300, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
+    return info;
+  }
+
+  // ONE short state word at a row's right ("Signed in", "Up to date", "Not allowed").
+  internal static TextBlock StateText(string text, string brush = "DeckSecondaryInkBrush")
+  {
+    var state = new TextBlock { Text = text, FontSize = 13, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    state.SetResourceReference(TextBlock.ForegroundProperty, brush);
+    return state;
+  }
+
+  // A small coloured tile with a white glyph, at the start of a row.
+  internal static FrameworkElement IconTile(string glyph, string brush, double size = 26)
+  {
+    var tile = new Border { Width = size, Height = size, CornerRadius = new CornerRadius(6), VerticalAlignment = VerticalAlignment.Center, Child = new DeckIcon { Glyph = glyph, FontSize = 14, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) } };
+    tile.SetResourceReference(Border.BackgroundProperty, brush);
+    return tile;
+  }
+
+  // A row that opens a page: the whole row is the click target and ends with a chevron.
+  internal static FrameworkElement LinkRow(string title, string? detail, FrameworkElement? leading, string? state, Action open)
+  {
+    var row = new Grid { ColumnSpacing = 12, MinHeight = 44, Padding = new Thickness(12, 8, 12, 8), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+    row.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+    row.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+    if (leading is not null) row.Children.Add(leading);
+    var words = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
+    words.Children.Add(new TextBlock { Text = title, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis });
+    if (!string.IsNullOrWhiteSpace(detail)) words.Children.Add(StateText(detail));
+    if (words.Children.Count > 1) ((TextBlock)words.Children[1]).FontSize = 11;
+    SetColumn(words, 1); row.Children.Add(words);
+    if (!string.IsNullOrWhiteSpace(state)) { var value = StateText(state); SetColumn(value, 2); row.Children.Add(value); }
+    var chevron = new DeckIcon { Glyph = "", FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    chevron.SetResourceReference(Control.ForegroundProperty, "DeckSecondaryInkBrush");
+    SetColumn(chevron, 3); row.Children.Add(chevron);
+    var link = new ContentControl { Content = row, IsTabStop = true, UseSystemFocusVisuals = true, HorizontalContentAlignment = HorizontalAlignment.Stretch, HorizontalAlignment = HorizontalAlignment.Stretch };
+    AutomationProperties.SetName(link, title);
+    link.Tapped += (_, _) => open();
+    link.KeyDown += (_, args) => { if (args.Key is Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space) { open(); args.Handled = true; } };
+    return link;
+  }
+
+  // Title, its info button (the help is shown ONCE, behind the button: no sentence under the title), and ONE control.
   internal static FrameworkElement SettingRow(string title, string help, FrameworkElement? control)
   {
     var row = new Grid { ColumnSpacing = 16 }; row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     var words = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center }; var label = new Grid { ColumnSpacing = 4, HorizontalAlignment = HorizontalAlignment.Left };
     label.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); label.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
     label.Children.Add(new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap, FontSize = 13, VerticalAlignment = VerticalAlignment.Center });
-    if (!string.IsNullOrWhiteSpace(help))
-    {
-      var info = new Button { Content = new DeckIcon { Glyph = "\uE946", FontSize = 12 }, Padding = new Thickness(2), MinWidth = 20, MinHeight = 20, CornerRadius = new CornerRadius(8) };
-      info.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
-      ToolTipService.SetToolTip(info, "About " + title); AutomationProperties.SetName(info, "About " + title); info.Flyout = new Flyout { Content = new TextBlock { Text = help, MaxWidth = 300, TextWrapping = TextWrapping.Wrap } }; SetColumn(info, 1); label.Children.Add(info);
-    }
+    if (!string.IsNullOrWhiteSpace(help)) { var info = InfoButton(title, help); SetColumn(info, 1); label.Children.Add(info); }
     words.Children.Add(label);
-    if (!string.IsNullOrWhiteSpace(help)) words.Children.Add(new TextBlock { Text = help, FontSize = 13, Opacity = 0.7, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis });
     row.Children.Add(words);
     if (control is not null) { control.HorizontalAlignment = HorizontalAlignment.Right; control.VerticalAlignment = VerticalAlignment.Center; AutomationProperties.SetName(control, title); SetColumn(control, 1); row.Children.Add(control); }
     if (control is not null)
@@ -276,7 +450,7 @@ public sealed partial class SettingsPanel : Grid
         control.MaxWidth = Math.Max(0, compact ? row.ActualWidth : Math.Min(280, row.ActualWidth * .48));
       };
     }
-    var card = new Border { Padding = new Thickness(12, 10, 12, 10), CornerRadius = new CornerRadius(10), Child = row, BorderThickness = new Thickness(0) };
+    var card = new Border { Padding = new Thickness(12, 10, 12, 10), CornerRadius = new CornerRadius(10), Child = row, BorderThickness = new Thickness(0), MinHeight = 44 };
     SetResourceReference(card, Border.BorderBrushProperty, "DeckDividerBrush");
     AutomationProperties.SetAutomationId(card, "settings.row"); SetResourceReference(card, Border.BackgroundProperty, "DeckCardBrush"); return card;
   }
@@ -318,9 +492,10 @@ public sealed partial class SettingsPanel : Grid
     }.ShowAsync();
   }
 
-  private static Button IconButton(string glyph, string name)
+  private static Button NavigationButton(string glyph, string name)
   {
-    var button = new Button { Content = new DeckIcon { Glyph = glyph, FontSize = 14 }, Width = 32, Height = 32, MinHeight = 32, Padding = new Thickness(4) };
+    var button = new Button { Content = new DeckIcon { Glyph = glyph, FontSize = 12 }, Width = 32, Height = 28, MinWidth = 32, MinHeight = 28, Padding = new Thickness(0) };
+    button.Style = (Style)Application.Current.Resources["DeckNavigationButtonStyle"];
     AutomationProperties.SetName(button, name); ToolTipService.SetToolTip(button, name); return button;
   }
 

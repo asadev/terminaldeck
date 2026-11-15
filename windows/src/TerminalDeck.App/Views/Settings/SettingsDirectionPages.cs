@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using TerminalDeck.App.Shell;
 using TerminalDeck.App.Views.Settings;
 using TerminalDeck.Core.Agents;
 using TerminalDeck.Core.Browser;
@@ -20,15 +21,22 @@ public sealed partial class SettingsPane
   public Action<bool>? SaveCloseConfirmation { get; set; }
   private Notices.CompactNotice directionStatus = new();
 
-  // Settings > Devices > "Paired with a code" opens the paired devices' own window.
+  // Settings > Advanced > "Paired with a code" opens the paired devices' own window.
   public Func<bool>? OpenPairedDevices { get; set; }
+  // The account the Settings list's profile row shows.
+  internal TerminalDeck.Core.Cloud.CloudAccountClient CloudAccount => runtime.Cloud;
+  // Devices and Cloud live inside Profile (Mac, 15 Nov); a device's own page is "device:<id>".
+  // "browser" is drawn for the Browser's own small settings window, never for the Settings list.
   internal FrameworkElement? DirectionPage(string id, Action<string> select) => id switch
   {
-    "profile" => new ProfilePage(runtime.Cloud),
-    "devices" => new DevicesPage(runtime.Cloud, () => runtime.Remote.Trust.List().Count, OpenPairedDevices),
+    "profile" => new ProfilePage(runtime.Cloud, select),
+    "personal" => new PersonalPage(runtime.Cloud),
+    "sign-in" => new SignInPage(runtime.Cloud),
+    _ when SettingsNavigation.IsDevice(id) => new DevicePage(runtime.Cloud, id[SettingsNavigation.DevicePrefix.Length..], select),
     "cloud" => new CloudPage(runtime.Cloud, runtime.CloudSync),
     "general" => GeneralSettings(),
     "notifications" => NotificationSettings(),
+    "privacy" => PrivacySettings(),
     "advanced" => AdvancedSettings(),
     "agent-defaults" => AgentSettings(),
     "browser" => BrowserSettings(),
@@ -46,7 +54,6 @@ public sealed partial class SettingsPane
     }
     var current = runtime.General.Read();
     var restore = Toggle(current.RestoreSessions, value => runtime.General.Save(runtime.General.Read() with { RestoreSessions = value }));
-    ToolTipService.SetToolTip(restore, "Choose whether saved tabs and windows reopen. Running sessions stay available either way.");
     // "When Terminal Deck opens" (Mac, 14 Nov): the New session page or where he left off. Windows has no Overview page.
     var opens = new ComboBox { MinWidth = 220, ItemsSource = TerminalDeck.Core.Sessions.OpensOn.OnWindows.Select(TerminalDeck.Core.Sessions.OpensOn.Label).ToArray() };
     opens.SelectedIndex = TerminalDeck.Core.Sessions.OpensOn.OnWindows.ToList().IndexOf(TerminalDeck.Core.Sessions.OpensOn.Normal(current.WhenOpens));
@@ -72,6 +79,12 @@ public sealed partial class SettingsPane
       AutomationProperties.SetName(picker, "Default permission mode for new chats");
       rows.Add(SettingsPanel.SettingRow("Permission mode for new chats", "New chats start in this mode. You can change it in any chat. An AI that lacks the mode uses its closest default.", picker));
     }
+    {
+      // Terminal text size (Mac, 15 Nov): moved here from Appearance; the same saved value.
+      var size = new NumberBox { Minimum = 9, Maximum = 24, SmallChange = 1, Value = runtime.TerminalAppearance.Preferences().FontSize, Width = 120, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+      size.ValueChanged += async (_, _) => { if (double.IsFinite(size.Value)) await DirectionRunAsync(() => { runtime.TerminalAppearance.Set(fontSize: (int)Math.Clamp(Math.Round(size.Value), 9, 24)); return Task.CompletedTask; }); };
+      rows.Add(SettingsPanel.SettingRow("Terminal text size", "The text size of terminal sessions. Open sessions change at once.", size));
+    }
     // One place per option (26 Oct): Settings checks; the side panel's card just above Settings holds
     // Restart to update (release 27), so it is not repeated here.
     var updates = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -84,56 +97,129 @@ public sealed partial class SettingsPane
       finally { check.IsEnabled = true; }
     };
     updates.Children.Add(check);
-    return DirectionPage("General", [
-      ("Sessions", rows.ToArray()),
-      ("This PC", new[] { SettingsPanel.SettingRow("Keep this PC awake while " + TerminalDeck.Core.Brand.Name + " is open", "Prevents idle sleep while the app is open. Closing the app releases its request; Windows still controls manual sleep and lid actions.", Toggle(current.KeepAwake, value => runtime.General.Save(runtime.General.Read() with { KeepAwake = value }))) }),
-      ("Updates", new[] { SettingsPanel.SettingRow("Check for updates", "", updates) })
+    return DirectionPage([
+      ("Sessions", null, rows.ToArray()),
+      ("This PC", null, new[] { SettingsPanel.SettingRow("Keep this PC awake while " + TerminalDeck.Core.Brand.Name + " is open", "Prevents idle sleep while the app is open. Closing the app releases its request; Windows still controls manual sleep and lid actions.", Toggle(current.KeepAwake, value => runtime.General.Save(runtime.General.Read() with { KeepAwake = value }))) }),
+      ("Updates", null, new[] { SettingsPanel.SettingRow("Check for updates", "", updates) })
     ]);
   }
 
-  private FrameworkElement NotificationSettings() => runtime.Notifications is null ? new TextBlock { Text = "Notification settings are starting…", TextWrapping = TextWrapping.Wrap } : new Notifications.NotificationPreferencesPage(runtime.Notifications);
+  // Notifications (Mac, 15 Nov): one group, three rows. Other saved choices keep working as they are.
+  private FrameworkElement NotificationSettings()
+  {
+    if (runtime.Notifications is not { } owner) return DirectionPage([(null, null, new[] { SettingsPanel.SettingRow("Notifications are starting…", "", null) })]);
+    ToggleSwitch Switch(bool value, Func<TerminalDeck.Core.Notifications.NotificationPreferences, bool, TerminalDeck.Core.Notifications.NotificationPreferences> change)
+    {
+      var toggle = new ToggleSwitch { IsOn = value, OnContent = "", OffContent = "", MinWidth = 40 };
+      toggle.Toggled += async (_, _) => await DirectionRunAsync(() => { owner.Save(change(owner.Read(), toggle.IsOn)); return Task.CompletedTask; });
+      return toggle;
+    }
+    var current = owner.Read();
+    var finished = Switch(current.Finished, (p, value) => p with { Finished = value });
+    // The sound pop-up sits at the switch's left while the switch is on.
+    var shown = current.Sound switch { "default" => "chime", "im" => "blip", "reminder" => "knock", var value => value };
+    var sound = new ComboBox { ItemsSource = new[] { "chime", "blip", "knock" }, SelectedItem = shown, MinWidth = 110, Visibility = current.PlaySound ? Visibility.Visible : Visibility.Collapsed };
+    sound.SelectionChanged += async (_, _) => { if (sound.SelectedItem is string selected) await DirectionRunAsync(() => { owner.Save(owner.Read() with { Sound = selected }); return Task.CompletedTask; }); };
+    AutomationProperties.SetName(sound, "Sound");
+    var play = Switch(current.PlaySound, (p, value) => p with { PlaySound = value });
+    play.Toggled += (_, _) => sound.Visibility = play.IsOn ? Visibility.Visible : Visibility.Collapsed;
+    var playing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+    playing.Children.Add(sound); playing.Children.Add(play);
+    var send = new Button { Content = "Send", VerticalAlignment = VerticalAlignment.Center };
+    send.Click += async (_, _) =>
+    {
+      send.IsEnabled = false;
+      try { directionStatus.Text = "Sending…"; directionStatus.Text = (await owner.TestAsync(false)).Message; }
+      catch (Exception ex) when (ex is not OutOfMemoryException) { directionStatus.Text = "Windows could not send a test notification. See Privacy."; }
+      finally { send.IsEnabled = true; }
+    };
+    return DirectionPage([(null, null, new[] {
+      SettingsPanel.SettingRow("When a session finishes", "Shows a Windows notification when a session finishes its work.", finished),
+      SettingsPanel.SettingRow("Play a sound", "Plays the chosen sound with a notification.", playing),
+      SettingsPanel.SettingRow("Test notification", "Sends one test notification to this PC.", send)
+    })]);
+  }
 
+  // Privacy (Mac, 15 Nov): this PC's own permissions, each with its real state and one small "Open".
+  private FrameworkElement PrivacySettings()
+  {
+    string? state = null; var allowed = false;
+    try
+    {
+      allowed = Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Setting == Microsoft.Windows.AppNotifications.AppNotificationSetting.Enabled;
+      state = allowed ? "Allowed" : "Not allowed";
+    }
+    catch (Exception ex) when (ex is not OutOfMemoryException) { state = null; }
+    var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+    if (state is not null) controls.Children.Add(SettingsPanel.StateText(state, allowed ? "DeckSecondaryInkBrush" : "DeckProjectOrangeBrush"));
+    controls.Children.Add(DirectionAction("Open", async () =>
+    {
+      if (!await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings:notifications"))) throw new InvalidOperationException("Windows could not open its notification settings.");
+    }));
+    return DirectionPage([("This PC's permissions",
+      "Windows decides what " + TerminalDeck.Core.Brand.Name + " may do on this PC. Open takes you to the place in Windows Settings where you can change it.",
+      new[] { SettingsPanel.SettingRow("Notifications", "", controls) })]);
+  }
+
+  // Agents (Mac, 15 Nov): one kind at a time, chosen at the top; three groups, every row title + control + info.
+  private AgentCategory agentCategory = AgentCategory.Agent;
   private FrameworkElement AgentSettings()
   {
-    var groups = new List<(string, FrameworkElement[])>();
-    foreach (var template in runtime.Agents.Templates())
+    var templates = runtime.Agents.Templates();
+    if (templates.Count == 0) return DirectionPage([]);
+    if (!templates.Any(t => t.Category == agentCategory)) agentCategory = templates[0].Category;
+    var template = templates.Single(t => t.Category == agentCategory);
+    var category = template.Category;
+    // Each control saves through AgentService's validation; defaults never rewrite an active hand.
+    AgentTemplate Current() => runtime.Agents.Templates().Single(t => t.Category == category);
+    var kinds = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+    foreach (var kind in templates.Select(t => t.Category))
     {
-      // Each control saves through AgentService's validation; defaults never rewrite an active hand.
-      AgentTemplate Current() => runtime.Agents.Templates().Single(t => t.Category == template.Category);
-      var seat = IntegerSetting(template.MaxHandsPerSeat, 1, 12, n => runtime.Agents.SaveTemplate(Current() with { MaxHandsPerSeat = n }));
-      var project = IntegerSetting(template.MaxHandsPerProject, 1, 60, n => runtime.Agents.SaveTemplate(Current() with { MaxHandsPerProject = n }));
-      var limit = IntegerSetting(template.CardLimit, 500, 40000, n => runtime.Agents.SaveTemplate(Current() with { CardLimit = n }));
-      var helper = new ComboBox { MinWidth = 140 };
-      foreach (var provider in new[] { "claude", "codex", "gemini" })
-      {
-        var item = new ComboBoxItem { Content = AgentSeats.ProviderName(provider), Tag = provider };
-        helper.Items.Add(item); if (provider == template.HelperAI) helper.SelectedItem = item;
-      }
-      helper.SelectionChanged += async (_, _) => await DirectionRunAsync(() => { runtime.Agents.SaveTemplate(Current() with { HelperAI = (string)((ComboBoxItem)helper.SelectedItem).Tag }); return Task.CompletedTask; });
-      var parts = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-      foreach (var (key, label) in new[] { ("card", "Card"), ("notes", "Notes"), ("helper", "Helper instructions") })
-      {
-        var enabled = template.Parts.IsDefault ? key is "card" or "notes" : template.Parts.Contains(key);
-        var part = new CheckBox { Content = label, IsChecked = enabled };
-        part.Click += async (_, _) => await DirectionRunAsync(() => {
-          var current = Current(); var saved = current.Parts.IsDefault ? System.Collections.Immutable.ImmutableArray.Create("card", "notes") : current.Parts;
-          runtime.Agents.SaveTemplate(current with { Parts = part.IsChecked == true ? saved.Where(p => p != key).Append(key).ToImmutableArray() : saved.Where(p => p != key).ToImmutableArray() });
-          return Task.CompletedTask;
-        });
-        parts.Children.Add(part);
-      }
-      groups.Add((template.Category.ToString(), [
-        SettingsPanel.SettingRow("Memory", "Parts included in a new hand’s instructions.", parts),
+      var choice = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton { Content = kind.ToString(), IsChecked = kind == category, Padding = new Thickness(12, 5, 12, 5), MinHeight = 30 };
+      AutomationProperties.SetName(choice, kind.ToString());
+      choice.Click += (_, _) => { agentCategory = kind; RefreshDirection("agent-defaults"); };
+      kinds.Children.Add(choice);
+    }
+    var chooser = new Border { Child = kinds, CornerRadius = new CornerRadius(8), Padding = new Thickness(3), HorizontalAlignment = HorizontalAlignment.Center };
+    chooser.SetResourceReference(Border.BackgroundProperty, "DeckControlBrush");
+    var seat = IntegerSetting(template.MaxHandsPerSeat, 1, 12, n => runtime.Agents.SaveTemplate(Current() with { MaxHandsPerSeat = n }));
+    var project = IntegerSetting(template.MaxHandsPerProject, 1, 60, n => runtime.Agents.SaveTemplate(Current() with { MaxHandsPerProject = n }));
+    var limit = IntegerSetting(template.CardLimit, 500, 40000, n => runtime.Agents.SaveTemplate(Current() with { CardLimit = n }));
+    var helper = new ComboBox { MinWidth = 140 };
+    foreach (var provider in new[] { "claude", "codex", "gemini" })
+    {
+      var item = new ComboBoxItem { Content = AgentSeats.ProviderName(provider), Tag = provider };
+      helper.Items.Add(item); if (provider == template.HelperAI) helper.SelectedItem = item;
+    }
+    helper.SelectionChanged += async (_, _) => await DirectionRunAsync(() => { runtime.Agents.SaveTemplate(Current() with { HelperAI = (string)((ComboBoxItem)helper.SelectedItem).Tag }); return Task.CompletedTask; });
+    var parts = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+    foreach (var (key, label) in new[] { ("card", "Card"), ("notes", "Notes"), ("helper", "Helper instructions") })
+    {
+      var enabled = template.Parts.IsDefault ? key is "card" or "notes" : template.Parts.Contains(key);
+      var part = new CheckBox { Content = label, IsChecked = enabled };
+      part.Click += async (_, _) => await DirectionRunAsync(() => {
+        var current = Current(); var saved = current.Parts.IsDefault ? System.Collections.Immutable.ImmutableArray.Create("card", "notes") : current.Parts;
+        runtime.Agents.SaveTemplate(current with { Parts = part.IsChecked == true ? saved.Where(p => p != key).Append(key).ToImmutableArray() : saved.Where(p => p != key).ToImmutableArray() });
+        return Task.CompletedTask;
+      });
+      parts.Children.Add(part);
+    }
+    return DirectionPage([
+      ("Defaults", null, new[] {
+        SettingsPanel.SettingRow("Helper AI", "The coding AI used when a hand asks for help.", helper),
+        SettingsPanel.SettingRow("Helper model", "Model name used for new helpers. Empty means the AI's default.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Helper model", t => t.HelperModel, (t, value) => t with { HelperModel = value }, 160))),
+        SettingsPanel.SettingRow("Memory", "Parts included in a new hand's instructions.", parts)
+      }),
+      ("Budgets", null, new[] {
         SettingsPanel.SettingRow("Hands per seat", "Maximum simultaneous hands using one seat.", seat),
         SettingsPanel.SettingRow("Hands per project", "Maximum simultaneous hands in one project.", project),
-        SettingsPanel.SettingRow("Card limit", "Maximum number of characters kept in a seat card.", limit),
-        SettingsPanel.SettingRow("Helper AI", "The coding AI used when a hand asks for help.", helper),
-        SettingsPanel.SettingRow("Helper model", "Model name used for new helpers.", DirectionAction("Edit…", () => EditTemplateTextAsync(template.Category, "Helper model", t => t.HelperModel, (t, value) => t with { HelperModel = value }, 160))),
-        SettingsPanel.SettingRow("Shared instructions", "Instructions for every seat in this category, including future hires.", DirectionAction("Edit…", () => EditTemplateTextAsync(template.Category, "Shared instructions", t => t.Instructions, (t, value) => t with { Instructions = value }, 40000))),
-        SettingsPanel.SettingRow("Checklist", "Checks a hand follows before finishing its work.", DirectionAction("Edit…", () => EditTemplateTextAsync(template.Category, "Checklist", t => t.Checklist, (t, value) => t with { Checklist = value }, 20000)))
-      ]));
-    }
-    return DirectionPage("Agents", groups);
+        SettingsPanel.SettingRow("Card limit", "Maximum number of characters kept in a seat card.", limit)
+      }),
+      ("Behaviour", null, new[] {
+        SettingsPanel.SettingRow("Shared instructions", "Instructions for every seat of this kind, including future hires.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Shared instructions", t => t.Instructions, (t, value) => t with { Instructions = value }, 40000))),
+        SettingsPanel.SettingRow("Checklist", "Checks a hand follows before finishing its work.", DirectionAction("Edit…", () => EditTemplateTextAsync(category, "Checklist", t => t.Checklist, (t, value) => t with { Checklist = value }, 20000)))
+      })
+    ], chooser);
   }
 
   private FrameworkElement BrowserSettings()
@@ -168,11 +254,11 @@ public sealed partial class SettingsPane
           if (name is not null) { await browser.UpdateProfileAsync(profile.Id, name); RefreshDirection("browser"); }
         }));
         if (profile.Id != BrowserModel.DefaultProfileId) actions.Children.Add(DirectionAction("Delete…", async () => {
-          var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = "Delete " + profile.Name + "?", Content = "Close tabs using this profile first. Its cookies, website data and saved passwords will be deleted; this cannot be undone.", PrimaryButtonText = "Delete", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close };
+          var dialog = new ContentDialog { XamlRoot = DialogRoot, RequestedTheme = ActualTheme, Title = "Delete " + profile.Name + "?", Content = "Close tabs using this profile first. Its cookies, website data and saved passwords will be deleted; this cannot be undone.", PrimaryButtonText = "Delete", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close };
           if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
           await browser.DeleteProfileAsync(profile.Id); if (PrivacyBrowser is { } owner) await owner.Privacy.ForgetAsync(profile.Id); RefreshDirection("browser");
         }));
-        profiles.Add(SettingsPanel.SettingRow(profile.Name, "A separate set of logins and cookies. Shared tabs keep sign-ins between app launches.", actions));
+        profiles.Add(SettingsPanel.SettingRow(profile.Name, "", actions));
       }
       profiles.Add(SettingsPanel.SettingRow("Add a profile", "Keep work and personal sign-ins separate.", DirectionAction("Add…", async () => {
         var name = await DirectionTextAsync("Add a profile", "", 40);
@@ -181,7 +267,8 @@ public sealed partial class SettingsPane
     }
     else profiles.Add(SettingsPanel.SettingRow("Profiles", "Open Browser to manage profiles and sign-ins.", null));
     if (PrivacyBrowser is { } privacyBrowser) profiles.Add(new BrowserPrivacyPage(privacyBrowser));
-    var result = DirectionPage("Browser", [("Pages", rows.ToArray()), ("Cookies and sign-ins", profiles.ToArray())]);
+    var result = DirectionPage([("Pages", null, rows.ToArray()),
+      ("Cookies and sign-ins", "Each profile is a separate set of logins and cookies. Shared tabs keep sign-ins between app launches.", profiles.ToArray())]);
     if (loadProblem is not null) directionStatus.Text = loadProblem;
     return result;
   }
@@ -198,9 +285,9 @@ public sealed partial class SettingsPane
       rows.Add(SettingsPanel.SettingRow("Connect a task system", "Choose an existing HTTP MCP server that offers tasks.", DirectionAction("Connect…", () => EditTaskSystemAsync(null))));
     }
     else rows.Add(SettingsPanel.SettingRow("Connected task systems", "Task services are starting. Reopen this page when they are ready.", null));
-    return DirectionPage("Tasks", [
-      ("Task agents", new[] { SettingsPanel.SettingRow("Agent defaults", "Shared instructions, helper AI and hand limits live in Agents.", DirectionAction("Agents", () => { select("agent-defaults"); return Task.CompletedTask; })) }),
-      ("Connected task systems", rows.ToArray())
+    return DirectionPage([
+      ("Task agents", null, new[] { SettingsPanel.SettingRow("Agent defaults", "Shared instructions, helper AI and hand limits live in Agents.", DirectionAction("Agents", () => { select("agent-defaults"); return Task.CompletedTask; })) }),
+      ("Connected task systems", null, rows.ToArray())
     ]);
   }
 
@@ -208,14 +295,14 @@ public sealed partial class SettingsPane
   {
     var connected = runtime.ConnectedTasks ?? throw new InvalidOperationException("Task services are not ready.");
     var servers = await connected.ServersAsync();
-    if (servers.Count == 0) throw new InvalidOperationException("Add an HTTP server under Outside AI apps → MCP servers first.");
+    if (servers.Count == 0) throw new InvalidOperationException("Add an HTTP server under AI apps → MCP servers first.");
     var server = new ComboBox { Header = "MCP server", ItemsSource = servers, DisplayMemberPath = "Name", SelectedItem = servers.FirstOrDefault(s => s.Id == system?.ServerId) ?? servers[0], HorizontalAlignment = HorizontalAlignment.Stretch };
     var projects = runtime.Projects.List().ToArray();
     var project = new ComboBox { Header = "Project", ItemsSource = projects, DisplayMemberPath = "Name", SelectedItem = projects.FirstOrDefault(p => p.Id == system?.ProjectId) ?? projects.FirstOrDefault(), HorizontalAlignment = HorizontalAlignment.Stretch };
     var changes = new ToggleSwitch { Header = "Allow changes", IsOn = system?.AllowChanges ?? false };
     var note = new TextBlock { Text = "The existing MCP server keeps its sign-in. Changes use the calling AI’s approval rules.", TextWrapping = TextWrapping.Wrap, MaxWidth = 400 };
     var body = new StackPanel { Spacing = 12 }; foreach (var control in new FrameworkElement[] { note, server, project, changes }) body.Children.Add(control);
-    var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = system?.Name ?? "Connect a task system", Content = body, PrimaryButtonText = "Save", CloseButtonText = "Cancel" };
+    var dialog = new ContentDialog { XamlRoot = DialogRoot, RequestedTheme = ActualTheme, Title = system?.Name ?? "Connect a task system", Content = body, PrimaryButtonText = "Save", CloseButtonText = "Cancel" };
     dialog.PrimaryButtonClick += async (_, args) => {
       var deferral = args.GetDeferral();
       try {
@@ -232,10 +319,10 @@ public sealed partial class SettingsPane
   private async Task EditTemplateTextAsync(AgentCategory category, string title, Func<AgentTemplate, string> read, Func<AgentTemplate, string, AgentTemplate> update, int maximum)
   {
     var old = runtime.Agents.Templates().Single(t => t.Category == category);
-    var text = new TextBox { Text = read(old), AcceptsReturn = maximum > 160, TextWrapping = TextWrapping.Wrap, MaxLength = maximum, MinWidth = 280, MaxHeight = 300 };
+    var text = new TextBox { Text = read(old), AcceptsReturn = maximum > 160, TextWrapping = TextWrapping.Wrap, MaxLength = maximum, MinWidth = 280, MaxHeight = 300, PlaceholderText = "Default" };
     var note = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 400 };
     var body = new StackPanel { Spacing = 12 }; body.Children.Add(text); body.Children.Add(note);
-    var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = title, Content = body, PrimaryButtonText = "Save", CloseButtonText = "Cancel" };
+    var dialog = new ContentDialog { XamlRoot = DialogRoot, RequestedTheme = ActualTheme, Title = title, Content = body, PrimaryButtonText = "Save", CloseButtonText = "Cancel" };
     dialog.PrimaryButtonClick += (_, args) => {
       try { runtime.Agents.SaveTemplate(update(runtime.Agents.Templates().Single(t => t.Category == category), text.Text)); }
       catch (Exception ex) when (ex is not OutOfMemoryException) { args.Cancel = true; note.Text = ex.Message; }
@@ -246,7 +333,7 @@ public sealed partial class SettingsPane
   private async Task<string?> DirectionTextAsync(string title, string value, int maximum)
   {
     var input = new TextBox { Text = value, MaxLength = maximum, MinWidth = 280 };
-    var dialog = new ContentDialog { XamlRoot = XamlRoot, RequestedTheme = ActualTheme, Title = title, Content = input, PrimaryButtonText = "Save", CloseButtonText = "Cancel", IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(value) };
+    var dialog = new ContentDialog { XamlRoot = DialogRoot, RequestedTheme = ActualTheme, Title = title, Content = input, PrimaryButtonText = "Save", CloseButtonText = "Cancel", IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(value) };
     input.TextChanged += (_, _) => dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(input.Text);
     return await dialog.ShowAsync() == ContentDialogResult.Primary ? input.Text.Trim() : null;
   }
@@ -278,13 +365,20 @@ public sealed partial class SettingsPane
   private void RefreshDirection(string id) => DirectionRefreshRequested?.Invoke(id);
   private static TextBlock ReadOnly(string value) => new() { Text = value, FontSize = 12, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center };
 
-  private FrameworkElement DirectionPage(string title, IEnumerable<(string Heading, FrameworkElement[] Rows)> groups)
+  // The page last drawn here: its window is where a dialog of this page opens (Settings, or the Browser's own window).
+  private FrameworkElement? directionSurface;
+  private XamlRoot? DialogRoot => directionSurface?.XamlRoot ?? XamlRoot;
+
+  // One centred column; no heading inside the page (the top bar is the heading); groups apart by space; a group's
+  // explanation sits behind the info button beside its title.
+  private FrameworkElement DirectionPage(IEnumerable<(string? Heading, string? Help, FrameworkElement[] Rows)> groups, FrameworkElement? top = null)
   {
-    var body = new StackPanel { Spacing = 12, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 0, 20, 20) };
-    body.Children.Add(SettingsPanel.PageHead(title));
-    foreach (var (heading, rows) in groups)
+    var body = new StackPanel { Spacing = 20, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20, 8, 20, 20) };
+    if (top is not null) body.Children.Add(top);
+    foreach (var (heading, help, rows) in groups)
     {
-      body.Children.Add(new TextBlock { Text = heading, FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(8, 20, 0, 0) });
+      if (rows.Length == 0) continue;
+      if (!string.IsNullOrWhiteSpace(heading)) body.Children.Add(SettingsPanel.GroupTitle(heading, help));
       body.Children.Add(SettingsPanel.GroupRows(rows));
     }
     var surface = new Grid();
@@ -292,6 +386,7 @@ public sealed partial class SettingsPane
     directionStatus = new Notices.CompactNotice { Scope = surface };
     AutomationProperties.SetLiveSetting(directionStatus, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
     surface.Children.Add(directionStatus);
+    directionSurface = surface;
     return surface;
   }
 }
