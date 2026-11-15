@@ -23,7 +23,10 @@ public static class WindowsReleaseFeed
   public static readonly Uri FeedUri = new("https://github.com/" + GitHubReleaseChannel.Repository + "/releases/download/" + ChannelTag + "/" + FeedFile);
   public static readonly Uri SignatureUri = new(FeedUri.AbsoluteUri + ".sig");
   // Raw 32-byte Ed25519 public keys, base64. Windows-only; a new key is added one release before it signs.
-  public static readonly IReadOnlyList<string> PublicKeys = ["dEXooWaSwDx1EgMRuWdIJGeZ400ZsMzhqVwCh/5L+Rk="];
+  //   dEXoo...: the release workflow's key (repository secret WINDOWS_UPDATE_ED25519_KEY).
+  //   mrjzZ...: Umer Malik's Windows release PC (added 14 Nov 2026, before any app carried this feed), for
+  //             Windows releases built and signed on that PC; its private half never leaves it.
+  public static readonly IReadOnlyList<string> PublicKeys = ["dEXooWaSwDx1EgMRuWdIJGeZ400ZsMzhqVwCh/5L+Rk=", "mrjzZwebMa2LQ2E6HcfKoKs9ZRrD99dNKUbNK1NgzjE="];
 
   // A Windows feed file: signed by a Windows key AND marked as the Windows channel's own file.
   public static GitHubReleaseChannel.WindowsRelease Read(byte[] feed, string signatureText, IReadOnlyList<string>? keys = null)
