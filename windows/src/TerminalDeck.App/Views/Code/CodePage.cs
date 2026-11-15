@@ -196,7 +196,8 @@ public abstract class CodePage : Grid
     finally { updatingSwitcher = false; }
     foreach (var root in RootList) if (!expanded.ContainsKey(root.Key)) expanded[root.Key] = root.Key == Active?.Key;
     if (Active is not null && focusActive) expanded[Active.Key] = true;
-    groups.Children.Clear(); groupViews.Clear(); summaries.Clear();
+    groups.Children.Clear(); groupViews.Clear(); summaries.Clear(); backupLines.Clear();
+    if (ShowsBackup) _ = LoadBackupAsync(refresh: false);
     if (RootList.Count == 0)
     {
       groups.Children.Add(CodeUi.Card(CodeUi.Words("No open projects yet. Open a project or start a session in a folder, and it shows up here.", muted: true)));
@@ -236,8 +237,70 @@ public abstract class CodePage : Grid
     };
     head.ContextFlyout = GroupMenu(root);
     shell.Children.Add(head); SetRow(content, 1); shell.Children.Add(content);
+    if (ShowsBackup && root.ProjectId is { } projectId && RootList.First(r => r.ProjectId == projectId).Key == root.Key)
+    {
+      // Lane K: the project's one backup line and its one action, under its name (first folder of the project only).
+      shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+      var line = new Border { Margin = new Thickness(30, 0, 8, 2) };
+      backupLines[projectId] = line; SetRow(line, 1); SetRow(content, 2); shell.Children.Add(line);
+      if (backupReport is not null) FillBackupLine(projectId);
+    }
     if (open) _ = FillGroupAsync(root, content);
     return shell;
+  }
+
+  // ---- Lane K: code backup to GitHub (the Mac's Code page, on the GitHub page: one line and one action per project) ----
+
+  private bool ShowsBackup => this is GitHubPage && CodeBackupHolder.Installed is not null;
+  private readonly Dictionary<string, Border> backupLines = [];
+  private CodeBackupReport? backupReport;
+  private readonly HashSet<string> backupWorking = [];
+
+  private async Task LoadBackupAsync(bool refresh)
+  {
+    if (CodeBackupHolder.Installed is not { } actions) return;
+    try { backupReport = await CodeBackupTools.ReadAsync(actions, refresh); }
+    catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException) { return; }
+    foreach (var projectId in backupLines.Keys.ToList()) FillBackupLine(projectId);
+  }
+
+  private void FillBackupLine(string projectId)
+  {
+    if (!backupLines.TryGetValue(projectId, out var holder)) return;
+    var row = backupReport?.Projects.FirstOrDefault(p => p.Id == projectId);
+    // Signed out: the GitHub page already says so once; no line per project.
+    if (row is null || backupReport?.SignedInToGitHub == false) { holder.Child = null; return; }
+    var now = DateTimeOffset.Now;
+    var last = CodeBackupWords.LastBackedUp(row, now);
+    var words = row.Note is { Length: > 0 } note && !note.StartsWith("Backed up", StringComparison.Ordinal) ? note : CodeBackupWords.Summary(row, now);
+    var text = CodeUi.Words(last.Length > 0 && row.State == CodeBackupState.BackedUp ? last : words, 11.5, muted: !row.NeedsAttention, wrap: false);
+    ToolTipService.SetToolTip(text, string.Join("\n", new[] { words, last, CodeBackupWords.HomeLine(row) }.Where(s => !string.IsNullOrEmpty(s)).Distinct()));
+    UIElement action = new TextBlock();
+    if (backupWorking.Contains(projectId)) action = new ProgressRing { IsActive = true, Width = 14, Height = 14 };
+    else if (row.State == CodeBackupState.CodeNotHere && row.GetFrom is not null) action = BackupButton(projectId, CodeBackupWords.GetTheCode, (a, say) => a.GetCode(projectId, say));
+    else if (row.OffersBackUp) action = BackupButton(projectId, CodeBackupWords.BackUpNow, (a, say) => a.BackUp(projectId, byHand: true, progress: say));
+    holder.Child = CodeUi.Columns((text, CodeUi.Star), (action, CodeUi.Auto));
+  }
+
+  private Button BackupButton(string projectId, string title, Func<CodeBackupActions, Action<string>, Task<CodeBackupActions.Outcome>> run)
+  {
+    var button = CodeUi.Action(title, async () =>
+    {
+      if (CodeBackupHolder.Installed is not { } actions || !backupWorking.Add(projectId)) return;
+      FillBackupLine(projectId);
+      try
+      {
+        var outcome = await run(actions, say => DispatcherQueue.TryEnqueue(() =>
+        {
+          if (backupLines.TryGetValue(projectId, out var holder) && holder.Child is Grid grid && grid.Children.FirstOrDefault() is TextBlock line) line.Text = say;
+        }));
+        if (!outcome.Ok) ShowProblem(outcome.Line, InfoBarSeverity.Warning);
+      }
+      finally { backupWorking.Remove(projectId); }
+      await LoadBackupAsync(refresh: false);
+    });
+    button.MinHeight = 24; button.Padding = new Thickness(8, 2, 8, 2); button.FontSize = 12;
+    return button;
   }
   private MenuFlyout GroupMenu(CodeRoot root)
   {
@@ -246,6 +309,31 @@ public abstract class CodePage : Grid
     Add("Show in Explorer", () => { CodeUi.Reveal(root.Folder); return Task.CompletedTask; });
     Add("Copy folder path", () => { CodeUi.Copy(root.Folder); return Task.CompletedTask; });
     Add("Open a terminal here", () => Host.OpenTerminalAsync(root, root.Folder));
+    if (ShowsBackup && root.ProjectId is { } projectId)
+    {
+      // Lane K: Automatic / Manual / Off sits behind this click, not on the row.
+      var modes = new MenuFlyoutSubItem { Text = "Code backup", FontSize = 13 };
+      menu.Items.Add(modes);
+      menu.Opening += (_, _) =>
+      {
+        modes.Items.Clear();
+        var row = backupReport?.Projects.FirstOrDefault(p => p.Id == projectId);
+        modes.IsEnabled = row is not null && backupReport?.SignedInToGitHub != false;
+        if (row is null) return;
+        foreach (var mode in row.ModeChoices)
+        {
+          var item = new RadioMenuFlyoutItem { Text = CodeBackupWordsOf.Word(mode), IsChecked = row.Mode == mode, GroupName = "backup-" + projectId, FontSize = 13, MinHeight = 28 };
+          if (mode == CodeBackupMode.Automatic) ToolTipService.SetToolTip(item, backupReport?.AutomaticWaits == true ? CodeBackupWords.AutomaticWaitsLine : CodeBackupActions.AutomaticRule);
+          item.Click += async (_, _) => await GuardAsync(async () =>
+          {
+            if (CodeBackupHolder.Installed is not { } actions) return;
+            await actions.SetMode(projectId, mode);
+            await LoadBackupAsync(refresh: false);
+          });
+          modes.Items.Add(item);
+        }
+      };
+    }
     return menu;
   }
   protected async Task FillGroupAsync(CodeRoot root, StackPanel content)
@@ -279,7 +367,12 @@ public abstract class CodePage : Grid
   }
   protected void ClearProblem() => Messages.Children.Clear();
   protected void UpdateSummary(CodeRoot root) { if (summaries.TryGetValue(root.Key, out var holder)) holder.Child = GroupSummary(root); }
-  public async Task RefreshAllAsync() { ClearProblem(); Rebuild(focusActive: false); await OnShownAsync(); }
+  public async Task RefreshAllAsync()
+  {
+    ClearProblem(); Rebuild(focusActive: false);
+    if (ShowsBackup) await LoadBackupAsync(refresh: true);
+    await OnShownAsync();
+  }
 
   protected abstract Task FillAsync(CodeRoot root, StackPanel content);
   protected virtual UIElement GroupSummary(CodeRoot root) => new TextBlock();
