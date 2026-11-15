@@ -176,6 +176,20 @@ public sealed class CloudSyncStore : ICloudSyncMetadata
     outbox = outbox.Select(r => ids.Contains(r.OpId) ? r with { State = CloudOutboxState.Sealed } : r).ToList();
   });
   public CloudSealedSegment? Unacknowledged() { lock (gate) return segments.FirstOrDefault(s => s.ReceiptSeq is null && !s.Retired); }
+  /// The first pack waiting for its receipt that `allowed` takes (saved-password packs wait while their key is not here;
+  /// memory's go on behind them).
+  public CloudSealedSegment? Unacknowledged(Func<CloudSealedSegment, bool> allowed) { lock (gate) return segments.FirstOrDefault(s => s.ReceiptSeq is null && !s.Retired && allowed(s)); }
+  /// Queued records that can never be sent any more (saved passwords sealed under a replaced key generation) leave the
+  /// queue. Never a record that is sealed in a pack waiting for its receipt.
+  public void DropQueued(Func<CloudOutboxRow, bool> drop) => Change(() => outbox = outbox.Where(r => !(r.State is CloudOutboxState.Queued or CloudOutboxState.Parked && drop(r))).ToList());
+  /// The outbox's identity: made once with this store, gone with it (a lost or rebuilt queue gets a new one, so no
+  /// "already sent" mark of the old queue is ever trusted).
+  public string OutboxId()
+  {
+    if (Get("outboxId") is { } id) return id;
+    Set("outboxId", CloudBytes.NewTransportId());
+    return Get("outboxId")!;
+  }
   public CloudSealedSegment? Segment(string segmentId) { lock (gate) return segments.FirstOrDefault(s => s.Descriptor.SegmentId == segmentId); }
   public void MarkSentOnce(string segmentId) => Change(() => segments = segments.Select(s => s.Descriptor.SegmentId == segmentId ? s with { SentOnce = true } : s).ToList());
   /// The service's receipt for a pack: its records leave the queue. Older acknowledged packs keep only what the pull

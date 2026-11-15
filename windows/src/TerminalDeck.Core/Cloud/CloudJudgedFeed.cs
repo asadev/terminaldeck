@@ -149,7 +149,10 @@ public sealed class CloudFeedLedger
 }
 
 /// The loop for one storage class. Single caller at a time (the sync owner serialises pulls and trust presses).
-public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudFeed feed, ICloudPackSink sink, ICloudDeviceTrust trust, CloudFeedLedger ledger)
+/// `passOver` (saved passwords only): an entry this loop must not judge, with the reason recorded once (a pack sealed
+/// under a replaced key generation, or one the service shows locked to this PC); null = judge it.
+public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudFeed feed, ICloudPackSink sink, ICloudDeviceTrust trust, CloudFeedLedger ledger,
+  Func<CloudFeedEntry, string?>? passOver = null)
 {
   public const int PageLimit = 100;
   /// The feed's other storage class (saved passwords), read by its own position.
@@ -191,6 +194,7 @@ public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudF
         // Saved passwords share the feed but are not this loop's to judge: passed over without a record.
         if (entry.StorageClass == OtherClass) { Ledger.Pass(entry.Seq); continue; }
         if (entry.StorageClass != storageClass) { Ledger.Refuse(entry.Seq, entry.DeviceId, CloudPackVerdict.Malformed, entry.Seq); continue; }
+        if (passOver?.Invoke(entry) is { } reason) { Ledger.Refuse(entry.Seq, entry.DeviceId, reason, entry.Seq); continue; }
         await ReceiveAsync(entry, ct);
       }
     }
@@ -259,6 +263,7 @@ public sealed class CloudJudgedFeed(string subject, string storageClass, ICloudF
         if (entry.Seq > end) { cursor = end; break; }
         cursor = entry.Seq;
         if (entry.StorageClass != storageClass || entry.DeviceId is not { } device || !active.TryGetValue(device, out var first) || entry.Seq < first) continue;
+        if (passOver?.Invoke(entry) is { } why) { Ledger.Refuse(entry.Seq, entry.DeviceId, why, null); Ledger.Released(device, entry.Seq, 0); continue; }
         var stopped = false;
         switch (Judge(entry))
         {

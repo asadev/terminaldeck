@@ -49,6 +49,16 @@ public sealed class CloudDeviceKeys
     return new Dictionary<string, string> { ["X-TD-Device"] = DeviceId, ["X-TD-Time"] = timeMs.ToString(System.Globalization.CultureInfo.InvariantCulture), ["X-TD-Request"] = requestId, ["X-TD-Signature"] = CloudWire.Base64Url(signature) };
   }
 
+  /// Saved passwords: this device's ECDH with a sealed key's ephemeral key (the 32-byte x coordinate, as CryptoKit's
+  /// SharedSecret). The private scalar exists only for this call.
+  public byte[] SharedSecret(CloudPublicJwk peer)
+  {
+    using var wrap = ECDiffieHellman.Create(); wrap.ImportPkcs8PrivateKey(wrapping, out _);
+    var scalar = wrap.ExportParameters(true).D!;
+    try { return CloudP256.SharedSecret(scalar, peer); }
+    finally { CryptographicOperations.ZeroMemory(scalar); }
+  }
+
   /// This device's ES256 signature (raw r||s, 64 bytes) over `bytes`: the signed pack descriptor of the sync engine.
   public byte[] Sign(byte[] bytes)
   {
