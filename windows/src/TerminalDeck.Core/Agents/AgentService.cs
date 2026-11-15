@@ -6,7 +6,7 @@ using TerminalDeck.Core.Storage;
 
 namespace TerminalDeck.Core.Agents;
 
-public sealed class AgentService : IAgents
+public sealed class AgentService : IAgents, ICloudAgentEntries
 {
   private readonly object gate = new();
   private readonly IStateStore<AgentState> store;
@@ -118,6 +118,29 @@ public sealed class AgentService : IAgents
     }
     foreach (var p in projects.List().Where(p => p.Lead == "agent:" + id)) projects.SetLead(p.Id, null);
     Changed?.Invoke();
+  }
+  /// Cloud delete rule (lane D2): the agent's ENTRY only, whatever its status, because the removal is already in the Bin.
+  /// As with Remove, the seat and its notes outlive it and reports become independent; its id is retired until put back.
+  public void CloudRemoveEntry(string id)
+  {
+    lock (gate)
+    {
+      var old = Get(id);
+      if (state.Runs.Any(r => r.AgentId == id && r.State is AgentRunState.Starting or AgentRunState.Running or AgentRunState.Uncertain)) throw new ArgumentException("This agent still has a hand at work. End its session before removing it.");
+      Persist(state with { RetiredIds = state.RetiredIds.Contains(id) ? state.RetiredIds : state.RetiredIds.Add(id), Agents = state.Agents.Remove(old).Select(a => a.ReportsTo == id ? a with { ReportsTo = null } : a).ToImmutableArray() });
+    }
+    foreach (var p in projects.List().Where(p => p.Lead == "agent:" + id)) projects.SetLead(p.Id, null);
+    Changed?.Invoke();
+  }
+  /// Cloud delete rule: an agent put back from the Bin keeps its own id (it is no longer a former hire).
+  public SavedAgent CloudPutBack(SavedAgent agent)
+  {
+    lock (gate)
+    {
+      if (state.Agents.Any(a => a.Id == agent.Id)) throw new InvalidOperationException("An agent was just added with this ID. Choose a new ID and try again.");
+      if (state.RetiredIds.Contains(agent.Id)) Persist(state with { RetiredIds = state.RetiredIds.Remove(agent.Id) });
+    }
+    return Save(agent, createOnly: true);
   }
   public SavedAgent SaveInstructions(string id, string text, string? expectedText = null)
   {
