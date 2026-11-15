@@ -79,7 +79,7 @@ public interface ICloudContentsSource
 public static class CloudContentsWords
 {
   public const string OpenButton = "Manage files", WindowTitle = "Your Cloud", Bin = "Bin", Open = "Open", NothingYet = "Nothing of this kind is in your Cloud yet.",
-    SignedOut = "Sign in to see what is in your Cloud.", BinEmptiesAfter = "Items in the Bin are deleted for good after 30 days.";
+    SignedOut = "Sign in to see what is in your Cloud.", BinEmpty = "The Bin is empty.", BinEmptiesAfter = "Items in the Bin are deleted for good after 30 days.";
   public static string On(CloudItemState state) => state switch
   {
     CloudItemState.NotOnThisPc => CloudDeleteWords.NotOnThisPc,

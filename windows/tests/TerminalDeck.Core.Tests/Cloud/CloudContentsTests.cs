@@ -273,4 +273,42 @@ public sealed class CloudContentsTests
       Assert.DoesNotContain('/', row.Name);
     }
   }
+
+  private sealed class Records(Dictionary<string, CloudJson.Object> held) : ICloudRecordOwner
+  {
+    public IReadOnlyDictionary<string, CloudJson.Object> CloudRecords() => held;
+    public CloudRecordPlan CloudPlan(string entity, CloudJson.Object? cloud) => throw new NotSupportedException();
+    public void CloudWrite(string entity, CloudJson.Object value, CloudJson.Object? expecting) => throw new NotSupportedException();
+    public void CloudImported(IReadOnlyList<string> entities) { }
+  }
+
+  [Fact]
+  public async Task RecordsProvider_TasksWithStateInTheirProject_TheirText_EverywhereOnly()
+  {
+    var owner = new Records(new()
+    {
+      ["task:1"] = (CloudJson.Object)CloudJson.Parse("{\"title\":\"Ship it\",\"crmStatus\":\"To do\",\"instructions\":\"Do the thing\",\"projectRef\":{\"projectId\":\"p1\"},\"updatedAt\":77}"),
+      ["task-system:x"] = (CloudJson.Object)CloudJson.Parse("{\"name\":\"Board\"}"),
+    });
+    var source = new CloudRecordsContentsSource(CloudContentsKind.Tasks, owner, new Owner(), () => new Dictionary<string, string> { ["p1"] = "Garden" });
+    var row = (await source.RowsAsync(default)).Single();
+    Assert.Equal(("Ship it", "To do", 77L), (row.Name, row.Detail, row.ChangedAt));
+    Assert.Equal(["Garden"], row.Folder);
+    Assert.Equal(new CloudDeleteItem("task:1", "task", "Ship it"), source.DeleteItem(row));
+    Assert.Equal("Do the thing", await source.TextAsync(row, default));
+    var contents = CloudContentsReader.Make(() => true, Person, tasks: null);
+    contents.Register(source);
+    var place = (await contents.ReadAsync()).Places.Single();
+    Assert.Equal((false, true), (place.CanBinCloud, place.CanBinEverywhere));
+  }
+
+  [Fact]
+  public async Task Reader_RegistersOnlyWhatExists_PasswordsWithoutStoresHaveNoButtons()
+  {
+    var contents = CloudContentsReader.Make(() => true, Person, settings: () => [], passwordStores: () => []);
+    var places = (await contents.ReadAsync()).Places;
+    Assert.Equal([CloudContentsKind.Settings, CloudContentsKind.Passwords], places.Select(p => p.Kind));
+    Assert.False(places[1].CanBinEverywhere);
+    Assert.Equal("The Bin is empty.", CloudContentsWords.BinEmpty);
+  }
 }
