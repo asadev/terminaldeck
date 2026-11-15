@@ -105,6 +105,8 @@ public sealed partial class CloudMemoryAdapter : ICloudSyncAdapter, ICloudDelete
   /// The six memory kinds. The board's kind is taken only to acknowledge and ignore what an older device sends.
   public IReadOnlyCollection<string> Domains => rows.Append(LocalOnlyRow).Distinct().Select(CloudMemoryFormat.Domain).ToArray();
   public IReadOnlyList<CloudMemoryOtherVersion> OtherVersions => state.Others.ToArray();
+  /// This account's memory store (the announcements are shared memory settings written into it).
+  public IDeckMemoryCloudStore Store => memory;
   public int WaitingCount => state.Versions.Values.Count(v => v.Waiting is not null);
 
   /// The memory store for one signed-in account on this PC: `<account folder>/memory` (notes and tables),

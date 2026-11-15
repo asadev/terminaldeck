@@ -28,6 +28,8 @@ public sealed partial class CloudBootFilesAdapter
     del = options ?? new CloudBootFilesDeleteOptions(new CloudBin(Path.Combine(retained, "..", "bin")), new CloudMemorySlotInMemory());
     marks = new CloudDeleteState(del.State);
   }
+  /// The account's announcements (the delete-rule gate), set once by the composition after the memory store exists.
+  public void UseAnnounce(CloudAnnounce announce) => del = del with { Announce = announce };
   public CloudDeleteState DeleteMarks => marks;
   private bool GateOpen() => del.Announce?.DeleteRuleIsOpen() == true;
   private string DeviceName(string device) =>

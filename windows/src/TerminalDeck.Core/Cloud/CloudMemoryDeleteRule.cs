@@ -102,6 +102,8 @@ public sealed partial class CloudMemoryAdapter
     requests = del.Requests.Read() is { } bytes ? JsonSerializer.Deserialize<DeleteRequests>(bytes) ?? new DeleteRequests() : new DeleteRequests();
   }
 
+  /// The account's announcements (the delete-rule gate), set once by the composition after the memory store exists.
+  public void UseAnnounce(CloudAnnounce announce) => del = del with { Announce = announce };
   /// The delete rule's local marks (for the page: "Not on this PC", "Only on this PC").
   public CloudDeleteState DeleteMarks => marks;
   public CloudBin Bin => del.Bin;
