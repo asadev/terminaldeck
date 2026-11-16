@@ -186,7 +186,8 @@ public sealed class CloudSecretsLogicalAdapter : ICloudSyncAdapter
     CloudSecretsDomains.ApiKey => "An API key", CloudSecretsDomains.Server => "A server password or key", CloudSecretsDomains.Ssh => "An SSH file",
     CloudSecretsDomains.Mcp => "An MCP server", CloudSecretsDomains.TaskConnection => "A task connection token", CloudSecretsDomains.Receiver => "The Receiver's secrets",
     CloudSecretsDomains.BrowserCookies => "A browser sign-in", CloudSecretsDomains.BrowserPassword => "A saved browser password",
-    CloudSecretsDomains.Project => "A project's secret settings", CloudSecretsDomains.App => "An app sign-in", _ => "An AI subscription sign-in"
+    CloudSecretsDomains.Project => "A project's secret settings", CloudSecretsDomains.App => "An app sign-in",
+    CloudSecretsDomains.WhatsApp => "A WhatsApp agent's key", _ => "An AI subscription sign-in"
   }) + " is too large to save in Cloud. It stays on this PC.";
 
   /// Switch to `epoch` and the current queue: load their durable marks. Marks persist only with a queue identity.

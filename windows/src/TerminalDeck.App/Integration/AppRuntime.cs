@@ -103,6 +103,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     await ReconnectAsync(); await RefreshSessionsAsync(); accountNotificationsReady = true;
     await AccountSwitches.RecoverAsync();
     await InitializeHootAsync(); InitializeTaskRuntime();
+    await InitializeWhatsAppAsync();
     await InitializeReceiverAsync(ReceiverDispatcher ?? (work => work()));
     Remote.ReceiverApplication = ReceiverRelay;
     Remote.ReceiverTransportRequired = () => Receiver.Sources().Any(s => s.Enabled);
@@ -317,6 +318,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
       (provider, action) => InstallFlowRequested?.Invoke(provider, action) ?? throw new McpRefusal("Open Coding AIs in the app."),
       (id, action) => SignInFlowRequested?.Invoke(id, action) ?? throw new McpRefusal("Open this account in Coding AIs."));
     chatTools.Register(Door);
+    TerminalDeck.Core.WhatsApp.WhatsAppTools.Register(Door, () => WhatsApp);
     projectTools.Register(Door);
     Door.Compose("sessions.list", terminal => async (c, a, ct) =>
     {

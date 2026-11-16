@@ -67,9 +67,11 @@ public sealed record CloudSecretVersionedPut(CloudSecretRecord Record, string Ve
 public static class CloudSecretsDomains
 {
   public const string ApiKey = "api-key", Server = "server", Ssh = "ssh", Mcp = "mcp", TaskConnection = "task-connection", Receiver = "receiver",
-    BrowserCookies = "browser-cookies", BrowserPassword = "browser-password", Project = "project", App = "app", AiSubscription = "ai-subscription";
+    BrowserCookies = "browser-cookies", BrowserPassword = "browser-password", Project = "project", App = "app", AiSubscription = "ai-subscription",
+    /// 15 Nov 2026: WhatsApp agents' keys (store "whatsapp").
+    WhatsApp = "whatsapp";
   public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
-    { ApiKey, Server, Ssh, Mcp, TaskConnection, Receiver, BrowserCookies, BrowserPassword, Project, App, AiSubscription };
+    { ApiKey, Server, Ssh, Mcp, TaskConnection, Receiver, BrowserCookies, BrowserPassword, Project, App, AiSubscription, WhatsApp };
   public static string Purpose(string domain) => domain switch
   {
     AiSubscription => "ai-subscription",
@@ -81,7 +83,7 @@ public static class CloudSecretsDomains
   public static readonly IReadOnlyDictionary<string, string> Sources = new Dictionary<string, string>(StringComparer.Ordinal)
   {
     ["api"] = ApiKey, ["servers"] = Server, ["ssh"] = Ssh, ["mcp-user"] = Mcp, ["tasks"] = TaskConnection, ["receiver"] = Receiver, ["voice"] = App,
-    ["project-files"] = Project
+    ["project-files"] = Project, ["whatsapp"] = WhatsApp
   };
   public static bool Admitted(string sourceId, string domain) => Sources.TryGetValue(sourceId, out var d) && d == domain;
 }

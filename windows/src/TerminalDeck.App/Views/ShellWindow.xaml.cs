@@ -46,11 +46,14 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
   public ShellWindow(AppDataRoot root)
   {
     InitializeComponent();
+    WhatsApp.WhatsAppMenus.InstallPageHooks();
     AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "icons", "app.ico"));
     dataRoot = root;
     Runtime = new(root, null, DispatchTool);
     InitializeRecoveryActions();
     Runtime.ReceiverDispatcher = OnUiAsync;
+    // WhatsApp agents: the screens' store hears the engine on the UI thread (the engine connects it in InitializeAsync).
+    TerminalDeck.Core.WhatsApp.WhatsAppAgentsStore.Shared.Post = work => DispatcherQueue.TryEnqueue(() => work());
     Runtime.SignInRequested = (account, home) => OnUiAsync(() => AccountSignInSheet.ShowAsync(Runtime, account, home, WindowHandle, Root));
     Runtime.HootSurface = this;
     Runtime.InitializeServers(new TerminalDeck.App.Views.Servers.ServerDialogAuthorizer(() => Root.XamlRoot, DispatcherQueue),
@@ -87,6 +90,8 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     Runtime.SignInFlowRequested = AccountSignInSheet.ControlAsync;
     settings.SettingsBrowser = browser.Core; settings.PrivacyBrowser = browser; browser.PrivacyWindowHandle = WindowHandle;
     browser.OpenSettingsRequested = () => OpenSettingsAsync("browser");
+    // The WhatsApp submenu's "Add a WhatsApp agent…" (no agent yet) opens Settings > AI apps.
+    WhatsApp.WhatsAppMenus.OpenSettings = () => OpenSettingsAsync(WhatsApp.WhatsAppWords.SettingsSection);
     InitializeGeneralSettings();
     InitializeSettingsPanel();
     InitializeWindows(root);

@@ -47,7 +47,9 @@ public sealed partial class AppRuntime
     CloudSshTravelledBox.Shared.Set(sshFolder);
     var ssh = new CloudKeysSshStore(serverStore, id => Path.Combine(Root.DirectoryPath, "servers", id), sshFolder, Path.Combine(state, "ssh-server-ids.json"))
       .DeleteRuleOwner(state, gate, DeviceName, serviceNow);
-    CloudKeysRemovals.Shared.Set(CloudKeysRemovals.Through(new Dictionary<string, CloudSecretsDeleteOwner> { ["api"] = api },
+    // WhatsApp agents' keys (store "whatsapp"): a Remove in the app goes everywhere through this owner.
+    var whatsapp = WhatsAppKeysOwner(state, gate, DeviceName, serviceNow);
+    CloudKeysRemovals.Shared.Set(CloudKeysRemovals.Through(new Dictionary<string, CloudSecretsDeleteOwner> { ["api"] = api, [TerminalDeck.Core.WhatsApp.WhatsAppKeysStore.Source] = whatsapp },
       () => serviceNow() is { } at ? new CloudDeleteActor(CloudDeleteBy.Person, deviceId, ThisName(), null, null, at, Guid.NewGuid().ToString("D")) : null));
     // Lane S3: project secret files (its own delete owner, not wrapped); gate = every device announced `projectsecrets`.
     var fileState = Path.Combine(state, "project-files");
@@ -60,7 +62,7 @@ public sealed partial class AppRuntime
       deleteGate: () => CloudSecretsDeleteRuleOpen(), deleteStamp: serviceNow, deleteDevice: () => deviceId, deleteMacName: DeviceName,
       witness: CloudDeleteWitnessSlot.Shared);
     CloudProjectSecretFilesHolder.Shared.Store = files; CloudProjectSecretFilesHolder.Shared.StateRoot = fileState;
-    cloudSecretStores = [serversOwner, api, mcp, ssh, files];
+    cloudSecretStores = [serversOwner, api, mcp, ssh, whatsapp, files];
     return cloudSecretStores;
   }
 }
