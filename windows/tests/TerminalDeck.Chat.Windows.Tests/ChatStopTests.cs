@@ -56,7 +56,7 @@ public sealed class ChatStopTests
       await chats.DisposeAsync();
       if (File.Exists(ChatWorkerPaths.FileFor(root, chat.CreationKey, ".identity.json"))) await processes.QuitAsync(chat.CreationKey, default);
       await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2");
-      System.Security.Cryptography.CryptographicOperations.ZeroMemory(credential); Directory.Delete(root.DirectoryPath, true);
+      System.Security.Cryptography.CryptographicOperations.ZeroMemory(credential); TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
   private sealed class SyntheticAccount : IAccountProvider

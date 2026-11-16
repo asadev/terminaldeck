@@ -13,6 +13,7 @@
     <Compile Include="../../TerminalDeck.App/ViewModels/ShellViewModel.cs" Link="ShellViewModel.cs" />
     <Compile Include="../../TerminalDeck.App/Views/Windows/SidebarCloudRows.cs" Link="SidebarCloudRows.cs" />
     <Compile Include="../../../tests/TerminalDeck.Core.Tests/Remote/LinkHarness.cs" Link="Link/LinkHarness.cs" />
+    <Compile Include="../../../tests/TerminalDeck.Core.Tests/TestFolder.cs" Link="TestFolder.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(TdLinkNative)' != ''">
     <None Include="$(TdLinkNative)/tdlink.dll;$(TdLinkNative)/libwebrtc.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />

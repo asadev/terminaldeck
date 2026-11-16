@@ -6,5 +6,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5"><PrivateAssets>all</PrivateAssets></PackageReference>
     <ProjectReference Include="../../src/TerminalDeck.Platform.Windows/TerminalDeck.Platform.Windows.csproj" />
     <Using Include="Xunit" />
+    <Compile Include="../TerminalDeck.Core.Tests/TestFolder.cs" Link="TestFolder.cs" />
   </ItemGroup>
 </Project>

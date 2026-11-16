@@ -51,7 +51,7 @@ public sealed class W4bAccountAdapterTests
       }
       await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2");
       Assert.Null(await new WindowsCredentialStore(root).ReadAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2"));
-      Directory.Delete(root.DirectoryPath, true);
+      TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
   [Trait("Group", "RealPc")] [Fact]

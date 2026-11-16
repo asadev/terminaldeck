@@ -126,7 +126,7 @@ public sealed class ChatWindowsTests
         await Task.Delay(50, timeout.Token);
       }
       await new WindowsCredentialStore(root).DeleteAsync($"{Brand.Name}/{root.NamespaceId}/keeper/auth-v2");
-      System.Security.Cryptography.CryptographicOperations.ZeroMemory(credential); Directory.Delete(root.DirectoryPath, true);
+      System.Security.Cryptography.CryptographicOperations.ZeroMemory(credential); TerminalDeck.Tests.TestFolder.Delete(root.DirectoryPath);
     }
   }
 }

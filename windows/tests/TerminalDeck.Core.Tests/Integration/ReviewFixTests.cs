@@ -304,7 +304,7 @@ public sealed class ReviewFixTests
   {
     public string DirectoryPath { get; } = Path.Combine(Path.GetTempPath(), "td-review-project-" + Guid.NewGuid().ToString("N"));
     public ScratchFolder() => Directory.CreateDirectory(DirectoryPath);
-    public void Dispose() => Directory.Delete(DirectoryPath, true);
+    public void Dispose() => TerminalDeck.Tests.TestFolder.Delete(DirectoryPath);
   }
 
 }
