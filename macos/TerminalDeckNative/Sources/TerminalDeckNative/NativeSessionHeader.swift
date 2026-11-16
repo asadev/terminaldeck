@@ -14,40 +14,43 @@ struct NativeSessionHeader: View {
     var body: some View {
         let header = TerminalHeader.make(info: session.info, railTitle: railItem?.title,
                                          status: session.status ?? TerminalStatus.parse(railItem?.status), ended: session.ended)
-        HStack(alignment: .center, spacing: 8) {
+        // The bar's frame is shared with the New session page (`NativeSessionBarFrame`): a change here changes it there.
+        NativeSessionBarFrame {
             // A pop-out window's bar marks the title with the status dot (PopoutWindow titleMark);
             // the main window's bar has none.
             if !inMainWindow {
                 NativeSessionStatusDot(status: header.status)
             }
-            // The page's window bar: the name on its own line, "where and who" under it.
-            VStack(alignment: .leading, spacing: 1) {
-                NativeSessionTitle(title: sharedTitle(fallback: header.title), rename: renamer)
-                HStack(spacing: 5) {
-                    if !header.folderPath.isEmpty {
-                        NativeFolderChip(path: header.folderPath)
-                    }
-                    if let machine = machineName {
-                        if !header.folderPath.isEmpty { ChipSeparator() }
-                        Text("on \(machine)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    switch session.target {
-                    case .local:
-                        if !header.folderPath.isEmpty { ChipSeparator() }
-                        NativeLocalAccountChip(session: session)
-                    case .machine:
-                        NativeMachineAccountChip(session: session)
-                    case .server:
-                        if !header.folderPath.isEmpty { ChipSeparator() }
-                        NativeServerAccountChip(session: session)
-                    }
-                }
+        } title: {
+            NativeSessionTitle(title: sharedTitle(fallback: header.title), rename: renamer)
+        } place: {
+            if !header.folderPath.isEmpty {
+                NativeFolderChip(path: header.folderPath)
             }
-            .layoutPriority(1)
-            Spacer(minLength: 8)
+            if let machine = machineName {
+                if !header.folderPath.isEmpty { ChipSeparator() }
+                Text("on \(machine)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            switch session.target {
+            case .local(let id):
+                if !header.folderPath.isEmpty { ChipSeparator() }
+                NativeLocalAccountChip(session: session)
+                // Switch to this Mac: the move's one done line, once, on the session it started here.
+                if let moved = NativeCloudChats.shared.arrivals[id] {
+                    ChipSeparator()
+                    Text(moved).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help(moved)
+                        .onDisappear { NativeCloudChats.shared.arrivals[id] = nil }
+                }
+            case .machine:
+                NativeMachineAccountChip(session: session)
+            case .server:
+                if !header.folderPath.isEmpty { ChipSeparator() }
+                NativeServerAccountChip(session: session)
+            }
+        } trailing: {
             // Model, effort and fast mode are read off a terminal's screen. A chat session keeps them under its box and
             // only its usage (plan limits, context window) up here, where it always was.
             if !session.isChat {
@@ -78,9 +81,6 @@ struct NativeSessionHeader: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .frame(minHeight: 48)
         // A chat session's bar wears the window's own look, like the chat under it.
         .foregroundStyle(session.isChat ? AnyShapeStyle(.primary) : AnyShapeStyle(NativeSessionChrome.ink))
         .background(session.isChat ? Color.clear : Color(nsColor: session.ground))
@@ -145,8 +145,35 @@ struct NativeSessionHeader: View {
     }
 }
 
+/// The frame of a session's bar: an optional mark, the name on its own line with "where and who" under it, and the
+/// session's own controls at the trailing end. An open session and the New session page both draw their bar through
+/// this one view, so the two can never drift apart.
+struct NativeSessionBarFrame<Mark: View, Title: View, Place: View, Trailing: View>: View {
+    @ViewBuilder var mark: () -> Mark
+    @ViewBuilder var title: () -> Title
+    @ViewBuilder var place: () -> Place
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            mark()
+            // The page's window bar: the name on its own line, "where and who" under it.
+            VStack(alignment: .leading, spacing: 1) {
+                title()
+                HStack(spacing: 5) { place() }
+            }
+            .layoutPriority(1)
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .frame(minHeight: 48)
+    }
+}
+
 /// `toolbar-chip-sep`: the small dot between the folder and the account.
-private struct ChipSeparator: View {
+struct ChipSeparator: View {
     var body: some View {
         Circle().fill(Color.secondary.opacity(0.6)).frame(width: 3, height: 3).accessibilityHidden(true)
     }

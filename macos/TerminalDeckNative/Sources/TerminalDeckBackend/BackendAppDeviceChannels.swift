@@ -18,6 +18,8 @@ public struct BackendAppDeviceChannels: Sendable {
     public static func unit(_ value: NativeRPCValue) throws -> Double {
         guard let number = value.number else { throw BackendAppSessionError("A position must be a number.") }; return min(max(number, 0), 1)
     }
+    /// The call comes from the app's own window (his phone panel), never from a tool or another app.
+    public static func fromHisPanel(_ context: NativeRPCContext) -> Bool { (try? BackendCompositionRoot.requireLocalUI(context)) != nil }
     private static func point(_ value: NativeRPCValue) throws -> NativeRPCValue { try BackendAppDeviceParsing.object([("x", .number(unit(value["x"]))), ("y", .number(unit(value["y"])))]) }
     public static func preview(_ png: Data, height: Int = 900) -> String {
         guard let source = CGImageSourceCreateWithData(png as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil), image.height > 0 else { return "" }
@@ -62,7 +64,10 @@ public struct BackendAppDeviceChannels: Sendable {
             try await manager.swipe(Self.deviceID(value(0)), from: Self.point(value(1)), to: Self.point(value(2)), durationMilliseconds: duration)
         case "devices:type":
             guard let text = value(1).string, text.utf16.count <= 2_000 else { throw BackendAppSessionError("Text to type must be a short string.") }
-            try await manager.type(Self.deviceID(value(0)), text: text)
+            let id = try Self.deviceID(value(0))
+            // MAC-NEXT-15c: his own typing in the phone panel (the app's own window) is marked as his; any other caller
+            // of this channel is not, so the simulator's pasteboard route stays refused for it by default.
+            try await BackendSimulatorPasteboard.$typingForPerson.withValue(Self.fromHisPanel(context)) { try await manager.type(id, text: text) }
         case "devices:key":
             guard let key = value(1).string, ["delete", "return", "enter", "tab", "escape", "arrow-up", "arrow-down", "arrow-left", "arrow-right", "select-all"].contains(key) else { throw BackendAppSessionError("That key is not one a device can be sent.") }
             let modifiers = BackendAppDeviceParsing.strings(value(2)).filter { ["command", "shift", "option", "control"].contains($0) }

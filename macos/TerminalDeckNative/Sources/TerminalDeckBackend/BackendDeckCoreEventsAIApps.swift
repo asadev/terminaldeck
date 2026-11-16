@@ -45,7 +45,7 @@ public struct BackendDeckCoreEventsAIApps: Sendable {
             subscriptions = subscriptions.setting(key,.array((subscriptions[key].elements ?? []) + [view]))
         }
         let host = relay.flatMap { URL(string:$0.url) }.map { ($0.host ?? "") + ($0.port.map { ":\($0)" } ?? "") }
-        let reason = relay == nil ? "Remote access is off, so this computer is not connected to a relay." : relay?.reason
+        let reason = relay == nil ? "This Mac is not connected to the relay yet." : relay?.reason
         return BackendDeckCoreEventsSupport.object([("keys",.array(list)),("internet",BackendDeckCoreEventsSupport.object([("on",.bool(await keys.internet())),("base",BackendDeckCoreEventsSupport.nullable(relay.flatMap { Self.internetBase(relayUrl:$0.url,hostId:$0.hostId) })),("relayHost",BackendDeckCoreEventsSupport.nullable(host)),("connected",.bool(relay?.connected == true)),("reason",BackendDeckCoreEventsSupport.nullable(reason))])),("local",BackendDeckCoreEventsSupport.object([("url",BackendDeckCoreEventsSupport.nullable(port.map { "http://127.0.0.1:\($0)/mcp" })),("movedFrom",BackendDeckCoreEventsSupport.number(await movedFrom().map(Double.init)))])),("folders",.array(await folders().map(NativeRPCValue.string))),("problem",BackendDeckCoreEventsSupport.nullable(await keys.loadProblem())),("delivery",.object(delivery)),("channelBridge",BackendDeckCoreEventsSupport.nullable(await channelBridge())),("subscriptions",subscriptions)])
     }
     public func register(in registry: NativeChannelRegistry, ownerID: String,

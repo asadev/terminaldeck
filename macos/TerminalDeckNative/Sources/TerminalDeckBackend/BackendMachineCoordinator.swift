@@ -28,6 +28,15 @@ public actor BackendMachineCoordinator {
     private var unreachable: [String: String] = [:]
     /// Which links were online at the last state, so a new welcome is noticed once.
     private var online: [String: Bool] = [:]
+    // MARK: Reach by account (live use from another Mac, 15 Nov): his other machines, by sign-in
+    private var reachGuest: BackendReachGuest?
+    /// Reach links' names (they have no paired record): link id → the machine's name.
+    private var reachNames: [String: String] = [:]
+    /// When each reach link was last asked for (a link with nothing attached is let go after `reachIdleMs`).
+    private var reachUsed: [String: Double] = [:]
+    private var reachReaper: Task<Void, Never>?
+    private var chatWatches: [String: Set<String>] = [:]
+    static let reachIdleMs: Double = 600_000
     public init(store: BackendMachineStore, registry: NativeChannelRegistry, localName: String, relayURL: String,
                 uploadAuthorize: @escaping BackendUploadSend.Authorize, ownPorts: BackendDevOwnPorts, windows: BackendMachineWindowServices? = nil,
                 pairingBlocked: @escaping @Sendable () async -> String? = { nil }, tunnelsDropped: @escaping @Sendable (String) async -> Void = { _ in }) {
@@ -56,6 +65,7 @@ public actor BackendMachineCoordinator {
         for upload in uploads.values { await upload.disconnected() }
         for reach in reaches.values { await reach.stop() }
         for link in links.values { await link.disconnect() }
+        reachReaper?.cancel(); reachReaper = nil; reachNames = [:]; reachUsed = [:]; chatWatches = [:]
         links = [:]; uploads = [:]; reaches = [:]; unreachable = [:]; opened = false; await store.close()
     }
     public func view() async throws -> NativeRPCValue {
@@ -66,12 +76,21 @@ public actor BackendMachineCoordinator {
             states.append(BackendMachineLinkState(id: id, phase: .error, reason: reason, sessions: [], folders: nil, capabilities: [], ports: [],
                 copilot: .null, hostPlatform: "", hostVersion: "", hostKind: nil, retryAt: nil).value)
         }
-        return .object([.init("machines", .array(machines)), .init("links", .array(states)), .init("here", .string(localName)), .init("blocked", await pairingBlocked().map(NativeRPCValue.string) ?? .null)])
+        // Machines reached by sign-in are listed with the paired ones (so every machines.* call and the AI tools take
+        // them unchanged), marked `reach` (the paired-machines page leaves them out: nothing there to forget or rename).
+        let reached = reachNames.keys.sorted().filter { links[$0] != nil }.map { id in
+            NativeRPCValue.object([.init("id", .string(id)), .init("name", .string(reachNames[id] ?? "Mac")), .init("fingerprint", .string("")),
+                                   .init("platform", .string("darwin")), .init("drivesWindows", .bool(false)), .init("reach", .bool(true))])
+        }
+        return .object([.init("machines", .array(machines + reached)), .init("links", .array(states)), .init("here", .string(localName)), .init("blocked", await pairingBlocked().map(NativeRPCValue.string) ?? .null)])
     }
-    public func link(_ id: String) throws -> BackendRemoteGuest { guard let link = links[id] else { throw NativeRPCError(code: "machine-offline", message: "This desktop is not linked to that machine") }; return link }
+    public func link(_ id: String) throws -> BackendRemoteGuest {
+        if reachNames[id] != nil { reachUsed[id] = Date().timeIntervalSince1970 * 1000 }
+        guard let link = links[id] else { throw NativeRPCError(code: "machine-offline", message: "This desktop is not linked to that machine") }; return link }
     public func connect(_ id: String) async throws {
         guard opened else { throw NativeRPCError(code: "machines-closed", message: "Open the machine coordinator before dialing") }
         if let link = links[id] { await link.connect(); return }
+        if BackendReachGuest.isReachLink(id) { _ = try await openReach(deviceIds: [String(id.dropFirst(BackendReachGuest.linkPrefix.count))]); return }
         let secrets = try await store.secrets(id), store = self.store
         unreachable[id] = nil
         let sender = BackendUploadSend(authorize: uploadAuthorize) { [weak self] progress in await self?.uploadProgress(id, progress) }
@@ -89,8 +108,96 @@ public actor BackendMachineCoordinator {
             ownSessions: windows?.ownSessions, receivedHolds: receivedHolds, receivedResult: windows?.receivedResult)
         links[id] = guest; reaches[id] = BackendRemoteGuestReach(guest: guest, ownPorts: ownPorts); await guest.connect(); await publish()
     }
+    // MARK: Reach by account
+
+    /// Signed in (or out: nil). Signing out lets every machine reached by sign-in go at once.
+    public func setReachGuest(_ guest: BackendReachGuest?) async {
+        reachGuest = guest
+        guard guest == nil else { return }
+        for id in Array(reachNames.keys) { await dropReach(id) }
+        await publish()
+    }
+
+    /// Dials his machines that are on, by sign-in (no code, no question), and returns their link ids. `name`: the
+    /// machine a page asks for (the Cloud's machine name); when no machine of that name is on, every machine that is
+    /// on is dialled (the Cloud's name and the machine's own may differ), so the page finds its session by its ref.
+    /// `deviceIds`: exactly those. Already-linked machines are kept, not dialled again.
+    @discardableResult
+    public func openReach(name: String? = nil, deviceIds: [String]? = nil) async throws -> [String] {
+        guard opened else { throw NativeRPCError(code: "machines-closed", message: "Open the machine coordinator before dialing") }
+        guard let reacher = reachGuest else { throw NativeRPCError(code: "machine-offline", message: "Sign in to your account on this Mac to reach your other computers.") }
+        let reachable = try await reacher.reachable()
+        let chosen = Self.reachChoice(reachable, name: name, deviceIds: deviceIds)
+        var ids: [String] = []
+        for machine in chosen {
+            let id = BackendReachGuest.linkID(machine.deviceId)
+            ids.append(id)
+            reachUsed[id] = Date().timeIntervalSince1970 * 1000
+            reachNames[id] = machine.shownName
+            if let link = links[id] { await link.connect(); continue }
+            let secrets = try await reacher.secrets(machine)
+            // Another request dialled it while this one waited for the key.
+            if let link = links[id] { await link.connect(); continue }
+            let sender = BackendUploadSend(authorize: uploadAuthorize) { [weak self] progress in await self?.uploadProgress(id, progress) }
+            uploads[id] = sender
+            let guest = BackendRemoteGuest(id: id, secrets: secrets, localName: localName,
+                onState: { [weak self] state in await self?.linkChanged(id, state: state) },
+                onOutput: { [weak self] session, text, replay in await self?.output(id, session: session, text: text, replay: replay) },
+                onWelcome: { _ in },
+                onFrame: { [weak self] frame in await sender.handle(frame); await self?.peerFrame(id, frame) },
+                relayToken: { try await reacher.relayToken() })
+            links[id] = guest; reaches[id] = BackendRemoteGuestReach(guest: guest, ownPorts: ownPorts)
+            await guest.connect()
+        }
+        startReachReaper()
+        await publish()
+        return ids
+    }
+
+    /// Which machines a request dials (pure, tested): named device ids; else the ones whose name matches; else all on.
+    static func reachChoice(_ reachable: [BackendReachMachine], name: String?, deviceIds: [String]?) -> [BackendReachMachine] {
+        if let deviceIds { return reachable.filter { deviceIds.contains($0.deviceId) } }
+        let wanted = BackendReachMachine.bare(name ?? "").lowercased()
+        let named = wanted.isEmpty ? [] : reachable.filter { $0.shownName.lowercased() == wanted || BackendReachMachine.bare($0.name).lowercased() == wanted }
+        return named.isEmpty ? reachable : named
+    }
+
+    /// Every minute: a reach link nobody asked for in 10 minutes and showing nothing here is let go.
+    private func startReachReaper() {
+        guard reachReaper == nil else { return }
+        reachReaper = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                await self?.reapReach()
+            }
+        }
+    }
+    private func reapReach() async {
+        let now = Date().timeIntervalSince1970 * 1000
+        var dropped = false
+        for (id, used) in reachUsed where now - used >= Self.reachIdleMs {
+            // A live terminal or a watched chat shown here keeps it.
+            if let link = links[id], await link.attachedCount > 0 || !(chatWatches[id]?.isEmpty ?? true) { reachUsed[id] = now; continue }
+            await dropReach(id); dropped = true
+        }
+        if reachNames.isEmpty { reachReaper?.cancel(); reachReaper = nil }
+        if dropped { await publish() }
+    }
+    private func dropReach(_ id: String) async {
+        await uploads.removeValue(forKey: id)?.disconnected(); await reaches.removeValue(forKey: id)?.stop(); await links.removeValue(forKey: id)?.disconnect()
+        await tunnelsDropped(id)
+        reachNames[id] = nil; reachUsed[id] = nil; online[id] = nil; chatWatches[id] = nil
+    }
+    /// The chats this Mac watches live on a machine (a watched chat keeps a reach link, as an attached terminal does).
+    public func noteChatWatch(_ id: String, chat: String, watching: Bool) {
+        if watching { chatWatches[id, default: []].insert(chat) } else { chatWatches[id]?.remove(chat) }
+    }
+
     public func disconnect(_ id: String) async { await uploads[id]?.disconnected(); await reaches[id]?.stop(); await links[id]?.disconnect(); await tunnelsDropped(id); await publish() }
     public func forget(_ id: String) async throws -> Bool {
+        // A machine reached by sign-in has no pairing to forget: it is let go here and comes back when asked for.
+        if reachNames[id] != nil { await dropReach(id); await publish(); return true }
         await uploads.removeValue(forKey: id)?.disconnected(); await reaches.removeValue(forKey: id)?.stop(); await links.removeValue(forKey: id)?.disconnect()
         unreachable[id] = nil
         let removed = try await store.forget(id); await tunnelsDropped(id); await publish(); return removed
@@ -200,14 +307,16 @@ public actor BackendMachineCoordinator {
         await reaches[id]?.handle(frame)
         // Another Mac's screen shown here (Mac to Mac, 31 Oct): its pictures, states and refusals.
         await BackendRemoteMacScreens.shared.received(id, frame)
-        let channels = ["hoot.state": ("machines:hoot:state", "state"), "hoot.chat": ("machines:hoot:chat", "chat"), "github.changed": ("machines:github:changed", "github")]
-        if let (channel, key) = channels[frame["t"].string ?? ""] { try? await registry.publish(channel, arguments: [.object([.init("machineId", .string(id)), .init(key, key == "chat" ? frame : frame[key])])]) }
+        let channels = ["hoot.state": ("machines:hoot:state", "state"), "hoot.chat": ("machines:hoot:chat", "chat"), "github.changed": ("machines:github:changed", "github"),
+                        // Live use from another Mac (15 Nov): a chat session's messages, as its phones get them.
+                        "chats.events": ("machines:chats:events", "frame")]
+        if let (channel, key) = channels[frame["t"].string ?? ""] { try? await registry.publish(channel, arguments: [.object([.init("machineId", .string(id)), .init(key, key == "chat" || key == "frame" ? frame : frame[key])])]) }
     }
     public func announceWindows(_ id: String) async throws { try await link(id).announceWindows() }
     public func announceSessions() async { for link in links.values { try? await link.announceSessions() } }
     /// The Mac woke, its network came back or it was unlocked: every link that is down dials now (Macky study, 9–10).
     public func nudgeAll() async { for link in links.values { await link.nudge() } }
     /// For Other Macs: the saved name of a linked machine.
-    public func name(_ id: String) async -> String { (try? await store.list().first { $0.id == id }?.name) ?? id }
+    public func name(_ id: String) async -> String { (try? await store.list().first { $0.id == id }?.name) ?? reachNames[id] ?? id }
     public func askWindow(machineID: String, id: String, sessionID: String, tool: String, arguments: String) async throws { try await link(machineID).askWindow(id: id, sessionID: sessionID, tool: tool, arguments: arguments) }
 }

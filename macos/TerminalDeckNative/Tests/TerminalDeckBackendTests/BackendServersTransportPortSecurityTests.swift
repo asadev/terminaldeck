@@ -7,7 +7,10 @@ import TerminalDeckNativeCore
 struct BackendServersTransportPortSecurityTests {
     private let secretNames: Set<String> = ["password", "privateKey", "passphrase"]
     @Test func secretIdentifiersRemainInsideCredentialAndNativeAuthOwners() throws {
-        let owners: Set<String> = ["BackendServersCredentials.swift", "BackendServersSSH.swift", "BackendServersSSHAgent.swift"]
+        // BackendServersEarlierAppKey.swift (lane/servers-old-key, 13 Nov) is a credential owner: it opens saved sign-ins
+        // sealed with the earlier app's key and hands them straight to BackendServersCredentials (`password:` is the
+        // cipher's own argument label). Security seat ruling.
+        let owners: Set<String> = ["BackendServersCredentials.swift", "BackendServersSSH.swift", "BackendServersSSHAgent.swift", "BackendServersEarlierAppKey.swift"]
         for file in try sources() where !owners.contains(file.lastPathComponent) {
             var text = try String(contentsOf: file, encoding: .utf8)
             if file.lastPathComponent == "BackendServersStore.swift" { text = text.replacingOccurrences(of: #"(?s)public enum BackendServersCredentialKind[^\}]*\}"#, with: "", options: .regularExpression) }

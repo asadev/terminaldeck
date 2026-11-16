@@ -92,7 +92,14 @@ extension BackendTaskMCPRequest {
             }
             await hired([saved])
             value = BackendTaskMCP.value([("saved", saved)])
-        } else if verb == "remove" { let agent = try args["id"].requireString("id", nonempty: true); try await view.config.removeAgent(agent); value = BackendTaskMCP.value([("removed", .string(agent))]) }
+        } else if verb == "remove" {
+            // Delete rule (L6): everywhere, into the Bin with its instructions, by an AI with the session's and agent's
+            // names, one group per call; no question (Asad, 14 Nov). Tasks and agents ignore any scope.
+            let agent = try args["id"].requireString("id", nonempty: true)
+            let name = try await view.config.agent(agent)?["name"].string ?? agent
+            try await view.config.removeAgent(agent, deletedBy: try await deleteActor())
+            value = BackendTaskMCP.value([("removed", .string(name)), ("line", .string("Removed from all the person's devices. " + BackendTaskMCP.binLine))])
+        }
         else { let agent = try args["id"].requireString("id", nonempty: true), row = try await view.config.setStatus(agent, action: verb); value = BackendTaskMCP.value([("agent", .string(agent)), ("status", row["status"])]) }
         return value
     }
@@ -114,12 +121,13 @@ extension BackendTaskMCPRequest {
 
     func local() async throws -> NativeRPCValue {
         let value: NativeRPCValue
-        if verb == "list" || verb == "trash" {
-            let rows = try await (verb == "trash" ? view.store.inTrash() : view.store.all()), agents = try await view.config.allAgents(), limit = min(max(Int(args["limit"].number ?? 200), 1), 200)
+        if verb == "list" {
+            // Delete rule (L6): the Trash is the person's Bin; no tool lists it.
+            let rows = try await view.store.all().filter { $0.value["deletedAt"].isNullish }, agents = try await view.config.allAgents(), limit = min(max(Int(args["limit"].number ?? 200), 1), 200)
             var visible: [BackendTaskRecord] = []; let scope = try await listingScope()
-            for row in rows where row.isLocal && BackendTaskProjectScope.includes(row, project: scope) { if try await authority.visible(caller, row), (verb == "trash" || ((!row.value["archivedAt"].isNullish) == (args["archived"].bool == true))), args["status"].string == nil || row.value["crmStatus"].string == args["status"].string, args["assignee"].string == nil || row.agentID == args["assignee"].string { visible.append(row) } }
+            for row in rows where row.isLocal && BackendTaskProjectScope.includes(row, project: scope) { if try await authority.visible(caller, row), (!row.value["archivedAt"].isNullish) == (args["archived"].bool == true), args["status"].string == nil || row.value["crmStatus"].string == args["status"].string, args["assignee"].string == nil || row.agentID == args["assignee"].string { visible.append(row) } }
             visible.sort { ($0.value["updatedAt"].number ?? 0) > ($1.value["updatedAt"].number ?? 0) }
-            value = BackendTaskMCP.value([(verb == "trash" ? "trash" : "tasks", .array(visible.prefix(limit).map { BackendTaskMCP.taskView($0, agents: agents) })), ("more", .number(Double(max(0, visible.count - limit)))), ("statuses", .array(BackendTaskLocalService.statuses.map(NativeRPCValue.string))), ("agents", .array(agents.filter { $0["status"].string != "archived" })), ("showing", .string(scope.map { "project " + $0 } ?? "all projects"))])
+            value = BackendTaskMCP.value([("tasks", .array(visible.prefix(limit).map { BackendTaskMCP.taskView($0, agents: agents) })), ("more", .number(Double(max(0, visible.count - limit)))), ("statuses", .array(BackendTaskLocalService.statuses.map(NativeRPCValue.string))), ("agents", .array(agents.filter { $0["status"].string != "archived" })), ("showing", .string(scope.map { "project " + $0 } ?? "all projects"))])
         } else {
             let row = try await task(args["task"], localOnly: true), names = ["comments": "listTaskComments", "activity": "listTaskActivity", "get": "fetchTaskDetailBundle", "routine": "fetchRoutine"]
             guard let name = names[verb] else { throw NativeRPCError.invalidArguments("Unknown tasks_local verb") }
@@ -154,10 +162,14 @@ extension BackendTaskMCPRequest {
             value = BackendTaskMCP.value([("created", BackendTaskMCP.taskView(made, agents: try await view.config.allAgents()))])
         }
         else {
-            let row = try await task(args["task"], localOnly: true, trash: verb == "restore" || verb == "purge")
-            if verb == "delete" { try await local.remove(row.id, by: by); value = BackendTaskMCP.value([("trashed", .string(row.id)), ("restore", .string("tasks_local_change do: restore"))]) }
-            else if verb == "purge" { try await view.store.purgeTrash(row.id); value = BackendTaskMCP.value([("purged", .string(row.id))]) }
-            else if verb == "restore" { value = BackendTaskMCP.value([("restored", BackendTaskMCP.taskView(try await local.restore(row.id, by: by), agents: try await view.config.allAgents()))]) }
+            let row = try await task(args["task"], localOnly: true)
+            // Delete rule (L6): everywhere, into the Bin for 30 days, by an AI with the session's and agent's names, one
+            // group per call; no question. Restore and purge are the person's, by hand (the verbs are retired).
+            if verb == "delete" {
+                try await local.remove(row.id, by: by, deletedBy: try await deleteActor())
+                value = BackendTaskMCP.value([("deleted", row.value["title"].isNullish ? .string("Task") : row.value["title"]),
+                                              ("line", .string("Deleted from all the person's devices. " + BackendTaskMCP.binLine))])
+            }
             else if verb == "comment" { let reply = await detail.call("addTaskCommentWith", arguments: [.string(row.id), args["text"], BackendTaskMCP.value([("parentId", args["reply_to"])])], by: by); try BackendTaskMCP.checkDetail(reply); value = BackendTaskMCP.value([("comment", reply["id"]), ("warning", reply["warning"])]) }
             else { if verb == "reply" { _ = try await local.reply(row.id, text: args["text"].requireString("text", nonempty: true)) }
                 else { if verb == "archive" || verb == "unarchive" { patch = BackendTaskMCP.value([("archived", .bool(verb == "archive"))]) }; guard !patch.spreadFields.isEmpty else { throw NativeRPCError.invalidArguments("update needs at least one field to change") }; _ = try await local.update(row.id, input: patch, by: by, notificationKeyID: try await authority.callerKeyID?(caller)) }
@@ -385,6 +397,17 @@ extension BackendTaskMCPRequest {
         let row = try await task(args["task"])
         value = try await BackendCrmLink.sync(row, on: args["on"].bool, store: view.store, outbox: view.outbox)
         return value
+    }
+
+    /// One actor per call (delete rule, L6): the composition's (`deleteActor`, names from the session and agent), else
+    /// the tools' own: by an AI, this Mac, the agent's name, one new group.
+    func deleteActor() async throws -> CloudDeleteActor {
+        if let make = authority.deleteActor { return try await make(caller) }
+        var agent: String?
+        if by.hasPrefix("taskagent:") { agent = try await view.config.agent(String(by.dropFirst("taskagent:".count)))?["name"].string }
+        else if by == "hoot" { agent = "Hoot" }
+        return CloudDeleteActor(by: .ai, mac: caller.machineID, macName: Host.current().localizedName ?? "This Mac", session: nil,
+                                agent: agent ?? "An AI", at: Int64(Date().timeIntervalSince1970 * 1000), group: UUID().uuidString.lowercased())
     }
 
     func localSchedule() async throws -> NativeRPCValue { try await localParts() }

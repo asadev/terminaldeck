@@ -18,4 +18,11 @@ paths = [
   '''windows/tests/.*''',
   '''windows/src/TerminalDeck\.App/Assets/terminal/terminal\.js$''',
   '''windows/src/TerminalDeck\.App/Verification/.*''',
+  # 14 Nov (0.22.0 dry run): a DEBUG-only fixture whose "password" is a made-up UUID.
+  '''macos/TerminalDeckNative/Sources/TerminalDeckBackend/BackendCloudContentsFixture\.swift$''',
+]
+# 14 Nov (0.22.0 dry run): a validation line, no value (`incoming.key.isEmpty, incoming.key.utf8.count`).
+regexTarget = "line"
+regexes = [
+  '''incoming\.key\.isEmpty, incoming\.key\.utf8\.count''',
 ]

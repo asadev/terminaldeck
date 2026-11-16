@@ -58,6 +58,8 @@ extension NativeCompositionProduction {
         // under way after 30 s says which step it waits on, so "no relay" can be seen next time.
         let report = self.report
         BackendRemoteRelayClient.setLog { line in report(line) }
+        // A1 (MAC-NEXT-13): once the launch start below has had its turn, the reach switch keeps the way in open.
+        defer { Task { @MainActor in NativeReachAccount.shared.launchSettled() } }
         guard let remoteHost else { report("remote access: not assembled in this app, so no relay link."); return }
         guard state.settingsEnvelope()["values"]["remote.enabled"].bool != false else { report("remote access: switched off in Settings, so no relay link."); return }
         let watch = Task { try? await Task.sleep(for: .seconds(30)); guard !Task.isCancelled else { return }

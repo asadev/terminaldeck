@@ -17,6 +17,16 @@ enum SHELLRoutes {
     /// the phone panel instead (Asad 10 Oct, "retire full page of simulators").
     static let retiredSimulators = "simulators"
 
+    /// The retired Overview page (Owner, 15 Nov: "we don't need overview page in any application anymore"). It only
+    /// ever drew the current project's page, which stays under Projects. Every old way in (a saved pin, the hidden
+    /// page's ⌘⇧D "Project dashboard", a tool's select, an old link) opens the current project's page, or the New
+    /// session page when no project is open. Never a selection, never drawn.
+    static let retiredOverview = "overview"
+    static func overviewStandIn(current: String? = DeckProject.current) -> String {
+        guard let current, isProject(path: current) else { return NativeLanding.pageID }
+        return projectPrefix + current
+    }
+
     /// The phone panel of the session on show (its window comes forward if popped out); on Hoot's page (only when the
     /// person opened Hoot) Hoot's own panel there; anywhere else the panel in its own phone window. With no device chosen
     /// it opens "Choose a device". 3 Nov (Asad: Hoot "should not be always open until we open the Hoot"): opening the
@@ -36,7 +46,9 @@ enum SHELLRoutes {
     /// A place this file draws (kept as the sidebar selection).
     static func owns(_ id: String?) -> Bool {
         guard let id else { return false }
-        if id == servers || id == Sidebar21Pages.projectsID { return true }
+        if id == servers || id == NativeLanding.pageID || id == Sidebar21Pages.projectsID || id == Sidebar21Pages.codeID || id == Sidebar21Pages.cloudID { return true }
+        // Sessions in the Cloud: another machine's session (read-only) and a project's Earlier chats.
+        if id.hasPrefix(SIDEBARCloudRows.sessionPrefix) || id.hasPrefix(SIDEBARCloudRows.earlierPrefix) { return true }
         return id.hasPrefix(projectPrefix) && !id.hasSuffix(settingsSuffix) && id.count > projectPrefix.count
     }
 
@@ -46,7 +58,7 @@ enum SHELLRoutes {
             || (id.hasPrefix(projectPrefix) && id.hasSuffix(settingsSuffix))
     }
 
-    /// The action carried into the place's draws (Add a server…, Pair a device…) until another place is chosen.
+    /// The action carried into the place's draws (Add a server…) until another place is chosen.
     /// Read, never taken: the detail is built several times per pass and only the last build is drawn.
     private static var pendingAction: String?
     /// Changes when an action is asked for again on a page already on show, so it opens fresh.
@@ -59,11 +71,9 @@ enum SHELLRoutes {
         case "servers:add", serverAddressAction:
             pendingAction = id; actionNonce &+= 1
             return servers
-        case "devices:pair":
-            AppModel.shared.requestDevicesWindow(pair: true)
-            return nil
-        case devices:
-            AppModel.shared.requestDevicesWindow()
+        case "devices:pair", devices:
+            // Owner, 14 Nov: Devices is a page of Settings (an old action id, a saved shortcut or a phone link opens it).
+            AppModel.shared.openDevices()
             return nil
         default:
             // Another place ends the action; its own place (chosen again, or echoed back by the page) keeps it.
@@ -115,14 +125,24 @@ enum SHELLRoutes {
     static func detail(kind: String, id: String) -> AnyView? {
         guard kind == "panel", owns(id) else { return nil }
         switch id {
+        case NativeLanding.pageID:
+            // Owner, 14 Nov: the app opens here; nothing is made until he sends his first message.
+            return AnyView(NativeLandingPage(model: NativeLanding.model))
         case Sidebar21Pages.projectsID:
             return AnyView(Sidebar21ProjectsScreen())
+        case Sidebar21Pages.codeID:
+            return AnyView(NativeCodeBackupPage())
         case servers:
             let add = asked("servers:add")
             return AnyView(NativeMachinesScreen(initialRoute: add ? .add : .list).id("servers-\(actionNonce)"))
-        case devices:
-            let pair = asked("devices:pair")
-            return AnyView(MACHINESDevicesScreen(pairOnOpen: pair).id("devices-\(actionNonce)"))
+        case Sidebar21Pages.cloudID:
+            // Owner, 14 Nov: what is in his Cloud is a page of the main window, no longer a separate grey window.
+            return AnyView(NativeCloudContentsPage())
+        case _ where id.hasPrefix(SIDEBARCloudRows.sessionPrefix):
+            let ref = String(id.dropFirst(SIDEBARCloudRows.sessionPrefix.count))
+            return AnyView(NativeCloudChatPage(ref: ref).id(id))
+        case _ where id.hasPrefix(SIDEBARCloudRows.earlierPrefix):
+            return AnyView(NativeCloudEarlierChatsPage(project: String(id.dropFirst(SIDEBARCloudRows.earlierPrefix.count))).id(id))
         default:
             let path = String(id.dropFirst(projectPrefix.count))
             let project = project(forPath: path)

@@ -10,6 +10,8 @@ public actor BackendRCVCompositionBox {
     public func set(service: BackendRCVService?) { self.service = service }
     public func set(github: (any BackendGHWorkspaceServing)?) { self.github = github }
     public func gitHub() -> (any BackendGHWorkspaceServing)? { github }
+    /// Keys travel (15 Nov): the Receiver's one store, for saved passwords (its sources' secrets travel).
+    public func cloudStore() -> BackendRCVStore? { service?.store }
 }
 
 public extension BackendCompositionRoot {

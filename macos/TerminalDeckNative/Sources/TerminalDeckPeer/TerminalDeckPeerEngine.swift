@@ -176,6 +176,7 @@ public final class TerminalDeckPeerConnection: BackendLinkConnection, @unchecked
     public func send(_ data: Data, lane: BackendLinkLane) -> Bool { link.send(data, lane: PeerLane(rawValue: lane.rawValue) ?? .control) }
     public var overTCP: Bool { link.overTCP }
     public func queued(_ lane: BackendLinkLane) -> UInt64 { link.queued(PeerLane(rawValue: lane.rawValue) ?? .control) }
+    public func whenControlDrains(below: UInt64, _ body: @escaping @Sendable () -> Void) { link.onControlDrained(below: below, body) }
     public func close() { link.close() }
 }
 

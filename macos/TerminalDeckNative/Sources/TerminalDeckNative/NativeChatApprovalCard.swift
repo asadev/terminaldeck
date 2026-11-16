@@ -5,6 +5,9 @@ import TerminalDeckNativeCore
 struct NativeChatApprovalCard: View {
     let request: NativeRPCValue
     let disabled: Bool
+    /// Another Mac's session (live use, 15 Nov): its answer carries only allow or deny, so nothing is shown that would
+    /// not be sent (no reason field, no scope choice, no remembered rules) and Allow is plain "Allow". Off for the local chat.
+    var onlyAllowOrDeny = false
     let answer: (Bool, NativeRPCValue) -> Void
     @State private var scope = ""
     @State private var comment = ""
@@ -32,6 +35,7 @@ struct NativeChatApprovalCard: View {
                     DisclosureGroup("Operation arguments") { code(details["input"].compact) }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 5)
             }.frame(maxHeight: 240)
+            if !onlyAllowOrDeny {
             if scopes.count > 1 {
                 Picker("Allow scope", selection: $scope) {
                     Text("Choose…").tag("")
@@ -51,14 +55,15 @@ struct NativeChatApprovalCard: View {
             if BackendChatApproval.supportsComment(request) {
                 NativeSessionTextField("Reason if denied (optional)", text: $comment, axis: .vertical).lineLimit(1...3).textFieldStyle(.roundedBorder)
             }
+            }
             HStack {
                 Spacer()
                 NativeSessionButton(BackendChatApproval.codexDecision(request, allowed: false, scope: "once").string == "cancel" ? "Cancel turn" : "Deny") {
                     answer(false, payload(allowed: false))
                 }.buttonStyle(.bordered)
-                NativeSessionButton(scopes.first(where: { $0.id == chosen })?.title ?? "Allow once") {
+                NativeSessionButton(onlyAllowOrDeny ? "Allow" : scopes.first(where: { $0.id == chosen })?.title ?? "Allow once") {
                     answer(true, payload(allowed: true))
-                }.buttonStyle(.borderedProminent).disabled(!scopes.contains(where: { $0.id == chosen }))
+                }.buttonStyle(.borderedProminent).disabled(!onlyAllowOrDeny && !scopes.contains(where: { $0.id == chosen }))
             }
         }.font(.system(size: 12)).padding(12).background(.background, in: .rect(cornerRadius: 12)).disabled(disabled)
     }

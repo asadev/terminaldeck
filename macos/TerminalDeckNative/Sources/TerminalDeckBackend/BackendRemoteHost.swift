@@ -11,6 +11,9 @@ public struct BackendRemoteHostWire: Sendable {
     /// The sealed channel's Noise channel binding (relay connections only; stream-anywhere binds the screen's direct
     /// connection to it). Nil on any connection without a sealed channel.
     public var channelBinding: Data? = nil
+    /// Reach by account (R2 decision 2): set by the relay client after the reach door admitted this channel's
+    /// sealed handshake, never by a message. Only such a wire takes a `reach:<deviceId>` hello, and it takes no other.
+    public var reach: BackendReachAdmission? = nil
     public init(address: String, peerPublicKey: Data? = nil, localWebBootstrap: Bool = false, send: @escaping @Sendable (String) async throws -> Void, close: @escaping @Sendable (Int, String) async -> Void) {
         self.address = address; self.peerPublicKey = peerPublicKey; self.localWebBootstrap = localWebBootstrap; self.send = send; self.close = close
     }
@@ -203,6 +206,13 @@ public actor BackendRemoteHost {
     public var onConnections: (@Sendable ([BackendRemoteHostConnection]) -> Void)?
     private var pairingSpent: (@Sendable () async -> Void)?
     private var deviceDisconnected: (@Sendable (String) async -> Void)?
+    /// Reach by account: the coordinator's judgement of an account device, asked again at its hello and right before
+    /// its welcome, so a door admission that raced a removal (or the switch going off, or a sign-out) never gets in.
+    /// Nil until a coordinator starts (as before); refuses everyone after it stopped.
+    private var reachJudge: (@Sendable (String) async -> Bool)?
+    private var reachJudgeOwner: UUID?
+    /// Host ids of account devices welcomed in this run: whose TURN logins a cut of every account device withdraws.
+    private var reachWelcomed: Set<String> = []
     private struct ServeLease: Sendable {
         let id: UUID
         let ownerID: String
@@ -233,6 +243,16 @@ public actor BackendRemoteHost {
         var attachmentBoundaries: [String: Attachment] = [:]
         var pendingAttachmentEvents: [String: [BackendRemoteServePTYEvent]] = [:]
         var ownSessions: [NativeRPCValue] = []
+        /// 14 Nov (phones ask 4): the Tasks lists this connection read (its `panel.read`, without its rid), by path and
+        /// view, so a task change sends each one again, unasked (`tasksChanged`). Newest 16.
+        var taskReads: [String: BackendRemoteClientMessage] = [:]
+        /// 14 Nov (phones fault 2): the Agents lists this connection read (`panel.read` agents, a list view, never an
+        /// `agent:<id>` page), without its rid, by view, so a session's state change sends each one again, unasked
+        /// (`agentsChanged`): a project page's Agents card keeps the same state as the session lists. Newest 4.
+        var agentReads: [String: BackendRemoteClientMessage] = [:]
+        /// 14 Nov phone link: the last unasked list sent to this connection, per panel and read (a hash of the frame),
+        /// so a change that leaves a list as it was sends nothing (`pushRememberedReads`).
+        var pushedLists: [String: Int] = [:]
         var timer: Task<Void, Never>?
         /// PHONE2: when this connection last typed into each session (host clock, ms).
         var lastInput: [String: Double] = [:]
@@ -266,6 +286,14 @@ public actor BackendRemoteHost {
     private var recordedTried: [String: Double?] = [:]
     private var recordedReading: Task<[RecordedRead], Never>?
     public func setRecordedActivity(_ reader: (@Sendable (NativeRPCValue) -> Double?)?) { recordedActivity = reader }
+    /// 14 Nov phone asks (`BackendPhoneStartText`): the first-message delivery, the phones' start rids, the Mac's
+    /// own New session default folder.
+    var startTextDelivery: BackendPhoneStartText.Deliver?
+    var startRids = BackendPhoneStartText.Rids()
+    /// First messages held until their start's `created` went out on that connection (`startDeliveries`).
+    var startDeliveriesWaiting: [UUID: [String]] = [:]
+    var startDeliveryJobs: [String: (job: BackendPhoneStartText.Job, rid: String?, deviceID: String, deliver: BackendPhoneStartText.Deliver)] = [:]
+    var defaultStartFolder: (@Sendable () -> String?)?
     /// stream step 2: the app's WebRTC layer (TerminalDeckPeer); only the app sets it.
     public func setLinkEngine(_ engine: (any BackendLinkEngine)?) async {
         linkEngine = engine
@@ -412,6 +440,44 @@ public actor BackendRemoteHost {
             if live[id]?.device?.id == device.id { result.append(value) }
         }; return result
     }
+    /// Reach by account: the device was removed (or reach went off, or this Mac signed out): its live connections
+    /// end now. nil = every account device. Paired devices are never touched.
+    public func dropReachDevices(_ deviceIds: Set<String>?) async {
+        let hostIds = deviceIds.map { Set($0.map(BackendReachAdmission.hostDeviceId)) }
+        // Each connection ends whole (finishConnection): its relay channel, its direct link (data channels and the
+        // peer connection, even when the relay channel had already closed under it), its session streams and screen
+        // or simulator watches (the features' connection-closed hooks), its window asks and credentials.
+        var dropped: Set<String> = []
+        for connection in Array(live.keys) {
+            guard let reach = live[connection]?.wire.reach else { continue }
+            if let hostIds, !hostIds.contains(reach.hostDeviceId) { continue }
+            dropped.insert(reach.hostDeviceId)
+            await disconnect(connection, code: 1008, reason: "This device can no longer reach this Mac.")
+        }
+        if let deviceIds { for id in deviceIds { await trust.forgetReachDevice(BackendReachAdmission.hostDeviceId(id)) } }
+        else { await trust.forgetReachDevice(nil) }
+        // Its TURN login (the direct link's way out) is withdrawn now, not after the 2-minute reconnect grace.
+        let named = hostIds ?? reachWelcomed
+        linkEligible.subtract(named.union(dropped))
+        reachWelcomed.subtract(named.union(dropped))
+        if let engine = linkEngine {
+            for device in named.union(dropped).sorted() { await engine.release(device: device, force: dropped.contains(device)) }
+        }
+    }
+    public func setReachJudge(owner: UUID, _ judge: @escaping @Sendable (String) async -> Bool) {
+        reachJudgeOwner = owner; reachJudge = judge
+    }
+    /// The coordinator `owner` stopped or signed out: no account device is welcomed until another one starts.
+    public func endReachJudge(owner: UUID) {
+        guard reachJudgeOwner == owner else { return }
+        reachJudge = { _ in false }
+    }
+    private func reachStillAdmitted(_ deviceId: String) async -> Bool {
+        guard let reachJudge else { return true }
+        return await reachJudge(deviceId)
+    }
+    /// Account devices connected now (device ids, not host ids).
+    public func reachConnectedDeviceIds() -> Set<String> { Set(live.values.compactMap { $0.wire.reach?.deviceId }) }
     public func remoteServeDropDevice(_ id: String) async {
         await phoneAccessChanged(id)
         for connection in live.keys.filter({ live[$0]?.device?.id == id }) { await disconnect(connection, code: 1008, reason: "This device is no longer approved.") }
@@ -510,7 +576,9 @@ public actor BackendRemoteHost {
         var attentionMoved = false
         if case .status(let id, let current) = item.event {
             if accepted[id] != nil { return } // the app's accepted status speaks for this session (`noteAcceptedStatus`)
-            attentionMoved = (status[id] ?? manager.knownStatus(id)).map { ($0 == .input) != (current == .input) } ?? (current == .input)
+            let before = status[id] ?? manager.knownStatus(id)
+            attentionMoved = before.map { ($0 == .input) != (current == .input) } ?? (current == .input)
+            if before != current { agentsChanged() } // the Agents lists a phone read show this state (fault 2)
             status[id] = current
         }
         if case .data(let id, _) = item.event { lastOutput[id] = clock() }
@@ -535,6 +603,7 @@ public actor BackendRemoteHost {
         let before = accepted[id] ?? status[id] ?? manager.knownStatus(id)
         accepted[id] = value
         guard before != value, manager.list().contains(where: { $0.id == id && $0.exitCode == nil }) else { return }
+        agentsChanged() // the Agents lists a phone read show this state (fault 2)
         // A device still receiving its attach gets the status at the end of it (`deliverSession`).
         for connection in Array(live.keys) where live[connection]?.attachmentBoundaries[id]?.ready != false {
             await deliverSessionEvent(.status(id: id, status: value), connectionID: connection)
@@ -608,6 +677,21 @@ public actor BackendRemoteHost {
         signalPTYWaiters()
         announce()
     }
+    /// 14 Nov phone link: this connection's waiting output for `session` fell behind a slow link and was dropped from its
+    /// outbox (`BackendRemoteLinkOutbox`): it is sent the session afresh, as a re-open or `take` sends it (`attached`, its
+    /// screen as history, its status), then live output again. His view jumps to now; nothing on the Mac is lost.
+    /// Unasked lists were thrown away with a link before they went: none counts as delivered, so the next one goes.
+    func forgetPushedLists(_ id: UUID) { live[id]?.pushedLists = [:] }
+    /// 14 Nov phone link: a chat page's size for this connection while its link is slow (nil: the usual frame limit).
+    /// The phone already pages back from whatever page it is given (`first`/`total`, `chats.older`).
+    public static let slowPageBytes = 64 * 1024
+    public func pageBudget(_ id: UUID) -> Int? { live[id]?.link.path.isSlow == true ? Self.slowPageBytes : nil }
+    func resyncSession(_ id: UUID, _ session: String) async {
+        guard let row = live[id] else { return }
+        guard row.attached.contains(session), let ptySource, serveLease != nil else { row.link.path.resyncAbandoned(session); return }
+        BackendRemoteRelayClient.note("link: \(row.device?.name ?? "a device") fell behind on \(session.prefix(8)); its screen is sent afresh")
+        do { try await deliverSession(id, session, from: ptySource) } catch { live[id]?.link.path.resyncAbandoned(session) }
+    }
     /// 28 Oct: after a device took the session at a new size, wait for the program to finish redrawing before its
     /// screen is read for that device: until its output has been quiet for 120 ms, never longer than 600 ms.
     private func settle(_ session: String) async {
@@ -624,6 +708,8 @@ public actor BackendRemoteHost {
         let path = BackendRemoteLinkPath(relay: wire.send)
         live[id] = Connection(wire: wire, link: BackendRemoteLinkState(path: path),
                               writer: BackendRemoteServeWireWriter(write: { text in try await path.write(text) }), connectedAt: clock())
+        path.onResync { [weak self] session in Task { await self?.resyncSession(id, session) } }
+        path.onListsLost { [weak self] in Task { await self?.forgetPushedLists(id) } }
         live[id]?.timer = Task { [weak self] in
             try? await self?.sleep(10_000)
             guard !Task.isCancelled else { return }
@@ -868,6 +954,10 @@ public actor BackendRemoteHost {
                         ptySource?.kill(session.id)
                         throw BackendRemoteTrustFailure.denied("This device is no longer approved for that folder.")
                     }
+                    // 14 Nov phone asks: its rid on the session, its first message delivered (both only when claimed).
+                    phoneStarted(connection: id, deviceID: context.deviceID, meta: session, rid: message["rid"].string, text: message["text"].string)
+                    defer { startDeliveries(id) } // only after `created` went out
+                    try await send(id, createdFrame(session, rid: message["rid"].string, connection: id)); try await broadcastSessions(); return
                 }
                 try await send(id, outcome.message()); try await broadcastSessions(); return
             }
@@ -884,7 +974,9 @@ public actor BackendRemoteHost {
                 throw BackendRemoteTrustFailure.denied("This device is no longer approved for that folder.")
             }
             _ = try? await trust.remoteServeIncludeStartedSession(context.deviceID, sessionID: session.id)
-            try await send(id, BackendRemoteServeSessionCreate.Outcome.created(session).message())
+            phoneStarted(connection: id, deviceID: context.deviceID, meta: session, rid: message["rid"].string, text: message["text"].string)
+            defer { startDeliveries(id) } // only after `created` went out
+            try await send(id, createdFrame(session, rid: message["rid"].string, connection: id))
             try await broadcastSessions()
         case "close", "rename":
             let session = message["id"].string!
@@ -916,6 +1008,10 @@ public actor BackendRemoteHost {
             if message.type == "window.holds" { await serveLease?.hooks.windowHolds(message, context.deviceID) }
             if message.type == "sessions.mine" { live[id]?.ownSessions = message["sessions"].elements ?? []; announce() }
             try await trust.requirePhoneAccess(context.deviceID, message: message.type, panel: message["panel"].string)
+            if message.type == "panel.read", message["panel"].string == "tasks" { noteTaskRead(id, message) }
+            if message.type == "panel.read", message["panel"].string == "agents" { noteAgentRead(id, message) }
+            // `chats.new` (14 Nov): a first message it holds begins only after its answers went out.
+            defer { if message.type == "chats.new" { startDeliveries(id) } }
             for answer in try await feature.handle(message, context) { try await send(id, answer) }
         }
     }
@@ -936,6 +1032,29 @@ public actor BackendRemoteHost {
         // Before any scrypt: a device (or pairing address) reconnecting too often is told to slow down and waits.
         if let wait = reconnects.admit(BackendRemoteReconnectThrottle.key(token: token, address: row.wire.address), now: Date().timeIntervalSince1970) {
             await refuse(id, code: "unavailable", message: BackendRemoteReconnectThrottle.slowDown(wait), close: 1013)
+            return
+        }
+        // Reach by account: no secret is sent. The reach door already proved the device holds its registered reach
+        // key; the hello names that same device, and the wire's peer key must be the key the door admitted.
+        if row.wire.reach != nil || token.hasPrefix("reach:") {
+            guard let admission = row.wire.reach, token == admission.helloToken, let peer = row.wire.peerPublicKey,
+                  BackendRemoteTrustStorage.equal(peer, admission.reachKey) else {
+                throw BackendRemoteTrustFailure.denied("This device is not allowed in.")
+            }
+            // Removed, switched off or signed out since the door let its handshake through: refused here too.
+            guard await reachStillAdmitted(admission.deviceId) else {
+                await refuse(id, code: "unauthorized", message: "This device can no longer reach this Mac.", close: 1008)
+                return
+            }
+            let device = await trust.admitReachDevice(admission)
+            // A cut that ran during the awaits above found no device on this connection yet: judged once more.
+            guard live[id] != nil, await reachStillAdmitted(admission.deviceId) else {
+                if !live.values.contains(where: { $0.device?.id == device.id }) { await trust.forgetReachDevice(device.id) }
+                await refuse(id, code: "unauthorized", message: "This device can no longer reach this Mac.", close: 1008)
+                return
+            }
+            reachWelcomed.insert(device.id)
+            try await welcome(id, row: row, message: message, device: device)
             return
         }
         if !token.contains("."), token.utf8.count >= 32 {
@@ -959,6 +1078,10 @@ public actor BackendRemoteHost {
             return
         }
         let device = try await trust.verify(token, address: row.wire.address, peerKey: row.wire.peerPublicKey)
+        try await welcome(id, row: row, message: message, device: device)
+    }
+    /// The verified hello's answer, the same for a paired device and an account device.
+    private func welcome(_ id: UUID, row: Connection, message: BackendRemoteClientMessage, device: BackendRemoteDevice) async throws {
         guard live[id] != nil else { return }
         live[id]?.device = device; live[id]?.platform = message["device"]["platform"].string ?? "unknown"
         // §11.1: a phone or the web on the relay gets nothing but the hello's answers until its terms are set below (a
@@ -972,6 +1095,7 @@ public actor BackendRemoteHost {
         var fields: [NativeRPCValue.Field] = [.init("protocol", .number(1)), .init("deviceId", .string(device.id)), .init("deviceName", .string(device.name)),
             .init("token", .null), .init("sessions", .array(context.phoneAccess == nil || context.phoneAccess == .hoot ? [] : try await sessions(context))), .init("capabilities", .array(capabilities(context).map(NativeRPCValue.string))),
             .init("hostPlatform", .string("darwin")), .init("hostName", .string(self.name)), .init("appVersion", .string(appVersion)), .init("hostKind", .string("desktop"))]
+        fields = Self.withMachine(fields)
         if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil { fields.append(.init("folders", .array(context.reach.folders.map(NativeRPCValue.string)))) }
         if let link = await Self.hootWelcomeLink(context, served: features["hoot.hello"] != nil, trust: trust) { fields.append(.init("hoot", link)) } // PHONE2
         // stream step 2: this host offers a link to a client that asked for one on a sealed connection; §11: a client that
@@ -996,6 +1120,8 @@ public actor BackendRemoteHost {
     }
     private func enroll(_ id: UUID, _ message: BackendRemoteClientMessage) async throws {
         guard let row = live[id], row.device == nil else { throw BackendRemoteTrustFailure.denied("This connection already authenticated.") }
+        // An account channel never enrolls: its only way in is its `reach:` hello.
+        guard row.wire.reach == nil else { throw BackendRemoteTrustFailure.denied("This device is not allowed in.") }
         if let lease = serveLease {
             try await lease.suppliers.requireReady()
             guard let enrollment = lease.suppliers.enrollment else { await unavailable(id, "Sign-in is not switched on for this machine. Pair it with a code instead."); return }
@@ -1036,7 +1162,12 @@ public actor BackendRemoteHost {
         if context.claimedCapabilities.contains("device.access") { enabled.insert("device.access") }
         if context.claimedCapabilities.contains(Self.pictureCapability) { enabled.insert(Self.pictureCapability) }
         if context.claimedCapabilities.contains(Self.handoffCapability) { enabled.insert(Self.handoffCapability) }
-        if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil { enabled.insert("create") }
+        if serveLease?.suppliers.create != nil || serveLease == nil && operations.create != nil {
+            enabled.insert("create")
+            // 14 Nov phone asks: said back only to a phone that claimed them (an older phone is sent nothing new).
+            if context.claimedCapabilities.contains(BackendPhoneStartText.ridCapability) { enabled.insert(BackendPhoneStartText.ridCapability) }
+            if startTextDelivery != nil, context.claimedCapabilities.contains(BackendPhoneStartText.textCapability) { enabled.insert(BackendPhoneStartText.textCapability) }
+        }
         if operations.close != nil { enabled.insert("close") }
         if operations.rename != nil { enabled.insert("rename") }
         var supplied: [String: Set<String>] = [:]
@@ -1065,8 +1196,12 @@ public actor BackendRemoteHost {
         else { hidden = { @Sendable (id: String) -> Bool in BackendRemoteServeSessionHidden.shared.contains(id) } }
         // host-core.ts hides by register + desk-Hoot identity, never by origin:
         // sessions Hoot or a routine started for the person stay ordinary work.
+        // 14 Nov (phones ask 1): the Mac's own New session default folder, last, so the first shared project stays first
+        // for an older phone. `reach` uses `offered` only for the person's own device; a guest's folders are its grants.
+        // With nothing else offered, home stays first, as `reach` gave it before.
         let rawOffered = await state.getProjects().compactMap { $0["path"].string } + sessionRows.filter { !hidden($0.id) }.map(\.cwd)
-        let offered = BackendRemoteServeSessionPolicy.offeredFolders(rawOffered, sessions: sessionRows, hidden: hidden)
+        var offered = BackendRemoteServeSessionPolicy.offeredFolders(rawOffered, sessions: sessionRows, hidden: hidden)
+        if let folder = defaultStartFolder?(), folder.hasPrefix("/") { offered = (offered.isEmpty ? [home] : offered) + [folder] }
         let reach = await trust.reach(device.id, offered: offered, home: home)
         let effective: BackendRemoteDeviceReach
         if let lease = serveLease {
@@ -1108,7 +1243,11 @@ public actor BackendRemoteHost {
     private func sessions(_ context: BackendRemoteHostContext) async throws -> [NativeRPCValue] {
         var result: [NativeRPCValue] = []
         let seen = await ledgerSeen()
-        for session in sessionSource where try await visible(session.id, context: context) { result.append(sessionValue(session, seen: seen[session.id])) }
+        for session in sessionSource where try await visible(session.id, context: context) {
+            let row = sessionValue(session, seen: seen[session.id])
+            // 14 Nov (`start.rid`): the rid of this device's own start, as its row's `rid`, for a phone that claimed it.
+            result.append(startRid(session.id, context: context).map { row.setting("rid", .string($0)) } ?? row)
+        }
         return result
     }
     /// When each remembered session last really did something, as its ledger kept it across app restarts
@@ -1167,7 +1306,43 @@ public actor BackendRemoteHost {
             .init("status", .string(state.rawValue)), .init("exitCode", meta.exitCode.map { .number(Double($0)) } ?? .null),
             .init("lastActivityAt", .number(Self.lastActivityAt(meta, live: manager.lastActivity(meta.id), seen: seen)))])
         // Additive: a phone that knows chats lists this one with them; an older phone ignores the field.
-        return meta.chat == true ? row.setting("chat", .bool(true)) : row
+        return Self.withTab(meta.chat == true ? row.setting("chat", .bool(true)) : row, meta)
+    }
+    /// The id join (15 Nov, live use): a session with a saved tab says it as `tab`, the very id its Cloud row has
+    /// (`BackendCloudChats.cloudID`), so phones and the web see ONE session, not a live row beside its Cloud row.
+    /// Without a saved tab the field is left out (its Cloud id is its own `id`). Added last: the rest is unchanged.
+    static func withTab(_ row: NativeRPCValue, _ meta: BackendSessionMeta) -> NativeRPCValue {
+        BackendCloudChats.liveTab(meta).map { row.setting("tab", .string($0)) } ?? row
+    }
+    /// The live list's header (`sessions` and `welcome`): this Mac's `machine`, the id the Cloud's session rows name it
+    /// by, while it is signed in; left out otherwise.
+    static func withMachine(_ fields: [NativeRPCValue.Field]) -> [NativeRPCValue.Field] {
+        guard let ref = BackendCloudChatsMachine.shared.current else { return fields }
+        return fields + [.init("machine", .string(ref))]
+    }
+    /// Sessions in the Cloud (15 Nov, step 1): every session this Mac lists, with the SAME status and last-real-use time
+    /// its phones get (`sessionValue`, `ledgerSeen`), for this Mac's own list in the Cloud (`BackendCloudChats`). The
+    /// account's own list, so no device filter applies; sessions the app hides from every list stay out. Read only.
+    public func cloudListed() async -> [BackendCloudChatsListedSession] {
+        let seen = await ledgerSeen()
+        return sessionSource.filter { !BackendRemoteServeSessionHidden.shared.contains($0.id) }.map { meta in
+            let row = sessionValue(meta, seen: seen[meta.id])
+            return BackendCloudChatsListedSession(meta: meta, status: row["status"].string ?? "idle",
+                                                  lastUsedAt: row["lastActivityAt"].number ?? meta.createdAt)
+        }
+    }
+    /// Earlier chats (15 Nov): the names the app still keeps for its sessions, by every conversation each one had, so a
+    /// past history is named as the side panel named it. Read only.
+    public func cloudKnownNames() async -> [String: String] {
+        guard let entries = try? await state.ledgerEntries() else { return [:] }
+        var names: [String: String] = [:]
+        for entry in entries {
+            guard let title = entry.saved["title"].string?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { continue }
+            let ids = [entry.saved["agentSessionId"].string].compactMap { $0 }
+                + (entry.saved[NativeOpenSessionLedger.knownConversationsKey].elements ?? []).compactMap(\.string)
+            for id in ids where names[id] == nil { names[id] = title }
+        }
+        return names
     }
     /// Test seam: the status a phone's session list shows for this session now.
     func listedStatusForTesting(_ id: String) -> String? {
@@ -1225,8 +1400,149 @@ public actor BackendRemoteHost {
         }
         announce()
     }
-    private func broadcastSessions() async throws { for id in Array(live.keys) { if let context = try await context(id) { try await sendSessions(id, context: context) } } }
-    private func sendSessions(_ id: UUID, context: BackendRemoteHostContext) async throws { try await send(id, .init(.sessions, fields: [.init("sessions", .array(try await sessions(context)))])) }
+    // MARK: 14 Nov (phones ask 4): task lists sent again when tasks change
+
+    private var tasksPush: Task<Void, Never>?
+    private var tasksFirstChange: Double?
+    private var tasksLastChange: Double = 0
+    private func noteTaskRead(_ id: UUID, _ message: BackendRemoteClientMessage) {
+        guard var row = live[id] else { return }
+        let key = (message["path"].string ?? "") + "\u{0}" + (message["scope"].string ?? "")
+        if row.taskReads[key] == nil, row.taskReads.count >= 16, let oldest = row.taskReads.keys.sorted().first { row.taskReads[oldest] = nil }
+        row.taskReads[key] = BackendRemoteClientMessage(message.value.removing("rid"))
+        live[id] = row
+    }
+    /// When the resend goes: a quarter second after the LAST change, and never later than two seconds after the first
+    /// change it waits for (host clock, ms).
+    static func tasksPushDue(firstChange: Double, lastChange: Double) -> Double { min(lastChange + 250, firstChange + 2000) }
+    /// The app's `tasks:changed`. Once quiet (`tasksPushDue`), every connection that read a Tasks list is sent that list
+    /// again as an unasked `panel.rows` (no rid: the frame the phones already store and redraw when it arrives, iOS
+    /// `HostLink` `.panelRows` → `tasksAnswers[path]`, Android `HostLink` panel rows). Each is read again through the same
+    /// checks as the phone's own read (session host ready, access level, policy, folder), as that device now; a read
+    /// that is refused or fails is dropped silently. A connection that never read Tasks is sent nothing.
+    public func tasksChanged() {
+        let now = clock()
+        tasksLastChange = now
+        if tasksFirstChange == nil { tasksFirstChange = now }
+        guard tasksPush == nil else { return }
+        tasksPush = Task { [weak self] in await self?.waitForQuietTasks() }
+    }
+    private func waitForQuietTasks() async {
+        while let first = tasksFirstChange {
+            let wait = Self.tasksPushDue(firstChange: first, lastChange: tasksLastChange) - clock()
+            if wait <= 0 { break }
+            do { try await sleep(max(1, Int(wait.rounded(.up)))) } catch { break }
+        }
+        await pushTaskLists()
+    }
+    /// Returns how many lists were sent (tests).
+    @discardableResult
+    func pushTaskLists() async -> Int {
+        tasksPush = nil; tasksFirstChange = nil
+        return await pushRememberedReads(panel: "tasks") { $0.taskReads.values.map { $0 } }
+    }
+    // 14 Nov phone link (Asad: "it's doing too much of re-connecting ... takes half a minute"): every message to a phone
+    // rides ONE ordered control channel with no limit of its own, and the phone ends the link when its heartbeat's pong
+    // is more than 10 s late (iOS LiveTransport.beat, every 25 s). Over TURN a busy session's unasked lists queued up in
+    // front of the pong and the keystrokes' echo. An unasked list now goes only to a phone whose link has settled and
+    // whose control channel is nearly empty, never twice the same, and one held back goes later instead.
+    /// A link that opened less than this long ago is still taking its opening answers (host clock, ms).
+    static let pushSettleMs: Double = 5_000
+    /// More than this many bytes waiting on a connection's control channel: the phone is still taking earlier frames.
+    static let pushMostQueued: UInt64 = 32 * 1024
+    /// A list held back is tried again this much later (ms).
+    static let pushRetryMs = 2_000
+    /// Whether an unasked list may go to this connection now: no link (a plain socket), or a link open for
+    /// `pushSettleMs` whose control channel holds at most `pushMostQueued` bytes.
+    static func pushMayGo(link: BackendRemoteLinkState, now: Double) -> Bool {
+        guard link.token != nil else { return true }
+        guard link.open, link.path.hasMoved, now - link.openedAt >= pushSettleMs else { return false }
+        // What waits in the link's outbox counts as well as the channel's own queue (the outbox keeps that one low).
+        return (link.connection?.queued(.control) ?? 0) + UInt64(link.path.outboxWaitingBytes) <= pushMostQueued
+    }
+    private var pushRetry: [String: Task<Void, Never>] = [:]
+    /// Sends each remembered read of `panel` again through the panels feature, as that device now (see `tasksChanged`).
+    private func pushRememberedReads(panel: String, _ reads: (Connection) -> [BackendRemoteClientMessage]) async -> Int {
+        guard let feature = features["panel.read"] else { return 0 }
+        // As the normal read: the session host's suppliers must be ready (`dispatch`'s requireReady).
+        if let lease = serveLease, (try? await lease.suppliers.requireReady()) == nil { return 0 }
+        var sent = 0, heldBack = false
+        for (id, row) in live where !reads(row).isEmpty {
+            guard Self.pushMayGo(link: row.link, now: clock()) else { heldBack = true; continue }
+            guard let context = try? await context(id), feature.policy != .ownerOnly || context.kind == .mine,
+                  feature.policy != .windowGrant || context.reach.drivesWindows,
+                  (try? await trust.requirePhoneAccess(context.deviceID, message: "panel.read", panel: panel)) != nil else { continue }
+            for message in reads(row) {
+                guard let answers = try? await feature.handle(message, context) else { continue }
+                for answer in answers where answer.kind == .panelRows && answer.value["rid"] == .missing {
+                    let key = panel + "\u{0}" + (message["path"].string ?? "") + "\u{0}" + (message["scope"].string ?? "")
+                    let print = (try? BackendRemoteProtocol.serialize(answer))?.hashValue
+                    if let print, live[id]?.pushedLists[key] == print { continue } // the list the phone already has
+                    if (try? await send(id, answer)) != nil {
+                        sent += 1
+                        if let print { live[id]?.pushedLists[key] = print }
+                    }
+                }
+            }
+        }
+        if heldBack, pushRetry[panel] == nil {
+            pushRetry[panel] = Task { [weak self] in
+                try? await self?.sleep(Self.pushRetryMs)
+                await self?.retryPush(panel)
+            }
+        }
+        return sent
+    }
+    private func retryPush(_ panel: String) async {
+        pushRetry[panel] = nil
+        if panel == "agents" { agentsChanged() } else { tasksChanged() }
+    }
+
+    /// The Mac's own New session default folder as this host offers it (`defaultFolder`), for the phone panel door.
+    public func offeredDefaultFolder() -> String? { defaultStartFolder?() }
+
+    // MARK: 14 Nov (phones fault 2): Agents lists sent again when a session's state changes
+
+    private var agentsPush: Task<Void, Never>?
+    private var agentsFirstChange: Double?
+    private var agentsLastChange: Double = 0
+    private func noteAgentRead(_ id: UUID, _ message: BackendRemoteClientMessage) {
+        guard var row = live[id] else { return }
+        let view = message["scope"].string ?? ""
+        guard !view.hasPrefix("agent:") else { return }
+        if row.agentReads[view] == nil, row.agentReads.count >= 4, let oldest = row.agentReads.keys.sorted().first { row.agentReads[oldest] = nil }
+        row.agentReads[view] = BackendRemoteClientMessage(message.value.removing("rid"))
+        live[id] = row
+    }
+    /// A session's state changed (the app's `agents-watch:changed`, or the session list this host sends). Once quiet
+    /// (the same `tasksPushDue`), every connection that read an Agents list is sent it again as an unasked `panel.rows`
+    /// (no rid; iOS `HostLink` `.panelRows` → `panels[.agents]`, Android the panel's answer), read again through the
+    /// same provider, checks and live-state rule as its own read (`seesThisMacsLiveAgents`). Nothing for any other.
+    public func agentsChanged() {
+        guard live.values.contains(where: { !$0.agentReads.isEmpty }) else { return }
+        let now = clock()
+        agentsLastChange = now
+        if agentsFirstChange == nil { agentsFirstChange = now }
+        guard agentsPush == nil else { return }
+        agentsPush = Task { [weak self] in await self?.waitForQuietAgents() }
+    }
+    private func waitForQuietAgents() async {
+        while let first = agentsFirstChange {
+            let wait = Self.tasksPushDue(firstChange: first, lastChange: agentsLastChange) - clock()
+            if wait <= 0 { break }
+            do { try await sleep(max(1, Int(wait.rounded(.up)))) } catch { break }
+        }
+        await pushAgentLists()
+    }
+    /// Returns how many lists were sent (tests).
+    @discardableResult
+    func pushAgentLists() async -> Int {
+        agentsPush = nil; agentsFirstChange = nil
+        return await pushRememberedReads(panel: "agents") { $0.agentReads.values.map { $0 } }
+    }
+
+    private func broadcastSessions() async throws { agentsChanged(); for id in Array(live.keys) { if let context = try await context(id) { try await sendSessions(id, context: context) } } }
+    private func sendSessions(_ id: UUID, context: BackendRemoteHostContext) async throws { try await send(id, .init(.sessions, fields: Self.withMachine([.init("sessions", .array(try await sessions(context)))]))) }
     private func send(_ id: UUID, _ message: BackendRemoteServerMessage) async throws {
         guard let row = live[id] else { throw NativeRPCError(code: "unavailable", message: "The remote connection is closed.") }
         let stamped = Self.stamped(message, to: id), text = try BackendRemoteProtocol.serialize(stamped)
@@ -1256,6 +1572,8 @@ public actor BackendRemoteHost {
     }
     private func finishConnection(_ id: UUID, closeWire: (Int, String)?) async {
         guard let row = live.removeValue(forKey: id) else { return }
+        // A first message whose start was never answered on it is dropped (the phone keeps its text, PHONES-NEXT-12c).
+        for session in startDeliveriesWaiting.removeValue(forKey: id) ?? [] { startDeliveryJobs[session] = nil }
         signalPTYWaiters()
         // Reads still running for it stop (29 Oct, Reviewer): nobody is left to answer.
         for read in row.pipeline.reads.values { read.cancel() }

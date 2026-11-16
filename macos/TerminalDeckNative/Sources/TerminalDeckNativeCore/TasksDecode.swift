@@ -115,7 +115,9 @@ public enum TasksDecode {
             stalled: stall(r["stalled"]), waitingOn: J.strings(r["waitingOn"]), createdAt: J.count(r["createdAt"], 0),
             keepAliveUntilClose: J.bool(r["keepAliveUntilClose"]), parentTaskId: J.text(r["parentTaskId"]),
             parentExternalTaskId: J.text(r["parentExternalTaskId"]), reviewerTaskId: J.text(r["reviewerTaskId"]),
-            reviewOfTaskId: J.text(r["reviewOfTaskId"]), projectID: J.text(r["projectId"]))
+            reviewOfTaskId: J.text(r["reviewOfTaskId"]), projectID: J.text(r["projectId"]),
+            workingElsewhere: J.text(r["workingOnName"]),
+            copyFrom: J.record(r["cloudCopy"]).map { "From \(J.text($0["system"]) ?? "its CRM"), on \(J.text($0["mac"]) ?? "another Mac")" })
     }
 
     static func goal(_ raw: Any?) -> GoalRow? {
@@ -148,7 +150,7 @@ public enum TasksDecode {
             trash: (r["trash"] as? [Any] ?? []).compactMap(task),
             outbox: (J.int(outbox["pending"], 0), J.int(outbox["undelivered"], 0)),
             localStatuses: localStatuses.isEmpty ? DEFAULT_CRM_STATUSES.statuses : localStatuses,
-            goals: (r["goals"] as? [Any] ?? []).compactMap(goal))
+            goals: (r["goals"] as? [Any] ?? []).compactMap(goal), elsewhere: J.strings(r["elsewhere"]))
     }
 
     public static func result(_ raw: Any?) -> TasksResult {

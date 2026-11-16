@@ -400,6 +400,8 @@ public struct BackendAppDeviceToolService: BackendDeckToolsMachinesDeviceService
     }
     public func type(_ id: String, text: String) async throws {
         if !text.isEmpty, try await directly(id, .type(text)) { return }
+        // A tool's typing: not marked as his (BackendSimulatorPasteboard.typingForPerson), so the simulator's pasteboard
+        // path refuses when it would reach his Mac clipboard (MAC-NEXT-15b, default since 15c).
         try await manager.type(id, text: text)
     }
     public func key(_ id: String, key: String, modifiers: [String]) async throws {

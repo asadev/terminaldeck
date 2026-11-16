@@ -158,10 +158,14 @@ public struct BackendBrowserDownloadsRPC: Sendable {
             let after = try await downloads.clear(context: context).items.count
             return .object([.init("cleared", .number(Double(max(0, before - after)))), .init("note", .string("Only the rows went. Every file is where it was."))])
         case "open", "reveal":
+            // A tool never opens another app or brings Finder forward (Asad 13 Nov): the file's path goes back to the
+            // caller; only the person's own Downloads buttons open or show it.
             let id = try raw["download"].requireString("download", nonempty: true)
-            let result = try await (action == "open" ? downloads.open(id, context: context) : downloads.reveal(id, context: context))
-            guard result.ok else { throw NativeRPCError(code: "download-open", message: result.message) }
-            return .object([.init("download", .string(id)), .init(action == "open" ? "opened" : "shown", .bool(true))])
+            guard let row = try await downloads.view(context: context).items.first(where: { $0.id == id }) else {
+                throw NativeRPCError(code: "download-open", message: "That download is no longer listed.")
+            }
+            return .object([.init("download", .string(id)), .init(action == "open" ? "opened" : "shown", .bool(false)), .init("path", .string(row.path)),
+                .init("forThePerson", .string("The file is at this path; the person opens or shows it himself."))])
         case "destination":
             let machine = try optional("machineId")
             var folder = try optional("folder")

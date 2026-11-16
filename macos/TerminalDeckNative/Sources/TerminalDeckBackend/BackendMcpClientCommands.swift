@@ -112,8 +112,19 @@ public struct BackendMcpClientWriter: Sendable {
         catch { return BackendMcpClientValue.failure(error.localizedDescription) }
     }
     public func remove(_ raw: NativeRPCValue) async -> NativeRPCValue {
-        do { let request = try BackendMcpClientCommands.validateRemove(raw); return await execute(["mcp", "remove", "--scope", request["scope"].string!, request["name"].string!], project: request["projectPath"].string, quiet: "Removed \(request["name"].string!).") }
-        catch { return BackendMcpClientValue.failure(error.localizedDescription) }
+        do {
+            let request = try BackendMcpClientCommands.validateRemove(raw)
+            // Review fix 1 (Decker): a user-scope server removed in the app is removed EVERYWHERE through the delete
+            // rule (Bin 30 days), so Cloud never brings it back. Not handled (saved passwords off): as before.
+            if request["scope"].string == "user", let name = request["name"].string {
+                do {
+                    if try await BackendCloudKeysRemovals.shared.removeEverywhere(sourceId: "mcp-user", id: name) {
+                        return BackendMcpClientValue.result(true, "Removed \(name).")
+                    }
+                } catch { return BackendMcpClientValue.failure("\(name) could not be removed from your devices just now. Try again in a moment.") }
+            }
+            return await execute(["mcp", "remove", "--scope", request["scope"].string!, request["name"].string!], project: request["projectPath"].string, quiet: "Removed \(request["name"].string!).")
+        } catch { return BackendMcpClientValue.failure(error.localizedDescription) }
     }
     private func execute(_ args: [String], project: String?, quiet: String) async -> NativeRPCValue {
         do {

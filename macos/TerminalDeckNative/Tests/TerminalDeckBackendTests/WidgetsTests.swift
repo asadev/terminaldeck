@@ -86,7 +86,10 @@ final class WidgetsTests: XCTestCase {
         let meta = BackendINT2PhoneTasks.meta(row)
         XCTAssertEqual(meta["completed"].string, "1")
         XCTAssertEqual(meta["archived"].string, "1")
-        XCTAssertEqual(meta["deleted"].string, "1")
+        // Delete rule L6 (305839b7b, 15 Nov): nothing in the Bin is shown to an AI or a phone, so the task view carries no
+        // deletion date and the phone row has no "deleted" word (a Bin task never reaches the list at all).
+        XCTAssertNil(row["deletedAt"].string)
+        XCTAssertNil(meta["deleted"].string)
     }
     func testWeeklyUsesIndicatorFirstWindowAndRejectsExpired() {
         let date = Date(timeIntervalSince1970: 2_000_000), now = date.timeIntervalSince1970 * 1000

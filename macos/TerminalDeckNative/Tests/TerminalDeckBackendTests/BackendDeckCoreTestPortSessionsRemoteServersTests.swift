@@ -34,22 +34,16 @@ final class BackendDeckCoreTestPortSessionsRemoteServersTests: XCTestCase {
         let calls = await channels.calls; XCTAssertTrue(calls.isEmpty)
         XCTAssertEqual(try S.spec("remote.manage").tier,.alter)
     }
-    func testGuestApprovalSentenceNamesDeviceFoldersAndLoginsAndStoppingCostsConnections() async throws {
-        let remote=BackendDeckToolsMachinesRemote(channels:BackendDeckCoreTestPortSessionsChannels(M.remoteAnswers))
-        _ = try await remote.run("remote.status",.object([]),S.context())
-        let sentence=await remote.sentence("remote.manage",S.o([("do",.string("approve")),("deviceId",.string("d-guest")),("kind",.string("guest")),("folders",.array([.string("/work/site")])),("loginShare",.string("selected")),("logins",.array([.string("acct-1")]))]))
-        for expected in ["“Saba’s laptop”","/work/site","acct-1"] {XCTAssertTrue(sentence.contains(expected))}
-        let stop=await remote.sentence("remote.manage",.object([.init("do",.string("stop"))]));XCTAssertTrue(stop.contains("cut off"))
-    }
-    func testGuestApprovalForwardsExactPanelArgumentsAndRequiresFolders() async throws {
+    /// Owner, 13 Nov: letting a waiting device in (as the owner's or a guest) is gone with pairing; the folders a guest
+    /// already has stay changeable (set-folders), and stopping still says what it costs.
+    func testApprovingIsRetiredAndStoppingCostsConnections() async throws {
         let channels=BackendDeckCoreTestPortSessionsChannels(M.remoteAnswers),remote=BackendDeckToolsMachinesRemote(channels:channels)
-        let approved = V.array((M.remoteDevices.elements ?? []).map{$0["id"] == .string("d-guest") ? $0.setting("approved",.bool(true)).setting("status",.string("approved")) : $0})
-        await channels.set("remote:device:approve",approved)
         let args=S.o([("do",.string("approve")),("deviceId",.string("d-guest")),("kind",.string("guest")),("folders",.array([.string("/work/site")])),("loginShare",.string("all"))])
-        _ = try await remote.run("remote.manage",args,S.context())
+        do {_ = try await remote.policy(S.spec("remote.manage"),args,S.context());XCTFail("approve is retired")}
+        catch {XCTAssertEqual((error as? BackendDeckCoreSecurityRefusal)?.message,DevicesPage.joinBySigningIn)}
         let calls=await channels.calls
-        XCTAssertTrue(calls.contains{$0.channel=="remote:device:approve" && $0.args == [.string("d-guest"),.string("guest"),.array([.string("/work/site")]),.string("all"),.array([])]})
-        do {_ = try await remote.policy(S.spec("remote.manage"),args.removing("folders"),S.context());XCTFail("A guest needs folders")}catch{XCTAssertTrue(error.localizedDescription.contains("folders"))}
+        XCTAssertFalse(calls.contains{$0.channel=="remote:device:approve"})
+        let stop=await remote.sentence("remote.manage",.object([.init("do",.string("stop"))]));XCTAssertTrue(stop.contains("cut off"))
     }
     func testRenameIsAnAIActionLikeTheDevicesPage() async throws {
         // The Devices page could rename a phone but no AI could (#306).
@@ -69,10 +63,15 @@ final class BackendDeckCoreTestPortSessionsRemoteServersTests: XCTestCase {
         do {_ = try await remote.policy(S.spec("remote.manage"),args.removing("name"),S.context());XCTFail("Rename needs a name")}catch{XCTAssertTrue(error.localizedDescription.contains("name"))}
         do {_ = try await remote.policy(S.spec("remote.manage"),args.setting("name",.string(String(repeating:"n",count:129))),S.context());XCTFail("Too long")}catch{XCTAssertTrue(error.localizedDescription.contains("128"))}
     }
-    func testRemotePairCodeReturnsOnlyToCallerAndNeverSummary() async throws {
-        let remote=BackendDeckToolsMachinesRemote(channels:BackendDeckCoreTestPortSessionsChannels(M.remoteAnswers))
-        let output=try await remote.run("remote.manage",.object([.init("do",.string("show-code"))]),S.context())
-        XCTAssertEqual(output.value["code"],.string("135790"));XCTAssertFalse(output.summary.compact.contains("135790"))
+    /// Owner, 13 Nov: no tool makes a number for a device to type any more; it answers how devices join.
+    func testRemoteShowCodeIsRetiredAndMintsNothing() async throws {
+        let channels=BackendDeckCoreTestPortSessionsChannels(M.remoteAnswers),remote=BackendDeckToolsMachinesRemote(channels:channels)
+        for verb in BackendDeckToolsMachinesRemote.retired {
+            do {_ = try await remote.run("remote.manage",.object([.init("do",.string(verb))]),S.context());XCTFail(verb)}
+            catch {XCTAssertEqual((error as? BackendDeckCoreSecurityRefusal)?.message,DevicesPage.joinBySigningIn)}
+        }
+        let calls=await channels.calls
+        XCTAssertTrue(calls.isEmpty)
     }
     func testServerShellTierCannotLowerAndNeverReadsGrantAndDescriptionExplainsPower() async throws {
         let servers=M.servers(BackendDeckCoreTestPortSessionsChannels(M.serverAnswers)),tool=try S.spec("servers.shell")

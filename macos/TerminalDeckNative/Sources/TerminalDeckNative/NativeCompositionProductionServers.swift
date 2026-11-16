@@ -45,7 +45,9 @@ extension NativeCompositionProduction {
             }, controls: nil, report: { [report] in report($0.message) },
             // The person's own SSH settings: ssh reads their config and key
             // files when connecting. This app never reads or copies a key.
-            sshHome: configuration.homeDirectory)
+            sshHome: configuration.homeDirectory,
+            // 13 Nov: sign-ins the earlier app sealed with its own key are moved to this app's key (never the dev copy).
+            earlierKey: BackendServersEarlierAppKey.keychain(appName: configuration.appName))
         serversOwner = try await root.installServers(inputs: inputs)
         // access.request_scope (server) and the Docker approval read the SAME store.
         if let room = serversOwner?.room { try serverStoreReference.install(await room.store) }

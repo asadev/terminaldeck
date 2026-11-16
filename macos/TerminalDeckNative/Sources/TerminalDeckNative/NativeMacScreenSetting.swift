@@ -13,7 +13,7 @@ enum NativeMacScreenSetting {
     static let key = "remote.macScreenAllowed"
     static let title = "Phones may view and control this Mac's screen"
     static let detail = "Off: a phone that tries is told why. Your phones' access levels still apply."
-    static let refusal = "This Mac does not let phones view or control its screen. Turn it on at the Mac: Devices → Device access → General → Phones may view and control this Mac's screen."
+    static let refusal = "This Mac does not let phones view or control its screen. Turn it on at the Mac: Settings → Devices → Phones may view and control this Mac's screen."
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cached: Bool?

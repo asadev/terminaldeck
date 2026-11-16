@@ -52,7 +52,7 @@ actor BackendDeckToolsSessionsPortEndpoint: BackendMCPToolEndpoint {
         default: return ["ok": true] as [String: Any]
         }
     }
-    func reveal(_ id: String) async -> Bool { true }
+    func readyForInput(_ id: String) async -> Bool { true }
     func click(_ id: String, cssRect: CGRect) -> Bool { true }
     func focusForTyping(_ id: String) -> Bool { true }
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool { true }

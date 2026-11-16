@@ -10,6 +10,8 @@ public enum BackendMachineChannels {
         "machines:controls:read", "machines:controls:apply", "machines:usage:read", "machines:account:read", "machines:account:switch", "machines:logins:read", "machines:logins:signin", "machines:logins:signout", "machines:send",
         "machines:host:read", "machines:host:restart", "machines:host:stop", "machines:github:read", "machines:github:connect", "machines:github:cancel", "machines:github:disconnect",
         "machines:ports", "machines:hoot:attach", "machines:hoot:detach", "machines:hoot:start", "machines:hoot:refresh", "machines:hoot:say", "machines:open",
+        // Live use from another Mac (15 Nov): his machines reached by sign-in, and a chat session's live messages there.
+        "machines:reach:open", "machines:chats",
     ]
     public struct Handle: Sendable { public let channels: [String] }
     public static func register(registry: NativeChannelRegistry, coordinator: BackendMachineCoordinator,
@@ -18,7 +20,8 @@ public enum BackendMachineChannels {
                                 authorizeCall: @escaping @Sendable (String, NativeRPCContext, [NativeRPCValue]) async throws -> Void = { _, _, _ in },
                                 requireReady: @escaping @Sendable () async throws -> Void = {}) async throws -> Handle {
         let local = ["machines:list", "machines:code", "machines:code:cancel", "machines:pair", "machines:forget", "machines:drive-windows", "machines:rename", "machines:connect", "machines:disconnect",
-            "machines:attach", "machines:detach", "machines:input", "machines:resize", "machines:create", "machines:close", "machines:session:rename", "machines:upload", "machines:upload:cancel", "machines:reach", "machines:reach:close"]
+            "machines:attach", "machines:detach", "machines:input", "machines:resize", "machines:create", "machines:close", "machines:session:rename", "machines:upload", "machines:upload:cancel", "machines:reach", "machines:reach:close",
+            "machines:reach:open", "machines:chats"]
         let requests: [String: (String, String, String)] = [
             "machines:controls:read": ("controls.read", "controls", "controls.reading"), "machines:controls:apply": ("controls.apply", "controls", "controls.applied"),
             "machines:usage:read": ("usage.read", "usage", "usage.reading"), "machines:account:read": ("account.read", "account", "account.state"),
@@ -72,6 +75,10 @@ public enum BackendMachineChannels {
                 case "machines:reach:close":
                     guard let machine = arg(0).string, let port = arg(1).number, port.rounded() == port, port >= 0, port < 65536 else { return .bool(false) }  // ipc.ts:1107
                     await coordinator.closeReach(machine, port: Int(port)); return .bool(true)
+                case "machines:reach:open":
+                    // [machine name?]: dials his machines that are on, by sign-in; answers their link ids.
+                    do { return .array(try await coordinator.openReach(name: arg(0).string).map(NativeRPCValue.string)) }
+                    catch { return outcome(false, error.localizedDescription) }
                 default: break
                 }
                 if let type = requests[channel]?.0, type.hasPrefix("host.") || type.hasPrefix("github.") {  // ipc.ts:1623-1663: null for a malformed or unlinked machine
@@ -88,6 +95,14 @@ public enum BackendMachineChannels {
                     for (key, index) in [("cwd", 1), ("provider", 2)] { if let value = arg(index).string, !value.isEmpty { fields.append(.init(key, .string(value))) } }
                     try await guest.send(type: "create", fields: fields, capability: "create"); return .bool(true)
                 case "machines:close": try await guest.send(type: "close", fields: [.init("id", .string(try text(1, "session")))], capability: "close"); return .bool(true)
+                case "machines:chats":
+                    // [machine, op, chat, text | request | before, approved]: the phones' chats.* on that machine's chat,
+                    // with the rights that machine gives this Mac (an answer needs Full control there, as for a phone).
+                    let op = try text(1, "operation"), chat = try text(2, "chat")
+                    guard let (type, fields) = Self.chatFrame(op, chat: chat, arg(3), arg(4)) else { throw NativeRPCError.invalidArguments("That is not a chat operation.") }
+                    try await guest.send(type: type, fields: fields, capability: "chats")
+                    if op == "watch" || op == "unwatch" { await coordinator.noteChatWatch(guest.id, chat: chat, watching: op == "watch") }
+                    return .bool(true)
                 case "machines:session:rename": try await guest.send(type: "rename", fields: [.init("id", .string(try text(1, "session"))), .init("title", .string(try arg(2).requireString("title")))], capability: "rename"); return .bool(true)
                 default: break
                 }
@@ -136,6 +151,23 @@ public enum BackendMachineChannels {
             }
         }
         return Handle(channels: all)
+    }
+    /// One chat operation as its client frame (pure, tested): watch, unwatch, say, interrupt, answer, older.
+    static func chatFrame(_ op: String, chat: String, _ third: NativeRPCValue, _ fourth: NativeRPCValue) -> (String, [NativeRPCValue.Field])? {
+        let id = NativeRPCValue.Field("id", .string(chat))
+        switch op {
+        case "watch", "unwatch", "interrupt": return ("chats." + op, [id])
+        case "say":
+            guard let text = third.string, !text.isEmpty else { return nil }
+            return ("chats.say", [id, .init("text", .string(text)), .init("clientMessageId", .string(UUID().uuidString.lowercased()))])
+        case "answer":
+            guard let request = third.string, !request.isEmpty, let approved = fourth.bool else { return nil }
+            return ("chats.answer", [id, .init("request", .string(request)), .init("approved", .bool(approved))])
+        case "older":
+            guard let before = third.number, before >= 0, before.rounded() == before else { return nil }
+            return ("chats.older", [id, .init("before", .number(before))])
+        default: return nil
+        }
     }
     private static func outcome(_ ok: Bool, _ message: String) -> NativeRPCValue { .object([.init("ok", .bool(ok)), .init("message", .string(message))]) }
     private static func projected(_ type: String, _ answer: NativeRPCValue) -> NativeRPCValue {

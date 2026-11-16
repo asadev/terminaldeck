@@ -589,19 +589,42 @@ public final class BackendPTYManager: @unchecked Sendable {
 
     /// Input a person typed or pasted, as opposed to what a terminal sends by itself (mouse reports, focus in and
     /// out, answers to the program's questions): anything left once escape sequences are taken out.
+    /// 14 Nov (Asad: "crm session says 27m ago but i did not used this session since yesterday"): a terminal's
+    /// answers that are strings (OSC: its colours, `ESC ] 11;rgb:… ESC \`; DCS: its name, `ESC P >|… ESC \`) and a
+    /// legacy mouse report (`ESC [ M` and three raw bytes) were read as typing. A terminal attaching after an app
+    /// start replays the session's screen, answers the questions in it (Claude asks for both at its start), and the
+    /// session said "used" at every app start or phone attach.
     static func isTyping(_ bytes: Data) -> Bool {
         var index = bytes.startIndex
+        func next() { index = bytes.index(after: index) }
         while index < bytes.endIndex {
             let byte = bytes[index]
             guard byte == 0x1b else { return true }
-            index = bytes.index(after: index)
+            next()
             guard index < bytes.endIndex else { return false }
             let kind = bytes[index]
-            index = bytes.index(after: index)
-            if kind == 0x5b { // CSI: parameters and intermediates, then one final byte
-                while index < bytes.endIndex, !(0x40...0x7e).contains(bytes[index]) { index = bytes.index(after: index) }
-                if index < bytes.endIndex { index = bytes.index(after: index) }
-            } else if kind == 0x4f, index < bytes.endIndex { index = bytes.index(after: index) } // SS3: one more byte
+            next()
+            switch kind {
+            case 0x5b: // CSI: parameters and intermediates, then one final byte
+                let start = index
+                while index < bytes.endIndex, !(0x40...0x7e).contains(bytes[index]) { next() }
+                guard index < bytes.endIndex else { break }
+                let final = bytes[index]
+                next()
+                if final == 0x4d, index == bytes.index(after: start) { // X10 mouse: `ESC [ M` then button, column, row
+                    index = bytes.index(index, offsetBy: 3, limitedBy: bytes.endIndex) ?? bytes.endIndex
+                }
+            case 0x4f: // SS3: one more byte
+                if index < bytes.endIndex { next() }
+            case 0x5d, 0x50, 0x5f, 0x5e, 0x58: // OSC, DCS, APC, PM, SOS: a string up to BEL or ST (`ESC \`)
+                while index < bytes.endIndex {
+                    let c = bytes[index]
+                    next()
+                    if c == 0x07 { break }
+                    if c == 0x1b, index < bytes.endIndex, bytes[index] == 0x5c { next(); break }
+                }
+            default: break // a two-byte escape (Alt with a key, keypad modes): not text written into the session
+            }
         }
         return false
     }
@@ -716,6 +739,16 @@ public final class BackendPTYManager: @unchecked Sendable {
         if let bridge = synchronized({ hostFrontend }), bridge.owns(id) { return (try? bridge.snapshot(id, remount: true))?.remount }
         #endif
         return synchronized { sessions[id]?.remount() }
+    }
+
+    /// Whether the program in this terminal has bracketed paste on now (`ESC[?2004h`), read from the modes in force
+    /// in its remount (this Mac's own reader or its session host's). Nil: a chat, a gone session, or a session host
+    /// older than the remount (14 Nov, a phone's first message follows the session's real paste setting).
+    public func bracketedPaste(_ id: String) -> Bool? {
+        guard !isChat(id), let drawn = remountIfAvailable(id) else { return nil }
+        var modes = BackendTerminalModes()
+        modes.scan(Array(drawn.utf8))
+        return modes.privateModes[2004] ?? false
     }
 
     public func scrollbackText(_ id: String) -> String? {

@@ -93,9 +93,13 @@ import TerminalDeckNativeCore
             .appendingPathComponent("Sources/TerminalDeckNative/NativeHootChat.swift")
         let text = try String(contentsOf: source, encoding: .utf8)
         let frame = try XCTUnwrap(text.range(of: "struct HootMessageFrame<"))
-        let body = String(text[frame.lowerBound...])
-        XCTAssertFalse(body.contains("if hovering || copied"))
-        XCTAssertTrue(body.contains("if row.at > 0 && hovering"))
+        let rest = text[frame.lowerBound...]
+        let end = rest.dropFirst().range(of: "\nstruct ")?.lowerBound ?? rest.endIndex
+        let body = String(rest[..<end])
+        // Asad, 15 Nov (553683b7d): "It should not change on my hover ... They should stay always like this": the time
+        // and every action are always shown; nothing in the message frame depends on hovering.
+        XCTAssertFalse(body.contains("hovering"))
+        XCTAssertTrue(body.contains("if row.at > 0 {"))
         XCTAssertTrue(body.contains("if let onFork"))
         XCTAssertTrue(body.contains("if let onRewind"))
         XCTAssertTrue(body.contains(#".alert("Rewind to here?""#))

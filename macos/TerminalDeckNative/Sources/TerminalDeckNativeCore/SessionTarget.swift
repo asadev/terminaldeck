@@ -115,6 +115,12 @@ public struct RemoteSessionFacts: Equatable, Sendable {
     public let provider: String
     public let status: String
     public let exitCode: Int?
+    /// The id join (15 Nov): the session's Cloud id when it has a saved tab (nil: its Cloud id is its own `id`).
+    public var tab: String? = nil
+    /// An app chat (drawn as a chat, not a terminal).
+    public var chat: Bool = false
+    /// The id its Cloud row has.
+    public var cloudID: String { tab ?? id }
 }
 
 /// A machine's link (`MachineLinkState`), as much as a session's screen reads.
@@ -126,6 +132,8 @@ public struct MachineLinkFacts: Equatable, Sendable {
     /// Epoch milliseconds of the next automatic try, or nil.
     public let retryAt: Double?
     public let sessions: [RemoteSessionFacts]
+    /// The Cloud's ref of that machine, once its link said it (live use from another Mac, 15 Nov).
+    public var machine: String? = nil
 
     public init(id: String, state: State, reason: String?, retryAt: Double?, sessions: [RemoteSessionFacts]) {
         self.id = id
@@ -164,14 +172,52 @@ public struct MachinesSnapshot: Equatable, Sendable {
             let state = (record["state"] as? String).flatMap(MachineLinkFacts.State.init(rawValue:)) ?? .offline
             let sessions: [RemoteSessionFacts] = (record["sessions"] as? [Any] ?? []).compactMap { raw in
                 guard let s = raw as? [String: Any], let sid = TerminalJSON.text(s["id"]) else { return nil }
-                return RemoteSessionFacts(id: sid, title: s["title"] as? String ?? "", cwd: s["cwd"] as? String ?? "",
-                                          provider: s["provider"] as? String ?? "", status: s["status"] as? String ?? "",
-                                          exitCode: TerminalJSON.int(s["exitCode"]))
+                var facts = RemoteSessionFacts(id: sid, title: s["title"] as? String ?? "", cwd: s["cwd"] as? String ?? "",
+                                               provider: s["provider"] as? String ?? "", status: s["status"] as? String ?? "",
+                                               exitCode: TerminalJSON.int(s["exitCode"]))
+                facts.tab = (s["tab"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                facts.chat = s["chat"] as? Bool == true
+                return facts
             }
-            links[id] = MachineLinkFacts(id: id, state: state, reason: record["reason"] as? String,
+            var facts = MachineLinkFacts(id: id, state: state, reason: record["reason"] as? String,
                                          retryAt: TerminalJSON.number(record["retryAt"]), sessions: sessions)
+            facts.machine = (record["machine"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            links[id] = facts
         }
         return MachinesSnapshot(names: names, links: links)
+    }
+
+    /// Live use from another Mac (15 Nov): the live session a Cloud row stands for, when its machine's link is online
+    /// and lists it. Machines match on the Cloud's ref (`machine`), else on the name; sessions on `tab`, else on the id.
+    public struct LiveTwin: Equatable, Sendable {
+        public let machineId: String
+        public let session: RemoteSessionFacts
+        /// The tab that opens it here (`machine <link> <session>`).
+        public var tabId: String { "machine \(machineId) \(session.id)" }
+    }
+    public func liveTwin(sessionId: String?, machineRef: String?, machineName: String?) -> LiveTwin? {
+        guard let sessionId, !sessionId.isEmpty else { return nil }
+        // Only machines from his ACCOUNT'S signed list (link ids `reach-…`, BackendReachGuest.linkPrefix) count: a
+        // machine paired by code says its own ref and name, and could stand in for his Cloud row (Reviewer, 15 Nov).
+        let online = links.values.filter { $0.state == .online && $0.id.hasPrefix(Self.reachLinkPrefix) }.sorted { $0.id < $1.id }
+        let byRef = machineRef.flatMap { ref in online.filter { $0.machine == ref } } ?? []
+        let wanted = machineName.map(Self.bare) ?? ""
+        // The name is a fallback only for a link that has not said its ref (an older machine).
+        let byName = byRef.isEmpty && !wanted.isEmpty ? online.filter { $0.machine == nil && Self.bare(names[$0.id] ?? "") == wanted } : []
+        for link in byRef.isEmpty ? byName : byRef {
+            if let row = link.sessions.first(where: { $0.tab == sessionId }) ?? link.sessions.first(where: { $0.tab == nil && $0.id == sessionId }) {
+                return LiveTwin(machineId: link.id, session: row)
+            }
+        }
+        return nil
+    }
+    /// The link id prefix of a machine reached by sign-in (the same as BackendReachGuest.linkPrefix).
+    public static let reachLinkPrefix = "reach-"
+    static func bare(_ name: String) -> String {
+        var text = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text.hasSuffix(".") { text.removeLast() }
+        if text.hasSuffix(".local"), text.count > 6 { text.removeLast(6) }
+        return text
     }
 }
 

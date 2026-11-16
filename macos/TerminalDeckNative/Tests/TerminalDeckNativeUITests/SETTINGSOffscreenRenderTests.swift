@@ -73,7 +73,7 @@ final class SETTINGSOffscreenRenderTests: XCTestCase {
                 scrollFrames += try render(editor, dark: dark, size: NSSize(width: 560, height: 520), name: "ai-key-editor", output: output)
                 baseFrames += 1
             }
-            XCTAssertEqual(baseFrames, 30, "14 actual settings panes and one shared key editor, both appearances.")
+            XCTAssertEqual(baseFrames, 2 * NativeSettingsNavigation.items.count + 2, "every settings pane and one shared key editor, both appearances.")
             print("SETTINGS_RENDER_CAPTURED base=\(baseFrames) scroll=\(scrollFrames) " + ISO8601DateFormatter().string(from: Date()))
         } catch {
             NativeIslandSettingsAccess.readScreen = previousScreenRead
@@ -140,11 +140,15 @@ final class SETTINGSOffscreenRenderTests: XCTestCase {
     }
     @ViewBuilder private func detail(_ section: String, coding: NativeCodingAIStore, hooks: HooksScreenModel) -> some View {
         if section == "agents" {
-            NativeSettingsPage(sectionId: section) { NativeCodingAIThisMachine(store: coding, hooks: hooks) }
+            DeckSettingsScaffold(title: "Coding AIs") { NativeCodingAIThisMachine(store: coding, hooks: hooks) }
         } else if section == "island" {
             NativeIslandSettings()
+        } else if section == "shortcuts" {
+            NativeShortcutsSettings(fixtureHidden: [])
+        } else if section == "devices" {
+            NativeDevicesSettings(fixture: true)
         } else if section == "agent-defaults" {
-            NativeSettingsPage(sectionId: section) { NativeAGSDefaultsSettingsSections() }
+            NativeAGSDefaultsSettingsSections()
         } else if let screen = NativeScreens.settings(sectionId: section) {
             screen
         } else {

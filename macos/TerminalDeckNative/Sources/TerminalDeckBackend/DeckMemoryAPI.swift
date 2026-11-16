@@ -10,6 +10,10 @@ import TerminalDeckNativeCore
 /// keeps the link; every row carries app-stamped labels; a card over its size cap is reported,
 /// never cut; a board result is attempted / reported / verified.
 public protocol DeckMemoryStoring: Sendable {
+    /// MAC-NEXT-7 (C): of these note ids, the ones whose file ARRIVED from another device through Cloud (its file
+    /// origin is another store). Background jobs that rewrite a note's file (the short-title helper) leave those to the
+    /// device that wrote the note; a rewrite here would send the note straight back as this Mac's edit.
+    func cloudArrivedNoteIDs(_ ids: [String]) async -> Set<String>
     // MARK: Folder
     /// Where the memory folder is now, where it would be by default, and where it was before.
     func location() async -> DeckMemoryLocation
@@ -182,6 +186,7 @@ public protocol DeckMemoryStoring: Sendable {
 }
 
 public extension DeckMemoryStoring {
+    func cloudArrivedNoteIDs(_ ids: [String]) async -> Set<String> { [] }
     func archiveNote(id: String, reason: String = "archived") async throws -> DeckMemoryNote { try await archiveNote(id: id, reason: reason, replacedBy: nil) }
     func updateNote(id: String, title: String? = nil, body: String? = nil) async throws -> DeckMemoryNote { try await updateNote(id: id, title: title, body: body, type: nil) }
     func topics(_ owner: DeckMemoryOwner) async throws -> [DeckMemoryTopic] { try await topics(owner, job: nil, includeClosed: false) }

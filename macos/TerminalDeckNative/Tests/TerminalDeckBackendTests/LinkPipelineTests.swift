@@ -150,6 +150,8 @@ struct LinkPipelineTests {
                 let at = V.now()
                 echoes[rid] = at
                 echoWaiters.removeValue(forKey: rid)?.resume(returning: at)
+            case "panel.rows":
+                panelRows += 1
             case "settings.applied":
                 if let rid = value["rid"].string, let n = Int(rid.dropFirst()) { ordered.append(n) }
             case "detached":
@@ -163,6 +165,8 @@ struct LinkPipelineTests {
             }
         }
 
+        /// `panel.rows` frames that arrived (14 Nov phone link: unasked lists).
+        var panelRows = 0
         var detachedAt: Double?
         var detachWaiters: [CheckedContinuation<Double, Never>] = []
         func waitDetached() async -> Double {
@@ -560,6 +564,37 @@ struct LinkPipelineTests {
         let detachedAt = await run.client.waitDetached() - start
         print("MEASURE link-terminal-lane detachedMs=\(detachedAt.isFinite ? Int(detachedAt) : -1)")
         #expect(detachedAt < 500, "the terminal lane did not wait 1.5 s behind the slow frame: \(detachedAt) ms")
+        await run.cleanup()
+    }
+
+    /// 14 Nov phone link (Asad: "it's doing too much of re-connecting"): fifty session state changes while a phone holds
+    /// an Agents list. Unasked lists wait for the link to settle, go only when the list changed, and the link stays up with
+    /// its round trips fast (the phone's heartbeat ends a link whose pong is 10 s late).
+    @Test(.timeLimit(.minutes(1))) func aLinkStaysUpAcrossFiftySessionStateChanges() async throws {
+        let run = try await start(link: (Self.stun, "all"), oneWay: 5)
+        #expect(try await run.waitMoved() != nil)
+        actor State { var n = 0; func bump() { n += 1 }; func value() -> Int { n / 10 } }
+        let state = State()
+        try await run.host.register(.init(capability: "panels", messageTypes: ["panel.read", "panel.act"], policy: .grantedDevice) { message, _ in
+            var fields: [NativeRPCValue.Field] = [.init("panel", message["panel"]), .init("path", .string("")),
+                .init("rows", .array([.object([.init("id", .string("session:s1")), .init("value", .string("state \(await state.value())"))])]))]
+            if let rid = message["rid"].string { fields.append(.init("rid", .string(rid))) }
+            return [try .init(.panelRows, fields: fields)]
+        })
+        await run.client.send(#"{"t":"panel.read","panel":"agents","rid":"a-1"}"#)
+        for _ in 0..<250 where await run.client.panelRows == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(await run.client.panelRows == 1, "the phone's own read is answered at once")
+        #expect(await run.host.pushAgentLists() == 0, "a link that opened just now is still taking its opening answers")
+        try await Task.sleep(for: .milliseconds(Int(BackendRemoteHost.pushSettleMs) + 200))
+        var pushed = 0
+        for _ in 0..<50 {
+            await state.bump()
+            pushed += await run.host.pushAgentLists()
+        }
+        #expect(pushed == 6, "one list per real change (states 0...5), never the same list twice: \(pushed)")
+        let times = try await run.echoes(10, label: "after-fifty")
+        #expect(!(await run.wireClosed.on), "the link stayed up")
+        #expect(V.median(times) < 200, "round trips stay fast: \(times)")
         await run.cleanup()
     }
 

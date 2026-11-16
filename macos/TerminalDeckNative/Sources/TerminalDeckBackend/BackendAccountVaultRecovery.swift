@@ -59,6 +59,47 @@ public struct BackendAccountVaultRecovery: Sendable {
             backupRoot: backupRoot)
         return try status()
     }
+    /// Cloud recovery uses a new account name. It never replaces the missing
+    /// original native key or tries to decrypt a lost-key file with a new key.
+    public func cloudLocalKeyOwner() -> BackendCloudRecoveryLocalKeyOwner {
+        let storage = keychain
+        @Sendable func validate(_ generation: String) throws {
+            guard UUID(uuidString: generation)?.uuidString.lowercased() == generation else { throw CloudFailure.invalidRequest }
+        }
+        // The dev copy keeps every local key inside its own data directory;
+        // this new generation must honor the same existing isolation rule.
+        if configuration.appName == BackendDevCopy.name {
+            let directory = configuration.dataDirectory.appendingPathComponent("cloud-local-store-keys", isDirectory: true)
+            return .init(originalKey: {
+                let file = configuration.dataDirectory.appendingPathComponent(BackendAccountDevKey.fileName)
+                return .file { try BackendAccountFiles.boundedRead(file, maximum: 256) }
+            }, generationKey: { generation in
+                guard (try? validate(generation)) != nil else { return .blocked("The local key name is not valid.") }
+                return .file { try BackendAccountFiles.boundedRead(directory.appendingPathComponent(generation + ".key"), maximum: 256) }
+            }, create: { generation in
+                try validate(generation)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                _ = try BackendAccountDevKey.password(at: directory.appendingPathComponent(generation + ".key"), create: true)
+            }, cipher: { generation in
+                try validate(generation)
+                guard let key = try BackendAccountFiles.boundedRead(directory.appendingPathComponent(generation + ".key"), maximum: 256), !key.isEmpty else { throw CloudFailure.secretsLocked }
+                return BackendCloudRecoveryLocalCipher(password: key)
+            })
+        }
+        return .init(originalKey: {
+            storage.keyState(account: configuration.appName)
+        }, generationKey: { generation in
+            guard (try? validate(generation)) != nil else { return .blocked("The local key name is not valid.") }
+            return storage.keyState(account: configuration.appName + " Cloud Local " + generation)
+        }, create: { generation in
+            try validate(generation)
+            _ = try storage.createNativeKey(interaction: false, account: configuration.appName + " Cloud Local " + generation)
+        }, cipher: { generation in
+            try validate(generation)
+            let key = try storage.password(account: configuration.appName + " Cloud Local " + generation, interaction: false)
+            return BackendCloudRecoveryLocalCipher(password: key)
+        })
+    }
     /// Beside the app's other account backups, inside its own data folder (never a folder of its own in the home folder).
     var backupRoot: URL {
         configuration.dataDirectory.appendingPathComponent("account-backups", isDirectory: true)
@@ -93,6 +134,11 @@ public struct BackendAccountVaultRecovery: Sendable {
 
 /// Pure file migration with injected keys. Plaintext remains only in memory.
 public enum BackendAccountVaultMigration {
+    static func saveCloudRoute(_ bytes: Data, to file: URL) throws {
+        guard bytes.count <= 4096 else { throw CloudFailure.invalidRequest }
+        try BackendAccountFiles.writeAtomic(bytes, to: file)
+        guard try BackendAccountFiles.boundedRead(file, maximum: 4096) == bytes else { throw CloudFailure.checksumMismatch }
+    }
     static func validatedPlain(_ encoded: Data, password: Data) throws -> String {
         guard let blob = Data(base64Encoded: String(decoding: encoded, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw BackendAccountFailure("The saved login store is not valid. Restore its backup before trying again.")
@@ -142,6 +188,14 @@ private struct BackendAccountStorageKeychain {
         var q = query(account); q[kSecReturnAttributes as String] = true; q[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         return SecItemCopyMatching(q as CFDictionary, nil) != errSecItemNotFound
     }
+    /// Never shows a dialog. Only errSecItemNotFound means "does not exist".
+    func keyState(account: String) -> BackendCloudRecoveryKeyState {
+        SecKeychainSetUserInteractionAllowed(false)
+        var q = query(account); q[kSecReturnData as String] = true
+        q[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        var found: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &found)
+        return .keychain(status: status, data: found as? Data)
+    }
     func password(account: String, interaction: Bool) throws -> Data {
         SecKeychainSetUserInteractionAllowed(interaction)
         defer { SecKeychainSetUserInteractionAllowed(false) }
@@ -157,7 +211,8 @@ private struct BackendAccountStorageKeychain {
             guard status == errSecSuccess, let app else { throw failure(status) }; return app
         }
     }
-    func createNativeKey(interaction: Bool) throws -> Data {
+    func createNativeKey(interaction: Bool, account: String? = nil) throws -> Data {
+        let account = account ?? appName
         SecKeychainSetUserInteractionAllowed(interaction)
         defer { SecKeychainSetUserInteractionAllowed(false) }
         var random = [UInt8](repeating: 0, count: 16)
@@ -165,10 +220,10 @@ private struct BackendAccountStorageKeychain {
         let data = Data(Data(random).base64EncodedString().utf8)
         var access: SecAccess?; let status = SecAccessCreate((appName + " login store") as CFString, try trusted() as CFArray, &access)
         guard status == errSecSuccess, let access else { throw failure(status) }
-        var q = query(appName); q.removeValue(forKey: kSecMatchLimit as String)
+        var q = query(account); q.removeValue(forKey: kSecMatchLimit as String)
         q[kSecValueData as String] = data; q[kSecAttrAccess as String] = access
         let added = SecItemAdd(q as CFDictionary, nil)
-        if added == errSecDuplicateItem { return try password(account: appName, interaction: interaction) }
+        if added == errSecDuplicateItem { return try password(account: account, interaction: interaction) }
         guard added == errSecSuccess else { throw failure(added) }; return data
     }
     private func item(_ account: String) throws -> SecKeychainItem {
@@ -222,4 +277,12 @@ private struct BackendAccountStorageKeychain {
         let changed = SecKeychainItemSetAccess(item, access)
         guard changed == errSecSuccess else { throw failure(changed) }
     }
+}
+
+private struct BackendCloudRecoveryLocalCipher: BackendAccountVaultCipher {
+    let password: Data
+    func available() -> Bool { true }
+    func prepareForWrites(existingVault: Bool) throws {}
+    func decrypt(_ blob: Data) throws -> String { try ChromiumSafeStorageCipher.decrypt(blob, password: password) }
+    func encrypt(_ text: String, existingVault: Bool) throws -> Data { try ChromiumSafeStorageCipher.encrypt(text, password: password) }
 }

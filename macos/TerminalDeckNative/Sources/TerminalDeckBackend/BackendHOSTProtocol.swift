@@ -26,6 +26,11 @@ public enum BackendHOSTProtocol {
         /// 18 Oct (#107): 1 = an account question this host does not know is answered with the typed
         /// `unknown-channel` code (BackendHOSTUnknownChannel). Nil: an older host, which says so only in words.
         public var accountUnknownChannel: Int? = nil
+        /// 14 Nov (LANDING-LIKE-CHAT-FIX): 1 = this host starts a session in the New session page's explicit
+        /// "Before it changes files" pick (`BackendCreateSessionInput.chosenStartPermission`, passed by name in its
+        /// chats too). Nil: an older host, which starts every new session in Bypass (R73); the page then offers no
+        /// pick. Optional, like the fields above: an old app ignores it, an old host never sends it.
+        public var chosenStartPermission: Int? = nil
     }
 
     /// The app resolves policy first, including its own inherited environment

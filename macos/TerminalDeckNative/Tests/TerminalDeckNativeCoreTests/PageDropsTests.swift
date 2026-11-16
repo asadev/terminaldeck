@@ -52,8 +52,9 @@ struct AppCommandsTests {
         ]
         // Already native: ⌘, ⌘O ⌘T are the scene's own; the sidebar is the system's (⌃⌘S);
         // a session's own window is the tab strip's "Open in New Window".
+        // view.overview: the Overview page was removed (Owner, 15 Nov); a project's page is under Projects.
         let elsewhere: Set<String> = ["app.preferences", "project.open", "session.new", "view.sidebar",
-                                      "session.popOut", "session.dock"]
+                                      "session.popOut", "session.dock", "view.overview"]
         var here = Set<String>()
         for command in AppCommandCatalog.all + [AppCommandCatalog.about] {
             if case .page(let id) = command.action { here.insert(id) }

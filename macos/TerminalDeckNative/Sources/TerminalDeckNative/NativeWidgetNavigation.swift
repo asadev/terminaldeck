@@ -27,8 +27,9 @@ enum NativeWidgetNavigation {
             // The weekly ring belongs to a session; its usage ring sits in that session's toolbar.
             select(session: source)
         } else {
-            // Machine and Needs you have no separate page on the Mac: Overview is the existing place for both.
-            AppModel.shared.select("overview")
+            // Machine and Needs you have no separate page on the Mac. Overview is gone (Owner, 15 Nov): the app's
+            // home, the New session page, whose side panel shows what needs him.
+            AppModel.shared.select(NativeLanding.pageID)
         }
     }
     static func isPairingLink(_ url: URL) -> Bool { url.scheme == "terminaldeck" && url.host == "pair" }
@@ -49,23 +50,23 @@ enum NativeWidgetNavigation {
             AppModel.shared.engine.log.note("server address link: Servers did not open")
         }
     }
-    /// A phone's pairing link (`terminaldeck://pair?…`) clicked on this Mac (review install-24 S5). This Mac owns the
-    /// scheme now, so the link lands here; a Mac pairs from Devices › Pair a device, whose sheet says what to do on
-    /// the phone. Nothing from the link is used: the Mac shows its own fresh code. The main window opens the Devices
-    /// window, so after a cold launch from the link that ask is repeated until the Devices window is actually up.
+    /// An old phone link (`terminaldeck://pair?…`) clicked on this Mac (review install-24 S5). Nothing from the link is
+    /// used and nothing is offered: the Devices window opens (owner, 13 Nov: devices join by signing in). After a cold
+    /// launch from the link that ask is repeated until the Devices window is actually up.
     private static func openPairing() {
         NativeLaunchWindow.ensureShown(front: true)
-        AppModel.shared.requestDevicesWindow(pair: true)
+        AppModel.shared.openDevices()
         Task {
             for attempt in 1...40 {
                 try? await Task.sleep(for: .milliseconds(250))
-                if let devices = NSApp.windows.first(where: { $0.identifier?.rawValue == DevicesWindow.sceneID && $0.isVisible }) {
-                    AppModel.shared.engine.log.note("pairing link: the Devices window opened" + (devices.attachedSheet != nil ? " with Pair a device" : ""))
+                if NSApp.windows.contains(where: { $0.identifier?.rawValue == SettingsWindow.sceneID && $0.isVisible }),
+                   AppModel.shared.settingsSelection == NativeSettingsNavigation.devicesID {
+                    AppModel.shared.engine.log.note("old device link: Settings opened on Devices")
                     return
                 }
-                if attempt % 8 == 0 { AppModel.shared.requestDevicesWindow(pair: true) }
+                if attempt % 8 == 0 { AppModel.shared.openDevices() }
             }
-            AppModel.shared.engine.log.note("pairing link: the Devices window did not open")
+            AppModel.shared.engine.log.note("old device link: Settings did not open on Devices")
         }
     }
     private static func select(session id: String) {

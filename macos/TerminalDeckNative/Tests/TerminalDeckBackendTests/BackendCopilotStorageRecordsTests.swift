@@ -51,7 +51,13 @@ final class BackendCopilotStorageRecordsTests: XCTestCase {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         XCTAssertTrue(f.profile.contains("(allow default)"))
-        XCTAssertEqual(f.profile.components(separatedBy: "\n").filter { $0.hasPrefix("(deny ") }.count, 2)
+        // Secrets delete rule J-5 (97a13cb63, 15 Nov): every Seatbelt profile ends with the Bin/safety-copy deny list,
+        // appended after the grants. Hoot's own records are still exactly two rules before it.
+        let bin = BackendMacConfinement.binDenyRules(f.root.appendingPathComponent("data"))
+        XCTAssertTrue(f.profile.hasSuffix(bin))
+        let own = String(f.profile.dropLast(bin.count))
+        XCTAssertEqual(own.components(separatedBy: "\n").filter { $0.hasPrefix("(deny ") }.count, 2)
+        XCTAssertEqual(bin.components(separatedBy: "\n").filter { $0.hasPrefix("(deny ") }.count, 5)
         XCTAssertTrue(f.profile.contains(BackendMacConfinement.seatbeltString(f.paths.log)))
         XCTAssertFalse(f.profile.contains("(subpath " + BackendMacConfinement.seatbeltString(f.paths.root) + ")"))
         XCTAssertFalse(f.profile.contains("(subpath " + BackendMacConfinement.seatbeltString(f.chosen) + ")"))

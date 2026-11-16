@@ -25,6 +25,8 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     private var popupOpeners: [String: String] = [:]
     private var transientPopups: Set<String> = []
     private var handoverCalls: [String: NativeSafariHandoverOutcome] = [:]
+    /// A parked page's quiet timer: no tool call for `parkIdleSeconds`, and its parking window goes (NativeSafariAutomation).
+    var parkIdle: [String: Task<Void, Never>] = [:]
     private let handlerName = "tdNativeSafariFrame"
     /// S4: the in-page picker (hover, click capture, Esc) in its own content world. One per runtime.
     private var inspectingTabs: Set<String> = []
@@ -92,6 +94,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     func detachedPage(_ id: String) {
         for child in popupOpeners.filter({ $0.value == id }).map(\.key) { closeTab(child) }
         popupOpeners[id] = nil; transientPopups.remove(id); inspectingTabs.remove(id)
+        parkIdle[id]?.cancel(); parkIdle[id] = nil
         unpark(id)
         installed[id] = nil; frames[id] = nil; map.closed(id)
     }
@@ -139,11 +142,17 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         let configuration = tabs.makeConfiguration(profile: profileID, isolated: isolated)
         prepareConfiguration(configuration)
         let tab = tabs.create(url: url, isolated: isolated, profile: profileID, show: false, configuration: configuration)
+        drove(tab.id)
         do { try attachPage(tab.id) } catch { publish("browser:error", .string(error.localizedDescription)) }
         return tab.id
     }
     func attach(_ id: String, to session: BrowserDriverSession) async -> String? { try? map.attach(id, to: session).name }
-    func load(_ id: String, url: URL) { navigationStarted(id); tabs.tab(id)?.load(url) }
+    func load(_ id: String, url: URL) { drove(id); navigationStarted(id); tabs.tab(id)?.load(url) }
+    /// MAC-NEXT-15b: a tool's input or navigation on this page (never a read, a screenshot or a state query): what the
+    /// page asks next is answered for the tool, never put in front of the person (BrowserPagePersonRule).
+    func drove(_ id: String) { tabs.tab(id)?.automation.toolTouched() }
+    /// MAC-NEXT-15c: a browser_step is input, so the page is driven from its start (BrowserDriverHost.toolStepStarts).
+    func toolStepStarts(_ id: String) { drove(id) }
     func isIsolated(_ id: String) -> Bool { tabs.tab(id)?.isolated ?? false }
     func setIsolated(_ id: String, _ isolated: Bool) {
         guard let tab = tabs.tab(id) else { return }
@@ -152,7 +161,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     }
     func settle(_ id: String, timeoutMs: Int) async -> Bool {
         guard let tab = tabs.tab(id) else { return false }; tab.ensurePage()
-        parkIfHidden(id)
+        parkForTool(id)
         let ready = await tab.settle(timeout: .milliseconds(max(0, timeoutMs)))
         return ready && tabs.tab(id) === tab
     }
@@ -161,15 +170,31 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     func displayTitle(_ id: String) -> String { tabs.tab(id)?.displayTitle ?? "" }
     func evaluate(_ id: String, _ script: String) async throws -> Any? {
         try Task.checkCancellation()
-        guard BrowserDriverScripts.name(of: script) != nil else { throw refusal("The browser driver only runs its own bounded scripts.") }
+        guard let name = BrowserDriverScripts.name(of: script) else { throw refusal("The browser driver only runs its own bounded scripts.") }
         let view = try requireView(id)
+        if BrowserPagePersonRule.actingScripts.contains(name) { drove(id) }
         // Browser 27: a page replaced mid-call (or stuck behind a dialog) never holds the tool forever.
         let value = try await NativeBrowserRace.within(30_000) {
             NativeBrowserUnchecked(try await view.evaluateJavaScript(script, in: nil, contentWorld: .defaultClient))
         }.value
         try Task.checkCancellation(); return value
     }
-    func reveal(_ id: String) async -> Bool { await tabs.reveal(id) }
+    /// A tool's page, ready for real input where it is (Asad, 31 Oct and 13 Nov: "use everything in the
+    /// background"): its page is made and, when the person is not showing it, parked in an off-screen window that is
+    /// never key. The tab is never selected and nothing comes forward. True once the page is in a window.
+    func readyForInput(_ id: String) async -> Bool {
+        guard let tab = tabs.tab(id) else { return false }
+        tab.ensurePage()
+        parkForTool(id)
+        return !Task.isCancelled && tabs.tab(id) === tab && tab.webView?.window != nil
+    }
+    /// The person's own menu choice only (BackendBrowserRuntime.showForPerson).
+    func showForPerson(_ id: String) async -> Bool { await tabs.showForPerson(id) } // person-ok: the Session menu's new window
+    func handoverOpened(_ id: String) -> Bool { tabs.tab(id)?.handoverOpened ?? false }
+    /// MAC-NEXT-15: what the page asked while this tool drove it (BrowserDriverHost.takePageNotes).
+    func takePageNotes(_ id: String) -> [[String: Any]] {
+        (tabs.tab(id)?.automation.takeToolNotes() ?? []).map { ["kind": $0.kind, "message": $0.message, "site": $0.site, "answer": $0.answer] }
+    }
     func screen(_ id: String) -> (WKWebView, NSWindow)? {
         guard !Task.isCancelled, let view = tabs.tab(id)?.webView, let window = view.window,
               tabs.tab(id)?.handoverPrompt == nil else { return nil }
@@ -177,6 +202,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
     }
     func click(_ id: String, cssRect: CGRect) -> Bool {
         guard let (view, window) = screen(id) else { return false }
+        drove(id)
         let point = BrowserInputGeometry.viewPoint(cssRect: cssRect, pageZoom: view.pageZoom,
             magnification: view.magnification, viewHeight: view.bounds.height, flipped: view.isFlipped)
         let location = view.convert(point, to: nil)
@@ -189,28 +215,17 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         }
         return true
     }
-    func focusForTyping(_ id: String) -> Bool { guard let (view, window) = screen(id) else { return false }; return window.makeFirstResponder(view) }
-    func type(_ id: String, plan: BrowserTypingPlan) -> Bool {
-        guard let (view, window) = screen(id) else { return false }
-        switch plan {
-        case .clear: sendKey(BrowserKeySpec.pressable["Backspace"]!, view, window)
-        case .keys(let letters): for letter in letters { sendKey(.init(keyCode: 0, characters: letter), view, window) }
-        case .insert(let text): view.insertText(text)
-        }
-        return true
-    }
-    func press(_ id: String, key: BrowserKeySpec) -> Bool {
-        guard let (view, window) = screen(id), window.makeFirstResponder(view) else { return false }
-        sendKey(key, view, window); return true
-    }
-    private func sendKey(_ key: BrowserKeySpec, _ view: WKWebView, _ window: NSWindow) {
-        for kind in [NSEvent.EventType.keyDown, .keyUp] {
-            guard let event = NSEvent.keyEvent(with: kind, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                characters: key.characters, charactersIgnoringModifiers: key.characters, isARepeat: false, keyCode: key.keyCode) else { continue }
-            if kind == .keyDown { view.keyDown(with: event) } else { view.keyUp(with: event) }
-        }
-    }
+    /// MAC-NEXT-14 (Asad, 14 Nov 00:59: an AI typing `#f5d76e` into a website showed up in HIS session's prompt).
+    /// An AI's keys never become AppKit key events. WebKit hands every key event its page does not take (no field
+    /// focused, the field blurred itself, the page lost focus when the keyboard was given back) to
+    /// `NSApp.sendEvent` again, a moment later, and AppKit gives a key event to the KEY window's first responder: his
+    /// terminal or text field. And a page could only take real keys as its window's first responder, which in his own
+    /// window is his keyboard. So `type` and `press` answer false here, always, and the driver types at page level
+    /// (BrowserDriverScripts.scriptedInput: the editing commands a real keyboard uses, with key events around them):
+    /// nothing leaves the page's own process, no first responder changes, and there is nothing to deliver late.
+    func focusForTyping(_ id: String) -> Bool { false }
+    func type(_ id: String, plan: BrowserTypingPlan) -> Bool { false }
+    func press(_ id: String, key: BrowserKeySpec) -> Bool { false }
     func pageState(_ id: String) throws -> NativeRPCValue {
         let tab = try requireTab(id)
         return .object([.init("id", .string(id)), .init("url", .string(pageURL(id))), .init("title", .string(tab.title)),
@@ -227,11 +242,11 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         switch operation {
         case "state": return try pageState(id)
         case "navigate": load(id, url: try BrowserStepRules.openableURL(try arguments["url"].requireString("url", nonempty: true)))
-        case "back": navigationStarted(id); tab.goBack()
-        case "forward": navigationStarted(id); tab.goForward()
-        case "reload": navigationStarted(id); tab.reload()
+        case "back": drove(id); navigationStarted(id); tab.goBack()
+        case "forward": drove(id); navigationStarted(id); tab.goForward()
+        case "reload": drove(id); navigationStarted(id); tab.reload()
         case "stop": tab.stop()
-        case "show": guard await reveal(id) else { throw refusal("This page could not be brought on screen.") }
+        case "show": guard await readyForInput(id) else { throw refusal("This page could not be made ready.") } // in the background: never selected for the person
         case "zoom":
             if arguments["factor"].isNullish { return .number(view.pageZoom) }
             guard let factor = arguments["factor"].number, (0.25...3).contains(factor) else { throw refusal("Zoom must be between 0.25 and 3.") }
@@ -244,7 +259,18 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
             let found = await withCheckedContinuation { continuation in view.find(text, configuration: config) { continuation.resume(returning: $0.matchFound) } }
             return .object([.init("matchFound", .bool(found))])
         case "findstop": tab.clearFind()
-        case "print": guard view.window != nil else { throw refusal("Bring this page on screen to print it.") }; tab.printPage()
+        case "print": guard view.window != nil else { throw refusal("Bring this page on screen to print it.") }; tab.printPage() // person-ok: his toolbar's Print (browser-view:print from the app)
+        case "print-file":
+            // MAC-NEXT-15b: a tool's print never opens the print sheet on his window; the page becomes a PDF file.
+            guard handoverPrompt(id) == nil else { throw refusal("The person has this page.") }
+            // WebKit's own callback form (its async overlay failed on a page in a plain window in tests).
+            let made: Result<Data, Error> = await withCheckedContinuation { done in
+                view.createPDF(configuration: WKPDFConfiguration()) { done.resume(returning: $0) }
+            }
+            let pdf = try made.get()
+            let file = try savePNG(pdf, folder: RNMHootPaths(dataRoot: dataRoot).screenshots, prefix: "print", ext: "pdf")
+            return .object([.init("path", .string(file.path)), .init("bytes", .number(Double(pdf.count))), .init("url", .string(pageURL(id))),
+                .init("note", .string(BrowserPagePersonRule.printNote))])
         case "devtools": throw refusal("WebKit has no public API to open Web Inspector. Use Safari's Develop menu or the page's Inspect Element menu.")
         case "useragent": tab.setUserAgent(arguments["userAgent"].string ?? arguments["ua"].string)
         case "inspect":
@@ -463,7 +489,7 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
               (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) == nil else {
             throw refusal("This run did not save that screenshot. Open older images from the explicitly selected screenshot folder.")
         }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) // person-ok: the toolbar's browser-view:reveal; browser_page reveal returns the path
     }
     func savePNG(_ png: Data, folder: URL, prefix: String, ext: String = "png") throws -> URL {
         var ancestor = folder
@@ -490,7 +516,8 @@ final class NativeSafariRuntime: NSObject, BackendBrowserRuntime, WKScriptMessag
         guard let tab = tabs.tab(id) else { return "drive-ended" }
         if tab.handoverPrompt == nil { tab.beginHandover(prompt) }
         map.changed?()
-        _ = await reveal(id)
+        // The person is asked quietly (the session row's raised hand, the page's own band): his view never moves.
+        _ = await readyForInput(id)
         let answer = NativeSafariHandoverOutcome()
         // Every end of a handover (Carry on, Stop, tab closed) goes through endHandover, which calls the waiter.
         if tab.handoverPrompt != nil, tabs.tab(id) != nil {
@@ -630,13 +657,16 @@ private final class NativeSafariFrameHost: BrowserDriverHost {
     func displayTitle(_ id: String) -> String { runtime.displayTitle(id) }
     func evaluate(_ id: String, _ script: String) async throws -> Any? {
         try Task.checkCancellation(); let view = try runtime.requireView(id)
+        if let name = BrowserDriverScripts.name(of: script), BrowserPagePersonRule.actingScripts.contains(name) { runtime.drove(id) }
         let current = try await view.callAsyncJavaScript("return String(location.href);", arguments: [:], in: frame, contentWorld: .defaultClient) as? String
         guard BackendBrowserOrigin.exact(current ?? "") == BackendBrowserOrigin.exact(url), runtime.handoverPrompt(id) == nil else {
             throw NativeRPCError(code: "origin-changed", message: "The frame's origin changed or the person took over. Try again after listing frames.")
         }
         return try await view.evaluateJavaScript(script, in: frame, contentWorld: .defaultClient)
     }
-    func reveal(_ id: String) async -> Bool { await runtime.reveal(id) }
+    func readyForInput(_ id: String) async -> Bool { await runtime.readyForInput(id) }
+    func takePageNotes(_ id: String) -> [[String: Any]] { runtime.takePageNotes(id) }
+    func toolStepStarts(_ id: String) { runtime.drove(id) }
     func click(_ id: String, cssRect: CGRect) -> Bool { false }
     func focusForTyping(_ id: String) -> Bool { false }
     func type(_ id: String, plan: BrowserTypingPlan) -> Bool { false }

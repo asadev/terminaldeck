@@ -28,7 +28,10 @@ public struct BackendRemoteServeSessionCreate: Sendable {
     public enum Outcome: Sendable {
         case created(BackendSessionMeta), refused(Refusal)
         public var session: BackendSessionMeta? { if case .created(let meta) = self { return meta }; return nil }
-        public func message() throws -> BackendRemoteServerMessage {
+        /// `rid` (14 Nov, `start.rid`): the phone's own request id, as the session row's `rid` (the phones' row
+        /// decoders read it there). Only for a phone that claimed `start.rid` (`BackendRemoteHost.createdFrame`); nil is
+        /// the frame exactly as before.
+        public func message(rid: String? = nil) throws -> BackendRemoteServerMessage {
             switch self {
             case .refused(let failure): return try .error(code: failure.code, message: failure.message)
             case .created(let meta):
@@ -39,6 +42,9 @@ public struct BackendRemoteServeSessionCreate: Sendable {
                     .init("lastActivityAt", .number(meta.createdAt))]
                 // A chat says so, as its row in the session list does (27 Oct walk, c: the phone had to guess).
                 if meta.chat == true { row.append(.init("chat", .bool(true))) }
+                if let rid { row.append(.init("rid", .string(rid))) }
+                // The id join (15 Nov): the same `tab` as its row in the session list (BackendRemoteHost.withTab).
+                if let tab = BackendCloudChats.liveTab(meta) { row.append(.init("tab", .string(tab))) }
                 return try .init(.created, fields: [.init("session", .object(row))])
             }
         }

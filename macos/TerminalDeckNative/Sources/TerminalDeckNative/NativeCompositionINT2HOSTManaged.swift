@@ -197,6 +197,8 @@ final class NativeCompositionINT2HOSTManaged {
             executor: dependencies.authCommands, sessionsUsing: { id in manager.list().filter { $0.exitCode == nil && $0.profileId == id }.map(\.title) },
             authorizeMetadata: { try authority.authorizeMetadata($0) }, authorizeMutation: { try authority.authorizeMutation($0) })
         self.appSignIn = appSignIn
+        // Keys travel (15 Nov): API accounts' keys ride saved passwords through this one service.
+        NativeCloudKeysOwners.apiAccounts = appSignIn.apiAccounts
         NativeAPIAccounts.shared.configure { id, key in
             try await appSignIn.apiAccounts.storeNativeKey(id: id, key: key, context: authority.localContext())
         }
@@ -448,6 +450,7 @@ final class NativeCompositionINT2HOSTManaged {
                 try await ready.wait(timeout: 60)
                 reconnects += 1
                 owner.hostCore?.refreshStatus()
+                NativeLanding.hostChanged() // the New session page re-reads what this helper can start (no app restart)
                 await owner.sessionChats?.retireFinishedJobs() // finished jobs the new helper still lists leave the list
                 note("new session helper pid \(managedClient.hello.hostPID), \(managedClient.hello.hostVersion), attempt \(attempt); \(gone.count) session(s) of the old one to start again")
                 if !held.isEmpty, let sessions = owner.sessions {

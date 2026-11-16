@@ -7,7 +7,40 @@ import TerminalDeckNativeCore
 public struct BackendGitService: Sendable {
     public let authority: BackendFilesystemAuthority
     public let runner: any BackendGitExecuting
-    public init(authority: BackendFilesystemAuthority, runner: any BackendGitExecuting) { self.authority = authority; self.runner = runner }
+    /// Which repository is a project folder's code (`BackendProjectCode`); nil: this Mac's, asked at each call.
+    public let bounds: BackendProjectCode.Bounds?
+    public init(authority: BackendFilesystemAuthority, runner: any BackendGitExecuting, bounds: BackendProjectCode.Bounds? = nil) {
+        self.authority = authority; self.runner = runner; self.bounds = bounds
+    }
+    /// The repository top Git names for this folder only when it is the folder's own code (CODE-PARENT, 14 Nov): a
+    /// repository above the folder that is the home folder's, the Terminal Deck folder's or above a folder the app made
+    /// is never read, shown, committed or pushed as this folder's; nor one above it that keeps no files inside it.
+    private func owns(_ top: String, _ folder: String, _ context: NativeRPCContext) async -> Bool {
+        await BackendProjectCode.owns(top: top, folder: folder, bounds: bounds ?? .live(), probe: probe(context))
+    }
+    /// The read-only `ls-files` the rule asks a repository above the folder (output capped; a cut-off list still counts).
+    private func probe(_ context: NativeRPCContext) -> BackendProjectCode.Probe {
+        let runner = self.runner
+        return { cwd, arguments in
+            guard let outcome = try? await runner.run(cwd: cwd, arguments: arguments, context: context, writing: false,
+                                                      timeoutMilliseconds: 8_000, maximumBytes: 64 * 1024), !outcome.missing else { return nil }
+            return outcome.stdout
+        }
+    }
+    /// The rule for other owners that run Git in a project folder (task workspaces, readiness, file lists).
+    public func isCode(top: String, folder: String, context: NativeRPCContext) async -> Bool { await owns(top, folder, context) }
+    public func codeNotHere(_ folder: String) -> Bool { BackendProjectCode.waitingForCode(folder, bounds: bounds ?? .live()) }
+    public func refuses(_ folder: String, context: NativeRPCContext) async -> Bool {
+        await BackendProjectCode.refuses(folder, bounds: bounds ?? .live(), probe: probe(context))
+    }
+    private static func codeNotHere(_ cwd: String) -> NativeRPCValue {
+        .object([.init("repo", .bool(false)), .init("cwd", .string(cwd)), .init("reason", .string(BackendProjectCode.notHereReason)),
+                 .init("message", .string(BackendProjectCode.notHereTitle))])
+    }
+    private static func notOwned(_ cwd: String) -> NativeRPCValue {
+        .object([.init("repo", .bool(false)), .init("cwd", .string(cwd)), .init("reason", .string("not-a-repo")),
+                 .init("message", .string("This folder is not a git repository. Source control can create one.")), .init("canInit", .bool(true))])
+    }
     public func status(cwd: String, context: NativeRPCContext) async throws -> NativeRPCValue {
         let folder: URL
         do { folder = try await authority.authorize(cwd, context: context) }
@@ -17,9 +50,13 @@ public struct BackendGitService: Sendable {
         guard (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
             return .object([.init("repo", .bool(false)), .init("cwd", .string(cwd)), .init("reason", .string("no-such-folder")), .init("message", .string("Not a folder"))])
         }
+        // A folder the app made for a project from the Cloud, still holding only what the Cloud put there.
+        if BackendProjectCode.waitingForCode(folder.path, bounds: bounds ?? .live()) { return Self.codeNotHere(cwd) }
         let top = try await call(folder.path, ["rev-parse", "--show-toplevel"], context)
         guard top.ok else { return Self.failure(cwd: cwd, outcome: top) }
         let root = top.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A repository above the folder that is not its code (the home folder's): the folder is a plain folder.
+        guard await owns(root, folder.path, context) else { return Self.notOwned(cwd) }
         _ = try await authority.authorize(root, context: context)
         async let status = call(folder.path, ["status", "--porcelain=v2", "--branch", "-z"], context)
         async let work = call(folder.path, ["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv"], context)
@@ -51,6 +88,7 @@ public struct BackendGitService: Sendable {
         let top = try await call(folder.path, ["rev-parse", "--show-toplevel"], context)
         guard top.ok else { return "" }
         let root = top.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard await owns(root, folder.path, context) else { return "" }
         guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0") else { return "" }
         // TS git.ts repoRelative: `relative(root, resolve(root, path))`, lexically. Not
         // `standardizedFileURL`, which turns git's `/private/var/…` toplevel into
@@ -80,6 +118,8 @@ public struct BackendGitService: Sendable {
         let top = try await call(folder.path, ["rev-parse", "--show-toplevel"], context)
         guard top.ok else { return (false, Self.failure(cwd: cwd, outcome: top)["message"].string ?? "This folder is not a git repository.", try await status(cwd: cwd, context: context)) }
         let root = top.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Never `git add -A` / commit in a repository above the folder that is not its code (the home folder's).
+        guard await owns(root, folder.path, context) else { return (false, "This folder is not a git repository.", try await status(cwd: cwd, context: context)) }
         _ = try await authority.authorize(root, context: context, intent: .write)
         let added = try await workspaceCommand(cwd: root, arguments: ["add", "-A"], context: context)
         guard added.ok else { return (false, Self.plain(added, fallback: "git could not stage the changes."), try await status(cwd: cwd, context: context)) }
@@ -121,13 +161,16 @@ public struct BackendGitService: Sendable {
     }
     public func gitDirectory(cwd: String, context: NativeRPCContext) async throws -> String? {
         let folder = try await authority.authorize(cwd, context: context)
-        let result = try await call(folder.path, ["rev-parse", "--absolute-git-dir"], context)
-        return result.ok ? result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        let result = try await call(folder.path, ["rev-parse", "--show-toplevel", "--absolute-git-dir"], context)
+        let lines = result.stdout.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard result.ok, lines.count >= 2, await owns(lines[0], folder.path, context) else { return nil }
+        return lines[1]
     }
     public func metadataDirectories(cwd: String, context: NativeRPCContext) async throws -> [String] {
         let folder = try await authority.authorize(cwd, context: context)
         var directories: [String] = []
-        if let directory = try await gitDirectory(cwd: cwd, context: context) { directories.append(directory) }
+        guard let directory = try await gitDirectory(cwd: cwd, context: context) else { return directories }
+        directories.append(directory)
         let common = try await call(folder.path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], context)
         if common.ok {
             let path = common.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,6 +180,9 @@ public struct BackendGitService: Sendable {
     }
     public func listFiles(cwd: String, context: NativeRPCContext) async throws -> [String]? {
         let folder = try await authority.authorize(cwd, context: context)
+        // A repository above the folder that is not its code (a home-folder repository whose .gitignore may hide
+        // everything): the caller walks the folder itself instead.
+        guard await !refuses(folder.path, context: context) else { return nil }
         let result = try await runner.run(cwd: folder.path, arguments: ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], context: context,
             writing: false, timeoutMilliseconds: 8_000, maximumBytes: 32 * 1024 * 1024)
         return result.ok ? result.stdout.components(separatedBy: "\0").filter { !$0.isEmpty } : nil

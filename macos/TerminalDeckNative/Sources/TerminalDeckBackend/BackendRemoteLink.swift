@@ -80,11 +80,15 @@ public protocol BackendLinkConnection: AnyObject, Sendable {
     var overTCP: Bool { get }
     /// Bytes waiting to go on `lane`.
     func queued(_ lane: BackendLinkLane) -> UInt64
+    /// `body` runs whenever the control channel's queue drops to `below` bytes or fewer (the channel's own low-water
+    /// notice; it may run on the library's thread).
+    func whenControlDrains(below: UInt64, _ body: @escaping @Sendable () -> Void)
 }
 
 extension BackendLinkConnection {
     public var overTCP: Bool { false }
     public func queued(_ lane: BackendLinkLane) -> UInt64 { 0 }
+    public func whenControlDrains(below: UInt64, _ body: @escaping @Sendable () -> Void) {}
 }
 
 /// How a connection's link carries video now (M5).
@@ -169,10 +173,73 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     private var waitingBytes = 0
     private var relayGone = false
     private var failure: (@Sendable (String) -> Void)?
-    init(relay: @escaping @Sendable (String) async throws -> Void) { self.relay = relay }
+    /// 15 Nov hidden off switch for the phone-link outbox (no screen shows it): while `outboxOffKey` is YES in the
+    /// app's own defaults, every link that starts after that sends the plain way, as 0220ze did (straight onto the
+    /// channel, nothing queued here, nothing dropped). Read at each link start, so a phone reconnect is enough.
+    ///   defaults write dev.terminaldeck.app TDLinkOutboxOff -bool YES    (back on: defaults delete dev.terminaldeck.app TDLinkOutboxOff)
+    static let outboxOffKey = "TDLinkOutboxOff"
+    static let outboxOffDomain = "dev.terminaldeck.app"
+    /// The app and the session host's Mac reach both run links; either may sit outside that domain (a dev copy, a
+    /// helper), so both its own defaults and the app's domain are read.
+    static func outboxSwitchedOff() -> Bool {
+        UserDefaults.standard.bool(forKey: outboxOffKey) || (UserDefaults(suiteName: outboxOffDomain)?.bool(forKey: outboxOffKey) ?? false)
+    }
+    private let outboxOff: @Sendable () -> Bool
+    init(relay: @escaping @Sendable (String) async throws -> Void,
+         outboxOff: @escaping @Sendable () -> Bool = BackendRemoteLinkPath.outboxSwitchedOff) {
+        self.relay = relay; self.outboxOff = outboxOff
+    }
+
+    /// 14 Nov phone link: what goes on the link waits here, answers first, never more than the channel takes at once.
+    private var outbox: BackendRemoteLinkOutbox?
+    private var resyncing: (@Sendable (String) -> Void)?
+    private var listsLost: (@Sendable () -> Void)?
+    private var named = "a device"
+    /// The device's name in the outbox's log lines (set when the link opens).
+    var deviceName: String {
+        get { lock.withLock { named } }
+        set { lock.withLock { named = newValue } }
+    }
+    /// The host sends a session afresh to this connection when its output fell behind (`BackendRemoteLinkOutbox`).
+    func onResync(_ body: @escaping @Sendable (String) -> Void) { lock.withLock { resyncing = body } }
+    /// An unasked list was thrown away with a link: the host must not count it as delivered.
+    func onListsLost(_ body: @escaping @Sendable () -> Void) { lock.withLock { listsLost = body } }
+    func resyncAbandoned(_ session: String) { lock.withLock { outbox }?.resyncAbandoned(session) }
+    /// Bytes waiting in the outbox (not yet handed to the channel).
+    var outboxWaitingBytes: Int { lock.withLock { outbox }?.waitingBytes ?? 0 }
+    /// The link has had more than a little waiting for over a second (`BackendRemoteLinkOutbox.isSlow`).
+    var isSlow: Bool { lock.withLock { outbox }?.isSlow ?? false }
 
     func attach(_ link: (any BackendLinkConnection)?, failure: (@Sendable (String) -> Void)?) {
-        lock.withLock { self.link = link; self.failure = failure }
+        let made = outboxOff() ? nil : link.map { link in
+            BackendRemoteLinkOutbox(send: { link.send($0, lane: .control) }, queued: { link.queued(.control) },
+                failed: { why in failure?(why) },
+                resync: { [weak self] session in
+                    guard let self else { return }
+                    let body = self.lock.withLock { self.resyncing }
+                    body?(session)
+                },
+                listsLost: { [weak self] in
+                    guard let self else { return }
+                    let body = self.lock.withLock { self.listsLost }
+                    body?()
+                },
+                log: { BackendRemoteRelayClient.note($0) },
+                label: { [weak self] in self?.deviceName ?? "a device" })
+        }
+        if let link, let made {
+            // The channel's own "queue is low" notice tops it up (off its callback thread: a send from inside it could
+            // call back in); the outbox's slow timer is only the safety net.
+            link.whenControlDrains(below: BackendRemoteLinkOutbox.lowMark) { [weak made] in
+                DispatchQueue.global(qos: .userInitiated).async { made?.pump() }
+            }
+        }
+        let previous = lock.withLock { () -> BackendRemoteLinkOutbox? in
+            let old = outbox
+            self.link = link; self.failure = failure; outbox = made
+            return old
+        }
+        previous?.stop()
     }
     func set(_ mode: Mode) { lock.withLock { self.mode = mode } }
     var currentMode: Mode { lock.withLock { mode } }
@@ -198,10 +265,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
                 defer { waiting = []; waitingBytes = 0 }
                 return (moved ? waiting : [], link, self.failure)
             }
-            for message in queued where link?.send(Data(message.utf8), lane: .control) != true {
-                failure?("A message could not go on the direct link.")
-                throw NativeRPCError(code: "unavailable", message: "The direct link ended.")
-            }
+            for message in queued { try sendOnLink(message, link, failure) }
             return
         }
         let route = lock.withLock { () -> (mode: Mode, moved: Bool, link: (any BackendLinkConnection)?, failure: (@Sendable (String) -> Void)?, relayGone: Bool) in
@@ -244,6 +308,11 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     }
 
     private func sendOnLink(_ text: String, _ link: (any BackendLinkConnection)?, _ failure: (@Sendable (String) -> Void)?) throws {
+        // Through this link's outbox (answers first, the channel never handed more than it takes; 14 Nov phone link).
+        if let link, let outbox = lock.withLock({ (self.link as AnyObject?) === (link as AnyObject) ? outbox : nil }) {
+            guard outbox.put(text) else { throw NativeRPCError(code: "unavailable", message: "The direct link ended.") }
+            return
+        }
         guard let link, link.send(Data(text.utf8), lane: .control) else {
             failure?("A message could not go on the direct link.")
             throw NativeRPCError(code: "unavailable", message: "The direct link ended.")
@@ -265,7 +334,12 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     }
 
     func detach() -> (any BackendLinkConnection)? {
-        lock.withLock { defer { link = nil; failure = nil; waiting = []; waitingBytes = 0 }; return link }
+        let (link, box) = lock.withLock { () -> ((any BackendLinkConnection)?, BackendRemoteLinkOutbox?) in
+            defer { self.link = nil; failure = nil; waiting = []; waitingBytes = 0; outbox = nil }
+            return (self.link, outbox)
+        }
+        box?.stop()
+        return link
     }
 }
 
@@ -283,6 +357,8 @@ struct BackendRemoteLinkState: Sendable {
     var token: UUID?
     var connection: (any BackendLinkConnection)?
     var offeredAt: Double = 0
+    /// When every channel opened (host clock, ms): unasked lists wait until the link has settled (14 Nov phone link).
+    var openedAt: Double = 0
     var open = false
     var route = ""
     /// The client's `link.moved` came over the relay: its link messages may be handled.
@@ -416,6 +492,8 @@ extension BackendRemoteHost {
     private func linkOpened(_ id: UUID, _ token: UUID, route: String) async {
         guard linkCurrent(id, token), let row = live[id], let connection = row.link.connection, !row.link.open else { return }
         live[id]?.link.open = true
+        live[id]?.link.openedAt = clock()
+        row.link.path.deviceName = row.device?.name ?? "a device"
         live[id]?.link.route = route
         row.link.path.attach(connection, failure: { [weak self] why in Task { await self?.linkEnded(id, token, why: why, tell: true) } })
         // The marker, then everything that waited for the link (§11.2), through the one ordered writer.
@@ -618,6 +696,9 @@ extension BackendRemoteHost {
             // §11.6: any access but none (Hoot-only included).
             if await trust.phoneAccess(device.id) != nil, await trust.isApproved(device.id) { eligible.insert(device.id) }
         }
+        // Account devices are not on the pairing roster: one still admitted keeps its link through a trust change of
+        // some other device (REACH-CUT); a removed one was already forgotten by `dropReachDevices`.
+        for id in linkEligible where await trust.isReachDevice(id) { eligible.insert(id) }
         return eligible
     }
 

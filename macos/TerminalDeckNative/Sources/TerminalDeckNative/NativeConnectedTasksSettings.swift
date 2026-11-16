@@ -18,8 +18,6 @@ struct ConnectedTaskSystemsGroup: View {
 
     var body: some View {
         Section {
-            Text("See and work on tasks that live in another system — your CRM or tracker — on the Tasks page. Terminal Deck reads them through the system’s MCP address, signed in with an access token you make there. The token stays in your Mac’s Keychain.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach(store.systems) { system in
                 ConnectedTaskSystemRow(system: system, open: open == system.id) { open = open == system.id ? nil : system.id }
             }
@@ -29,10 +27,16 @@ struct ConnectedTaskSystemsGroup: View {
                 NativeSessionButton("Connect a task system") { adding = true }.buttonStyle(.borderedProminent)
             }
         } header: {
-            Text("Connected task systems")
+            // review-fixes 5: the explainer sits behind the group's info button (kit), never as a sentence on the page.
+            HStack(spacing: DeckSettingsLook.infoGap) {
+                Text("Connected task systems")
+                DeckSettingsInfoButton(label: "Connected task systems", text: Self.about)
+            }
         }
         .onAppear { store.start() }
     }
+
+    static let about = "See and work on tasks that live in another system — your CRM or tracker — on the Tasks page. Terminal Deck reads them through the system’s MCP address, signed in with an access token you make there. The token is kept with your saved passwords, and your devices open it by themselves."
 }
 
 /// What the add form starts with (renders pass a filled one).

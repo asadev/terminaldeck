@@ -386,6 +386,8 @@ public actor BackendSessionChats {
         // An explicit New chat mode must override inherited launch flags in both
         // the actual CLI arguments and the composer's reported choice.
         if let permission = chosenPermission { item.choices["permission"] = permission }
+        // The New session page's explicit pick stays passed by name ("default" too), as the launch passed it.
+        if let picked = input.chosenStartPermission, item.choices["permission"] == picked { item.choices[Self.explicitPermissionKey] = "true" }
         var meta = hostLaunch?.metadata ?? BackendSessionMeta(id: id, input: input, spawn: spawn)
         meta.chat = true
         if let job = input.teamJob {
@@ -1771,6 +1773,7 @@ public actor BackendSessionChats {
             guard let mode = BackendHOOTSIMPermissionMode(rawValue: raw) else { throw NativeRPCError.invalidArguments("Unknown permission mode.") }
             let cli = mode.cliMode(provider: provider)
             item.choices["permission"] = cli
+            item.choices[Self.explicitPermissionKey] = nil   // a switch in the open chat behaves as before
             await item.store.setPermissionPolicy(cli == "default" ? nil : cli)
             await item.store.applyPermissionPolicyNow(cli == "default" ? nil : cli, cliMode: cli)
             if provider != .claude { item.relaunch = true }   // Codex's sandbox and Gemini's mode are launch settings
@@ -1790,6 +1793,10 @@ public actor BackendSessionChats {
         }
         return try await options(id)
     }
+
+    /// Set only for a chat started from the New session page with an explicit "Before it changes files" pick:
+    /// its asking mode is passed by name, so the AI's own saved default cannot replace it.
+    static let explicitPermissionKey = "permissionExplicit"
 
     /// The session's launch with the picks made under the box in place of its own.
     static func withChoices(_ arguments: [String], provider: HootChatProvider, choices: [String: String]) -> [String] {
@@ -1822,14 +1829,14 @@ public actor BackendSessionChats {
             switch provider {
             case .claude:
                 drop(["--dangerously-skip-permissions"], pair: false); drop(["--permission-mode"])
-                if permission != "default" { args += ["--permission-mode", permission] }
+                if permission != "default" || choices[explicitPermissionKey] == "true" { args += ["--permission-mode", permission] }
             case .codex:
                 drop(["--sandbox", "-s", "--ask-for-approval", "-a"])
                 if permission == "default" { args += ["--ask-for-approval", "on-request"] }
                 else { args += ["--sandbox", permission, "--ask-for-approval", permission == "danger-full-access" ? "never" : "on-request"] }
             case .gemini:
                 drop(["--yolo", "-y"], pair: false); drop(["--approval-mode"])
-                if permission == "yolo" { args += ["--yolo"] } else if permission != "default" { args += ["--approval-mode", permission] }
+                if permission == "yolo" { args += ["--yolo"] } else if permission != "default" || choices[explicitPermissionKey] == "true" { args += ["--approval-mode", permission] }
             }
         }
         return args

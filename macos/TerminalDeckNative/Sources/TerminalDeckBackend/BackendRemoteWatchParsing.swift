@@ -106,8 +106,18 @@ extension BackendRemoteProtocol {
         guard raw.fields != nil, let id = raw["id"].string, !id.isEmpty, let title = raw["title"].string,
               let cwd = raw["cwd"].string, let provider = raw["provider"].string, let status = raw["status"].string else { return nil }
         let exitCode = raw["exitCode"].number.flatMap { $0.rounded() == $0 ? $0 : nil }
-        return .object([.init("id", .string(id)), .init("title", .string(title)), .init("cwd", .string(cwd)),
+        var row = NativeRPCValue.object([.init("id", .string(id)), .init("title", .string(title)), .init("cwd", .string(cwd)),
             .init("provider", .string(provider)), .init("status", .string(status)), .init("exitCode", exitCode.map(NativeRPCValue.number) ?? .null)])
+        // Live use from another Mac (15 Nov): the id join's `tab` (the session's Cloud id) and the chat mark are kept, so
+        // this Mac matches the Cloud row to the live one and draws a chat as a chat. Both only when sent and well formed.
+        if let tab = raw["tab"].string, liveTab(tab) { row = row.setting("tab", .string(tab)) }
+        if raw["chat"].bool == true { row = row.setting("chat", .bool(true)) }
+        return row
+    }
+    /// A Cloud session id as the host sends it (a saved tab key): 1-256 bytes, no control characters, not only spaces.
+    static func liveTab(_ tab: String) -> Bool {
+        !tab.trimmingCharacters(in: .whitespaces).isEmpty && tab.utf8.count <= 256
+            && !tab.unicodeScalars.contains { $0.value < 32 || (127...159).contains($0.value) || $0 == "\u{2028}" || $0 == "\u{2029}" }
     }
     private static func heldWindows(_ raw: NativeRPCValue) -> [NativeRPCValue] {
         var result: [NativeRPCValue] = []

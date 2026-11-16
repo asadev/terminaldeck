@@ -33,6 +33,27 @@ final class NativeBrowserAutomation {
         if dialogs.count > 50 { dialogs.removeFirst(dialogs.count - 50) }
     }
 
+    /// MAC-NEXT-15: what the page asked while a tool drove it (a dialog answered for the tool, a file chooser not
+    /// opened), handed to that tool in its next step's result.
+    private(set) var toolNotes: [DialogRecord] = []
+    func noteForTool(_ record: DialogRecord) {
+        note(record)
+        toolNotes.append(record)
+        if toolNotes.count > 20 { toolNotes.removeFirst(toolNotes.count - 20) }
+    }
+    func takeToolNotes() -> [DialogRecord] { defer { toolNotes = [] }; return toolNotes }
+
+    // MARK: Who is acting on the page (MAC-NEXT-15)
+
+    /// The last tool call on this page (any browser tool, its synthetic click) and the person's own last click or key
+    /// in it, on the steady clock. BrowserPagePersonRule decides from these whether a tool is driving it now.
+    private(set) var toolTouchedAt: Double?
+    private(set) var personTouchedAt: Double?
+    static func clock() -> Double { ProcessInfo.processInfo.systemUptime }
+    func toolTouched() { toolTouchedAt = Self.clock() }
+    func personTouched() { personTouchedAt = Self.clock() }
+    var toolDriving: Bool { BrowserPagePersonRule.toolDriving(toolAt: toolTouchedAt, personAt: personTouchedAt, now: Self.clock()) }
+
     /// The agent's standing answer for this dialog, or nil to ask the person.
     func autoAnswer() -> DialogPolicy? {
         guard dialogPolicy != .ask else { return nil }

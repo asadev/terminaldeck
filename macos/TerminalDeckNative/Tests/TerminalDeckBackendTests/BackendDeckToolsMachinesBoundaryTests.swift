@@ -38,21 +38,21 @@ final class BackendDeckToolsMachinesBoundaryTests: XCTestCase {
         let rename = try await area.policy(tool, args.setting("do", .string("rename")).removing("text").setting("title", .string("new")), context())
         XCTAssertEqual(rename.tier, .act)
     }
-    func testMachineManageAlwaysNeedsOwnerAnswerAndPairingDropsSecrets() async throws {
-        let channels = BackendDeckToolsMachinesFakeChannels(["machines:list": view, "machines:pair": o(["ok": .bool(true), "offer": o(["hostId": .string("m1"), "name": .string("Office PC")]), "credential": .string("BEARER-SECRET"), "guestKeys": o(["secretKey": .string("PRIVATE-SECRET")])])])
-        let area = machines(channels), args = o(["do": .string("pair"), "code": .string("123456")])
-        let policy = try await area.policy(spec("machines.manage"), args, context())
+    func testMachineManageAlwaysNeedsOwnerAnswerAndNeverAddsAComputer() async throws {
+        let channels = BackendDeckToolsMachinesFakeChannels(["machines:list": view])
+        let area = machines(channels)
+        let policy = try await area.policy(spec("machines.manage"), o(["do": .string("forget"), "machineId": .string("m1")]), context())
         XCTAssertTrue(policy.ownerMustAnswer)
-        let out = try await area.run("machines.manage", args, context())
-        XCTAssertEqual(out.value["machineId"], .string("m1")); XCTAssertFalse(out.value.compact.contains("BEARER")); XCTAssertFalse(out.value.compact.contains("PRIVATE")); XCTAssertFalse(out.summary.compact.contains("123456"))
+        // Owner, 13 Nov: computers join by signing in; "pair" is answered with that and nothing runs.
+        for verb in ["pair", "show-code", "cancel-code"] {
+            do { _ = try await area.policy(spec("machines.manage"), o(["do": .string(verb), "code": .string("123456")]), context()); XCTFail(verb) }
+            catch { XCTAssertEqual((error as? BackendDeckCoreSecurityRefusal)?.message, DevicesPage.joinBySigningIn) }
+            do { _ = try await area.run("machines.manage", o(["do": .string(verb), "code": .string("123456")]), context()); XCTFail(verb) }
+            catch { XCTAssertEqual((error as? BackendDeckCoreSecurityRefusal)?.message, DevicesPage.joinBySigningIn) }
+        }
     }
     func testMachineManageDoesNotAskRemoteCaller() async throws {
         do { _ = try await machines(.init([:])).policy(spec("machines.manage"), o(["do": .string("forget"), "machineId": .string("m1")]), context(kind: .remote)); XCTFail("remote machine manage admitted") } catch { XCTAssertTrue(error.localizedDescription.contains("A paired device cannot")) }
-    }
-    func testCodeReturnedOnlyToCallerNeverLogSummary() async throws {
-        let area = machines(.init(["machines:code": o(["ok": .bool(true), "code": o(["token": .string("424242"), "expiresAt": .number(99)])])]))
-        let out = try await area.run("machines.manage", o(["do": .string("show-code")]), context())
-        XCTAssertEqual(out.value["code"], .string("424242")); XCTAssertFalse(out.summary.compact.contains("424242"))
     }
     func testShellShowsWholeCommandAndRejectsTooLongAndMultiline() async throws {
         let server = BackendDeckToolsMachinesServers(channels: BackendDeckToolsMachinesFakeChannels([:]), shells: BackendDeckToolsMachinesFakeShells(), dataRoot: URL(fileURLWithPath: "/fixture/data"), home: URL(fileURLWithPath: "/fixture/home"))

@@ -356,6 +356,33 @@ public enum AiAppsLines {
             + "If that matters to you, run your own relay and point this app at it. Turning this off stops every internet key at once; keys on this Mac keep working."
     }
 
+    // MARK: 15 Nov, the "AI apps" page (one address through our server, keys told apart)
+
+    /// "13 Nov, 11:00": the date AND time a key was made, at the right of its row (15 Nov, DESIGN-FIXES A-1). Keys that
+    /// share a name are told apart by this alone: their titles stay the plain name.
+    public static func madeAt(_ at: Double, timeZone: TimeZone = .current) -> String {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_GB"); format.timeZone = timeZone; format.dateFormat = "d MMM, HH:mm"
+        return format.string(from: Date(timeIntervalSince1970: at / 1000))
+    }
+
+    /// What a key may do, as its row's second line.
+    public static func mayDo(_ key: AiAccessKey) -> String {
+        key.folders == nil ? key.level.label : "\(key.level.label) · \(folders(key.folders))"
+    }
+
+    /// The switch's (i).
+    public static let switchInfo = "AI apps you give a key (Claude, ChatGPT, a CRM) can use this Mac from anywhere, through Terminal Deck's own server. "
+        + "Each key decides what its app may do, and you can take any key back. Off: the server answers nothing for this Mac; apps on this Mac itself can still connect."
+
+    /// The address row's (i): the one place the address on this Mac is named.
+    public static func addressInfo(localURL: String?) -> String {
+        let local = localURL.map { " Apps running on this Mac can also use \($0)." } ?? ""
+        return "Give an AI app this address and one of the keys below (it goes in the app's Authorization: Bearer field). "
+            + "It works from anywhere while the switch is on. The server passes each request to this Mac and keeps none of them; "
+            + "after ten wrong keys in a minute it turns that caller away for five minutes." + local
+    }
+
     /// Asad, 11 Oct: "app itself will not ask any permissions at all it all depends on ai model settings directly".
     public static let askingNote = "Terminal Deck does not ask you before this app acts. Whether it asks first is the AI app’s own permission setting. What it can reach is its level and folders, and every change is in the activity log."
 

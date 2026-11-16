@@ -31,15 +31,29 @@ public enum BackendAPIAccountKeychain {
         }
         return key
     }
+    /// Cloud must distinguish a missing item from denied access; neither means an empty key.
+    static func cloudRead(_ record: BackendAPIAccountRecord) throws -> String? {
+        var lookup = query(record)
+        lookup[kSecReturnData as String] = true; lookup[kSecReturnAttributes as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let status = SecItemCopyMatching(lookup as CFDictionary, &value)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let attributes = value as? [String: Any],
+              attributes[kSecAttrGeneric as String] as? Data == record.credentialScope,
+              let bytes = attributes[kSecValueData as String] as? Data,
+              let key = String(data: bytes, encoding: .utf8), !key.isEmpty else { throw BackendAccountFailure("The saved API key is locked.") }
+        return key
+    }
     public static func validate(_ key: String) throws {
         guard (8...8192).contains(key.utf8.count), key.utf8.allSatisfy({ (0x21...0x7e).contains($0) && $0 != 34 && $0 != 92 }) else {
             throw BackendAccountFailure("Enter a plain API key or token of 8 to 8192 characters, without spaces.")
         }
     }
-    public static func write(_ key: String, record: BackendAPIAccountRecord, trustedExecutables: [URL]) throws {
+    public static func write(_ key: String, record: BackendAPIAccountRecord, trustedExecutables: [URL], onlyIfAbsent: Bool = false) throws {
         try validate(key)
         let values: [String: Any] = [kSecValueData as String: Data(key.utf8), kSecAttrGeneric as String: record.credentialScope]
-        let updated = SecItemUpdate(query(record) as CFDictionary, values as CFDictionary)
+        let updated = onlyIfAbsent ? errSecItemNotFound : SecItemUpdate(query(record) as CFDictionary, values as CFDictionary)
         if updated == errSecSuccess { return }
         guard updated == errSecItemNotFound else { throw BackendAccountFailure("Keychain could not update this API key (\(updated)).") }
         var item = query(record); item[kSecValueData as String] = Data(key.utf8); item[kSecAttrGeneric as String] = record.credentialScope

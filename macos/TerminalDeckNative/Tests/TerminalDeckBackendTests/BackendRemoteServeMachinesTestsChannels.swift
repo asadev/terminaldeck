@@ -41,7 +41,9 @@ final class BackendRemoteServeMachinesTestsChannels: XCTestCase {
             "machines:create", "machines:detach", "machines:disconnect", "machines:drive-windows", "machines:forget", "machines:github:cancel", "machines:github:connect", "machines:github:disconnect", "machines:github:read",
             "machines:host:read", "machines:host:restart", "machines:host:stop", "machines:input", "machines:list", "machines:logins:read", "machines:logins:signin", "machines:logins:signout",
             "machines:open", "machines:pair", "machines:ports", "machines:reach", "machines:reach:close", "machines:rename", "machines:resize", "machines:send", "machines:session:rename",
-            "machines:upload", "machines:upload:cancel", "machines:usage:read"]
+            "machines:upload", "machines:upload:cancel", "machines:usage:read",
+            // Live use from another Mac (15 Nov): his machines by sign-in, a chat session's live messages.
+            "machines:reach:open", "machines:chats"]
         let actual = await rig.registry.channels(); XCTAssertEqual(actual, expected.sorted()); await rig.close()
     }
     func testCodeUnavailableWhenNoPublishingHostSupplied() async throws {

@@ -39,7 +39,8 @@ public struct BackendINT2PhonePanelScope: Sendable {
             throw NativeRPCError(code: "access-denied", message: "This machine panel belongs to an owner-approved device.")
         }
         guard current.claimedCapabilities.contains("panels." + domain) else {
-            throw NativeRPCError(code: "access-denied", message: "This device did not negotiate panels.")
+            // `unavailable`, not a refusal: an older phone keeps this error rather than an empty panel (14 Nov review).
+            throw NativeRPCError(code: "unavailable", message: "This device did not negotiate panels.")
         }
         try await trust.requirePhoneAccess(current.deviceID, message: mutation ? "panel.act" : "panel.read", panel: domain)
         return current
@@ -64,6 +65,16 @@ public struct BackendINT2PhonePanelScope: Sendable {
         default: return false
         }
     }
+    /// Fault 1 (14 Nov): the one place added, and only for Tasks: the Mac's own New session default folder
+    /// (`~/Terminal Deck/Independent`, which the Mac offers this device as `defaultFolder`), for his own device at Full
+    /// control (the one start rule, `BackendPhoneChats.fullControl`: its level, or none set). Nothing else: not the
+    /// device's other start places (his own devices may start anywhere), not another domain, never a guest.
+    public static func defaultTaskFolder(kind: BackendRemoteDeviceKind, level: BackendINT2PhoneAccessLevel?, domain: String,
+                                         defaultFolder: String?) -> String? {
+        guard domain == "tasks", kind == .mine, BackendPhoneChats.fullControl(level: level, kind: kind),
+              let defaultFolder, defaultFolder.hasPrefix("/") else { return nil }
+        return defaultFolder
+    }
     public func call(_ tool: String, arguments: NativeRPCValue, rpc: NativeRPCContext, domain: String,
                      tier: BackendMCPTier = .read, projects paths: [String] = []) async throws -> NativeRPCValue {
         let mutation = tier != .read
@@ -81,9 +92,11 @@ public struct BackendINT2PhonePanelScope: Sendable {
                       paths.allSatisfy({ path in fresh.reach.unrestricted || fresh.reach.folders.contains { BackendRemoteTrustStore.within($0, path) } }) else {
                     return .init(kind: .remote, tiers: [], deviceID: context.deviceID)
                 }
+                let offered = await endpoint.offeredDefaultFolder()
                 return .init(kind: .remote, tiers: level.tiers, deviceID: fresh.deviceID,
                     tasks: ["tasks", "goals", "agents", "connected-tasks"].contains(domain), folders: fresh.reach.unrestricted ? nil : fresh.reach.folders,
-                    projectRoot: paths.first)
+                    projectRoot: paths.first,
+                    defaultTaskFolder: Self.defaultTaskFolder(kind: fresh.kind, level: level, domain: domain, defaultFolder: offered))
             } catch { return .init(kind: .remote, tiers: [], deviceID: context.deviceID) }
         }
         let grant = BackendDeckCoreSecurityGrant(identity: "device:" + context.deviceID + ":connection:" + context.connectionID.uuidString,
@@ -109,7 +122,9 @@ public struct BackendINT2PhonePanelScope: Sendable {
             throw NativeRPCError(code: "access-denied", message: "The device's access changed while this panel call was running.")
         }
         let result = try await slot.get()
-        guard result.ok else { throw NativeRPCError(code: result.refusal?.rawValue ?? "panel-refused", message: result.error ?? "The existing tool refused this action.") }
+        // The tool's own code travels (14 Nov): a refusal (`access-denied`, a security reason) leaves the section out;
+        // a plain failure keeps its sentence and the phone's Try again.
+        guard result.ok else { throw NativeRPCError(code: result.refusal?.rawValue ?? result.code ?? "panel-failed", message: result.error ?? "The existing tool refused this action.") }
         return result.value
     }
 }

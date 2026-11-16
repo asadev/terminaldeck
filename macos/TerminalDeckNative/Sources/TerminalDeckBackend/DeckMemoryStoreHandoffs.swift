@@ -161,6 +161,8 @@ extension DeckMemoryStore {
             try FileManager.default.createDirectory(at: url(target).deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: url(path), to: url(target))
         } catch { throw DeckMemoryError(.io, "The handoff could not be moved: \(error.localizedDescription)") }
+        // Delete rule (decision 1): the app's own archive or restore of a hand-off travels as a move.
+        try cloudRecordMemoryMove(from: path, to: target)
         try indexHandoff(path: target, pathOwner: owner, topic: row.string(3), archivedByPath: archive, text: file.text)
         if archive { try db.run("UPDATE handoffs SET origin_path = ? WHERE id = ?", [.text(path), .text(id)]) }
         post(.topics, owner, "handoff:" + id)

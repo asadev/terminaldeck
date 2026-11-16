@@ -30,7 +30,7 @@ struct BackendCrmTaskToolsParityTests {
         try await BackendTaskClockContext.withClock(parityClock) {
             let r = try await BackendCrmTaskToolsParityFixture.make(localOnly: true)
             #expect(try r.spec("tasks.local").tier == .read)
-            let groups: [(String,[String],BackendMCPTier)] = [("tasks.local_change",["status","comment","reply"],.act),("tasks.local_change",["create","update","assign","archive","unarchive","delete","restore"],.alter),("tasks.local_parts",["subtask_add","subtask_done","checklist_item_done","field_set","time_start","time_add"],.act),("tasks.local_parts",["subtask_remove","checklist_remove","field_remove","attach_file","attachment_remove","time_remove"],.alter),("tasks.local_schedule",["reminder_set","comment_schedule"],.act),("tasks.local_schedule",["repeat_set","repeat_stop","repeat_restart"],.alter),("tasks.agents",["list"],.read),("tasks.agents",["save"],.alter)]
+            let groups: [(String,[String],BackendMCPTier)] = [("tasks.local_change",["status","comment","reply","delete"],.act),("tasks.local_change",["create","update","assign","archive","unarchive"],.alter),("tasks.local_parts",["subtask_add","subtask_done","checklist_item_done","field_set","time_start","time_add"],.act),("tasks.local_parts",["subtask_remove","checklist_remove","field_remove","attach_file","attachment_remove","time_remove"],.alter),("tasks.local_schedule",["reminder_set","comment_schedule"],.act),("tasks.local_schedule",["repeat_set","repeat_stop","repeat_restart"],.alter),("tasks.agents",["list"],.read),("tasks.agents",["save"],.alter)]
             for (id, verbs, expected) in groups {
                 for verb in verbs {
                     let before = await r.audit.tiers.count
@@ -118,10 +118,14 @@ struct BackendCrmTaskToolsParityTests {
             _ = try await r.call("tasks.local_change", crmParityValue(["do":"archive","task":id])); #expect(try await r.f.row(id)["archivedAt"].number != nil)
             #expect(crmParityStrings(try await r.call("tasks.local", crmParityValue(["do":"list","archived":true]))["tasks"],"task") == [id])
             _ = try await r.call("tasks.local_change", crmParityValue(["do":"unarchive","task":id]))
-            #expect(try await r.call("tasks.local_change", crmParityValue(["do":"delete","task":id]))["trashed"].string == id)
+            // Delete rule (L6): delete goes everywhere into the Bin with no question; the Bin (Trash) is the person's, by
+            // hand: no tool lists it, restores from it or purges it.
+            #expect(try await r.call("tasks.local_change", crmParityValue(["do":"delete","task":id]))["deleted"].string == "Old idea")
             #expect(try await r.f.store.byID(id) == nil)
-            #expect(crmParityStrings(try await r.call("tasks.local", crmParityValue(["do":"trash"]))["trash"],"task") == [id])
-            _ = try await r.call("tasks.local_change", crmParityValue(["do":"restore","task":id])); #expect(try await r.f.row(id)["title"].string == "Old idea")
+            await #expect(throws: (any Error).self) { _ = try await r.call("tasks.local", crmParityValue(["do":"trash"])) }
+            await #expect(throws: (any Error).self) { _ = try await r.call("tasks.local_change", crmParityValue(["do":"restore","task":id])) }
+            await #expect(throws: (any Error).self) { _ = try await r.call("tasks.local_change", crmParityValue(["do":"purge","task":id])) }
+            #expect(try await r.f.store.inTrash().contains { $0.id == id }, "still in the person's Bin")
         
         }
     }

@@ -79,9 +79,20 @@ public struct SettingsSectionInfo: Equatable, Sendable, Identifiable {
 
 public enum SettingsSchema {
     public static let all: [SettingDefinition] = [
+        // Owner, 14 Nov: the app opens on a New session page (this Mac keeps a copy to draw its first frame).
+        SettingDefinition(id: "general.whenOpens",
+            section: "general",
+            label: "When Terminal Deck opens",
+            help: "",
+            store: .extra,
+            kind: .select,
+            defaultValue: .string("new-session"),
+            // Owner, 15 Nov: no Overview any more. A saved "overview" is not an option, so it reads as the default.
+            options: [.init(value: "new-session", label: "New session"), .init(value: "hoot", label: "Hoot chat"),
+                      .init(value: "left-off", label: "Where I left off")]),
         SettingDefinition(id: "general.restoreSessions",
             section: "general",
-            label: "Pick up where you left off",
+            label: "Reopen sessions after a restart",
             help: "Reopens the projects and sessions you had open and carries on task work a restart cut off, continuing each conversation.",
             more: "Rather than starting each one over. A session whose folder or conversation is gone opens clean instead of failing. Off: closed sessions stay closed and cut-off task work waits for your reply on its task. Sessions that kept running while the app was closed are always kept.",
             store: .prefs,

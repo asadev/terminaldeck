@@ -211,6 +211,7 @@ public enum GitWidgetRules {
         case "not-a-repo": return "Nothing to track here"
         case "git-missing": return "git is not installed"
         case "no-such-folder": return "That folder is gone"
+        case "code-not-here": return "Code not on this Mac yet"
         default: return "Source control is unavailable"
         }
     }

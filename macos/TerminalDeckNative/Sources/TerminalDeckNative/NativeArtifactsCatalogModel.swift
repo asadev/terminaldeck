@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 /// Catalog-specific presentation. Scans remain on the existing granted artifact channels.
@@ -24,6 +25,11 @@ final class NativeArtifactsCatalogModel {
         let source: [String: String]
         /// Made by a session that was working in this project's folder (the scan's `own`).
         var own = false
+        /// Lane L3 slice 2: an artifact from the Cloud store (made on another device, or kept there after it left this
+        /// Mac's list): its store path. nil for a file this Mac's list found.
+        var cloudPath: String? = nil
+        /// The name of the Mac that made it, for one quiet line; nil when it was made on this Mac.
+        var fromMac: String? = nil
         var id: String { root + "\u{0}" + artifact.relPath }
         var projectID: String { artifact.projectID }
         var request: [String: Any] { ["cwd": root, "relPath": artifact.relPath, "projectId": projectID] }
@@ -83,9 +89,43 @@ final class NativeArtifactsCatalogModel {
         self.persistSelection = persistSelection
         projectID = persistSelection ? UserDefaults.standard.string(forKey: "catalog.artifacts.project") : nil
     }
+    /// Lane L3 slice 2: this Mac's list plus the artifacts in the Cloud store that this list does not hold (made on
+    /// another Mac), shown only once their project is on this Mac (until then they wait in the store).
+    var allRows: [Row] { rows + cloudRows }
+    var cloudRows: [Row] {
+        let cloud = NativeCloudArtifacts.shared
+        guard let store = cloud.owner?.store, !isFixture else { return [] }
+        return Self.cloudRows(cloud.items, store: store, projects: Set(NativePROJLabels.shared.projects.map(\.id)), local: rows,
+                              macName: { cloud.macName($0) })
+    }
+    /// The store's artifacts as rows of this page: only those whose project is on this Mac (an artifact of a project
+    /// that has not arrived yet waits in the store and appears with it), and never one this Mac's own list holds.
+    static func cloudRows(_ items: [CloudArtifactItem], store: URL, projects: Set<String>, local: [Row], macName: (String?) -> String?) -> [Row] {
+        let known = projects.subtracting([PROJProjects.independentID])
+        let here = Set(local.map { $0.projectID + "\u{0}" + $0.artifact.relPath })
+        return items.compactMap { item in
+            guard known.contains(item.projectId), !here.contains(item.projectId + "\u{0}" + item.relPath) else { return nil }
+            let artifact = Artifact(relPath: item.relPath, name: item.name, firstAt: Double(item.createdAt), lastAt: Double(item.changedAt),
+                                    onDisk: ArtifactOnDisk(bytes: Int(item.bytes), modifiedAt: Double(item.changedAt)), projectID: item.projectId)
+            return Row(root: store.appendingPathComponent(item.projectId, isDirectory: true).path, artifact: artifact,
+                       source: item.madeBy.map { ["title": $0] } ?? [:], cloudPath: item.path, fromMac: macName(item.device))
+        }
+    }
+    /// The store path of a row's copy in the Cloud, when it has one.
+    func cloudCopy(_ row: Row) -> String? {
+        if let path = row.cloudPath { return path }
+        let items = NativeCloudArtifacts.shared.items
+        return items.first { $0.projectId == row.projectID && $0.relPath == row.artifact.relPath }?.path
+    }
+    /// Who made it, as a name: the source's title, Hoot, or the session's name; nil when not known.
+    static func madeBy(_ row: Row, sessionNames: [String: String]) -> String? {
+        if let title = row.source["title"], !title.isEmpty { return title }
+        if row.source["kind"] == "hoot" { return "Hoot" }
+        return row.artifact.sessionIds.lazy.compactMap { sessionNames[$0] }.first
+    }
     var visible: [Row] {
         let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return rows.filter {
+        return allRows.filter {
             (projectID == nil || $0.projectID == projectID) &&
             (kind == .all || Kind.of($0.artifact.relPath) == kind) &&
             (needle.isEmpty || ($0.artifact.name + " " + $0.artifact.relPath + " " + sourceName($0) + " " + NativePROJLabels.shared.name(for: $0.projectID) + " " + ($0.location ?? "")).localizedCaseInsensitiveContains(needle))
@@ -111,11 +151,13 @@ final class NativeArtifactsCatalogModel {
     func subtitle(_ row: Row) -> String {
         let project = NativePROJLabels.shared.name(for: row.projectID)
         if let location = row.location { return "\(project) · \(location)" }
+        if row.cloudPath != nil, row.source["title"] == nil { return project }
         return "\(sourceName(row)) · \(project)"
     }
     /// The preview's heading line: who, which project and, for an outside file, where.
     func detailLine(_ row: Row) -> String {
-        ([sourceName(row), NativePROJLabels.shared.name(for: row.projectID)] + (row.location.map { [$0] } ?? [])).joined(separator: " · ")
+        ([sourceName(row), NativePROJLabels.shared.name(for: row.projectID)] + (row.location.map { [$0] } ?? [])
+            + (row.fromMac.map { [CloudArtifactsFormat.fromLine($0)] } ?? [])).joined(separator: " · ")
     }
     /// The whole path on hover; the row itself stays short.
     func pathHelp(_ row: Row) -> String {
@@ -185,20 +227,29 @@ final class NativeArtifactsCatalogModel {
     }
     /// One folder's artifacts, as the engine lists them now.
     private func scan(_ root: String) async throws -> [Row] {
+        let found = try await Self.read(root, invoke: invoke)
+        // A history that could not be read was skipped, not a failure: everything else is listed.
+        if let skipped = found.skipped {
+            skippedByRoot[root] = skipped
+            skippedHistories = skippedByRoot.values.reduce(into: Set<String>()) { $0.formUnion($1) }.count
+        }
+        return found.rows
+    }
+    /// One folder's artifacts, as the engine lists them now (the page's reading; lane L3 slice 2 feeds the Cloud from
+    /// the same reading). `skipped`: the histories left out; nil when the folder is quietly not one the engine lists.
+    static func read(_ root: String, invoke: @MainActor (String, [Any]) async throws -> Any) async throws -> (rows: [Row], skipped: Set<String>?) {
         // Artifacts alone, the project's own sessions first, and enough of them to reach older work.
-        let answer = try await call("artifacts:list", [["cwd": root, "scope": "all", "only": "artifacts", "maxSessions": 200, "maxArtifacts": 600]])
+        let answer = try await invoke("artifacts:list", [["cwd": root, "scope": "all", "only": "artifacts", "maxSessions": 200, "maxArtifacts": 600]])
         // A folder that belongs to no project (its sessions are "Independent") is not one the engine lists by
         // folder. It adds nothing, and it is never an error card.
         if let reply = answer as? [String: Any], reply["ok"] as? Bool != true,
            ArtifactRules.isQuietRefusal(error: reply["error"] as? String,
                                         projectID: PROJProjects.resolve(projectID: nil, folder: root, projects: NativePROJLabels.shared.projects)) {
-            return []
+            return ([], nil)
         }
         switch ArtifactsWire.list(answer) {
         case .done(let list):
-            // A history that could not be read was skipped, not a failure: everything else is listed.
-            skippedByRoot[root] = Set((answer as? [String: Any])?["skippedKeys"] as? [String] ?? [])
-            skippedHistories = skippedByRoot.values.reduce(into: Set<String>()) { $0.formUnion($1) }.count
+            let skipped = Set((answer as? [String: Any])?["skippedKeys"] as? [String] ?? [])
             let wireRows = (answer as? [String: Any])?["artifacts"] as? [[String: Any]] ?? []
             let wire = Dictionary(wireRows.compactMap { value -> (String, [String: String])? in
                 guard let path = value["relPath"] as? String else { return nil }
@@ -209,8 +260,9 @@ final class NativeArtifactsCatalogModel {
                 })
             }, uniquingKeysWith: { _, newer in newer })
             let own = Set(wireRows.compactMap { $0["own"] as? Bool == true ? $0["relPath"] as? String : nil })
-            return list.artifacts.filter { ArtifactRules.isArtifact($0.relPath) && Kind.of($0.relPath) != nil }
+            let rows = list.artifacts.filter { ArtifactRules.isArtifact($0.relPath) && Kind.of($0.relPath) != nil }
                 .map { Row(root: root, artifact: $0, source: wire[$0.relPath] ?? [:], own: own.contains($0.relPath)) }
+            return (rows, skipped)
         case .cancelled: throw CatalogError("History reading was interrupted. Try Again.")
         case .failed(let message): throw CatalogError(message)
         }
@@ -261,6 +313,9 @@ final class NativeArtifactsCatalogModel {
                     return (id, row["title"] as? String ?? "Session")
                 }
             }
+            // Lane L3 slice 2: what the page just read is what travels (new and changed artifacts are copied for his
+            // other Macs; nothing is asked).
+            if !isFixture { NativeCloudArtifacts.shared.offer(rows, sessionNames: sessionNames) }
         }
     }
     /// Try Again on one card: that folder alone is read again. Its card says "Trying…" where it is,
@@ -309,7 +364,7 @@ final class NativeArtifactsCatalogModel {
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        let count = buffer.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+        let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, $0.count) }
         guard count > 0 else { return nil }
         return String(decoding: buffer.prefix(count), as: UTF8.self)
     }
@@ -324,7 +379,21 @@ final class NativeArtifactsCatalogModel {
     func openSource(_ row: Row) { selected = row; presented = .source(row) }
     func send(_ row: Row, to target: String) { action("artifacts:send", row: row, extra: ["target": target]) }
     func requestDelete(_ row: Row) { pendingDelete = row }
-    func deleteFromList(_ row: Row) { action("artifacts:hide", row: row) }
+    /// Lane L3 slice 2: Delete from list also removes its copy from his other Macs (into the Bin on each for 30 days).
+    /// An artifact that came from the Cloud has no place in this Mac's list: only its copy is removed.
+    func deleteFromList(_ row: Row) {
+        let copy = cloudCopy(row)
+        if row.cloudPath == nil { action("artifacts:hide", row: row) }
+        guard let copy, !isFixture else { return }
+        Task {
+            let done = await NativeCloudArtifacts.shared.remove(path: copy)
+            if row.cloudPath != nil {
+                if done { actionNotice = "Removed \(row.artifact.name) from all your devices. It stays in the Bin for 30 days." }
+                else { actionError = "That artifact could not be removed. Nothing was changed." }
+                if selected?.id == row.id { selected = nil; presented = nil }
+            }
+        }
+    }
     func clearError() { actionError = nil }
     private func action(_ channel: String, row: Row, extra: [String: Any] = [:]) {
         actionError = nil; actionNotice = nil

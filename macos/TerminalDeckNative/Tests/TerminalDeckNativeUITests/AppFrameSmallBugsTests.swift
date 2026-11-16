@@ -69,7 +69,9 @@ final class AppFrameSmallBugsTests: XCTestCase {
     /// #132: only pages that really reopen are booked as moved to their own window.
     func testRestoreBooksOnlyPagesThatReopen() throws {
         let take = try slice(try source("TerminalDeckNative/AppModel.swift"), from: "func takeScreensToRestore()", to: "func knownSymbol")
-        let filter = try XCTUnwrap(take.range(of: "UIGMemoryVisibility.restoredScreens(screensToRestore)"))
+        // 14 Nov: the list is first narrowed (remembered pages only, no Settings pages: Settings is one window), then
+        // UIGMemoryVisibility still drops what cannot reopen, before anything is booked.
+        let filter = try XCTUnwrap(take.range(of: "UIGMemoryVisibility.restoredScreens(screensToRestore.filter {"))
         let booked = try XCTUnwrap(take.range(of: "NativePageWindows.shared.requested(ref)"))
         XCTAssertLessThan(filter.lowerBound, booked.lowerBound)
         XCTAssertTrue(take.contains("for ref in restored where"))

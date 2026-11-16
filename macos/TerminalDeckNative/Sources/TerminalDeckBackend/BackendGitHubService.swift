@@ -32,6 +32,8 @@ public actor BackendGitHubService {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) else { return await failure("no-such-folder", "This project folder no longer exists.") }
         guard isDirectory.boolValue else { return await failure("no-such-folder", "That project path is not a folder.") }
+        // CODE-PARENT: a repository above the folder that is not its code (the home folder's) is not its GitHub home.
+        if await codeRefused(cwd) { return await failure("not-a-repo", BackendGitHubRules.notARepo) }
         do {
             let result = try await run("git", ["config", "--local", "--get-regexp", #"^remote\..*\.(url|gh-resolved)$"#], cwd: cwd)
             if !result.ok {
@@ -47,8 +49,16 @@ public actor BackendGitHubService {
             return await failure("no-github-remote", "None of this repository’s remotes point at GitHub.", action: "git remote add github <url>", detail: entries.map { "\($0.name) → \(BackendGitHubRules.redactURL($0.url))" }.joined(separator: ", "))
         } catch { return BackendGitHubRules.classify(text: error.localizedDescription, secrets: await auth?.secrets() ?? []) }
     }
+    /// CODE-PARENT: the folder's code is not here, or the repository above it is not its code (`BackendProjectCode`).
+    private func codeRefused(_ cwd: String) async -> Bool {
+        await BackendProjectCode.refuses(cwd, bounds: .live(), probe: { [self] top, arguments in
+            guard let outcome = try? await self.run("git", arguments, cwd: top), !outcome.missing else { return nil }
+            return outcome.stdout
+        })
+    }
     public func readBranch(_ cwd: String) async -> NativeRPCValue {
         guard cwd.hasPrefix("/") else { return .null }
+        guard await !codeRefused(cwd) else { return .null }
         do {
             let result = try await run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd: cwd)
             let name = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

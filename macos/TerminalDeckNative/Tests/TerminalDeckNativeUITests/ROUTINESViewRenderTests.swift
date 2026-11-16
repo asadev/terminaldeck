@@ -340,7 +340,7 @@ struct ROUTINESRenderSettingsFrame<Content: View>: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) { ForEach([Color.red, .orange, .green], id: \.self) { Circle().fill($0).frame(width: 11, height: 11) } }.padding(.bottom, 12)
-                ForEach(["Hoot", "General", "Appearance", "Notifications", "Dynamic Island", "Coding AIs", "Agents", "Browser", "Outside AI apps", "Power", "Advanced", "Simulators"], id: \.self) { title in
+                ForEach(["Hoot", "General", "Appearance", "Notifications", "Dynamic Island", "Coding AIs", "Agents", "Browser", "AI apps", "Power", "Advanced", "Simulators"], id: \.self) { title in
                     Text(title).font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12).frame(height: 28)
                         .background(title == "Hoot" ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 8))

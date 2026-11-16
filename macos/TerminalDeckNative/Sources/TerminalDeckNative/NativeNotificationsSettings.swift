@@ -3,86 +3,54 @@ import Observation
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// Settings → Notifications (`NotificationsSection.tsx`): the table's rows, a
-/// test banner (and the way to the system's notification settings) under
-/// "Tell me when a session finishes", a Test under "Sound", and what the check
-/// found. Turning a banner on proves it with one, as the page does.
+/// Settings → Notifications (owner, 15 Nov; DESIGN.md section 4, item 50): ONE group, three rows. "When a session
+/// finishes" (a banner; turning it on proves it with one) · "Play a sound" with the sound beside its switch while on ·
+/// "Test notification" with its "Send" button (a test banner, and the sound when it is on). Approvals (always on) and the way to the Mac's own
+/// notification settings are in the info buttons; what the check found is one line.
 struct NativeNotificationsSettings: View {
     @State private var check = NativeNotificationCheck()
     @State private var soundNote: String?
     private let store = NativeSettingsValues.shared
+    static let finishInfo = "A banner on this Mac when a session finishes. Approval requests always reach you, here and on your phone; they cannot be turned off. If no banner shows, allow Terminal Deck in the Mac's own notification settings."
 
     var body: some View {
-        NativeSettingsPage(sectionId: "notifications") {
-            Section("Tell me when") {
+        let soundOn = store.bool("notifications.onFinishSound")
+        DeckSettingsScaffold(title: "Notifications") {
+            DeckSettingsGroup {
                 // TRUTH-B: shown on the Mac too (it was compiled out, so session banners could not be turned off here).
-                if let definition = finishDefinition {
-                    NativeSettingControl(setting: definition, onSave: saveAndProve)
-                }
-                NativeSettingRow(label: "Approvals", help: "Always on the phone too.",
-                    more: "Approval requests always reach the owner. This cannot be turned off here.") {
-                    Text("Always on").foregroundStyle(.secondary)
-                }
-                testButtons
-            }
-            Section("How") {
-                // TRUTH-B: the switch the Sound picker depends on was not on the Mac page; the app plays it now.
-                NativeSettingRow(label: "Play a sound when a session finishes") {
-                    Toggle("Play a sound when a session finishes", isOn: Binding(get: { store.bool("notifications.onFinishSound") },
-                        set: { store.save(["notifications.onFinishSound": .bool($0)]) }))
-                        .labelsHidden().toggleStyle(.switch).disabled(store.loading)
-                }
-                NativeSettingRow(label: "Sound") {
-                    HStack {
-                        Picker("Sound", selection: Binding(get: { store.string("notifications.soundName") },
-                            set: { store.save(["notifications.soundName": .string($0)]) })) {
-                            Text("Chime").tag("chime"); Text("Blip").tag("blip"); Text("Knock").tag("knock")
-                        }.labelsHidden().disabled(store.loading)
-                        Button("Test", action: testSound)
-                    }
-                }
-            }
-            if soundNote != nil || check.state != nil {
-                Section {
-                    if let soundNote { NativeCodingAINotice(tone: .warn, text: soundNote) }
-                    if let state = check.state {
-                        VStack(alignment: .leading, spacing: 6) {
-                            NativeCodingAINotice(tone: Self.tone(state.tone), text: state.text)
-                            if state.offerSettings && check.canOpenSettings {
-                                Button("Open notification settings") { check.openSettings() }
-                                    .buttonStyle(.link)
+                DeckSettingsSchemaRow(id: "notifications.onComplete", title: "When a session finishes", info: Self.finishInfo, onSave: saveAndProve)
+                DeckSettingsRow("Play a sound") {
+                    HStack(spacing: DeckTokens.Spacing.s8) {
+                        if soundOn {
+                            Picker("Sound", selection: Binding(get: { store.string("notifications.soundName") },
+                                set: { store.save(["notifications.soundName": .string($0)]); testSound() })) {
+                                Text("Chime").tag("chime"); Text("Blip").tag("blip"); Text("Knock").tag("knock")
                             }
+                            .pickerStyle(.menu).fixedSize().labelsHidden()
                         }
+                        Toggle("Play a sound", isOn: Binding(get: { soundOn }, set: { store.save(["notifications.onFinishSound": .bool($0)]) }))
+                            .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    }
+                    .disabled(store.loading)
+                }
+                DeckSettingsRow(SettingsNotifications.testTitle) {
+                    Button(check.busy ? SettingsNotifications.askingLabel : SettingsNotifications.testLabel) {
+                        check.fire(test: true)
+                        if soundOn { testSound() }
+                    }
+                    .controlSize(.small)
+                    .disabled(check.busy)
+                }
+                if let soundNote { DeckSettingsProblem(text: soundNote) }
+                if let state = check.state {
+                    DeckSettingsProblem(text: state.text, warn: state.tone != .info)
+                    if state.offerSettings && check.canOpenSettings {
+                        DeckSettingsButtonRow(title: "Open notification settings") { check.openSettings() }
                     }
                 }
             }
         }
-        .onAppear { check.readSupport() }
-    }
-
-    private var finishDefinition: SettingDefinition? {
-        guard var definition = SettingsSchema.setting("notifications.onComplete") else { return nil }
-        definition.label = "A session finishes"; definition.help = ""
-        return definition
-    }
-
-    /// The check's tone as a notice's (kept out of the view body so it type-checks fast).
-    private static func tone(_ tone: SettingsNotifications.Tone) -> NativeCodingAINotice.Tone {
-        switch tone {
-        case .info: return .info
-        case .warn: return .warn
-        case .error: return .error
-        }
-    }
-
-    private var testButtons: AnyView {
-        AnyView(HStack {
-            Button(check.busy ? SettingsNotifications.askingLabel : SettingsNotifications.testLabel) { check.fire(test: true) }
-                .disabled(check.busy)
-            if check.canOpenSettings {
-                Button("Open notification settings") { check.openSettings() }
-            }
-        })
+        .onAppear { store.start(); check.readSupport() }
     }
 
     private func saveAndProve(_ patch: [String: CodingAIJSON]) {

@@ -11,7 +11,7 @@ public enum BackendANDROIDSessionPhoneNote {
     public static let tool = "mcp__deck-control__devices_open_app"
 
     /// CONNECT-SKILLS: plus the line naming Terminal Deck's built-in skills (empty when this copy has none).
-    public static var note: String { phoneNote + BackendBuiltInSkills.sessionLine() }
+    public static var note: String { phoneNote + BackendBuiltInSkills.sessionLine() + CloudFolderFormat.sessionLine() }
     public static let phoneNote = """
     You are running inside Terminal Deck (a Mac app). This session has a phone panel beside it that shows an \
     iOS Simulator or Android emulator. To open, install or test an app on a phone, call the \(tool) tool \
@@ -22,7 +22,7 @@ public enum BackendANDROIDSessionPhoneNote {
     """
 
     /// Codex has no deck-control tools here (only Claude sessions get them): keep phones headless.
-    public static var codexNote: String { codexPhoneNote + BackendBuiltInSkills.sessionLine() }
+    public static var codexNote: String { codexPhoneNote + BackendBuiltInSkills.sessionLine() + CloudFolderFormat.sessionLine() }
     public static let codexPhoneNote = """
     You are running inside Terminal Deck (a Mac app) whose session has a phone panel that shows an iOS \
     Simulator or Android emulator. Keep phones headless: use `xcrun simctl` (boot/install/launch/openurl) and \

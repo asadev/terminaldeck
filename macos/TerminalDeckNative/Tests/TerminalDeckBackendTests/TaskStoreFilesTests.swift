@@ -84,9 +84,23 @@ struct TaskStoreFilesTests {
         try persistence.write("tasks.json", value: .object([.init("v", .number(1)), .init("tasks", .array([Self.row("live")])), .init("trash", .array([
             Self.row("old", [("deletedAt", .number(now - 31 * day))]), Self.row("recent", [("deletedAt", .number(now - day))]),
             Self.row("held", [("deletedAt", .number(now - 31 * day)), ("sessionId", .string("s9"))]), crm]))]))
-        let store = BackendTaskStore(persistence: persistence); try await store.start()
+        // Lead decision 2 (review A2, ce9792b2b): the Trash ages by the SERVICE clock only; with no known service
+        // clock nothing ages. Give the store the service clock as the Cloud registration does.
+        let store = BackendTaskStore(persistence: persistence)
+        store.recordDeletes.configure(gate: { true }, macNames: { $0 }, serviceTime: { Int64(now) })
+        try await store.start()
         #expect(try await store.inTrash().map(\.id) == ["local:recent", "local:held", "crm:x"])
         _ = try await store.update("local:live", patch: .object([.init("title", .string("Live"))]))
         #expect((try persistence.read("tasks.json")?["trash"].elements ?? []).compactMap { $0["id"].string } == ["local:recent", "local:held", "crm:x"])
+    }
+
+    /// Lead decision 2 (review A2): while the service clock is not known, nothing ages, so a wrong Mac clock empties nothing.
+    @Test func withoutTheServiceClockNothingLeavesTheTrash() async throws {
+        let root = Self.folder("trash-noclock"); defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = try BackendTaskPersistence(directory: root, ownership: .exclusive), now = Date().timeIntervalSince1970 * 1_000, day = 86_400_000.0
+        try persistence.write("tasks.json", value: .object([.init("v", .number(1)), .init("tasks", .array([])), .init("trash", .array([
+            Self.row("old", [("deletedAt", .number(now - 31 * day))])]))]))
+        let store = BackendTaskStore(persistence: persistence); try await store.start()
+        #expect(try await store.inTrash().map(\.id) == ["local:old"])
     }
 }

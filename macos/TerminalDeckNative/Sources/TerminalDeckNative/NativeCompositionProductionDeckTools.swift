@@ -84,7 +84,7 @@ struct NativeCompositionSessionWindows: BackendDeckToolsSessionsWindows {
             }
             NativePoppedSessions.shared.dock(sessionID)
             NativePageWindows.shared.closed(ScreenRef(kind: .session, id: sessionID))
-            AppModel.shared.selectTab(sessionID)
+            AppModel.shared.selectTab(sessionID) // window-tool-ok: an explicit window tool (its job is moving the view when asked); kept, see NativeBackgroundToolsPolicy
             return Self.object([("ok", .bool(true)), ("sessionId", .string(sessionID)), ("message", .string("The session is back in the main window and still running."))])
         }
     }
@@ -122,9 +122,7 @@ extension NativeCompositionProduction {
         let appAccess = BackendCompositionDeckToolsAccess.appAccess(scope: scope)
         let runtime = BackendCompositionDeckToolsSessionsRuntime(scope: scope)
         var definitions: [BackendDeckToolsDefinition] = []
-        definitions += try Sidebar21MCP.definitions(access: appAccess, perform: { id, args in
-            try await Sidebar21MCP.live(id, args)
-        })
+        definitions += try Self.windowToolDefinitions(access: appAccess)
         definitions += try devicePanelToolDefinitions(gate: gate)
         definitions += try chatFeatureToolDefinitions(gate: gate)
         definitions += try chatOrganizationToolDefinitions(gate: gate)
@@ -248,6 +246,10 @@ extension NativeCompositionProduction {
         guard let github = clients.github, let githubAuth = clients.githubAuth else {
             throw NativeRPCError(code: "unavailable", message: "The existing GitHub account service is unavailable.")
         }
+        // L5: the Code page's model and its actions, shared by the page and the code_* tools.
+        await NativeCodeBackupLive.install(registry: root.registry, authority: authority, auth: githubAuth,
+            environment: configuration.inheritedEnvironment, dataRoot: root.dataRoot, home: configuration.homeDirectory.path,
+            loginPath: { [root] in try await root.providers.loginPath() })
         let githubTools = BackendGitHubNativeTools(home: configuration.homeDirectory.path,
             loginPath: { [root] in try await root.providers.loginPath() })
         let githubWorkspace = BackendGHComposition(authenticator: githubAuth,
@@ -299,6 +301,23 @@ extension NativeCompositionProduction {
         try await registerMachines()
         try await installBrowserChannels()
         _ = sessions; _ = hoot; _ = routinesOwner
+    }
+
+    /// The window tools built from the app access alone: the side panel's, the Code page's code_projects, and the Devices window's rows and its Remove
+    /// (owner, 13 Nov: devices join by signing in; no tool adds one). DeckToolsStartupRegistrationTests runs the start-up
+    /// registration check on exactly this list, so a tool added here and not to the registrar fails a test, not the launch.
+    static func windowToolDefinitions(access: BackendDeckToolsAppAccess) throws -> [BackendDeckToolsDefinition] {
+        try Sidebar21MCP.definitions(access: access, perform: { id, args in try await Sidebar21MCP.live(id, args) })
+            + MACHINESMCP.deviceDefinitions(access: access)
+            + BackendCodeBackupTools.definitions(access: access)
+            // Lane L4: the Cloud page's file manager (open, versions, use a version, Remove, Bin, Put back, Empty Bin, Clean up).
+            + BackendCloudManagerTools.definitions(access: access, actions: NativeCloudContentsModel.toolActions(), door: NativeCloudDeleteToolDoor.live())
+            // Lane L3: the Cloud folder (where it is; copy something into it).
+            + BackendCloudFolderTools.definitions(access: access, actions: NativeCloudFolder.toolActions())
+            // Lane L3 slice 2: artifacts on all his Macs (list free; remove and put back ask him).
+            + BackendCloudArtifactsTools.definitions(access: access, actions: NativeCloudArtifacts.toolActions())
+            // Project secret files: which travel with saved passwords (read only; never a file's content).
+            + BackendProjectSecretFilesTools.definitions(access: access, actions: NativeProjectSecretFiles.toolActions())
     }
 
     static func replacing(_ definition: BackendDeckToolsDefinition, handler: @escaping BackendNativeMCPServer.Handler) -> BackendDeckToolsDefinition {

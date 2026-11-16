@@ -12,7 +12,7 @@ private func json(_ text: String) -> CodingAIJSON { CodingAIJSON.parse(text) }
 struct SettingsSchemaTests {
     @Test func everySectionListsItsRowsInTableOrder() {
         #expect(SettingsSchema.settings(in: "general").map(\.id) == [
-            "general.restoreSessions", "general.autoNameSessions", "general.confirmCloseWorking", "general.copyOnSelect",
+            "general.whenOpens", "general.restoreSessions", "general.autoNameSessions", "general.confirmCloseWorking", "general.copyOnSelect",
         ])
         #expect(SettingsSchema.settings(in: "appearance").map(\.id) == [
             "appearance.theme", "appearance.terminalScheme",

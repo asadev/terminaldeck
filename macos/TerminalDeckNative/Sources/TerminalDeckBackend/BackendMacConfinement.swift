@@ -56,7 +56,7 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
             let plan = try Self.plan(folder: boundary.folder, home: home.path, accountHome: accountHome,
                 path: account.path, writable: boundary.writableDirectories,
                 files: boundary.readableFiles + Self.handedFiles(args, appDataRoot: appDataRoot.path), projects: boundary.readOnlyProjects)
-            let profile = Self.profile(plan)
+            let profile = Self.profile(plan) + Self.binDenyRules(appDataRoot)
             try await proveBoundary(plan: plan, profile: profile, environment: proofEnvironment)
             var environment = context.environmentOverrides
             environment["HOME"] = home.path
@@ -74,7 +74,7 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
         }
         guard context.appFenceID == Self.recordsFenceID else { throw BackendSessionFailure.missingCapability("the requested app records fence") }
         let paths = Self.recordsPaths(appDataRoot)
-        let profile = Self.recordsProfile(paths)
+        let profile = Self.recordsProfile(paths) + Self.binDenyRules(appDataRoot)
         try await proveRecords(paths: paths, profile: profile, environment: proofEnvironment)
         return BackendConfinedLaunch(command: "/usr/bin/sandbox-exec", args: ["-p", profile, command] + args,
             environment: context.environmentOverrides, removeEnvironment: context.removeEnvironment, enforcedBoundary: true)
@@ -372,7 +372,7 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
 
     /// The actual launch profile, for contract/parity inspection without
     /// starting a process or weakening the positive/negative launch canaries.
-    public static func recordsFenceProfile(_ root: URL) -> String { recordsProfile(recordsPaths(root)) }
+    public static func recordsFenceProfile(_ root: URL) -> String { recordsProfile(recordsPaths(root)) + binDenyRules(root) }
 
     /// Asad, 11 Oct: the guard is only for Hoot's OWN settings: its action log (what it did) and which devices may
     /// reach it. Routines, the routine engine's state, trusted devices, AI-app keys and plugin grants are the app's,
@@ -388,6 +388,22 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// J-5: appended after EVERY grant/exception in the two existing Seatbelt profiles. It is a silent
+    /// deny, never a permission question. Resolving the existing parent also covers a Bin made after launch.
+    /// Sessions launched without either existing boundary have no deny-list enforcement (see L3 result).
+    public static func binDenyRules(_ dataRoot: URL) -> String {
+        let root = URL(fileURLWithPath: kernelPath(dataRoot.path), isDirectory: true)
+        let fixed = ["memory-safety", "project-secret-files", "cloud-mcp-pending", "sealed-bin"]
+        var lines = fixed.map { name in
+            "(deny file-read* file-write* (subpath \(seatbeltString(kernelPath(root.appendingPathComponent(name).path)))))"
+        }
+        // The identity is not guessed or enumerated: all account slots, including future ones, match. These
+        // folders hold memory/boot/folder/artifacts keepers, the folder Bin and the migration safety copies.
+        let cloud = pathRegex(kernelPath(root.appendingPathComponent("cloud").path))
+        lines.append("(deny file-read* file-write* (regex #\"^\(cloud)/[^/]+/(archive|memory/versions|[^/]+/safety|[^/]+/sealed-bin)(/.*)?$\"))")
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     /// One measured proof of the app records fence (copilot-session.ts
     /// `fence()`), with the same canaries a fenced launch uses. Starts no
     /// session. Hoot measures per start and fails open visibly on a throw.
@@ -396,7 +412,7 @@ public struct BackendMacConfinement: BackendConfinementLaunchResolver, Sendable 
         var environment = inherited
         environment["PATH"] = path
         let paths = Self.recordsPaths(appDataRoot)
-        try await proveRecords(paths: paths, profile: Self.recordsProfile(paths), environment: environment)
+        try await proveRecords(paths: paths, profile: Self.recordsProfile(paths) + Self.binDenyRules(appDataRoot), environment: environment)
         return BackendCopilotSessionFence(id: Self.recordsFenceID, kind: "seatbelt")
     }
 

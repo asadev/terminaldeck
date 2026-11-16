@@ -38,6 +38,7 @@ extension NativeCompositionProduction {
             tunnelsDropped: { [weak self] id in await (await MainActor.run { self?.reachLedger })?.forget(id) })
         machineCoordinator = coordinator; joins.bindMachines(coordinator)
         NativeRemoteMacs.shared.bind(coordinator)   // Other Macs' screens (Mac to Mac, 31 Oct)
+        NativeReachLive.shared.machinesReady()      // His other Macs by sign-in (live use, 15 Nov)
         let panels = BackendRemotePanelRegistry()
         guard let index = files.artifacts, let previews = files.previews, let mcp = clients.mcpClients else {
             throw NativeRPCError(code: "composition-incomplete", message: "Machine panels need the actual artifacts, preview and MCP owners.")

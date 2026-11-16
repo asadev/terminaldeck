@@ -116,6 +116,9 @@ public struct BackendReadinessService: Sendable {
     }
     private static func scriptFix(_ id: String, _ script: String, _ body: String, replace: Bool = false) -> ReadinessFix { fix(id, replace ? "Replace the placeholder" : "Add \(script) script", "\(replace ? "Replaces npm's placeholder with" : "Adds") \"\(script)\": \"\(body)\" in package.json, using an installed dependency.", ["package.json"], destructive: replace) }
     private func tracked(_ root: String, context: NativeRPCContext) async throws -> [String] {
+        // A repository above the folder that is not its code (CODE-PARENT): nothing of the project is tracked, and
+        // "untrack secrets" never runs `git rm --cached` in it.
+        guard await !git.refuses(root, context: context) else { return [] }
         let result = try await git.runner.run(cwd: root, arguments: ["ls-files", "-z"], context: context, writing: false, timeoutMilliseconds: 8000, maximumBytes: 16 * 1024 * 1024)
         guard result.ok else { throw NativeRPCError(code: "filesystem", message: "Git could not list tracked files: " + String(result.stderr.prefix(200))) }
         return result.stdout.split(separator: "\0").map(String.init)

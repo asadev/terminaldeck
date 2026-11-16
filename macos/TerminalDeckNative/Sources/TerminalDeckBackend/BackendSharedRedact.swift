@@ -149,6 +149,19 @@ public enum BackendSharedRedact {
         return .init(text: output, count: count)
     }
     public static func redact(_ text: String, options: BackendSharedRedactOptions = .init()) -> String { redactWithCount(text, options: options).text }
+    /// Lane L3 slice 2 (artifacts that travel): true when `text` holds a secret of a shape this rule knows (key blocks,
+    /// sign-ins inside links, secret headers, quoted secret values, bearer values, the pair rule, every token shape).
+    /// Read only, nothing is replaced. Left out: the user-name rule (not a secret), the bare `name = value` rule (it
+    /// matches ordinary code in a page, such as `token = read()`) and the high-randomness sweep (it matches pictures
+    /// written into a page). A file it answers true for stays on its Mac.
+    public static func containsKnownSecret(_ text: String) -> Bool {
+        if text.isEmpty { return false }
+        let skipped = ["USER|USERNAME|LOGNAME", "(?!" + hiddenAlready + ")"]
+        for rule in structural where !skipped.contains(where: { rule.regex.pattern.contains($0) }) {
+            if found(rule.regex, in: text) { return true }
+        }
+        return tokens.contains { found($0, in: text) }
+    }
     public static func redactLines(_ lines: [String], options: BackendSharedRedactOptions = .init()) -> [String] { lines.map { redact($0, options: options) } }
     public static func redactValue(_ value: NativeRPCValue, options: BackendSharedRedactOptions = .init()) -> NativeRPCValue {
         switch value {

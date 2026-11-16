@@ -467,6 +467,8 @@ extension DeckMemoryStore {
                 _ = try? db.run("DELETE FROM embed_queue WHERE kind = ? AND ref = ?", [.text(kind), .text(ref)])
                 await Task.yield()
             }
+            // MAC-NEXT-8: a rest after every 16 rows; the queue is in the database, so a quit or a relaunch resumes here.
+            await restBetweenBatches()
         }
     }
 }

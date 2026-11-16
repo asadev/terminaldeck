@@ -12,6 +12,15 @@ public protocol BackendLaunchCapability: Sendable {
     var readiness: BackendLaunchReadiness { get }
 }
 
+/// Set only in-process by Cloud Continue. A decoded value is never honoured, so renderer or saved input cannot request it.
+public struct BackendCloudContinueMarker: Codable, Equatable, Sendable {
+    public let inProcess: Bool
+    init(inProcess: Bool) { self.inProcess = inProcess }
+    static let continuing = BackendCloudContinueMarker(inProcess: true)
+    public init(from decoder: any Decoder) throws { inProcess = false }
+    public func encode(to encoder: any Encoder) throws { var container = encoder.singleValueContainer(); try container.encodeNil() }
+}
+
 public struct BackendProviderSpec: Sendable {
     public let id: String
     public let command: String
@@ -244,8 +253,9 @@ public actor BackendSessionLauncher {
 
     /// R73: a fresh start always runs in bypass, whatever a profile, seat or start form asked; a restore or a
     /// replacement keeps the mode it carries.
-    static func initialPermission(requested: String?, provider: String, fresh: Bool) -> String? {
-        fresh ? (BackendTAGLaunchArguments.newSessionPermission(provider: provider) ?? requested) : requested
+    /// `chosen`: the New session page's explicit, checked start mode (`chosenStartPermission`); it replaces the bypass.
+    static func initialPermission(requested: String?, provider: String, fresh: Bool, chosen: String? = nil) -> String? {
+        fresh ? (chosen ?? BackendTAGLaunchArguments.newSessionPermission(provider: provider) ?? requested) : requested
     }
 
     public func create(_ requested: BackendCreateSessionInput, context: BackendLaunchContext = BackendLaunchContext(), chatMigration: ChatDispatch? = nil) async throws -> BackendSessionMeta {
@@ -264,7 +274,9 @@ public actor BackendSessionLauncher {
         let provider = try await dependencies.providers.resolve(input, loginPath: path)
         if let requested = input.provider, requested != provider.id { throw BackendSessionFailure.providerMismatch }
         let fresh = !BackendAGSLaunchScope.restoring && input.replaces == nil
-        input.permissionMode = Self.initialPermission(requested: input.permissionMode, provider: provider.id, fresh: fresh)
+        // Only the New session page's explicit pick replaces the R73 bypass, and only on a fresh start.
+        let chosenStart = try fresh ? BackendTAGLaunchArguments.chosenStart(input.chosenStartPermission, provider: provider.id) : nil
+        input.permissionMode = Self.initialPermission(requested: input.permissionMode, provider: provider.id, fresh: fresh, chosen: chosenStart)
         // Only Claude, Codex and Gemini have a chat mode; anything else (a shell, a custom CLI) is a terminal.
         if input.chat == true, !BackendCreateSessionInput.chatProviders.contains(provider.id) { input.chat = nil }
         guard !provider.id.isEmpty, !provider.command.isEmpty else { throw BackendSessionFailure.providerMismatch }
@@ -308,7 +320,8 @@ public actor BackendSessionLauncher {
                     launchArguments = composedProvider.args + ["--resume", conversationID]
                 }
             }
-            if fresh { launchArguments = BackendTAGLaunchArguments.bypassing(launchArguments, provider: provider.id) }
+            if fresh, let chosenStart { launchArguments = BackendTAGLaunchArguments.explicitStart(launchArguments, provider: provider.id, mode: chosenStart) }
+            else if fresh { launchArguments = BackendTAGLaunchArguments.bypassing(launchArguments, provider: provider.id) }
             let launch = try await dependencies.confinement.resolve(command: provider.command,
                 args: launchArguments,
                 input: input, account: account, context: context)
@@ -423,7 +436,9 @@ public enum BackendConversationLaunch {
     public static func arguments(_ input: BackendCreateSessionInput, provider: BackendProviderSpec,
                                  live: [BackendSessionMeta], makeID: () -> String = { UUID().uuidString.lowercased() }) throws -> Selection {
         let picking = input.pickConversation == true && provider.id == "claude"
-        let named = !picking && input.resume == true && ["claude", "codex"].contains(provider.id) && !(input.resumeConversationId ?? "").isEmpty
+        // Gemini's named resume is used only by an explicit Cloud Continue; ordinary restarts and task resumes keep their arguments.
+        let namedProviders: Set<String> = input.cloudContinue?.inProcess == true ? ["claude", "codex", "gemini"] : ["claude", "codex"]
+        let named = !picking && input.resume == true && namedProviders.contains(provider.id) && !(input.resumeConversationId ?? "").isEmpty
         let namedID = named ? input.resumeConversationId : nil
         // F38: Claude forks the parent while launching. The parent is live on purpose, so it never holds the fork back,
         // and the fork must not claim the parent's conversation ID as its own.

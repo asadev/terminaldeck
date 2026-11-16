@@ -30,7 +30,8 @@ final class BackendFoundationTestsConfineRecords: XCTestCase {
         // Asad, 11 Oct: the guard holds only Hoot's own records (its action log, which devices may reach it);
         // the other five stay named (they are described to Hoot) but are no longer denied.
         let profile = BackendMacConfinement.recordsFenceProfile(root)
-        XCTAssertEqual(profile.components(separatedBy: "(deny ").count - 1, 2)
+        // Two Hoot record denies plus five silent keeper/Bin/safety denies (J-5).
+        XCTAssertEqual(profile.components(separatedBy: "(deny ").count - 1, 7)
         XCTAssertTrue(profile.contains("(deny file-read* file-write* (subpath " + BackendMacConfinement.seatbeltString(root.appendingPathComponent("hoot-log").path) + "))"))
         XCTAssertTrue(profile.contains("(deny file-write* (literal " + BackendMacConfinement.seatbeltString(root.appendingPathComponent("remote/remote-device-kinds.json").path) + "))"))
         XCTAssertFalse(profile.contains("routines") || profile.contains("access-keys") || profile.contains("plugin-grants") || profile.contains("remote-auth"))

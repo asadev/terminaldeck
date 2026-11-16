@@ -134,6 +134,31 @@ public enum TaskList {
     /// The one group you can drag to reorder: Today, in your own order.
     public static let reorderableGroupKey = "due:Today"
 
+    // MARK: What the page lists (15 Nov: one rule for the page and the side panel's number)
+
+    /// Every task the Tasks page lists: his own AND the ones a connected CRM sent (on the Mac it reached, or as the
+    /// read-only copy on his other Macs), never one in the Trash. My Work draws from exactly this.
+    public static func listed(_ tasks: [TaskRow]) -> [TaskRow] { tasks.filter { $0.deletedAt == nil } }
+
+    /// The open tasks the page lists in its widest view (All projects, no search, no filter, not archived, not Done).
+    /// The number beside Tasks in the side panel is `openInWidestView(...).count`, so the two can never disagree.
+    public static func openInWidestView(_ tasks: [TaskRow]) -> [TaskRow] {
+        filter(listed(tasks), ListFilters(), today: "", nowHm: nil).filter { $0.crmStatus != "Done" }
+    }
+
+    /// Whether the page lets him change this row in place. A task a connected system sent is changed there, so its
+    /// row opens its details but its ring, status, dates, tags, drag and menus stay still.
+    public static func editableInList(_ task: TaskRow) -> Bool { task.local }
+
+    /// The one quiet mark on a task that came from a connected system: "From iLoop" (the connection's name) on the
+    /// Mac it reached, "From iLoop, on Mac mini" on a copy; nil on his own tasks.
+    public static func source(_ task: TaskRow, connections: [CrmConnection]) -> String? {
+        guard !task.local else { return nil }
+        if let copy = task.copyFrom, !copy.isEmpty { return copy }
+        let name = connections.first { $0.keyId == task.keyId }?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return "From " + (name.isEmpty ? "your CRM" : name)
+    }
+
     // MARK: Days
 
     public static func isYmd(_ value: String?) -> Bool {

@@ -419,14 +419,14 @@ enum NativeSafariDownloadsSystem {
         .init(authorize: authorize, open: { url in
             try await open(url)
         }, reveal: { url in
-            await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([url]); return .init(ok: true) }
+            await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([url]); return .init(ok: true) } // person-ok: the Downloads panel's own button; the download tool returns the path
         }, chooseFolder: { current in
             try await chooseFolder(current: current, parentWindow: parentWindow)
         }, deliver: deliver)
     }
 
     private static func open(_ url: URL) async throws -> BackendBrowserDownloadOperationReply {
-        _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
+        _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) // person-ok: the Downloads panel's own button; the download tool returns the path
         return .init(ok: true)
     }
     private static func chooseFolder(current: URL, parentWindow: @MainActor @Sendable () -> NSWindow?) async throws -> String {

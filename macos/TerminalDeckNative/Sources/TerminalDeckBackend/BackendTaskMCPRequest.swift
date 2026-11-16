@@ -42,7 +42,7 @@ struct BackendTaskMCPRequest: Sendable {
         by = id == "crm.task" ? "" : try await authority.actorName(caller)
         // Lane TK: the calling session's project, and the project a listing covers (nil: every project).
         if let project = args["project"].string, !project.isEmpty { try await authority.project(caller, project) }
-        if args.has("task") { _ = try await task(args["task"], localOnly: localTool || ["tasks.retry", "tasks.reassign", "tasks.review", "tasks.goals"].contains(id), trash: verb == "restore" || verb == "purge") }
+        if args.has("task") { _ = try await task(args["task"], localOnly: localTool || ["tasks.retry", "tasks.reassign", "tasks.review", "tasks.goals"].contains(id)) }
         if id == "tasks.plan", let project = try await planning.validate(args) { try await authority.project(caller, project) }
         if ["save", "save-many"].contains(verb) && id == "tasks.agents" { profileKey = try await authority.callerKeyID?(caller) } else { profileKey = nil }
         if profileKey != nil { reviewOrdinaryProfileFields = try await authority.requiresOwnerProfileEdits?(caller) ?? false } else { reviewOrdinaryProfileFields = false }

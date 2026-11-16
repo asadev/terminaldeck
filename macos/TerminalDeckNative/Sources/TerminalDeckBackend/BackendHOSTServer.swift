@@ -65,7 +65,7 @@ public final class BackendHOSTServer: @unchecked Sendable {
                       hostPID: getpid(), instance: UUID(), chatService: chatUpdates == nil ? nil : 1, pcDecisionValidation: pcDecisionValidation ? 1 : nil,
                       chatSteering: chatUpdates == nil ? nil : 1, chatFeatures: chatUpdates == nil ? nil : 1,
                       chatOwnedTerminals: chatUpdates == nil ? nil : 1, chatSessionFeatures: chatUpdates == nil ? nil : 1,
-                      accountUnknownChannel: resource == nil ? nil : 1)
+                      accountUnknownChannel: resource == nil ? nil : 1, chosenStartPermission: 1)
         control.setSpecific(key: controlKey, value: 1)
         var address = try BackendHOSTSocket.address(paths.socket)
         var existing = stat()

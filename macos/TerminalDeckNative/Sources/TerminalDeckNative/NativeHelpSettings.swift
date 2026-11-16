@@ -1,27 +1,29 @@
+import AppKit
 import Observation
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// Settings → Help (`HelpSection.tsx`): About at the top — what this app is,
-/// its version, licence, source, build line and updates — then "How it works".
+/// Settings → About (owner, 15 Nov: the Settings window's look): the app's name and version, then its facts as rows
+/// (Licence, Build: their details in info buttons; Source, Website, Releases open their pages), then the help topics.
 struct NativeHelpSettings: View {
     @State private var about = NativeAboutModel()
 
     var body: some View {
-        NativeSettingsPage(sectionId: "help") {
+        DeckSettingsScaffold(title: "About") {
             NativeAboutSettings(model: about)
-            Section("Help topics") {
+            DeckSettingsGroup("Help topics") {
                 // lane S's HelpPanel (web: HelpPanel.tsx), without its Shortcuts and About; debug goes to Advanced.
                 NativeHelpPanel(hideSections: ["shortcuts", "about"],
                                 onOpenDebug: { AppModel.shared.selectSettingsSection("advanced") },
                                 autoFocus: false)
+                    .padding(DeckSettingsLook.rowPadding)
             }
         }
         .onAppear { about.load() }
     }
 }
 
-/// About (`AboutSection.tsx`), the masthead at the top of Help.
+/// About (`AboutSection.tsx`): the masthead, then one group of facts.
 struct NativeAboutSettings: View {
     let model: NativeAboutModel
 
@@ -29,60 +31,30 @@ struct NativeAboutSettings: View {
         let about = model.about
         let checkable = about?.updates?.checkable ?? false
         let releases = SettingsAbout.releasesURL(about?.repository)
-        Section {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(about?.name ?? model.fallbackName ?? "This app")
-                    .font(.title3.weight(.semibold))
-                let tagline = (about?.tagline).flatMap { $0.isEmpty ? nil : $0 } ?? model.fallbackTagline ?? ""
-                if !tagline.isEmpty {
-                    Text(tagline).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(tagline)
-                }
-                if let about {
-                    Text("Version \(about.version)").font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            if about == nil {
-                NativeCodingAINotice(tone: .warn, text: SettingsAbout.unreadable)
-            }
-            fact("Licence", more: SettingsAbout.licenceMore) {
-                Text(about?.license.flatMap { $0.isEmpty ? nil : $0 } ?? SettingsAbout.notRecorded)
-            }
-            fact("Source") {
-                if let repository = about?.repository, let url = URL(string: repository) {
-                    Link("View source", destination: url)
-                } else {
-                    Text(SettingsAbout.notRecorded)
-                }
+        VStack(spacing: DeckTokens.Spacing.s4) {
+            Image(nsImage: NSApp.applicationIconImage ?? NSImage()).resizable().frame(width: 64, height: 64).accessibilityHidden(true)
+            Text(about?.name ?? model.fallbackName ?? "This app").font(.system(size: 17, weight: .semibold))
+            if let about { Text("Version \(about.version)").font(DeckSettingsLook.rowTitle).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity)
+        DeckSettingsGroup {
+            if about == nil { DeckSettingsProblem(text: SettingsAbout.unreadable) }
+            let tagline = (about?.tagline).flatMap { $0.isEmpty ? nil : $0 } ?? model.fallbackTagline ?? ""
+            DeckSettingsRow("Licence", info: [tagline, SettingsAbout.licenceMore].filter { !$0.isEmpty }.joined(separator: "\n\n"),
+                            state: about?.license.flatMap { $0.isEmpty ? nil : $0 } ?? SettingsAbout.notRecorded)
+            if let about { DeckSettingsRow("Build", info: about.buildLine + "\n\n" + SettingsAbout.buildMore) }
+            if let repository = about?.repository, let url = URL(string: repository) {
+                DeckSettingsLinkRow(title: "Source") { NSWorkspace.shared.open(url) }
             }
             if let homepage = about?.homepage, let url = URL(string: homepage) {
-                fact("Website") { Link("Visit website", destination: url) }
+                DeckSettingsLinkRow(title: "Website") { NSWorkspace.shared.open(url) }
             }
-            if let about {
-                fact("Build", more: SettingsAbout.buildMore) {
-                    Text(about.buildLine).textSelection(.enabled)
+            // One place per option (26 Oct): "Check for updates" lives in Settings › General › Updates. About keeps the
+            // link and the one state line.
+            if let releases, let url = URL(string: releases) {
+                DeckSettingsLinkRow(title: "Releases", value: model.checked ?? SettingsAbout.updateNote(about, checkable: checkable)) {
+                    NSWorkspace.shared.open(url)
                 }
-            }
-            // One place per option (26 Oct): "Check for updates" lives in Settings › General › Updates, and a new
-            // version shows itself in the side panel just above Settings (release 27). About keeps the link only.
-            HStack(spacing: 10) {
-                if let releases, let url = URL(string: releases) {
-                    Link("Releases", destination: url)
-                }
-                Text(model.checked ?? SettingsAbout.updateNote(about, checkable: checkable))
-                    .lineLimit(1).help(model.checked ?? SettingsAbout.updateNote(about, checkable: checkable))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func fact<Value: View>(_ label: String, more: String? = nil, @ViewBuilder value: () -> Value) -> some View {
-        LabeledContent {
-            value()
-        } label: {
-            HStack(spacing: 4) {
-                Text(label)
-                if let more { NativeCodingAIInfo(label: label, text: more) }
             }
         }
     }

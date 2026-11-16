@@ -36,6 +36,7 @@ struct NativeNewSessionEffects {
     var dismiss: @MainActor () -> Void = {}
     var closed: @MainActor () -> Void = {}
     var removedProject: @MainActor (String, [String]) -> Void = { _, _ in }
+    var removeProjectEntry: @MainActor (String) async throws -> Void = { _ in }
 
     // These are the existing renderer keys, with the same bounded per-folder map.
     static let memoryKey = "session-start.defaults.v1"
@@ -68,7 +69,7 @@ struct NativeNewSessionEffects {
             if !text.isEmpty { terminal.terminal.feed(text: text) }
         }, dismiss: { NativeNewSession.close() }, removedProject: { path, ids in
             AppModel.shared.buttonActions.projectRemoved(path, sessions: ids)
-        })
+        }, removeProjectEntry: { path in _ = try await NativeCloudDeleteOwners.removeFromThisMac(path: path) })
     }
 }
 
@@ -94,6 +95,17 @@ enum NativeNewSession {
     /// the tools): always on the main window, starting where `startFolder` says. A form that is
     /// still on screen is brought forward and kept, never replaced or stacked (#620).
     static func open(folder: String? = nil, project: PROJProject? = nil) throws {
+        // Owner, 14 Nov: every New session door opens the New session page; another Mac keeps this form.
+        if folder?.hasPrefix("machine:") != true {
+            try NativeLanding.show(folder: folder, project: project)
+            return
+        }
+        try openForm(folder: folder, project: project)
+    }
+
+    /// The full form, now only for another Mac (`open` with "machine:", the side panel's + on that Mac's group) and the
+    /// tools' `new-session-start`. The New session page no longer opens it (15 Nov review: "All choices…" is gone).
+    static func openForm(folder: String? = nil, project: PROJProject? = nil) throws {
         if sheet?.sheetParent == nil { close() }
         guard sheet?.sheetParent != nil || NativeButtonPresentation.sessionParent != nil else {
             throw NativeRPCError(code: "no-window", message: "Open the main window before starting a session.")
@@ -172,13 +184,19 @@ enum NativeNewSession {
     }
 
     static var isOpen: Bool { model != nil }
+    /// A tool's new-session-start: the full form the person has open, quietly (nothing shown, he is not moved, not
+    /// remembered as his own start). With no form open it refuses: tools start sessions through sessions_start_agent,
+    /// which checks the folder and asks as its neighbours do.
     static func submitForTool() async throws {
-        guard let model, model.canStart else { throw NativeNewSessionFailure("Open the new session form and choose its folder first.") }
+        guard let model else { throw NativeRPCError(code: "refused", message: "No New session form is open. Use sessions_start_agent to start a session.") }
+        guard model.canStart else { throw NativeNewSessionFailure("Open the new session form and choose its folder first.") }
+        model.byTool = true
+        defer { model.byTool = false }
         await model.submitNative()
         if let error = model.error { throw NativeRPCError(code: "refused", message: error) }
     }
     static func cancelForTool() throws {
-        guard let model else { throw NativeNewSessionFailure("The new session form is not open.") }
+        guard let model else { return } // nothing open: the New session page is not a form and is left as it is
         guard !model.starting else { throw NativeNewSessionFailure("The session is still starting. Wait for it to finish.") }
         model.cancel()
     }
@@ -239,6 +257,8 @@ final class NativeNewSessionModel {
         }
     }
     var remember = true
+    /// A tool pressed new-session-start: the session is added quietly and is not his remembered start.
+    @ObservationIgnored var byTool = false
     /// Chat or Terminal for an AI session (Asad, 13 Oct). Opens on the person's last choice; whatever they choose
     /// here is the choice next time, and for every quick new session (+, ⌘T) meanwhile.
     var chatMode = true
@@ -280,7 +300,6 @@ final class NativeNewSessionModel {
     private(set) var loading = false
     private(set) var starting = false
     private(set) var browsing = false
-    var confirmRemove: String?
 
     // Add a CLI
     var addingAgent = false
@@ -336,6 +355,15 @@ final class NativeNewSessionModel {
     }
 
     var decided: NewSessionRequest? { resolution.request }
+    /// 15 Nov review item 12: the form opened with a spinner and "That profile no longer exists, and no other login is
+    /// available." before its account list had arrived. A missing login is said only once the list is known, and never
+    /// when no other login exists (the AI's own login on that Mac is then simply used: nothing for him to do).
+    var shownNotices: [NewSessionNotice] {
+        resolution.notices.filter { notice in
+            guard notice.code == "profile-missing" else { return true }
+            return !snapshot.accounts.isEmpty && !notice.message.contains("no other login")
+        }
+    }
     var profileNotice: String? {
         NewSessionProviders.isolationNotice(decided?.provider, apiAccountAvailable: snapshot.accounts.contains { $0.isAPIKey && $0.provider == decided?.provider })
     }
@@ -594,36 +622,27 @@ final class NativeNewSessionModel {
     }
 
     func removeNative(_ path: String) async {
-        confirmRemove = nil
         error = nil
         do {
-            let ids = try await Self.removeFolder(path, invoke: effects.invoke)
+            let ids = try await Self.removeFolder(path, invoke: effects.invoke, removeEntry: effects.removeProjectEntry)
             effects.removedProject(path, ids)
             projects.removeAll { $0.path == path }
             if selectedPath == path { selectedPath = nil }
-        } catch { self.error = "That folder could not be removed. Its remaining sessions and folder were kept." }
+        } catch { self.error = "That project could not be removed from this Mac." }
     }
 
-    static func removeFolder(_ path: String, invoke: @MainActor (String, [Any?]) async throws -> Any) async throws -> [String] {
+    /// J-4 "Remove from this Mac", one press, no question: a registered project's entry gets the "Not on this Mac" mark
+    /// (Bring back in Your Cloud), and the folder leaves this Mac's list. The old route killed every session in the
+    /// folder first; now no session is closed and no folder is touched. Returns the sessions to forget: none.
+    static func removeFolder(_ path: String, invoke: @MainActor (String, [Any?]) async throws -> Any,
+                             removeEntry: @MainActor (String) async throws -> Void = { path in _ = try await NativeCloudDeleteOwners.removeFromThisMac(path: path) }) async throws -> [String] {
         guard !path.isEmpty else { throw NativeNewSessionFailure("Choose a folder first.") }
-        func checked(_ channel: String, _ args: [Any?]) async throws -> Any {
-            let result = try await invoke(channel, args)
-            if result as? Bool == false || (result as? [String: Any])?["ok"] as? Bool == false {
-                throw NativeNewSessionFailure("That folder could not be removed. Its remaining sessions and folder were kept.")
-            }
-            return result
+        try await removeEntry(path)
+        let result = try await invoke("projects:remove", [path])
+        if result as? Bool == false || (result as? [String: Any])?["ok"] as? Bool == false {
+            throw NativeNewSessionFailure("That project could not be removed from this Mac.")
         }
-        guard let sessions = try await checked("session:list", []) as? [[String: Any]] else {
-            throw NativeNewSessionFailure("The sessions list could not be read. The folder was kept.")
-        }
-        var ids: [String] = []
-        for row in sessions where NewSessionPaths.normalize(row["cwd"] as? String ?? "") == NewSessionPaths.normalize(path) {
-            if let id = row["id"] as? String {
-                _ = try await checked("session:kill", [id]); ids.append(id)
-            }
-        }
-        _ = try await checked("projects:remove", [path])
-        return ids
+        return []
     }
 
     func addAgent() {
@@ -651,9 +670,11 @@ final class NativeNewSessionModel {
 
     func removeAgent(_ id: String) {
         Task {
-            _ = try? await call("agents:remove", [id])
-            added = NewSessionCustomAgent.parse((try? await call("agents:list")) ?? .null)
-            if chosenProvider == id { chosenProvider = nil }
+            do {
+                _ = try await call("agents:remove", [id])
+                added = NewSessionCustomAgent.parse((try? await call("agents:list")) ?? .null)
+                if chosenProvider == id { chosenProvider = nil }
+            } catch { self.error = "That agent could not be removed." }
         }
     }
 
@@ -758,7 +779,8 @@ final class NativeNewSessionModel {
                 do { _ = try await call("session:chat:options", [id, options]) }
                 catch { notes.append("Its selected model could not be applied: " + error.localizedDescription) }
             }
-            effects.openedLocal(meta)
+            // A tool's start is added quietly; the person's own start shows it.
+            if byTool { AppModel.shared.buttonActions.created(meta) } else { effects.openedLocal(meta) }
             // The choice made here is the one next time (only an AI session has the switch).
             if canChat {
                 do { _ = try await call("prefs:set", [[NewSessionChatMode.preference: asChat ? "chat" : "terminal"]]) }
@@ -777,6 +799,12 @@ final class NativeNewSessionModel {
             }
             do { try effects.writeLastFolder(request.cwd) }
             catch { notes.append("Its folder could not be remembered.") }
+            // The New session page opens on this start next time (his own start on this Mac).
+            if effects.mode == .live, !byTool {
+                NativeLandingMemory.remember(.fromForm(cwd: request.cwd, projectID: identity, projectName: projectName,
+                    provider: chosenAgent?.provider ?? request.provider, account: chosenProfileId,
+                    model: chosenAgent == nil ? chosenModelId : nil, chat: asChat, agentID: chosenAgent?.id, agentName: chosenAgent?.name))
+            }
             if notes.isEmpty {
                 effects.dismiss()
                 effects.closed()
@@ -903,9 +931,9 @@ struct NativeNewSessionDialog: View {
             if model.server == nil, let problem = model.resolution.problem {
                 Text(problem).font(.callout).foregroundStyle(.orange)
             }
-            if model.server == nil, !model.resolution.notices.isEmpty {
+            if model.server == nil, !model.shownNotices.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.resolution.notices) { notice in
+                    ForEach(model.shownNotices) { notice in
                         Text(notice.message).font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -1054,7 +1082,6 @@ struct NativeNewSessionDialog: View {
                             NativeNewSessionProjectRow(project: project,
                                                        selected: project.path == model.selectedPath,
                                                        liveSessions: model.context.sessions(in: project.path),
-                                                       confirming: model.confirmRemove == project.path,
                                                        model: model)
                         }
                     }
@@ -1255,7 +1282,6 @@ private struct NativeNewSessionProjectRow: View {
     let project: NewSessionProject
     let selected: Bool
     let liveSessions: Int
-    let confirming: Bool
     let model: NativeNewSessionModel
 
     var body: some View {
@@ -1266,21 +1292,9 @@ private struct NativeNewSessionProjectRow: View {
                 Text(project.path).font(.callout).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle).help(project.path)
             }
-            if confirming {
-                HStack(spacing: 6) {
-                    Text("Delete \(liveSessions) session\(liveSessions == 1 ? "" : "s")?")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Button("Remove", role: .destructive) { model.remove(project.path) }
-                    Button("Keep") { model.confirmRemove = nil }
-                }
-                .accessibilityLabel("Remove \(project.name)")
-            } else {
-                Button("Remove") {
-                    if liveSessions > 0 { model.confirmRemove = project.path } else { model.remove(project.path) }
-                }
-                .help("Remove from this list — the folder is not deleted")
-                .accessibilityLabel("Remove \(project.name) from this list")
-            }
+            Button("Remove from this Mac") { model.remove(project.path) }
+                .help("Removed from this Mac only. Its folders and sessions are kept; Bring back is in Your Cloud.")
+                .accessibilityLabel("Remove " + project.name + " from this Mac")
         }
     }
 }

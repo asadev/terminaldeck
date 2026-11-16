@@ -45,9 +45,8 @@ struct NativeSessionDatePicker: View {
     }
 
     var body: some View {
-        NativeSessionDatePickerContent(title: title, selection: $selection, components: components,
-                                       lowerBound: lowerBound, upperBound: upperBound, graphical: graphical)
-            .id(scope?.identity)
+        nativeSessionOwnedInput(NativeSessionDatePickerContent(title: title, selection: $selection, components: components,
+                                       lowerBound: lowerBound, upperBound: upperBound, graphical: graphical), owner: scope)
     }
 }
 

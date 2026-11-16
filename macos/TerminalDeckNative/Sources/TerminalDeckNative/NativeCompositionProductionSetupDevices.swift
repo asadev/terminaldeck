@@ -68,7 +68,23 @@ extension NativeCompositionProduction {
             report("prefs written: " + keys + (patch["theme"].string.map { " theme=" + $0 } ?? ""))
             Task { try? await endpoint.remoteServePushToOwnDevices(message: try await serverSettings.changed(), claiming: BackendCompositionRemoteSettings.capability) }
         }
+        // Owner's rule (14 Nov): a device paired the old way that has not connected for 30 days is removed by itself,
+        // through the same removal as its Remove button, one line in the log (BackendRemoteStaleDevices: running days
+        // only). Never at launch: first half an hour after it, then every six hours. Account devices are not on this roster.
+        let staleSweep = Task.detached(priority: .utility) { [report] in
+            var wait = BackendRemoteStaleDevices.firstCheck
+            while !Task.isCancelled {
+                try? await Task.sleep(for: wait)
+                wait = BackendRemoteStaleDevices.interval
+                guard !Task.isCancelled else { return }
+                await BackendRemoteStaleDevices.sweep(directory: trust.directory,
+                    devices: { await trust.listDevices() },
+                    connected: { await endpoint.remoteServeConnectedDeviceIDs() },
+                    noteSeen: { ids, now in try await trust.noteSeen(ids, at: now) },
+                    revoke: { id, quietBefore in try await registration.revoke(id, quietBefore: quietBefore) }, report: report)
+            }
+        }
         try await root.retain(.init(name: "remote-settings", domains: ["remote-settings"], ownerID: owner, invokes: Set(channels + ["remote:device:revoke"]),
-            stop: { [registry = root.registry] in await pushes.cancelAndWait(); await feature.cancelAndWait(); await registry.removeOwner(owner) }))
+            stop: { [registry = root.registry] in staleSweep.cancel(); await pushes.cancelAndWait(); await feature.cancelAndWait(); await registry.removeOwner(owner) }))
     }
 }

@@ -9,8 +9,11 @@ import TerminalDeckNativeCore
     static let shared = NativeFIXESIslandPreferences()
     static let screenKey = "IslandShowOn", lookKey = "copilot.islandLook"
     static let widthKey = "copilot.islandWidthPreset", quietKey = "copilot.islandQuiet"
+    /// What lives in the island (15 Nov). Same store as the other choices, so it syncs; only Screen stays per Mac.
+    static let showsKey = "copilot.islandShows"
     private(set) var choice = FIXESIslandScreenChoice.main
     private(set) var options = FIXESIslandOptions()
+    private(set) var shows = NativeIslandShows.hoot
     private(set) var enabled = true
     @ObservationIgnored private var hasStoredChoice = false
     @ObservationIgnored private var writer: ((NativeRPCValue) async throws -> NativeRPCValue)?
@@ -21,21 +24,23 @@ import TerminalDeckNativeCore
     func bind(write: @escaping (NativeRPCValue) async throws -> NativeRPCValue) { writer = write }
     func accept(_ raw: NativeRPCValue) {
         let values = raw["values"].fields != nil ? raw["values"] : raw
-        let before = choice, previous = options, wasEnabled = enabled
+        let before = choice, previous = options, wasEnabled = enabled, shown = shows
+        shows = NativeIslandShows(stored: values[Self.showsKey].string)
         enabled = values[BackendHootMenuBar.menuBarKey].bool != false
         hasStoredChoice = values[Self.screenKey].string != nil
         choice = values[Self.screenKey].string.flatMap { try? JSONDecoder().decode(FIXESIslandScreenChoice.self, from: Data($0.utf8)) } ?? .main
         options = .init(look: values[Self.lookKey].string.flatMap(FIXESIslandOptions.Look.init(rawValue:)) ?? .matchApp,
             width: values[Self.widthKey].string.flatMap(FIXESIslandOptions.Width.init(rawValue:)) ?? .standard,
             whenQuiet: values[Self.quietKey].string.flatMap(FIXESIslandOptions.WhenQuiet.init(rawValue:)) ?? .show)
-        if before != choice || previous != options || wasEnabled != enabled { changed?() }
+        if before != choice || previous != options || wasEnabled != enabled || shown != shows { changed?() }
     }
     func stop() { writer = nil; changed = nil }
     var persistedChoice: FIXESIslandScreenChoice? { hasStoredChoice ? choice : nil }
     /// SETTINGS uses this for Screen because the existing settings store accepts
     /// primitive values. The named-screen object is encoded as one JSON string.
     func update(showOn: FIXESIslandScreenChoice? = nil, look: FIXESIslandOptions.Look? = nil,
-        width: FIXESIslandOptions.Width? = nil, whenQuiet: FIXESIslandOptions.WhenQuiet? = nil, enabled: Bool? = nil) async throws {
+        width: FIXESIslandOptions.Width? = nil, whenQuiet: FIXESIslandOptions.WhenQuiet? = nil, enabled: Bool? = nil,
+        shows: NativeIslandShows? = nil) async throws {
         guard let writer else { throw NativeRPCError(code: "unavailable", message: "Dynamic Island settings are not connected.") }
         var fields: [NativeRPCValue.Field] = []
         if let showOn {
@@ -50,12 +55,14 @@ import TerminalDeckNativeCore
         }
         if let whenQuiet { fields.append(.init(Self.quietKey, .string(whenQuiet.rawValue))) }
         if let enabled { fields.append(.init(BackendHootMenuBar.menuBarKey, .bool(enabled))) }
+        if let shows { fields.append(.init(Self.showsKey, .string(shows.rawValue))) }
         guard !fields.isEmpty else { return }
         accept(try await writer(.object(fields)))
     }
     func read() -> NativeRPCValue {
         .object([.init("enabled", .bool(enabled)), .init("showOn", wire(choice)), .init("look", .string(options.look.rawValue)),
             .init("width", .string(options.width.rawValue)), .init("whenQuiet", .string(options.whenQuiet.rawValue)),
+            .init("shows", .string(shows.rawValue)),
             .init("screens", .array(NativeHootScreens.displays().map {
                 .object([.init("id", .string($0.id)), .init("screenUUID", .string($0.id)), .init("name", .string($0.name)), .init("builtIn", .bool($0.builtIn))])
             }))])
@@ -78,7 +85,9 @@ import TerminalDeckNativeCore
         guard raw["look"].isNullish || look != nil, raw["width"].isNullish || width != nil,
               raw["whenQuiet"].isNullish || whenQuiet != nil else { throw NativeRPCError.invalidArguments("Choose a valid Look, Width, or quiet setting.") }
         guard raw["enabled"].isNullish || raw["enabled"].bool != nil else { throw NativeRPCError.invalidArguments("Show Hoot must be on or off.") }
-        try await update(showOn: next, look: look, width: width, whenQuiet: whenQuiet, enabled: raw["enabled"].bool)
+        let shows = raw["shows"].string.flatMap(NativeIslandShows.init(rawValue:))
+        guard raw["shows"].isNullish || shows != nil else { throw NativeRPCError.invalidArguments("Choose hoot, sessions, tasks or needs-me for Shows.") }
+        try await update(showOn: next, look: look, width: width, whenQuiet: whenQuiet, enabled: raw["enabled"].bool, shows: shows)
         return read()
     }
     private func wire(_ value: FIXESIslandScreenChoice) -> NativeRPCValue {

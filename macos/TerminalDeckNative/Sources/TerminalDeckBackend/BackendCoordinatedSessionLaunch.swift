@@ -129,8 +129,11 @@ public actor BackendCoordinatedSessionLaunch {
         let provider = try await providers.resolve(input, loginPath: path)
         // New starts ignore profile, seat and project permission defaults. Restores and live switches keep theirs.
         // R73 (Asad, reaffirmed 2 Nov): every new session from any surface starts in bypass; no start-mode choice.
+        // LANDING-LIKE-CHAT fix: the one exception is the person's own explicit pick on this Mac's New session page
+        // (`chosenStartPermission`, checked for this AI; a value it does not have refuses the start).
         if !BackendAGSLaunchScope.restoring, input.replaces == nil,
-           let permission = BackendTAGLaunchArguments.newSessionPermission(provider: provider.id) {
+           let bypass = BackendTAGLaunchArguments.newSessionPermission(provider: provider.id) {
+            let permission = try BackendTAGLaunchArguments.chosenStart(input.chosenStartPermission, provider: provider.id) ?? bypass
             input.permissionMode = permission
             if var settings = input.agentSettings {
                 settings.permissionMode = permission

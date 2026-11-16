@@ -58,6 +58,11 @@ public actor BackendPhoneChats {
         public var stillSees: @Sendable (BackendRemoteHostContext, String) async -> Bool
         /// A chat this device just started: approval, folder and access checked again, then shown to it.
         public var admitStarted: @Sendable (BackendRemoteHostContext, BackendSessionMeta) async throws -> Void
+        /// 14 Nov phone asks (`BackendPhoneStartText`): after the re-checks, the start's rid and first message, and
+        /// the `created` answer (rid on it only for a phone that claimed `start.rid`). Nil: the plain `created`.
+        public var started: (@Sendable (_ context: BackendRemoteHostContext, _ meta: BackendSessionMeta, _ rid: String?, _ text: String?) async throws -> BackendRemoteServerMessage)? = nil
+        /// 14 Nov phone link: a smaller chat page for a connection whose link is slow (nil: the usual frame limit).
+        public var pageBudget: (@Sendable (UUID) async -> Int?)? = nil
         public init(send: @escaping @Sendable (UUID, BackendRemoteServerMessage) async throws -> Void,
                     stillSees: @escaping @Sendable (BackendRemoteHostContext, String) async -> Bool,
                     admitStarted: @escaping @Sendable (BackendRemoteHostContext, BackendSessionMeta) async throws -> Void) {
@@ -84,7 +89,7 @@ public actor BackendPhoneChats {
     }
 
     public init(endpoint: BackendRemoteHost, trust: BackendRemoteTrustStore, engine: Engine) {
-        self.init(engine: engine, host: .init(
+        var host = Host(
             send: { connection, message in try await endpoint.sendToConnection(connection, message: message) },
             stillSees: { context, chat in (try? await endpoint.panelSessionIDs(context))?.contains(chat) == true },
             admitStarted: { context, meta in
@@ -95,7 +100,16 @@ public actor BackendPhoneChats {
                 }
                 _ = try? await trust.remoteServeIncludeStartedSession(context.deviceID, sessionID: meta.id)
                 await endpoint.sessionsChanged()
-            }))
+            })
+        host.started = { context, meta, rid, text in
+            // admitStarted already sent the lists; once the rid is on the session they are sent again (only then).
+            if await endpoint.phoneStarted(connection: context.connectionID, deviceID: context.deviceID, meta: meta, rid: rid, text: text) {
+                await endpoint.sessionsChanged()
+            }
+            return try await endpoint.createdFrame(meta, rid: rid, connection: context.connectionID)
+        }
+        host.pageBudget = { connection in await endpoint.pageBudget(connection) }
+        self.init(engine: engine, host: host)
     }
 
     public func feature() -> BackendRemoteHostFeature {
@@ -118,18 +132,19 @@ public actor BackendPhoneChats {
             watching[context.connectionID, default: [:]][chat] = context
             #if DEBUG
             let readAt = Date()
-            let frame = try await conversation(chat)
+            let frame = try await conversation(chat, budget: await host.pageBudget?(context.connectionID))
             BackendRemoteRelayClient.note("open: chats.watch \(chat.prefix(8)) read in \(Int(Date().timeIntervalSince(readAt) * 1_000)) ms (\(((try? BackendRemoteProtocol.serialize(frame))?.utf8.count ?? 0) / 1024) KB)")
             return [frame]
             #else
-            return [try await conversation(chat)]
+            return [try await conversation(chat, budget: await host.pageBudget?(context.connectionID))]
             #endif
         case "chats.unwatch":
             watching[context.connectionID]?[chat] = nil
             return []
         case "chats.older":
             // The page before what the phone has (27 Oct: a chat showed only its newest ~64 KB, with no way back).
-            return [try await conversation(chat, before: message["before"].number.map { Int($0) } ?? 0)]
+            return [try await conversation(chat, before: message["before"].number.map { Int($0) } ?? 0,
+                                           budget: await host.pageBudget?(context.connectionID))]
         case "chats.say", "chats.steer":
             let files = (message["files"].elements ?? []).compactMap(\.string)
             let text = try message["text"].requireString("message", nonempty: files.isEmpty)
@@ -166,8 +181,11 @@ public actor BackendPhoneChats {
     }
 
     /// Full control: the level the host issued, or (a Mac without levels) the person's own device.
-    static func fullControl(_ context: BackendRemoteHostContext) -> Bool {
-        context.phoneAccess.map { $0 == .full } ?? (context.kind == .mine)
+    static func fullControl(_ context: BackendRemoteHostContext) -> Bool { fullControl(level: context.phoneAccess, kind: context.kind) }
+    /// The one rule (also the device Agents panel's, 14 Nov): the level the host issued, or, with none set, the
+    /// person's own device.
+    public static func fullControl(level: BackendINT2PhoneAccessLevel?, kind: BackendRemoteDeviceKind) -> Bool {
+        level.map { $0 == .full } ?? (kind == .mine)
     }
     /// A new session's login and permission mode are Full control: Work may start a session, not choose whose
     /// login it spends or what it may do without asking.
@@ -254,6 +272,9 @@ public actor BackendPhoneChats {
                                               .init("accounts", bounded("accounts")), .init("agents", bounded("agents"))]
         if let preferred = lists["defaultProvider"].string { fields.append(.init("defaultProvider", .string(preferred))) }
         if let mode = lists["openAs"].string, ["chat", "terminal"].contains(mode) { fields.append(.init("openAs", .string(mode))) }
+        // 14 Nov (lead's decision: the phone follows the Mac's page): true only when a start's "Before it changes files"
+        // pick is honoured; false, the phone shows Bypass and sends no pick (a stricter one is refused, `NativePhoneStart`).
+        if let atStart = lists["modeAtStart"].bool { fields.append(.init("modeAtStart", .bool(atStart))) }
         if let folder = lists["defaultFolder"].string, folder.hasPrefix("/"), folder.utf8.count <= 1024,
            reach.unrestricted || reach.folders.contains(where: { BackendRemoteTrustStore.within($0, folder) }) {
             fields.append(.init("defaultFolder", .string(folder)))
@@ -276,6 +297,7 @@ public actor BackendPhoneChats {
         }
         let meta = try await engine.start(planned)
         try await host.admitStarted(context, meta)
+        if let started = host.started { return try await started(context, meta, message["rid"].string, message["text"].string) }
         return try BackendRemoteServeSessionCreate.Outcome.created(meta).message()
     }
 
@@ -284,7 +306,8 @@ public actor BackendPhoneChats {
     /// The newest page (`before` nil: the watch and every push, `reset`), or the page that ends just before event
     /// `before` (`older`). Each page says where it starts among all the conversation's events (`first`) and how many
     /// there are (`total`), so a phone can ask for the page before it.
-    public func conversation(_ chat: String, before: Int? = nil) async throws -> BackendRemoteServerMessage {
+    /// `budget` (14 Nov phone link): a smaller frame while the connection's link is slow; the newest event always stays.
+    public func conversation(_ chat: String, before: Int? = nil, budget: Int? = nil) async throws -> BackendRemoteServerMessage {
         // A picture's bytes never travel to a phone: each page carries its stand-in (BackendChatMedia), so a chat
         // with pictures still pages back through all of its history (28 Oct).
         let snapshot = BackendChatMedia.slim(try await engine.read(chat))
@@ -307,15 +330,24 @@ public actor BackendPhoneChats {
             if before != nil { fields.append(.init("older", .bool(true))) }
             return try .init(.chatsEvents, fields: fields)
         }
-        let limit = BackendRemoteProtocol.limits["MAX_MESSAGE_BYTES"] ?? 1_048_576
+        let hard = BackendRemoteProtocol.limits["MAX_MESSAGE_BYTES"] ?? 1_048_576
+        let small = budget.map { min($0, hard) }
+        let limit = small ?? hard
+        // A smaller page keeps at least the newest event (the hard limit below still applies to it).
+        let keep = small == nil ? 0 : 1
         // Drop the oldest by their own sizes first (one encoding each), then check the whole frame.
-        let drop = BackendINT2HootPhone.oldestToDrop(events, budget: limit - 1_024)
+        let drop = min(BackendINT2HootPhone.oldestToDrop(events, budget: limit - 1_024), max(0, events.count - keep))
         events.removeFirst(drop); first += drop
         var message = try frame()
         // Original message text always wins the shared frame budget. A phone can
         // derive the same visual fences from it when the additive block hints do not fit.
         if try message.value.encodedJSON().count > limit { includeRendered = false; message = try frame() }
-        while try message.value.encodedJSON().count > limit, !events.isEmpty {
+        while try message.value.encodedJSON().count > limit, events.count > keep {
+            events.removeFirst()
+            first += 1
+            message = try frame()
+        }
+        while try message.value.encodedJSON().count > hard, !events.isEmpty {
             events.removeFirst()
             first += 1
             message = try frame()
@@ -344,7 +376,7 @@ public actor BackendPhoneChats {
             watching[connection]?[chat] = nil
             return
         }
-        guard let frame = try? await conversation(chat) else { return }
+        guard let frame = try? await conversation(chat, budget: await host.pageBudget?(connection)) else { return }
         do { try await host.send(connection, frame) } catch { watching[connection] = nil }
     }
 

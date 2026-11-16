@@ -462,7 +462,7 @@ public sealed class CodeBackupProjectsTests : IDisposable
       Assert.Equal("o/n", CodeBackupReader.GitHubHome(url, "github.com"));
     Assert.Null(CodeBackupReader.GitHubHome("https://gitlab.com/o/n.git", "github.com"));
     Assert.Null(CodeBackupReader.GitHubHome("/tmp/bare.git", "github.com"));
-    Assert.Null(CodeBackupReader.GitHubHome(@"C:\TD-test\bare.git", "github.com"));
+    Assert.Null(CodeBackupReader.GitHubHome(@"C:\repos\bare.git", "github.com"));
     Assert.Equal("gitlab.com", CodeBackupReader.Host("https://gitlab.com/o/n.git"));
     Assert.Equal("a folder on this PC", CodeBackupReader.Host("/srv/bare.git"));
     Assert.Equal("a folder on this PC", CodeBackupReader.Host(@"D:\srv\bare.git"));

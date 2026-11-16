@@ -113,7 +113,7 @@ public enum TasksSettingsText {
     public static func keyHelp(_ key: TasksKey?) -> String {
         guard let key else { return "Recommended. It can send tasks and nothing else, and you confirm before it is made." }
         if key.crmOnly { return "A key made for a CRM: it can send tasks and nothing else." }
-        return "An AI app’s key. The CRM would sign in as that app, and anyone with the key could send tasks. Turn on Your tasks for this key in Settings › Outside AI apps, or every request is refused."
+        return "An AI app’s key. The CRM would sign in as that app, and anyone with the key could send tasks. Turn on Your tasks for this key in Settings › AI apps, or every request is refused."
     }
 
     /// Which key a connection signs in with, in words.

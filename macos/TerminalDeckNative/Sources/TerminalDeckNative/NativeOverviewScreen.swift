@@ -2,28 +2,8 @@ import Observation
 import SwiftUI
 import TerminalDeckNativeCore
 
-/// The fixed project dashboard. Each card reads and fails independently.
-struct NativeOverviewScreen: View {
-    var projectPath: String? = nil
-    var embedded = false
-    @State private var model = PROJPAGEOverviewModel()
-    var body: some View {
-        let folder = projectPath ?? DeckProject.current
-        Group {
-            if let folder {
-                let project = NativePROJLabels.shared.projects.first { $0.folders.contains(folder) }
-                    ?? PROJProject(id: folder, name: URL(fileURLWithPath: folder).lastPathComponent, folders: [folder], colour: "blue")
-                if embedded {
-                    PROJPAGEOverviewContent(model: model, project: project, navigate: DeckProject.show, fixWithHoot: { AppModel.shared.select("hoot") })
-                } else { ProjectPage(project: project) }
-            } else { DeckNeedsProject(label: "Overview", symbol: "square.grid.2x2") }
-        }
-        .task(id: folder) {
-            if embedded, let folder { await model.load(project: NativePROJLabels.shared.projects.first { $0.folders.contains(folder) } ?? PROJProject(id: folder, name: URL(fileURLWithPath: folder).lastPathComponent, folders: [folder]), folder: folder) }
-        }
-        .onDisappear { model.stop() }
-    }
-}
+// The project page's Overview tab (ProjectPage). The app-wide Overview page that showed the current project's page
+// was removed (Owner, 15 Nov); its old id opens `SHELLRoutes.overviewStandIn`.
 
 @MainActor @Observable final class PROJPAGEOverviewModel {
     typealias Read = @MainActor (String, [Any?]) async throws -> Any
@@ -298,11 +278,16 @@ struct PROJPAGEOverviewContent: View {
                     if !model.hidden.contains("usage") { usage }
                     if !model.hidden.contains("git") { card("git", title: "Code", trailing: codeHeader) { value in
                         let status = GitWidgetRules.status(value.foundation)
+                        if status.reason == "code-not-here" {
+                            // A project from his Cloud whose code is not on this Mac yet: no counts, no branch.
+                            Text(GitWidgetRules.notRepoTitle(status.reason)).font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
+                        } else {
                         Button { navigate("git") } label: {
                             HStack { metric(String(status.staged.count), "staged"); metric(String(status.unstaged.count), "changed"); metric(String(status.untracked.count), "untracked") }.padding(.vertical, 8).contentShape(.rect)
                         }.buttonStyle(.plain)
                         if let commit = value["lastCommit"]["subject"].string { Text(commit).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                         Button("Review changes") { navigate("git") }.buttonStyle(.bordered)
+                        }
                     } }
                     if !model.hidden.contains("readiness") { card("readiness", title: "Readiness", trailing: readinessHeader) { value in
                         if let report = ReadinessReport(json: value.foundation) {
@@ -403,9 +388,11 @@ struct PROJPAGEOverviewContent: View {
         }.font(.caption).foregroundStyle(.secondary))
     }
     private var codeHeader: AnyView? {
-        guard let status = model.git else { return nil }
+        // LANDING-FIX-4: code not on this Mac says so once, in the card's body; the header shows nothing then.
+        guard let status = model.git, status.reason != "code-not-here" else { return nil }
         return AnyView(HStack(spacing: 6) {
-            Label(status.branchName ?? "No repository", systemImage: "arrow.triangle.branch").lineLimit(1)
+            Label(status.branchName ?? "No repository",
+                  systemImage: "arrow.triangle.branch").lineLimit(1)
             if status.ahead > 0 { Label(String(status.ahead), systemImage: "arrow.up") }
             if status.behind > 0 { Label(String(status.behind), systemImage: "arrow.down") }
         }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 6).frame(height: 22).background(.primary.opacity(0.06), in: .rect(cornerRadius: 6)))

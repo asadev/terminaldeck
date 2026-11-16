@@ -60,6 +60,19 @@ final class Sidebar21Tests: XCTestCase {
             XCTAssertEqual(Sidebar21Store(defaults: defaults).ids, ["tasks", "agents-all"])
         }
     }
+    /// Review 14 Nov: Cloud is pinned once, and only where this copy can use Cloud; unpinning it sticks.
+    @MainActor func testCloudIsPinnedOnceOnlyWhereCloudCanBeUsed() throws {
+        try scratch { defaults, pins in
+            pins.initialize(existingUser: false, pages: Sidebar21Pages.standard)
+            XCTAssertFalse(Sidebar21Pages.catalogue(nil, cloud: false).contains { $0.id == Sidebar21Pages.cloudID })
+            XCTAssertEqual(pins.ids, ["agents-all", "tasks"], "no Cloud for a copy that cannot use it")
+            pins.addCloudOnce()
+            XCTAssertEqual(pins.ids, ["agents-all", "tasks", Sidebar21Pages.cloudID])
+            pins.setPinned(Sidebar21Pages.cloudID, pinned: false, pages: Sidebar21Pages.standard)
+            pins.addCloudOnce()
+            XCTAssertFalse(Sidebar21Store(defaults: defaults).isPinned(Sidebar21Pages.cloudID))
+        }
+    }
     @MainActor func testMoreOpenChoosesThePageThenClosesWithoutPinning() throws {
         try scratch { _, pins in
             var actions: [String] = []
@@ -105,7 +118,8 @@ final class Sidebar21Tests: XCTestCase {
         XCTAssertTrue(source.contains("header(\"Running\")"))
         XCTAssertTrue(source.contains("identified(sessions)")) // R51: stable rail identity during switches.
         XCTAssertTrue(source.contains("SidebarSettingsLine(model: model)"))
-        XCTAssertTrue(source.contains("Button { model.requestDevicesWindow() }"))
+        XCTAssertFalse(source.contains("requestDevicesWindow"), "no Devices window: the bottom bar is profile + gear (owner, 14 Nov)")
+        XCTAssertTrue(source.contains("SidebarProfileButton"))
         XCTAssertFalse(source.contains("\"bell\""), "no in-app notifications")
     }
     @MainActor func testMCPToolsAreRegisteredAndRejectAnUngrantedCaller() async throws {
@@ -123,7 +137,9 @@ final class Sidebar21Tests: XCTestCase {
     }
     @MainActor func testRenderSidebarAndMoreLightDarkAndNarrowWithoutStartingTheApp() throws {
         NSApplication.shared.setActivationPolicy(.prohibited)
-        let destination = try XCTUnwrap(ProcessInfo.processInfo.environment["TD_SIDEBAR21_FRAMES"])
+        guard let destination = ProcessInfo.processInfo.environment["TD_SIDEBAR21_FRAMES"] else {
+            throw XCTSkip("Render pictures run only on request: set TD_SIDEBAR21_FRAMES to a scratch folder.")
+        }
         let output = URL(fileURLWithPath: destination)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         try scratch { _, pins in

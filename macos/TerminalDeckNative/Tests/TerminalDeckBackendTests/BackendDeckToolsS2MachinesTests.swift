@@ -51,12 +51,11 @@ final class BackendDeckToolsS2MachinesTests: XCTestCase {
                       "credential": .string("BEARER-SECRET-123"), "deviceId": .string("d1"), "deviceName": .string("Mac mini"),
                       "guestKeys": o(["publicKey": .string(Data("PUB".utf8).base64EncodedString()), "secretKey": .string(secret)])])
         let area = BackendDeckToolsMachinesPortMachineArea(.init(["machines:list": BackendDeckToolsMachinesPortView(), "machines:pair": pair]))
-        let out = try await area.run("machines.manage", o(["do": .string("pair"), "code": .string("123456")]), BackendDeckToolsMachinesPortContext())
-        let seen = V.array([out.value, out.summary]).compact
-        for banned in ["BEARER-SECRET-123", secret, "PRIVATE-KEY-BYTES", "secretKey", "credential"] {
-            XCTAssertFalse(seen.contains(banned), "the pairing result carries \(banned)")
-        }
-        XCTAssertEqual(out.value["machineId"], .string("m1"))
+        // Owner, 13 Nov: the tool no longer adds a computer at all, so nothing of that answer can come back.
+        do {
+            _ = try await area.run("machines.manage", o(["do": .string("pair"), "code": .string("123456")]), BackendDeckToolsMachinesPortContext())
+            XCTFail("pair is retired")
+        } catch { XCTAssertFalse(String(describing: error).contains("BEARER")) }
     }
 
     // TSCASE server-room-tools.test.ts:109 — the line and its Enter are two writes to

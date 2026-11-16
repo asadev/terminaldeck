@@ -20,7 +20,12 @@ public struct BackendTaskRecord: Sendable, Equatable {
 }
 
 public actor BackendTaskStore {
+    private var cloudArchive: BackendCloudBrainAgentsArchive?
+    private var cloudImporting = false
+    private var cloudCaptureFailed = false
+    private var cloudRoots: [String: CloudBrainProjectRoot] = [:]
     private let persistence: BackendTaskPersistence
+    nonisolated let recordDeletes: RecordsDeleteLedger
     private var tasks: [String: BackendTaskRecord] = [:] { didSet { sessionIndex = nil } }
     private var trash: [String: BackendTaskRecord] = [:]
     /// U140 (#194): which task holds each session, built on the first look after a change. Every session status event
@@ -47,6 +52,7 @@ public actor BackendTaskStore {
     private let writeDelay: Double
     public init(persistence: BackendTaskPersistence, writeDelay: Double = 0, changed: @escaping @Sendable () async -> Void = {}) {
         self.persistence = persistence; self.writeDelay = writeDelay; self.changed = changed
+        recordDeletes = RecordsDeleteLedger(root: persistence.directory.appendingPathComponent("records-delete"))
     }
     public func start() throws {
         guard !loaded else { return }
@@ -80,6 +86,265 @@ public actor BackendTaskStore {
         if receiptsRaw == nil, ["seen", "ours"].contains(where: { raw?.has($0) == true }) { dirty.insert(.receipts) }
         loaded = true; pruneReceipts(); prune()
     }
+    // MARK: Cloud (lane A2). Capture only from what was written (design D2); import through this writer (D1).
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        if cloudArchive == nil { cloudArchive = .init(ownerDirectory: persistence.ownership == .memory ? nil : persistence.directory, namespace: "tasks", domains: ["tasks"]) }
+        try cloudArchive!.attach(account)
+    }
+    public func cloudDetach() { cloudArchive?.detach() }
+    /// Folder → projectId/rootId of every registered project root, refreshed by the tasks adapter (finding 11).
+    public func cloudSetProjectRoots(_ roots: [CloudBrainProjectRoot]) {
+        cloudRoots = Dictionary(roots.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+    /// The exact values writeDirty writes for each file.
+    private func tasksFileValue() -> NativeRPCValue {
+        BackendTaskValues.object([("v", .number(1)), ("tasks", .array(order.compactMap { tasks[$0]?.value })), ("trash", .array(trashOrder.compactMap { trash[$0]?.value }))])
+    }
+    private func runsFileValue() -> NativeRPCValue {
+        BackendTaskValues.object([("v", .number(1)), ("agentRuns", .array(runOrder.compactMap { runs[$0] })), ("agentRunRollups", runRollups),
+            ("agentRuntimeState", runtimeState), ("agentHistorySince", historySince.map(NativeRPCValue.number) ?? .null)])
+    }
+    private func receiptsFileValue() -> NativeRPCValue {
+        BackendTaskValues.object([("v", .number(1)),
+            ("seen", .array(seenOrder.compactMap { key in seen[key].map { .array([.string(key), $0]) } })), ("ours", .array(oursOrder.compactMap { key in ours[key].map { .array([.string(key), .number($0)]) } }))])
+    }
+    /// The exact values writeDirty writes for each file (Cloud paths only; a save builds only the part it writes).
+    private func cloudFileValues() -> (tasks: NativeRPCValue, runs: NativeRPCValue, receipts: NativeRPCValue) {
+        (tasksFileValue(), runsFileValue(), receiptsFileValue())
+    }
+    /// What the three files hold now. A pre-U141 tasks.json still holding runs/receipts is read the same way start() reads it.
+    private func cloudDiskRecords() throws -> [CloudBrainAgentsRecord] {
+        guard persistence.ownership != .memory else { let v = cloudFileValues(); return try CloudBrainTasks.records(tasks: v.tasks, runs: v.runs, receipts: v.receipts) }
+        let raw = try persistence.read("tasks.json")
+        let runsRaw = try persistence.read(Self.runsFile), receiptsRaw = try persistence.read(Self.receiptsFile)
+        return try CloudBrainTasks.records(tasks: raw, runs: runsRaw ?? raw, receipts: receiptsRaw ?? raw)
+    }
+    private static func cloudScope(_ parts: Parts) -> (String) -> Bool {
+        { key in
+            let kind = key.dropFirst("tasks:".count).split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
+            switch kind {
+            case "task": return parts.contains(.tasks)
+            case "run", "rollup", "runtime", "history-since": return parts.contains(.runs)
+            case "seen", "ours": return parts.contains(.receipts)
+            default: return false
+            }
+        }
+    }
+    private static let cloudBlocked = ["The task outbox, goals, routines, connected-task definitions, briefs and attachments are not exported by this adapter.",
+        "Kept in Cloud history but not restored on another Mac: agent run totals, live runtime state and runs that were still working."]
+    public func cloudTaskInventory() throws -> [CloudCoverage] {
+        try requireStarted()
+        let failed = cloudCaptureFailed ? ["A save on this Mac could not be recorded for the Cloud yet; the next save or snapshot records it."] : []
+        return [try BackendCloudBrainAgentsSupport.coverage(row: "I12", sourceID: "task-store", records: try cloudDiskRecords(), blocked: Self.cloudBlocked + failed, attention: cloudArchive?.attention() ?? [])]
+    }
+    public func cloudTaskSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        try requireStarted()
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let records = try cloudDiskRecords()
+        _ = try cloudArchive!.capture(records, sourceID: "task-store", complete: true, shape: cloudShape([:]))
+        cloudCaptureFailed = false
+        return .init(operations: try cloudArchive!.ownOperations(), coverage: try cloudTaskInventory())
+    }
+    /// Post-write hook: only the parts that were just written, from the values that were written.
+    private func cloudCaptureWritten(_ parts: Parts) {
+        guard !cloudImporting, cloudArchive?.attached == true, !parts.isEmpty else { return }
+        do {
+            let records = try CloudBrainTasks.records(tasks: parts.contains(.tasks) ? tasksFileValue() : nil, runs: parts.contains(.runs) ? runsFileValue() : nil,
+                receipts: parts.contains(.receipts) ? receiptsFileValue() : nil)
+            try cloudArchive!.capture(records, sourceID: "task-store", complete: true, scope: Self.cloudScope(parts), shape: cloudShape([:]))
+        } catch { cloudCaptureFailed = true }
+    }
+    private func cloudMemoryRecords() throws -> [String: NativeRPCValue] {
+        let values = cloudFileValues()
+        return Dictionary(try CloudBrainTasks.records(tasks: values.tasks, runs: values.runs, receipts: values.receipts).map { ($0.key, try $0.persistedValue().raw) },
+            uniquingKeysWith: { first, _ in first })
+    }
+    private func cloudShape(_ memory: [String: NativeRPCValue]) -> CloudBrainAgentsShape {
+        let roots = cloudRoots
+        return CloudBrainAgentsShape(show: { op, payload in
+            guard let kind = payload["kind"].string, CloudBrainTasks.kinds.contains(kind), let id = payload["id"].string,
+                  op.entityId == CloudBrainTasks.entity(kind: kind, id: id) else { throw CloudFailure.invalidRequest }
+            switch kind {
+            case "task":
+                guard let place = payload["place"].string, place == "tasks" || place == "trash" else { throw CloudFailure.invalidRequest }
+                let existing = memory[CloudBrainAgentsLedger.key(domain: "tasks", entityID: op.entityId)]?["record"]
+                let local = CloudBrainTasks.show(payload["record"], existing: existing, operationID: op.opId,
+                    localPath: { project, root in roots.values.first { $0.projectID == project && $0.rootID == root }?.path })
+                guard try BackendTaskRecord(local).id == id else { throw CloudFailure.invalidRequest }
+                return payload.setting("record", local)
+            case "run":
+                let row = payload["record"]
+                guard row["id"].string == id, row["agent_id"].string != nil, row["session_id"].string != nil || row["conversation_id"].string != nil,
+                      row["started_at"].number != nil else { throw CloudFailure.invalidRequest }
+                // A run that was still working elsewhere is history only; it never looks like work running here.
+                return row["ended_at"].number == nil ? nil : payload
+            case "seen":
+                guard payload["record"]["at"].number != nil else { throw CloudFailure.invalidRequest }
+                return payload
+            case "ours":
+                guard payload["record"].number != nil else { throw CloudFailure.invalidRequest }
+                return payload
+            default:
+                return nil
+            }
+        }, share: { value in
+            guard value["kind"].string == "task" else { return value }
+            return value.setting("record", CloudBrainTasks.share(value["record"], roots: roots))
+        })
+    }
+    public func cloudTaskImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        try requireStarted(); try persistence.writable()
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let memory = try cloudMemoryRecords()
+        cloudImporting = true
+        let results: [CloudItemResult]
+        do {
+            results = try cloudArchive!.importing(operations, current: { memory[$0] }, shape: cloudShape(memory), write: { try self.cloudWriteProjections($0) })
+        } catch { cloudImporting = false; throw error }
+        cloudImporting = false
+        // Anything the import's write also flushed (a waiting local edit) is captured now, from what was written.
+        cloudCaptureWritten(.all)
+        // No changed callback, run observer, task engine, outbox or external connector is invoked.
+        return results
+    }
+    /// Re-evaluates Cloud records not shown yet (for example after a project folder was mapped on this Mac).
+    public func cloudTaskRefresh() throws -> Int {
+        try requireStarted(); try persistence.writable()
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let memory = try cloudMemoryRecords()
+        cloudImporting = true; defer { cloudImporting = false }
+        return try cloudArchive!.refresh(current: { memory[$0] }, shape: cloudShape(memory), write: { try self.cloudWriteProjections($0) })
+    }
+    private func cloudWriteProjections(_ items: [CloudBrainAgentsProjection]) throws -> [String: NativeRPCValue?] {
+        var nextTasks = tasks, nextOrder = order, nextTrash = trash, nextTrashOrder = trashOrder
+        var nextRuns = runs, nextRunOrder = runOrder, nextSeen = seen, nextSeenOrder = seenOrder, nextOurs = ours, nextOursOrder = oursOrder
+        var parts: Parts = []
+        for item in items {
+            guard let image = item.image, let kind = image["kind"].string, let id = image["id"].string else { continue }
+            switch kind {
+            case "task":
+                let record = try BackendTaskRecord(image["record"])
+                let toTrash = image["place"].string == "trash"
+                // One place per id; the order lists never repeat an id.
+                if toTrash {
+                    nextTasks[id] = nil; nextOrder.removeAll { $0 == id }
+                    if !nextTrashOrder.contains(id) { nextTrashOrder.append(id) }
+                    nextTrash[id] = record
+                } else {
+                    nextTrash[id] = nil; nextTrashOrder.removeAll { $0 == id }
+                    if !nextOrder.contains(id) { nextOrder.append(id) }
+                    nextTasks[id] = record
+                }
+                parts.insert(.tasks)
+            case "run":
+                if !nextRunOrder.contains(id) { nextRunOrder.append(id) }
+                nextRuns[id] = image["record"]; parts.insert(.runs)
+            case "seen":
+                if !nextSeenOrder.contains(id) { nextSeenOrder.append(id) }
+                nextSeen[id] = image["record"]; parts.insert(.receipts)
+            case "ours":
+                guard let at = image["record"].number else { throw CloudFailure.invalidRequest }
+                if !nextOursOrder.contains(id) { nextOursOrder.append(id) }
+                nextOurs[id] = at; parts.insert(.receipts)
+            default:
+                continue
+            }
+        }
+        let before = (tasks, order, trash, trashOrder, runs, runOrder, seen, seenOrder, ours, oursOrder)
+        (tasks, order, trash, trashOrder) = (nextTasks, nextOrder, nextTrash, nextTrashOrder)
+        (runs, runOrder, seen, seenOrder, ours, oursOrder) = (nextRuns, nextRunOrder, nextSeen, nextSeenOrder, nextOurs, nextOursOrder)
+        do { if !parts.isEmpty { try flush(parts, now: true) } } catch {
+            (tasks, order, trash, trashOrder) = (before.0, before.1, before.2, before.3)
+            (runs, runOrder, seen, seenOrder, ours, oursOrder) = (before.4, before.5, before.6, before.7, before.8, before.9)
+            throw error
+        }
+        let after = try cloudMemoryRecords()
+        return Dictionary(items.map { ($0.key, after[$0.key]) }, uniquingKeysWith: { first, _ in first })
+    }
+    public func cloudTaskRetained(_ operations: [CloudOperation]) throws -> Bool { try cloudArchive?.retained(operations) ?? false }
+    public func cloudTaskVersions() throws -> [CloudOperation] { try cloudArchive?.revisions() ?? [] }
+    public func cloudTaskOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.ownChanges(after: after, limit: limit) }
+    public func cloudTaskCursor() throws -> String? { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.cursor() }
+    public func cloudTaskSaveCursor(_ value: String) throws { guard cloudArchive != nil else { throw CloudFailure.gateClosed }; try cloudArchive!.saveCursor(value) }
+    public func cloudTaskNotices() -> AsyncStream<Void> {
+        guard cloudArchive != nil else { return AsyncStream { $0.finish() } }
+        return cloudArchive!.notices()
+    }
+    // MARK: Cloud lane L3 (14 Nov): this Mac's own tasks (local ones only) on the record rule.
+    /// Every LOCAL task with where it is kept ("tasks" or "trash"). Tasks of a connected task system are not in it.
+    public func cloudKindsTasks() throws -> [(place: String, row: NativeRPCValue)] {
+        try requireStarted()
+        return order.compactMap { tasks[$0] }.filter(\.isLocal).map { (place: "tasks", row: $0.value) }
+            + trashOrder.compactMap { trash[$0] }.filter(\.isLocal).map { (place: "trash", row: $0.value) }
+    }
+    /// Stores a task as another Mac shared it, exactly as given, in the list or the Trash. Written at once. No change
+    /// callback, run observer, task engine or connector is invoked (the Tasks page is refreshed by the display-only
+    /// signal). Never over a connected system's task, never a task that is not local.
+    public func cloudKindsWrite(_ value: NativeRPCValue, trash toTrash: Bool) throws {
+        try requireStarted(); try persistence.writable()
+        let record = try BackendTaskRecord(value)
+        guard record.isLocal, record.value["keyId"].string == "local" else { throw NativeRPCError.invalidArguments("Only a task of this app can come from the Cloud.") }
+        if let current = tasks[record.id] ?? trash[record.id], !current.isLocal { throw NativeRPCError.invalidArguments("A task of a connected system has this id.") }
+        let before = (tasks, order, trash, trashOrder), id = record.id
+        if toTrash {
+            tasks[id] = nil; order.removeAll { $0 == id }
+            if !trashOrder.contains(id) { trashOrder.append(id) }
+            trash[id] = record
+        } else {
+            trash[id] = nil; trashOrder.removeAll { $0 == id }
+            if !order.contains(id) { order.append(id) }
+            tasks[id] = record
+        }
+        do { try flush(.tasks, now: true) } catch { (tasks, order, trash, trashOrder) = before; throw error }
+    }
+    // MARK: Tasks everywhere: read-only copies of the tasks a CRM task link sent to another Mac
+    /// On a copy: where it lives, `{device, mac, system}` (this Mac only, never sent). A copy is never edited here.
+    public static let copyField = "cloudCopy"
+    /// The plain refusal for any change to a copy here.
+    public static func copyRefusal(_ value: NativeRPCValue) -> NativeRPCError {
+        let mac = value[copyField]["mac"].string ?? "another Mac", system = value[copyField]["system"].string ?? "its CRM"
+        return NativeRPCError(code: "read-only-copy", message: "This task is from \(system) and lives on \(mac). It can be changed or worked on there only.")
+    }
+    private func refuseCopy(_ record: BackendTaskRecord?) throws {
+        if let record, !record.value[Self.copyField].isNullish { throw Self.copyRefusal(record.value) }
+    }
+    /// The live tasks of connected CRM links on this Mac: the ones it receives itself and the copies of other Macs'.
+    public func cloudLinkedTasks() throws -> [NativeRPCValue] {
+        try requireStarted()
+        return order.compactMap { tasks[$0] }.filter { !$0.isLocal }.map(\.value)
+    }
+    /// Stores the read-only copy of another Mac's CRM task exactly as given. Never over a task this Mac receives
+    /// itself or one of its own. No change callback, run observer, task engine or connector is invoked.
+    public func cloudKindsWriteCopy(_ value: NativeRPCValue) throws {
+        try requireStarted(); try persistence.writable()
+        let record = try BackendTaskRecord(value)
+        guard !record.isLocal, value[Self.copyField].fields != nil, value["keyId"].string != "local" else {
+            throw NativeRPCError.invalidArguments("Only a copy of another Mac's CRM task can be stored here.")
+        }
+        if let current = tasks[record.id] ?? trash[record.id], current.value[Self.copyField].isNullish {
+            throw NativeRPCError.invalidArguments("This Mac has this task itself.")
+        }
+        let before = (tasks, order), id = record.id
+        if !order.contains(id) { order.append(id) }
+        tasks[id] = record
+        do { try flush(.tasks, now: true) } catch { (tasks, order) = before; throw error }
+    }
+    /// The original went on its Mac: its copy goes here. Only ever a copy.
+    public func cloudKindsRemoveCopy(_ id: String) throws {
+        try requireStarted(); try persistence.writable()
+        guard let current = tasks[id], !current.value[Self.copyField].isNullish else { return }
+        let before = (tasks, order)
+        tasks[id] = nil; order.removeAll { $0 == id }
+        do { try flush(.tasks, now: true) } catch { (tasks, order) = before; throw error }
+    }
+    /// A travelling purge only reaches an already binned task; a concurrent edit is kept by ancestry.
+    public func cloudKindsPurge(_ id: String) throws {
+        try requireStarted(); try persistence.writable()
+        guard tasks[id] == nil, let row = trash[id], row.isLocal else { return }
+        let before = (trash, trashOrder)
+        trash[id] = nil; trashOrder.removeAll { $0 == id }
+        do { try flush(.tasks, now: true) } catch { (trash, trashOrder) = before; throw error }
+    }
     public func all(includeTrash: Bool = false) throws -> [BackendTaskRecord] { try requireStarted(); return order.compactMap { tasks[$0] } + (includeTrash ? trashOrder.compactMap { trash[$0] } : []) }
     public func inTrash() throws -> [BackendTaskRecord] { try requireStarted(); return trashOrder.compactMap { trash[$0] } }
     public func byID(_ id: String, includeTrash: Bool = false) throws -> BackendTaskRecord? { try requireStarted(); return tasks[id] ?? (includeTrash ? trash[id] : nil) }
@@ -100,6 +365,8 @@ public actor BackendTaskStore {
     private func putNow(_ value: NativeRPCValue, decisionOwner: Bool = false, now: Bool = false) throws -> BackendTaskRecord {
         try requireStarted(); try requireCompletionFence(); try persistence.writable()
         let id = value["id"].string ?? "", previous = tasks[id]
+        // Tasks everywhere: a read-only copy of another Mac's CRM task is never changed, assigned or started here.
+        try refuseCopy(previous)
         var value = value
         if !decisionOwner {
             if let previous {
@@ -222,10 +489,20 @@ public actor BackendTaskStore {
     public func release(_ id: String, process: String = "exited") async throws {
         _ = try await update(id, patch: BackendTaskValues.object([("sessionId", .null), ("process", .string(process)), ("keepOpenUntil", .null), ("keepAliveUntilClose", .bool(false))]), now: true)
     }
-    public func moveToTrash(_ id: String) async throws {
+    public func moveToTrash(_ id: String, deletedBy actor: CloudDeleteActor? = nil) async throws {
+        // This Mac's name comes from the device list (lead decision 5); read before the checks, so no await follows them.
+        let given: CloudDeleteActor
+        if let actor { given = actor } else { given = await recordDeletes.currentActor() }
         try requireStarted(); try persistence.writable(); guard let record = tasks[id] else { throw NativeRPCError.invalidArguments("That task no longer exists.") }
+        try refuseCopy(record)
         let before = (tasks, trash), now = BackendTaskValues.time()
-        tasks[id] = nil; trash[id] = try BackendTaskRecord(record.value.setting("deletedAt", .number(now)).setting("updatedAt", .number(now)))
+        let who = given
+        let intent = who.intent(place: "task:" + id, scope: .everywhere)
+        try recordDeletes.saveIntent(intent)
+        // A new delete is never read as a put back (lead decision 1).
+        try recordDeletes.clearRestoring("task:" + id)
+        let metadata = RecordsDeleteLedger.metadata(intent, macName: who.macName)
+        tasks[id] = nil; trash[id] = try BackendTaskRecord(record.value.merging(metadata).setting("deletedAt", .number(Double(who.at))).setting("updatedAt", .number(now)))
         let oldOrder = order, oldTrashOrder = trashOrder; order.removeAll { $0 == id }; if !trashOrder.contains(id) { trashOrder.append(id) }
         do { try flush(.tasks, now: true) } catch { (tasks, trash) = before; order = oldOrder; trashOrder = oldTrashOrder; throw error }; await changed()
     }
@@ -235,15 +512,19 @@ public actor BackendTaskStore {
         guard let record = trash[id], record.isLocal, record.sessionID == nil else {
             throw NativeRPCError.invalidArguments("Only a stopped local task in Trash can be permanently deleted.")
         }
+        try recordDeletes.save("purged:task:" + id, .bool(true))
         let before = trash, beforeOrder = trashOrder
         trash[id] = nil; trashOrder.removeAll { $0 == id }
-        do { try flush(.tasks, now: true) } catch { trash = before; trashOrder = beforeOrder; throw error }
+        do { try flush(.tasks, now: true) } catch { trash = before; trashOrder = beforeOrder; try? recordDeletes.clearSaved("purged:task:" + id); throw error }
         await changed()
     }
     public func restore(_ id: String) async throws -> BackendTaskRecord {
         try requireStarted(); try persistence.writable()
         guard let record = trash[id], record.isLocal, tasks[id] == nil else { throw NativeRPCError.invalidArguments("That task is not in the Trash.") }
-        let before = (tasks, trash), restored = try BackendTaskRecord(record.value.setting("deletedAt", .null).setting("updatedAt", .number(BackendTaskValues.time())))
+        try recordDeletes.clearIntent("task:" + id)
+        try recordDeletes.clearSaved("purged:task:" + id)
+        try recordDeletes.save("task:" + id, .bool(true), restoring: true)
+        let before = (tasks, trash), restored = try BackendTaskRecord(RecordsDeleteLedger.clearing(record.value).setting("deletedAt", .null).setting("updatedAt", .number(BackendTaskValues.time())))
         trash[id] = nil; tasks[id] = restored
         let oldOrder = order, oldTrashOrder = trashOrder; trashOrder.removeAll { $0 == id }; order.append(id)
         do { try flush(.tasks, now: true) } catch { (tasks, trash) = before; order = oldOrder; trashOrder = oldTrashOrder; throw error }; await changed(); return restored
@@ -301,22 +582,30 @@ public actor BackendTaskStore {
         for key in seenOrder.prefix(max(0, seen.count - 5_000)) { seen[key] = nil }; for key in oursOrder.prefix(max(0, ours.count - 5_000)) { ours[key] = nil }
         seenOrder.removeAll { seen[$0] == nil }; oursOrder.removeAll { ours[$0] == nil }
     }
-    /// U141 (#182): a local task 30 days in the Trash is deleted for good, as Purge does, so the Trash (and the file) no
-    /// longer only grows. Looked at, at most, once an hour.
+    /// U141 (#182): a local task 30 days in the Trash is deleted for good, so the Trash (and the file) no longer only
+    /// grows. Looked at, at most, once an hour.
+    /// Lead decision 2 (review A2): the ageing is THIS MAC'S OWN and never travels (no purge is recorded, so nothing is
+    /// sent and no other device loses anything). It goes by the SERVICE clock only; while that clock is not known
+    /// nothing ages at all, so a Mac whose own clock is wrong can empty nothing. Only "Delete for good" pressed by a
+    /// person (`purgeTrash`) travels.
     static let trashDays = 30.0
     private var trashAgedAt: Double?
     private func ageTrash() {
-        let now = BackendTaskValues.time()
-        if let last = trashAgedAt, now - last < 3_600_000 { return }
+        guard let service = recordDeletes.serviceNow() else { return }
+        let now = Double(service)
+        if let last = trashAgedAt, now >= last, now - last < 3_600_000 { return }
         trashAgedAt = now
         let cutoff = now - Self.trashDays * 86_400_000
-        for id in trashOrder { if let row = trash[id], row.isLocal, row.sessionID == nil, let deleted = row.value["deletedAt"].number, deleted < cutoff { trash[id] = nil } }
+        for id in trashOrder { if let row = trash[id], row.isLocal, row.sessionID == nil, let deleted = row.value["deletedAt"].number, deleted < cutoff {
+            // Remembered here only, so the same Trash copy arriving again is not placed back into this Trash.
+            if (try? recordDeletes.save(RecordsDeleteLedger.agedKey("task:" + id), .bool(true))) != nil { trash[id] = nil }
+        } }
     }
     private func prune() {
         ageTrash()
         // U20 (#345): past 500 open CRM tasks the oldest idle ones are archived with a note saying why, never deleted,
         // so they stay findable, restorable and open to later CRM updates.
-        let mirrored = order.compactMap { tasks[$0] }.filter { !$0.isLocal && $0.value["archivedAt"].isNullish }, extra = mirrored.count - 500
+        let mirrored = order.compactMap { tasks[$0] }.filter { !$0.isLocal && $0.value["archivedAt"].isNullish && $0.value[Self.copyField].isNullish }, extra = mirrored.count - 500
         if extra > 0 {
             let now = BackendTaskValues.time()
             for task in mirrored.filter({ $0.sessionID == nil && $0.process != "queued" }).sorted(by: { ($0.value["updatedAt"].number ?? 0) < ($1.value["updatedAt"].number ?? 0) }).prefix(extra) {
@@ -479,18 +768,20 @@ public actor BackendTaskStore {
     /// The run history and receipts go first: an old tasks.json loses them only after their own files hold them.
     private func writeDirty() throws {
         if dirty.contains(.runs) {
-            try persistence.write(Self.runsFile, value: BackendTaskValues.object([("v", .number(1)), ("agentRuns", .array(runOrder.compactMap { runs[$0] })), ("agentRunRollups", runRollups),
-                ("agentRuntimeState", runtimeState), ("agentHistorySince", historySince.map(NativeRPCValue.number) ?? .null)]))
+            try persistence.write(Self.runsFile, value: runsFileValue())
             dirty.remove(.runs)
+            // Cloud capture follows each successful write, from exactly the value written (finding 14).
+            cloudCaptureWritten(.runs)
         }
         if dirty.contains(.receipts) {
-            try persistence.write(Self.receiptsFile, value: BackendTaskValues.object([("v", .number(1)),
-                ("seen", .array(seenOrder.compactMap { key in seen[key].map { .array([.string(key), $0]) } })), ("ours", .array(oursOrder.compactMap { key in ours[key].map { .array([.string(key), .number($0)]) } }))]))
+            try persistence.write(Self.receiptsFile, value: receiptsFileValue())
             dirty.remove(.receipts)
+            cloudCaptureWritten(.receipts)
         }
         if dirty.contains(.tasks) {
-            try persistence.write("tasks.json", value: BackendTaskValues.object([("v", .number(1)), ("tasks", .array(order.compactMap { tasks[$0]?.value })), ("trash", .array(trashOrder.compactMap { trash[$0]?.value }))]))
+            try persistence.write("tasks.json", value: tasksFileValue())
             dirty.remove(.tasks)
+            cloudCaptureWritten(.tasks)
         }
         lastWrite = BackendTaskValues.time()
     }

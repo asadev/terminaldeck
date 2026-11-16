@@ -65,7 +65,7 @@ enum Sidebar21MCP {
 
     @MainActor static func live(_ id: String, _ args: NativeRPCValue) throws -> NativeRPCValue {
         let model = AppModel.shared
-        let pages = Sidebar21Pages.catalogue(model.visibleSidebar)
+        let pages = Sidebar21Pages.catalogue(model.visibleSidebar, cloud: NativeCloudDisplayGate.shared.shows)
         let pins = Sidebar21Store.shared
         guard model.canRun, model.visibleSidebar != nil else {
             throw NativeRPCError(code: "unavailable", message: "The side panel is still starting. Please try again.")

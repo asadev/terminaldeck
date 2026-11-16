@@ -16,7 +16,60 @@ public struct BackendRemoteRelayMCPReply: Sendable {
     public let status: Int
     public let contentType: String?
     public let body: Data
-    public init(status: Int, contentType: String?, body: Data) { self.status = status; self.contentType = contentType; self.body = body }
+    /// The key was wrong or unknown (told to the relay in the reply head, never to the caller).
+    public let refused: Bool
+    public init(status: Int, contentType: String?, body: Data, refused: Bool = false) { self.status = status; self.contentType = contentType; self.body = body; self.refused = refused }
+}
+
+/// 15 Nov (AI apps through our server): whether this Mac lets AI apps in through the relay right now, i.e.
+/// "Let AI apps use this Mac" is on. Every live relay client says it to the relay (frame 0x13, [1] or [0]) when it
+/// connects and whenever it changes, so the relay forwards only while it is on and answers 404 otherwise. With no
+/// provider set yet the answer is "not now" [0] (review-fixes 6: nothing is "serving" before the switch is read); the
+/// key door still refuses per request on this Mac either way.
+public final class BackendRelayMCPServing: @unchecked Sendable {
+    public static let shared = BackendRelayMCPServing()
+    private let lock = NSLock()
+    private var provider: (@Sendable () async -> Bool)?
+    public init() {}
+    public func setProvider(_ provider: (@Sendable () async -> Bool)?) { lock.withLock { self.provider = provider } }
+    public func serving() async -> Bool {
+        guard let provider = lock.withLock({ provider }) else { return false }
+        return await provider()
+    }
+    private var follower: (@Sendable () async -> Void)?
+    /// review-fixes 1: told after every change (the remote host service starts or stops its AI-apps-only link).
+    public func setFollower(_ follower: (@Sendable () async -> Void)?) { lock.withLock { self.follower = follower } }
+    /// The switch (or the key door) changed: every live relay client re-says it.
+    public func changed() async {
+        for client in BackendRemoteRelayClient.liveClients() { await client.mcpServingChanged() }
+        if let follower = lock.withLock({ follower }) { await follower() }
+    }
+}
+
+/// review-fixes 6 (15 Nov): what one relay connection last told the relay about serving MCP, told by one caller at a
+/// time. A call while another is under way only asks it to read again; after every send the switch is read again and
+/// said again if it moved, so the relay always ends on the switch's latest value.
+actor BackendRelayServingTeller {
+    private(set) var said: Bool?
+    private var saying = false, again = false
+    /// `live` is false once this connection is gone; `send` throws when it could not be said (said again next time).
+    func tell(read: @escaping @Sendable () async -> Bool, live: @escaping @Sendable () async -> Bool,
+              send: @escaping @Sendable (Bool) async throws -> Void) async {
+        guard !saying else { again = true; return }
+        saying = true
+        defer { saying = false }
+        repeat {
+            again = false
+            guard await live() else { return }
+            let on = await read()
+            guard await live() else { return }
+            if said != on {
+                said = on
+                do { try await send(on) } catch { said = nil; return }
+            }
+            if await read() != on { again = true }
+        } while again
+    }
 }
 
 /// One relay socket and independent authenticated Noise transport per channel.
@@ -43,6 +96,8 @@ public actor BackendRemoteRelayClient {
     private var retryAt: Double?
     private var channels: [Data: Channel] = [:]
     private var mcpPending: [Data: Task<Void, Never>] = [:]
+    /// What this connection last told the relay about serving MCP (nil: nothing yet on this connection).
+    private var mcpTeller = BackendRelayServingTeller()
     private var queuedBytes = 0
     private var generation = UUID()
     private var readyWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
@@ -91,9 +146,24 @@ public actor BackendRemoteRelayClient {
         var endpoint: UUID?
         var peer: Data?
         var chain: Task<Void, Never>?
+        /// Reach by account: the device id from the relay's open mark (`0x52 0x01` + id); nil = a paired join.
+        var account: String?
     }
+    /// Reach by account (R2): the door and the relay token live in ONE place for this process
+    /// (`BackendReachRelayLink`), so a relay client started later picks them up. Never set in the boot helper.
+    /// The current link was dialed with this token; a link that never opened then refuses that token (falls back to
+    /// an untied dial), so a refused or stale token can never keep pairing out.
+    private var dialedWithToken: String?
+    private var refusedToken: String?
     public init(url: String, identity: BackendRemoteHostIdentity, trust: BackendRemoteTrustStore, host: BackendRemoteHost, mcp: MCPHandler? = nil) throws {
         self.url = try Self.target(url); self.identity = identity; self.trust = trust; self.host = host; self.mcp = mcp; beaconOffer = nil
+    }
+    /// 15 Nov (review-fixes 1): the AI-apps-only link. Started when "Let AI apps use this Mac" is on while remote
+    /// access is off, so the address works by itself. It carries the tools door (MCP) and nothing else: no host, no
+    /// trust store, no account token, no Receiver; every channel a phone or browser tries to open is closed at once,
+    /// so starting it never lets a device in (that stays remote access's own switch).
+    public init(url: String, identity: BackendRemoteHostIdentity, aiAppsOnly mcp: @escaping MCPHandler) throws {
+        self.url = try Self.target(url); self.identity = identity; self.mcp = mcp; trust = nil; host = nil; beaconOffer = nil
     }
     init(url: String, identity: BackendRemoteHostIdentity, beaconOffer: String) throws {
         self.url = try Self.target(url); self.identity = identity; self.beaconOffer = beaconOffer; trust = nil; host = nil; mcp = nil
@@ -106,6 +176,8 @@ public actor BackendRemoteRelayClient {
     private var lastLogged: String?
     /// The reach frame's payload that says "this Mac serves MCP".
     public static let reachServing = Data([1])
+    /// ...and the one that says "not now" (the relay then answers every AI app 404 without asking this Mac).
+    public static let reachNotServing = Data([0])
     public func setStateHandler(_ handler: (@Sendable (BackendRemoteRelayState) -> Void)?) { onState = handler }
     public func state() -> BackendRemoteRelayState { .init(url: url.absoluteString, hostID: identity.hostID,
         publicKey: BackendRemoteTrustStorage.base64URL(identity.keys.publicKey), fingerprint: identity.fingerprint,
@@ -220,6 +292,7 @@ public actor BackendRemoteRelayClient {
         return false
     }
 
+    static func liveClients() -> [BackendRemoteRelayClient] { live.all() }
     /// Every live relay client checks itself (the Mac woke, the screen unlocked).
     public static func nudgeAll(_ why: String) {
         for client in live.all() { Task { await client.nudge(why) } }
@@ -247,6 +320,12 @@ public actor BackendRemoteRelayClient {
         components.path = BackendRelayPacketCodec.hostPath; components.query = nil; components.fragment = nil
         var request = URLRequest(url: components.url!, timeoutInterval: 15)
         request.setValue(BackendRemoteTrustStorage.base64URL(identity.hostSecret), forHTTPHeaderField: BackendRelayPacketCodec.secretHeader)
+        // Reach by account: the room is tied to the account only with a token that still has a minute left.
+        dialedWithToken = nil
+        if beaconOffer == nil, host != nil, let held = BackendReachRelayLink.shared.token, held.token != refusedToken,
+           held.expiresAtMs - Date().timeIntervalSince1970 * 1000 > 60_000 {
+            request.setValue("Bearer " + held.token, forHTTPHeaderField: "authorization"); dialedWithToken = held.token
+        }
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 15; config.timeoutIntervalForResource = .infinity
@@ -284,7 +363,10 @@ public actor BackendRemoteRelayClient {
         // fromHostMcp; the Electron app sent [on ? 1 : 0]). An empty payload read as "not serving", so every
         // AI app or CRM calling https://relay…/mcp/<host> got 404 "Nothing answered at this address" (CRM-LINK, 12 Oct).
         // The internet switch for keys is still enforced per request on this Mac (answerRelay → keys.internet()).
-        if mcp != nil { try? await envelope(.mcpReach, channel: BackendRelayPacketCodec.noRequest, payload: Self.reachServing) }
+        // 15 Nov: [1] only while "Let AI apps use this Mac" is on (BackendRelayMCPServing), so the relay itself answers
+        // 404 while it is off; re-said on every connection and on every change (mcpServingChanged).
+        mcpTeller = BackendRelayServingTeller()
+        await mcpServingChanged()
         if host != nil { await BackendRCVRelayLink.shared.opened { [weak self] type, channel, payload in
             try await self?.receiverEnvelope(type, channel: channel, payload: payload, epoch: epoch)
         } } // RCV
@@ -319,8 +401,18 @@ public actor BackendRemoteRelayClient {
         switch packet.type {
         case 1:
             guard channels[packet.channel] == nil else { return }
+            // The AI-apps-only link (no host, no pairing beacon) opens no device channel at all.
+            guard host != nil || beaconOffer != nil else { try? await envelope(.close, channel: packet.channel, payload: Data()); return }
             guard channels.count < 16 else { try? await envelope(.close, channel: packet.channel, payload: Data()); return }
-            channels[packet.channel] = Channel(); announce()
+            // R2 decision 1: an unmarked open is today's paired join, exactly as before; a marked one is an account
+            // channel and goes only to the reach door; a mark that cannot be read is closed.
+            var channel = Channel()
+            switch BackendReachWire.openKind(packet.payload) {
+            case .paired: break
+            case .account(let deviceId): channel.account = deviceId
+            case .invalid: try? await envelope(.close, channel: packet.channel, payload: Data()); return
+            }
+            channels[packet.channel] = channel; announce()
         case 2:
             guard let channel = channels[packet.channel] else { return }
             let previous = channel.chain
@@ -339,6 +431,10 @@ public actor BackendRemoteRelayClient {
     }
     private func channelData(_ id: Data, payload: Data, epoch: UUID) async {
         guard epoch == generation, let channel = channels[id] else { return }
+        if channel.transport == nil, let account = channel.account {
+            await openAccountChannel(id, deviceId: account, payload: payload, epoch: epoch)
+            return
+        }
         if channel.transport == nil {
             do {
                 let policy = await trust?.handshakePolicy()
@@ -370,6 +466,49 @@ public actor BackendRemoteRelayClient {
                await host.backlogged(endpoint) { await taken.answered.value }
         } catch { await closeChannel(id) }
     }
+    /// An account channel's first frame: the reach door answers only for a key of this account's roster that the
+    /// gate admits, for the device the relay's mark names; then the host gets a wire carrying that admission.
+    private func openAccountChannel(_ id: Data, deviceId: String, payload: Data, epoch: UUID) async {
+        guard let door = BackendReachRelayLink.shared.door, let host, beaconOffer == nil else { await closeChannel(id); return }
+        do {
+            let opened = try await door.answer(identity: identity.keys, frame: payload, marked: deviceId)
+            guard epoch == generation, channels[id] != nil else { return }
+            channels[id]?.transport = opened.transport; channels[id]?.peer = opened.admission.reachKey
+            try await envelope(.data, channel: id, payload: opened.reply)
+            var wire = BackendRemoteHostWire(address: "reach:" + deviceId, peerPublicKey: opened.admission.reachKey,
+                send: { [weak self] text in try await self?.channelSend(id, text: text) },
+                close: { [weak self] _, _ in await self?.closeChannel(id) })
+            wire.channelBinding = opened.transport.channelBinding
+            wire.reach = opened.admission
+            let endpoint = await host.accept(wire)
+            channels[id]?.endpoint = endpoint
+            if endpoint == nil { await closeChannel(id) }
+        } catch {
+            if case BackendReachFailure.refused(let why) = error { Self.note("reach: a device of the account was refused (\(why.rawValue)).") }
+            await closeChannel(id)
+        }
+    }
+
+    /// Reach by account: the shared token changed. A link that is not tied (and should be), or tied while it
+    /// should not be, is dialed again; a tied link only keeps the fresh token for its next dial.
+    func reachTokenChanged() async {
+        guard !stopped, beaconOffer == nil, host != nil else { return }
+        let wanted = BackendReachRelayLink.shared.token != nil
+        if wanted == (dialedWithToken != nil) { return }
+        refusedToken = nil
+        Self.note(wanted ? "reach: tying this Mac's relay room to the account." : "reach: untying this Mac's relay room from the account.")
+        await drop(wanted ? "Tying this Mac's relay room to the account." : "Untying this Mac's relay room from the account.")
+    }
+    /// Whether the current link was dialed tied to the account (the page's state).
+    public func accountTied() -> Bool { connected && dialedWithToken != nil }
+    /// Ends every account channel now (paired ones stay).
+    public func closeAccountChannels(_ deviceIds: Set<String>?) async {
+        for (id, channel) in channels {
+            guard let account = channel.account else { continue }
+            if let deviceIds, !deviceIds.contains(account) { continue }
+            await closeChannel(id)
+        }
+    }
     private func channelSend(_ id: Data, text: String) async throws {
         guard let transport = channels[id]?.transport else { throw NativeRPCError(code: "relay-channel", message: "The relay channel is closed") }
         let sealed = try await transport.send(Data(text.utf8))
@@ -399,6 +538,25 @@ public actor BackendRemoteRelayClient {
         }
     }
     private func finishMCP(_ id: Data) { mcpPending[id] = nil }
+    /// Tells the relay whether this Mac serves MCP now, when that differs from what this connection last said.
+    /// review-fixes 6: told through this connection's one teller (BackendRelayServingTeller): a call while one is under
+    /// way makes it read again, and after each send the switch is read again, so overlapping changes never leave a
+    /// stale "serving" with the relay.
+    public func mcpServingChanged() async {
+        guard mcp != nil, connected else { return }
+        let epoch = generation, teller = mcpTeller
+        await teller.tell(read: { await BackendRelayMCPServing.shared.serving() },
+                          live: { [weak self] in await self?.isLive(epoch) ?? false },
+                          send: { [weak self] on in
+                              guard let self else { throw CancellationError() }
+                              try await self.sayServing(on, epoch: epoch)
+                          })
+    }
+    private func isLive(_ epoch: UUID) -> Bool { epoch == generation && connected }
+    private func sayServing(_ on: Bool, epoch: UUID) async throws {
+        guard epoch == generation, connected else { throw CancellationError() }
+        try await envelope(.mcpReach, channel: BackendRelayPacketCodec.noRequest, payload: on ? Self.reachServing : Self.reachNotServing)
+    }
     private func mcpReply(_ id: Data, response: BackendRemoteRelayMCPReply, epoch: UUID) async {
         guard epoch == generation, mcpPending[id] != nil else { return }
         var at = 0
@@ -406,7 +564,7 @@ public actor BackendRemoteRelayClient {
             let end = min(at + 61440, response.body.count)
             let first = at == 0, last = end == response.body.count
             let flags: UInt8 = (first ? 1 : 0) | (last ? 2 : 0)
-            let head = first ? BackendRelayPacketCodec.MCPReplyHead(status: response.status, contentType: response.contentType) : nil
+            let head = first ? BackendRelayPacketCodec.MCPReplyHead(status: response.status, contentType: response.contentType, refused: response.refused) : nil
             do { try await envelope(.mcpReply, channel: id, payload: BackendRelayPacketCodec.encodeMCPReply(flags: flags, head: head, chunk: response.body.subdata(in: at..<end))) }
             catch { return }
             at = end
@@ -427,6 +585,12 @@ public actor BackendRemoteRelayClient {
         try await socket.send(.data(data))
     }
     private func drop(_ why: String, retrying: Bool = true) async {
+        // A link dialed with a reach token that never opened: the next dial goes untied, so pairing keeps working
+        // whatever the relay thinks of the token. Presence ties the room again with a fresh one.
+        if let token = dialedWithToken, !connected {
+            refusedToken = token; dialedWithToken = nil
+            Self.note("reach: the relay did not take this Mac's account token; connecting untied.")
+        }
         generation = UUID(); connected = false
         connectDeadline?.cancel(); connectDeadline = nil; pongDeadline?.cancel(); pongDeadline = nil; heartbeat?.cancel(); heartbeat = nil; receiver?.cancel(); receiver = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
@@ -506,4 +670,32 @@ final class BackendRemoteRelayLive: @unchecked Sendable {
     func add(_ client: BackendRemoteRelayClient) { lock.withLock { clients[ObjectIdentifier(client)] = WeakClient(client: client) } }
     func remove(_ client: BackendRemoteRelayClient) { lock.withLock { clients[ObjectIdentifier(client)] = nil } }
     func all() -> [BackendRemoteRelayClient] { lock.withLock { clients.values.compactMap(\.client) } }
+}
+
+/// Reach by account: this process's one place for the reach door and the relay token. Presence ties and unties
+/// every live relay client through it; clients started later read it when they dial.
+public final class BackendReachRelayLink: BackendReachRelayDoor, @unchecked Sendable {
+    public static let shared = BackendReachRelayLink()
+    private let lock = NSLock()
+    private var _door: BackendReachAccountDoor?
+    private var _token: BackendReachRelayToken?
+    public var door: BackendReachAccountDoor? { lock.withLock { _door } }
+    public var token: BackendReachRelayToken? { lock.withLock { _token } }
+    public func setDoor(_ door: BackendReachAccountDoor?) { lock.withLock { _door = door } }
+    public func attachAccount(_ token: BackendReachRelayToken) async throws {
+        lock.withLock { _token = token }
+        for client in BackendRemoteRelayClient.liveClients() { await client.reachTokenChanged() }
+    }
+    public func detachAccount() async {
+        guard lock.withLock({ () -> Bool in let had = _token != nil; _token = nil; return had }) else { return }
+        for client in BackendRemoteRelayClient.liveClients() { await client.reachTokenChanged() }
+    }
+    /// Ends account channels now (nil = all); paired channels stay.
+    public func closeAccountChannels(_ deviceIds: Set<String>?) async {
+        for client in BackendRemoteRelayClient.liveClients() { await client.closeAccountChannels(deviceIds) }
+    }
+    public func tied() async -> Bool {
+        for client in BackendRemoteRelayClient.liveClients() where await client.accountTied() { return true }
+        return false
+    }
 }

@@ -10,7 +10,7 @@ public struct BackendRemoteDeviceReach: Sendable {
 }
 
 extension BackendRemoteTrustStore {
-    public func kindOf(_ id: String) -> BackendRemoteDeviceKind { kinds[id]?.kind ?? .guest }
+    public func kindOf(_ id: String) -> BackendRemoteDeviceKind { reachAdmitted[id] != nil ? .mine : kinds[id]?.kind ?? .guest }
     public func kindDecided(_ id: String) -> Bool { kinds[id] != nil }
     public func grantedFolders(_ id: String) -> [String]? { folderGrants[id] }
     /// The person's own device ("My device") reaches what this Mac's owner reaches (Asad, 3 Nov, #27: "when you choose

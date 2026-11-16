@@ -78,6 +78,7 @@ public enum BackendINT2PhoneAccessLevel: String, CaseIterable, Sendable {
 public extension BackendRemoteTrustStore {
     func phoneAccess(_ id: String) -> BackendINT2PhoneAccessLevel? {
         guard isApproved(id) else { return nil }
+        if reachAdmitted[id] != nil { return .full }   // reach by account: full access, always (owner, 13 Nov)
         return phoneAccessLevels[id]
     }
     func setPhoneAccess(_ id: String, level: BackendINT2PhoneAccessLevel?) throws {

@@ -28,7 +28,7 @@ final class BackendDeckCoreTestPortSessionsBrowserHost: BackendBrowserRuntime {
          "found":true,"visible":true,"enabled":true,"hit":true,"secret":false,"label":"Go","tag":"BUTTON","ok":true,
          "rect":["x":10,"y":10,"width":100,"height":20],"viewport":["width":1024,"height":768]] as [String:Any]
     }
-    func reveal(_ id:String)async->Bool{true}
+    func readyForInput(_ id:String)async->Bool{true}
     func click(_ id:String,cssRect:CGRect)->Bool{true}
     func focusForTyping(_ id:String)->Bool{true}
     func type(_ id:String,plan:BrowserTypingPlan)->Bool{true}

@@ -112,7 +112,9 @@ public struct MachinesView: Equatable, Sendable {
             return double.isFinite && double == double.rounded() ? Int(double) : nil
         }
         machines = (row["machines"] as? [Any] ?? []).compactMap { entry in
-            guard let m = entry as? [String: Any], let id = m["id"] as? String, !id.isEmpty else { return nil }
+            // A machine reached by sign-in (`reach`, 15 Nov) is not a paired one: nothing here to forget, rename or
+            // approve; it is listed by the account's own half of the Devices page.
+            guard let m = entry as? [String: Any], let id = m["id"] as? String, !id.isEmpty, m["reach"] as? Bool != true else { return nil }
             return PairedMachine(id: id, name: text(m["name"]), fingerprint: text(m["fingerprint"]), platform: text(m["platform"]),
                                  drivesWindows: m["drivesWindows"] as? Bool == true)
         }

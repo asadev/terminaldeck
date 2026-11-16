@@ -13,6 +13,10 @@ public struct Sidebar21Page: Identifiable, Equatable, Sendable {
 
 public enum Sidebar21Pages {
     public static let projectsID = "sidebar-projects"
+    /// The Code page (L5, 14 Nov): every project's code and its last backup to GitHub, beside Projects.
+    public static let codeID = "code"
+    /// Owner, 14 Nov: what is in his Cloud, as a main page (it was a separate window behind a Settings button).
+    public static let cloudID = "cloud-page"
     public static let defaults = ["agents-all", "tasks"]
     /// Exactly the previous native rail's drawing order. Projects was a section.
     public static let upgradeOrder = Array(SIDEBARLayout.main.dropFirst()) + [projectsID]
@@ -22,15 +26,22 @@ public enum Sidebar21Pages {
         .init("tasks", "Tasks", "list.bullet"),
         .init("artifacts", "Artifacts", "doc.richtext"),
         .init(projectsID, "Projects", "folder"),
+        .init(codeID, "Code", "chevron.left.forwardslash.chevron.right"),
         .init("servers", "Servers", "server.rack"),
+        .init(cloudID, "Cloud", "cloud"),
         .init("devices", "Devices", "laptopcomputer.and.iphone"),
         .init("receiver", "Receiver", "antenna.radiowaves.left.and.right"),
         .init("mcp", "MCP servers", "puzzlepiece.extension"),
-        .init("store", "Store", "bag"),
-        .init("overview", "Overview", "square.grid.2x2")
+        .init("store", "Store", "bag")
+        // Overview is gone (Owner, 15 Nov: the app always lands on New session). A saved "overview" pin is dropped
+        // by `unique`; its old id opens SHELLRoutes.overviewStandIn.
     ]
     public static func catalogue(_ state: SidebarState?) -> [Sidebar21Page] {
         standard
+    }
+    /// Owner, 14 Nov review: the Cloud page exists only where this copy can use Cloud.
+    public static func catalogue(_ state: SidebarState?, cloud: Bool) -> [Sidebar21Page] {
+        cloud ? standard : standard.filter { $0.id != cloudID }
     }
     public static func unique(_ ids: [String], pages: [Sidebar21Page]) -> [String] {
         let allowed = Set(pages.map(\.id)); var seen = Set<String>()

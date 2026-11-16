@@ -78,10 +78,16 @@ struct NativeArtifactsCatalogScreen: View {
                 NativeArtifactsSourcePreview(request: NativeArtifactsSourceRequest(projectRoot: row.root, relativePath: row.artifact.relPath, sessionIDs: row.artifact.sessionIds, title: row.artifact.name))
             }
         }
-            .confirmationDialog("Delete \(model.pendingDelete?.artifact.name ?? "artifact") from the list?", isPresented: Binding(get: { model.pendingDelete != nil }, set: { if !$0 { model.pendingDelete = nil } }), titleVisibility: .visible, presenting: model.pendingDelete) { row in
-                NativeSessionButton("Delete from list", role: .destructive) { model.deleteFromList(row); model.pendingDelete = nil }
+            .confirmationDialog(model.pendingDelete?.cloudPath != nil ? "Remove \(model.pendingDelete?.artifact.name ?? "artifact") from all your devices?"
+                                    : "Delete \(model.pendingDelete?.artifact.name ?? "artifact") from the list?", isPresented: Binding(get: { model.pendingDelete != nil }, set: { if !$0 { model.pendingDelete = nil } }), titleVisibility: .visible, presenting: model.pendingDelete) { row in
+                NativeSessionButton(row.cloudPath != nil ? "Remove from all Macs" : "Delete from list", role: .destructive) { model.deleteFromList(row); model.pendingDelete = nil }
                 NativeSessionButton("Cancel", role: .cancel) { model.pendingDelete = nil }
-            } message: { _ in Text("The file and its chat stay where they are.") }
+            } message: { row in
+                // Lane L3 slice 2: an artifact that travels leaves his other Macs too, into their Bin for 30 days.
+                if row.cloudPath != nil { Text("It stays in the Bin on each device for 30 days, where Put back brings it back.") }
+                else if model.cloudCopy(row) != nil { Text("The file and its chat stay where they are. Its copy on your other devices goes to their Bin for 30 days.") }
+                else { Text("The file and its chat stay where they are.") }
+            }
             .alert("Couldn't complete that action", isPresented: Binding(get: { model.actionError != nil }, set: { if !$0 { model.clearError() } })) {
                 NativeSessionButton("OK") { model.clearError() }
             } message: { Text(model.actionError ?? "") }

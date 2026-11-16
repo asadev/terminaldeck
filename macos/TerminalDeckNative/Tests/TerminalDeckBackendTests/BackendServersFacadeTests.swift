@@ -147,7 +147,7 @@ struct BackendServersFacadeTests {
         let reaches = BackendServersReach(connections: app.pool, ownPorts: BackendDevOwnPorts(), servers: { try app.store.list() }, facts: { try await app.room.measured($0) }, tunnelsDropped: { _ in })
         try await BackendServersReachChannels(room: app.room, reach: reaches, resolve: { BackendServersCaller(kind: .nativeUI, attended: true, context: $0) }).register(on: registry, ownerID: "test-backend")
         let channels = await registry.channels(), sendsInput = await registry.hasSend("servers:shell:write")
-        #expect(channels.count == 51); #expect(sendsInput)
+        #expect(channels.count == 53); #expect(sendsInput)
         #expect(channels.contains("servers:shown-apps:read") && channels.contains("servers:shown-apps:set"))
         #expect(app.dialer.count == 0)
         for token in tokens { await token.cancelAndWait() }; await registry.shutdown(); await reaches.stop(); await ipc.stop()

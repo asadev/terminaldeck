@@ -68,7 +68,7 @@ struct NativeAccountSmallBugsTests {
         let shown = NativeAGSDefaultsEditor.shown(AGSDefaults(providers: [:]), provider: "claude")
         #expect(shown.effort == nil)
         #expect(shown.provider == "claude")
-        #expect(NativeAGSDefaultsEditor.effortDefaultLabel(provider: "claude") == "App default (Extra high)")
-        #expect(NativeAGSDefaultsEditor.effortDefaultLabel(provider: "gemini") == "App default")
+        #expect(NativeAGSDefaultsEditor.effortDefaultLabel(provider: "claude") == "Default (Extra high)")
+        #expect(NativeAGSDefaultsEditor.effortDefaultLabel(provider: "gemini") == "Default")
     }
 }

@@ -9,6 +9,9 @@ struct NativeSessionNumberField: View {
     private let prompt: Text?
     private let read: () -> String
     private let write: (String) -> Bool
+    /// SP-2: drawn without the field's own bezel (the Settings kit's quiet field draws its fill).
+    private var quiet = false
+    func quietField() -> Self { var copy = self; copy.quiet = true; return copy }
 
     init(_ title: String, value: Binding<Int>, format: IntegerFormatStyle<Int> = .number, prompt: Text? = nil) {
         self.title = title
@@ -59,7 +62,7 @@ struct NativeSessionNumberField: View {
         }
     }
     var body: some View {
-        NativeSessionNumberFieldContent(title: title, prompt: prompt, read: read, write: write).id(scope?.identity)
+        nativeSessionOwnedInput(NativeSessionNumberFieldContent(title: title, prompt: prompt, read: read, write: write, quiet: quiet), owner: scope)
     }
 }
 private struct NativeSessionNumberFieldContent: View {
@@ -67,19 +70,20 @@ private struct NativeSessionNumberFieldContent: View {
     let prompt: Text?
     let read: () -> String
     let write: (String) -> Bool
+    var quiet = false
     @State private var draft: String?
     @State private var ownValue: String?
     @FocusState private var focused: Bool
 
     var body: some View {
         let value = read()
-        return NativeSessionTextField(title, text: Binding(get: { draft ?? read() }, set: { raw in
+        let field = NativeSessionTextField(title, text: Binding(get: { draft ?? read() }, set: { raw in
             draft = raw
             if write(raw) { ownValue = read() }
         }), prompt: prompt)
         .sessionFocused($focused)
         .onSubmit { draft = nil }
-        .textFieldStyle(.roundedBorder)
+        return (quiet ? field.textFieldStyle(.plain) : field.textFieldStyle(.roundedBorder))
         .onChange(of: focused) { _, now in if !now { draft = nil } }
         .onChange(of: value) { _, next in
             if !focused || next != ownValue { draft = nil }

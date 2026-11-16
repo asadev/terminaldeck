@@ -47,7 +47,8 @@ final class SIDEBARProjectStore {
 
     func start() {
         guard subscriptions.isEmpty else { return }
-        for event in ["project-registry:changed", "session:created", "session:exit", "session:removed", "session:renamed"] {
+        // "cloud-records:shown" (BackendCloudLeanRecords.displayEvent): a project arrived from Cloud; redraw only.
+        for event in ["project-registry:changed", "cloud-records:shown", "session:created", "session:exit", "session:removed", "session:renamed"] {
             subscriptions.append(EngineBridge.shared.on(event) { [weak self] _ in self?.refresh() })
         }
         refresh()

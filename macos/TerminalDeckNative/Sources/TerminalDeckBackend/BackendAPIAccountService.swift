@@ -85,6 +85,15 @@ public actor BackendAPIAccountService {
             // 18 Oct (#89): the refusal names the sessions; a tab whose agent has ended is not counted.
             let using = await inUse(id)
             guard using.isEmpty else { throw BackendAccountFailure(using.refusal("This API account")) }
+            // Review fix 1 (Decker): a Remove pressed in the app removes it EVERYWHERE through the delete rule (in the
+            // Bin 30 days, no question), so Cloud never brings it back. Without saved passwords: removed as before.
+            let everywhere: Bool
+            do {
+                everywhere = try await BackendAPIAccountDeletion.$appRemoving.withValue(id) {
+                    try await BackendCloudKeysRemovals.shared.removeEverywhere(sourceId: "api", id: id)
+                }
+            } catch { throw BackendAccountFailure("This API account could not be removed from your devices just now. Try again in a moment.") }
+            if everywhere { return .object([.init("removed", .bool(true)), .init("credentialsRetained", .bool(false))]) }
             try await BackendAPIAccountCLI.removeLogin(record, inherited: configuration.inheritedEnvironment)
             let result = try await access.remove(id, context)
             guard result["removed"].bool == true else { throw BackendAccountFailure("The account entry was not removed; its API key was kept.") }
@@ -170,4 +179,93 @@ public actor BackendAPIAccountService {
 
 enum BackendAPIAccountDeletion {
     @TaskLocal static var insideCleanup = false
+    /// Review fix 1: the account a Remove pressed in the app is removing (its turn is already held).
+    @TaskLocal static var appRemoving: String? = nil
+}
+
+/// Keys travel (Security seat, 15 Nov 2026): the API accounts' own owner for saved passwords. Same file, so the cloud
+/// writer uses exactly this service's checks (owned folder, this copy's app name, nothing running as the account).
+/// Nothing here returns, logs or throws a key; refusals are fixed words.
+extension BackendAPIAccountService: BackendCloudKeysAPIOwner {
+    private static let cloudContext = NativeRPCContext(caller: .internalEngine, ownerID: "cloud-keys-travel")
+    public func cloudAccounts() async throws -> [BackendCloudKeysAPIAccount] {
+        try await access.list(Self.cloudContext).compactMap { profile in
+            guard BackendAPIAccountRecord.isAPIAccountID(profile.id), BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
+                  let record = try? BackendAPIAccountRecord.read(profile), record.appName == configuration.appName else { return nil }
+            return BackendCloudKeysAPIAccount(record: record, name: profile.name)
+        }
+    }
+    public func cloudKey(_ record: BackendAPIAccountRecord) async throws -> String? {
+        do { return try BackendAPIAccountKeychain.cloudRead(record) } catch { throw CloudFailure.secretsLocked }
+    }
+    private func cloudExecutables() -> [URL] {
+        [Bundle.main.executableURL, configuration.helperExecutable,
+         configuration.helperExecutable.deletingLastPathComponent().appendingPathComponent("TerminalDeckSessionHostHelper")].compactMap { $0 }
+            .filter { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+    public func cloudCreate(accountID: String, name: String, value: BackendCloudKeysAPIValue) async throws {
+        guard BackendAPIAccountRecord.isAPIAccountID(accountID), let kind = BackendAPIAccountRecord.Kind(rawValue: value.kind), kind.provider == value.provider,
+              kind != .compatibleLocal, mutating.insert(accountID).inserted else { throw CloudFailure.invalidRequest }
+        defer { mutating.remove(accountID) }
+        let context = Self.cloudContext
+        guard try await access.find(accountID, context) == nil else { throw CloudFailure.versionChanged }
+        let home = configuration.accountLoginsRoot.appendingPathComponent("api-" + UUID().uuidString.lowercased())
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let created: BackendAccountProfile
+        do { created = try await access.create(accountID, kind.provider, home.path, context) }
+        catch { try? FileManager.default.removeItem(at: home); throw CloudFailure.unavailable }
+        func undo() async { _ = try? await access.remove(created.id, context); try? FileManager.default.removeItem(at: home) }
+        guard created.id == accountID else { await undo(); throw CloudFailure.versionChanged }
+        // His name if free here; otherwise named apart by the sending Mac (a name clash is never an overwrite).
+        var profile: BackendAccountProfile
+        do { profile = try await access.rename(created.id, name, context) }
+        catch {
+            do { profile = try await access.rename(created.id, BackendCloudKeysTravel.apart(name, mac: value.from), context) }
+            catch { await undo(); throw CloudFailure.unavailable }
+        }
+        do {
+            var record = try BackendAPIAccountRecord(profile: profile, appName: configuration.appName, kind: kind,
+                baseURL: value.baseURL, model: value.model, workspaceID: value.workspaceID)
+            try record.save(); try BackendAPIAccountCLI.configure(record)
+            try BackendAPIAccountKeychain.write(value.key, record: record, trustedExecutables: cloudExecutables(), onlyIfAbsent: true)
+            record.credentialRevision += 1; try record.save()
+            guard try BackendAPIAccountKeychain.cloudRead(record) == value.key else { throw CloudFailure.checksumMismatch }
+        } catch {
+            if let record = try? BackendAPIAccountRecord.read(profile) { try? BackendAPIAccountKeychain.remove(record) }
+            await undo(); throw CloudFailure.unavailable
+        }
+    }
+    public func cloudRemove(accountID: String, expectingKey: String) async throws -> Bool {
+        // A Remove pressed in the app already holds this account's turn (review fix 1); it runs on inside it.
+        let insideAppRemove = BackendAPIAccountDeletion.appRemoving == accountID
+        if !insideAppRemove { guard mutating.insert(accountID).inserted else { return false } }
+        defer { if !insideAppRemove { mutating.remove(accountID) } }
+        let context = Self.cloudContext
+        guard let profile = try await access.find(accountID, context) else { return true }
+        guard BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
+              let record = try BackendAPIAccountRecord.read(profile), record.appName == configuration.appName else { return false }
+        guard try BackendAPIAccountKeychain.cloudRead(record) == expectingKey else { return false }
+        // A session running as it keeps it (the removal is closed as not applied; he sees it in the Bin's line).
+        guard (await inUse(accountID)).isEmpty else { return false }
+        // Review fix 10: the account first. Refused: nothing else was touched, so it keeps its sign-in.
+        let result = try await access.remove(accountID, context)
+        guard result["removed"].bool == true else { return false }
+        try? await BackendAPIAccountCLI.removeLogin(record, inherited: configuration.inheritedEnvironment)
+        try? BackendAPIAccountKeychain.remove(record)
+        return true
+    }
+    /// Review fix 3: the key replaced in place while it is still `expectingKey` (a newer key from his other device).
+    public func cloudReplaceKey(accountID: String, key: String, expectingKey: String) async throws -> Bool {
+        guard mutating.insert(accountID).inserted else { return false }
+        defer { mutating.remove(accountID) }
+        let context = Self.cloudContext
+        guard let profile = try await access.find(accountID, context), BackendAccountSignInStorage.ownsFolder(profile, configuration: configuration),
+              var record = try BackendAPIAccountRecord.read(profile), record.appName == configuration.appName, record.requiresKey else { return false }
+        guard try BackendAPIAccountKeychain.cloudRead(record) == expectingKey else { return false }
+        // A session running as it keeps the old key until it ends; the next look takes the new one.
+        guard (await inUse(accountID)).isEmpty else { return false }
+        try BackendAPIAccountKeychain.write(key, record: record, trustedExecutables: cloudExecutables())
+        record.credentialRevision += 1; record.checkState = nil; record.checkedAt = nil; try record.save()
+        return try BackendAPIAccountKeychain.cloudRead(record) == key
+    }
 }

@@ -84,7 +84,16 @@ public actor BackendRCVService {
         }
         unavailableReason = nil
         started = true
+        // review-fixes 3: a source, secret or key that arrives from another Mac (Cloud) is declared to the relay at
+        // once and the page reads again; the Receiver's own edits already do both (a second sync is harmless).
+        await store.setSourcesFollower { [weak self] in
+            _ = Task { await self?.sourcesChangedElsewhere() }
+        }
         await scheduleWake()
+    }
+    func sourcesChangedElsewhere() async {
+        guard started else { return }
+        await syncRelay(); await changed()
     }
 
     /// Every entry point: start on first use, or say clearly why the Receiver is unavailable.
@@ -484,6 +493,11 @@ public actor BackendRCVService {
         try await ready()
         guard !RCVPresets.isInternal(id) else { throw NativeRPCError.invalidArguments("Terminal Deck’s own sources can be paused but not deleted.") }
         guard try await store.read().sources.contains(where: { $0.id == id }) else { throw Self.noSource() }
+        // Review fix 1 (Decker): a source deleted in the app goes EVERYWHERE with its secret through the delete rule
+        // (Bin 30 days), so Cloud never brings it back. Not handled (saved passwords off): removed here as before.
+        // Review fix B: when the Cloud step fails, nothing is removed (else Cloud would bring it back with its secret).
+        do { _ = try await BackendCloudKeysRemovals.shared.removeEverywhere(sourceId: "receiver", id: "source/" + id) }
+        catch { throw NativeRPCError(code: "unavailable", message: "This source could not be removed from your devices just now. Try again in a moment.") }
         try await store.update { state in
             state.sources.removeAll { $0.id == id }; state.secrets[id] = nil
             for index in state.rules.indices where state.rules[index].sourceIds.contains(id) {

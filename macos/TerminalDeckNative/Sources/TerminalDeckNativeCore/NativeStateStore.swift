@@ -33,6 +33,10 @@ public actor NativeStateStore {
     private var snapshotListeners: [(id: UUID, listener: @Sendable (NativeRPCValue) -> Void)] = []
     private var ledger: NativeOpenSessionLedger?
     private var closed = false
+    private var cloudArchive: CloudBrainAgentsArchive?
+    private var cloudImporting = false, cloudCaptureFailed = false
+    private var cloudLastCaptured: NativeRPCValue?
+
     /// U1: state.json could not be read and not even a copy of it could be kept, so nothing is written over it.
     private var unreadable: String?
 
@@ -54,6 +58,66 @@ public actor NativeStateStore {
         state = Self.migrating(initialState)
     }
 
+    // MARK: Cloud (lane A2). Preferences are shared; project rows and open-session links are history only,
+    // so no folder, process or session is ever started from another Mac's state.json.
+    public func cloudAttach(_ account: CloudBrainAgentsAccount) throws {
+        if cloudArchive == nil { cloudArchive = .init(ownerDirectory: ownership == .memory ? nil : file?.deletingLastPathComponent(), namespace: "native-state", domains: ["native-state"]) }
+        try cloudArchive!.attach(account)
+    }
+    public func cloudDetach() { cloudArchive?.detach(); cloudLastCaptured = nil }
+    /// After a successful write only, and only when the Cloud-relevant part changed (this commit path is hot).
+    private func cloudCaptureWritten(_ value: NativeRPCValue) {
+        guard !cloudImporting, cloudArchive?.attached == true else { return }
+        let relevant = CloudBrainSettingsState.relevant(value)
+        guard relevant != cloudLastCaptured else { return }
+        do {
+            try cloudArchive!.capture(CloudBrainSettingsState.records(value), sourceID: "native-state", complete: true)
+            cloudLastCaptured = relevant
+        } catch { cloudCaptureFailed = true }
+    }
+    private func cloudDisk() throws -> NativeRPCValue {
+        guard unreadable == nil else { throw CloudFailure.unavailable }
+        guard let file, ownership != .memory else { return state }
+        guard FileManager.default.fileExists(atPath: file.path) else { return Self.defaults }
+        return Self.migrating(try NativeRPCValue.parseJSON(Data(contentsOf: file), maximumBytes: 16_777_216))
+    }
+    public func cloudStateInventory() throws -> [CloudCoverage] {
+        var blocked = ["Settings not yet classified as personal preferences stay on this Mac; their values were not exported.",
+            "Open sessions and project rows are kept in Cloud history as links; processes and folders are never imported."]
+        if cloudCaptureFailed { blocked.append("A save on this Mac could not be recorded for the Cloud yet; the next save or snapshot records it.") }
+        return [try CloudBrainAgentsSupport.coverage(row: "I11", sourceID: "native-state", records: CloudBrainSettingsState.records(try cloudDisk()),
+            blocked: blocked, attention: cloudArchive?.attention() ?? [])]
+    }
+    public func cloudStateSnapshot(cut: CloudSnapshotCut) throws -> CloudBrainAgentsExport {
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let disk = try cloudDisk()
+        try cloudArchive!.capture(CloudBrainSettingsState.records(disk), sourceID: "native-state", complete: true)
+        cloudCaptureFailed = false
+        return .init(operations: try cloudArchive!.ownOperations(), coverage: try cloudStateInventory())
+    }
+    public func cloudStateImport(_ operations: [CloudOperation]) throws -> [CloudItemResult] {
+        try writable(); guard unreadable == nil, failurePolicy == .throwAndRollback else { throw CloudFailure.unavailable }
+        guard cloudArchive?.attached == true else { throw CloudFailure.gateClosed }
+        let current = Dictionary(try CloudBrainSettingsState.records(state).map { ($0.key, try $0.persistedValue().raw) }, uniquingKeysWith: { first, _ in first })
+        cloudImporting = true; defer { cloudImporting = false }
+        return try cloudArchive!.importing(operations, current: { current[$0] }, shape: CloudBrainSettingsState.shape(), write: { items in
+            var preferences = self.state["preferences"]
+            for item in items { if let image = item.image, let key = image["key"].string { preferences = preferences.setting(key, image["value"]) } }
+            // Neither project folders nor the open-session ledger is passed to a live writer.
+            if preferences != self.state["preferences"] { try self.commit(self.state.setting("preferences", preferences)) }
+            let after = Dictionary(try CloudBrainSettingsState.records(self.state).map { ($0.key, try $0.persistedValue().raw) }, uniquingKeysWith: { first, _ in first })
+            return Dictionary(items.map { ($0.key, after[$0.key]) }, uniquingKeysWith: { first, _ in first })
+        })
+    }
+    public func cloudStateRetained(_ operations: [CloudOperation]) throws -> Bool { try cloudArchive?.retained(operations) ?? false }
+    public func cloudStateVersions() throws -> [CloudOperation] { try cloudArchive?.revisions() ?? [] }
+    public func cloudStateOwnChanges(after: String?, limit: Int) throws -> [CloudOperation] { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.ownChanges(after: after, limit: limit) }
+    public func cloudStateCursor() throws -> String? { guard let cloudArchive else { throw CloudFailure.gateClosed }; return try cloudArchive.cursor() }
+    public func cloudStateSaveCursor(_ value: String) throws { guard cloudArchive != nil else { throw CloudFailure.gateClosed }; try cloudArchive!.saveCursor(value) }
+    public func cloudStateNotices() -> AsyncStream<Void> {
+        guard cloudArchive != nil else { return AsyncStream { $0.finish() } }
+        return cloudArchive!.notices()
+    }
     public func getState() -> NativeRPCValue { state }
     /// Register and seed atomically on this actor. The composition's synchronous
     /// readers project this same owner; they never maintain another disk writer.
@@ -281,6 +345,7 @@ public actor NativeStateStore {
                 try NativeStateWriterLease.write(try next.encodedJSON(pretty: true), to: file)
             }
             state = next
+            cloudCaptureWritten(next)
         } catch {
             let failure = NativeRPCError(code: "persistence", message: "Could not save native state: \(error.localizedDescription)")
             report(failure)

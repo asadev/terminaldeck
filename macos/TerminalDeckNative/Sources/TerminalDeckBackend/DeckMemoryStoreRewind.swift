@@ -103,6 +103,7 @@ extension DeckMemoryStore {
     }
 
     public func undoRewind(id: Int64) async throws -> DeckMemoryRewind {
+        if try cloudRewindBelongsToAnotherStore(id) { throw DeckMemoryError(.invalid, "This rewind belongs to another device. Its history is kept here.") }
         guard let row = try db.first("SELECT \(Self.rewindColumns) FROM rewinds WHERE id = ?", [.int(id)]) else { throw missing("That rewind is not on record.") }
         let made = rewind(row)
         guard !made.isUndone else { return made }

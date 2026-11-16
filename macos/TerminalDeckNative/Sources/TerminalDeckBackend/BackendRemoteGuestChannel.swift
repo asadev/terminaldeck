@@ -12,9 +12,15 @@ public actor BackendRemoteGuestChannel {
     private var socket: URLSessionWebSocketTask?
     private var sealed: SealedTransport?
     private var closed = false
-    public init(relayURL: String, hostID: String, hostKey: Data, identity: BackendSealedIdentity) {
-        self.relayURL = relayURL; self.hostID = hostID; self.hostKey = hostKey; self.identity = identity
+    /// Reach by account (live use from another Mac, 15 Nov): the relay token this join carries, read at every open.
+    /// Nil for paired machines (today's join, unchanged).
+    private let relayToken: (@Sendable () async throws -> String)?
+    public init(relayURL: String, hostID: String, hostKey: Data, identity: BackendSealedIdentity, relayToken: (@Sendable () async throws -> String)? = nil) {
+        self.relayURL = relayURL; self.hostID = hostID; self.hostKey = hostKey; self.identity = identity; self.relayToken = relayToken
     }
+    /// The phones' account join: `td-reach` and `td-token.<relay token>` as WebSocket protocols (URLSession may drop an
+    /// `authorization` header on a WebSocket; the protocol list is the relay's other accepted form).
+    static func reachProtocols(_ token: String) -> [String] { ["td-reach", "td-token." + token] }
     public func open(timeoutMilliseconds: Int = 15000) async throws {
         guard socket == nil, !closed, BackendRelayPacketCodec.isHostID(hostID), hostKey.count == 32 else { throw NativeRPCError.invalidArguments("The remote host identity or channel lifecycle is invalid") }
         let target = try BackendRemoteRelayClient.target(relayURL)
@@ -25,8 +31,11 @@ public actor BackendRemoteGuestChannel {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = Double(timeoutMilliseconds) / 1000; config.timeoutIntervalForResource = .infinity
+        let token = try await relayToken?()
+        guard !closed else { throw CancellationError() }
         let session = URLSession(configuration: config)
-        let socket = session.webSocketTask(with: components.url!); socket.maximumMessageSize = 98304
+        let socket = token.map { session.webSocketTask(with: components.url!, protocols: Self.reachProtocols($0)) } ?? session.webSocketTask(with: components.url!)
+        socket.maximumMessageSize = 98304
         self.session = session; self.socket = socket
         do {
             let guest = StaticKeyPair(privateKey: identity.privateKey)!

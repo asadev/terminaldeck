@@ -246,13 +246,13 @@ final class BackendDeckCoreTestPortS1ReachTests: BackendDeckCoreTestPortSecurity
         } catch let error as BackendDeckCoreSecurityRefusal { XCTAssertEqual(error.reason, .notPermitted) }
     }
     func testKeyReachL255() async throws {
-        let keyed = machines(.key, key: "k1"), showCode = o([("do", .string("show-code"))])
+        let keyed = machines(.key, key: "k1"), stop = o([("do", .string("stop"))])
         let remoteArea = BackendDeckToolsMachinesRemote(channels: BackendDeckCoreTestPortS1ReachChannels())
-        let remotePolicy = try await remoteArea.policy(try machinesSpec("remote.manage"), showCode, keyed)
+        let remotePolicy = try await remoteArea.policy(try machinesSpec("remote.manage"), stop, keyed)
         XCTAssertTrue(remotePolicy.ownerMustAnswer, "remote.manage")
         let area = BackendDeckToolsMachinesArea(channels: BackendDeckCoreTestPortS1ReachChannels(), stateWaiter: .init(registry: .init()), watch: .init(),
             dataRoot: URL(fileURLWithPath: "/fixture/data"), home: URL(fileURLWithPath: "/fixture/home"))
-        let machinesPolicy = try await area.policy(try machinesSpec("machines.manage"), showCode, keyed)
+        let machinesPolicy = try await area.policy(try machinesSpec("machines.manage"), o([("do", .string("forget")), ("machineId", .string("m1"))]), keyed)
         XCTAssertTrue(machinesPolicy.ownerMustAnswer, "machines.manage")
     }
 }

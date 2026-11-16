@@ -1,379 +1,293 @@
 import AppKit
-import CoreImage.CIFilterBuiltins
 import SwiftUI
 import TerminalDeckBackend
 import TerminalDeckNativeCore
 
-/// Devices is its own page. The same live model remains mounted while its pairing sheet is open.
+/// The Devices window (owner, 13 Nov: "we don't have pairing thing at all completely. We just see all of our devices
+/// when we just log in. Not behind link, not behind any code, nowhere."). What it shows is decided by `DevicesPage`
+/// (Core): the one switch, the account's devices, and, only when any exist, the devices connected before accounts with
+/// Remove. Nothing here makes a code, shows a picture to scan, opens a sheet or asks which folder.
 struct MACHINESDevicesScreen: View {
     @State private var model: RemoteSectionModel
-    @State private var machines = MachinesHalfModel()
-    /// Other Macs this one can see and use (Mac to Mac, 31 Oct).
+    @State private var machines: MachinesHalfModel
+    /// Other Macs this one already reaches the old way (their screens; Mac to Mac, 31 Oct).
     @State private var otherMacs: OtherMacsModel
-    @State private var pairingShown = false
-    @State private var revoke: RemoteDevice?
-    @State private var rename: RemoteDevice?
-    @State private var newName = ""
+    @State private var macScreenAllowed = NativeMacScreenSetting.allowed
+    var account = NativeCloudAccount.shared
+    var reach = NativeReachAccount.shared
     let fixture: Bool
-    let fixtureAccess: [String: String]
-    let onAccess: (() -> Void)?
+    /// A render or test may hand the whole page in.
+    let fixturePage: DevicesPage?
+    /// The old device whose Details are open (its own per-device content: folders, sessions, sign-ins, browser windows).
+    @State private var details: RemoteDevice?
 
-    init(model: RemoteSectionModel? = nil, machines: MachinesHalfModel? = nil, otherMacs: OtherMacsModel? = nil, fixture: Bool = false, pairOnOpen: Bool = false, fixtureAccess: [String: String] = [:], onAccess: (() -> Void)? = nil) {
-        _otherMacs = State(initialValue: otherMacs ?? OtherMacsModel())
-        let model = model ?? RemoteSectionModel()
-        if fixture { model.setRenderAccess(fixtureAccess) }
-        _model = State(initialValue: model)
-        _pairingShown = State(initialValue: pairOnOpen)
+    init(model: RemoteSectionModel? = nil, machines: MachinesHalfModel? = nil, otherMacs: OtherMacsModel? = nil,
+         fixture: Bool = false, fixturePage: DevicesPage? = nil) {
+        _model = State(initialValue: model ?? RemoteSectionModel())
         _machines = State(initialValue: machines ?? MachinesHalfModel())
+        _otherMacs = State(initialValue: otherMacs ?? OtherMacsModel())
         self.fixture = fixture
-        self.fixtureAccess = fixtureAccess
-        self.onAccess = onAccess
+        self.fixturePage = fixturePage
+    }
+
+    /// Signed in for this window: an account is on this Mac (Cloud open, paused, or not open for the account yet).
+    nonisolated static func signedIn(_ phase: CloudAccountSnapshot.Phase) -> Bool { [.signedIn, .paused, .dormant].contains(phase) }
+
+    /// The page for what this Mac holds now. Reading it changes nothing: no record of the old way is written.
+    var page: DevicesPage {
+        if let fixturePage { return fixturePage }
+        let snapshot = account.snapshot
+        let old = DevicesPage.oldDevices(devices: model.state?.devices ?? [], connected: Set(model.state?.connections.map(\.deviceId) ?? []),
+                                         machines: machines.view.machines,
+                                         online: Set(machines.view.links.filter { $0.phase == .online }.map(\.id)))
+        let signedIn = !fixture && Self.signedIn(snapshot.phase)
+        return DevicesPage(signedIn: signedIn, account: signedIn ? DevicesPage.accountDevices(snapshot) : [],
+                           reach: fixture ? .unknown : reach.devicesReach, old: old)
     }
 
     var body: some View {
-        MACHINESPage(title: "Devices", subtitle: "Phones, browsers and computers that can drive this Mac", switcher: { EmptyView() }, actions: {
-            NativeSessionButton(model.busy == "web" ? "Opening…" : "Open web version", systemImage: "globe") { model.openWebVersion() }
-                .buttonStyle(.bordered).disabled(fixture || model.busy != nil)
-                .help(webTurnsAccessOn ? Self.webAccessNote : "Open the web version in this Mac’s browser")
-                .accessibilityIdentifier("devices.openWebVersion")
-            NativeSessionButton("Device access", systemImage: "lock") { openAccess() }.buttonStyle(.bordered)
-            NativeSessionButton("Pair a device", systemImage: "qrcode") { pairingShown = true }.buttonStyle(.borderedProminent)
-        }) {
+        let page = self.page
+        MACHINESPage(title: DevicesPage.title, subtitle: DevicesPage.subtitle, switcher: { EmptyView() }, actions: { EmptyView() }) {
             VStack(alignment: .leading, spacing: 16) {
-                if webTurnsAccessOn {
-                    // The web version is served by device access, so its button turns that on (review install-24 S1).
-                    // Said under the header's buttons only while access is off: then the click changes it.
-                    Text(Self.webAccessNote).font(.caption).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.top, -8)
-                        .accessibilityIdentifier("devices.openWebVersion.note")
-                }
-                HStack {
-                    Text("Paired").font(.system(size: 15, weight: .semibold))
-                    Spacer()
-                    if model.state != nil { Text("\(approved.count) devices").font(.caption).foregroundStyle(.secondary) }
-                }
-                if model.state == nil && model.problem == nil {
-                    MACHINESCard {
-                        ForEach(0..<3) { _ in
-                            HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.1)).frame(width: 32, height: 32)
-                                RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1)).frame(width: 180, height: 12)
-                                Spacer()
-                            }.padding(.vertical, 8)
-                        }
-                    }.accessibilityLabel("Loading devices")
-                } else if model.state == nil, let problem = model.problem {
-                    VStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle").font(.system(size: 34)).foregroundStyle(.orange)
-                        Text("Couldn’t read devices").font(.headline)
-                        Text(problem).font(.callout).foregroundStyle(.secondary)
-                        DeckRetryButton("Try Again", autoRetry: true) { Task { await model.refresh() } }.buttonStyle(.bordered) // autoRetry: re-reads the device list
-                    }.frame(maxWidth: .infinity).padding(.top, 80)
-                } else if approved.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 34)).foregroundStyle(.tertiary)
-                        Text("No devices yet").font(.headline)
-                        Text("Pair a phone or computer to drive this Mac.").font(.callout).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity).padding(.top, 80)
-                } else {
-                    MACHINESCard {
-                        VStack(spacing: 0) {
-                            ForEach(approved) { device in
-                                deviceRow(device)
-                                if device.id != approved.last?.id { Divider() }
-                            }
-                        }
-                    }
-                    .task(id: approved.map(\.id)) { await model.readAccess() }
-                }
-                if let pending = model.state?.devices.first(where: { $0.state == .pending }) {
-                    NativeSessionButton { pairingShown = true } label: {
-                        HStack {
-                            Image(systemName: "iphone.gen3").foregroundStyle(.secondary)
-                            Text("\(pending.name) wants to connect")
-                            Spacer()
-                            Text("Review").foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-                        }.frame(maxWidth: .infinity, minHeight: 36).contentShape(.rect)
-                    }.buttonStyle(MACHINESRowStyle())
-                }
-                if model.state != nil, let problem = model.problem {
-                    HStack {
-                        Label(problem, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        DeckRetryButton("Try Again", autoRetry: true) { Task { await model.refresh() } }.buttonStyle(.bordered) // autoRetry: re-reads the device list
-                    }
-                }
+                if page.showsSetting { setting(page) }
+                else if let note = page.featureNote { Text(note).font(.callout).foregroundStyle(.secondary) }
+                if page.signedIn { accountCard(page) } else { signIn }
+                if page.showsOld { oldGroup(page) }
                 if let notice = model.notice, !notice.ok { Text(notice.text).font(.callout).foregroundStyle(.secondary) }
-                if !machines.view.machines.isEmpty || machines.error != nil {
-                    MACHINESCard { NativeMachineLinksView(half: machines) }
-                }
-                MACHINESCard { NativeOtherMacsCard(model: otherMacs) }
+                if let error = machines.actionError { Text(error).font(.callout).foregroundStyle(.secondary) }
+                if !otherMacs.macs.isEmpty { MACHINESCard { NativeOtherMacsCard(model: otherMacs) } }
+                thisMac(page)
             }
+        }
+        .sheet(item: $details) { device in
+            DevicesOldDetails(device: device, kinds: model.kinds) { details = nil }
         }
         .task {
             guard !fixture else { return }
             async let remote: Void = model.start()
-            async let reach: Void = machines.start()
-            _ = await (remote, reach)
+            async let links: Void = machines.start()
+            async let switchState: Void = reach.reload()
+            _ = await (remote, links, switchState)
         }
         .onDisappear { if !fixture { model.stop(); machines.stop() } }
         .onChange(of: machines.view, initial: true) { _, view in if !fixture { otherMacs.update(view) } }
-        .sheet(isPresented: $pairingShown) {
-            MACHINESDevicesPairSheet(model: model, machines: machines, fixture: fixture) { pairingShown = false }
-        }
-        .alert("Revoke \(revoke?.name ?? "device")?", isPresented: Binding(get: { revoke != nil }, set: { if !$0 { revoke = nil } })) {
-            NativeSessionButton("Cancel", role: .cancel) { revoke = nil }
-            NativeSessionButton("Revoke", role: .destructive) { if let device = revoke { model.revoke(device) }; revoke = nil }
-        } message: { Text("It will be disconnected immediately and must pair again.") }
-        .alert("Rename device", isPresented: Binding(get: { rename != nil }, set: { if !$0 { rename = nil } })) {
-            NativeSessionTextField("Name", text: $newName)
-            NativeSessionButton("Cancel", role: .cancel) { rename = nil }
-            NativeSessionButton("Rename") { if let device = rename { model.rename(device, to: newName) }; rename = nil }
-                .disabled(!validRename)
-        } message: { Text("Use a name from 1 to 128 characters.") }
     }
 
-    private func openAccess() {
-        if let onAccess { onAccess() }
-        else { MACHINESObjectWindows.openDevices() }
-    }
+    // MARK: The one setting
 
-    private var validRename: Bool {
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && trimmed.count <= 128
-    }
-
-    private var approved: [RemoteDevice] { (model.state?.devices ?? []).filter { $0.state == .approved } }
-    /// Open web version starts device access (relay included) and remembers it on, as the Device access switch does.
-    static let webAccessNote = "Open web version also turns on device access for this Mac."
-    private var webTurnsAccessOn: Bool { model.state?.running == false }
-
-    private func deviceRow(_ device: RemoteDevice) -> some View {
-        let connected = model.state?.connections.contains { $0.deviceId == device.id } == true
-        return HStack(spacing: 12) {
-            NativeSessionButton { openAccess() } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: symbol(device)).foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32).background(MACHINESTokens.selection, in: .rect(cornerRadius: 8))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(device.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).help(device.name)
-                        Text((device.platform == "web" ? "Web browser · " : "") + pairedNote(device)).font(.caption).foregroundStyle(.secondary)
+    private func setting(_ page: DevicesPage) -> some View {
+        MACHINESCard {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(DevicesPage.settingTitle, isOn: Binding(get: { page.settingOn }, set: { turn($0) }))
+                    .toggleStyle(.switch).disabled(fixture || reach.busy)
+                    .accessibilityIdentifier("devices.setting")
+                HStack(spacing: 6) {
+                    if let door = page.door {
+                        Circle().fill(door == .ready ? Color.green : door == .connecting ? Color.secondary : Color.orange)
+                            .frame(width: 6, height: 6).accessibilityHidden(true)
                     }
-                    Spacer()
-                    HStack(spacing: 5) {
-                        Circle().fill(connected ? Color.green : Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
-                        Text(connected ? "Connected" : seenNote(device)).font(.caption).foregroundStyle(.secondary)
-                    }
-                }.frame(maxWidth: .infinity, minHeight: 44).contentShape(.rect)
-            }.buttonStyle(MACHINESRowStyle())
-            NativeINT2PhoneAccessControl(deviceID: device.id, level: fixture ? (model.access?[device.id] ?? "full") : model.accessLevel(device.id),
-                                         problem: model.accessProblem) { try await model.setAccess(device.id, to: $0) }
-                .frame(width: 140)
-            Menu {
-                NativeSessionButton("Device access…") { openAccess() }
-                NativeSessionButton("Rename…") { newName = device.name; rename = device }
-                NativeSessionButton("Revoke…", role: .destructive) { revoke = device }
-            } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28).contentShape(.rect) }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Device actions").accessibilityLabel("Actions for \(device.name)")
-        }
-        .padding(.vertical, 6)
-        .background(model.highlightedDeviceID == device.id ? MACHINESTokens.selection : Color.clear, in: .rect(cornerRadius: 8))
-        .contextMenu {
-            NativeSessionButton("Device access…") { openAccess() }
-            NativeSessionButton("Rename…") { newName = device.name; rename = device }
-            NativeSessionButton("Revoke…", role: .destructive) { revoke = device }
+                    Text(page.settingDetail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }.accessibilityElement(children: .combine).accessibilityIdentifier("devices.setting.state")
+                if let note = page.featureNote { Text(note).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("devices.setting.note") }
+                if let problem = reach.problem { Text(problem).font(.caption).foregroundStyle(.orange) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func symbol(_ device: RemoteDevice) -> String {
-        RemoteRules.deviceSymbol(platform: device.platform ?? model.state?.connections.first { $0.deviceId == device.id }?.platform)
-    }
-    private func pairedNote(_ device: RemoteDevice) -> String {
-        guard let at = device.addedAt else { return "Paired device" }
-        return "Paired " + RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: at / 1000), relativeTo: Date(timeIntervalSince1970: model.now / 1000))
-    }
-    private func seenNote(_ device: RemoteDevice) -> String {
-        guard let at = device.lastSeenAt else { return "Not connected" }
-        return "Last seen " + RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: at / 1000), relativeTo: Date(timeIntervalSince1970: model.now / 1000))
-    }
-}
-
-struct MACHINESDevicesPairSheet: View {
-    @Bindable var model: RemoteSectionModel
-    @Bindable var machines: MachinesHalfModel
-    let fixture: Bool
-    let close: () -> Void
-    @State private var segment = "This Mac shows a code"
-    @State private var access = "full"
-    /// Whose device is waiting (#27): the person's own by default, with Full control and every login.
-    @State private var whose = RemoteDeviceKind.mine
-    @State private var submitting = false
-    @State private var typedCode = ""
-
-    init(model: RemoteSectionModel, machines: MachinesHalfModel, fixture: Bool,
-         typeCodeOnOpen: Bool = false, whose: RemoteDeviceKind = .mine, close: @escaping () -> Void) {
-        _model = Bindable(wrappedValue: model)
-        _whose = State(initialValue: whose)
-        _machines = Bindable(wrappedValue: machines)
-        self.fixture = fixture
-        self.close = close
-        _segment = State(initialValue: typeCodeOnOpen ? "Type a code" : "This Mac shows a code")
+    /// On also makes sure this Mac serves: the reach model starts remote access itself whenever the switch is on and it
+    /// is not running (A1). Off only closes the account way; remote access stays for devices connected before accounts.
+    private func turn(_ on: Bool) {
+        reach.setEnabled(on)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Pair a device").font(.system(size: 20, weight: .semibold))
-                Text("On the phone, open Terminal Deck and tap Pair. Scan this, or type the code.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            Picker("Pairing direction", selection: $segment) {
-                Text("This Mac shows a code").tag("This Mac shows a code")
-                Text("Type a code").tag("Type a code")
-            }.pickerStyle(.segmented).labelsHidden().nativeUIGGreyControl()
-            if segment == "This Mac shows a code" {
-                HStack(spacing: 24) {
-                    qr
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Code").font(.callout).foregroundStyle(.secondary)
-                        if let pairing = model.pairing {
-                            Text(RemoteRules.codeShown(pairing.token)).font(.system(size: 26, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-                            if let seconds = model.secondsLeft, seconds > 0 {
-                                Text("Works once · \(seconds / 60):\(String(format: "%02d", seconds % 60)) left").font(.callout).foregroundStyle(.secondary)
-                            } else {
-                                Text("This code expired").font(.callout).foregroundStyle(.secondary)
-                                NativeSessionButton("Make a new code") { model.pair() }.buttonStyle(.bordered)
-                            }
-                            NativeSessionButton("Copy code") { DeckProject.copy(RemoteRules.codeShown(pairing.token)) }.buttonStyle(.borderless)
-                        } else if model.busy != nil { ProgressView().controlSize(.small) }
-                        else { NativeSessionButton("Make a code") { model.pair() }.buttonStyle(.bordered) }
-                    }
-                    Spacer(minLength: 0)
-                }.frame(height: 140)
-                if let request = pending {
-                    MACHINESCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "iphone.gen3").foregroundStyle(Color.accentColor).frame(width: 32, height: 32)
-                                    .background(Color.accentColor.opacity(0.1), in: .rect(cornerRadius: 8))
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("\(request.name) wants to connect").font(.system(size: 13, weight: .semibold)).lineLimit(2).help(request.name)
-                                    Text("Only let in the device you are holding.").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                if !guestOpen { accessPicker }
-                            }
-                            Picker("Whose device", selection: whoseChoice(request)) {
-                                Text("My device").tag(RemoteDeviceKind.mine)
-                                Text("Someone else’s").tag(RemoteDeviceKind.guest)
-                            }.pickerStyle(.segmented).labelsHidden().nativeUIGGreyControl().disabled(submitting || model.busy != nil)
-                            Text(guestOpen ? Self.guestNote : Self.mineNote)
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    // MARK: The account's devices
+
+    private var signIn: some View {
+        let stage = account.signInStage
+        let content = NativeCloudSignInPage.content(stage)
+        return MACHINESCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(DevicesPage.signedOutLine).font(.callout)
+                Button(content.button) {
+                    if case .reaching = stage { account.pressCheckAgain() } else { account.pressSignIn() }
+                }
+                .buttonStyle(.borderedProminent).disabled(fixture || !content.enabled || account.busy)
+                .accessibilityIdentifier("devices.signIn")
+                if let notice = account.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func accountCard(_ page: DevicesPage) -> some View {
+        MACHINESCard {
+            VStack(spacing: 0) {
+                ForEach(page.accountRows) { row in
+                    HStack(spacing: 12) {
+                        Image(systemName: Self.symbol(row.kind)).foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32).background(MACHINESTokens.selection, in: .rect(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(row.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).help(row.name)
+                            Text(row.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        if row.canRemove, let ref = row.ref {
+                            Button(DevicesPage.removeTitle) { removeAccount(ref) }
+                                .buttonStyle(.bordered).controlSize(.small).disabled(fixture || reach.busy || account.busy)
+                                .accessibilityLabel("Remove \(row.name)")
                         }
                     }
-                    if guestOpen {
-                        RemoteApprovalCard(approval: $model.approving, busy: model.busy != nil, problem: nil,
-                                           addFolder: model.addApprovalFolder, approve: model.approve,
-                                           cancel: { whose = .mine; model.approving = nil }, firstStep: .folders)
-                    }
-                } else {
-                    Text("Waiting for the device…").font(.callout).foregroundStyle(.secondary).frame(height: 56)
+                    .frame(maxWidth: .infinity, minHeight: 44).padding(.vertical, 4)
+                    .accessibilityElement(children: .contain).accessibilityIdentifier("devices.\(row.id)")
+                    if row.id != page.accountRows.last?.id { Divider() }
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Show a code on the other computer, then type it here.").font(.callout).foregroundStyle(.secondary)
-                    NativeSessionTextField("Pairing code", text: $typedCode).textFieldStyle(.roundedBorder).font(.system(.title3, design: .monospaced))
-                    if let error = machines.pairError { Text(error).font(.callout).foregroundStyle(.secondary).lineLimit(2).help(error) }
-                }.frame(height: 216, alignment: .top)
-            }
-            if let notice = model.notice, !notice.ok { Text(notice.text).font(.callout).foregroundStyle(.secondary).lineLimit(1).help(notice.text) }
-            HStack {
-                Spacer()
-                NativeSessionButton(pending == nil ? "Cancel" : "Not now") { cancel() }.buttonStyle(.bordered)
-                if segment == "Type a code" {
-                    NativeSessionButton(machines.busy ? "Pairing…" : "Pair a device") { machines.type(typedCode); machines.pair() }
-                        .buttonStyle(.borderedProminent).disabled(machines.busy || CodeEntryRules.normalise(typedCode) == nil)
-                } else if !guestOpen {
-                    NativeSessionButton(submitting ? "Letting it in…" : "Let it in") {
-                        guard let request = pending else { return }
-                        submitting = true
-                        Task { if await model.letIn(request, access: access) { close() }; submitting = false }
-                    }.buttonStyle(.borderedProminent).disabled(pending == nil || submitting || model.busy != nil)
+                if page.accountRows.allSatisfy(\.isThisMac) {
+                    Text(DevicesPage.noOtherDevice).font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                 }
             }
         }
-        .padding(24).frame(width: 592)
-        .task { if !fixture, segment == "This Mac shows a code", model.pairing == nil, pending == nil { model.pair() } }
-        .onChange(of: machines.busy) { before, after in
-            if before && !after && machines.pairError == nil && machines.digits.isEmpty { close() }
-        }
-        .onChange(of: segment) { _, after in
-            if !fixture {
-                if after == "Type a code" { model.closePairing() }
-                else if pending == nil { model.pair() }
-            }
-        }
-        // A guest let in through its folder and login steps: the walk-through ends, so does the sheet.
-        .onChange(of: model.approving == nil) { _, ended in if ended && whose == .guest { whose = .mine; close() } }
-        .onDisappear {
-            if model.approving != nil { model.approving = nil }
-            if !fixture, model.pairing != nil { model.closePairing() }
-        }
-        .sessionOnExitCommand { cancel() }
     }
 
-    private var pending: RemoteDevice? { model.state?.devices.first { $0.state == .pending } }
-    /// The guest steps are open for the device waiting now (a different device arriving shows My device again).
-    private var guestOpen: Bool { whose == .guest && pending != nil && model.approving?.device.id == pending?.id }
-    static let mineNote = "Your own device. At Full control it gets every login, every tool and every folder, as on this Mac."
-    static let guestNote = "They get only the folders and logins you choose next, and never Hoot."
-    /// Someone else's opens the guest steps (folders, logins, confirm) for this device; My device closes them.
-    private func whoseChoice(_ request: RemoteDevice) -> Binding<RemoteDeviceKind> {
-        Binding(get: { guestOpen ? .guest : .mine }, set: { picked in
-            whose = picked
-            if picked == .guest {
-                var approval = RemoteApproval(device: request)
-                approval.pick(.guest)
-                model.approving = approval
-                NativeCodingAIStore.shared.reloadAccounts()
-            } else { model.approving = nil }
-        })
+    /// The account device's Remove (A3), at once and with no sheet: Reach's Remove when reach is assembled here (it
+    /// can no longer reach this Mac, this Mac stops taking its changes, the account is told), else the Cloud page's own
+    /// Remove (this Mac stops taking its changes).
+    private func removeAccount(_ deviceId: String) {
+        if reach.coordinator != nil { reach.remove(deviceId) } else { account.removeJoined(deviceId) }
     }
-    private var accessPicker: some View {
-        Picker("Access", selection: $access) {
-            ForEach(BackendINT2PhoneAccessLevel.offered, id: \.self) { Text($0.title).tag($0.rawValue) }
-        }.pickerStyle(.menu).fixedSize()
+
+    static func symbol(_ kind: DevicesPage.Kind) -> String {
+        switch kind {
+        case .mac: "laptopcomputer"
+        case .pc: "pc"
+        case .phone: "iphone.gen3"
+        case .browser: "globe"
+        }
     }
-    private var qr: some View {
-        Group {
-            if let url = model.pairingURL, let image = MACHINESDevicesQR.image(url) {
-                Image(nsImage: image).resizable().interpolation(.none).scaledToFit().padding(8)
-                    .background(Color.white, in: .rect(cornerRadius: 12)).accessibilityLabel("Scan to pair this device")
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "qrcode").font(.system(size: 40)).foregroundStyle(.tertiary)
-                    Text("Type the code").font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(MACHINESTokens.card, in: .rect(cornerRadius: 12))
+
+    // MARK: Connected before accounts
+
+    private func oldGroup(_ page: DevicesPage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(DevicesPage.oldTitle).font(.system(size: 15, weight: .semibold))
+            Text(DevicesPage.oldLine).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !page.oldRecent.isEmpty {
+                MACHINESCard { oldRows(page.oldRecent) }
             }
-        }.frame(width: 140, height: 140)
+            if !page.oldQuiet.isEmpty {
+                MACHINESCard {
+                    DisclosureGroup {
+                        oldRows(page.oldQuiet)
+                    } label: {
+                        HStack {
+                            Text(DevicesPage.quietTitle(page.oldQuiet.count)).font(.system(size: 13, weight: .semibold))
+                            Spacer()
+                            Button(DevicesPage.removeAllTitle) { for row in page.oldQuiet { remove(row) } }
+                                .buttonStyle(.borderless).disabled(fixture || busy)
+                                .accessibilityIdentifier("devices.old.removeAll")
+                        }
+                    }
+                }
+            }
+        }
     }
-    private func cancel() {
-        if !fixture { if let request = pending { model.deny(request) }; model.closePairing() }
-        close()
+
+    private func oldRows(_ rows: [DevicesPage.OldRow]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(rows) { row in
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.name).font(.system(size: 13, weight: .medium)).lineLimit(1).help(row.name)
+                        Text(row.seen).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if row.source == .device {
+                        Button(DevicesPage.detailsTitle) { openDetails(row) }.buttonStyle(.borderless).controlSize(.small)
+                            .disabled(fixture).accessibilityLabel("Details for \(row.name)")
+                    }
+                    Button(DevicesPage.removeTitle) { remove(row) }.buttonStyle(.bordered).controlSize(.small).disabled(fixture || busy)
+                        .accessibilityLabel("Remove \(row.name)")
+                }
+                .frame(maxWidth: .infinity, minHeight: 40)
+                if row.id != rows.last?.id { Divider() }
+            }
+        }
+    }
+
+    private var busy: Bool { model.busy != nil || machines.busy }
+
+    private func openDetails(_ row: DevicesPage.OldRow) {
+        let id = String(row.ref.split(separator: ":", maxSplits: 1).last ?? "")
+        details = model.state?.devices.first { $0.id == id }
+    }
+
+    /// The row's own Remove: what the old Revoke (a device) or Forget (a computer) did, with no question after it.
+    private func remove(_ row: DevicesPage.OldRow) {
+        let id = String(row.ref.split(separator: ":", maxSplits: 1).last ?? "")
+        switch row.source {
+        case .device: if let device = model.state?.devices.first(where: { $0.id == id }) { model.remove(device) }
+        case .machine: if let machine = machines.view.machines.first(where: { $0.id == id }) { machines.forget(machine) }
+        }
+    }
+
+    // MARK: This Mac
+
+    /// This Mac's own screen settings (they used to sit behind a separate window), and who opened it lately.
+    private func thisMac(_ page: DevicesPage) -> some View {
+        MACHINESCard {
+            Form {
+                Section("This Mac") {
+                    Toggle(NativeMacScreenSetting.title, isOn: Binding(get: { macScreenAllowed }, set: { on in
+                        macScreenAllowed = on
+                        NativeMacScreenSetting.set(on)
+                    }))
+                    .toggleStyle(.switch).disabled(fixture)
+                    .accessibilityIdentifier("devices.access.macScreen")
+                    Text(NativeMacScreenSetting.detail).font(.callout).foregroundStyle(.secondary)
+                }
+                if !page.lastConnections.isEmpty {
+                    Section(DevicesPage.lastConnectionsTitle) {
+                        ForEach(Array(page.lastConnections.enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(line)
+                        }
+                    }.accessibilityIdentifier("devices.lastConnections")
+                }
+                NativeMacReachSettings(fixture: fixture)
+            }.formStyle(.grouped).scrollDisabled(true)
+            // The card is the frame: the form draws no second background, border or margin inside it.
+            .scrollContentBackground(.hidden).contentMargins(0, for: .scrollContent)
+        }
     }
 }
 
-@MainActor
-enum MACHINESDevicesQR {
-    static func image(_ payload: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(payload.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage,
-              let bitmap = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return NSImage(cgImage: bitmap, size: NSSize(width: output.extent.width, height: output.extent.height))
+/// "Details" on a device connected before accounts (A6b): the content the old Device access window had for it (which
+/// folders, sessions, sign-ins and browser windows it gets), for that one device. No access level, no code, nothing
+/// that adds a device.
+struct DevicesOldDetails: View {
+    let device: RemoteDevice
+    let kinds: [String: RemoteDeviceKind]?
+    let done: () -> Void
+    @State private var tab = "Folders"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(device.name).font(.title3.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Button("Done", action: done).keyboardShortcut(.defaultAction)
+            }
+            MACHINESDevicesSettingsTabs(selection: $tab, items: MACHINESDevicesSettingsTabs.perDevice)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    let one = [device]
+                    switch tab {
+                    case "Folders": RemoteFoldersView(devices: RemoteRules.grantable(one, kinds: kinds))
+                    case "Sessions": RemoteSessionsView(devices: RemoteRules.sessionDevices(one))
+                    case "Sign-ins": RemoteLoginsView(devices: RemoteRules.sessionDevices(one))
+                    default: RemoteWindowsView(devices: RemoteRules.sessionDevices(one))
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(20).frame(width: 620, height: 520)
     }
 }
 
@@ -397,7 +311,7 @@ struct MACHINESDevicesAccessContent: View {
                         Section {
                             Toggle("Let approved devices in", isOn: Binding(get: { state.running }, set: { model.enable($0) }))
                                 .toggleStyle(.switch).disabled(model.busy != nil || fixture)
-                            Text("Only devices you pair and approve can connect.").font(.callout).foregroundStyle(.secondary)
+                            Text("Devices connected before accounts can connect while this is on.").font(.callout).foregroundStyle(.secondary)
                         }
                         macScreenSection
                         Section("Relay") {
@@ -477,7 +391,9 @@ struct MACHINESDevicesAccessContent: View {
 
 struct MACHINESDevicesSettingsTabs: View {
     @Binding var selection: String
-    private let items = [("General", "gearshape"), ("Folders", "folder"), ("Sessions", "terminal"), ("Sign-ins", "key"), ("Browser", "globe")]
+    static let all = [("General", "gearshape"), ("Folders", "folder"), ("Sessions", "terminal"), ("Sign-ins", "key"), ("Browser", "globe")]
+    static let perDevice = Array(all.dropFirst())
+    var items = Self.all
     var body: some View {
         GlassEffectContainer(spacing: 4) {
             HStack(spacing: 4) {

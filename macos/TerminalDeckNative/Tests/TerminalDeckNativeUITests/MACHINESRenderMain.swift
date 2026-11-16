@@ -51,15 +51,6 @@ enum MACHINESRenderEvidence {
             }
             try save(MACHINESDevicesScreen(model: remote, fixture: true), "devices", 1120, 840)
             try save(MACHINESDevicesScreen(model: remote, fixture: true), "devices-window", 760, 560)
-            try save(MACHINESDevicesPairSheet(model: remote, machines: MachinesHalfModel(), fixture: true, close: {})
-                .background(MACHINESTokens.page), "pairing", 640, 560)
-            // #27: Someone else's opens the guest steps (folders first) for the waiting device.
-            let guest = MACHINESFixtures.remoteModel()
-            if let waiting = guest.state?.devices.first(where: { $0.state == .pending }) {
-                var approval = RemoteApproval(device: waiting); approval.pick(.guest); guest.approving = approval
-            }
-            try save(MACHINESDevicesPairSheet(model: guest, machines: MachinesHalfModel(), fixture: true, whose: .guest, close: {})
-                .background(MACHINESTokens.page), "pairing-guest", 640, 760)
             try save(MACHINESDevicesAccessContent(model: remote, fixture: true), "device-access", 560, 520)
             try save(MACHINESAddServerSheet(model: model, route: .constant(.list), cancel: {}, fixtureAliases: MACHINESFixtures.aliases),
                 "add-server", 600, 550)
@@ -170,8 +161,6 @@ enum MACHINESFocusedChecks {
             [["id": request.id, "status": "approved", "access": arguments[1] as? String ?? ""]]
         }, refreshAfter: false)
         try expect(workAllowed && working.state?.devices.first(where: { $0.id == request.id })?.state == .approved, "Work from the picker lets the device in")
-        try expect(MACHINESDevicesPairSheet.mineNote.contains("every login") && MACHINESDevicesPairSheet.guestNote.contains("folders and logins you choose"),
-                    "My device says it gets every login; Someone else's says only what you choose")
         let refused = MACHINESFixtures.remoteModel()
         let no = await refused.letIn(request, access: "full", invoke: { _, _ in [["id": request.id, "status": "pending"]] }, refreshAfter: false)
         try expect(!no && refused.pairing != nil && refused.highlightedDeviceID == nil && refused.notice?.ok == false, "Refused approval preserves the same sheet and shows an error")
@@ -193,7 +182,6 @@ enum MACHINESFocusedChecks {
         let missingAccepted = await missing.letIn(request, access: "look", invoke: { _, _ in [["id": request.id, "status": "approved"]] }, refreshAfter: false)
         try expect(!missingAccepted && missing.pairing != nil && missing.highlightedDeviceID == nil,
             "Approval without a confirmed access level keeps the sheet open")
-        try expect(MACHINESDevicesQR.image(MACHINESFixtures.pairingURL) != nil, "QR image uses the real pairing payload")
         return count
     }
 }

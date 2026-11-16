@@ -150,19 +150,20 @@ struct HootReplyText: View {
     }
 }
 
+/// 15 Nov (Asad: "This chat needs to be well presentable, free form also"): a marked part is flowing text with a small
+/// coloured label in front, never a box with a fill and an outline.
 struct HootCalloutBox: View {
     let kind: HootCallout.Kind
     let text: String
     var onReply: ((String) -> Void)? = nil
     var body: some View {
-        let strong = kind == .needsYou
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: kind.symbol).foregroundStyle(kind.color)
-                Text(kind.title).fontWeight(.semibold)
-                Spacer(minLength: 8)
+                Text(kind.title).fontWeight(.semibold).foregroundStyle(kind.color)
                 let numbers = HootCallout.numbers(text)
                 if kind == .needsYou, let onReply, !numbers.isEmpty {
+                    Spacer(minLength: 8)
                     Button {
                         onReply(numbers.map { "\($0). " }.joined(separator: "\n"))
                     } label: { Label("Reply by number", systemImage: "arrowshape.turn.up.left").font(.system(size: 11.5)) }
@@ -173,13 +174,7 @@ struct HootCalloutBox: View {
             .font(.system(size: 12))
             NativeChatMarkdown(text: text)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(kind.color.opacity(strong ? 0.12 : 0.07), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(kind.color.opacity(strong ? 0.55 : 0.25), lineWidth: strong ? 1 : 0.75))
-        .overlay(alignment: .leading) {
-            UnevenRoundedRectangle(topLeadingRadius: 10, bottomLeadingRadius: 10).fill(kind.color.opacity(0.85)).frame(width: 3)
-        }
         .accessibilityElement(children: .contain).accessibilityLabel(kind.title)
     }
 }
