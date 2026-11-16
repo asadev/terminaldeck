@@ -90,6 +90,8 @@ public sealed partial class AppRuntime : IAsyncDisposable
     InitializePreferenceTools();
     Remote.McpBridge = new McpRelayBridge(Door);
     OtherComputersTools.Register(Door, OtherComputers, this);
+    InitializeCloud();
+    InitializeReach();
   }
   public async Task InitializeAsync()
   {
@@ -110,6 +112,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     InitializeRoutineEvents();
     InitializePhoneWorkspace();
     InitializePhoneManagementTools();
+    _ = ResumeCloudAsync();
     await Remote.StartAsync(); Changed?.Invoke();
   }
   private readonly KeeperReconnectGate reconnectGate = new();
@@ -388,6 +391,7 @@ public sealed partial class AppRuntime : IAsyncDisposable
     if (receiverSources is not null) receiverSources.Changed -= EnsureReceiverTransport;
     await DisposeServerSigninAsync();
     await Remote.DisposeAsync();
+    DisposeCloud();
     DisposeSessionNotifications(); DisposePhoneExtendedWorkspace(); providerHookHost?.Dispose();
     usage?.Dispose();
     if (hootToolConnection is not null) await hootToolConnection.DisposeAsync();

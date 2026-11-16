@@ -114,6 +114,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         hootPage = new(Runtime.Hoot, () => Runtime.Accounts.List(), () => Runtime.ProjectSessions().Where(s => s.Id != Runtime.Hoot.Read().ChatId).Select(s => new TerminalDeck.App.Views.Hoot.HootSessionChoice(s.Id, s.Title)).ToArray(), OpenSession, OpenCodingAis, SignInForHootAsync) { SlashCommands = HootSlashCommands, Chats = Runtime.Chats, DataDirectory = Runtime.Root.DirectoryPath, McpNavigation = id => new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(id, server, tool, args, ct)) };
         serversPage = new(new(Runtime.Servers), this);
         Runtime.RegisterTools();
+        Runtime.StartCodeBackup();
         RegisterWindowTools();
         RegisterShellReadTools();
         RegisterProjectRemovalTool();
@@ -147,7 +148,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
         RegisterGeneralSettingsTools();
         tools = new(Runtime.Door, dataRoot); Runtime.LocalToolAddress = tools.Address; await Runtime.StartHootToolConnectionAsync();
         renderedPage = null; Refresh();
-        SyncSessions(); await browser.PrepareShellAsync(); renderedWindowsStructure = ""; Model.Notice = ""; ready.TrySetResult(); SyncWindows();
+        SyncSessions(); await browser.PrepareShellAsync(); renderedWindowsStructure = ""; Model.Notice = ""; ready.TrySetResult(); SyncWindows(); OpenOnLaunch();
       }
       catch (Exception ex) when (ex is not OutOfMemoryException) { shellRecoveryRequired = true; UiRecovery.Report("Shell initialization", ex); Model.Notice = "The session service could not connect. Existing terminals were left alone."; ready.TrySetException(ex); }
       _ = CheckForUpdateOnOpenAsync();
@@ -256,6 +257,8 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
             Runtime.Projects.Get(Runtime.Projects.Resolve(null, draft.Folder)).Folders,
             async id => { await Runtime.Accounts.SignInAsync(id, draft.Folder); await Runtime.RefreshSessionsAsync(); }, new ChatMcpNavigation(Runtime.Mcp, (server, tool, args, ct) => Runtime.CallChatAppToolAsync(draft.Id, server, tool, args, ct)), id => Model.Sessions.FirstOrDefault(s => s.Id == id)), accountModels: Runtime.Accounts);
         chat.Model.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(ChatViewModel.Snapshot)) SyncSessions(); };
+        // A first message from the New session page that could not be handed over waits in this chat's box.
+        if (pendingChatDrafts.Remove(draft.Id, out var firstMessage)) chat.Model.Draft = firstMessage;
 
         chatPanes.Add(draft.Id, chat);
       }
@@ -317,12 +320,8 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
     });
   }
 
-  private async void NewSession_Click(object sender, RoutedEventArgs e)
-  {
-    try { await NewSessionPicker.ShowAsync(Root.XamlRoot, Runtime.Agents, Runtime.Projects, Runtime.Accounts, this,
-      terminalStart: async (folder, project) => { var row = await Runtime.StartShellForProjectAsync(folder, project); OpenSession(row.Definition.Id); }); }
-    catch (Exception ex) when (ex is not OutOfMemoryException) { Model.Notice = ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException ? ex.Message : "The new session picker could not open."; }
-  }
+  // New session (side panel button, Ctrl+T) opens the New session page; its "All choices…" opens the full form.
+  private void NewSession_Click(object sender, RoutedEventArgs e) => OpenNewSessionPage();
   public async void OpenSession(string id)
   {
     if (TerminalDeck.Core.Integration.W9TaskRunner.IsHootRun(id)) { Model.Page = ShellPage.Hoot; return; }
@@ -350,6 +349,7 @@ public sealed partial class ShellWindow : Window, IAgentTasksNavigation, IProjec
   }
   public async void QueueReceiverActivation(Microsoft.Windows.AppLifecycle.AppActivationArguments activation)
   {
+    if (activation.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.Protocol) { QueueCloudLink(activation); return; }
     if (activation.Kind != Microsoft.Windows.AppLifecycle.ExtendedActivationKind.ShareTarget) return;
     try { await Ready; await OnUiAsync(async () => { if (await Runtime.ReceiverActivation.ActivateAsync(activation)) Model.Page = ShellPage.Receiver; }); }
     catch (Exception ex) when (ex is not OutOfMemoryException) { DispatcherQueue.TryEnqueueHandled(() => Model.Notice = "The shared item could not be saved. Open Receiver and try again."); }

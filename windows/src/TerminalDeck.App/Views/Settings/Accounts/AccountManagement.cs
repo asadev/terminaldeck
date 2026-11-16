@@ -1,16 +1,15 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Documents;
 using TerminalDeck.Core.Accounts;
 using TerminalDeck.Core.Settings;
 
 namespace TerminalDeck.App.Views;
 
-// Settings → Coding AIs (Mac: NativeCodingAIAccounts). Each AI: installation, the
-// model and level new sessions start with, then every account it holds — several
-// subscription logins and API keys side by side — each with sign in/out, rename,
-// colour, API key edit/check and remove. Which account is used where lives in
-// "Who uses what"; the Default badge here only reports it.
+// Settings → Coding AIs (Mac: NativeCodingAIAccounts, 15 Nov). One group per INSTALLED AI, titled with
+// its mark and name (version in the info button): each account by its name with a state dot (green
+// signed in, orange needs him), its plan as the second line and a "…" menu; "+ Add account" last.
+// Then the model and effort new sessions start with. "Which account agents use" opens Who uses what.
+// A signed-out login is said once, as that account's orange dot; e-mail only in the info button.
 public sealed partial class SettingsPane
 {
   private readonly Dictionary<string, Task<ProviderInstallation>> installations = [];
@@ -26,53 +25,57 @@ public sealed partial class SettingsPane
       stack.Children.Add(Card("Couldn’t read accounts", "Your saved accounts have been kept. Try reading them again.", "Try again", RenderAsync));
       return;
     }
-    stack.Children.Remove(loading);
-    if (accounts.Count == 0) stack.Children.Add(Description("No accounts yet"));
+    // Each AI's installation is read once, all at the same time.
+    foreach (var provider in CodingAis)
+      if (!installations.ContainsKey(provider) && accounts.FirstOrDefault(a => a.Provider == provider) is { } first)
+        installations[provider] = runtime.Accounts.InstallationAsync(first.Id).AsTask();
+    var sections = new List<FrameworkElement>();
+    var missing = new List<string>();
     foreach (var provider in CodingAis)
     {
       var group = accounts.Where(a => a.Provider == provider).ToArray();
-      stack.Children.Add(new TextBlock { Text = AccountMcp.AgentName(provider), FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-      var status = Description("Reading installation…"); stack.Children.Add(status);
-      var installNeeded = true;
-      if (group.Length > 0)
-      {
-        if (!installations.TryGetValue(provider, out var task)) installations[provider] = task = runtime.Accounts.InstallationAsync(group[0].Id).AsTask();
-        try
-        {
-          var installation = await task.WaitAsync(ct);
-          installNeeded = installation.Installed != true || installation.Version is null;
-          status.Text = (installation.Installed == true ? "Installed" : installation.Installed == false ? "Not installed" : "Installation unknown") + (installation.Version is null ? "" : " · " + installation.Version) + " · Checked " + installation.CheckedAt.ToLocalTime().ToString("t") + "\n" + installation.Note;
-        }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException) { status.Text = "Couldn’t read installation status. Try again."; }
-      }
-      else status.Text = "No accounts yet. Add one below to sign in or use an API key.";
-      var tools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-      var install = new Button { Content = "Install", Visibility = installNeeded && group.Length > 0 ? Visibility.Visible : Visibility.Collapsed };
-      install.Click += async (_, _) => { await runtime.InstallAiAsync(provider); installations.Remove(provider); await RenderAsync(); }; tools.Children.Add(install);
-      var retry = new Button { Content = "Read installation", Visibility = group.Length > 0 ? Visibility.Visible : Visibility.Collapsed };
-      retry.Click += async (_, _) => { installations.Remove(provider); await RenderAsync(); }; tools.Children.Add(retry);
-      var add = new Button { Content = "Add " + AccountMcp.AgentName(provider) + " account…" };
-      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(add, "accounts.add." + provider);
-      add.Click += async (_, _) => await ShowAddAccountAsync(provider); tools.Children.Add(add);
-      stack.Children.Add(tools);
-      stack.Children.Add(LaunchModelRow(provider));
-      var defaultAccount = runtime.Accounts.Default(provider);
-      foreach (var account in group) stack.Children.Add(AccountCard(account, defaultAccount?.Id == account.Id));
+      if (group.Length == 0) continue;
+      ProviderInstallation? installation = null;
+      try { installation = await installations[provider].WaitAsync(ct); }
+      catch (Exception ex) when (ex is IOException or InvalidOperationException) { installations.Remove(provider); }
+      // Never a group for an AI that is not on this PC; only its Install row below.
+      if (installation?.Installed == false) { missing.Add(provider); continue; }
+      var rows = group.Select(a => (FrameworkElement)AccountRow(a)).ToList();
+      rows.Add(AiPageAddRow("Add account", "accounts.add." + provider, () => ShowAddAccountAsync(provider)));
+      sections.Add(AiPageSection(AccountMcp.AgentName(provider), provider, installation?.Version is { } version ? "Version " + version : null,
+        Settings.SettingsPanel.GroupRows(rows), Settings.SettingsPanel.GroupRows(LaunchModelRows(provider))));
     }
-    stack.Children.Add(Card("Custom terminal CLIs", "Add another coding tool using its exact Windows executable, literal arguments and private environment values.", "Manage…", () => { Agents.CustomTerminalProviderWindow.Open(runtime.CustomProviders, ActualTheme); return Task.CompletedTask; }));
+    stack.Children.Remove(loading);
+    if (accounts.Count == 0) stack.Children.Add(Description("No accounts yet"));
+    foreach (var section in sections) stack.Children.Add(section);
+    if (sections.Count == 0) stack.Children.Add(Settings.SettingsPanel.GroupRows([AiPageAddRow("Add account", "accounts.add", () => ShowAddAccountAsync())]));
+    // A second page of this window (15 Nov): the bar names it and Back returns.
+    var more = new List<FrameworkElement> { AiPageLinkRow("Which account agents use", () => NavigateSettings?.Invoke("accounts") ?? SelectSectionAsync(1)) };
+    foreach (var provider in missing)
+    {
+      var install = new Button { Content = "Install" };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(install, "accounts.install." + provider);
+      install.Click += async (_, _) => await AiPageRunAsync(install, async () => { await runtime.InstallAiAsync(provider); installations.Remove(provider); await RenderAsync(); });
+      more.Add(AiPageRow(AccountMcp.AgentName(provider), "Not installed", install));
+    }
+    more.Add(AiPageLinkRow("Custom terminal CLIs", () =>
+    {
+      if (NavigateSettings is { } navigate) return navigate("custom-clis");
+      Agents.CustomTerminalProviderWindow.Open(runtime.CustomProviders, ActualTheme); return Task.CompletedTask;
+    }));
+    stack.Children.Add(Settings.SettingsPanel.GroupRows(more));
   }
 
-  // "New sessions start with": the app-wide model and level (one place; sessions,
-  // chats, agents and hands without their own choice, and Hoot use it).
-  private FrameworkElement LaunchModelRow(string provider)
+  // "Default model" and "Default effort": what every new session, chat, agent and Hoot starts with
+  // unless one is chosen for it (one place). The list shows the models' real names, never "Default".
+  private List<FrameworkElement> LaunchModelRows(string provider)
   {
     var (savedModel, savedEffort) = LaunchDefaults.For(provider, runtime.General.Read());
     var signedIn = runtime.Accounts.Preferred(provider);
     var models = ModelCatalog.Merge(provider, runtime.Accounts.InstantModels(provider, signedIn?.Id).Models, savedModel);
-    var model = new ComboBox { Header = "Model", ItemsSource = models.Select(m => m.Name).ToArray(), SelectedIndex = Math.Max(0, models.ToList().FindIndex(m => m.Id == savedModel)), MinWidth = 200 };
+    var model = new ComboBox { ItemsSource = models.Select(m => m.Name).ToArray(), SelectedIndex = Math.Max(0, models.ToList().FindIndex(m => m.Id == savedModel)), MinWidth = 200 };
     var levels = ModelEfforts.For(provider, models.FirstOrDefault(m => m.Id == savedModel)).ToArray();
-    var effort = new ComboBox { Header = "Effort", ItemsSource = levels.Select(ModelCatalog.EffortName).ToArray(), SelectedIndex = Math.Max(0, Array.IndexOf(levels, savedEffort ?? "")), MinWidth = 140, Visibility = levels.Length == 0 ? Visibility.Collapsed : Visibility.Visible };
-    var outcome = new Notices.CompactNotice();
+    var effort = new ComboBox { ItemsSource = levels.Select(ModelCatalog.EffortName).ToArray(), SelectedIndex = Math.Max(0, Array.IndexOf(levels, savedEffort ?? "")), MinWidth = 140, Visibility = levels.Length == 0 ? Visibility.Collapsed : Visibility.Visible };
     var saving = false;
     void Save()
     {
@@ -87,58 +90,47 @@ public sealed partial class SettingsPane
         if (!offered.SequenceEqual(levels)) { levels = offered; effort.ItemsSource = levels.Select(ModelCatalog.EffortName).ToArray(); }
         effort.SelectedIndex = Array.IndexOf(levels, level ?? ""); effort.Visibility = levels.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         runtime.General.Save(LaunchDefaults.With(runtime.General.Read(), provider, chosen.Id, level));
-        outcome.Text = "New sessions start with " + ModelCatalog.Label(provider, chosen.Id, level) + ". Running sessions keep theirs.";
       }
-      catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { outcome.Text = "Couldn’t save that choice. Your previous one was kept."; }
+      catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { this.model.Notice = "Couldn’t save that choice. Your previous one was kept."; }
       finally { saving = false; }
     }
     model.SelectionChanged += (_, _) => Save(); effort.SelectionChanged += (_, _) => Save();
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(model, "accounts.launchModel." + provider);
     Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(effort, "accounts.launchEffort." + provider);
-    var pickers = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 }; pickers.Children.Add(model); pickers.Children.Add(effort);
-    var card = (Border)Settings.SettingsPanel.SettingRow("New sessions start with", "The model and effort every new " + AccountMcp.AgentName(provider) + " session, chat, agent and Hoot uses unless one is chosen for it. Change it for one session in its own picker.", pickers);
-    if (card.Child is Grid row && row.Children.OfType<StackPanel>().FirstOrDefault() is { } words) words.Children.Add(outcome);
-    return card;
+    var rows = new List<FrameworkElement> { Settings.SettingsPanel.SettingRow("Default model", "New " + AccountMcp.AgentName(provider) + " sessions, chats, agents and Hoot start with it unless one is chosen for them. Running sessions keep theirs.", model) };
+    if (levels.Length > 0) rows.Add(Settings.SettingsPanel.SettingRow("Default effort", "How hard the model thinks by default. Change it for one session in its own picker.", effort));
+    return rows;
   }
 
-  private Border AccountCard(AccountProfile account, bool isDefault)
+  private Border AccountRow(AccountProfile account)
   {
     var api = account.Authentication == AccountAuthentication.ApiKey;
     var connection = api ? runtime.ApiAccounts.Read(account.Id) : null;
-    var state = api ? ApiAccountService.Status(connection)
-      : account.SignedIn ? account.Email ?? "Signed in · identity not reported"
-      : account.Email is not null ? account.Email + " · Not signed in" : "Not signed in";
-    var action = api ? "Check key" : account.SignedIn ? "View models" : account.Email is not null ? "Sign in again" : "Sign in";
-    Func<Task> act = api ? async () => { await runtime.ApiAccounts.CheckAsync(account.Id); await RenderAsync(); }
-      : account.SignedIn ? () => ShowAccountModelsAsync(account.Id) : () => SignInAccountAsync(account.Id);
-    var card = Card(account.Name, "", action, act);
-    if (card.Child is Grid grid && grid.Children.OfType<StackPanel>().FirstOrDefault() is { } words)
-    {
-      if (words.Children.FirstOrDefault() is Grid label && label.Children.OfType<TextBlock>().FirstOrDefault() is { } title)
-      {
-        title.Text = ""; title.Inlines.Clear();
-        title.Inlines.Add(new Run { Text = "● ", Foreground = AccountBrush(account.Color) });
-        title.Inlines.Add(new Run { Text = account.Name });
-      }
-      var badges = new List<string> { api ? "API key" : "Subscription" };
-      if (isDefault) badges.Add("Whole-app account");
-      if (account.HomeId == AccountHomes.ExistingLogin) badges.Add("Your own install");
-      if (!string.IsNullOrWhiteSpace(account.Plan)) badges.Add(PlanName(account.Plan));
-      words.Children.Insert(1, Description(string.Join(" · ", badges)));
-      words.Children.Insert(2, Description(state));
-      var extra = api ? (connection is null ? "Edit this account and paste its key." : ApiKinds.For(account.Provider).FirstOrDefault(k => k.Kind == connection.Kind).Name + (connection.BaseUrl is { } url ? " · " + url : "") + (connection.WorkspaceId is { } workspace ? " · Workspace " + workspace : "") + (connection.CheckedAt is { } at ? " · Checked " + at.ToLocalTime().ToString("g") : ""))
-        + "\nUsage and reported cost appear in each chat. Subscription windows are separate."
-        : account.HomeId == AccountHomes.ExistingLogin ? "Follows this AI’s existing Windows login." : "Kept in its own login folder in this app.";
-      words.Children.Insert(3, Description(extra));
-      var attached = AttachedSessions(account.Id);
-      if (attached.Count > 0) words.Children.Insert(4, Description(attached.Count == 1 ? "1 open session uses it" : attached.Count + " open sessions use it"));
-    }
+    var ready = api ? connection is { Configured: true } && connection.CheckState is not ("invalid" or "no-access" or "needs-key") : account.SignedIn;
+    var state = api ? ApiAccountService.Status(connection) : account.SignedIn ? "Signed in" : "Needs sign-in";
+    var plan = api ? "API key" : string.IsNullOrWhiteSpace(account.Plan) ? null : PlanName(account.Plan);
+    var info = new List<string>();
+    if (!api && account.Email is not null) info.Add(account.Email);
+    if (api && connection is not null)
+      info.Add(ApiKinds.For(account.Provider).FirstOrDefault(k => k.Kind == connection.Kind).Name + (connection.CheckedAt is { } at ? " · Checked " + at.ToLocalTime().ToString("g") : ""));
+    var attached = AttachedSessions(account.Id).Count;
+    if (attached > 0) info.Add(attached == 1 ? "1 open session uses it" : attached + " open sessions use it");
     var actions = new MenuFlyout();
     void Item(string text, Func<Task> click, bool enabled = true)
     {
       var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
       item.Click += async (_, _) => { try { await click(); } catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException) { model.Notice = ex.Message; } };
       actions.Items.Add(item);
+    }
+    if (api)
+    {
+      Item("Edit key…", () => ShowApiAccountAsync(account.Provider, account.Id));
+      Item("Check key", async () => { await runtime.ApiAccounts.CheckAsync(account.Id); await RenderAsync(); });
+    }
+    else
+    {
+      Item(account.SignedIn || account.Email is not null ? "Sign in again…" : "Sign in…", () => SignInAccountAsync(account.Id));
+      Item("Sign out…", () => SignOutAccountAsync(account.Id), account.SignedIn);
     }
     Item("Rename…", () => RenameAccountAsync(account.Id));
     var colours = new MenuFlyoutSubItem { Text = "Colour" };
@@ -149,32 +141,15 @@ public sealed partial class SettingsPane
       colours.Items.Add(choice);
     }
     actions.Items.Add(colours);
-    if (api)
-    {
-      Item("Edit API connection and key…", () => ShowApiAccountAsync(account.Provider, account.Id));
-      Item("Check key", async () => { await runtime.ApiAccounts.CheckAsync(account.Id); await RenderAsync(); });
-    }
-    else
-    {
-      if (account.SignedIn) Item("Sign in again…", () => SignInAccountAsync(account.Id));
-      Item("Sign out…", () => SignOutAccountAsync(account.Id), account.SignedIn);
-    }
     actions.Items.Add(new MenuFlyoutSeparator());
-    Item("Who uses what…", () => SelectSectionAsync(1));
     Item("Remove…", () => RemoveAccountAsync(account.Id));
-    AddCardMenu(card, actions, "Account actions");
-    return card;
+    return AiPageRow(account.Name, plan, AiPageMenu(actions, "Account actions"), AiPageDot(ready, state), info.Count == 0 ? null : string.Join("\n", info));
   }
   private static string PlanName(string plan) => plan.ToLowerInvariant() switch
   {
     "max" => "Max plan", "pro" => "Pro plan", "team" => "Team plan", "enterprise" => "Enterprise plan", "plus" => "Plus plan", "free" => "Free plan", "business" => "Business plan",
     _ => char.ToUpperInvariant(plan[0]) + plan[1..] + " plan"
   };
-  private Microsoft.UI.Xaml.Media.Brush AccountBrush(string? color) => (Microsoft.UI.Xaml.Media.Brush)TerminalDeck.App.Shell.ShellTheme.Resource(this, color switch
-  {
-    "green" => "DeckProjectGreenBrush", "amber" => "DeckProjectYellowBrush", "orange" => "DeckProjectOrangeBrush", "red" => "DeckAgentRedBrush",
-    "purple" => "DeckProjectPurpleBrush", "teal" => "DeckProjectTealBrush", "pink" => "DeckProjectPinkBrush", _ => "DeckProjectBlueBrush"
-  });
 
   // Open terminals and chats using this account (Remove shows them and can close them).
   private List<(string Id, string Title, bool Chat)> AttachedSessions(string accountId)

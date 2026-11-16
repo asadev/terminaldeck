@@ -208,7 +208,9 @@ public sealed partial class ShellWindow
   private void UpdateSidebarSessions()
   {
     if (windowState is null) return;
-    var rows = Model.Sessions.Where(s => windowState.OwnerOf(s.Id) == s.Id && !sidebar.Read.HiddenSessions.Contains(s.Id)).ToArray();
+    // Every open session is its own row (Asad, 15 Nov: "every open session is its own row"), whichever tab strip holds
+    // it: the old filter kept only each strip's owner, so sessions sharing a strip collapsed into one row.
+    var rows = SidebarCloudRows.LocalRows(Model.Sessions, s => s.Id, s => !sidebar.Read.HiddenSessions.Contains(s.Id)).ToArray();
     void SyncRows(System.Collections.ObjectModel.ObservableCollection<SessionDraft> list, SessionDraft[] values)
     {
       for (var i = list.Count - 1; i >= 0; i--) if (!values.Contains(list[i])) list.RemoveAt(i);
@@ -223,25 +225,17 @@ public sealed partial class ShellWindow
     foreach (var chat in archivedSessions)
     {
       var row = new Grid(); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-      var open = new Button { Content = ProjectAgentUi.SessionIdentityRow(chat), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
-      if (open.Content is Grid identity)
-      {
-        var selected = Model.Page == ShellPage.Sessions && Model.Selected == chat;
-        // One line each with "…", fixed row height, like the running rows (Mac).
-        foreach (var line in WorkspaceVisuals.Tree(identity).OfType<TextBlock>()) { line.TextWrapping = TextWrapping.NoWrap; line.TextTrimming = TextTrimming.CharacterEllipsis; line.MaxLines = 1; }
-        foreach (var picture in WorkspaceVisuals.Tree(identity).OfType<SessionPicture>()) { picture.OnAccent = selected; picture.RowSurface("DeckRailBrush"); }
-        if (selected)
-        {
-          open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
-          foreach (var text in WorkspaceVisuals.Tree(identity).OfType<TextBlock>().Where(t => !WorkspaceVisuals.Tree(identity).OfType<SessionPicture>().Any(p => WorkspaceVisuals.Tree(p).Contains(t))))
-            text.SetResourceReference(TextBlock.ForegroundProperty, "DeckSidebarSelectionInkBrush");
-        }
-      }
+      // The same one-line row as the running sessions (DESIGN-SESSION-ROWS.md): type icon and name only.
+      var selected = Model.Page == ShellPage.Sessions && Model.Selected == chat;
+      var open = new Button { Content = SidebarSimpleRow(chat.TypeGlyph, chat.Title, SidebarRowLook.NeedsYou(chat.State), selected), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
+      Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(open, chat.Title);
+      if (selected) open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
       open.Click += (_, _) => SelectSessionWindow(chat); row.Children.Add(open);
       var restore = new Button { Content = "Restore", Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"], FontSize = 12 };
       restore.Click += (_, _) => SidebarGuard(() => sidebar.ArchiveChat(chat.Id, false)); Grid.SetColumn(restore, 1); row.Children.Add(restore); ArchivedChatRows.Children.Add(row);
     }
-    EmptySidebar.Visibility = sidebarSessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    RenderCloudSessionRows();
+    EmptySidebar.Visibility = sidebarSessions.Count == 0 && CloudSessionRows.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     RefreshProjectRows(); SyncNavigation();
   }
   private string renderedProjects = "";
@@ -249,7 +243,7 @@ public sealed partial class ShellWindow
   private void RefreshProjectRows()
   {
     var projects = Runtime.Projects.List().Where(p => p.IsOpen).ToArray();
-    var key = JsonSerializer.Serialize(new { rows = projects.Select(p => new { p.Id, p.Name, p.Colour, p.Logo, count = ProjectRunningCount(p.Id) }), selected = Model.Page == ShellPage.Projects ? Projects?.Model.SelectedId : null, page = Model.Page });
+    var key = JsonSerializer.Serialize(new { rows = projects.Select(p => new { p.Id, p.Name, p.Colour, p.Logo }), selected = Model.Page == ShellPage.Projects ? Projects?.Model.SelectedId : null, page = Model.Page });
     RefreshPageCounts();
     if (key == renderedProjects) return; renderedProjects = key; ProjectRows.Children.Clear(); projectNavigation.Clear();
     if (projects.Length == 0)
@@ -261,7 +255,8 @@ public sealed partial class ShellWindow
     {
       var picture = ShellProjectPicture(project, 14);
       var label = new Grid(); label.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); label.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-      var count = new TextBlock { Text = ProjectRunningCount(project.Id) is var total && total > 0 ? total.ToString() : "", FontSize = 12, Opacity = 0.6 };
+      // A project row shows the project only; it never stands in for its sessions (each is a row under "Sessions").
+      var count = new TextBlock { Text = "", FontSize = 12, Opacity = 0.6 };
       label.Children.Add(new TextBlock { Text = project.Name, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis }); Grid.SetColumn(count, 1);
       var content = new Grid { ColumnSpacing = 8 }; content.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); content.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
       content.Children.Add(picture); Grid.SetColumn(label, 1); content.Children.Add(label);
@@ -289,14 +284,18 @@ public sealed partial class ShellWindow
   }
   private FrameworkElement PageView(ShellPage page)
   {
+    // A session on another machine: its own page each time (never retained under the one page key).
+    if (page == ShellPage.CloudChat) return cloudChatView ?? new WorkspaceLoadingView();
     if (pageViews.TryGetValue(page, out var retained)) return retained;
     FrameworkElement content = page switch
     {
       ShellPage.Projects => Projects, ShellPage.Agents => Agents,
+      ShellPage.NewSession => NewSessionView(),
       ShellPage.Tasks when tasksPage is not null => tasksPage,
       ShellPage.Hoot when hootPage is not null => hootPage,
       ShellPage.Servers when serversPage is not null => serversPage,
       ShellPage.Hooks => new Hooks.HooksPage(Runtime),
+      ShellPage.Cloud => YourCloudView(),
       ShellPage.Store => new Store.StorePage(Runtime.AppStore, () => { Model.Page = ShellPage.Mcp; }),
       ShellPage.Mcp => ConnectionPage(page),
       ShellPage.Files or ShellPage.SourceControl or ShellPage.GitHub => CodePageView(page),

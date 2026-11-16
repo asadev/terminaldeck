@@ -56,6 +56,13 @@ public sealed class DelegateAgentSessionGateway(Func<AgentLaunchPlan, Cancellati
 {
   public ValueTask<AgentSessionStarted> StartAsync(AgentLaunchPlan plan, CancellationToken cancellationToken) => start(plan, cancellationToken);
 }
+/// The two narrow writers the Cloud delete rule needs (AgentService): the entry alone out, and back with its own id.
+public interface ICloudAgentEntries
+{
+  void CloudRemoveEntry(string id);
+  SavedAgent CloudPutBack(SavedAgent agent);
+}
+
 public interface IAgentInstructions
 {
   string Save(string id, string text);

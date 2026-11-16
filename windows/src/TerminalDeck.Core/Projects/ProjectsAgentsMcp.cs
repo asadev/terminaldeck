@@ -97,7 +97,7 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
         return Value(ProjectView(saved));
       }
       case "project_registry.remove_empty":
-        _ = Project(Required(args, "id")); await context.EnsureCurrentAsync(ct); projects.RemoveEmpty(Required(args, "id")); return Value(new { removed = true });
+        _ = Project(Required(args, "id")); await context.EnsureCurrentAsync(ct); TerminalDeck.Core.Cloud.CloudRecordDeletes.RemoveEmptyProject(projects, Required(args, "id"), context.Grant.SessionId); return Value(new { removed = true });
       case "project_registry.set_lead":
       {
         var p = Project(Required(args, "projectId")); var lead = S(args, "lead");
@@ -266,7 +266,7 @@ public sealed class ProjectsAgentsMcp(IProjects projects, IAgents agents, IProje
           return await SaveAgentAsync(old ?? new(id, Required(patch, "name"), S(patch, "provider") ?? "claude"), patch, context, ct, create: old is null);
         }
         var a = Agent(Required(args, "id")); await context.EnsureCurrentAsync(ct);
-        if (action == "remove") { agents.Remove(a.Id); return Value(new { removed = true }); }
+        if (action == "remove") { TerminalDeck.Core.Cloud.CloudRecordDeletes.RemoveAgent(agents, a.Id, context.Grant.SessionId, byAi: true); return Value(new { removed = true }); }
         var status = action switch { "pause" => SavedAgentStatus.Paused, "archive" => SavedAgentStatus.Archived, "resume" or "restore" => SavedAgentStatus.Active, _ => throw new McpRefusal("Choose list, save, remove, pause, resume, archive or restore.") };
         return Value(AgentView(agents.Save(a with { Status = status }, a)));
       }

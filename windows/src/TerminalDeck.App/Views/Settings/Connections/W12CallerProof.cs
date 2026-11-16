@@ -42,16 +42,24 @@ public sealed partial class ShellWindow
       check("An app cannot rename another app's key", refused && new CallerConnectionFiles(dataRoot).Names([firstId])[firstId] == "Audit MCP name");
       await settingsPanel.SelectAsync("outside-ai-apps");
       await CaptureSettingsAsync(settingsWindowRoot!, Path.Combine(output, "outside-app-keys-dark.png"));
-      card = CallerCard("Audit MCP name"); InvokeW12(card, "Revoke…"); await Task.Delay(100); dialog = CallerDialog();
+      await InvokeCallerMenuAsync("Audit MCP name", "Revoke…"); dialog = CallerDialog();
       check("Revoke names the selected app and warns that its key stops immediately", SettingsTree(dialog).OfType<TextBlock>().Any(t => t.Text.Contains("Audit MCP name", StringComparison.Ordinal) && t.Text.Contains("immediately", StringComparison.Ordinal)));
       await CaptureSettingsAsync(dialog, Path.Combine(output, "app-key-revoke-dark.png"));
       InvokeW12(dialog, "Keep it"); await Task.Delay(100);
       check("Keep it preserves the selected key", Runtime.Door.Authenticate(first.Token) == first.Id);
-      InvokeW12(CallerCard("Audit MCP name"), "Revoke…"); await Task.Delay(100); InvokeW12(CallerDialog(), "Revoke"); await Task.Delay(150);
+      await InvokeCallerMenuAsync("Audit MCP name", "Revoke…"); InvokeW12(CallerDialog(), "Revoke"); await Task.Delay(150);
       var stopped = false; try { Runtime.Door.Authenticate(first.Token); } catch (McpRefusal) { stopped = true; }
       check("Confirmed revoke invalidates only the selected credential", stopped && Runtime.Door.Authenticate(other.Token) == other.Id);
     }
     finally { Runtime.RevokeCaller(firstId); Runtime.RevokeCaller(otherId); }
+  }
+  // Rename and Revoke sit in a key's "…" menu (AI apps, 15 Nov).
+  private async Task InvokeCallerMenuAsync(string title, string label)
+  {
+    InvokeW12(CallerCard(title), "App key actions"); await Task.Delay(100);
+    var item = VisualTreeHelper.GetOpenPopupsForXamlRoot(settings.XamlRoot).SelectMany(p => SettingsTree(p.Child)).OfType<MenuFlyoutItem>().Single(m => m.Text == label);
+    if (FrameworkElementAutomationPeer.CreatePeerForElement(item)?.GetPattern(PatternInterface.Invoke) is not IInvokeProvider invoke) throw new InvalidOperationException(label + " menu is not invokable.");
+    invoke.Invoke(); await Task.Delay(100);
   }
   private ContentDialog CallerDialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(settings.XamlRoot).SelectMany(p => SettingsTree(p.Child)).OfType<ContentDialog>().Single();
   private Border CallerCard(string title) => SettingsTree(settings).OfType<Border>().First(b => b.Child is Grid row && row.Children.OfType<StackPanel>().Any(p => p.Children.OfType<TextBlock>().Any(t => t.Text == title)));

@@ -1,0 +1,46 @@
+import Foundation
+import CryptoKit
+enum CloudWire { static func isValidDomain(_ s: String) -> Bool { true } }
+// BackendCloudBrainMemoryHash, verbatim
+func hashBytes(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+func shaped(_ text: String, version: UInt8) -> String {
+    var b = Array(SHA256.hash(data: Data(text.utf8)).prefix(16)); b[6] = (b[6] & 15) | version; b[8] = (b[8] & 63) | 128
+    let h = b.map { String(format: "%02x", $0) }.joined()
+    return "\(h.prefix(8))-\(h.dropFirst(8).prefix(4))-\(h.dropFirst(12).prefix(4))-\(h.dropFirst(16).prefix(4))-\(h.dropFirst(20))"
+}
+func uuid(_ t: String) -> String { shaped(t, version: 0x50) }
+func operationId(_ t: String) -> String { shaped(t, version: 0x40) }
+func canonical<T: Encodable>(_ v: T) -> Data { let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]; return try! e.encode(v) }
+let store = "2b7e1516-28ae-4d2a-a6d2-abf7158809cf", device = "e3c75f30-363e-4323-a592-cf07fe14c4a6"
+func cell(_ t: String, _ v: String?) -> CloudBrainMemoryCell { .init(type: t, value: v) }
+var out: [String: String] = [:]
+func row(_ name: String, _ table: String, _ columns: [String], _ cells: [CloudBrainMemoryCell], keys: [String], refs: [String: CloudBrainMemoryReference] = [:], rowId: String, stamp: Int64) {
+    let body = canonical(CloudBrainMemoryRow(table: table, columns: columns, cells: cells, references: refs))
+    let keyCells = keys.map { cells[columns.firstIndex(of: $0)!] }
+    let key = "row/" + table + "/" + hashBytes(canonical(keyCells))
+    let hash = hashBytes(body)
+    let version = uuid(store + ":" + key + "\n" + hash)
+    let part = CloudBrainMemoryPart(storeId: store, inventoryRow: rowId, key: key, version: version, resourceHash: hash, bytes: String(body.count), index: 0, count: 1, parents: [], data: body.base64EncodedString(), stamp: String(stamp), baseline: false)
+    let payload = canonical(part)
+    out[name + ".body"] = String(decoding: body, as: UTF8.self)
+    out[name + ".key"] = key; out[name + ".version"] = version
+    out[name + ".payload"] = String(decoding: payload, as: UTF8.self)
+    out[name + ".payloadHash"] = hashBytes(payload)
+    out[name + ".opId"] = operationId(version + "\n0\n" + device)
+    out[name + ".entity"] = uuid(store + "\n" + key + "\n0")
+}
+row("setting", "settings", ["owner","key","value","updated"], [cell("text","hoot"), cell("text","tidy.on"), cell("text","1"), cell("real", String(1763000000.123))], keys: ["owner","key"], rowId: "I05", stamp: 1763000000500)
+row("tombstone", "settings", ["owner","key","value","updated"], [cell("text","hoot"), cell("text","tidy.on"), cell("null", nil), cell("real", String(1763000100.5))], keys: ["owner","key"], rowId: "I05", stamp: 1763000100500)
+let topicCols = "owner,id,title,path,open,project,session,agent,date,hand,job".components(separatedBy: ",")
+row("topic", "topics", topicCols, [cell("text","project:crm"), cell("text","t1"), cell("text","Release plan"), cell("text","projects/crm/topics/t1.md"), cell("integer","1"), cell("text","crm"), cell("null",nil), cell("null",nil), cell("text","2026-11-13"), cell("null",nil), cell("null",nil)], keys: ["owner","id"], refs: ["path": .init(storeId: store, table: "file", id: cell("text","projects/crm/topics/t1.md"))], rowId: "I05", stamp: 1763000000600)
+// A file of 40000 bytes: two parts.
+let file = Data((0..<40000).map { UInt8($0 % 251) })
+let fkey = "file/notes/big.md", fhash = hashBytes(file), fversion = uuid(store + ":" + fkey + "\n" + fhash)
+for i in 0..<2 {
+  let slice = file.subdata(in: (i*32768)..<min((i+1)*32768, file.count))
+  let p = CloudBrainMemoryPart(storeId: store, inventoryRow: "I01", key: fkey, version: fversion, resourceHash: fhash, bytes: String(file.count), index: i, count: 2, parents: [], data: slice.base64EncodedString(), stamp: "1763000000700", baseline: false)
+  out["file\(i).payloadHash"] = hashBytes(canonical(p)); out["file\(i).opId"] = operationId(fversion + "\n\(i)\n" + device); out["file\(i).entity"] = uuid(store + "\n" + fkey + "\n\(i)")
+}
+out["file.version"] = fversion
+for v in [1e15, 1e16, 0.0001, 0.00001, 1763000000.123, 0.1, 100.0, 1.5e-7, 2.5e20, -3.0, 123.456e-10] { out["double." + String(v.bitPattern)] = String(v) }
+print(String(decoding: canonical(out), as: UTF8.self))

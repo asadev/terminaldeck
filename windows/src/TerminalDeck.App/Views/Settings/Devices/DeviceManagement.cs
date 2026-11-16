@@ -12,8 +12,15 @@ public sealed partial class SettingsPane
   {
     var approved = runtime.Remote.Trust.List();
     if (pairingNotice is not null) stack.Children.Add(Description(pairingNotice));
-    stack.Children.Add(Description(approved.Count + (approved.Count == 1 ? " paired device · Relay: " : " paired devices · Relay: ") + runtime.Remote.State));
-    stack.Children.Add(Card("Pair a device", "Show a one-use code for your phone or computer. Only let in the device you’re holding.", "Show code", ShowPairingAsync));
+    // Reach by account (the Mac's Devices page): signed-in devices open this PC with no code. While it is on, the
+    // pairing code is out of the way; it stays only behind the switch being off (the stricter way).
+    var reach = AddReachRows(stack);
+    if (reach.OffersPairing)
+    {
+      stack.Children.Add(Description(approved.Count + (approved.Count == 1 ? " paired device · Relay: " : " paired devices · Relay: ") + runtime.Remote.State));
+      stack.Children.Add(Card("Pair a device", "Show a one-use code for your phone or computer. Only let in the device you’re holding.", "Show code", ShowPairingAsync));
+    }
+    else if (approved.Count > 0) { stack.Children.Add(Description(ReachPage.OldTitle)); stack.Children.Add(Description(ReachPage.OldLine)); }
     stack.Children.Add(Card("Web version", "Open this PC in your browser. The browser becomes a paired Web device with the usual access controls.", "Open web version", async () =>
     {
       try { await runtime.Remote.OpenWebAsync(); }
@@ -33,7 +40,54 @@ public sealed partial class SettingsPane
       card.ContextFlyout = actions;
       AddCardMenu(card, actions, "Device actions"); stack.Children.Add(card);
     }
-    if (approved.Count + runtime.Remote.Trust.Pending().Count == 0) stack.Children.Add(Description("No devices yet"));
+    if (reach.OffersPairing && approved.Count + runtime.Remote.Trust.Pending().Count == 0) stack.Children.Add(Description("No devices yet"));
+  }
+
+  private ReachStatus? reachStatus;
+  private DateTimeOffset reachRead = DateTimeOffset.MinValue;
+  private bool reachReading;
+  private string? reachProblem;
+
+  // The switch, one line under it, then the account's devices by name and date with Remove. Hidden while signed out or
+  // while the account does not have the feature (pairing exactly as before then).
+  private ReachPage AddReachRows(StackPanel stack)
+  {
+    if (runtime.Reach is null) { reachStatus = null; return new ReachPage(new ReachStatus(false, null, false, ReachPresenceStatus.SignedOut, false, [], [])); }
+    if (!reachReading && DateTimeOffset.UtcNow - reachRead > TimeSpan.FromSeconds(10)) _ = ReadReachAsync();
+    var status = reachStatus ?? new ReachStatus(true, null, runtime.Reach.Gate.Settings().Enabled, ReachPresenceStatus.Off, false, [], []);
+    var page = new ReachPage(status);
+    // While the account's answer is not in yet, a switch that is on already keeps pairing out of the way.
+    if (status.Entitled is null && !status.Enabled) return page;
+    var toggle = new ToggleSwitch { IsOn = status.Enabled, OnContent = "", OffContent = "", MinWidth = 40 };
+    toggle.Toggled += async (_, _) =>
+    {
+      if (toggle.IsOn == (reachStatus?.Enabled ?? status.Enabled)) return;
+      reachProblem = await runtime.SetReachEnabledAsync(toggle.IsOn);
+      reachRead = DateTimeOffset.MinValue; await RenderAsync();
+    };
+    var line = status.Entitled == false ? ReachPage.NotEntitledDetail : status.Enabled ? ReachPage.OnDetail : ReachPage.OffDetail;
+    stack.Children.Add(TerminalDeck.App.Views.Settings.SettingsPanel.SettingRow(ReachPage.SwitchTitle, line, toggle));
+    if (reachProblem is not null) stack.Children.Add(Description(reachProblem));
+    if (runtime.ReachNotice is { } notice) stack.Children.Add(Description(notice));
+    if (page.Mode != ReachPage.PageMode.On) return page;
+    foreach (var row in page.Rows)
+      stack.Children.Add(Card(row.Title, row.Detail, ReachPage.RemoveTitle, async () =>
+      {
+        reachProblem = await runtime.RemoveReachDeviceAsync(row.DeviceId);
+        reachRead = DateTimeOffset.MinValue; await RenderAsync();
+      }));
+    if (page.Rows.Count > 0) stack.Children.Add(Description(ReachPage.RemoveMeans));
+    return page;
+  }
+
+  private async Task ReadReachAsync()
+  {
+    if (runtime.Reach is not { } reach) return;
+    reachReading = true;
+    try { reachStatus = await reach.StatusAsync(); reachRead = DateTimeOffset.UtcNow; }
+    catch (Exception ex) when (ex is not OutOfMemoryException) { reachRead = DateTimeOffset.UtcNow; }
+    finally { reachReading = false; }
+    DispatcherQueue.TryEnqueue(async () => { if (IsLoaded) await RenderAsync(); });
   }
 
   // The one switch for This PC on the phone (the Mac's "Phones may view and control this Mac's screen"), and who is

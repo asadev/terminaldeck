@@ -1,0 +1,10 @@
+<UserControl x:Class="TerminalDeck.App.Views.Settings.CloudPage"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ AutomationProperties.AutomationId="settings.cloud">
+ <!-- Profile > Cloud (Mac, 15 Nov). The rows are drawn in CloudPage.xaml.cs with the Settings rows' own helpers:
+      group 1 = the state and Sync now, then Use Cloud on this PC; then how this PC trusts your other devices.
+      No heading inside the page: the Settings top bar is the heading. -->
+ <!-- The column moves into the Settings pages' one centred container (SettingsPanel.Scroll) in the constructor. -->
+ <StackPanel x:Name="Body" Spacing="20" Margin="0,8,0,20"/>
+</UserControl>

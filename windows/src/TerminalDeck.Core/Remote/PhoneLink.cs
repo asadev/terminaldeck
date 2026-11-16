@@ -26,7 +26,9 @@ public sealed class PhoneLink(DeviceTrust trust, string hostName, string appVers
       if (message.Value.GetProperty("protocol").GetInt32() != 1)
         return Reply(Error("version", "This phone and computer speak different versions. Update whichever is older."), close: true);
       var token = message.Text("token");
-      if (!token.Contains('.'))
+      // Reach by account: no secret is sent; the relay connection's door already proved the device holds its key.
+      var reach = trust.IsReachChannel(channel) || token.StartsWith("reach:", StringComparison.Ordinal);
+      if (!reach && !token.Contains('.'))
       {
         var device = message.Value.GetProperty("device");
         var paired = trust.Redeem(token, device.GetProperty("name").GetString()!, device.GetProperty("platform").GetString()!, peerKey.Span);
@@ -34,7 +36,7 @@ public sealed class PhoneLink(DeviceTrust trust, string hostName, string appVers
           PhoneWire.PendingWelcome(paired.DeviceId, paired.DeviceName, paired.Credential),
           Error("unauthorized", "Paired. Approve this device on this computer, then reconnect.")], Close: true));
       }
-      var approved = trust.Authenticate(token, peerKey.Span);
+      var approved = trust.AuthenticateHello(channel, token, peerKey.Span);
       var welcome = PhoneWire.ApprovedWelcome(approved.Id, approved.Name, hostName, appVersion, sessionView.Read(approved), []);
       trust.Connected(approved.Id, channel); authenticated[channel] = approved.Id;
       return Reply(welcome);

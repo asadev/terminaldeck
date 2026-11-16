@@ -57,7 +57,7 @@ public sealed partial class ShellWindow
           .Where(row => row.DataContext is SessionDraft draft && draft.Id != owned).All(row => ProofTree(row).OfType<TextBlock>().Where(t => t.Text is "fixture-work" or "Codex").All(t => t.Foreground is Microsoft.UI.Xaml.Media.SolidColorBrush brush && brush.Color.Equals(expectedInk))));
         Check(width + " " + theme + " exact width", Math.Abs(Root.ActualWidth - width) < 2);
         Check(width + " " + theme + " no unknown usage or Shell chip", !ProofTree(Workspace).OfType<TextBlock>().Any(t => t.Text is "Usage unknown" or "Shell") && !ProofTree(Workspace).OfType<Button>().Any(b => b.Content as string is "Usage unknown" or "Shell"));
-        foreach (var section in new[] { "general", "notifications", "appearance", "browser", "tasks", "coding-ais", "accounts", "outside-ai-apps", "advanced", "agent-defaults", "about" })
+        foreach (var section in new[] { "general", "notifications", "appearance", "tasks", "coding-ais", "accounts", "outside-ai-apps", "advanced", "agent-defaults", "about" })
         {
           await OpenSettingsAsync(section); await Task.Delay(100); Root.UpdateLayout();
           Check(width + " " + theme + " " + section + " has its own window", settingsWindow is not null);
@@ -65,7 +65,7 @@ public sealed partial class ShellWindow
           {
             var switches = ProofTree(settingsPanel!).OfType<ToggleSwitch>().ToArray();
             Check(width + " " + theme + " five General switches", switches.Length == 5);
-            Check(width + " " + theme + " restore is honestly disabled", switches.Any(t => AutomationProperties.GetName(t) == "Pick up where you left off" && !t.IsEnabled && t.IsOn));
+            Check(width + " " + theme + " restore is honestly disabled", switches.Any(t => AutomationProperties.GetName(t) == "Reopen sessions after a restart" && !t.IsEnabled && t.IsOn));
             foreach (var title in new[] { "Name sessions from the conversation", "Confirm before closing a session", "Copy on select", "Keep this PC awake while " + TerminalDeck.Core.Brand.Name + " is open" })
             {
               var control = switches.Single(t => AutomationProperties.GetName(t) == title);

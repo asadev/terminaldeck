@@ -230,6 +230,80 @@ public sealed partial class ShellWindow
     var index = focused is Control current ? Array.IndexOf(controls, current) : -1;
     if (controls.Length > 0) controls[Math.Clamp(index < 0 ? (delta > 0 ? 0 : controls.Length - 1) : index + delta, 0, controls.Length - 1)].Focus(FocusState.Keyboard);
   }
+  // ---- Session rows (DESIGN-SESSION-ROWS.md) and the sessions on his other machines (DESIGN-WINDOWS-CLOUD.md 4) ----
+  private bool cloudRowsWired;
+  private string renderedCloudRows = "";
+  /// The Cloud chat page now shown (ShellPage.CloudChat), and which session it is.
+  private FrameworkElement? cloudChatView;
+  private string? cloudChatRef;
+
+  /// One session row's content: the thin outline type icon, the name on one line, the small orange dot only when the
+  /// session needs him. Nothing else.
+  internal static Grid SidebarSimpleRow(string glyph, string title, bool needsYou, bool onAccent)
+  {
+    var row = new Grid { ColumnSpacing = 8, MinHeight = 32, Padding = new(0) };
+    row.ColumnDefinitions.Add(new() { Width = new(16) }); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); row.ColumnDefinitions.Add(new() { Width = new(12) });
+    var icon = new DeckIcon { Glyph = glyph, FontSize = SidebarRowLook.GlyphSize, VerticalAlignment = VerticalAlignment.Center };
+    icon.SetResourceReference(Control.ForegroundProperty, onAccent ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
+    row.Children.Add(icon);
+    var name = new TextBlock { Text = title, FontSize = 13, MaxLines = 1, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+    if (onAccent) name.SetResourceReference(TextBlock.ForegroundProperty, "DeckSidebarSelectionInkBrush");
+    Grid.SetColumn(name, 1); row.Children.Add(name);
+    if (needsYou)
+    {
+      var dot = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 7, Height = 7, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+      dot.SetResourceReference(Microsoft.UI.Xaml.Shapes.Shape.FillProperty, onAccent ? "DeckSidebarSelectionInkBrush" : "DeckProjectOrangeBrush");
+      AutomationProperties.SetName(dot, "Needs you");
+      Grid.SetColumn(dot, 2); row.Children.Add(dot);
+    }
+    return row;
+  }
+
+  /// The other machines' sessions under this PC's own, in the same "Sessions" list: one row per session; a session
+  /// that has a row here already (a live tab, or it moved here) is not listed twice.
+  private void RenderCloudSessionRows()
+  {
+    if (Runtime.CloudChats is not { } chats) { CloudSessionRows.Visibility = Visibility.Collapsed; return; }
+    if (!cloudRowsWired)
+    {
+      cloudRowsWired = true;
+      chats.Changed += () => DispatcherQueue.TryEnqueueHandled(UpdateSidebarSessions);
+    }
+    var rows = SidebarCloudRows.From(chats.Others, chats.Machines, Model.Sessions.Select(s => s.Id));
+    var key = JsonSerializer.Serialize(new { rows, open = Model.Page == ShellPage.CloudChat ? cloudChatRef : null });
+    if (key == renderedCloudRows) return;
+    renderedCloudRows = key;
+    CloudSessionRows.Children.Clear();
+    foreach (var row in rows)
+    {
+      var selected = Model.Page == ShellPage.CloudChat && cloudChatRef == row.Ref;
+      var open = new Button { Content = SidebarSimpleRow(SidebarRowLook.Glyph(row.Chat), row.Name, row.NeedsYou, selected), Height = 32, Padding = new(8, 0, 8, 0), Margin = new(0, 2, 0, 2),
+        HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["DeckSidebarActionStyle"] };
+      AutomationProperties.SetName(open, row.Name);
+      if (selected) open.SetResourceReference(Control.BackgroundProperty, "DeckSidebarSelectionBrush");
+      var shown = row;
+      open.Click += (_, _) => OpenCloudChat(shown);
+      CloudSessionRows.Children.Add(open);
+    }
+    CloudSessionRows.Visibility = CloudSessionRows.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+  }
+
+  /// A session on another machine opens as its Cloud chat page (read only: Windows has no live link to it yet).
+  private void OpenCloudChat(SidebarCloudRow row)
+  {
+    if (Runtime.CloudChats is null) return;
+    cloudChatRef = row.Ref;
+    cloudChatView = new TerminalDeck.App.Views.Chat.CloudChatPage(row, () => Runtime.CloudChatsDoor());
+    SessionList.SelectedItem = null;
+    renderedWindowsStructure = "";
+    Model.Page = ShellPage.CloudChat;
+    UpdateSidebarSessions();
+  }
+
+  /// Your Cloud: a full page of the main window (DESIGN-WINDOWS-CLOUD.md 1).
+  private FrameworkElement YourCloudView() => new TerminalDeck.App.Views.Settings.YourCloudPage(Runtime.YourCloud, () => { Model.Page = ShellPage.GitHub; },
+    ShowBrowserSettingsWindow, message => Model.Notice = message);
+
   private FrameworkElement ConnectionPage(ShellPage page)
   {
     if (!connectionPages.TryGetValue(page, out var pane))

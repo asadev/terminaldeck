@@ -77,6 +77,21 @@ public sealed partial class RemoteService : IAsyncDisposable
     Trust = new(new DeviceStore(root));
     Grants = new(new JsonStateStore<SessionGrantState>(root, "phone-grants"));
     Trust.Changed += () => Changed?.Invoke();
+    // Reach by account: the relay connection tells the phone host which sealed channel the door admitted.
+    ReachLink.Admitted = (channel, admission) => Trust.AdmitReachChannel(channel, admission);
+  }
+  /// Reach by account: this process's door and relay token (AppRuntime.CloudReach.cs builds the coordinator around it).
+  public ReachRelayLink ReachLink { get; } = new();
+  /// What this PC publishes for its account while reach is on: its relay room and sealed-channel key, and its name.
+  /// Null while the phone host is not running.
+  public ReachHostCard? ReachCard()
+  {
+    lock (hostSecretGate)
+    {
+      if (!phonesEnabled || relay is null || hostSecret is null || identity is null) return null;
+      try { return new(PairingCode.HostId(hostSecret), ReachWire.Base64Url(identity.PublicKey), Environment.MachineName); }
+      catch (ObjectDisposedException) { return null; }
+    }
   }
   private byte[]? hostSecret;
   private bool phonesEnabled;
@@ -108,7 +123,7 @@ public sealed partial class RemoteService : IAsyncDisposable
       File.WriteAllText(Path.Combine(dataRoot.DirectoryPath, "remote-local.json"), JsonSerializer.Serialize(new { address = localWeb.Address, protocol = 1 }));
     }
     relay = new(RelayEndpoint.Default, hostSecret, identity, transportHub, mcp: enablePhones ? McpBridge : null, receiver: ReceiverApplication,
-      linkEngine: enablePhones ? LinkEngine : null, linkEligible: enablePhones ? LinkEligibility.For(Trust) : null);
+      linkEngine: enablePhones ? LinkEngine : null, linkEligible: enablePhones ? LinkEligibility.For(Trust) : null) { Reach = enablePhones ? ReachLink : null };
     // Security M2: which devices may hold a TURN login comes from the trust store, now and on every change.
     RefreshLinkDevices();
     Trust.Changed += OnTrustChangedForLinks;
@@ -127,6 +142,8 @@ public sealed partial class RemoteService : IAsyncDisposable
   }
   public async Task<PairingOffer> ShowCodeAsync()
   {
+    // Reach by account live: devices join by signing in; the code stays only behind the switch being off.
+    if (Trust.PairingLockedByReach) throw new InvalidOperationException(ReachPage.PairingLocked);
     await StartAsync();
     pairingStop?.Cancel();
     var offer = Trust.Pairing.Create();

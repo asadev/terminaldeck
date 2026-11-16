@@ -11,7 +11,7 @@ public sealed partial class SettingsPane : Grid
   private readonly ShellViewModel model;
   private readonly AppRuntime runtime;
   private readonly Grid content = new();
-  private readonly ListView destinations = new() { ItemsSource = new[] { "Coding AIs", "Who uses what", "Devices & pairing", "MCP servers", "Outside AI apps" }, SelectionMode = ListViewSelectionMode.Single };
+  private readonly ListView destinations = new() { ItemsSource = new[] { "Coding AIs", "Who uses what", "Devices & pairing", "MCP servers", "AI apps" }, SelectionMode = ListViewSelectionMode.Single };
   internal bool PopupPresentation { get; set; }
   private bool selectingSection;
   private int renderRequest;
@@ -91,12 +91,7 @@ public sealed partial class SettingsPane : Grid
     switch (section)
     {
       case 0:
-        stack.Children.Add(Description("Add as many accounts for each AI as you like: subscription logins (Sign in opens the AI’s own login and browser step) and API keys. Choose who uses which account under Who uses what."));
         await AddAccountRowsAsync(stack, ct);
-        stack.Children.Add(Card("Account status", "Read each account’s current sign-in.", "Refresh", async () =>
-        { await RefreshCodingAccountsAsync(); await RenderAsync(); }));
-        stack.Children.Add(Card("SIGN-IN READINESS CHECK", "See the reply, model list, account switch and approval checks waiting for your sign-in. Opening this report sends no message.", "View readiness", ShowSignInReadinessAsync));
-        stack.Children.Add(Description("When the CLI saves your sign-in, account status and models refresh here. Default follows your existing login in the real app. Test copies keep their own sign-ins. Open Accounts on an AI session to switch its saved conversation to another account for the same AI."));
         break;
       case 1:
         AddAssignmentRows(stack);
@@ -108,10 +103,7 @@ public sealed partial class SettingsPane : Grid
         await AddMcpRowsAsync(stack, ct);
         break;
       case 4:
-        stack.Children.Add(Description("Connect each AI app with its own key, conversation and grants. Its own permission setting controls questions; planning mode cannot make changes."));
-        stack.Children.Add(Card("Connect an AI app", "Grant one conversation and specific browser origins. Connection files stay in this preview’s private folder.", "Connect", ConnectAiAppAsync));
         await AddCallerRowsAsync(stack, ct);
-        stack.Children.Add(Card("Remote app tools", runtime.RemoteToolsEnabled ? "Enabled until this app closes. Each connected AI keeps its own grants and permission flow." : "Off. Local connection tokens do not work over the relay.", runtime.RemoteToolsEnabled ? "Turn off" : "Enable remote tools", async () => { await runtime.SetRemoteToolsAsync(!runtime.RemoteToolsEnabled); await RenderAsync(); }));
         break;
     }
     ct.ThrowIfCancellationRequested();
@@ -166,7 +158,7 @@ public sealed partial class SettingsPane : Grid
         var selected = (TerminalDeck.Core.Projects.ProjectSession)session.SelectedItem;
         var registration = runtime.ConnectCaller(name.Text.Trim(), selected.Id, (AiPermissionMode)mode.SelectedItem,
           origins.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), relay.IsChecked == true);
-        model.Notice = "Private connection saved in mcp/callers/" + registration.Id.ToString("N") + ".json. Use that file’s URL and key in this AI app’s MCP settings.";
+        model.Notice = "Key made. Its setup file is in the app's private folder.";
       }
       catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TerminalDeck.Core.Platform.ProviderUnavailableException or McpRefusal) { args.Cancel = true; note.Text = ex.Message; }
     };

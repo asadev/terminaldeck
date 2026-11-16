@@ -105,6 +105,9 @@ try {
   $shareExtensions = $manifest.CreateElement('Extensions', $manifest.DocumentElement.NamespaceURI)
   [xml] $share = Get-Content (Join-Path $root 'src/TerminalDeck.Platform.Windows/Receiver/ShareTarget.appxmanifest.xml')
   $shareExtensions.AppendChild($manifest.ImportNode($share.DocumentElement, $true)) | Out-Null
+  # terminaldeck:// links: the website hands the Cloud sign-in back to the app through terminaldeck://cloud/return.
+  [xml] $cloudLink = Get-Content (Join-Path $root 'src/TerminalDeck.Platform.Windows/CloudProtocol.appxmanifest.xml')
+  $shareExtensions.AppendChild($manifest.ImportNode($cloudLink.DocumentElement, $true)) | Out-Null
   $app.AppendChild($shareExtensions) | Out-Null
   $extensions = $manifest.CreateElement('Extensions', $manifest.DocumentElement.NamespaceURI)
   $manifest.DocumentElement.AppendChild($extensions) | Out-Null

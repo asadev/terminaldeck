@@ -96,6 +96,8 @@ public sealed class ProjectsPage : Grid
     }
     actions.Add(AsyncButton("New session", () => NewSessionPicker.ShowAsync(XamlRoot, Model.Agents, Model.Projects, Model.Accounts, navigation, project.Id), true));
     var subtitle = project.HomeFolder is { } home ? home + (project.Folders.Length > 1 ? $" · +{project.Folders.Length - 1} folders" : "") : "Independent";
+    // 7C-2: a folder made by Cloud sync that holds only what the Cloud carries. Sync never fetches code.
+    if (TerminalDeck.Core.Cloud.CloudProjectFolders.Installed?.WaitingForCode(project.HomeFolder) == true) subtitle += " · Code not on this PC yet";
     body.Children.Add(PageHeader(project.Name, subtitle, ProjectPicture(Model.Projects, project, 30), switcher, actions.ToArray()));
     if (project.Id != ProjectIdentity.IndependentId)
     {

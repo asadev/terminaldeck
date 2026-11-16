@@ -31,13 +31,16 @@ public sealed partial class SettingsPane
     stack.Children.Remove(loading);
     var projects = runtime.Projects.List();
     var choices = new[] { "Every project" }.Concat(projects.Select(p => p.Name)).ToArray();
-    var picker = new ComboBox { Header = "Project", ItemsSource = choices, SelectedIndex = mcpProject is null ? 0 : Math.Max(0, Array.FindIndex(projects.ToArray(), p => p.Id == mcpProject) + 1), HorizontalAlignment = HorizontalAlignment.Stretch };
+    var picker = new ComboBox { ItemsSource = choices, SelectedIndex = mcpProject is null ? 0 : Math.Max(0, Array.FindIndex(projects.ToArray(), p => p.Id == mcpProject) + 1), MinWidth = 200 };
     picker.SelectionChanged += async (_, _) => { mcpProject = picker.SelectedIndex > 0 ? projects[picker.SelectedIndex - 1].Id : null; await RenderAsync(); };
-    if (projects.Count > 0) stack.Children.Add(picker);
     var folders = projects.FirstOrDefault(p => p.Id == mcpProject)?.Folders.ToHashSet(StringComparer.OrdinalIgnoreCase);
     var shown = servers.Where(s => folders is null || s.Scope == "user" || s.Folder is not null && folders.Contains(s.Folder)).ToArray();
-    stack.Children.Add(Card("MCP servers", shown.Length + " servers · " + servers.Count + " total", "Add server", ShowAddServerAsync));
-    if (shown.Length == 0) stack.Children.Add(Description("No MCP servers yet"));
+    // The project choice, the list's own row and "No MCP servers yet" inside one card (15 Nov).
+    var top = new List<FrameworkElement>();
+    if (projects.Count > 0) top.Add(Settings.SettingsPanel.SettingRow("Project", "", picker));
+    top.Add(Card("MCP servers", shown.Length + " servers · " + servers.Count + " total", "Add server", ShowAddServerAsync));
+    if (shown.Length == 0) top.Add(Settings.SettingsPanel.SettingRow("No MCP servers yet", "", null));
+    stack.Children.Add(Settings.SettingsPanel.GroupRows(top));
     string? lastGroup = null;
     foreach (var server in shown.OrderBy(s => s.Scope == "user" ? "" : s.Folder, StringComparer.OrdinalIgnoreCase))
     {

@@ -154,6 +154,10 @@ public sealed partial class BrowserPane
     profileActions.Children.Add(downloadButton);
     Tool("Send", "\uE724", () => Run("send"));
     profileActions.Children.Add(profile);
+    // The Browser's own settings (Mac, 15 Nov): one plain gear where the toolbar ends; it opens their small window.
+    var gear = WorkspaceSurface.IconButton("Browser settings", "\uE713", async () => await GuardAsync(OpenProfileSettingsAsync, tab));
+    gear.Width = gear.Height = gear.MinWidth = gear.MinHeight = 26; gear.CornerRadius = new(8); gear.Padding = new(0);
+    profileActions.Children.Add(gear);
     Grid.SetRow(status, 5); panel.Children.Add(status);
     var annotationCount = -1; var renderedSelection = -1;
     shellRefresh[id] = () =>

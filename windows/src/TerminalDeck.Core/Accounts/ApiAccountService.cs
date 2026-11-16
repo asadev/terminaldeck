@@ -51,7 +51,20 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     return Store(row, connection with { CheckState = state, CheckDetail = detail, CheckedAt = DateTimeOffset.UtcNow });
   }
 
+  /// Keys travel: a Remove pressed in the app (or asked by an AI tool) goes EVERYWHERE through the saved passwords'
+  /// delete rule while saved passwords run (Bin 30 days); otherwise, or for an account that does not travel, as before.
+  /// Without this the Cloud record would bring the account back on the next sync.
   public async ValueTask RemoveAsync(string id, Func<string, bool> inUse, CancellationToken ct = default)
+  {
+    var row = accounts.Get(id);
+    if (inUse(row.Id)) throw new InvalidOperationException("This account is still used by a session. Switch that session first.");
+    if (row.Authentication == AccountAuthentication.ApiKey && ApiAccountCloudDoor.CloudId(row.Id) is { } cloudId
+      && await TerminalDeck.Core.Cloud.CloudKeysRemovals.Shared.RemoveEverywhereAsync("api", cloudId)) return;
+    await RemoveHereAsync(id, inUse, ct);
+  }
+
+  /// This PC only (the delete rule's own remove, and the old path).
+  internal async ValueTask RemoveHereAsync(string id, Func<string, bool> inUse, CancellationToken ct = default)
   {
     var row = accounts.Get(id);
     var connection = row.Authentication == AccountAuthentication.ApiKey ? ApiAccountFiles.Read(root, row.HomeId) : null;
@@ -59,6 +72,9 @@ public sealed class ApiAccountService(AccountService accounts, AccountCredential
     if (connection?.CredentialReference is { } reference) await credentials.DeleteAsync(reference, ct);
     if (row.Authentication == AccountAuthentication.ApiKey) ApiAccountFiles.Delete(root, row.HomeId);
   }
+
+  /// Keys travel: this service's narrow door for the `api` saved-passwords source (`inUse`: a session runs as it).
+  public TerminalDeck.Core.Cloud.ICloudKeysApiOwner CloudDoor(Func<string, bool> inUse) => new ApiAccountCloudDoor(this, accounts, credentials, root, inUse);
 
   public static string Status(ApiConnection? connection) => connection is null ? "Needs key" : connection.CheckState switch
   {

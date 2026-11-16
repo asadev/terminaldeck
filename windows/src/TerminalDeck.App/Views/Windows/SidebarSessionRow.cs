@@ -79,6 +79,8 @@ public sealed class SidebarSessionRow : Grid
       }
 
       if (child is SessionStatusMark status) status.OnAccent = onAccent;
+      // The type icon: the secondary text colour (SR-2), white on the blue selection.
+      if (child is DeckIcon icon && icon.Tag as string == "SessionType") icon.Foreground = (Brush)ShellTheme.Resource(this, onAccent ? "DeckSidebarSelectionInkBrush" : "DeckSecondaryInkBrush");
       if (child is Button menu)
       {
         menu.Foreground = ink;

@@ -10,6 +10,7 @@
     <Compile Include="../WorkspaceState.cs" Link="WorkspaceState.cs" />
     <Compile Include="../WorkspaceText.cs" Link="WorkspaceText.cs" />
     <Compile Include="../../../ViewModels/ShellViewModel.cs" Link="ShellViewModel.cs" />
+    <Compile Include="../SidebarCloudRows.cs" Link="SidebarCloudRows.cs" />
     <ProjectReference Include="../../../../TerminalDeck.Core/TerminalDeck.Core.csproj" />
     <Compile Include="../ShellCommands.cs" Link="ShellCommands.cs" />
     <Compile Include="../SessionStatus.cs" Link="SessionStatus.cs" />
