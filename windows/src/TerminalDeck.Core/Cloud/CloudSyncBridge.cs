@@ -61,8 +61,9 @@ public sealed class CloudSyncBridge : IDisposable
   public event Action<CloudSyncState?>? StatusChanged;
   /// The engine while it runs (tests and diagnostics).
   public CloudSyncEngine? Engine { get { lock (gate) return running?.Engine; } }
-  /// The service's clock in ms (this PC's clock plus the offset learned from the service), null while not known.
-  public long? ServiceNow { get { lock (gate) return running?.Client is { ServiceOffset: not null } c ? c.ServiceNow() : null; } }
+  /// The service's clock in ms (CloudFeedClient.KnownServiceNow: the learned offset, or the moment the service accepted
+  /// this PC's own signed time, counted forward on the steady clock), null while not known.
+  public long? ServiceNow { get { lock (gate) return running?.Client.KnownServiceNow(); } }
   /// Every event of the account's socket, after the sync's own nudge (reach by sign-in takes `devices`, `gate`, `hello`).
   public event Action<CloudSyncEvent>? AccountEvent;
 
@@ -134,7 +135,7 @@ public sealed class CloudSyncBridge : IDisposable
     var content = new CloudSecretsContent(subject, deviceId, handover);
     var known = new CloudSecretsKnownStore(Path.Combine(folder, "known"));
     var conflicts = new CloudSecretsKeptConflicts(Path.Combine(folder, "kept-conflicts"));
-    var adapters = (sp.Stores?.Invoke(subject, deviceId, () => client.ServiceOffset is null ? null : client.ServiceNow()) ?? [])
+    var adapters = (sp.Stores?.Invoke(subject, deviceId, client.KnownServiceNow) ?? [])
       .Where(s => CloudSecretsDomains.Admitted(s.SourceId, s.Domain))
       .Select(s => new CloudSecretsLogicalAdapter(s, content, deviceId, known, store.OutboxId, op => engine()?.StillQueued(op) ?? true, conflicts.Keep, log)).ToArray();
     var lane = new CloudSecretsLane(handover, adapters, () => { if (running() is { } r) Nudge(r); }, client.ServiceNow, log);

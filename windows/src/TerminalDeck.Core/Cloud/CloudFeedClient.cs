@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
@@ -218,6 +219,22 @@ public sealed class CloudFeedClient
   /// The service's clock as learned from a clock_skew answer or a commit receipt (ms). Null until known.
   public long? ServiceOffset => long.TryParse(metadata.Get("signingClockOffset"), out var v) ? v : null;
   public long ServiceNow() => clock() + (ServiceOffset ?? 0);
+  /// The service's clock when this PC knows it, null otherwise. Known = an offset learned (above), OR, until one is, the
+  /// moment the service accepted a request this PC signed with its own clock: the service takes a signed request only
+  /// when its time is within 60 s of its own (worker user.ts clockWithin; else clock_skew), so the time that request was
+  /// signed with is the service's time within 60 s at that moment. That moment is taken ONCE (the first accepted request
+  /// of this run) and counted forward on the steady clock, so a later change of this PC's own clock does not move it.
+  /// The Mac has no other source either (its clock comes only from a commit receipt or a clock_skew answer); a Mac always
+  /// commits a first pack, a PC that only RECEIVES never does. 16 Nov, first real sign-in: such a PC never knew the
+  /// service clock, so its announcements waited forever and the Cloud folder, artifacts and the delete rule stayed shut
+  /// for every device of the account.
+  public long? KnownServiceNow()
+  {
+    if (ServiceOffset is { } offset) return clock() + offset;
+    lock (acceptedGate) return accepted is { } at ? at.SignedAt + (long)Stopwatch.GetElapsedTime(at.Steady).TotalMilliseconds : null;
+  }
+  private readonly object acceptedGate = new();
+  private (long SignedAt, long Steady)? accepted;
 
   public CloudFeedClient(CloudSyncEndpoint endpoint, string subject, ICloudSyncAuth auth, ICloudSyncHttp http, ICloudSyncMetadata metadata, Func<long>? clock = null, CloudSyncBackoff? backoff = null)
   {
@@ -271,6 +288,7 @@ public sealed class CloudFeedClient
   private async Task<byte[]> AttemptAsync(string method, string pathAndQuery, byte[] bytes, string requestId, CloudSyncCredentials credentials, bool packScoped, bool skewRetry, CancellationToken ct)
   {
     var time = ServiceNow();
+    var steady = Stopwatch.GetTimestamp();
     var full = "/v1" + pathAndQuery;
     var proof = auth.Proof(method, full, bytes, time, requestId);
     if (!proof.TryGetValue("X-TD-Device", out var device) || device != credentials.DeviceId) throw new CloudFailure("invalid_request");
@@ -279,7 +297,13 @@ public sealed class CloudFeedClient
       ["Authorization"] = "Bearer " + credentials.AccessToken, ["Cache-Control"] = "no-store", ["Content-Type"] = "application/json"
     };
     var response = await Guard(() => http.SendAsync(new(method, endpoint.Control(pathAndQuery), headers, bytes, MaximumControlBytes), ct), ct);
-    if (response.Status is >= 200 and < 300) { Backoff.Succeeded(); return response.Body; }
+    if (response.Status is >= 200 and < 300)
+    {
+      Backoff.Succeeded();
+      // Signed with this PC's own clock (no offset yet) and accepted: that time was within the service's 60 s window.
+      if (ServiceOffset is null) lock (acceptedGate) accepted ??= (time, steady);
+      return response.Body;
+    }
     var detail = ErrorDetail(response.Body);
     if (skewRetry && response.Status == 400 && detail.Code == "clock_skew" && detail.ServerTime is > 0) throw new ClockSkew(detail.ServerTime.Value);
     // Saved passwords B4: the service's explicit word that ANOTHER device signed this device out (who and when).

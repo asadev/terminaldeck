@@ -473,6 +473,30 @@ public sealed class CloudMemoryDeleteRuleTests : IDisposable
     Assert.Equal("# Plan\n", Text(b, "hoot/notes/plan.md"));
   }
 
+  // 16 Nov, the PC run: removed Everywhere and put back on the SAME device. The put-back bytes equal the version the
+  // place came from, so the capture took them as "unchanged since it came" and sent nothing: the other devices kept the
+  // note in their Bin. It must travel as a new version on top of this device's own removal.
+  [Fact]
+  public async Task Put_back_on_the_device_that_removed_it_travels_to_the_others()
+  {
+    var (a, b) = await Shared();
+    a.Memory.WriteFile("hoot/notes/other.md", T("keeps the root"));
+    await Sync(a, b);
+    await Capture(b);
+    var actor = new CloudDeleteActor(CloudDeleteBy.Person, A, "Mac mini", null, null, now, Group);
+    await a.Adapter.DeleteItemsAsync([CloudMemoryAdapter.Item("hoot/notes/plan.md")], CloudDeleteScope.Everywhere, actor);
+    now += 1_000;
+    await Sync(a, b);
+    Assert.Null(Text(b, "hoot/notes/plan.md"));
+    var held = Assert.Single(await a.Adapter.BinGroupsAsync());
+    Assert.Single(await a.Adapter.PutBackGroupAsync(held.Id));
+    Assert.Equal("# Plan\n", Text(a, "hoot/notes/plan.md"));
+    now += 1_000;
+    await Sync(a, b);
+    Assert.Equal("# Plan\n", Text(b, "hoot/notes/plan.md"));
+    Assert.Empty(await b.Adapter.BinGroupsAsync());
+  }
+
   [Fact]
   public async Task Bin_groups_resolve_device_names_and_delete_for_good_takes_only_the_chosen_rows()
   {
