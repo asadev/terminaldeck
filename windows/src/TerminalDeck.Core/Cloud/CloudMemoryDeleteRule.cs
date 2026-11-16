@@ -457,6 +457,9 @@ public sealed partial class CloudMemoryAdapter
       {
         var path = item.Id;
         if (del.Bin.Get(ItemKey(path)) is not { } binned || del.Bin.Content(binned.Kind, binned.Sha256) is not { } bytes) continue;
+        // A removal not sent yet (put back at once, or while offline) must never go out after the put back (the Mac:
+        // DeckMemoryStoreOneRule cloudWriteAsNewest, state.clearIntent).
+        marks.ClearIntent(path);
         if (marks.Mark(path) is { Mark: CloudLocalMark.OnlyOnThisPc })
         {
           requests.PutInCloud.Add(path); SaveRequests();

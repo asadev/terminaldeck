@@ -497,6 +497,26 @@ public sealed class CloudMemoryDeleteRuleTests : IDisposable
     Assert.Empty(await b.Adapter.BinGroupsAsync());
   }
 
+  // 16 Nov review: Put back pressed BEFORE this device sent the removal (at once, or offline). The stored removal must
+  // not go out afterwards: the other device keeps the note and its Bin stays empty.
+  [Fact]
+  public async Task Put_back_before_the_removal_is_sent_sends_no_removal()
+  {
+    var (a, b) = await Shared();
+    a.Memory.WriteFile("hoot/notes/other.md", T("keeps the root"));
+    await Sync(a, b);
+    await Capture(b);
+    var actor = new CloudDeleteActor(CloudDeleteBy.Person, A, "Mac mini", null, null, now, Group);
+    await a.Adapter.DeleteItemsAsync([CloudMemoryAdapter.Item("hoot/notes/plan.md")], CloudDeleteScope.Everywhere, actor);
+    var held = Assert.Single(await a.Adapter.BinGroupsAsync());
+    Assert.Single(await a.Adapter.PutBackGroupAsync(held.Id));
+    now += 1_000;
+    await Sync(a, b);
+    Assert.Equal("# Plan\n", Text(a, "hoot/notes/plan.md"));
+    Assert.Equal("# Plan\n", Text(b, "hoot/notes/plan.md"));
+    Assert.Empty(await b.Adapter.BinGroupsAsync());
+  }
+
   [Fact]
   public async Task Bin_groups_resolve_device_names_and_delete_for_good_takes_only_the_chosen_rows()
   {
