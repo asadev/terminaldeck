@@ -9,8 +9,8 @@
     The .pfx password comes from the environment variable WINDOWS_SIGNING_PFX_PASSWORD, never the command line.
 
   It refuses a signing certificate that is not the one installed PCs already trust (CN=Terminal Deck Stable,
-  SHA-1 thumbprint 2539F637233ED387682AD54E1A5C3D5B3633A96E, valid to 2041, the TerminalDeck-Stable.cer of every
-  release since 0.20): a different certificate would make every installed copy refuse the update. Without -PfxPath it stops after the unsigned package (for a dry build).
+  SHA-1 thumbprint 4DB0D37959FD8CC5A3ECF712843DFCEAF20342D5, valid to 2036, the TerminalDeck-Stable.cer of every
+  release since 0.22.1.0; 0.20 to 0.21.x used 2539F637233ED387682AD54E1A5C3D5B3633A96E, whose key is no longer used): a different certificate would make every installed copy refuse the update. Without -PfxPath it stops after the unsigned package (for a dry build).
 #>
 [CmdletBinding()]
 param(
@@ -136,7 +136,7 @@ try {
   if (!$PfxPath) { Write-Host "Unsigned package (no -PfxPath): $package"; return }
   $password = $env:WINDOWS_SIGNING_PFX_PASSWORD
   if (!$password) { throw 'WINDOWS_SIGNING_PFX_PASSWORD is not set' }
-  $trustedThumbprint = '2539F637233ED387682AD54E1A5C3D5B3633A96E'
+  $trustedThumbprint = '4DB0D37959FD8CC5A3ECF712843DFCEAF20342D5'
   $signer = [Security.Cryptography.X509Certificates.X509Certificate2]::new($PfxPath, $password, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
   if ($signer.Thumbprint -ne $trustedThumbprint -or $signer.Subject -ne 'CN=Terminal Deck Stable' -or !$signer.HasPrivateKey) { throw "The signing certificate ($($signer.Subject), $($signer.Thumbprint)) is not the Terminal Deck Stable certificate installed PCs trust ($trustedThumbprint)." }
   $publicCer = Join-Path $Out 'TerminalDeck-Stable.cer'
