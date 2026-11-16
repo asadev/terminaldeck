@@ -61,7 +61,7 @@ public sealed partial class AppRuntime
   /// their 12-hour renewals). OFF until the saved-passwords lane and the task/agent/project records lane are joined and
   /// Decker says so: a signed-in PC that announced half would hold back parts of sync on the Macs. While off, nothing is
   /// written and nothing is remembered for later.
-  private const bool CloudAnnouncementsOn = false;
+  private const bool CloudAnnouncementsOn = true;
   private Timer? cloudAnnounceTimer;
   /// Lane D's AI delete witness (one per app); the MCP-servers store reads it for `claude mcp remove`.
   public CloudAiDeleteWitness? CloudWitness { get; private set; }

@@ -457,6 +457,9 @@ public sealed partial class CloudMemoryAdapter
       {
         var path = item.Id;
         if (del.Bin.Get(ItemKey(path)) is not { } binned || del.Bin.Content(binned.Kind, binned.Sha256) is not { } bytes) continue;
+        // A removal not sent yet (put back at once, or while offline) must never go out after the put back (the Mac:
+        // DeckMemoryStoreOneRule cloudWriteAsNewest, state.clearIntent).
+        marks.ClearIntent(path);
         if (marks.Mark(path) is { Mark: CloudLocalMark.OnlyOnThisPc })
         {
           requests.PutInCloud.Add(path); SaveRequests();
@@ -466,6 +469,17 @@ public sealed partial class CloudMemoryAdapter
           if (memory.ReadFile(path) is { } current && CloudMemoryFormat.Hash(current) != binned.Sha256) keeper.Keep(path, current, "this PC", localNow());
           memory.WriteFile(path, bytes);
           marks.ClearMark(path);
+          // 16 Nov: removed on THIS device, the place still names the version before the removal as where it came from,
+          // so the put-back bytes (equal to it) were taken as "unchanged" and never sent. Build on the removal itself,
+          // as "Put in Cloud again" does, so the capture sends a new version on top of it.
+          var (storeId, key) = KeyOf(path);
+          if (Newest(key) is { } newest && IsRemoval(newest))
+          {
+            state.Heads[storeId + ":" + key] = new Head { Hash = newest.Hash, Version = newest.Id, Parents = newest.Parents.ToList(), Base = newest.Id };
+            state.FileOrigins[path] = new Origin { StoreId = newest.StoreId, Key = newest.Key, Version = newest.Id };
+            state.FileStamps.Remove(path);
+            Save();
+          }
         }
         del.Bin.Take(ItemKey(path), localNow());
         back.Add(item);
