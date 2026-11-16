@@ -1,5 +1,5 @@
 // Generated from the product's shared Swift source: the phone app's SealedChannel.swift
-// Source SHA256 eb5a3519458652c70e55b199cd638bafd428f4445f1986e057087aec2abcc7c7; regenerate with scripts/assemble-swift-backend.mjs.
+// Source SHA256 d256ce2bd26ed38a58c8ca64ef8fad6df6190b1ae93097249609411b4ba51c46; regenerate with scripts/assemble-swift-backend.mjs.
 /**
  * The sealed channel, in Swift. A port of `src/shared/sealed.ts`, byte for byte.
  *
@@ -90,6 +90,9 @@ enum Sealed {
     /// The Noise IK reply: ephemeral + an empty confirmation's tag. 48; the wire
     /// carries 49.
     static let noiseReplyBytes = keyBytes + tagBytes
+    /// 13 Nov (phone speed, resume): the most an early payload (a resume hello sealed into the first message, see
+    /// `SealedHandshake.start(early:)`) may carry. A Mac that never issued a resume ticket never receives one.
+    static let mostEarlyBytes = 8 * 1024
 }
 
 /**
@@ -360,9 +363,16 @@ enum SealedHandshake {
      * the Node implementation generated and asserts this function produces the
      * identical message. Production callers never pass it.
      */
+    /// `early` (13 Nov, phone speed): a payload sealed into this first message, Noise IK's own message-1 payload,
+    /// under the key `ss` yields (counter 0, the transcript as associated data) and mixed into the transcript after it.
+    /// It is given the transcript hash at that point (`binding`), so a proof inside it is tied to this one handshake.
+    /// Only a resume hello goes here, never a credential: unlike everything after the reply it is not forward secret
+    /// and a relay can replay it, so what it carries must be single-use (a resume ticket's proof) and useless to a
+    /// reader. Nil (every caller before 13 Nov): the 80-byte message, byte for byte as before.
     static func start(deviceStatic: StaticKeyPair,
                       responderStaticPublic: Data,
-                      ephemeral: StaticKeyPair = .generate())
+                      ephemeral: StaticKeyPair = .generate(),
+                      early: ((_ binding: Data) -> Data)? = nil)
         throws -> (message: Data, pending: PendingHandshake) {
 
         guard responderStaticPublic.count == Sealed.keyBytes else { throw SealedError.length }
@@ -380,7 +390,15 @@ enum SealedHandshake {
         let ss = mixKey(chainingKey, try diffieHellman(deviceStatic.privateKey, responderStaticPublic))
         chainingKey = ss.chainingKey
 
-        return (ephemeral.publicKey + encryptedStatic,
+        var sealedEarly = Data()
+        if let early {
+            let payload = early(h)
+            guard payload.count <= Sealed.mostEarlyBytes else { throw SealedError.length }
+            sealedEarly = try seal(key: ss.temp, counter: 0, plaintext: payload, aad: h)
+            h = hash(h, sealedEarly)
+        }
+
+        return (ephemeral.publicKey + encryptedStatic + sealedEarly,
                 PendingHandshake(ephemeralPrivate: ephemeral.privateKey,
                                  chainingKey: chainingKey,
                                  h: h,
@@ -503,15 +521,31 @@ public struct BackendSealedResponse: Sendable {
     public let reply: Data
     public let devicePublicKey: Data
     public let transport: BackendSealedTransport
+    /// 13 Nov (phone speed, resume): the payload sealed into the device's first message (a resume hello), opened;
+    /// nil when it sent the plain 80 bytes. Only ever from a key this Mac already knows (never on a pairing).
+    public var early: Data? = nil
+    /// The transcript hash the early payload was sealed under: what a resume proof inside it is bound to.
+    public var earlyBinding: Data? = nil
 }
 
 extension SealedHandshake {
     /// The host direction from src/shared/sealed.ts. Approval is checked only
     /// after authenticating the encrypted identity and deriving its static DH.
     static func respond(host: StaticKeyPair, message: Data, known: Set<Data>, permitUnknownPeer: Bool = false, ephemeral: StaticKeyPair) throws -> (Data, Data, SealedTransport) {
-        guard message.count == Sealed.noiseMessageBytes else { throw SealedError.length }
+        let answered = try respondEarly(host: host, message: message, known: known, permitUnknownPeer: permitUnknownPeer, ephemeral: ephemeral)
+        return (answered.reply, answered.device, answered.transport)
+    }
+
+    /// `respond`, also opening an early payload (13 Nov: `start(early:)`): a message longer than 80 bytes carries one,
+    /// sealed under `ss` and mixed into the transcript, so both ends' keys and binding include it.
+    static func respondEarly(host: StaticKeyPair, message: Data, known: Set<Data>, permitUnknownPeer: Bool = false, ephemeral: StaticKeyPair)
+        throws -> (reply: Data, device: Data, transport: SealedTransport, early: Data?, earlyBinding: Data?) {
+        guard message.count == Sealed.noiseMessageBytes
+                || (message.count >= Sealed.noiseMessageBytes + Sealed.tagBytes && message.count <= Sealed.noiseMessageBytes + Sealed.tagBytes + Sealed.mostEarlyBytes)
+        else { throw SealedError.length }
         let peerEphemeral = Data(message.prefix(Sealed.keyBytes))
-        let encryptedStatic = Data(message.dropFirst(Sealed.keyBytes))
+        let encryptedStatic = Data(message.prefix(Sealed.noiseMessageBytes).dropFirst(Sealed.keyBytes))
+        let sealedEarly = Data(message.dropFirst(Sealed.noiseMessageBytes))
         var (chainingKey, h) = initialState(responderStatic: host.publicKey)
         h = hash(h, peerEphemeral)
         let es = mixKey(chainingKey, try diffieHellman(host.privateKey, peerEphemeral))
@@ -524,6 +558,14 @@ extension SealedHandshake {
         // admits only the Noise transport; hello must still spend the one-shot
         // code and human approval must still precede session access.
         guard permitUnknownPeer || known.contains(device) else { throw SealedError.authentication }
+        var early: Data?, earlyBinding: Data?
+        if !sealedEarly.isEmpty {
+            // Opened (a bad tag ends the handshake like any other) and always mixed in, so the transcript matches the
+            // device's; handed up only for a key this Mac already knows (a pairing never carries one).
+            let opened = try open(key: ss.temp, counter: 0, sealed: sealedEarly, aad: h)
+            if known.contains(device) { early = opened; earlyBinding = h }
+            h = hash(h, sealedEarly)
+        }
         h = hash(h, ephemeral.publicKey)
         let ee = mixKey(chainingKey, try diffieHellman(ephemeral.privateKey, peerEphemeral))
         chainingKey = ee.chainingKey
@@ -533,7 +575,7 @@ extension SealedHandshake {
         h = hash(h, confirmation)
         let keys = split(chainingKey, h)
         return (ephemeral.publicKey + confirmation, device,
-                SealedTransport(sendKey: keys.k2, receiveKey: keys.k1, channelBinding: keys.binding))
+                SealedTransport(sendKey: keys.k2, receiveKey: keys.k1, channelBinding: keys.binding), early, earlyBinding)
     }
 }
 
@@ -546,8 +588,9 @@ public enum BackendSealedHost {
             ephemeral = key
         } else { ephemeral = .generate() }
         do {
-            let (reply, peer, transport) = try SealedHandshake.respond(host: host, message: message, known: approvedKeys, permitUnknownPeer: permitUnknownPeer, ephemeral: ephemeral)
-            return BackendSealedResponse(reply: reply, devicePublicKey: peer, transport: BackendSealedTransport(transport))
+            let answered = try SealedHandshake.respondEarly(host: host, message: message, known: approvedKeys, permitUnknownPeer: permitUnknownPeer, ephemeral: ephemeral)
+            return BackendSealedResponse(reply: answered.reply, devicePublicKey: answered.device, transport: BackendSealedTransport(answered.transport),
+                                         early: answered.early, earlyBinding: answered.earlyBinding)
         } catch {
             if error as? SealedError == .length { throw BackendSealedFailure.length }
             throw BackendSealedFailure.authentication
@@ -555,10 +598,12 @@ public enum BackendSealedHost {
     }
 
     public static func respondRelayFrame(identity: BackendSealedIdentity, frame: Data, approvedKeys: Set<Data>, permitUnknownPeer: Bool = false) throws -> BackendSealedResponse {
-        guard frame.count == RelayWire.handshakeOpenBytes else { throw BackendSealedFailure.length }
+        // 81 bytes, or (13 Nov, resume) 81 + a sealed early payload; `respond` checks the exact bounds.
+        guard frame.count >= RelayWire.handshakeOpenBytes else { throw BackendSealedFailure.length }
         guard frame.first == RelayWire.sealedVersion else { throw BackendSealedFailure.version }
         let opened = try respond(identity: identity, message: Data(frame.dropFirst()), approvedKeys: approvedKeys, permitUnknownPeer: permitUnknownPeer)
-        return BackendSealedResponse(reply: RelayWire.withSealedVersion(opened.reply), devicePublicKey: opened.devicePublicKey, transport: opened.transport)
+        return BackendSealedResponse(reply: RelayWire.withSealedVersion(opened.reply), devicePublicKey: opened.devicePublicKey, transport: opened.transport,
+                                     early: opened.early, earlyBinding: opened.earlyBinding)
     }
 }
 

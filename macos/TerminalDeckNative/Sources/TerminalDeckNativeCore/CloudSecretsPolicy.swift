@@ -5,6 +5,8 @@ public enum CloudSecretsStage: String, CaseIterable, Sendable { case capture, ex
 public enum CloudSecretsDomain: String, Codable, CaseIterable, Sendable {
     case apiKey = "api-key", server, ssh, mcp, taskConnection = "task-connection", receiver, browserCookies = "browser-cookies"
     case browserPassword = "browser-password", project, app, aiSubscription = "ai-subscription"
+    /// 15 Nov: WhatsApp agents' keys (store "whatsapp").
+    case whatsapp
     public var purpose: CloudPurpose {
         switch self { case .aiSubscription: .aiSubscription; case .browserCookies, .browserPassword: .browser; default: .secret }
     }

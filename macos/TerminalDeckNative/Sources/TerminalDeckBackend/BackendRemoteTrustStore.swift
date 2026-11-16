@@ -79,6 +79,8 @@ public actor BackendRemoteTrustStore {
     var pairingLockedByReach = false
     public func setPairingLockedByReach(_ on: Bool) { pairingLockedByReach = on; if on { cancelPairing() } }
     public func pairingLocked() -> Bool { pairingLockedByReach }
+    /// 13 Nov (phone speed): resume tickets by id, memory only (BackendRemoteResume.swift).
+    var resumeTickets: [String: BackendRemoteResumeTicket] = [:]
     private var changeObservers: [UUID: @Sendable () -> Void] = [:]
     public var onChanged: (@Sendable () -> Void)?
 
@@ -103,7 +105,7 @@ public actor BackendRemoteTrustStore {
             identity = loaded; lease = held
         } catch { throw error }
     }
-    public func close() { localWebPairing.cancel(); cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data(); phoneAccessLevels = [:]; reachAdmitted = [:] }
+    public func close() { localWebPairing.cancel(); cancelPairing(); lease = nil; identity = nil; devices = []; attempts = [:]; decoySalt = Data(); phoneAccessLevels = [:]; reachAdmitted = [:]; resumeTickets = [:] }
     public func hostIdentity() throws -> BackendRemoteHostIdentity { try requireOpen(); guard let identity else { throw BackendRemoteTrustFailure.closed }; return identity }
     public func listDevices() -> [BackendRemoteDevice] { devices.map(\.publicDevice) }
     public func device(_ id: String) -> BackendRemoteDevice? { devices.first { $0.id == id }?.publicDevice }
@@ -364,7 +366,7 @@ public actor BackendRemoteTrustStore {
     }
     private func clearFailures(_ keys: [String]) { for key in keys { attempts[key] = nil } }
     private func commit(_ next: [StoredDevice]) throws { try persist(next); devices = next; changed() }
-    private func persist(_ rows: [StoredDevice]) throws { try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .array(rows.map(\.value)))]), file: directory.appendingPathComponent("remote-auth.json")) }
+    func persist(_ rows: [StoredDevice]) throws { try BackendRemoteTrustStorage.write(.object([.init("version", .number(1)), .init("devices", .array(rows.map(\.value)))]), file: directory.appendingPathComponent("remote-auth.json")) }
     private func loadDevices() throws {
         let file = directory.appendingPathComponent("remote-auth.json")
         let raw: NativeRPCValue?

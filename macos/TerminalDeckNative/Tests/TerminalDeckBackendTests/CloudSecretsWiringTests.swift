@@ -135,9 +135,9 @@ struct CloudSecretsWiringTests {
             WiringStore(sourceId: "voice", domain: .apiKey)]
         #expect(BackendCloudSecretsLean.domains(out).isEmpty)
         let domains = BackendCloudSecretsLean.domains(out + lean + out + lean)
-        #expect(domains == ["api-key", "server", "ssh", "mcp", "task-connection", "receiver", "app", "project"])
+        #expect(domains == ["api-key", "server", "ssh", "mcp", "task-connection", "receiver", "app", "project", "whatsapp"])
         let kept = BackendCloudSecretsLean.admitted(out + lean + lean).map { $0.sourceId }.sorted()
-        #expect(kept == ["api", "mcp-user", "project-files", "receiver", "servers", "ssh", "tasks", "voice"])
+        #expect(kept == ["api", "mcp-user", "project-files", "receiver", "servers", "ssh", "tasks", "voice", "whatsapp"])
         // Nothing handed in: the sync core is built with no saved-password domain and no saved-password content port.
         let parts = BackendCloudSecretsEngineParts()
         #expect(parts.domains.isEmpty)
@@ -363,7 +363,7 @@ struct CloudSecretsWiringTests {
         // Every source of this version that did not join is named in one plain sentence, on the page and in the tool.
         let expected = BackendCloudSecretsLeanCoverage.notSaved(registered: ["api"])
         #expect(w.graph.notSaved == expected)
-        #expect(expected.count == 7) // seven lean sources besides "api" (project secret files joined 14 Nov)
+        #expect(expected.count == 8) // eight lean sources besides "api" (project secret files joined 14 Nov, WhatsApp keys 16 Nov)
         let page = await w.graph.page()
         #expect(page.notSaved == expected)
         #expect(page.skipped.isEmpty)

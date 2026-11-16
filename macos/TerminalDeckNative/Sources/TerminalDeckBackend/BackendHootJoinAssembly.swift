@@ -36,6 +36,8 @@ public struct BackendHootJoinFolderSupply: BackendCopilotFolderDependencies {
 /// supplies only AppKit (panels, picker, navigation) and the evidence closures
 /// named in hoot-HANDOFF.md. Nothing starts until `installed.registration.start()`.
 public enum BackendHootJoinAssembly {
+    /// A Hoot conversation that lasts (WhatsApp agents): its id is "lasting-<name>" and its folder is fixed.
+    static let lastingPrefix = "lasting-"
     public struct Inputs: Sendable {
         public let storageRoot: URL
         public let sessions: BackendCompositionSessions
@@ -216,21 +218,26 @@ public enum BackendHootJoinAssembly {
         // own process, the same AI, account, card, rules, playbook (its desk) and tools as the chat Hoot, the same fence
         // on Hoot's records. Never the chat's conversation; its CLI session is hidden like the chat Hoot's.
         let taskHome = dataRoot.appendingPathComponent("hoot-tasks", isDirectory: true)
+        let lastingHome = dataRoot.appendingPathComponent("hoot-lasting", isDirectory: true)
         let taskProvider = inputs.headlessProvider, taskConsent = inputs.deckCore.consent, taskConfinement = inputs.confinement
         let taskPolicy = inputs.headlessPolicy, taskOwner = inputs.ownerContext, taskProviders = root.providers
         let mainHome = RNMHootPaths(dataRoot: dataRoot).home.path
         let makeConversation: @Sendable (String, HootChatProvider) async throws -> BackendCopilotSessionRuntime = { taskID, taskProvider in
-            let folder = taskHome.appendingPathComponent(BackendHootTaskConversations.folderName(taskID) + "-" + UUID().uuidString.lowercased(), isDirectory: true)
+            // A lasting conversation (WhatsApp agents) keeps one fixed folder, so it carries on after a restart.
+            let lastingID = taskID.hasPrefix(Self.lastingPrefix) ? String(taskID.dropFirst(Self.lastingPrefix.count)) : nil
+            let folder = lastingID.map { lastingHome.appendingPathComponent(BackendHootTaskConversations.folderName($0), isDirectory: true) }
+                ?? taskHome.appendingPathComponent(BackendHootTaskConversations.folderName(taskID) + "-" + UUID().uuidString.lowercased(), isDirectory: true)
+            let ownTask = !taskID.hasPrefix("fork-") && lastingID == nil
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let taskChat = try BackendHootChatStore(file: folder.appendingPathComponent("chat-\(taskProvider.rawValue).json"),
                                                     provider: taskProvider, consent: taskConsent, retainAllHistory: true)
             await taskChat.setToolTier { name in await tierServer.control.policy(named: name)?.tool.tier }
             let taskDriver = BackendHootChatDriver(providers: taskProviders, sessions: sessions, confinement: taskConfinement, chat: taskChat,
                 exposure: boundary.exposureHook, policy: taskPolicy, readyDefaults: defaults, launchBinding: launchBinding,
-                defaultProjectPath: mainHome, ownerContext: taskOwner, taskID: taskID.hasPrefix("fork-") ? nil : taskID)
+                defaultProjectPath: mainHome, ownerContext: taskOwner, taskID: ownTask ? taskID : nil)
             await usage.track(BackendHootUsage.taskPrefix + taskID, chat: taskChat) { await usageAccount(taskDriver) }
             let taskDoor: any BackendCopilotSessionToolProviding
-            if !taskID.hasPrefix("fork-"), let host = await sessions.chatHost, host.hello.chatService == 1 {
+            if ownTask, let host = await sessions.chatHost, host.hello.chatService == 1 {
                 taskDoor = try await BackendHOSTTaskChatDoor(source: door, client: host, taskID: taskID)
             } else { taskDoor = door }
             return BackendCopilotSessionRuntime(dependencies: .init(userData: folder.path, storageDir: storageRoot.path,
@@ -245,6 +252,7 @@ public enum BackendHootJoinAssembly {
         let taskConversations = BackendHootTaskConversations(makeFork: makeConversation) { taskID in
             try await makeConversation(taskID, taskProvider)
         }
+        await taskConversations.setLastingMaker { id in try await makeConversation(Self.lastingPrefix + id, taskProvider) }
         let folder = BackendCopilotFolderService(dependencies: BackendHootJoinFolderSupply(dataRoot: dataRoot, settings: settings,
             runningIn: { try? await runtime.state().folder.runningIn }, pick: inputs.pickFolder))
         let authority = BackendHootJoinSourceAuthority(window: inputs.window)

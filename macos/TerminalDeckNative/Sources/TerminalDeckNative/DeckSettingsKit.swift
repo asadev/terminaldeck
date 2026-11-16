@@ -236,8 +236,7 @@ struct DeckSettingsGroup<Content: View>: View {
                 Group(subviews: content()) { rows in
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         if index > 0 {
-                            Rectangle().fill(DeckSettingsLook.separator).frame(height: 0.5)
-                                .padding(.leading, DeckSettingsLook.separatorInset)
+                            DeckSettingsHairline().padding(.leading, DeckSettingsLook.separatorInset)
                         }
                         row
                     }
@@ -247,6 +246,16 @@ struct DeckSettingsGroup<Content: View>: View {
             .background(DeckSettingsLook.groupFill, in: RoundedRectangle(cornerRadius: DeckSettingsLook.groupRadius))
             .clipShape(RoundedRectangle(cornerRadius: DeckSettingsLook.groupRadius))
         }
+    }
+}
+
+/// The line between two rows: exactly one device pixel (0.5 pt on a 2x screen, 1 pt on a 1x screen), so every row
+/// boundary sits on a whole pixel and looks the same. A fixed 0.5 pt line on a 1x screen lands on a half pixel under
+/// every second row and is dropped there (WhatsApp seven-agents picture, 16 Nov).
+struct DeckSettingsHairline: View {
+    @Environment(\.displayScale) private var scale
+    var body: some View {
+        Rectangle().fill(DeckSettingsLook.separator).frame(height: 1 / max(scale, 1))
     }
 }
 

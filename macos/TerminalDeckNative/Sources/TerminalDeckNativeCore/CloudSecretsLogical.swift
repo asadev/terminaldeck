@@ -155,6 +155,7 @@ public actor CloudSecretsLogicalAdapter: CloudDomainAdapter {
         case .project: item = "A project's secret settings"
         case .app: item = "An app sign-in"
         case .aiSubscription: item = "An AI subscription sign-in"
+        case .whatsapp: item = "A WhatsApp agent's key"
         }
         return item + " is too large to save in Cloud. It stays on this Mac."
     }

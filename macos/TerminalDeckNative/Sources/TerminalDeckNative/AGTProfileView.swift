@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 /// Item 100: one agent's profile. Tabs Dashboard · Memory · Instructions · Skills · Runs
@@ -33,6 +34,7 @@ struct AGTProfileView: View {
         if let fixtureActions { return fixtureActions }
         if model.isFixture { return .init(name: model.draft.name) }
         var value = agent.map { AgentMenu.actions(for: $0) } ?? .init(name: model.draft.name)
+        if isHoot { value.whatsApp = .hoot }
         // Wake, Stop and Reset sessions go through the task engine's own agent actions.
         // The engine asks the owner once through the approval path (agopt:profile-action).
         if !isHoot, agent?.kind == .profile {
@@ -134,6 +136,8 @@ struct AGTProfileView: View {
 
     private var headerActions: some View {
         HStack(spacing: 8) {
+            // WhatsApp (DESIGN-WHATSAPP section 3): the one chip, only while a WhatsApp agent is attached here.
+            if let here = actions.whatsApp { NativeWhatsAppChip(here: here, separated: false) }
             Button {
                 guard !model.isFixture else { return }
                 if isHoot { HootProfileRoute.open(tab: "brain") } else { AGTAgentSettingsWindow.open(agentID) }

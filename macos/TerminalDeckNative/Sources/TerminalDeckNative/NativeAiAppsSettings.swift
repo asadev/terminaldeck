@@ -23,6 +23,8 @@ struct NativeAiAppsSettings: View {
                     else { DeckSettingsProblem(text: "Reading the keys…", warn: false) }
                 }
             }
+            // WhatsApp agents (DESIGN-WHATSAPP section 2): the new LAST group; the groups above are unchanged.
+            NativeWhatsAppSettingsGroup()
         }
         .onAppear { model.start() }
         .onDisappear { model.stop() }

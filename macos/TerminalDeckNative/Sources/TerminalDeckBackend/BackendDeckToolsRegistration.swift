@@ -111,7 +111,9 @@ public enum BackendDeckToolsRegistration {
         let cloudArtifactsTools: Set<String> = supplied.isDisjoint(with: BackendCloudArtifactsTools.pageIDs) ? [] : BackendCloudArtifactsTools.pageIDs
         // Project secret files (14 Nov): cloud.project_secrets (read only), supplied whole or not at all.
         let projectSecretTools: Set<String> = supplied.isDisjoint(with: BackendProjectSecretFilesTools.pageIDs) ? [] : BackendProjectSecretFilesTools.pageIDs
-        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs).union(attachTools).union(recordTools).union(simulatorTools).union(chatTools).union(libraryTools).union(devicePanelTools).union(sidebarTools).union(queueTools).union(captureTools).union(privacyTools).union(devicesPageTools).union(codePageTools).union(cloudPageTools).union(cloudFolderTools).union(cloudArtifactsTools).union(projectSecretTools)
+        // WhatsApp agents (15 Nov): the seven whatsapp.* tools, supplied whole or not at all.
+        let whatsAppTools: Set<String> = supplied.isDisjoint(with: BackendWhatsAppTools.pageIDs) ? [] : BackendWhatsAppTools.pageIDs
+        let expected = Set(rootIDs + sessionIDs + appIDs + machineIDs).union(BackendAIRReadinessTools.toolIDs).union(BackendSFXMCP.toolIDs).union(attachTools).union(recordTools).union(simulatorTools).union(chatTools).union(libraryTools).union(devicePanelTools).union(sidebarTools).union(queueTools).union(captureTools).union(privacyTools).union(devicesPageTools).union(codePageTools).union(cloudPageTools).union(cloudFolderTools).union(cloudArtifactsTools).union(projectSecretTools).union(whatsAppTools)
         // The Bin is by hand only: a retired Bin or delete tool is never part of any expected set, whoever lists it.
         return expected.subtracting(BackendCloudManagerTools.retiredIDs)
     }

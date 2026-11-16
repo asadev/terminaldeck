@@ -300,6 +300,8 @@ extension NativeCompositionProduction {
         try await installINT2PhonePanels(panels: panels)
         try await registerMachines()
         try await installBrowserChannels()
+        // WhatsApp agents (15 Nov): after the sessions, the chat owners and Hoot exist.
+        await installWhatsApp()
         _ = sessions; _ = hoot; _ = routinesOwner
     }
 
@@ -318,6 +320,8 @@ extension NativeCompositionProduction {
             + BackendCloudArtifactsTools.definitions(access: access, actions: NativeCloudArtifacts.toolActions())
             // Project secret files: which travel with saved passwords (read only; never a file's content).
             + BackendProjectSecretFilesTools.definitions(access: access, actions: NativeProjectSecretFiles.toolActions())
+            // WhatsApp agents (15 Nov): list, add, remove, rename, replace key, where it is received, send.
+            + BackendWhatsAppTools.definitions(access: access, actions: .init(engine: { await NativeWhatsAppEngineBox.shared.engine }))
     }
 
     static func replacing(_ definition: BackendDeckToolsDefinition, handler: @escaping BackendNativeMCPServer.Handler) -> BackendDeckToolsDefinition {

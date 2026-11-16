@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 struct SidebarView: View {
@@ -327,6 +328,10 @@ struct SIDEBARPanel<Footer: View, HostFailure: View>: View {
         Button("Open in new window") { openWindow(session) }
         Button("Rename…") { rename(session) }
         NativeConnectBrowserMenu(tabId: session.id)
+        // WhatsApp (DESIGN-WHATSAPP section 3): in the menu only; the row itself shows nothing new.
+        if case .local(let id)? = SessionTarget(tabId: session.id) {
+            NativeWhatsAppSubmenu(here: .session(id: id, name: SIDEBARSessionLine.title(session, store: store)))
+        }
         Divider()
         if running.contains(where: { $0.id == session.id }) { Button("Stop") { stop(session.id) } }
         Button("Delete", role: .destructive) { close(session.id) } // the app's own close, with its confirmation

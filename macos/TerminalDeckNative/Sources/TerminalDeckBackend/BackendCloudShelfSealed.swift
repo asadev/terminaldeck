@@ -166,6 +166,12 @@ public enum BackendCloudShelfSealed {
             var fields: [CloudSecretsShelfSeal.Field] = [.init(label: "Secret", value: secrets.secret, secret: true)]
             if let reply = secrets.reply, !reply.isEmpty { fields.append(.init(label: "Reply token", value: reply, secret: true)) }
             return Line(name: clip(source.name, 128) ?? "Receiver source", purpose: "Receiver", place: nil, fields: fields)
+        case BackendWhatsAppKeysStore.source:
+            // WhatsApp agents: the key, by his name for the agent.
+            guard let value = try? BackendCloudSecretsRecords.decode(WhatsAppKeyValue.self, record, source: record.sourceId, domain: .whatsapp),
+                  !value.key.isEmpty else { return nil }
+            return Line(name: "WhatsApp · " + (clip(value.name, 110) ?? "WhatsApp agent"), purpose: "WhatsApp key", place: nil,
+                        fields: [.init(label: "Key", value: value.key, secret: true)])
         default:
             // MCP server sign-ins and any other saved password: every setting it holds, a secret-looking one hidden.
             var raw = record.payload.raw
@@ -187,6 +193,7 @@ public enum BackendCloudShelfSealed {
         case .receiver: return "Receiver sign-in"
         case .project: return "Project password"
         case .app: return "App password"
+        case .whatsapp: return "WhatsApp key"
         default: return "Saved password"
         }
     }

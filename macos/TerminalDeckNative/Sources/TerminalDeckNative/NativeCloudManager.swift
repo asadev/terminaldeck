@@ -42,7 +42,8 @@ extension NativeCloudContentsModel {
         if let kind { shared.chooseShelf(kind: kind) }
         AppModel.shared.select(Sidebar21Pages.cloudID)
         NativeLaunchWindow.ensureShown(front: true)
-        NSApp?.activate() // front-ok: only his own Manage files click (Settings › Cloud) calls this
+        // His own Manage files click (Settings › Cloud): the app is active and the click is the current event.
+        NativeFront.onlyForPerson("Cloud: Manage files") { NSApp?.activate() }
     }
 
     // MARK: Places, folders, back and forward

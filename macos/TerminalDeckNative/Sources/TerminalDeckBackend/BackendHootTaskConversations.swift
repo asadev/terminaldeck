@@ -26,6 +26,20 @@ public actor BackendHootTaskConversations {
     private let make: Make
     private let memory: @Sendable () async -> any DeckMemoryStoring
     private var workers: [String: any BackendHootTaskWorker] = [:]
+    /// WhatsApp agents (15 Nov): Hoot's lasting conversations, one per name, kept for the app's life and saved in their
+    /// own fixed folder (so the conversation carries on after a restart). Never a task's conversation, never the chat's.
+    private var makeLasting: (@Sendable (String) async throws -> BackendCopilotSessionRuntime)?
+    private var lasting: [String: BackendCopilotSessionRuntime] = [:]
+    public func setLastingMaker(_ make: (@Sendable (String) async throws -> BackendCopilotSessionRuntime)?) { makeLasting = make }
+    /// The lasting conversation for `id` (letters, digits, "-" and "_"), made on first use.
+    public func lastingConversation(_ id: String) async throws -> BackendCopilotSessionRuntime {
+        if let made = lasting[id] { return made }
+        guard let makeLasting else { throw NativeRPCError(code: "unavailable", message: "Hoot's conversation owner is unavailable.") }
+        let made = try await makeLasting(id)
+        if let raced = lasting[id] { await made.rest(); return raced }
+        lasting[id] = made
+        return made
+    }
     private var visibleStart: (@Sendable (String, String, any BackendHootTaskWorker) async throws -> Void)?
     private var closing: @Sendable () async -> Bool = { false }
     private var visibleFinish: (@Sendable (String, BackendHootTaskResult) async -> Void)?

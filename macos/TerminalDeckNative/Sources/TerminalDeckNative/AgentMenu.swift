@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 /// Shared content for both right-click and the ellipsis. Handlers are injectable:
@@ -52,6 +53,9 @@ struct AgentMenu: View {
         var archived = false
         var reasons: [Action: String] = [:]
         var busy = false
+        /// WhatsApp (DESIGN-WHATSAPP section 3): where a WhatsApp agent attached from this menu is received (Hoot or this
+        /// saved agent). Nil hides the submenu (a live session's row has its own, in the side panel).
+        var whatsApp: WhatsAppReceiver?
     }
 
     let actions: Actions
@@ -91,6 +95,7 @@ struct AgentMenu: View {
                 .disabled(actions.setLead == nil || actions.busy)
                 .help(actions.leadReason ?? "A project has one lead. Hoot gives the lead goals; the lead runs the project's agents.")
         }
+        if let here = actions.whatsApp { NativeWhatsAppSubmenu(here: here) }
         item(.copy)
         item(.duplicate)
         item(.file)
@@ -143,6 +148,9 @@ private enum AgentMenuNative {
         let tasks = Array(Set(rows.filter { $0.sessionID != nil }.compactMap(\.taskID))).sorted()
         var value = AgentMenu.Actions(name: agent.name, paused: agent.status == "paused", managerID: agent.reportsTo)
         value.busy = store.busy || TasksStore.shared.busy
+        // WhatsApp: Hoot, or a saved agent by its profile id (the receiver the engine keeps), by its name.
+        if agent.isHoot { value.whatsApp = .hoot }
+        else if agent.kind == .profile, let id = agent.profileID, agent.status != "archived" { value.whatsApp = .agent(id: id, name: agent.name) }
         value.perform[.open] = {
             // Hoot's profile lives on the Hoot page.
             if agent.kind == .hoot { HootProfileRoute.open(); return }

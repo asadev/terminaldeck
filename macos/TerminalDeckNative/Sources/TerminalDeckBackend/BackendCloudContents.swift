@@ -619,6 +619,7 @@ public enum BackendCloudContentsBuilder {
         case .project: return "Project password"
         case .app: return "App password"
         case .aiSubscription: return "AI account sign-in"
+        case .whatsapp: return "WhatsApp key"
         case nil: return "Saved password"
         }
     }

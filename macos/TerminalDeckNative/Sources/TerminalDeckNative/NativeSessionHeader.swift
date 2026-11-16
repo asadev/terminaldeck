@@ -1,4 +1,5 @@
 import SwiftUI
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 /// A session's bar, as the page's window toolbar drew it over a session: its name
@@ -38,6 +39,8 @@ struct NativeSessionHeader: View {
             case .local(let id):
                 if !header.folderPath.isEmpty { ChipSeparator() }
                 NativeLocalAccountChip(session: session)
+                // WhatsApp (DESIGN-WHATSAPP section 3): only while a WhatsApp agent is attached to this session.
+                NativeWhatsAppChip(here: .session(id: id, name: sharedTitle(fallback: header.title)))
                 // Switch to this Mac: the move's one done line, once, on the session it started here.
                 if let moved = NativeCloudChats.shared.arrivals[id] {
                     ChipSeparator()

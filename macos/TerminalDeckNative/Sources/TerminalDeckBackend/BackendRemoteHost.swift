@@ -14,6 +14,9 @@ public struct BackendRemoteHostWire: Sendable {
     /// Reach by account (R2 decision 2): set by the relay client after the reach door admitted this channel's
     /// sealed handshake, never by a message. Only such a wire takes a `reach:<deviceId>` hello, and it takes no other.
     public var reach: BackendReachAdmission? = nil
+    /// 13 Nov (phone speed): the transcript hash a payload sealed into the handshake's first message was sealed under
+    /// (`BackendSealedResponse.earlyBinding`); a resume hello's proof must be bound to it. Nil without one.
+    public var earlyBinding: Data? = nil
     public init(address: String, peerPublicKey: Data? = nil, localWebBootstrap: Bool = false, send: @escaping @Sendable (String) async throws -> Void, close: @escaping @Sendable (Int, String) async -> Void) {
         self.address = address; self.peerPublicKey = peerPublicKey; self.localWebBootstrap = localWebBootstrap; self.send = send; self.close = close
     }
@@ -196,6 +199,9 @@ public actor BackendRemoteHost {
     /// session with its size (taking it), sends `take` for "Move back here", reports its size with `resize` without
     /// taking it, and shows "Open on <name>" while another device has it (`size` frames, with the owner's `name`).
     public static let handoffCapability = "terminal.handoff"
+    /// 13 Nov (phone speed): what a phone says when it reads a session's history as raw DEFLATE pieces (`output` with
+    /// `z`, base64, and an empty `data`). Only a phone that claims it is sent them; everything else gets plain text.
+    public static let historyDeflateCapability = "history.z"
     /// 28 Oct: when each session last printed (host clock), for `settle`.
     private var lastOutput: [String: Double] = [:]
     private var status: [String: BackendSessionStatus] = [:]
@@ -265,6 +271,8 @@ public actor BackendRemoteHost {
         var sentSize: [String: NativeRPCValue] = [:]
         /// 29 Oct: this connection's frames, answered alongside each other where they may be (`take`).
         var pipeline = Pipeline()
+        /// 13 Nov (phone speed): this connection already tried a resume hello (one try, right or wrong).
+        var resumeTried = false
     }
     private let screenOnly: Bool
 
@@ -638,16 +646,13 @@ public actor BackendRemoteHost {
     private func deliverSession(_ id: UUID, _ sessionID: String, from ptySource: any BackendRemoteServePTYSource) async throws {
         // No await from the owner-queue snapshot to installing this peer's
         // watermark. Earlier queued events are excluded from its replay.
-        #if DEBUG
         let snapAt = clock()
-        #endif
         guard let snapshot = ptySource.snapshot(sessionID), live[id] != nil else {
             live[id]?.viewSizes[sessionID] = nil; _ = try? pushViewerSizes(sessionID)
             await unknown(id, sessionID); return
         }
-        #if DEBUG
-        BackendRemoteRelayClient.note("open: snapshot \(sessionID.prefix(8)) \(snapshot.replay.utf8.count / 1024) KB in \(Int(clock() - snapAt)) ms (link \(live[id]?.link.path.hasMoved == true ? "moved" : "not moved"))")
-        #endif
+        let readMs = Int(clock() - snapAt)
+        let deflate = live[id]?.capabilities.contains(Self.historyDeflateCapability) == true
         live[id]?.attached.insert(sessionID); live[id]?.outputChecked[sessionID] = nil
         live[id]?.attachmentBoundaries[sessionID] = .init(sequence: snapshot.sequence, ready: false)
         live[id]?.pendingAttachmentEvents[sessionID] = []
@@ -656,9 +661,15 @@ public actor BackendRemoteHost {
             // Before the snapshot: who has the size (a phone that shows pictures sizes its picture first).
             try await sendSize(id, sessionID)
             // Flagged as history (27 Oct): the phone's first unflagged frame, or the `status` below, ends its hold.
-            for frame in try Self.historyFrames(sessionID, snapshot.replay) { try await send(id, frame) }
+            let packAt = clock()
+            let frames = try Self.historyFrames(sessionID, snapshot.replay, deflate: deflate)
+            let packMs = Int(clock() - packAt), sendAt = clock()
+            for frame in frames { try await send(id, frame) }
             let current = accepted[sessionID] ?? snapshot.status
             try await send(id, .init(.status, fields: statusFields(sessionID, current)))
+            // Timings only (13 Nov, phone speed): never the screen's text. `KB` raw, then what went on the wire.
+            let wire = frames.reduce(0) { $0 + ($1.value["z"].string ?? $1.value["data"].string ?? "").utf8.count }
+            BackendRemoteRelayClient.note("open: snapshot \(sessionID.prefix(8)) \(snapshot.replay.utf8.count / 1024) KB, \(wire / 1024) KB sent\(deflate ? " (z)" : "") in \(frames.count) frames; read \(readMs) ms, pack \(packMs) ms, send \(Int(clock() - sendAt)) ms (link \(live[id]?.link.path.hasMoved == true ? "moved" : "not moved"))")
         } catch {
             // A failed replay must not leave a not-ready attachment that
             // holds the lifecycle's exit/grant-pruning barrier forever.
@@ -889,21 +900,15 @@ public actor BackendRemoteHost {
             // `keep`: a phone coming back after its link dropped, to a session it had; it takes it back only if nobody
             // chose it since. A phone that shows pictures (27 Oct) attaches without a size and never takes it.
             watchSizes()
-            #if DEBUG
             let openedAt = clock()
             defer { BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) answered in \(Int(clock() - openedAt)) ms") }
-            #endif
             if let cols = message["cols"].number, let rows = message["rows"].number {
                 let size = BackendTerminalSize(cols: Int(cols), rows: Int(rows))
                 claim(id, sessionID, size)
                 if try pushViewerSizes(sessionID, joining: id, user: id, keep: message["keep"].bool == true) {
-                    #if DEBUG
                     let settleAt = clock()
-                    #endif
                     await settle(sessionID)
-                    #if DEBUG
                     BackendRemoteRelayClient.note("open: attach \(sessionID.prefix(8)) settle \(Int(clock() - settleAt)) ms")
-                    #endif
                     // Another device leaving meanwhile forgets the sizes of sessions not yet attached: asked again.
                     claim(id, sessionID, size)
                 }
@@ -1017,10 +1022,9 @@ public actor BackendRemoteHost {
     }
     private func hello(_ id: UUID, _ message: BackendRemoteClientMessage) async throws {
         guard let row = live[id], row.device == nil else { throw BackendRemoteTrustFailure.denied("This connection already said hello.") }
-        #if DEBUG
+        // Timings only (13 Nov, phone speed): since the sealed connection opened, and the hello's own answer time.
         let helloAt = clock()
-        defer { BackendRemoteRelayClient.note("conn: hello answered in \(Int(clock() - helloAt)) ms (\(row.wire.address.prefix(14)))") }
-        #endif
+        defer { BackendRemoteRelayClient.note("conn: hello answered in \(Int(clock() - helloAt)) ms, \(Int(helloAt - row.connectedAt)) ms after the channel opened") }
         guard message["protocol"].number == 1 else { await refuse(id, code: "version", message: "This client and host speak different protocol versions. Update whichever is older.", close: 1008); return }
         let token = message["token"].string!, name = message["device"]["name"].string!
         // §11.5: a phone or the web on the relay that cannot take a link has no way to carry anything now.
@@ -1029,8 +1033,29 @@ public actor BackendRemoteHost {
             await refuse(id, code: "version", message: Self.cannotLink(message["device"]["platform"].string), close: 1008)
             return
         }
+        // 13 Nov (phone speed): a resume hello (BackendRemoteResume) stands in for the credential check, only as the
+        // payload of this connection's sealed first message, only once. Any refusal is `resume.no`: the phone then sends
+        // its full hello on this same connection, so a refused resume costs nothing over the old way.
+        var resumed: BackendRemoteDevice?
+        if message["resume"] != .missing {
+            let tried = row.resumeTried
+            live[id]?.resumeTried = true
+            guard !tried, let binding = row.wire.earlyBinding, let key = row.wire.peerPublicKey,
+                  let ticket = message["resume"]["id"].string, let proof = message["resume"]["proof"].string,
+                  let device = await trust.redeemResume(id: ticket, proof: proof, binding: binding, key: key) else {
+                BackendRemoteRelayClient.note("conn: resume refused; the full hello follows")
+                try await send(id, .init(.resumeNo, fields: []))
+                return
+            }
+            // The same reconnect pace as a full hello from this device.
+            if let wait = reconnects.admit(BackendRemoteReconnectThrottle.key(token: device.id + ".", address: row.wire.address), now: Date().timeIntervalSince1970) {
+                await refuse(id, code: "unavailable", message: BackendRemoteReconnectThrottle.slowDown(wait), close: 1013)
+                return
+            }
+            resumed = device
+        }
         // Before any scrypt: a device (or pairing address) reconnecting too often is told to slow down and waits.
-        if let wait = reconnects.admit(BackendRemoteReconnectThrottle.key(token: token, address: row.wire.address), now: Date().timeIntervalSince1970) {
+        if resumed == nil, let wait = reconnects.admit(BackendRemoteReconnectThrottle.key(token: token, address: row.wire.address), now: Date().timeIntervalSince1970) {
             await refuse(id, code: "unavailable", message: BackendRemoteReconnectThrottle.slowDown(wait), close: 1013)
             return
         }
@@ -1057,7 +1082,7 @@ public actor BackendRemoteHost {
             try await welcome(id, row: row, message: message, device: device)
             return
         }
-        if !token.contains("."), token.utf8.count >= 32 {
+        if resumed == nil, !token.contains("."), token.utf8.count >= 32 {
             guard row.wire.localWebBootstrap, message["device"]["platform"].string == "web" else {
                 throw BackendRemoteTrustFailure.denied("This browser link can only be used by the web version on this Mac.")
             }
@@ -1068,7 +1093,7 @@ public actor BackendRemoteHost {
             await disconnect(id, code: 1000, reason: "Paired. Reconnect with the browser's saved credential.")
             return
         }
-        if !token.contains(".") {
+        if resumed == nil, !token.contains(".") {
             let paired = try await trust.redeem(token, name: name, address: row.wire.address, publicKey: row.wire.peerPublicKey,
                                                 platform: message["device"]["platform"].string)
             await pairingSpent?()
@@ -1077,7 +1102,8 @@ public actor BackendRemoteHost {
             await refuse(id, code: "unauthorized", message: "Paired. Approve this device in the app on this Mac, then reconnect.", close: 1008)
             return
         }
-        let device = try await trust.verify(token, address: row.wire.address, peerKey: row.wire.peerPublicKey)
+        let device: BackendRemoteDevice
+        if let resumed { device = resumed } else { device = try await trust.verify(token, address: row.wire.address, peerKey: row.wire.peerPublicKey) }
         try await welcome(id, row: row, message: message, device: device)
     }
     /// The verified hello's answer, the same for a paired device and an account device.
@@ -1115,6 +1141,12 @@ public actor BackendRemoteHost {
             row.link.path.set(.noLink)
         }
         try await send(id, .init(.welcome, fields: fields)); announce()
+        // 13 Nov (phone speed): the next connection's resume ticket, to a phone that claimed it on a sealed connection.
+        if row.wire.channelBinding != nil, let key = row.wire.peerPublicKey, live[id]?.capabilities.contains(BackendRemoteResume.capability) == true,
+           let ticket = try? await trust.issueResume(deviceID: device.id, key: key) {
+            try await send(id, .init(.resumeTicket, fields: [.init("id", .string(ticket.id)), .init("key", .string(ticket.secret.base64EncodedString())),
+                                                             .init("ttl", .number((ticket.ttlMs / 1000).rounded()))]))
+        }
         try await sendPhoneAccess(id, deviceID: device.id)
         if link { startLink(id) }
     }
@@ -1293,10 +1325,25 @@ public actor BackendRemoteHost {
         return fields
     }
     /// A snapshot's history as `output` frames flagged `replay`.
-    static func historyFrames(_ session: String, _ text: String) throws -> [BackendRemoteServerMessage] {
-        try BackendRemoteProtocol.chunkOutput(text).map {
-            try .init(.output, fields: [.init("id", .string(session)), .init("data", .string($0)), .init("replay", .bool(true))])
+    /// `deflate` (13 Nov, a phone that claimed `history.z`): each piece that packs well goes as one `output` with `z`
+    /// (raw DEFLATE, base64) and an empty `data`; a piece that does not stays plain text, as before.
+    static func historyFrames(_ session: String, _ text: String, deflate: Bool = false) throws -> [BackendRemoteServerMessage] {
+        let plain: (String) throws -> [BackendRemoteServerMessage] = { part in
+            try BackendRemoteProtocol.chunkOutput(part).map {
+                try .init(.output, fields: [.init("id", .string(session)), .init("data", .string($0)), .init("replay", .bool(true))])
+            }
         }
+        guard deflate else { return try plain(text) }
+        var frames: [BackendRemoteServerMessage] = []
+        for piece in BackendRemoteProtocol.historyPieces(text) {
+            if let packed = piece.packed {
+                frames.append(try .init(.output, fields: [.init("id", .string(session)), .init("data", .string("")),
+                                                          .init("z", .string(packed.base64EncodedString())), .init("replay", .bool(true))]))
+            } else {
+                frames += try plain(piece.raw)
+            }
+        }
+        return frames
     }
     private func sessionValue(_ meta: BackendSessionMeta, seen: Double? = nil) -> NativeRPCValue {
         // The status the session's own events last gave, never a full snapshot of it (that carries its whole raw

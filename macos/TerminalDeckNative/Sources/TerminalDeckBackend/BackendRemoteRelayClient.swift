@@ -449,9 +449,16 @@ public actor BackendRemoteRelayClient {
                         peerPublicKey: response.devicePublicKey, send: { [weak self] text in try await self?.channelSend(id, text: text) },
                         close: { [weak self] _, _ in await self?.closeChannel(id) })
                     wire.channelBinding = response.transport.channelBinding
+                    wire.earlyBinding = response.earlyBinding
                     let endpoint = await host.accept(wire)
                     channels[id]?.endpoint = endpoint
-                    if endpoint == nil { await closeChannel(id) }
+                    if endpoint == nil { await closeChannel(id); return }
+                    // 13 Nov (phone speed): a resume hello sealed into the first message is this connection's first
+                    // frame, answered right behind the handshake's reply (one relay round trip instead of two).
+                    if let early = response.early, let endpoint {
+                        guard early.count <= 65536, let text = String(data: early, encoding: .utf8) else { await closeChannel(id); return }
+                        await host.receive(endpoint, text: text)
+                    }
                 }
             } catch { await closeChannel(id) }
             return

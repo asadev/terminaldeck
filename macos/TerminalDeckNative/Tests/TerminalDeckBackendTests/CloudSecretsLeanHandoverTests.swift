@@ -127,7 +127,7 @@ final class CloudSecretsLeanHandoverTests: XCTestCase {
         let bound = BackendCloudSecretsLeanCoverage.lines(registered: ["servers", "voice", "mcp-user", files])
         check(Set(bound.filter { $0.notSaved == nil }.map(\.sourceId)) == ["servers", "voice", "mcp-user", files])
         let left = BackendCloudSecretsLeanCoverage.notSaved(registered: ["servers", "voice", "mcp-user", files])
-        check(left.count == 4)
+        check(left.count == 5)   // 15 Nov: WhatsApp keys joined the lean list
         // Keys travel (15 Nov): API keys, task tokens and Receiver secrets travel; only the SSH folder's line is left.
         check(left.allSatisfy { !$0.contains("not saved") && !$0.contains("in this version") && $0.contains("saved in Cloud as soon as") })
         check(left.contains { $0.hasPrefix("API keys") } && left.contains { $0.hasPrefix("Connected-task tokens") }

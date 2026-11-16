@@ -524,6 +524,10 @@ enum NativeCloudSecretsOwners {
                     stores.append(mcp.deleteRuleStore(stateRoot: deleteRoot, gate: deleteGate, macName: macName, serviceClock: serviceClock,
                                                       vanished: vanished, now: clock))
                 }
+                // WhatsApp agents' keys (15 Nov): store "whatsapp", one record per agent, named as he named it.
+                stores.append(BackendWhatsAppKeysStore(keeper: NativeWhatsAppEngineBox.shared.keeper(appName: appName), names: { id in
+                    await NativeWhatsAppEngineBox.shared.engine?.agents().first { $0.id == id }?.name
+                }).deleteRuleStore(stateRoot: deleteRoot, gate: deleteGate, macName: macName, serviceClock: serviceClock, now: clock))
                 BackendProjectSecretFilesHolder.shared.store = secretFiles
                 return stores
             },
@@ -539,6 +543,8 @@ enum NativeCloudSecretsOwners {
                 port.observe { changed("servers") }
                 // A connected task system's token saved here is taken at once.
                 if let connected { Task { await connected.setTokenSaved { changed("tasks") } } }
+                // A WhatsApp key added or replaced here is taken at once.
+                NativeWhatsAppEngineBox.shared.setKeysChanged { changed(BackendWhatsAppKeysStore.source) }
                 // Project secret files have no change signal: a look every 10 minutes (plus start and Sync now).
                 let looks = NativeProjectSecretFiles.looks(changed)
                 // Keys travel: API keys, Receiver secrets and MCP servers have no change signal here either; the same
@@ -547,11 +553,12 @@ enum NativeCloudSecretsOwners {
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
                         guard !Task.isCancelled else { return }
-                        for source in ["api", "receiver", "mcp-user", "ssh"] { changed(source) }
+                        for source in ["api", "receiver", "mcp-user", "ssh", BackendWhatsAppKeysStore.source] { changed(source) }
                     }
                 }
                 return {
                     port.observe(nil); looks.cancel(); keyLooks.cancel()
+                    NativeWhatsAppEngineBox.shared.setKeysChanged(nil)
                     if let connected { Task { await connected.setTokenSaved(nil) } }
                 }
             })

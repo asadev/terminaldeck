@@ -65,7 +65,14 @@ extension NativeCloudChats {
                 await MainActor.run { AppModel.shared.select(meta.id) }
                 return meta.id
             },
-            changed: { entry in await MainActor.run { NativeCloudChats.shared.noteMove(entry) } })
+            changed: { entry in
+                await MainActor.run { NativeCloudChats.shared.noteMove(entry) }
+                // The take succeeded here: the session's WhatsApp agent follows it (receiver and reader here).
+                if entry.role == .taker, entry.step == .done, let id = entry.launchedID,
+                   let engine = NativeWhatsAppEngineBox.shared.engine {
+                    await engine.sessionArrived(cloudSessionID: entry.sessionId, sessionID: id)
+                }
+            })
         let mover = BackendCloudSessionMove(ports: ports, file: file)
         self.mover = mover
         Task {

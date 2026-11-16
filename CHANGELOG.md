@@ -10,6 +10,12 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.22.1] — 2026-11-16
+
+- WhatsApp agents: connect your WhatsApp agents as profiles, choose where each is received (Hoot, an agent or a session), a switch for sending, approvals by 1 / 2; an agent follows a session that moves to another Mac.
+- Settings lists draw even lines on standard-resolution screens.
+- The phone connects and resumes faster.
+
 ## [0.22.0] — 2026-11-16
 
 Terminal Deck 0.22.0 brings Cloud: sign in once with your Terminal Deck account and your work follows you to every Mac, your phones and the web.

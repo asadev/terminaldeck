@@ -14,7 +14,7 @@ public enum BackendCloudSecretsLeanCoverage {
     }
     /// Every source of the lean list, in the order Asad named them.
     /// 14 Nov (owner): project secret files joined the lean list (`BackendCloudSecretsLean.sources`), so they are named too.
-    public static let order = ["servers", "api", "ssh", "tasks", "receiver", "voice", "mcp-user", BackendProjectSecretFilesRules.sourceId]
+    public static let order = ["servers", "api", "ssh", "tasks", "receiver", "voice", "mcp-user", BackendProjectSecretFilesRules.sourceId, BackendWhatsAppKeysStore.source]
     static func title(_ sourceId: String) -> String {
         switch sourceId {
         case "servers": return "Server passwords and saved SSH keys"
@@ -25,6 +25,7 @@ public enum BackendCloudSecretsLeanCoverage {
         case "voice": return "The voice key"
         case "mcp-user": return "MCP servers"
         case BackendProjectSecretFilesRules.sourceId: return "Project secret files"
+        case BackendWhatsAppKeysStore.source: return "WhatsApp keys"
         default: return sourceId
         }
     }
@@ -40,6 +41,7 @@ public enum BackendCloudSecretsLeanCoverage {
         case "servers": return "Server passwords and saved SSH keys are not being saved in Cloud from this Mac. They stay on this Mac."
         case "voice": return "The voice key is not being saved in Cloud from this Mac. It stays on this Mac."
         case "mcp-user": return "MCP servers are saved in Cloud as soon as this Mac's MCP settings are ready."
+        case BackendWhatsAppKeysStore.source: return "WhatsApp keys are saved in Cloud as soon as this Mac's WhatsApp agents are ready."
         case BackendProjectSecretFilesRules.sourceId: return "Project secret files are not being saved in Cloud from this Mac. They stay in their project folders on this Mac."
         default: return title(sourceId) + " is saved in Cloud as soon as it is ready on this Mac."
         }

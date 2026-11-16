@@ -428,6 +428,8 @@ final class BackendTerminalProbe: TerminalDelegate {
     func feed(_ data: Data) { terminal.feed(byteArray: Array(data)) }
     func feed(_ text: String) { terminal.feed(text: text) }
     func resize(cols: Int, rows: Int) { terminal.resize(cols: cols, rows: rows) }
+    /// What a phone opening this terminal is sent (no modes set): for measuring and the history tests.
+    var remount: String { BackendTerminalRemount.render(terminal, modes: BackendTerminalModes()) }
     /// The visible rows as they read on screen: only the terminal's width, an unwritten cell as a blank,
     /// trailing blanks trimmed.
     var rows: [String] {

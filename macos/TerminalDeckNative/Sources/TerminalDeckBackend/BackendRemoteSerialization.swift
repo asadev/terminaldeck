@@ -28,6 +28,7 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
         case pushState = "push.state" // 31 Oct: how a phone's alerts arrive while its app is closed (BackendPhonePush)
         case widgetsSnapshot = "widgets.snapshot"
         case activitySample = "activity.sample" // 31 Oct: the Mac's load, while a phone's Activity page is open (BackendPhoneActivity)
+        case resumeTicket = "resume.ticket", resumeNo = "resume.no" // 13 Nov (phone speed): BackendRemoteResume, only to phones that claimed `resume.v1`
         case terminalSize = "size" // 27 Oct: who sizes a session and at what size (to phones that claimed `terminal.picture` or, 28 Oct, `terminal.handoff`)
     }
     public let kind: Kind
@@ -45,7 +46,7 @@ public struct BackendRemoteServerMessage: Equatable, Sendable {
     /// Required top-level fields come from the complete ServerMessage union.
     /// Additive/optional readings remain intact rather than being reprojected.
     private static let requiredFieldSchemas: [Kind: String] = [
-            .welcome: "protocol:n deviceId:s deviceName:s token:s? sessions:a capabilities:a", .enrolled: "deviceId:s deviceName:s credential:s",
+            .welcome: "protocol:n deviceId:s deviceName:s token:s? sessions:a capabilities:a", .resumeTicket: "id:s key:s ttl:n", .resumeNo: "", .enrolled: "deviceId:s deviceName:s credential:s",
             .sessions: "sessions:a", .attached: "id:s", .detached: "id:s", .output: "id:s data:s", .status: "id:s status:s", .exit: "id:s exitCode:n",
             .error: "code:s message:s", .pong: "", .created: "session:o", .closed: "id:s", .folders: "folders:a",
             .folderEntries: "path:s parent:s? entries:a", .fileRows: "path:s parent:s? entries:a", .fileText: "path:s text:s at:n truncated:b binary:b",
@@ -139,6 +140,22 @@ public extension BackendRemoteProtocol {
     /// Both UTF-8 paste size and escaped frame size matter. Backslashes/control
     /// text can hit the JSON budget well before the terminal's raw-byte budget.
     static func chunkInput(_ data: String, size: Int = 16384) -> [String] { chunks(data, rawBudget: size, jsonBudget: 32768) }
+    /// A history piece is at most this much UTF-8 before packing (split on code points, never inside one).
+    static let historyPieceBytes = 256 * 1024
+    /// A packed piece bigger than this goes as plain text instead, so one frame stays under the phones' 64 KiB message
+    /// cap (`Wire.maxMessageBytes`, `Protocol.MAX_MESSAGE_BYTES`): base64 makes it 4/3, about 60 KB of JSON.
+    static let historyMostPackedBytes = 44 * 1024
+    /// 13 Nov (phone speed): a session's history in pieces, each packed with raw DEFLATE (RFC 1951, what the phones'
+    /// `COMPRESSION_ZLIB` and `Inflater(nowrap)` read) when that makes it under `historyMostPackedBytes` and smaller
+    /// by a tenth at least; `packed` nil otherwise.
+    static func historyPieces(_ text: String) -> [(raw: String, packed: Data?)] {
+        chunks(text, rawBudget: historyPieceBytes, jsonBudget: Int.max / 4).map { raw in
+            let bytes = Data(raw.utf8)
+            guard let packed = try? (bytes as NSData).compressed(using: .zlib) as Data,
+                  packed.count <= historyMostPackedBytes, packed.count * 10 <= bytes.count * 9 else { return (raw, nil) }
+            return (raw, packed)
+        }
+    }
     private static func chunks(_ data: String, rawBudget: Int?, jsonBudget: Int) -> [String] {
         if data.isEmpty { return [] }
         var output: [String] = [], current = "", raw = 0, json = 0

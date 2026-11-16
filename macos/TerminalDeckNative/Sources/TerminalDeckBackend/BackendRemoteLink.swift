@@ -161,7 +161,7 @@ final class BackendRemoteLinkPath: @unchecked Sendable {
     /// How every `link.peer` this host writes starts (`BackendRemoteProtocol.serialize` puts `t` first).
     static let signalPrefix = #"{"t":"link.peer""#
     /// What may cross the relay from this host to a link client (§11.1); the welcome goes before the mode is set.
-    static let relayTypes: Set<String> = ["welcome", "enrolled", "device.access", "link.peer", "link.moved"]
+    static let relayTypes: Set<String> = ["welcome", "enrolled", "device.access", "link.peer", "link.moved", "resume.ticket", "resume.no"]
     /// Messages waiting for the move: at most this many bytes (more means the link has failed).
     static let mostWaitingBytes = 4 * 1024 * 1024
     private let lock = NSLock()
@@ -428,13 +428,9 @@ extension BackendRemoteHost {
             }
         }
         live[id]?.link.task = Task { [weak self] in
-            #if DEBUG
             let askedAt = Date()
-            #endif
             let (servers, policy) = await engine.servers(device: device)
-            #if DEBUG
             BackendRemoteRelayClient.note("conn: ICE servers in \(Int(Date().timeIntervalSince(askedAt) * 1_000)) ms (\(servers.contains { $0.urls.contains { $0.hasPrefix("turn") } } ? "with TURN" : "STUN only"))")
-            #endif
             guard let self, await self.linkCurrent(id, token) else { return }
             let events = BackendLinkEvents(
                 candidate: { [weak self] sdp, mid, index in Task { await self?.linkCandidate(id, token, sdp: sdp, mid: mid, index: index) } },

@@ -1,4 +1,5 @@
 import SwiftUI
+import TerminalDeckBackend
 import TerminalDeckNativeCore
 
 // Hoot's window, drawn in Swift (lane R) — src/renderer/copilot/CopilotView.tsx,
@@ -194,6 +195,8 @@ struct NativeHootScreen: View {
                             action: { if chat.avatarState == .waiting { chat.requestFocus += 1 } else if !fixtureMode { local?.ensure() } })
                         ChipSeparator()
                         HootAccountChip(brain: brain, lists: lists, live: !fixtureMode)
+                        // WhatsApp (DESIGN-WHATSAPP section 3): only while a WhatsApp agent is attached to Hoot.
+                        if !fixtureMode { NativeWhatsAppChip(here: .hoot) }
                     }
                     if let off = chat.guardOff {
                         // Hoot runs, but the app's guard on its own records is not on; the app keeps trying.

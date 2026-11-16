@@ -9,7 +9,7 @@ public enum BackendCloudSecretsLean {
     /// Out and never admitted: browser cookies, saved browser passwords, AI-subscription sign-ins, GitHub.
     /// 14 Nov (owner): project secret files join as `project-files` under `project` (BackendProjectSecretFilesStore).
     public static let sources: [String: CloudSecretsDomain] = [
-        "api": .apiKey, "servers": .server, "ssh": .ssh, "mcp-user": .mcp, "tasks": .taskConnection, "receiver": .receiver, "voice": .app,
+        "api": .apiKey, "servers": .server, "ssh": .ssh, "mcp-user": .mcp, "tasks": .taskConnection, "receiver": .receiver, "voice": .app, BackendWhatsAppKeysStore.source: .whatsapp,
         BackendProjectSecretFilesRules.sourceId: .project
     ]
     /// A store joins only when its source id AND its domain are on the list above, and once per domain.

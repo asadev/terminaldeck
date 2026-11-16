@@ -11,6 +11,14 @@ extension BackendRemoteProtocol {
             message = message.setting("protocol", .number(protocolVersion))
             if type == "hello" {
                 message = message.setting("token", .string(try r.text("token", reason: "hello without a usable token", units: 200, controls: true)))
+                // 13 Nov (phone speed): a resume hello, sealed into the handshake's first message (BackendRemoteResume).
+                let resume = r["resume"]
+                if resume != .missing {
+                    guard let id = resume["id"].string, !id.isEmpty, id.utf16.count <= 64, !containsControls(id),
+                          let proof = resume["proof"].string, !proof.isEmpty, proof.utf16.count <= 64, !containsControls(proof)
+                    else { throw r.bad("hello with an unusable resume") }
+                    message = message.setting("resume", .object([.init("id", .string(id)), .init("proof", .string(proof))]))
+                }
             }
             let device = r["device"]
             guard device.fields != nil, let name = device["name"].string, let platform = device["platform"].string else { throw r.bad("\(type) without a device descriptor") }
