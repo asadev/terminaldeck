@@ -47,7 +47,13 @@ public sealed class ChatFixture : IAsyncDisposable
   public async ValueTask DisposeAsync()
   {
     await Chats.DisposeAsync(); await Keeper.DisposeAsync();
-    if (Directory.Exists(Root.DirectoryPath)) Directory.Delete(Root.DirectoryPath, true);
+    // The synthetic CLI runs IN this folder. On Windows a stopped process lets go of its working folder a moment
+    // after the stop, so the delete waits briefly for that (2 s at most) instead of failing the test.
+    for (var attempt = 0; Directory.Exists(Root.DirectoryPath); attempt++)
+    {
+      try { Directory.Delete(Root.DirectoryPath, true); }
+      catch (Exception error) when (attempt < 20 && error is IOException or UnauthorizedAccessException) { await Task.Delay(100); }
+    }
   }
 }
 

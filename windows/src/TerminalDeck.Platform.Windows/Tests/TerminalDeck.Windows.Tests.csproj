@@ -11,6 +11,7 @@
     <Compile Include="../../TerminalDeck.Keeper/KeeperHootHandoff.cs" Link="KeeperHootHandoff.cs" />
     <Compile Include="../../TerminalDeck.App/Services/PhoneRecoveryHost.cs" Link="PhoneRecoveryHost.cs" />
     <Compile Include="../../TerminalDeck.App/ViewModels/ShellViewModel.cs" Link="ShellViewModel.cs" />
+    <Compile Include="../../TerminalDeck.App/Views/Windows/SidebarCloudRows.cs" Link="SidebarCloudRows.cs" />
     <Compile Include="../../../tests/TerminalDeck.Core.Tests/Remote/LinkHarness.cs" Link="Link/LinkHarness.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(TdLinkNative)' != ''">

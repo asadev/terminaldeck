@@ -100,6 +100,11 @@ jobs:
           dotnet build windows/src/TerminalDeck.ToolBridge/TerminalDeck.ToolBridge.csproj -c Release -nologo -v minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet build windows/tests/TerminalDeck.Servers.Askpass/TerminalDeck.Servers.Askpass.csproj -c Release -nologo -v minimal
+      # The Windows platform tests compile app files by link; the release workflow builds and runs them, so a file
+      # they miss must show here too (16 Nov: SidebarRowLook). Running them needs the direct-link engine: release only.
+      - name: Windows platform tests compile
+        shell: pwsh
+        run: dotnet build windows/src/TerminalDeck.Platform.Windows/Tests/TerminalDeck.Windows.Tests.csproj -c Release -nologo -v minimal
       # The open chat's view-model tests, unchanged, prove the chat behaves as before the New session page
       # began sharing its frame and box.
       - name: Chat tests
